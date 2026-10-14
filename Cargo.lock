@@ -6337,11 +6337,13 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "log",
  "qol-config",
  "qol-runtime",
  "qol-secrets",
  "qol-terminal-sessions",
  "serde",
+ "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "workspace-hack",

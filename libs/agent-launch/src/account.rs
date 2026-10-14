@@ -6,6 +6,7 @@ use qol_terminal_sessions::cli::{CliLaunchProgram, CliToolId};
 
 pub const CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 const DEFAULT_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+const PROFILE_REGISTRY: [&str; 3] = [".config", "account-profiles", "profiles.json"];
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +33,57 @@ impl LaneExecCommand {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ProfileRegistry {
+    #[serde(default)]
+    profiles: Vec<RegisteredProfile>,
+}
+
+#[derive(serde::Deserialize)]
+struct RegisteredProfile {
+    #[serde(rename = "configDir")]
+    config_dir: Option<String>,
+    key: Option<String>,
+}
+
+fn registered_accounts(home: Option<&Path>) -> Vec<(String, ClaudeAccountSpec)> {
+    let Some(home) = home else {
+        return Vec::new();
+    };
+    let path = PROFILE_REGISTRY
+        .iter()
+        .fold(home.to_path_buf(), |path, part| path.join(part));
+    let Ok(encoded) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    parse_registry(&encoded).unwrap_or_else(|error| {
+        log::warn!(
+            "account profiles in {} are unreadable: {error:#}",
+            path.display()
+        );
+        Vec::new()
+    })
+}
+
+fn parse_registry(encoded: &str) -> Result<Vec<(String, ClaudeAccountSpec)>> {
+    let registry: ProfileRegistry = serde_json::from_str(encoded)?;
+    Ok(registry
+        .profiles
+        .into_iter()
+        .filter_map(|profile| {
+            let config_dir = profile.config_dir.filter(|dir| !dir.trim().is_empty())?;
+            let secret = profile.key.filter(|key| !key.trim().is_empty())?;
+            Some((
+                config_dir,
+                ClaudeAccountSpec {
+                    secret,
+                    token_env: None,
+                },
+            ))
+        })
+        .collect())
+}
+
 pub fn config_claude_accounts() -> Result<BTreeMap<String, ClaudeAccountSpec>> {
     let Some(path) = crate::sessions_config_path() else {
         return Ok(BTreeMap::new());
@@ -53,12 +105,28 @@ pub fn apply(
     let Some(config_dir) = config_dir else {
         return Ok(());
     };
-    let accounts = config_claude_accounts()?;
+    let home = dirs::home_dir();
+    let mut accounts: Vec<_> = config_claude_accounts()?.into_iter().collect();
+    // The registry belongs to another tool, so a profile whose secret cannot be read is skipped.
+    accounts.extend(
+        registered_accounts(home.as_deref())
+            .into_iter()
+            .filter(|(dir, account)| match qol_secrets::read(&account.secret) {
+                Ok(_) => true,
+                Err(error) => {
+                    log::warn!(
+                        "ignoring the registered account for {dir}: secret `{}` cannot be read: {error:#}",
+                        account.secret
+                    );
+                    false
+                }
+            }),
+    );
     apply_with(
         launch,
         config_dir,
         &accounts,
-        dirs::home_dir().as_deref(),
+        home.as_deref(),
         lane_exec,
         |secret| qol_secrets::read(secret).map(drop),
     )
@@ -67,7 +135,7 @@ pub fn apply(
 fn apply_with(
     launch: &mut CliLaunchProgram,
     config_dir: &Path,
-    accounts: &BTreeMap<String, ClaudeAccountSpec>,
+    accounts: &[(String, ClaudeAccountSpec)],
     home: Option<&Path>,
     lane_exec: &LaneExecCommand,
     check_secret: impl Fn(&str) -> Result<()>,
@@ -145,11 +213,11 @@ mod tests {
         launch
     }
 
-    fn accounts() -> BTreeMap<String, ClaudeAccountSpec> {
-        BTreeMap::from([(
+    fn accounts() -> Vec<(String, ClaudeAccountSpec)> {
+        vec![(
             "~/.claude-personal".to_owned(),
             account("claude-code-personal", None),
-        )])
+        )]
     }
 
     #[test]
@@ -230,10 +298,10 @@ mod tests {
     #[test]
     fn an_api_key_account_names_its_own_variable() {
         let mut launch = claude_launch();
-        let accounts = BTreeMap::from([(
+        let accounts = vec![(
             "/srv/claude".to_owned(),
             account("claude-api", Some("ANTHROPIC_API_KEY")),
-        )]);
+        )];
         apply_with(
             &mut launch,
             Path::new("/srv/claude"),
@@ -245,5 +313,82 @@ mod tests {
         .unwrap();
 
         assert_eq!(launch.args[5], "ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn the_sessions_config_wins_over_a_registered_profile_for_the_same_directory() {
+        let mut launch = claude_launch();
+        let accounts = vec![
+            (
+                "/Users/me/.claude-personal".to_owned(),
+                account("from-config", None),
+            ),
+            (
+                "~/.claude-personal".to_owned(),
+                account("from-registry", None),
+            ),
+        ];
+        apply_with(
+            &mut launch,
+            Path::new("/Users/me/.claude-personal"),
+            &accounts,
+            Some(Path::new("/Users/me")),
+            &qol(),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(launch.args[3], "from-config");
+    }
+
+    #[test]
+    fn registered_profiles_with_a_key_become_accounts() {
+        let registry = r#"{"profiles": [
+            {"name": "personal", "configDir": "~/.claude-personal", "key": "claude-personal"},
+            {"name": "work", "configDir": "/Users/me/.claude"},
+            {"name": "blank", "configDir": "", "key": "claude-blank"}
+        ]}"#;
+
+        let accounts = parse_registry(registry).unwrap();
+
+        assert_eq!(
+            accounts,
+            [(
+                "~/.claude-personal".to_owned(),
+                account("claude-personal", None)
+            )]
+        );
+    }
+
+    #[test]
+    fn a_registered_profile_maps_a_launch_without_any_sessions_config() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".config/account-profiles");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("profiles.json"),
+            r#"{"profiles": [{"configDir": "~/.claude-personal", "key": "claude-personal"}]}"#,
+        )
+        .unwrap();
+        let config_dir = home.path().join(".claude-personal");
+        let mut launch = claude_launch();
+
+        apply_with(
+            &mut launch,
+            &config_dir,
+            &registered_accounts(Some(home.path())),
+            Some(home.path()),
+            &qol(),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(launch.args[3], "claude-personal");
+    }
+
+    #[test]
+    fn an_unreadable_registry_contributes_no_accounts() {
+        assert!(parse_registry("not json").is_err());
+        assert!(registered_accounts(Some(Path::new("/nonexistent-home"))).is_empty());
     }
 }

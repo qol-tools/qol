@@ -200,6 +200,13 @@ pub fn unpark(id: &str) -> Result<String> {
         Ok(session) => session,
         Err(error) => {
             store.release(id);
+            if retry {
+                record.detail = Some(format!("{error:#}"));
+                record.notified = false;
+                if let Err(write_error) = store.record(&record) {
+                    log::warn!("failed to record the resume failure of {id}: {write_error:#}");
+                }
+            }
             return Err(error);
         }
     };

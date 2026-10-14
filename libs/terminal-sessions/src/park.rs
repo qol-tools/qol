@@ -97,19 +97,27 @@ pub fn watching(dir: &Path) -> Vec<ParkRecord> {
         .collect()
 }
 
-/// Finished parks whose final report has not been shown to the user yet.
+/// Finished or unresumable parks whose outcome has not been shown to the user yet.
 pub fn unnotified(dir: &Path) -> Vec<ParkRecord> {
     records(dir)
         .unwrap_or_default()
         .into_iter()
-        .filter(|record| record.state == ParkState::Finished && !record.notified)
+        .filter(|record| announces(record) && !record.notified)
         .collect()
+}
+
+fn announces(record: &ParkRecord) -> bool {
+    match record.state {
+        ParkState::Finished => true,
+        ParkState::Failed => record.resumed_session.is_none(),
+        _ => false,
+    }
 }
 
 pub fn mark_notified(dir: &Path, record: &ParkRecord) -> std::io::Result<()> {
     let path = dir.join(format!("{}.json", record.id));
     let stored = serde_json::from_str::<ParkRecord>(&fs::read_to_string(&path)?)?;
-    if stored.state != ParkState::Finished {
+    if !announces(&stored) {
         return Ok(());
     }
     let notified = ParkRecord {
@@ -233,5 +241,29 @@ mod tests {
             .iter()
             .any(|record| record.id == "done" && record.notified));
         assert!(!root.path().join("done.json.notified").exists());
+    }
+
+    #[test]
+    fn a_park_that_could_not_resume_is_announced_once() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            root.path(),
+            &ParkRecord {
+                resumed_session: None,
+                ..record("stuck", 1, ParkState::Failed)
+            },
+        );
+        write(
+            root.path(),
+            &ParkRecord {
+                resumed_session: Some("v1:kitty:1".to_owned()),
+                ..record("ran", 1, ParkState::Failed)
+            },
+        );
+        let pending = unnotified(root.path());
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, "stuck");
+        mark_notified(root.path(), &pending[0]).unwrap();
+        assert!(unnotified(root.path()).is_empty());
     }
 }

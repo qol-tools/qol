@@ -749,7 +749,7 @@ fn closing_sessions(dir: Option<&std::path::Path>) -> Vec<String> {
         .collect()
 }
 
-/// One toast per finished park, marked first so a failed write never repeats it.
+/// One toast per finished or unresumable park, marked first so a failed write never repeats it.
 fn finished_park_notices(dir: Option<&std::path::Path>) -> Vec<Notice> {
     let Some(dir) = dir else {
         return Vec::new();
@@ -768,7 +768,7 @@ fn finished_park_notices(dir: Option<&std::path::Path>) -> Vec<Notice> {
                 }
             },
         )
-        .map(|record| Notice::finished_park(&record))
+        .map(|record| Notice::for_park(&record))
         .collect()
 }
 
