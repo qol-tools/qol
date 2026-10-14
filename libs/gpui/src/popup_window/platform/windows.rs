@@ -358,6 +358,16 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
+    let pid = std::process::id();
+    top_level_windows()
+        .into_iter()
+        .filter(|window| {
+            window.pid() == Some(pid) && window.title().starts_with(prefix) && window.is_shown()
+        })
+        .count()
+}
+
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
@@ -459,6 +469,35 @@ mod tests {
         );
         assert!(find_window("qol-popup").is_none());
         assert!(find_window("qol-popup-search-longer").is_none());
+        unsafe { DestroyWindow(hwnd) };
+    }
+
+    #[test]
+    fn only_shown_uncloaked_windows_count_as_visible() {
+        let title: Vec<u16> = "qol-visible-count@0\0".encode_utf16().collect();
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                windows_sys::w!("STATIC"),
+                title.as_ptr(),
+                0,
+                0,
+                0,
+                10,
+                10,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        assert_eq!(visible_windows_by_title_prefix("qol-visible-count"), 0);
+        unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+        assert_eq!(visible_windows_by_title_prefix("qol-visible-count"), 1);
+        assert_eq!(visible_windows_by_title_prefix("qol-visible-other"), 0);
+        cloak(hwnd, true);
+        assert_eq!(visible_windows_by_title_prefix("qol-visible-count"), 0);
         unsafe { DestroyWindow(hwnd) };
     }
 
