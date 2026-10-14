@@ -5,6 +5,8 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
+use super::super::PrivilegedExit;
+
 const PRIVILEGED_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) fn available() -> bool {
@@ -25,15 +27,15 @@ pub(crate) fn run(label: &str, script: &str, args: &[String]) -> Result<()> {
     let mut child = command.spawn().context("failed to launch pkexec")?;
     let status = wait_for_privileged(&mut child, PRIVILEGED_COMMAND_TIMEOUT)
         .context("privileged pkexec command failed or timed out")?;
-    if !status.success() {
-        bail!("pkexec exited with {status}");
-    }
-    Ok(())
+    PrivilegedExit::check(status)
 }
 
-pub(crate) fn spawn(label: &str, program: &Path, args: &[OsString]) -> Result<Child> {
+pub(crate) fn spawn(label: &str, program: &Path, args: &[OsString], piped: bool) -> Result<Child> {
     let mut command = Command::new("pkexec");
     command.arg(program).args(args);
+    if piped {
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+    }
     command
         .spawn()
         .with_context(|| format!("failed to launch privileged {label}"))
@@ -63,6 +65,23 @@ fn wait_for_privileged(child: &mut Child, timeout: Duration) -> Result<ExitStatu
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn a_pkexec_exit_says_whether_the_prompt_was_dismissed_or_refused() {
+        use std::os::unix::process::ExitStatusExt;
+        let exit = |code: i32| {
+            PrivilegedExit::check(ExitStatus::from_raw(code << 8))
+                .unwrap_err()
+                .downcast::<PrivilegedExit>()
+                .unwrap()
+        };
+        assert!(PrivilegedExit::check(ExitStatus::from_raw(0)).is_ok());
+        assert!(exit(126).dismissed());
+        assert!(exit(127).not_authorized());
+        assert!(!exit(3).dismissed() && !exit(3).not_authorized());
+        assert_eq!(exit(3).code(), Some(3));
+        assert_eq!(exit(126).to_string(), "pkexec exited with exit status: 126");
+    }
 
     #[test]
     fn a_hanging_privileged_child_is_killed_with_its_tree_after_the_timeout() {

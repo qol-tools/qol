@@ -658,10 +658,27 @@ where
 }
 
 fn write_response(stream: &mut LocalStream, response: &DaemonResponse) {
-    if let Ok(payload) = local_ipc::encode_secret_json(response) {
-        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
-        let _ = stream.write_all(&payload);
-    }
+    let payload = match local_ipc::encode_secret_json(response) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let message = match error {
+                local_ipc::SecretMessageError::TooLarge => format!(
+                    "the daemon's answer is larger than the {} KiB message limit, so it was not sent",
+                    local_ipc::MAX_MESSAGE_BYTES / 1024
+                ),
+                local_ipc::SecretMessageError::Encode => {
+                    "the daemon's answer could not be encoded".to_string()
+                }
+            };
+            log::warn!("{message}");
+            match local_ipc::encode_secret_json(&DaemonResponse::Error { message }) {
+                Ok(payload) => payload,
+                Err(_) => return,
+            }
+        }
+    };
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(10)));
+    let _ = stream.write_all(&payload);
 }
 
 #[derive(Clone)]

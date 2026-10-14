@@ -4,6 +4,7 @@ pub mod feature_flags;
 mod inspection;
 pub mod normalized;
 pub mod object_array;
+pub mod pages;
 pub mod validation;
 
 pub use defaults::{

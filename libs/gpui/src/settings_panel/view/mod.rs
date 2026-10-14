@@ -492,17 +492,28 @@ impl SettingsPanelView {
             .panel
             .sources
             .iter()
-            .map(|source| {
-                if let Some(index) = carried_views
+            .enumerate()
+            .map(|(index, source)| {
+                if let Some(carried) = carried_views
                     .iter()
                     .position(|(plugin_id, _)| plugin_id == &source.plugin_id)
                 {
-                    return Some(carried_views.swap_remove(index).1);
+                    return Some(carried_views.swap_remove(carried).1);
                 }
                 custom_factories
                     .iter()
                     .find(|(plugin_id, _)| plugin_id == &source.plugin_id)
-                    .map(|(_, factory)| {
+                    .map(|(_, factory)| Rc::clone(factory))
+                    .or_else(|| {
+                        let state = view.sources.get(index)?;
+                        let spec = state.pages.clone()?;
+                        Some(super::pages::factory(
+                            source.heading.clone(),
+                            spec,
+                            state.runtime.clone(),
+                        ))
+                    })
+                    .map(|factory| {
                         let back_link = Rc::clone(&parent_link);
                         let on_back: CustomPanelCallback = Rc::new(move |window, app| {
                             let parent = back_link.borrow().clone();

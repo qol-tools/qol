@@ -20,6 +20,6 @@ pub use runtime::{
 };
 pub use v1::{
     parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldAlign, FieldDefault, FieldKind,
-    FieldSpec, ItemSpec, NestedListSpec, NumberConstraints, ParseSpecError, RowActionSpec,
-    RowSliderSpec, SectionSpec,
+    FieldSpec, ItemSpec, NestedListSpec, NumberConstraints, PagesSpec, ParseSpecError,
+    RowActionSpec, RowSliderSpec, SectionSpec,
 };

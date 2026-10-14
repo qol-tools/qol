@@ -38,7 +38,7 @@ pub use row::SettingsRow;
 pub use text_field::SettingsTextField;
 pub use tile::{
     choose_hints, choose_step, settings_tile_rows, tile_arts, tile_grid_gap, tile_layout,
-    SettingsTile, TileArt, TileLayout, TILE_HEIGHT,
+    SettingsTick, SettingsTile, TileArt, TileLayout, TILE_HEIGHT,
 };
 pub use toggle::SettingsToggle;
 

@@ -1,0 +1,42 @@
+[plugin]
+id = "qol-update-manager"
+uid = "4d185145-2f3e-466a-aa80-5efd11ae7a49"
+name = "Update Manager"
+icon = "updates"
+description = "See what updates wait, install them when you choose, and restart when it suits you"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "qol-update-manager"
+
+[action.press]
+label = "Press an Update Manager row"
+args = ["press"]
+hotkey = false
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+hotkey = false
+
+[daemon]
+enabled = true
+command = "qol-update-manager"
+socket = "/tmp/qol-update-manager.sock"
+
+[capabilities]
+gpui = true
+doctor = true
+
+[menu]
+label = "Update Manager"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-update-manager"
+repo = "qol-tools/qol-update-manager"
+pattern = "qol-update-manager-{os}-{arch}"

@@ -3,6 +3,7 @@ mod entry_form;
 mod form_nav;
 mod navigation;
 mod object_array_row;
+mod pages;
 mod persistence;
 mod rows;
 mod stream;
@@ -210,6 +211,8 @@ pub struct CustomPanelContext {
 pub type CustomPanelFactory = Rc<dyn Fn(CustomPanelContext, &mut App) -> CustomPanelView>;
 
 type QueryHandler = dyn Fn(&str) -> Result<serde_json::Value, String> + Send + Sync;
+type InputQueryHandler =
+    dyn Fn(&str, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync;
 type ActionHandler =
     dyn Fn(&str, serde_json::Value) -> Result<Option<serde_json::Value>, String> + Send + Sync;
 
@@ -242,6 +245,7 @@ fn attention_value_is_truthy(value: &serde_json::Value) -> bool {
 #[derive(Clone)]
 pub struct SettingsRuntime {
     query: Arc<QueryHandler>,
+    input_query: Arc<InputQueryHandler>,
     action: Arc<ActionHandler>,
     poll_interval: Duration,
     query_intervals: std::collections::HashMap<String, Duration>,
@@ -302,6 +306,7 @@ pub(super) struct SourceState {
     pub(super) runtime: SettingsRuntime,
     pub(super) daemon_port: Option<u16>,
     pub(super) copy: std::collections::BTreeMap<String, FieldCopy>,
+    pub(super) pages: Option<qol_config::contract::PagesSpec>,
 }
 
 struct PreparedPanel {
@@ -600,8 +605,11 @@ impl SettingsRuntime {
     pub fn new(
         query: impl Fn(&str) -> Result<serde_json::Value, String> + Send + Sync + 'static,
     ) -> Self {
+        let query: Arc<QueryHandler> = Arc::new(query);
+        let plain = Arc::clone(&query);
         Self {
-            query: Arc::new(query),
+            query,
+            input_query: Arc::new(move |name, _| plain(name)),
             action: Arc::new(|action, _| Err(format!("action `{action}` is unavailable"))),
             poll_interval: Duration::from_secs(2),
             query_intervals: std::collections::HashMap::new(),
@@ -623,9 +631,25 @@ impl SettingsRuntime {
 
     fn tray_base(base: String) -> Self {
         let query_base = base.clone();
-        Self::new(move |query| persistence::query(&query_base, query)).with_input_action_result(
-            move |action, input| persistence::run_action(&base, action, &input),
-        )
+        let input_base = base.clone();
+        Self::new(move |query| persistence::query(&query_base, query))
+            .with_input_query(move |query, input| {
+                persistence::query_with_input(&input_base, query, &input)
+            })
+            .with_input_action_result(move |action, input| {
+                persistence::run_action(&base, action, &input)
+            })
+    }
+
+    pub fn with_input_query(
+        mut self,
+        query: impl Fn(&str, serde_json::Value) -> Result<serde_json::Value, String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.input_query = Arc::new(query);
+        self
     }
 
     pub fn with_input_action(
@@ -666,6 +690,14 @@ impl SettingsRuntime {
 
     fn query(&self, name: &str) -> Result<serde_json::Value, String> {
         (self.query)(name)
+    }
+
+    fn query_with(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        (self.input_query)(name, input)
     }
 
     fn run_action(
@@ -743,13 +775,17 @@ pub async fn open_plugin_settings(
 }
 
 fn prepare_panel(
-    panel: SettingsPanel,
+    mut panel: SettingsPanel,
     runtimes: Vec<SettingsRuntime>,
 ) -> anyhow::Result<PreparedSettingsPanel> {
     let mut prepared_sources = Vec::new();
-    for (source, runtime) in panel.sources.iter().zip(runtimes) {
+    let mut paged = Vec::new();
+    for (index, (source, runtime)) in panel.sources.iter().zip(runtimes).enumerate() {
         match prepare_source(source, runtime) {
             Ok(prepared) => {
+                if prepared.state.pages.is_some() {
+                    paged.push(index);
+                }
                 prepared_sources.push(prepared);
             }
             Err(error) if panel.sources.len() > 1 => {
@@ -757,6 +793,9 @@ fn prepare_panel(
             }
             Err(error) => return Err(error),
         }
+    }
+    for index in paged {
+        panel.sources[index].custom = true;
     }
     let mut rows = Vec::new();
     let mut sections = Vec::new();
@@ -862,21 +901,13 @@ fn prepare_source(
     runtime: SettingsRuntime,
 ) -> anyhow::Result<PreparedSource> {
     if source.custom {
-        return Ok(PreparedSource {
-            rows: Vec::new(),
-            sections: Vec::new(),
-            state: SourceState {
-                plugin_id: source.plugin_id.clone(),
-                values: serde_json::json!({}),
-                path: None,
-                runtime,
-                daemon_port: None,
-                copy: std::collections::BTreeMap::new(),
-            },
-        });
+        return Ok(bare_source(source, runtime, None));
     }
     let spec = qol_config::contract::parse_spec_str(&source.contract)
         .map_err(|error| anyhow::anyhow!("contract parse failed: {error:?}"))?;
+    if let Some(pages) = spec.pages {
+        return Ok(bare_source(source, runtime, Some(pages)));
+    }
     let base = persistence::panel_base(&source.plugin_id);
     let path = if source.plugin_id == qol_conventions::CORE_PANEL_ID {
         None
@@ -920,8 +951,29 @@ fn prepare_source(
             runtime,
             daemon_port,
             copy,
+            pages: None,
         },
     })
+}
+
+fn bare_source(
+    source: &PanelSource,
+    runtime: SettingsRuntime,
+    pages: Option<qol_config::contract::PagesSpec>,
+) -> PreparedSource {
+    PreparedSource {
+        rows: Vec::new(),
+        sections: Vec::new(),
+        state: SourceState {
+            plugin_id: source.plugin_id.clone(),
+            values: serde_json::json!({}),
+            path: None,
+            runtime,
+            daemon_port: None,
+            copy: std::collections::BTreeMap::new(),
+            pages,
+        },
+    }
 }
 
 fn settings_surface() -> Surface {
@@ -1110,7 +1162,25 @@ mod tests {
             runtime,
             daemon_port: None,
             copy: std::collections::BTreeMap::new(),
+            pages: None,
         }
+    }
+
+    #[test]
+    fn a_query_with_input_falls_back_to_the_plain_query_until_one_is_given() {
+        let plain = SettingsRuntime::new(|query| Ok(serde_json::json!(query)));
+        assert_eq!(
+            plain.query_with("pages", serde_json::json!({"open": ["main"]})),
+            Ok(serde_json::json!("pages"))
+        );
+        let scoped = plain.with_input_query(|query, input| {
+            Ok(serde_json::json!({"query": query, "input": input}))
+        });
+        assert_eq!(
+            scoped.query_with("pages", serde_json::json!({"open": ["main"]})),
+            Ok(serde_json::json!({"query": "pages", "input": {"open": ["main"]}}))
+        );
+        assert_eq!(scoped.query("pages"), Ok(serde_json::json!("pages")));
     }
 
     #[test]
@@ -1561,6 +1631,28 @@ active_query = "status"
             rail_width(prepared.sources.len()),
             0.0,
             "sizing must not reserve a rail the body will not open"
+        );
+    }
+
+    #[test]
+    fn a_pages_contract_turns_its_source_into_a_custom_page() {
+        let panel = SettingsPanel::single(
+            "plugin-pages".into(),
+            "schema_version = 1\n\n[pages]\nquery = \"pages\"\naction = \"press\"\n".into(),
+            "Pages".into(),
+        );
+
+        let prepared = super::prepare_panel(panel, vec![SettingsRuntime::empty()])
+            .expect("a pages contract prepares");
+
+        assert!(prepared.panel.sources[0].custom);
+        assert!(prepared.rows.is_empty());
+        assert_eq!(
+            prepared.sources[0].pages,
+            Some(qol_config::contract::PagesSpec {
+                query: "pages".into(),
+                action: "press".into(),
+            })
         );
     }
 

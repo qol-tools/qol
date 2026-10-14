@@ -237,6 +237,19 @@ fn writes_owned_error_message() {
 }
 
 #[test]
+fn an_answer_over_the_message_limit_arrives_as_an_error() {
+    let payload = serde_json::json!("x".repeat(local_ipc::MAX_MESSAGE_BYTES));
+    let (should_continue, response) =
+        response_for_result::<()>(ReadResult::HandledWithData(payload), |_| unreachable!());
+
+    assert!(should_continue);
+    match response {
+        DaemonResponse::Error { message } => assert!(message.contains("64 KiB"), "{message}"),
+        _ => panic!("expected error response"),
+    }
+}
+
+#[test]
 fn parser_can_keep_state_across_requests() {
     let mut count = 0;
 
