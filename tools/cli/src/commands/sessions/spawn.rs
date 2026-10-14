@@ -11,6 +11,7 @@ pub(super) use qol_agent_launch::cap::{config_spawn_cap, resolve_spawn_cap, Spaw
 use qol_agent_launch::sessions_config_path;
 pub(super) use qol_agent_launch::surface::{config_surface, surface_token, SURFACE_TAB};
 use qol_agent_launch::surface::{parse_surface, SURFACE_OS_WINDOW};
+use qol_terminal_sessions::cli::launch_flags::LaneProfile;
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
@@ -144,6 +145,32 @@ struct SpawnConfigFile {
     fork_effort: Option<String>,
     fork_surface: Option<String>,
     spawn_effort: Option<String>,
+    spawn_claude_settings: Option<toml::Table>,
+    spawn_claude_mcp_servers: Option<toml::Table>,
+}
+
+#[derive(Serialize)]
+struct McpConfig {
+    #[serde(rename = "mcpServers")]
+    mcp_servers: toml::Table,
+}
+
+fn lane_profile_from(
+    settings: Option<toml::Table>,
+    mcp_servers: Option<toml::Table>,
+) -> Result<LaneProfile> {
+    let settings_json = settings
+        .map(|settings| serde_json::to_string(&settings))
+        .transpose()
+        .context("spawn_claude_settings cannot be encoded as JSON")?;
+    let mcp_config_json = mcp_servers
+        .map(|mcp_servers| serde_json::to_string(&McpConfig { mcp_servers }))
+        .transpose()
+        .context("spawn_claude_mcp_servers cannot be encoded as JSON")?;
+    Ok(LaneProfile {
+        settings_json,
+        mcp_config_json,
+    })
 }
 
 pub(super) fn config_launch_defaults() -> Result<super::launch::LaunchDefaults> {
@@ -186,11 +213,16 @@ fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
         config.default_agent_profile,
         config.enforce_agent_profiles,
     )?;
+    let lane_profile = lane_profile_from(
+        config.spawn_claude_settings,
+        config.spawn_claude_mcp_servers,
+    )?;
     Ok(DispatchPolicy {
         agent,
         default_model: config.spawn_model,
         allowed_models,
         tool_models,
+        lane_profile,
     })
 }
 
@@ -1373,6 +1405,10 @@ pub(super) fn spawn_or_reuse(
                     model,
                     effort,
                 )?);
+                launch.args.extend(super::launch_flags::lane_profile_flags(
+                    &prepared.tool_id,
+                    &dispatch.policy.lane_profile,
+                ));
                 qol_agent_launch::account::apply(
                     &mut launch,
                     &prepared.tool_id,
@@ -3458,6 +3494,62 @@ mod tests {
     }
 
     #[test]
+    fn the_claude_lane_profile_loads_as_json_and_stays_empty_when_absent() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("sessions.toml");
+        let json = |encoded: Option<&str>| -> serde_json::Value {
+            serde_json::from_str(encoded.expect("a configured profile part")).unwrap()
+        };
+
+        let missing = config_dispatch_policy_at(&path).unwrap();
+        assert_eq!(missing.lane_profile, LaneProfile::default());
+        fs::write(&path, "spawn_model = \"flash\"\n").unwrap();
+        let absent = config_dispatch_policy_at(&path).unwrap();
+        assert_eq!(absent.lane_profile, LaneProfile::default());
+
+        fs::write(
+            &path,
+            "[spawn_claude_settings.enabledPlugins]\n\"heavy@market\" = false\n\n\
+             [spawn_claude_settings.statusLine]\ntype = \"command\"\ncommand = \"true\"\n\n\
+             [spawn_claude_mcp_servers]\n",
+        )
+        .unwrap();
+        let lean = config_dispatch_policy_at(&path).unwrap().lane_profile;
+        assert_eq!(
+            json(lean.settings_json.as_deref()),
+            serde_json::json!({
+                "enabledPlugins": { "heavy@market": false },
+                "statusLine": { "type": "command", "command": "true" },
+            })
+        );
+        assert_eq!(
+            json(lean.mcp_config_json.as_deref()),
+            serde_json::json!({ "mcpServers": {} })
+        );
+
+        fs::write(
+            &path,
+            "[spawn_claude_mcp_servers.docs]\ntype = \"http\"\nurl = \"https://docs.test/mcp\"\n",
+        )
+        .unwrap();
+        let only_mcp = config_dispatch_policy_at(&path).unwrap().lane_profile;
+        assert!(only_mcp.settings_json.is_none());
+        assert_eq!(
+            json(only_mcp.mcp_config_json.as_deref()),
+            serde_json::json!({
+                "mcpServers": { "docs": { "type": "http", "url": "https://docs.test/mcp" } }
+            })
+        );
+
+        fs::write(&path, "spawn_claude_settings = \"lean\"\n").unwrap();
+        let not_a_table = format!("{:#}", config_dispatch_policy_at(&path).unwrap_err());
+        assert!(
+            not_a_table.contains("spawn_claude_settings"),
+            "{not_a_table}"
+        );
+    }
+
+    #[test]
     fn tool_models_reject_empty_duplicate_and_absent_entries() {
         let root = tempfile::TempDir::new().unwrap();
         let path = root.path().join("sessions.toml");
@@ -3495,6 +3587,7 @@ mod tests {
                     "pi".to_owned(),
                     vec!["flash".to_owned()],
                 )]),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -3669,6 +3762,7 @@ mod tests {
                 default_model: Some("flash-y".to_owned()),
                 allowed_models: Vec::new(),
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -5273,6 +5367,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest {
                 agent_profile: agent_profile.map(str::to_owned),
@@ -5304,6 +5399,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest {
                 agent_profile: Some("other".to_owned()),
@@ -5335,6 +5431,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         )
@@ -5365,6 +5462,7 @@ mod tests {
                 default_model: default_model.map(str::to_owned),
                 allowed_models,
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         )
@@ -5906,6 +6004,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest {
                 agent_profile: Some(selected.to_owned()),
@@ -5943,6 +6042,7 @@ mod tests {
                 default_model: None,
                 allowed_models,
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest {
                 agent_profile: Some("worker".to_owned()),

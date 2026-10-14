@@ -43,6 +43,29 @@ pub fn tier_flags(
     Ok(flags)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaneProfile {
+    pub settings_json: Option<String>,
+    pub mcp_config_json: Option<String>,
+}
+
+pub fn lane_profile_flags(tool: &CliToolId, profile: &LaneProfile) -> Vec<String> {
+    if tool.as_str() != "claude" {
+        return Vec::new();
+    }
+    let mut flags = Vec::new();
+    if let Some(settings) = &profile.settings_json {
+        flags.extend(["--settings".to_owned(), settings.clone()]);
+    }
+    if let Some(mcp_config) = &profile.mcp_config_json {
+        flags.extend([
+            "--strict-mcp-config".to_owned(),
+            format!("--mcp-config={mcp_config}"),
+        ]);
+    }
+    flags
+}
+
 fn permission_flags(tool: &CliToolId) -> Vec<String> {
     match tool.as_str() {
         "claude" => vec!["--dangerously-skip-permissions".to_owned()],
@@ -172,6 +195,48 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("no model override flag"), "{error}");
+    }
+
+    #[test]
+    fn a_claude_lane_profile_layers_settings_and_pins_its_mcp_servers() {
+        let profile = LaneProfile {
+            settings_json: Some(r#"{"enabledPlugins":{"heavy@market":false}}"#.to_owned()),
+            mcp_config_json: Some(r#"{"mcpServers":{}}"#.to_owned()),
+        };
+        assert_eq!(
+            lane_profile_flags(&tool("claude"), &profile),
+            [
+                "--settings",
+                r#"{"enabledPlugins":{"heavy@market":false}}"#,
+                "--strict-mcp-config",
+                r#"--mcp-config={"mcpServers":{}}"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_mcp_config_rides_in_its_flag_so_the_variadic_list_cannot_swallow_the_prompt() {
+        let profile = LaneProfile {
+            settings_json: None,
+            mcp_config_json: Some(r#"{"mcpServers":{}}"#.to_owned()),
+        };
+        let flags = lane_profile_flags(&tool("claude"), &profile);
+        assert!(!flags.contains(&"--mcp-config".to_owned()), "{flags:?}");
+        assert!(flags
+            .last()
+            .is_some_and(|flag| flag.starts_with("--mcp-config=")));
+    }
+
+    #[test]
+    fn lane_profiles_only_reach_claude_and_an_empty_profile_adds_nothing() {
+        let profile = LaneProfile {
+            settings_json: Some("{}".to_owned()),
+            mcp_config_json: Some(r#"{"mcpServers":{}}"#.to_owned()),
+        };
+        for id in ["pi", "codex", "kimi"] {
+            assert!(lane_profile_flags(&tool(id), &profile).is_empty(), "{id}");
+        }
+        assert!(lane_profile_flags(&tool("claude"), &LaneProfile::default()).is_empty());
     }
 
     #[test]

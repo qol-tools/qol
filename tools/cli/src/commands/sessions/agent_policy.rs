@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Result};
+use qol_terminal_sessions::cli::launch_flags::LaneProfile;
 use serde::{Deserialize, Serialize};
 
 pub(super) const EVIDENCE_BASIS: &str = "configuration_declared";
@@ -279,6 +280,7 @@ pub(super) struct DispatchPolicy {
     pub(super) default_model: Option<String>,
     pub(super) allowed_models: Vec<String>,
     pub(super) tool_models: BTreeMap<String, Vec<String>>,
+    pub(super) lane_profile: LaneProfile,
 }
 
 impl DispatchPolicy {
@@ -857,6 +859,7 @@ mod tests {
                 default_model: None,
                 allowed_models: Vec::new(),
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             request,
         )
@@ -1267,6 +1270,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             request(Some("worker"), Some(AgentRole::Implement), None),
         );
@@ -1283,6 +1287,7 @@ mod tests {
                 default_model: Some("flash".to_owned()),
                 allowed_models: Vec::new(),
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -1352,6 +1357,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned(), "pro".to_owned()],
                 tool_models: BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -1389,6 +1395,7 @@ mod tests {
                 default_model: None,
                 allowed_models: Vec::new(),
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             request(Some("worker"), Some(AgentRole::Implement), None),
         );
@@ -1407,6 +1414,7 @@ mod tests {
                 default_model: None,
                 allowed_models: Vec::new(),
                 tool_models: BTreeMap::from([("pi".to_owned(), vec!["flash".to_owned()])]),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -1698,6 +1706,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["other".to_owned()],
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
@@ -1714,6 +1723,7 @@ mod tests {
                 default_model: None,
                 allowed_models: Vec::new(),
                 tool_models: BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
             AssignmentRequest::default(),
         );
