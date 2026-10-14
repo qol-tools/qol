@@ -45,7 +45,7 @@ struct Shared {
     state: Mutex<State>,
     wake: Condvar,
     journal: Option<PathBuf>,
-    log: PathBuf,
+    log: Option<PathBuf>,
 }
 
 impl Shared {
@@ -84,18 +84,12 @@ fn now() -> NaiveDateTime {
 pub fn run() -> ExitCode {
     let dir = qol_config::data_subdir("plugins").map(|dir| dir.join(crate::PLUGIN_ID));
     let journal = dir.as_ref().map(|dir| dir.join("journal.json"));
-    let log = dir
-        .as_ref()
-        .map_or_else(
-            || std::env::temp_dir().join("qol-update-manager"),
-            Clone::clone,
-        )
-        .join("install.log");
+    let log = dir.as_ref().map(|dir| dir.join("install.log"));
     let mut session = Session::new(
         journal.as_deref().map(Journal::load).unwrap_or_default(),
         !HostResidency::current().is_resident(),
     );
-    session.install_log = Some(log.display().to_string());
+    session.install_log = log.as_ref().map(|log| log.display().to_string());
     let shared = Arc::new(Shared {
         state: Mutex::new(State {
             session,
@@ -248,9 +242,18 @@ fn start(shared: &Arc<Shared>, session: &mut Session, task: Task) {
 fn work(shared: &Shared, task: Task) {
     let result = match &task {
         Task::Install(list) => {
-            let result = updates::install(list, &shared.log, &mut |done| {
-                shared.lock().session.progress(done);
-            });
+            let result = match &shared.log {
+                Some(log) => updates::install(list, log, &mut |done| {
+                    shared.lock().session.progress(done);
+                }),
+                None => Err(Failure {
+                    done: 0,
+                    reason: Reason::Stopped(
+                        "the install log could not be written: qol's data folder was not found"
+                            .into(),
+                    ),
+                }),
+            };
             let mut state = shared.lock();
             state.session.installed(result);
             shared.save(&state.session);
@@ -456,8 +459,26 @@ mod tests {
             }),
             wake: Condvar::new(),
             journal: None,
-            log: std::env::temp_dir().join("qol-update-manager-test.log"),
+            log: None,
         })
+    }
+
+    #[test]
+    fn an_install_without_a_data_folder_stops_and_says_why() {
+        let shared = shared();
+        shared.lock().session.job = Some(crate::session::Job {
+            updates: Vec::new(),
+            done: 0,
+        });
+        work(&shared, Task::Install(Vec::new()));
+        let state = shared.lock();
+        let failed = state.session.failed.as_ref().expect("failed");
+        assert_eq!(
+            failed.failure.reason,
+            Reason::Stopped(
+                "the install log could not be written: qol's data folder was not found".into()
+            )
+        );
     }
 
     #[test]
