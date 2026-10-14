@@ -1,3 +1,4 @@
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -243,8 +244,18 @@ fn work(shared: &Shared, task: Task) {
     let result = match &task {
         Task::Install(list) => {
             let result = match &shared.log {
-                Some(log) => updates::install(list, log, &mut |done| {
-                    shared.lock().session.progress(done);
+                Some(log) => panic::catch_unwind(AssertUnwindSafe(|| {
+                    updates::install(list, log, &mut |done| {
+                        shared.lock().session.progress(done);
+                    })
+                }))
+                .unwrap_or_else(|_| {
+                    Err(Failure {
+                        done: 0,
+                        reason: Reason::Stopped(
+                            "qol stopped unexpectedly during the install".into(),
+                        ),
+                    })
                 }),
                 None => Err(Failure {
                     done: 0,

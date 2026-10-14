@@ -288,7 +288,10 @@ impl Session {
                 Ok(Some(Task::Rules))
             }
             Act::Tonight(on) => {
-                let at = on.then(|| effective(self.hours(), self.time).next_after(now));
+                if *on {
+                    self.refuse_during_install()?;
+                }
+                let at =on.then(|| effective(self.hours(), self.time).next_after(now));
                 self.start(Op::Tonight)?;
                 Ok(Some(Task::Restart(at)))
             }
@@ -331,11 +334,19 @@ impl Session {
                 Ok(None)
             }
             Act::RestartNow => {
+                self.refuse_during_install()?;
                 self.start(Op::RestartNow)?;
                 Ok(Some(Task::RestartNow))
             }
             Act::Open(path) => Ok(Some(Task::Open(path.clone()))),
         }
+    }
+
+    fn refuse_during_install(&self) -> Result<(), String> {
+        if self.job.is_some() {
+            return Err("Wait for the install that is running to finish first".into());
+        }
+        Ok(())
     }
 
     fn start(&mut self, op: Op) -> Result<(), String> {

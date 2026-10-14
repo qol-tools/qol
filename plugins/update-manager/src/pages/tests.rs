@@ -366,21 +366,19 @@ fn the_waiting_page_puts_restarts_first_and_held_last() {
 fn install_asks_first_then_starts_one_job() {
     let mut session = mint();
     let pages = build(&session, now()).pages;
-    let install = page(&pages, "install");
+    let all = super::updates::install_all(&session);
+    let install = page(&pages, &all);
     assert_eq!(install.groups[0].title, "install 30 updates now?");
     assert_eq!(
-        label(&pages, "install", "restart"),
+        label(&pages, &all, "restart"),
         "NVIDIA driver 580.178 and the Secure Boot list"
     );
-    assert_eq!(
-        label(&pages, "install", "held"),
-        "AppArmor 4.0.1 stays held"
-    );
+    assert_eq!(label(&pages, &all, "held"), "AppArmor 4.0.1 stays held");
     assert_eq!(
         install.row("cancel").and_then(|row| row.enter.clone()),
         Some(Enter::Back)
     );
-    let outcome = press(&mut session, "install", "go", now());
+    let outcome = press(&mut session, &all, "go", now());
     assert_eq!(outcome.go, Some(Go::Back));
     let Some(Task::Install(list)) = outcome.task else {
         panic!("install must start a job");
@@ -388,7 +386,7 @@ fn install_asks_first_then_starts_one_job() {
     assert_eq!(list.len(), 4);
     let pages = build(&session, now()).pages;
     assert_eq!(label(&pages, ROOT, "waiting"), "Installing 30 updates");
-    assert!(pages.page("install").is_none());
+    assert!(pages.page(&all).is_none());
     assert_eq!(
         detail(&pages, "waiting", "update:apt:nvidia"),
         "installing, 0 of 20 packages"

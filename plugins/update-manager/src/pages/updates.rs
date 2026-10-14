@@ -82,6 +82,17 @@ fn job_detail(session: &Session, update: &Update) -> Option<String> {
     })
 }
 
+/// The page id names the listed updates, so a press from a confirmation whose
+/// list has since changed finds no row instead of installing what was never shown.
+pub(super) fn install_all(session: &Session) -> String {
+    let ids: Vec<&str> = session
+        .available()
+        .iter()
+        .map(|update| update.id.as_str())
+        .collect();
+    format!("install-all:{}", ids.join(","))
+}
+
 pub(super) fn pages(session: &Session) -> Vec<Sheet> {
     let mut sheets = Vec::new();
     if session.list().is_empty() && session.job.is_none() {
@@ -94,7 +105,7 @@ pub(super) fn pages(session: &Session) -> Vec<Sheet> {
             .iter()
             .map(|update| update.id.clone())
             .collect();
-        sheets.push(install(session, "install", &ids));
+        sheets.push(install(session, &install_all(session), &ids));
     }
     for update in session.list() {
         sheets.extend(one(session, update));
@@ -135,7 +146,7 @@ fn waiting(session: &Session) -> Vec<Sheet> {
             )
             .detail(detail)
             .button("install")
-            .open("install"),
+            .open(install_all(session)),
         );
     }
     let mut list: Vec<&Update> = session.list().iter().collect();

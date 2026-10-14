@@ -44,6 +44,9 @@ pub(super) fn read() -> Result<Vec<Update>, String> {
             _ => Err(done.reason()),
         };
     }
+    if !matches!(done.code, Some(0 | 2)) && !done.stdout.contains("\"Devices\"") {
+        return Err(done.reason());
+    }
     parse(&done.stdout)
 }
 

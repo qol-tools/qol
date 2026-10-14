@@ -28,13 +28,21 @@ pub(super) fn parse(
     let mut entry = Entry::default();
     for line in text.lines() {
         let Some((key, value)) = line.split_once(": ") else {
-            if line.trim().is_empty() && entry.start.is_some() {
-                entries.push(std::mem::take(&mut entry));
+            if line.trim().is_empty() {
+                let finished = std::mem::take(&mut entry);
+                if finished.start.is_some() {
+                    entries.push(finished);
+                }
             }
             continue;
         };
         match key {
-            "Start-Date" => entry.start = stamp(value),
+            "Start-Date" => {
+                entry = Entry {
+                    start: stamp(value),
+                    ..Entry::default()
+                }
+            }
             "End-Date" => entry.end = stamp(value),
             "Commandline" => entry.commandline = value.to_string(),
             "Requested-By" => {

@@ -73,15 +73,17 @@ fn restart(session: &Session, now: NaiveDateTime) -> Sheet {
         ),
         None => "Asks first. Open apps close.".to_string(),
     };
-    sheet.row(with_error(
-        Row::new("now", "Restart now")
-            .detail(now_detail)
-            .button("restart")
-            .busy(session.busy.contains(&Op::RestartNow))
-            .open("restart-now"),
-        session,
-        Op::RestartNow,
-    ));
+    if session.job.is_none() {
+        sheet.row(with_error(
+            Row::new("now", "Restart now")
+                .detail(now_detail)
+                .button("restart")
+                .busy(session.busy.contains(&Op::RestartNow))
+                .open("restart-now"),
+            session,
+            Op::RestartNow,
+        ));
+    }
     sheet.group("what finishes", "installed, waiting for the restart.");
     for (index, row) in session.finish().into_iter().enumerate() {
         sheet.row(Row::info(format!("finish:{index}"), row.label).detail(row.finish));
