@@ -94,6 +94,10 @@ impl Window {
         shown && !owned && !tool && !self.is_cloaked() && !self.is_shell()
     }
 
+    pub fn is_shown(self) -> bool {
+        unsafe { IsWindowVisible(self.0) != 0 && !self.is_cloaked() }
+    }
+
     fn is_cloaked(self) -> bool {
         let mut cloaked = 0u32;
         let read = unsafe {
