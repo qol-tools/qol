@@ -2012,6 +2012,111 @@ mod tests {
             .any(|pair| pair == ["--model", "sonnet-x"]));
     }
 
+    const LEAN_SETTINGS: &str = r#"{"enabledPlugins":{"heavy@market":false}}"#;
+    const LEAN_MCP_CONFIG: &str = r#"{"mcpServers":{}}"#;
+
+    fn lean_lane_policy() -> super::super::agent_policy::DispatchPolicy {
+        super::super::agent_policy::DispatchPolicy {
+            lane_profile: qol_terminal_sessions::cli::launch_flags::LaneProfile {
+                settings_json: Some(LEAN_SETTINGS.to_owned()),
+                mcp_config_json: Some(LEAN_MCP_CONFIG.to_owned()),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn carries_lane_profile(args: &[String]) -> bool {
+        args.iter().any(|arg| {
+            arg == "--settings" || arg == "--strict-mcp-config" || arg.starts_with("--mcp-config")
+        })
+    }
+
+    #[test]
+    fn a_claude_lane_launches_with_the_lane_profile_and_its_prompt_stays_last() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], true, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf())
+            .with_policy(lean_lane_policy());
+        let mut arguments = spawn_arguments("claude", "lane-one", None, &cwd);
+        arguments["model"] = json!("sonnet-x");
+        arguments["task"] = json!("implement and test the bounded change");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false, "{response}");
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        let args = &launch.args;
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--settings", LEAN_SETTINGS]),
+            "{args:?}"
+        );
+        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
+        let mcp_config = args
+            .iter()
+            .position(|arg| *arg == format!("--mcp-config={LEAN_MCP_CONFIG}"))
+            .unwrap_or_else(|| panic!("no joined --mcp-config in {args:?}"));
+        let prompt = args.last().unwrap();
+        assert!(mcp_config < args.len() - 1, "{args:?}");
+        assert!(
+            prompt.contains("implement and test the bounded change"),
+            "{prompt}"
+        );
+    }
+
+    #[test]
+    fn a_claude_fork_keeps_the_full_environment_and_never_takes_the_lane_profile() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf())
+            .with_policy(lean_lane_policy());
+        let response = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": spawn_cwd(&root),
+                "key": "fork-full-environment",
+                "model": "opus",
+                "brief": "chase the stale lockfile",
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false, "{response}");
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "claude");
+        assert!(!carries_lane_profile(&launch.args), "{:?}", launch.args);
+    }
+
+    #[test]
+    fn a_pi_lane_never_takes_the_claude_lane_profile() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(vec![live_pi_screen()], true, false)
+                .with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf())
+            .with_policy(lean_lane_policy());
+        let mut arguments = spawn_arguments("pi", "lane-one", None, &cwd);
+        arguments["model"] = json!("flash-x");
+        arguments["task"] = json!("implement and test the bounded change");
+        let response = tool_call(&server, "session_spawn", arguments);
+        assert_eq!(response["result"]["isError"], false, "{response}");
+
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "pi");
+        assert!(!carries_lane_profile(&launch.args), "{:?}", launch.args);
+    }
+
     #[test]
     fn bridge_with_a_task_is_rejected() {
         let (server, backend) = server(Vec::new(), true, false);
@@ -3007,6 +3112,7 @@ mod tests {
             default_model: None,
             allowed_models: vec!["flash".to_owned()],
             tool_models: std::collections::BTreeMap::new(),
+            ..DispatchPolicy::default()
         }
     }
 
@@ -3105,6 +3211,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
         );
         let response = tool_call(
@@ -3149,6 +3256,7 @@ mod tests {
                     "pi".to_owned(),
                     vec!["flash".to_owned()],
                 )]),
+                ..DispatchPolicy::default()
             },
         );
         let response = tool_call(
@@ -3188,6 +3296,7 @@ mod tests {
                 default_model: None,
                 allowed_models: vec!["flash".to_owned()],
                 tool_models: std::collections::BTreeMap::new(),
+                ..DispatchPolicy::default()
             },
         );
         let response = tool_call(
@@ -3225,6 +3334,7 @@ mod tests {
                     "pi".to_owned(),
                     vec!["flash".to_owned()],
                 )]),
+                ..DispatchPolicy::default()
             },
         );
         let mut arguments = spawn_arguments("claude", "mcp-undeclared-pair", None, &cwd);
