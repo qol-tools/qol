@@ -1,0 +1,17 @@
+name: qol CodeQL config
+
+# Test code, vendored upstream code and research scripts are not shipped.
+paths-ignore:
+  - "**/tests/**"
+  - "**/tests.rs"
+  - "vendor/**"
+  - "docs/**"
+
+# These rules flag inline #[cfg(test)] modules, which a path filter cannot
+# reach, plus zero-filled buffers and user ids. Every alert they raised on
+# 2026-10-14 was a false positive.
+query-filters:
+  - exclude:
+      id: rust/hard-coded-cryptographic-value
+  - exclude:
+      id: rust/cleartext-logging
