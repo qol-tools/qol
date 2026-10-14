@@ -1,14 +1,17 @@
 mod endpoint;
 mod parse;
+mod program;
 mod socket;
 mod spawn;
 
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub use parse::{parse_ls, KittyLs};
+pub use program::locate_kitten;
 
 #[cfg(test)]
 use endpoint::LegacyEndpointSource;
@@ -476,14 +479,14 @@ trait CommandRunner: Send + Sync {
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct SystemCommandRunner {
-    program: String,
+    program: PathBuf,
     timeout: Duration,
 }
 
 impl Default for SystemCommandRunner {
     fn default() -> Self {
         Self {
-            program: "kitten".to_owned(),
+            program: program::kitten_program(),
             timeout: COMMAND_TIMEOUT,
         }
     }
@@ -1437,7 +1440,7 @@ mod tests {
     fn system_runner_times_out_while_stdin_is_unread() {
         let sleep = script("exec sleep 60", "Start-Sleep 60");
         let runner = SystemCommandRunner {
-            program: sleep[0].clone(),
+            program: std::path::PathBuf::from(&sleep[0]),
             timeout: Duration::from_millis(300),
         };
         let started = std::time::Instant::now();
