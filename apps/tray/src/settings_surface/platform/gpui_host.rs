@@ -40,25 +40,43 @@ struct ToastCommand {
     activate: Option<ToastActivation>,
 }
 
-/// The plugin action a click on the toast runs, through the tray's plugin
-/// action route like any other plugin action.
 #[derive(Debug, PartialEq, serde::Deserialize)]
-struct ToastActivation {
-    plugin: String,
-    action: String,
-    #[serde(default)]
-    input: serde_json::Value,
+#[serde(untagged)]
+enum ToastActivation {
+    MirrorBanner {
+        mirror_banner_id: String,
+    },
+    Plugin {
+        plugin: String,
+        action: String,
+        #[serde(default)]
+        input: serde_json::Value,
+    },
 }
 
 impl ToastActivation {
     fn run(&self, cx: &mut App) {
-        let route = qol_conventions::api_routes::plugin_action(&self.plugin, &self.action);
-        let body = self.input.to_string();
+        let (route, body) = match self {
+            Self::Plugin {
+                plugin,
+                action,
+                input,
+            } => (
+                qol_conventions::api_routes::plugin_action(plugin, action),
+                Some(input.to_string()),
+            ),
+            Self::MirrorBanner { mirror_banner_id } => (
+                qol_conventions::api_routes::notification_mirror_activate(mirror_banner_id),
+                None,
+            ),
+        };
+        let body_owned = body;
         cx.background_spawn(async move {
+            let body_ref = body_owned.as_deref();
             if let Err(error) = super::native_tools::data::request_text(
                 qol_runtime::local_http::Method::Post,
                 &route,
-                Some(&body),
+                body_ref,
                 super::native_tools::data::REQUEST_TIMEOUT,
             ) {
                 log::warn!("[toast] activation {route} failed: {error:#}");
@@ -70,9 +88,24 @@ impl ToastActivation {
 
 fn validated_activation(value: &serde_json::Value) -> Option<ToastActivation> {
     let activation = serde_json::from_value::<ToastActivation>(value.clone()).ok()?;
-    (qol_plugin_api::manifest::is_valid_plugin_id(&activation.plugin)
-        && crate::plugins::manifest::is_valid_action_id(&activation.action))
-    .then_some(activation)
+    match &activation {
+        ToastActivation::Plugin { plugin, action, .. } => {
+            (qol_plugin_api::manifest::is_valid_plugin_id(plugin)
+                && crate::plugins::manifest::is_valid_action_id(action))
+            .then_some(activation)
+        }
+        ToastActivation::MirrorBanner { mirror_banner_id } => {
+            is_valid_mirror_banner_id(mirror_banner_id).then_some(activation)
+        }
+    }
+}
+
+fn is_valid_mirror_banner_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 32
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
 }
 
 fn config() -> DaemonConfig {
@@ -959,13 +992,20 @@ pub(in crate::settings_surface) fn show_toast(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
-    activate: Option<(&str, &DaemonRequest)>,
+    activate: Option<crate::settings_surface::ToastActivate<'_>>,
 ) -> anyhow::Result<bool> {
     let config = config();
     let action =
         action.map(|(label, payload)| serde_json::json!({ "label": label, "payload": payload }));
-    let activate = activate.map(|(plugin, request)| {
-        serde_json::json!({ "plugin": plugin, "action": request.action, "input": request.input })
+    let activate = activate.map(|activate| match activate {
+        crate::settings_surface::ToastActivate::Plugin { plugin, request } => serde_json::json!({
+            "plugin": plugin,
+            "action": request.action,
+            "input": request.input,
+        }),
+        crate::settings_surface::ToastActivate::MirrorBanner { id } => serde_json::json!({
+            "mirror_banner_id": id,
+        }),
     });
     Ok(matches!(
         core_daemon::send_request(
@@ -1349,7 +1389,7 @@ mod tests {
                 "action": "focus",
                 "input": { "session": "kitty:42" },
             })),
-            Some(super::ToastActivation {
+            Some(super::ToastActivation::Plugin {
                 plugin: "qol-cli-sessions".into(),
                 action: "focus".into(),
                 input: serde_json::json!({ "session": "kitty:42" }),
@@ -1360,6 +1400,38 @@ mod tests {
             serde_json::json!({ "plugin": "qol-cli-sessions", "action": "a/b" }),
             serde_json::json!({ "action": "focus" }),
             serde_json::Value::Null,
+        ];
+        for case in cases {
+            assert_eq!(toast(case.clone()), None, "{case}");
+        }
+    }
+
+    #[test]
+    fn toast_protocol_carries_a_mirror_banner_activation_and_drops_invalid_ids() {
+        let toast = |activate: serde_json::Value| {
+            let ToastCommand { activate, .. } = parsed_toast(parse_request(&DaemonRequest {
+                action: "toast".into(),
+                input: serde_json::json!({
+                    "title": "title",
+                    "body": "body",
+                    "level": "info",
+                    "activate": activate,
+                }),
+            }));
+            activate
+        };
+        assert_eq!(
+            toast(serde_json::json!({ "mirror_banner_id": "mb-0000000000000001" })),
+            Some(super::ToastActivation::MirrorBanner {
+                mirror_banner_id: "mb-0000000000000001".into(),
+            })
+        );
+        let too_long = "a".repeat(33);
+        let cases = [
+            serde_json::json!({ "mirror_banner_id": "" }),
+            serde_json::json!({ "mirror_banner_id": "../core" }),
+            serde_json::json!({ "mirror_banner_id": "has space" }),
+            serde_json::json!({ "mirror_banner_id": too_long }),
         ];
         for case in cases {
             assert_eq!(toast(case.clone()), None, "{case}");

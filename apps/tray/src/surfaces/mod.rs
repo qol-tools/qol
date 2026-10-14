@@ -32,7 +32,9 @@ pub fn show_plugin_notification(
             action,
             artifact,
             layout,
-            plugin_id.zip(activate),
+            plugin_id.zip(activate).map(|(plugin, request)| {
+                crate::settings_surface::ToastActivate::Plugin { plugin, request }
+            }),
         )
         .unwrap_or(false)
     };

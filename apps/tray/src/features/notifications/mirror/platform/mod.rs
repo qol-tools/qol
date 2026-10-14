@@ -4,6 +4,6 @@ mod fallback;
 mod macos;
 
 #[cfg(not(target_os = "macos"))]
-pub(super) use fallback::{access, sync};
+pub(super) use fallback::{access, activate, is_safe_banner_id, sync};
 #[cfg(target_os = "macos")]
-pub(super) use macos::{access, sync};
+pub(super) use macos::{access, activate, is_safe_banner_id, sync};

@@ -8,13 +8,34 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+use anyhow::{bail, Result};
 use core_foundation::base::CFTypeRef;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
 use core_foundation::string::CFStringRef;
 
+use super::retained::{self, AppRef, Entry};
 use super::toast::{self, Mirrored};
 
 pub(super) use claims::claimed;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in super::super) struct BannerMatch {
+    pub(in super::super) pid: i32,
+    pub(in super::super) banner_id: String,
+}
+
+pub(in super::super) fn press(matcher: &BannerMatch) -> Result<()> {
+    let app = ax::Element::application(matcher.pid)
+        .ok_or_else(|| anyhow::anyhow!("Notification Center AX element unavailable"))?;
+    for window in app.windows() {
+        for live in tree::live_banners(&window) {
+            if live.banner.id == matcher.banner_id {
+                return live.element.press_descendant();
+            }
+        }
+    }
+    bail!("banner no longer available")
+}
 
 const NOTIFICATION_CENTER: &str = "com.apple.notificationcenterui";
 const RECHECK: Duration = Duration::from_secs(5);
@@ -156,9 +177,21 @@ extern "C" fn on_created(
         }
         None => log::warn!("notification banners: banner has no window to hide"),
     }
+    let pid = notification_center_pid();
     for banner in banners {
         if first_sighting(&banner.id) {
             claims::record(&banner.title, &banner.body);
+            let retained_id = retained::next_id();
+            retained::insert(
+                &retained_id,
+                Entry {
+                    app: AppRef::DisplayName(banner.app.clone()),
+                    matcher: pid.map(|pid| BannerMatch {
+                        pid,
+                        banner_id: banner.id.clone(),
+                    }),
+                },
+            );
             toast::show(
                 &banner.app,
                 &Mirrored {
@@ -167,6 +200,7 @@ extern "C" fn on_created(
                     subtitle: banner.subtitle,
                     body: banner.body,
                 },
+                Some(&retained_id),
             );
         }
     }

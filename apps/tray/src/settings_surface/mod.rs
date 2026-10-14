@@ -107,6 +107,17 @@ pub struct ToastSource<'a> {
     pub mark: Option<&'a str>,
 }
 
+#[derive(Clone, Copy)]
+pub enum ToastActivate<'a> {
+    Plugin {
+        plugin: &'a str,
+        request: &'a DaemonRequest,
+    },
+    MirrorBanner {
+        id: &'a str,
+    },
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn show_toast(
     source: ToastSource<'_>,
@@ -116,7 +127,7 @@ pub fn show_toast(
     action: Option<(&str, &str)>,
     artifact: Option<&str>,
     layout: Option<NotificationLayout>,
-    activate: Option<(&str, &DaemonRequest)>,
+    activate: Option<ToastActivate<'_>>,
 ) -> anyhow::Result<bool> {
     platform::show_toast(
         source, title, body, level, action, artifact, layout, activate,

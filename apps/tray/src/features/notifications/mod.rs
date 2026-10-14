@@ -1,4 +1,4 @@
-mod mirror;
+pub(crate) mod mirror;
 
 use anyhow::{Context, Result};
 use qol_plugin_daemon::notification::gate::NativeHandler;

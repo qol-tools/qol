@@ -93,6 +93,10 @@ pub(super) fn routes() -> Router<AppState> {
             "/notifications",
             axum::routing::put(notifications_handlers::set_notifications),
         )
+        .route(
+            "/notifications/mirror/activate/{id}",
+            post(notifications_handlers::activate_mirrored),
+        )
         .route("/shortcuts", get(shortcut_handlers::list_shortcuts))
         .route("/shortcuts", post(shortcut_handlers::create_shortcut))
         .route(

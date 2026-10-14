@@ -1,9 +1,12 @@
 use axum::{
+    extract::Path,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
+
+use crate::features::notifications::{self, mirror::ActivateOutcome};
 
 use super::super::types::MAX_CONFIG_SIZE;
 use super::http_json::{self, blocking};
@@ -58,4 +61,25 @@ fn notifications_response() -> HttpResult<Response> {
 
 fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, message.to_string()).into_response()
+}
+
+pub(in super::super) async fn activate_mirrored(Path(id): Path<String>) -> impl IntoResponse {
+    blocking("mirror activate", move || activate_mirrored_inner(&id)).await
+}
+
+fn activate_mirrored_inner(id: &str) -> HttpResult<Response> {
+    if !notifications::mirror::is_safe_banner_id(id) {
+        return Err(Box::new(bad_request("invalid mirror banner id")));
+    }
+    match notifications::mirror::activate(id) {
+        Ok(ActivateOutcome::Pressed | ActivateOutcome::Activated) => {
+            Ok(StatusCode::NO_CONTENT.into_response())
+        }
+        Ok(ActivateOutcome::Missing) => Ok(StatusCode::NOT_FOUND.into_response()),
+        Err(error) => Ok((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("mirror activation failed: {error:#}"),
+        )
+            .into_response()),
+    }
 }

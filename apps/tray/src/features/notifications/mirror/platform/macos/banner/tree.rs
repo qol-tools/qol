@@ -53,6 +53,77 @@ pub(super) fn banners(root: &Node) -> Vec<Banner> {
     found
 }
 
+pub(super) struct LiveBanner {
+    pub(super) banner: Banner,
+    pub(super) element: Element,
+}
+
+pub(super) fn live_banners(root: &Element) -> Vec<LiveBanner> {
+    let mut found = Vec::new();
+    if !live_contains_history(root, 0) {
+        live_collect(root, 0, &mut found);
+    }
+    found
+}
+
+fn live_contains_history(element: &Element, depth: usize) -> bool {
+    if element.text("AXIdentifier").as_deref() == Some(HISTORY_LIST) {
+        return true;
+    }
+    if depth >= MAX_DEPTH {
+        return false;
+    }
+    element
+        .children()
+        .iter()
+        .any(|child| live_contains_history(child, depth + 1))
+}
+
+fn live_collect(element: &Element, depth: usize, found: &mut Vec<LiveBanner>) {
+    if element.text("AXSubrole").as_deref() == Some(BANNER) {
+        found.push(LiveBanner {
+            banner: banner_from_element(element),
+            element: element.clone(),
+        });
+        return;
+    }
+    if depth >= MAX_DEPTH {
+        return;
+    }
+    for child in element.children() {
+        live_collect(&child, depth + 1, found);
+    }
+}
+
+fn banner_from_element(element: &Element) -> Banner {
+    let identifier = element.text("AXIdentifier").unwrap_or_default();
+    let description = element.text("AXDescription").unwrap_or_default();
+    let field = |id: &str| -> String {
+        element
+            .children()
+            .iter()
+            .find(|child| child.text("AXIdentifier").as_deref() == Some(id))
+            .and_then(|child| child.text("AXValue"))
+            .unwrap_or_default()
+    };
+    let title = field("title");
+    let subtitle = field("subtitle");
+    let body = field("body");
+    let app = app_name(&description, [&title, &subtitle, &body]);
+    let id = if identifier.is_empty() {
+        format!("{app}\n{title}\n{subtitle}\n{body}")
+    } else {
+        identifier
+    };
+    Banner {
+        id,
+        app,
+        title,
+        subtitle,
+        body,
+    }
+}
+
 fn contains_history(node: &Node) -> bool {
     node.identifier == HISTORY_LIST || node.children.iter().any(contains_history)
 }
