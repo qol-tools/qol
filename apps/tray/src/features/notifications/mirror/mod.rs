@@ -8,6 +8,7 @@ pub enum MirrorAccess {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) enum ActivateOutcome {
     Pressed,
     Activated,
