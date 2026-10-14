@@ -107,7 +107,21 @@ pub fn apply(
     };
     let home = dirs::home_dir();
     let mut accounts: Vec<_> = config_claude_accounts()?.into_iter().collect();
-    accounts.extend(registered_accounts(home.as_deref()));
+    // The registry belongs to another tool, so a profile whose secret cannot be read is skipped.
+    accounts.extend(
+        registered_accounts(home.as_deref())
+            .into_iter()
+            .filter(|(dir, account)| match qol_secrets::read(&account.secret) {
+                Ok(_) => true,
+                Err(error) => {
+                    log::warn!(
+                        "ignoring the registered account for {dir}: secret `{}` cannot be read: {error:#}",
+                        account.secret
+                    );
+                    false
+                }
+            }),
+    );
     apply_with(
         launch,
         config_dir,
