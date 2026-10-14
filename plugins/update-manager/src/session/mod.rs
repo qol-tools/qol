@@ -291,16 +291,20 @@ impl Session {
                 if *on {
                     self.refuse_during_install()?;
                 }
-                let at =on.then(|| effective(self.hours(), self.time).next_after(now));
+                let at = on.then(|| effective(self.hours(), self.time).next_after(now));
                 self.start(Op::Tonight)?;
                 Ok(Some(Task::Restart(at)))
             }
             Act::Time(clock) => {
-                self.time = *clock;
-                if self.host.restart_at.is_some() {
-                    return self.apply(&Act::Tonight(true), now);
+                let was = std::mem::replace(&mut self.time, *clock);
+                if self.host.restart_at.is_none() {
+                    return Ok(None);
                 }
-                Ok(None)
+                let moved = self.apply(&Act::Tonight(true), now);
+                if moved.is_err() {
+                    self.time = was;
+                }
+                moved
             }
             Act::Hours(hours) => {
                 let target = hours.unwrap_or(MINT_DEFAULT);
@@ -658,5 +662,22 @@ mod tests {
         session.rules.helper = Helper::Failed(Refusal::Dismissed);
         assert!(!session.holding_all());
         assert_eq!(session.run_at().as_deref(), Some("Mint's run at 00:37"));
+    }
+
+    #[test]
+    fn a_restart_time_the_restart_cannot_take_stays_as_it_was() {
+        let mut session = session();
+        session.host.restart_at = Some(at("2026-10-15 01:30"));
+        session.job = Some(Job {
+            updates: Vec::new(),
+            done: 0,
+        });
+        let was = session.time;
+        assert_ne!(was, Clock::hm(5, 0));
+        assert_eq!(
+            session.apply(&Act::Time(Clock::hm(5, 0)), at("2026-10-14 12:00")),
+            Err("Wait for the install that is running to finish first".into())
+        );
+        assert_eq!(session.time, was);
     }
 }

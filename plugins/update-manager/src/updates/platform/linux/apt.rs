@@ -181,7 +181,13 @@ struct Item {
 pub(super) fn read(running: &Running, tag: &str) -> Result<Vec<Update>, String> {
     let sim = parse_sim(&output(
         "apt-get",
-        &["-s", "-o", "Debug::NoLocking=1", "--no-remove", "dist-upgrade"],
+        &[
+            "-s",
+            "-o",
+            "Debug::NoLocking=1",
+            "--no-remove",
+            "dist-upgrade",
+        ],
     )?);
     let holds: BTreeSet<String> = output("apt-mark", &["showhold"])
         .unwrap_or_default()

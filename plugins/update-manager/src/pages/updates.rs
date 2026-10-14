@@ -1,3 +1,5 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 use qol_config::pages::{Go, Row, Tone};
 
 use super::words::{join, plural, size, title};
@@ -82,15 +84,12 @@ fn job_detail(session: &Session, update: &Update) -> Option<String> {
     })
 }
 
-/// The page id names the listed updates, so a press from a confirmation whose
-/// list has since changed finds no row instead of installing what was never shown.
 pub(super) fn install_all(session: &Session) -> String {
-    let ids: Vec<&str> = session
-        .available()
-        .iter()
-        .map(|update| update.id.as_str())
-        .collect();
-    format!("install-all:{}", ids.join(","))
+    let mut hasher = DefaultHasher::new();
+    for update in session.available() {
+        update.id.hash(&mut hasher);
+    }
+    format!("install-all:{:016x}", hasher.finish())
 }
 
 pub(super) fn pages(session: &Session) -> Vec<Sheet> {
