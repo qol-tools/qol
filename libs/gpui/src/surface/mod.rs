@@ -391,7 +391,7 @@ impl Surface {
             .and_then(|memory| Remembered::new(memory, self.placement, cx));
         let restored = remembered
             .as_ref()
-            .and_then(|remembered| remembered.restore(self.size, constrains_size, cx));
+            .and_then(|remembered| remembered.restore(self.size, constrains_size, monitor, cx));
         let restored_monitor = restored.as_ref().map(|restored| restored.monitor.clone());
         let monitor = restored_monitor.as_ref().or(monitor);
         let bounds = restored
@@ -1076,13 +1076,16 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                     .set(self.dismisser.state.generation.get().wrapping_add(1));
                 self.reveal_pending.set(false);
             }
+            let active = tracker.snapshot_monitor();
             let restored = self
                 .dismisser
                 .state
                 .remembered
                 .as_ref()
-                .and_then(|remembered| remembered.restore(self.size(), self.constrains_size, cx));
-            let bounds = match (restored, self.kind, tracker.snapshot_monitor()) {
+                .and_then(|remembered| {
+                    remembered.restore(self.size(), self.constrains_size, active.as_ref(), cx)
+                });
+            let bounds = match (restored, self.kind, active) {
                 (Some(restored), _, _) => restored.bounds,
                 (None, _, Some(monitor)) => {
                     placed_bounds(self.kind, self.placement, &monitor, self.size())

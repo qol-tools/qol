@@ -67,6 +67,34 @@ fn flush_all_drains_every_pending_window() {
     }
 }
 
+#[gpui::test]
+fn a_restore_lands_on_the_active_monitor_at_the_saved_offset(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = state("memory-test-active-key", true);
+    let remembered = Remembered {
+        store: WindowStateStore::new(dir.path()),
+        key: saved.key.clone(),
+        reopen: RefCell::new(None),
+        default_placement: saved.default_placement.clone(),
+        last: RefCell::new(Some(saved)),
+        save_generation: Cell::new(0),
+    };
+    let active = ActiveMonitor::from_bounds(bounds(100_000.0, 0.0, 2560.0, 1440.0));
+    let restored = cx
+        .update(|cx| remembered.restore(size(px(300.0), px(200.0)), false, Some(&active), cx))
+        .unwrap();
+    assert_eq!(
+        restored.bounds,
+        to_bounds(WindowRect {
+            x: 100_010.0,
+            y: 20.0,
+            width: 300.0,
+            height: 200.0,
+        })
+    );
+    assert_eq!(restored.monitor.bounds(), active.bounds());
+}
+
 #[test]
 fn placement_labels_tell_defaults_apart() {
     use crate::placement::{Corner, CORNER_MARGIN};

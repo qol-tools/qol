@@ -92,6 +92,7 @@ impl Remembered {
         &self,
         content: Size<Pixels>,
         keep_content_size: bool,
+        active: Option<&ActiveMonitor>,
         cx: &App,
     ) -> Option<RestoredPlacement> {
         let mut saved = self.last.borrow().clone()?;
@@ -99,7 +100,10 @@ impl Remembered {
             saved.bounds_on_monitor.width = content.width.to_f64();
             saved.bounds_on_monitor.height = content.height.to_f64();
         }
-        let (monitor, window) = resolved(&saved, cx)?;
+        let (monitor, window) = match active {
+            Some(active) => (active.clone(), placed_on(&saved, active)),
+            None => resolved(&saved, cx)?,
+        };
         Some(RestoredPlacement {
             bounds: to_bounds(window),
             monitor,
@@ -247,6 +251,11 @@ fn resolved(saved: &WindowState, cx: &App) -> Option<(ActiveMonitor, WindowRect)
         .into_iter()
         .nth(index)
         .map(|native| (native, window))
+}
+
+fn placed_on(saved: &WindowState, monitor: &ActiveMonitor) -> WindowRect {
+    let (bounds, work_area) = logical_areas(monitor);
+    qol_window_state::place_on(saved, bounds, work_area)
 }
 
 fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {

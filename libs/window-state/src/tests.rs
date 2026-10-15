@@ -187,6 +187,24 @@ fn resolve_prefers_the_primary_when_monitors_are_equally_near() {
 }
 
 #[test]
+fn place_on_keeps_the_saved_offset_on_any_monitor() {
+    let state = saved(
+        reference("left", "DP-1", area(0.0, 0.0, 1920.0, 1080.0)),
+        rect(80.0, 100.0, 400.0, 300.0),
+    );
+    let right = area(1920.0, 0.0, 2560.0, 1440.0);
+    assert_eq!(
+        place_on(&state, right, right),
+        rect(2000.0, 100.0, 400.0, 300.0)
+    );
+    let small = area(1920.0, 0.0, 300.0, 200.0);
+    assert_eq!(
+        place_on(&state, small, small),
+        rect(1920.0, 0.0, 300.0, 200.0)
+    );
+}
+
+#[test]
 fn state_round_trips_through_the_store() {
     let dir = tempfile::tempdir().unwrap();
     let store = WindowStateStore::new(dir.path().join("window-state"));
