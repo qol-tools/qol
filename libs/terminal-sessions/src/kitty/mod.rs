@@ -88,7 +88,7 @@ impl KittyBackend {
         Ok(parse_ls(&body, backend_id())?.sessions_for(backend_id(), endpoint.instance()))
     }
 
-    fn sessions(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+    fn sessions(&self) -> Result<(Vec<SessionFacts>, Vec<String>), TerminalError> {
         let endpoints = self.endpoints.endpoints();
         qol_runtime::probe!(
             "TERMINAL_SESSIONS",
@@ -97,6 +97,7 @@ impl KittyBackend {
             endpoints.len()
         );
         let mut sessions = Vec::new();
+        let mut unlisted = Vec::new();
         let mut first_error = None;
         let mut reached = false;
         for endpoint in endpoints {
@@ -105,8 +106,10 @@ impl KittyBackend {
                     reached = true;
                     sessions.append(&mut discovered);
                 }
-                Err(error) if first_error.is_none() => first_error = Some(error),
-                Err(_) => {}
+                Err(error) => {
+                    unlisted.push(endpoint.native_prefix());
+                    first_error.get_or_insert(error);
+                }
             }
         }
         if !reached {
@@ -114,7 +117,7 @@ impl KittyBackend {
                 return Err(error);
             }
         }
-        Ok(sessions)
+        Ok((sessions, unlisted))
     }
 
     fn route_target(&self, target: &SessionBinding) -> Result<(Endpoint, u64), TerminalError> {
@@ -237,6 +240,10 @@ fn current_session_id(native: Option<&str>, endpoint: &Endpoint) -> Option<Sessi
 
 impl SessionInventory for KittyBackend {
     fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+        self.sessions().map(|(sessions, _)| sessions)
+    }
+
+    fn discover_partial(&self) -> Result<(Vec<SessionFacts>, Vec<String>), TerminalError> {
         self.sessions()
     }
 }
@@ -744,6 +751,28 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.native(), "k1_2.42");
+    }
+
+    #[test]
+    fn a_snapshot_does_not_cover_the_instance_it_could_not_list() {
+        let runner = FakeRunner::with_results(vec![
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "busy")),
+            Ok(success(ls(42, 901))),
+        ]);
+        let endpoints = FixedEndpointSource::new(vec![
+            Endpoint::fixture("k1_1", "unix:/tmp/kitty-1"),
+            Endpoint::fixture("k1_2", "unix:/tmp/kitty-2"),
+        ]);
+        let backend = Arc::new(KittyBackend::with_parts(runner, endpoints));
+        let terminals =
+            TerminalSessionService::from_backends([backend as Arc<dyn TerminalBackend>]).unwrap();
+        let id = |native: &str| SessionId::new(backend_id().clone(), native).unwrap();
+
+        let snapshot = terminals.snapshot().unwrap();
+
+        assert!(!snapshot.covers(&id("k1_1.17")));
+        assert!(snapshot.covers(&id("k1_2.42")));
+        assert!(snapshot.covers(&id("k1_2.17")));
     }
 
     #[test]

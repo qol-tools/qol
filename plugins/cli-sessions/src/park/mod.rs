@@ -18,7 +18,7 @@ use args::ParkArgs;
 pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
-use runner::{caller_state, CallerState};
+use runner::{caller_state, holder, CallerState, Holder};
 pub(crate) use runner::{target, Target};
 use store::ParkStore;
 
@@ -142,6 +142,7 @@ fn park(
         closes_terminal,
         caller_closed: false,
         exit_code: None,
+        wake: None,
         resumed_session: None,
         detail: None,
         report: None,
@@ -176,13 +177,9 @@ pub fn unpark(id: &str) -> Result<String> {
     let Some(_lock) = store.lock_unpark(id)? else {
         bail!("`{id}` is already being resumed or reopened");
     };
-    let mut record = store.load(id)?;
+    let record = store.load(id)?;
     if record.state == ParkState::Finished {
         return reopen(&store, record);
-    }
-    let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
-    if record.state != ParkState::Waiting && !retry {
-        bail!("`{id}` is no longer waiting ({:?})", record.state);
     }
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
@@ -196,6 +193,15 @@ pub fn unpark(id: &str) -> Result<String> {
             record.session
         );
     }
+    let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
+        bail!("`{id}` is already being resumed");
+    };
+    let mut record = store.load(id)?;
+    let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
+    if record.state != ParkState::Waiting && !retry {
+        bail!("`{id}` is no longer waiting ({:?})", record.state);
+    }
+    ensure_not_open(&store, &terminals, &interpreter, &record, &caller)?;
     if !store.claim_resume(id)? {
         bail!("`{id}` is already being resumed");
     }
@@ -228,14 +234,48 @@ pub fn unpark(id: &str) -> Result<String> {
     Ok(format!("resumed {id} in {session}"))
 }
 
-fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<String> {
+fn reopen(store: &ParkStore, record: ParkRecord) -> Result<String> {
     let terminals = TerminalSessionService::system();
-    let session = resume(&terminals, &CliSessionInterpreter::system(), &record, "")?;
+    let interpreter = CliSessionInterpreter::system();
+    let caller = record
+        .session
+        .parse::<SessionBinding>()
+        .map_err(|error| anyhow!("invalid parked session token: {error}"))?;
+    let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
+        bail!("`{}` is already being resumed", record.id);
+    };
+    let mut record = store.load(&record.id)?;
+    if record.state != ParkState::Finished {
+        bail!("`{}` is no longer finished ({:?})", record.id, record.state);
+    }
+    ensure_not_open(store, &terminals, &interpreter, &record, &caller)?;
+    let session = resume(&terminals, &interpreter, &record, "")?;
     record.state = ParkState::Resumed;
     record.resumed_session = Some(session.clone());
     record.detail = Some("reopened from its notification".to_owned());
     store.record(&record)?;
     Ok(format!("reopened {} in {session}", record.id))
+}
+
+/// Refuses to open a second copy of a conversation that a live session already holds.
+fn ensure_not_open(
+    store: &ParkStore,
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    record: &ParkRecord,
+    caller: &SessionBinding,
+) -> Result<()> {
+    match holder(terminals, interpreter, store, record, caller) {
+        Holder::None => Ok(()),
+        Holder::Live(binding) => bail!(
+            "`{}` is already open in `{binding}`; continue there",
+            record.id
+        ),
+        Holder::Unknown => bail!(
+            "could not list every terminal, so `{}` may already be open; try again",
+            record.id
+        ),
+    }
 }
 
 pub fn list() -> Result<Vec<String>> {
@@ -289,6 +329,7 @@ pub(crate) mod tests {
             closes_terminal: false,
             caller_closed: false,
             exit_code: None,
+            wake: None,
             resumed_session: None,
             detail: None,
             report: None,

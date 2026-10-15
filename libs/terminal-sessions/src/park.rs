@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ParkState {
     Waiting,
+    /// The command finished and its result waits to be delivered to the conversation.
+    Exited,
     Delivered,
     Resumed,
     Finished,
@@ -44,6 +46,9 @@ pub struct ParkRecord {
     pub caller_closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    /// What the conversation is told about the finished command, kept until it is delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +92,47 @@ pub fn waiting(dir: &Path) -> Vec<ParkRecord> {
         .unwrap_or_default()
         .into_iter()
         .filter(|record| record.state == ParkState::Waiting)
+        .collect()
+}
+
+/// Finished commands of one conversation whose results are not delivered yet, oldest first.
+pub fn exited(dir: &Path, external_id: &str) -> Vec<ParkRecord> {
+    let mut exited = records(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| record.state == ParkState::Exited && record.external_id == external_id)
+        .collect::<Vec<_>>();
+    exited.reverse();
+    exited
+}
+
+pub const STALE_DETAIL: &str = "the park runner stopped before it delivered the command's result";
+
+/// Marks parks whose runner died before delivering as failed, so they stop showing as
+/// waiting and are announced once. Returns the ids it failed.
+pub fn fail_stale(dir: &Path, runner_alive: impl Fn(u32, Option<&str>) -> bool) -> Vec<String> {
+    records(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| matches!(record.state, ParkState::Waiting | ParkState::Exited))
+        .filter(|record| {
+            record
+                .runner_pid
+                .is_some_and(|pid| !runner_alive(pid, record.runner_identity.as_deref()))
+        })
+        .filter_map(|record| {
+            let id = record.id.clone();
+            let failed = ParkRecord {
+                state: ParkState::Failed,
+                runner_pid: None,
+                detail: Some(STALE_DETAIL.to_owned()),
+                ..record
+            };
+            let staging = dir.join(format!("{id}.json.stale"));
+            fs::write(&staging, serde_json::to_string(&failed).ok()?).ok()?;
+            fs::rename(staging, dir.join(format!("{id}.json"))).ok()?;
+            Some(id)
+        })
         .collect()
 }
 
@@ -155,6 +201,7 @@ mod tests {
             closes_terminal: false,
             caller_closed: false,
             exit_code: None,
+            wake: None,
             resumed_session: None,
             detail: None,
             report: None,
@@ -208,6 +255,68 @@ mod tests {
             .map(|record| record.id)
             .collect();
         assert_eq!(ids, ["w"]);
+    }
+
+    #[test]
+    fn exited_lists_one_conversation_oldest_first() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &record("late", 3, ParkState::Exited));
+        write(root.path(), &record("early", 1, ParkState::Exited));
+        write(root.path(), &record("waiting", 2, ParkState::Waiting));
+        write(
+            root.path(),
+            &ParkRecord {
+                external_id: "other".to_owned(),
+                ..record("other", 2, ParkState::Exited)
+            },
+        );
+        let ids: Vec<String> = exited(root.path(), "abc")
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(ids, ["early", "late"]);
+    }
+
+    #[test]
+    fn parks_whose_runner_died_fail_once_and_are_announced() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &record("dead", 1, ParkState::Waiting));
+        write(root.path(), &record("undelivered", 1, ParkState::Exited));
+        write(
+            root.path(),
+            &ParkRecord {
+                runner_pid: Some(8),
+                ..record("alive", 1, ParkState::Waiting)
+            },
+        );
+        write(
+            root.path(),
+            &ParkRecord {
+                runner_pid: None,
+                ..record("starting", 1, ParkState::Waiting)
+            },
+        );
+        write(root.path(), &record("done", 1, ParkState::Delivered));
+        let alive = |pid: u32, _: Option<&str>| pid == 8;
+        let mut failed = fail_stale(root.path(), alive);
+        failed.sort();
+        assert_eq!(failed, ["dead", "undelivered"]);
+        assert!(fail_stale(root.path(), alive).is_empty());
+        let ids: Vec<String> = waiting(root.path())
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(ids, ["alive", "starting"]);
+        let announced: Vec<String> = unnotified(root.path())
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(announced.len(), 2);
+        assert!(records(root.path())
+            .unwrap()
+            .iter()
+            .filter(|record| record.state == ParkState::Failed)
+            .all(|record| record.detail.as_deref() == Some(STALE_DETAIL)));
     }
 
     #[test]

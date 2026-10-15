@@ -16,7 +16,10 @@ use super::spawn::{SpawnLedger, SpawnLocks};
 
 mod evidence;
 
-use qol_terminal_sessions::cli::{CliRuntimeState, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{
+    below_composer, composer_draft, composer_holds_draft, composer_screen, CliRuntimeState,
+    CliSessionInterpreter,
+};
 
 const POLL_BASE: Duration = Duration::from_secs(3);
 const POLL_CAP: Duration = Duration::from_secs(5);
@@ -2196,65 +2199,6 @@ fn record_wake_failure(
     );
 }
 
-fn composer_line(line: &str) -> Option<&str> {
-    line.trim()
-        .strip_prefix(['>', '❯'])
-        .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
-}
-
-fn composer_busy(screen: &str) -> bool {
-    composer_draft(screen).is_some()
-}
-
-fn composer_draft(screen: &str) -> Option<String> {
-    let lines: Vec<&str> = screen.lines().collect();
-    let start = lines
-        .iter()
-        .rposition(|line| composer_line(line).is_some())?;
-    let rest = composer_line(lines[start])?;
-    if rest.chars().all(char::is_whitespace) {
-        return None;
-    }
-    let continuation = lines[start + 1..]
-        .iter()
-        .take_while(|line| !line.trim_start().starts_with('\u{2500}'))
-        .copied();
-    Some(
-        std::iter::once(rest)
-            .chain(continuation)
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
-}
-
-fn below_composer(screen: &str) -> &str {
-    let mut offset = 0;
-    let mut below = "";
-    for line in screen.split_inclusive('\n') {
-        offset += line.len();
-        if composer_line(line).is_some() {
-            below = &screen[offset..];
-        }
-    }
-    below
-}
-
-fn composer_screen(
-    terminals: &TerminalSessionService,
-    binding: &SessionBinding,
-) -> Result<String, TerminalError> {
-    terminals
-        .read_screen_styled(binding)
-        .map(|screen| qol_terminal_sessions::cli::without_faint_text(&screen))
-}
-
-fn composer_holds_draft(
-    terminals: &TerminalSessionService,
-    binding: &SessionBinding,
-) -> Result<bool, TerminalError> {
-    composer_screen(terminals, binding).map(|screen| composer_busy(&screen))
-}
-
 fn composer_holds_draft_or_unreadable(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
@@ -4222,38 +4166,6 @@ mod tests {
         assert_eq!(clean_screen("a\n\n\n\nb"), "a\n\nb");
         assert_eq!(clean_screen(""), "");
         assert_eq!(clean_screen("   \n\n"), "");
-    }
-
-    #[test]
-    fn composer_busy_detects_an_in_progress_prompt_and_ignores_bare_prompts() {
-        let cases: &[(&str, bool)] = &[
-            ("> fixing the parser", true),
-            ("> fixing the parser\nidle output", true),
-            ("> draft\nstatus: running", true),
-            ("❯ fixing the parser", true),
-            ("   > fixing the parser", true),
-            ("> old message\n> ", false),
-            ("> old message\n> draft", true),
-            ("❯ old message\n❯ ", false),
-            (">", false),
-            ("> ", false),
-            (">  ", false),
-            ("❯", false),
-            ("❯ ", false),
-            ("❯\u{a0}please fork an agent", true),
-            ("❯\u{a0}", false),
-            ("❯\u{a0}old message\n❯\u{a0}", false),
-            (">quoted output", false),
-            (
-                "❯ old\n\u{2500}\u{2500}\n❯\u{a0}draft\n\u{2500}\u{2500}\n  status line",
-                true,
-            ),
-            ("just output, no prompt", false),
-            ("", false),
-        ];
-        for (screen, expected) in cases {
-            assert_eq!(composer_busy(screen), *expected, "screen: {screen:?}");
-        }
     }
 
     #[test]
