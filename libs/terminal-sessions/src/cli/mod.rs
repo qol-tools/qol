@@ -21,8 +21,8 @@ pub use builtins::{
 };
 pub use chat::{ChatRole, ChatTurn};
 pub use evidence::{
-    CliActivityEvidence, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
-    CliSessionEvidence, CliViewportState,
+    CliActivityEvidence, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliRuntimeState,
+    CliScreenEvidence, CliSessionEvidence, CliViewportState,
 };
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
 pub use model::{CliSessionDescriptor, CliTool, CliToolColor, CliToolId};
@@ -141,6 +141,10 @@ pub trait CliSessionStrategy: Send + Sync {
     }
 
     fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
+
+    fn draft_stash(&self) -> Option<CliDraftStash> {
         None
     }
 }

@@ -9,7 +9,7 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
+    ChatTurn, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
     CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
     CliSessionSubscriptionError, CliTool, CliToolId,
 };
@@ -203,11 +203,26 @@ impl CliSessionInterpreter {
         terminals: &TerminalSessionService,
         binding: &SessionBinding,
     ) -> Result<Option<String>, TerminalError> {
-        let sessions = terminals.discover()?;
-        Ok(sessions
-            .iter()
-            .find(|session| session.binding().as_ref() == Ok(binding))
-            .and_then(|facts| self.keep_open_reason(facts)))
+        Ok(Self::facts_for(terminals, binding)?.and_then(|facts| self.keep_open_reason(&facts)))
+    }
+
+    pub fn draft_stash_for(
+        &self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Result<Option<CliDraftStash>, TerminalError> {
+        Ok(Self::facts_for(terminals, binding)?
+            .and_then(|facts| self.strategy_for(&facts).draft_stash()))
+    }
+
+    fn facts_for(
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Result<Option<SessionFacts>, TerminalError> {
+        Ok(terminals
+            .discover()?
+            .into_iter()
+            .find(|session| session.binding().as_ref() == Ok(binding)))
     }
 
     pub fn launchable_tools(&self) -> Vec<CliToolId> {

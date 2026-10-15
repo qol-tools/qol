@@ -46,6 +46,14 @@ pub struct CliScreenEvidence {
     pub viewport: CliViewportState,
 }
 
+/// How a tool sets an unsent composer draft aside and shows that it did:
+/// the key that stashes it, and the text the tool draws while a stash is held.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CliDraftStash {
+    pub key: &'static str,
+    pub indicator: &'static str,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CliLaunchProgram {
     pub program: String,
