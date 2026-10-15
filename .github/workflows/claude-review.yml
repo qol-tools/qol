@@ -5,9 +5,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  workflow_run:
-    workflows: [tests]
-    types: [completed]
   merge_group:
 
 permissions:
@@ -25,14 +22,10 @@ jobs:
     name: Review with qol-code-review
     if: >-
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'merge_group' &&
-       github.event.workflow_run.conclusion == 'failure' &&
-       github.event.workflow_run.head_repository.full_name == github.repository) ||
       (github.event.pull_request.head.repo.full_name == github.repository &&
        !endsWith(github.actor, '[bot]'))
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_branch || github.ref }}
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -105,28 +98,10 @@ jobs:
           echo "path=$node" >> "$GITHUB_OUTPUT"
           echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
 
-      - name: Read the merge queue failure
-        if: github.event_name == 'workflow_run'
-        id: queue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NODE: ${{ steps.node.outputs.path }}
-          OUT: ${{ steps.node.outputs.out }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-        run: node "$NODE" queue-context --run-id "$RUN_ID" --repo "$GITHUB_REPOSITORY" --out "$OUT" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name != 'workflow_run' || steps.queue.outputs.pr != ''
         with:
-          ref: ${{ steps.queue.outputs.merge-ref }}
           fetch-depth: 2
           persist-credentials: false
-
-      # refs/pull/N/merge moves with the pull request, so the publish job checks out this exact merge.
-      - name: Pin the merge commit
-        if: steps.queue.outputs.pr != ''
-        id: merge
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Find the last review
         if: github.event_name == 'pull_request'
@@ -167,28 +142,6 @@ jobs:
           OUT: ${{ steps.node.outputs.out }}
         run: echo "verdict=$(jq -r .status "$OUT/review/report.json")" >> "$GITHUB_OUTPUT"
 
-      - name: Fix
-        id: fix
-        if: github.event_name == 'pull_request'
-        timeout-minutes: 40
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
-          NODE: ${{ steps.node.outputs.path }}
-          OUT: ${{ steps.node.outputs.out }}
-        run: node "$NODE" fix --base HEAD^1 --head HEAD --out "$OUT"
-
-      - name: Fix the merge queue failure
-        id: queue-fix
-        if: steps.queue.outputs.pr != ''
-        timeout-minutes: 50
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CLAUDE_CODE_PLUGIN_SEED_DIR: ${{ steps.seed.outputs.dir }}
-          NODE: ${{ steps.node.outputs.path }}
-          OUT: ${{ steps.node.outputs.out }}
-        run: node "$NODE" queue-fix --base HEAD^1 --head HEAD --out "$OUT"
-
       - name: Upload review
         if: ${{ !cancelled() && github.event_name != 'push' && steps.node.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -197,28 +150,21 @@ jobs:
           path: |
             ${{ steps.node.outputs.out }}/reply.md
             ${{ steps.node.outputs.out }}/review/
-            ${{ steps.node.outputs.out }}/fix/
-            ${{ steps.node.outputs.out }}/queue/
           if-no-files-found: ignore
           retention-days: 7
 
     outputs:
       seed-key: ${{ steps.seed.outputs.key }}
       verdict: ${{ steps.verdict.outputs.verdict }}
-      fix: ${{ steps.queue-fix.outcome == 'skipped' && steps.fix.outcome || steps.queue-fix.outcome }}
-      pr: ${{ steps.queue.outputs.pr }}
-      head-ref: ${{ steps.queue.outputs.head-ref }}
-      head-sha: ${{ steps.queue.outputs.head-sha }}
-      merge-sha: ${{ steps.merge.outputs.sha }}
 
-  # A fresh runner, so nothing the review and fix sessions wrote reaches the steps holding the deploy key and the PR token.
+  # A fresh runner, so nothing the review session wrote reaches the step holding the PR token.
   publish:
     name: Publish the review
     needs: review
-    # !cancelled() replaces the implicit success() a job if gets, so a failed review or fix still posts its comment.
+    # !cancelled() replaces the implicit success() a job if gets, so a failed review still posts its comment.
     if: >-
       !cancelled() && needs.review.result != 'skipped' &&
-      (github.event_name == 'pull_request' || needs.review.outputs.pr != '')
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -227,7 +173,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.review.outputs.merge-sha }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -253,42 +198,6 @@ jobs:
           test "$(echo "$node" | wc -l)" = 1
           echo "path=$node" >> "$GITHUB_OUTPUT"
           echo "out=$RUNNER_TEMP/claude-review" >> "$GITHUB_OUTPUT"
-          if [ -s "$RUNNER_TEMP/claude-review/fix/fix.patch" ]; then echo "patch=true" >> "$GITHUB_OUTPUT"; fi
-
-      - name: Push fix
-        id: push
-        if: steps.node.outputs.patch == 'true'
-        env:
-          DEPLOY_KEY: ${{ secrets.VERSIONING_DEPLOY_KEY }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref || needs.review.outputs.head-ref }}
-          NODE: ${{ steps.node.outputs.path }}
-          OUT: ${{ steps.node.outputs.out }}
-          SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_CONFIG_NOSYSTEM: "1"
-        run: |
-          set -euo pipefail
-          for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
-            if [ -n "$secret" ] && grep -qF -- "$secret" "$OUT/fix/fix.patch"; then
-              echo "::error::the fix patch contains a secret and was not pushed"
-              exit 1
-            fi
-          done
-          node "$NODE" check-patch --patch "$OUT/fix/fix.patch" --base HEAD^1 --head HEAD
-          git -c advice.detachedHead=false checkout -q HEAD^2
-          git apply --index "$OUT/fix/fix.patch"
-          git -c core.hooksPath=/dev/null -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -q -F "$OUT/fix/message.txt"
-          key="$RUNNER_TEMP/deploy-key"
-          printf '%s\n' "$DEPLOY_KEY" > "$key"
-          chmod 600 "$key"
-          # The deploy key, unlike the workflow token, starts the tests and merge gate on the pushed fix.
-          GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-            git push "git@github.com:$GITHUB_REPOSITORY.git" "HEAD:refs/heads/$HEAD_REF"
-          rm -f "$key"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Post review comment
         if: ${{ !cancelled() && steps.node.outcome == 'success' }}
@@ -296,20 +205,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
-          PR_NUMBER: ${{ github.event.pull_request.number || needs.review.outputs.pr }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || needs.review.outputs.head-sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          FIX_OUTCOME: ${{ needs.review.outputs.fix == 'failure' && 'failure' || steps.push.outcome }}
-          FIX_SHA: ${{ steps.push.outputs.sha }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p "$OUT"
           status=0
-          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" \
-            --fix-sha "$FIX_SHA" --fix-outcome "$FIX_OUTCOME" > /dev/null || status=$?
+          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
           body="$OUT/comment.md"
           for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
             if [ -n "$secret" ] && grep -qF -- "$secret" "$body"; then
