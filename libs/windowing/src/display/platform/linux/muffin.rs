@@ -401,7 +401,37 @@ fn plan_mode(
     let (old_width, old_height) =
         logical_extent(current_mode(state, connector)?, logical, state.layout_mode);
     let (new_width, new_height) = logical_extent(new_mode, logical, state.layout_mode);
-    let (right, bottom) = (logical.x + old_width, logical.y + old_height);
+    let mut extents = Vec::with_capacity(configs.len());
+    for other in &state.logical_monitors {
+        extents.push(match other.connectors.first() {
+            Some(first) => logical_extent(current_mode(state, first)?, other, state.layout_mode),
+            None => (0, 0),
+        });
+    }
+    let columns: Vec<Span> = state
+        .logical_monitors
+        .iter()
+        .zip(&extents)
+        .map(|(other, &(width, height))| Span {
+            start: other.x,
+            length: width,
+            cross_start: other.y,
+            cross_length: height,
+        })
+        .collect();
+    let rows: Vec<Span> = state
+        .logical_monitors
+        .iter()
+        .zip(&extents)
+        .map(|(other, &(width, height))| Span {
+            start: other.y,
+            length: height,
+            cross_start: other.x,
+            cross_length: width,
+        })
+        .collect();
+    let shift_x = trailing_neighbours(&columns, index);
+    let shift_y = trailing_neighbours(&rows, index);
     for (other, config) in configs.iter_mut().enumerate() {
         if other == index {
             if let Some(target) = config
@@ -413,14 +443,51 @@ fn plan_mode(
             }
             continue;
         }
-        if config.x >= right {
+        if shift_x[other] {
             config.x += new_width - old_width;
         }
-        if config.y >= bottom {
+        if shift_y[other] {
             config.y += new_height - old_height;
         }
     }
     Ok(configs)
+}
+
+/// A logical monitor's extent along one axis plus its extent on the perpendicular axis.
+struct Span {
+    start: i32,
+    length: i32,
+    cross_start: i32,
+    cross_length: i32,
+}
+
+/// Flags the monitors that sit past the far edge of `changed` along the axis, directly or
+/// through a chain of monitors that do, and share rows (or columns) with the one before them.
+fn trailing_neighbours(spans: &[Span], changed: usize) -> Vec<bool> {
+    let mut shifted = vec![false; spans.len()];
+    shifted[changed] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for other in 0..spans.len() {
+            if shifted[other] {
+                continue;
+            }
+            let follows = (0..spans.len()).any(|anchor| {
+                let (a, o) = (&spans[anchor], &spans[other]);
+                shifted[anchor]
+                    && o.start >= a.start + a.length
+                    && o.cross_start < a.cross_start + a.cross_length
+                    && a.cross_start < o.cross_start + o.cross_length
+            });
+            if follows {
+                shifted[other] = true;
+                grew = true;
+            }
+        }
+    }
+    shifted[changed] = false;
+    shifted
 }
 
 fn logical_extent(
@@ -825,6 +892,18 @@ mod tests {
         ];
         let planned = plan_mode(&state, "DP-1", &spec(1920, 1080, false, 60.0)).unwrap();
         assert_eq!(positions(&planned), vec![(0, 0), (0, 1080), (1920, 0)]);
+    }
+
+    #[test]
+    fn plan_mode_leaves_monitors_in_other_rows_and_columns_alone() {
+        let mut state = with_small_dp1(false);
+        state.logical_monitors = vec![
+            logical(0, 0, true, &["DP-2"]),
+            logical(0, 1440, false, &["DP-1"]),
+            logical(2560, 0, false, &["HDMI-1"]),
+        ];
+        let planned = plan_mode(&state, "DP-1", &spec(1280, 720, false, 60.0)).unwrap();
+        assert_eq!(positions(&planned), vec![(0, 0), (0, 1440), (2560, 0)]);
     }
 
     #[test]
