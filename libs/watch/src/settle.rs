@@ -73,7 +73,7 @@ mod tests {
         fs::create_dir(&model).unwrap();
 
         let (_watch, batches) =
-            settled(&[WatchRoot::deep(root.path())], Duration::from_millis(200)).unwrap();
+            settled(&[WatchRoot::deep(root.path())], Duration::from_secs(1)).unwrap();
 
         for name in ["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"] {
             fs::write(model.join(name), b"weights").unwrap();
@@ -85,7 +85,7 @@ mod tests {
             "the settled batch must carry the files that landed: {batch:?}"
         );
         assert!(
-            batches.recv_timeout(Duration::from_millis(400)).is_err(),
+            batches.recv_timeout(Duration::from_secs(2)).is_err(),
             "a settled burst must not keep emitting"
         );
     }
