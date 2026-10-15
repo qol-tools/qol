@@ -1070,7 +1070,7 @@ fn poll_round(
         if finished_turn
             && fault.is_none()
             && round.nudged_report.is_none()
-            && nudge_missing_marker(terminals, interpreter, round, facts.as_ref(), &screen)
+            && nudge_missing_marker(terminals, interpreter, round, facts.as_ref())
         {
             round.nudged_report = Some(report);
             round.ready_polls = 0;
@@ -1127,9 +1127,8 @@ fn nudge_missing_marker(
     interpreter: &CliSessionInterpreter,
     round: &WatchedRound,
     facts: Option<&SessionFacts>,
-    screen: &str,
 ) -> bool {
-    if composer_busy(screen) {
+    if composer_holds_draft(terminals, &round.binding).unwrap_or(true) {
         return false;
     }
     let Ok(marker) = super::bridge::CompletionMarker::from_token(&round.marker) else {
@@ -1852,6 +1851,14 @@ pub(super) fn close_lane_terminal(terminals: &TerminalSessionService, binding: &
         );
         return;
     }
+    if composer_holds_draft(terminals, binding).unwrap_or(true) {
+        qol_runtime::probe!(
+            "CLI_SESSION_WATCH",
+            "event=autoclose_skipped session={} reason=draft_or_unreadable_composer",
+            binding.token()
+        );
+        return;
+    }
     match CliSessionInterpreter::system().keep_open_reason_for(terminals, binding) {
         Ok(None) => {}
         Ok(Some(reason)) => {
@@ -2190,16 +2197,24 @@ fn record_wake_failure(
 fn composer_busy(screen: &str) -> bool {
     let mut composer = None;
     for line in screen.lines() {
-        let line = line.trim();
         if let Some(rest) = line
-            .strip_prefix("> ")
-            .or_else(|| line.strip_prefix("❯ "))
-            .or_else(|| (line == ">" || line == "❯").then_some(""))
+            .trim()
+            .strip_prefix(['>', '❯'])
+            .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
         {
             composer = Some(rest);
         }
     }
     composer.is_some_and(|rest| rest.chars().any(|character| !character.is_whitespace()))
+}
+
+fn composer_holds_draft(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+) -> Result<bool, TerminalError> {
+    terminals
+        .read_screen_styled(binding)
+        .map(|screen| composer_busy(&qol_terminal_sessions::cli::without_faint_text(&screen)))
 }
 
 enum ComposerWait {
@@ -2216,9 +2231,9 @@ fn wait_for_empty_composer(
 ) -> ComposerWait {
     let mut unread = 0usize;
     loop {
-        match terminals.read_screen_relaxed(binding) {
-            Ok(screen) if !composer_busy(&screen) => return ComposerWait::Empty,
-            Ok(_) => unread = 0,
+        match composer_holds_draft(terminals, binding) {
+            Ok(false) => return ComposerWait::Empty,
+            Ok(true) => unread = 0,
             Err(TerminalError::Unsupported { .. }) => return ComposerWait::Empty,
             Err(_) if session_gone(terminals, binding) => return ComposerWait::Gone,
             Err(_) if unread + 1 >= WAKE_UNREADABLE_POLLS => return ComposerWait::Unreadable,
@@ -4098,6 +4113,14 @@ mod tests {
             (">  ", false),
             ("❯", false),
             ("❯ ", false),
+            ("❯\u{a0}please fork an agent", true),
+            ("❯\u{a0}", false),
+            ("❯\u{a0}old message\n❯\u{a0}", false),
+            (">quoted output", false),
+            (
+                "❯ old\n\u{2500}\u{2500}\n❯\u{a0}draft\n\u{2500}\u{2500}\n  status line",
+                true,
+            ),
             ("just output, no prompt", false),
             ("", false),
         ];
@@ -4908,6 +4931,80 @@ mod tests {
         assert_eq!(
             deferrals, drafts,
             "the wake waits for the draft to clear however long it sits"
+        );
+    }
+
+    const CLAUDE_PLACEHOLDER: &str = "\u{1b}[m\u{276F}\u{a0}\u{1b}[22;2mTry\u{1b}[22m \u{1b}[22;2m\"create a util logging.py that...\"";
+    const CLAUDE_DRAFT: &str = "\u{1b}[m\u{276F}\u{a0}please fork an agent";
+
+    #[test]
+    fn a_claude_draft_after_a_non_breaking_space_defers_the_wake() {
+        let drafts = 5;
+        let screens = completed_then(
+            std::iter::repeat_n(CLAUDE_DRAFT.to_owned(), drafts)
+                .chain([CLAUDE_PLACEHOLDER.to_owned()]),
+        );
+        let (events, backend, deferrals) = run_wake(FakeBackend::new(facts("7", 100), screens));
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(deferrals, drafts, "the wake waits until the draft is gone");
+    }
+
+    #[test]
+    fn a_faint_placeholder_in_an_empty_claude_composer_does_not_hold_the_wake() {
+        let screens = completed_then([CLAUDE_PLACEHOLDER.to_owned()]);
+        let (events, backend, deferrals) = run_wake(FakeBackend::new(facts("7", 100), screens));
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(deferrals, 0, "a dim placeholder is not a draft");
+    }
+
+    #[test]
+    fn an_autoclose_lane_holding_a_draft_stays_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_auto",
+                "v1:fake:7:100",
+                true,
+                None,
+            )
+            .unwrap();
+        let marker = "done\nQOL_BRIDGE_DONE_auto".to_owned();
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec![
+                marker.clone(),
+                marker,
+                CLAUDE_PLACEHOLDER.to_owned(),
+                CLAUDE_DRAFT.to_owned(),
+            ],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &pending,
+            &ledger(&root),
+            &locks(&root),
+            &[binding.token().to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+
+        let events = lines(&out);
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert!(
+            backend.closed.lock().unwrap().is_empty(),
+            "closing the lane would discard the draft typed into it"
         );
     }
 
