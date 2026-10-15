@@ -26,6 +26,8 @@ const SCREEN_SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const WAKE_SNIPPET_MAX_BYTES: usize = 8 * 1024;
 const WAKE_COMPOSER_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const WAKE_UNREADABLE_POLLS: usize = 30;
+const WAKE_DRAFT_SETTLE_POLLS: usize = 10;
+const WAKE_DRAFT_NOTIFY_POLLS: usize = 30;
 const WATCH_ALL_KEY: &str = "watch-all";
 
 #[derive(Clone, Copy)]
@@ -2194,27 +2196,63 @@ fn record_wake_failure(
     );
 }
 
+fn composer_line(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix(['>', '❯'])
+        .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+}
+
 fn composer_busy(screen: &str) -> bool {
-    let mut composer = None;
-    for line in screen.lines() {
-        if let Some(rest) = line
-            .trim()
-            .strip_prefix(['>', '❯'])
-            .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
-        {
-            composer = Some(rest);
+    composer_draft(screen).is_some()
+}
+
+fn composer_draft(screen: &str) -> Option<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|line| composer_line(line).is_some())?;
+    let rest = composer_line(lines[start])?;
+    if rest.chars().all(char::is_whitespace) {
+        return None;
+    }
+    let continuation = lines[start + 1..]
+        .iter()
+        .take_while(|line| !line.trim_start().starts_with('\u{2500}'))
+        .copied();
+    Some(
+        std::iter::once(rest)
+            .chain(continuation)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn below_composer(screen: &str) -> &str {
+    let mut offset = 0;
+    let mut below = "";
+    for line in screen.split_inclusive('\n') {
+        offset += line.len();
+        if composer_line(line).is_some() {
+            below = &screen[offset..];
         }
     }
-    composer.is_some_and(|rest| rest.chars().any(|character| !character.is_whitespace()))
+    below
+}
+
+fn composer_screen(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+) -> Result<String, TerminalError> {
+    terminals
+        .read_screen_styled(binding)
+        .map(|screen| qol_terminal_sessions::cli::without_faint_text(&screen))
 }
 
 fn composer_holds_draft(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
 ) -> Result<bool, TerminalError> {
-    terminals
-        .read_screen_styled(binding)
-        .map(|screen| composer_busy(&qol_terminal_sessions::cli::without_faint_text(&screen)))
+    composer_screen(terminals, binding).map(|screen| composer_busy(&screen))
 }
 
 fn composer_holds_draft_or_unreadable(
@@ -2233,25 +2271,92 @@ enum ComposerWait {
     Unreadable,
 }
 
+#[derive(Default)]
+struct DraftHold {
+    deferrals: usize,
+    draft: Option<String>,
+    steady: usize,
+    stashed: bool,
+    stash_tried: bool,
+    notified: bool,
+}
+
+impl DraftHold {
+    fn observe(&mut self, draft: String) {
+        if self.draft.as_ref() == Some(&draft) {
+            self.steady += 1;
+        } else {
+            self.draft = Some(draft);
+            self.steady = 0;
+        }
+    }
+}
+
 fn wait_for_empty_composer(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
     sleep: &mut dyn FnMut(Duration),
-    deferrals: &mut usize,
+    hold: &mut DraftHold,
 ) -> ComposerWait {
     let mut unread = 0usize;
     loop {
-        match composer_holds_draft(terminals, binding) {
-            Ok(false) => return ComposerWait::Empty,
-            Ok(true) => unread = 0,
+        match composer_screen(terminals, binding) {
+            Ok(screen) => {
+                let Some(draft) = composer_draft(&screen) else {
+                    return ComposerWait::Empty;
+                };
+                unread = 0;
+                hold.observe(draft);
+                if hold.steady >= WAKE_DRAFT_SETTLE_POLLS && !hold.stash_tried {
+                    hold.stash_tried = true;
+                    hold.stashed = stash_draft(terminals, binding, &screen);
+                }
+                if hold.deferrals >= WAKE_DRAFT_NOTIFY_POLLS && !hold.notified {
+                    hold.notified = true;
+                    notify_held_wake();
+                }
+            }
             Err(TerminalError::Unsupported { .. }) => return ComposerWait::Empty,
             Err(_) if session_gone(terminals, binding) => return ComposerWait::Gone,
             Err(_) if unread + 1 >= WAKE_UNREADABLE_POLLS => return ComposerWait::Unreadable,
             Err(_) => unread += 1,
         }
         sleep(WAKE_COMPOSER_POLL_INTERVAL);
-        *deferrals += 1;
+        hold.deferrals += 1;
     }
+}
+
+/// Sets a settled draft aside with the tool's own stash, which keeps its
+/// text, cursor and paste chips, and puts it back after the next submit. A
+/// tool without a stash, or one already holding a stash the key would
+/// replace, keeps the draft where it is.
+fn stash_draft(terminals: &TerminalSessionService, binding: &SessionBinding, screen: &str) -> bool {
+    let Ok(Some(stash)) = CliSessionInterpreter::system().draft_stash_for(terminals, binding)
+    else {
+        return false;
+    };
+    if below_composer(screen).contains(stash.indicator) {
+        return false;
+    }
+    terminals.send_key(binding, stash.key).is_ok()
+}
+
+#[cfg(not(test))]
+fn notify_held_wake() {
+    qol_plugin_daemon::notification::send_notification(
+        "Lane report waiting",
+        "A lane finished, but its report waits for the draft in your composer. Send or clear the draft to receive it.",
+    );
+}
+
+#[cfg(test)]
+thread_local! {
+    static HELD_WAKE_NOTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn notify_held_wake() {
+    HELD_WAKE_NOTICES.with(|notices| notices.set(notices.get() + 1));
 }
 
 fn deliver_wake(
@@ -2279,14 +2384,17 @@ fn deliver_wake(
                         error: Some("the initiator terminal is no longer live".to_owned()),
                     }
                 } else {
-                    let mut deferrals = 0usize;
-                    let wait = wait_for_empty_composer(terminals, &binding, sleep, &mut deferrals);
+                    let mut hold = DraftHold::default();
+                    let wait = wait_for_empty_composer(terminals, &binding, sleep, &mut hold);
+                    let deferrals = hold.deferrals;
                     if deferrals > 0 {
                         qol_runtime::probe!(
                             "CLI_SESSION_WATCH",
-                            "event=wake_deferred_composer_busy driver={} waited_s={}",
+                            "event=wake_deferred_composer_busy driver={} waited_s={} draft_stashed={} notified={}",
                             driver,
-                            (deferrals as u64) * WAKE_COMPOSER_POLL_INTERVAL.as_secs()
+                            (deferrals as u64) * WAKE_COMPOSER_POLL_INTERVAL.as_secs(),
+                            hold.stashed,
+                            hold.notified
                         );
                         let sanitized = driver.replace([':', '.'], "_");
                         let _ = std::fs::OpenOptions::new()
@@ -2296,11 +2404,13 @@ fn deliver_wake(
                             .and_then(|mut file| {
                                 file.write_all(
                                     format!(
-                                        "{} wake deferred driver={} polls={} composer_empty={}\n",
+                                        "{} wake deferred driver={} polls={} composer_empty={} draft_stashed={} notified={}\n",
                                         chrono::Utc::now().to_rfc3339(),
                                         driver,
                                         deferrals,
-                                        matches!(wait, ComposerWait::Empty)
+                                        matches!(wait, ComposerWait::Empty),
+                                        hold.stashed,
+                                        hold.notified
                                     )
                                     .as_bytes(),
                                 )
@@ -2625,6 +2735,7 @@ mod tests {
         last: Mutex<Option<String>>,
         calls: Mutex<Vec<(CallKind, Instant)>>,
         sent: Mutex<Vec<(SessionBinding, String, DeliveryMode)>>,
+        keys: Mutex<Vec<String>>,
         closed: Mutex<Vec<SessionBinding>>,
     }
 
@@ -2642,6 +2753,7 @@ mod tests {
                 last: Mutex::new(None),
                 calls: Mutex::new(Vec::new()),
                 sent: Mutex::new(Vec::new()),
+                keys: Mutex::new(Vec::new()),
                 closed: Mutex::new(Vec::new()),
             })
         }
@@ -2759,7 +2871,8 @@ mod tests {
             Ok(())
         }
 
-        fn send_key(&self, _target: &SessionBinding, _key: &str) -> Result<(), TerminalError> {
+        fn send_key(&self, _target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+            self.keys.lock().unwrap().push(key.to_owned());
             Ok(())
         }
     }
@@ -4887,17 +5000,18 @@ mod tests {
     }
 
     fn run_wake(backend: Arc<FakeBackend>) -> (Vec<serde_json::Value>, Arc<FakeBackend>, usize) {
+        run_wake_to(backend, "v1:fake:7:100")
+    }
+
+    fn run_wake_to(
+        backend: Arc<FakeBackend>,
+        driver: &str,
+    ) -> (Vec<serde_json::Value>, Arc<FakeBackend>, usize) {
         let root = tempfile::TempDir::new().unwrap();
         let pending = store(&root);
         let binding: SessionBinding = "v1:fake:7:100".parse().unwrap();
         pending
-            .start(
-                &binding,
-                "QOL_BRIDGE_DONE_round",
-                "v1:fake:7:100",
-                false,
-                None,
-            )
+            .start(&binding, "QOL_BRIDGE_DONE_round", driver, false, None)
             .unwrap();
         let (terminals, backend) = harness(backend);
         let mut out = Vec::new();
@@ -4946,6 +5060,114 @@ mod tests {
             deferrals, drafts,
             "the wake waits for the draft to clear however long it sits"
         );
+        assert!(
+            backend.keys.lock().unwrap().is_empty(),
+            "a tool without a draft stash gets no stash key"
+        );
+        assert_eq!(
+            HELD_WAKE_NOTICES.with(std::cell::Cell::get),
+            1,
+            "a held wake tells the user once instead of waiting silently"
+        );
+    }
+
+    const CLAUDE_RULE: &str = "\u{1b}[m\u{1b}[38:2:136:136:136m\u{2500}\u{2500}\u{2500}";
+    const CLAUDE_FOOTER: &str = "\u{1b}[m  \u{1b}[36m/work/\u{1b}[22;1mcc\u{1b}[22;38:2:153:153:153m \u{1b}[22;2m\u{2502}\u{1b}[22m \u{1b}[22;1;33mHaiku 5.5\u{1b}[22;38:2:153:153:153m \u{1b}[22;2mmedium\u{1b}[22;39m";
+    const CLAUDE_STASH_HELD: &str = "                   \u{1b}[38:2:153:153:153m \u{203A} stashed";
+    const CLAUDE_MULTILINE_DRAFT: &str =
+        "\u{1b}[m\u{276F}\u{a0}first draft line\n\u{1b}[m  second line [Pasted text #1 +40 lines]";
+
+    fn claude_screen(composer: &str, stash_held: bool) -> String {
+        let stash = if stash_held { CLAUDE_STASH_HELD } else { "" };
+        format!("{CLAUDE_RULE}\n{composer}\n{CLAUDE_RULE}\n{CLAUDE_FOOTER}{stash}\n")
+    }
+
+    fn claude_driver(backend: Arc<FakeBackend>) -> Arc<FakeBackend> {
+        let mut driver = facts("8", 200);
+        driver.foreground_basenames = vec!["claude".to_owned()];
+        backend.with_driver(driver)
+    }
+
+    #[test]
+    fn a_settled_claude_draft_is_stashed_and_the_wake_submits() {
+        let held = WAKE_DRAFT_SETTLE_POLLS + 1;
+        let screens = completed_then(
+            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held)
+                .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", true)]),
+        );
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s"]);
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(
+            deferrals, held,
+            "the wake goes out once the stash empties the composer"
+        );
+        assert_eq!(HELD_WAKE_NOTICES.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn a_claude_draft_still_being_typed_is_not_stashed() {
+        let typing = WAKE_DRAFT_SETTLE_POLLS * 2;
+        let screens = completed_then(
+            (0..typing)
+                .map(|length| {
+                    claude_screen(
+                        &format!("\u{1b}[m\u{276F}\u{a0}{}", "x".repeat(length + 1)),
+                        false,
+                    )
+                })
+                .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", false)]),
+        );
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert!(
+            backend.keys.lock().unwrap().is_empty(),
+            "a changing draft is left alone"
+        );
+        assert_eq!(deferrals, typing);
+    }
+
+    #[test]
+    fn a_claude_draft_over_an_existing_stash_is_never_stashed_over_it() {
+        let held = WAKE_DRAFT_NOTIFY_POLLS + 2;
+        let screens = completed_then(
+            std::iter::repeat_n(
+                claude_screen("\u{1b}[m\u{276F}\u{a0}typed after stash", true),
+                held,
+            )
+            .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", true)]),
+        );
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert!(
+            backend.keys.lock().unwrap().is_empty(),
+            "stashing again would replace the stash the user already holds"
+        );
+        assert_eq!(deferrals, held);
+        assert_eq!(HELD_WAKE_NOTICES.with(std::cell::Cell::get), 1);
+    }
+
+    #[test]
+    fn a_stash_key_that_leaves_the_draft_is_sent_once_and_the_user_is_told() {
+        let held = WAKE_DRAFT_NOTIFY_POLLS + 2;
+        let screens = completed_then(
+            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held)
+                .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", false)]),
+        );
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s"]);
+        assert_eq!(deferrals, held);
+        assert_eq!(HELD_WAKE_NOTICES.with(std::cell::Cell::get), 1);
     }
 
     const CLAUDE_PLACEHOLDER: &str = "\u{1b}[m\u{276F}\u{a0}\u{1b}[22;2mTry\u{1b}[22m \u{1b}[22;2m\"create a util logging.py that...\"";

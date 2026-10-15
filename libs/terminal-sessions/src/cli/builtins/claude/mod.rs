@@ -7,9 +7,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliDraftStash, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -122,6 +122,13 @@ impl CliSessionStrategy for ClaudeStrategy {
         self.metadata
             .remote_controlled(session)
             .then(|| REMOTE_CONTROL_REASON.to_owned())
+    }
+
+    fn draft_stash(&self) -> Option<CliDraftStash> {
+        Some(CliDraftStash {
+            key: "ctrl+s",
+            indicator: "\u{203A} stashed",
+        })
     }
 
     fn subscribe(
