@@ -6,7 +6,7 @@ icon = "input"
 description = "Set how the mouse, touchpad and keyboard respond"
 version = "0.1.0"
 author = "KMRH47"
-platforms = ["linux", "windows"]
+platforms = ["linux", "macos", "windows"]
 
 [runtime]
 command = "qol-input"

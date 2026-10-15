@@ -129,6 +129,66 @@ impl Steps {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Values {
+    Steps(Steps),
+    Only(&'static [u32]),
+}
+
+impl Values {
+    pub fn first(self) -> u32 {
+        match self {
+            Self::Steps(steps) => steps.first,
+            Self::Only(values) => values[0],
+        }
+    }
+
+    pub fn last(self) -> u32 {
+        match self {
+            Self::Steps(steps) => steps.last,
+            Self::Only(values) => values[values.len() - 1],
+        }
+    }
+
+    pub fn contains(self, value: u32) -> bool {
+        match self {
+            Self::Steps(steps) => steps.contains(value),
+            Self::Only(values) => values.contains(&value),
+        }
+    }
+
+    pub fn each(self) -> Vec<u32> {
+        match self {
+            Self::Steps(Steps { first, last, step }) => {
+                (first..=last).step_by(step as usize).collect()
+            }
+            Self::Only(values) => values.to_vec(),
+        }
+    }
+
+    pub fn refused_between(self) -> Option<u32> {
+        (self.first()..self.last()).find(|value| !self.contains(*value))
+    }
+
+    fn describe(self, unit: &str) -> String {
+        match self {
+            Self::Steps(Steps {
+                first,
+                last,
+                step: 1,
+            }) => format!("{first} to {last}{unit}"),
+            Self::Steps(Steps { first, last, step }) => {
+                format!("{first} to {last}{unit} in steps of {step}{unit}")
+            }
+            Self::Only(values) => {
+                let (last, rest) = values.split_last().expect("a value list is never empty");
+                let rest: Vec<String> = rest.iter().map(u32::to_string).collect();
+                format!("{} or {last}{unit}", rest.join(", "))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     PointerSpeed,
     DoubleClick,
@@ -182,17 +242,12 @@ impl Level {
         }
     }
 
-    pub fn values(self) -> Steps {
+    pub fn values(self) -> Values {
         platform::values(self)
     }
 
     pub fn accepted(self) -> String {
-        let Steps { first, last, step } = self.values();
-        let unit = self.unit();
-        match step {
-            1 => format!("{first} to {last}{unit}"),
-            step => format!("{first} to {last}{unit} in steps of {step}{unit}"),
-        }
+        self.values().describe(self.unit())
     }
 
     pub fn read(self, status: &Status) -> Option<u32> {
@@ -344,13 +399,12 @@ mod tests {
     fn a_level_outside_its_values_is_refused_before_the_host_is_touched() {
         for level in Level::ALL {
             let values = level.values();
-            let between = (values.step > 1).then(|| values.first + 1);
             for value in values
-                .first
+                .first()
                 .checked_sub(1)
                 .into_iter()
-                .chain([values.last + 1])
-                .chain(between)
+                .chain([values.last() + 1])
+                .chain(values.refused_between())
             {
                 let error = set_level(level, value).unwrap_err().to_string();
                 assert!(error.contains(level.label()), "{error}");
@@ -362,11 +416,10 @@ mod tests {
     #[test]
     fn this_computer_accepts_only_values_inside_the_bounds_the_settings_offer() {
         for level in Level::ALL {
-            let values = level.values();
             let bounds = level.bounds();
-            assert!(bounds.contains(values.first), "{level:?}");
-            assert!(bounds.contains(values.last), "{level:?}");
-            assert!(values.step.is_multiple_of(bounds.step), "{level:?}");
+            for value in level.values().each() {
+                assert!(bounds.contains(value), "{level:?} {value}");
+            }
         }
     }
 
@@ -386,13 +439,21 @@ mod tests {
         assert!(Steps::span(2, 50).contains(33));
         assert!(!Steps::span(2, 50).contains(51));
         assert_eq!(
-            Level::RepeatRate.accepted(),
-            format!(
-                "{} to {} keys/s",
-                Level::RepeatRate.values().first,
-                Level::RepeatRate.values().last
-            )
+            Values::Steps(Steps::span(3, 30)).describe(" keys/s"),
+            "3 to 30 keys/s"
         );
+        assert_eq!(
+            Values::Steps(quarters).describe(" ms"),
+            "250 to 1000 ms in steps of 250 ms"
+        );
+        let rates = Values::Only(&[2, 3, 5, 30]);
+        assert_eq!(rates.describe(" keys/s"), "2, 3, 5 or 30 keys/s");
+        assert!(rates.contains(5));
+        assert!(!rates.contains(4));
+        assert_eq!(rates.refused_between(), Some(4));
+        assert_eq!(rates.each(), [2, 3, 5, 30]);
+        assert_eq!(Values::Steps(quarters).each(), [250, 500, 750, 1000]);
+        assert_eq!(Values::Steps(Steps::span(2, 50)).refused_between(), None);
     }
 
     #[test]

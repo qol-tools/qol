@@ -5,7 +5,7 @@ use qol_desktop_settings::desktop::{classify_desktop, DesktopEnvironment};
 use qol_desktop_settings::gsettings;
 
 use super::super::{
-    Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, NO_TOUCHPAD,
+    Baseline, Keyboard, Level, Mouse, Setting, Switch, Touchpad, Values, NO_TOUCHPAD,
 };
 
 const UDEV_DATA: &str = "/run/udev/data";
@@ -109,8 +109,12 @@ pub(crate) fn set_level(level: Level, value: u32) -> Result<()> {
     gsettings::set(schema, key, &value)
 }
 
-pub(crate) fn values(level: Level) -> Steps {
-    level.bounds()
+pub(crate) fn values(level: Level) -> Values {
+    Values::Steps(level.bounds())
+}
+
+pub(crate) fn owner(setting: Setting) -> Setting {
+    setting
 }
 
 pub(crate) fn capture(setting: Setting) -> Result<Baseline> {

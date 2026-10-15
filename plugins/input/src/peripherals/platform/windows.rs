@@ -18,7 +18,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::super::{
-    Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, NO_TOUCHPAD,
+    Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, Values, NO_TOUCHPAD,
 };
 
 const SPI_GETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AE;
@@ -132,8 +132,8 @@ pub(crate) fn restore(setting: Setting, baseline: Baseline) -> Result<()> {
     }
 }
 
-pub(crate) fn values(level: Level) -> Steps {
-    match level {
+pub(crate) fn values(level: Level) -> Values {
+    Values::Steps(match level {
         Level::PointerSpeed | Level::TouchpadSpeed => Steps {
             first: step_percent(1),
             last: step_percent(SPEED_STEPS),
@@ -146,7 +146,11 @@ pub(crate) fn values(level: Level) -> Steps {
             step: DELAY_STEP_MS,
         },
         Level::RepeatRate => Steps::span(rate_from_step(0), rate_from_step(RATE_STEPS)),
-    }
+    })
+}
+
+pub(crate) fn owner(setting: Setting) -> Setting {
+    setting
 }
 
 fn read_level(level: Level) -> Result<u32> {
@@ -460,12 +464,11 @@ mod tests {
             Level::RepeatDelay => delay_ms(delay_step(value)),
             Level::RepeatRate => rate_from_step(rate_step(value)),
         };
-        assert_eq!(values(Level::RepeatRate), Steps::span(3, 30));
-        assert_eq!(values(Level::RepeatDelay).step, 250);
-        assert_eq!(values(Level::PointerSpeed).first, 5);
+        assert_eq!(values(Level::RepeatRate), Values::Steps(Steps::span(3, 30)));
+        assert_eq!(values(Level::RepeatDelay).refused_between(), Some(251));
+        assert_eq!(values(Level::PointerSpeed).first(), 5);
         for level in Level::ALL {
-            let Steps { first, last, step } = values(level);
-            for value in (first..=last).step_by(step as usize) {
+            for value in values(level).each() {
                 assert_eq!(read_back(level, value), value, "{level:?}");
             }
         }

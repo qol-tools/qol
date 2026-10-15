@@ -20,7 +20,13 @@ workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 qol-desktop-settings.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2-core-foundation = { workspace = true, features = ["CFNumber", "CFString"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 qol-process.workspace = true

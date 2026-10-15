@@ -1,8 +1,8 @@
 use anyhow::{bail, Result};
 
-use super::super::{Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad};
+use super::super::{Baseline, Keyboard, Level, Mouse, Setting, Switch, Touchpad, Values};
 
-const UNSUPPORTED: &str = "input settings work on Linux and Windows only";
+const UNSUPPORTED: &str = "input settings work on Linux, macOS and Windows only";
 
 pub(crate) fn backend() -> Result<&'static str> {
     bail!(UNSUPPORTED)
@@ -36,6 +36,10 @@ pub(crate) fn restore(_setting: Setting, _baseline: Baseline) -> Result<()> {
     bail!(UNSUPPORTED)
 }
 
-pub(crate) fn values(level: Level) -> Steps {
-    level.bounds()
+pub(crate) fn values(level: Level) -> Values {
+    Values::Steps(level.bounds())
+}
+
+pub(crate) fn owner(setting: Setting) -> Setting {
+    setting
 }

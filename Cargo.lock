@@ -6834,7 +6834,9 @@ name = "qol-input"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "log",
+ "objc2-core-foundation",
  "qol-apps",
  "qol-config",
  "qol-conventions",

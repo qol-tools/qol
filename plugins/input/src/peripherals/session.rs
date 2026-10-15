@@ -63,7 +63,7 @@ impl HostMutation for Claim {
 }
 
 pub(super) fn claim(setting: Setting) -> Result<()> {
-    match store().and_then(|store| store.claim(&Claim(setting))) {
+    match store().and_then(|store| store.claim(&Claim(platform::owner(setting)))) {
         Ok(()) => Ok(()),
         Err(error) if residency().is_resident() => {
             log::warn!(

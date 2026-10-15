@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn set_reads_a_switch_as_on_or_off_and_a_level_as_a_number_in_range() {
-        let slowest = Level::RepeatRate.values().first;
+        let slowest = Level::RepeatRate.values().first();
         assert_eq!(
             parse_set_args(&args(&["touchpad", "off"])),
             Ok(Change::Switch(Switch::Touchpad, false))
@@ -437,8 +437,10 @@ mod tests {
         for level in Level::ALL {
             let values = level.values();
             let name = Setting::Level(level).name();
-            let between = (values.step > 1).then(|| values.first + 1);
-            for value in [values.last + 1].into_iter().chain(between) {
+            for value in [values.last() + 1]
+                .into_iter()
+                .chain(values.refused_between())
+            {
                 let error = parse_set_args(&args(&[&name, &value.to_string()])).unwrap_err();
                 assert!(error.contains(&level.accepted()), "{error}");
                 assert!(error.contains(&format!("got `{value}`")), "{error}");

@@ -31,6 +31,13 @@ On Windows:
 - A mouse has no natural scrolling setting.
 - Pointer and touchpad speed move in steps of 5%, the repeat delay is 250, 500, 750 or 1000 ms, and keys repeat 3 to 30 times a second. Other values are refused.
 
+On macOS:
+
+- Changes apply at once, through the same preferences System Settings writes.
+- The touchpad cannot be turned off, and a mouse has no button swap setting.
+- Natural scrolling is one setting for the mouse and the touchpad, so changing either row changes both.
+- The repeat delay moves in steps of 50 ms, and keys repeat 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 times a second. Other values are refused.
+
 ## Settings
 
 - Mouse sets pointer speed, acceleration, swapped buttons, double-click time and natural scrolling.

@@ -327,7 +327,7 @@ mod tests {
             assert_eq!(min, f64::from(bounds.first), "{level:?}");
             assert_eq!(max, f64::from(bounds.last), "{level:?}");
             let values = level.values();
-            for end in [values.first, values.last] {
+            for end in [values.first(), values.last()] {
                 assert_eq!((f64::from(end) - min) % step, 0.0, "{level:?} {end}");
             }
         }
