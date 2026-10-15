@@ -12,6 +12,7 @@ workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { workspace = true, features = ["randr"] }
+zbus = { version = "5.16.0", features = ["blocking-api"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

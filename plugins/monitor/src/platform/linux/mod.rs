@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use qol_host_fixes::residency::HostResidency;
 use qol_windowing::display::{
     DisplayEnumerator, DisplayError, DisplayHandle, DisplayMode, DisplayOps, DisplayPlacement,
-    DisplaySnapshot,
+    DisplaySnapshot, Persistence,
 };
 
 mod i2c_dev;
@@ -78,12 +79,22 @@ impl DisplayOps for X11Display {
 
     fn set_mode(&self, handle: &DisplayHandle, mode: &DisplayMode) -> Result<(), DisplayError> {
         gate(super::display_server(), "modes")?;
-        self.platform.set_mode(handle, mode)
+        let persistence = persistence_for(HostResidency::current().is_resident());
+        self.platform.set_mode_as(handle, mode, persistence)
     }
 
     fn set_layout(&self, placements: &[DisplayPlacement]) -> Result<(), DisplayError> {
         gate(super::display_server(), "layout")?;
-        self.platform.set_layout(placements)
+        let persistence = persistence_for(HostResidency::current().is_resident());
+        self.platform.set_layout_as(placements, persistence)
+    }
+}
+
+fn persistence_for(resident: bool) -> Persistence {
+    if resident {
+        Persistence::Saved
+    } else {
+        Persistence::Session
     }
 }
 
@@ -101,6 +112,12 @@ fn gate(server: DisplayServer, capability: &'static str) -> Result<(), DisplayEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_resident_host_saves_display_changes() {
+        assert_eq!(persistence_for(true), Persistence::Saved);
+        assert_eq!(persistence_for(false), Persistence::Session);
+    }
 
     #[test]
     fn a_wayland_or_headless_session_refuses_display_writes() {

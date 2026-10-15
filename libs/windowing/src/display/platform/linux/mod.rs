@@ -1,3 +1,5 @@
+mod muffin;
+
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -9,13 +11,44 @@ use x11rb::rust_connection::RustConnection;
 use super::DisplayEnumerator;
 use crate::display::{
     validate_layout, DisplayError, DisplayHandle, DisplayMode, DisplayOps, DisplayPlacement,
-    DisplaySnapshot,
+    DisplaySnapshot, Persistence,
 };
 use crate::geometry::MonitorBounds;
 
 const BASE_EDID_BYTES: usize = 128;
 
 pub struct Platform;
+
+impl Platform {
+    pub fn set_mode_as(
+        &self,
+        handle: &DisplayHandle,
+        mode: &DisplayMode,
+        persistence: Persistence,
+    ) -> Result<(), DisplayError> {
+        let mut bus = X11Bus::open()?;
+        match muffin::SessionMuffin::connect() {
+            Some(mut muffin) => {
+                muffin::set_mode_with(&mut muffin, &mut bus, handle, mode, persistence)
+            }
+            None => set_mode_from(&mut bus, handle, mode),
+        }
+    }
+
+    pub fn set_layout_as(
+        &self,
+        placements: &[DisplayPlacement],
+        persistence: Persistence,
+    ) -> Result<(), DisplayError> {
+        let mut bus = X11Bus::open()?;
+        match muffin::SessionMuffin::connect() {
+            Some(mut muffin) => {
+                muffin::set_layout_with(&mut muffin, &mut bus, placements, persistence)
+            }
+            None => set_layout_from(&mut bus, placements),
+        }
+    }
+}
 
 impl DisplayEnumerator for Platform {
     fn enumerate(&self) -> Result<Vec<DisplayHandle>, DisplayError> {
@@ -38,13 +71,11 @@ impl DisplayOps for Platform {
     }
 
     fn set_mode(&self, handle: &DisplayHandle, mode: &DisplayMode) -> Result<(), DisplayError> {
-        let mut bus = X11Bus::open()?;
-        set_mode_from(&mut bus, handle, mode)
+        self.set_mode_as(handle, mode, Persistence::Session)
     }
 
     fn set_layout(&self, placements: &[DisplayPlacement]) -> Result<(), DisplayError> {
-        let mut bus = X11Bus::open()?;
-        set_layout_from(&mut bus, placements)
+        self.set_layout_as(placements, Persistence::Session)
     }
 }
 
@@ -286,6 +317,10 @@ impl RandrBus for X11Bus {
 }
 
 fn refresh_hz(dot_clock: u32, htotal: u32, vtotal: u32, interlace: bool) -> u32 {
+    exact_refresh(dot_clock, htotal, vtotal, interlace).round() as u32
+}
+
+fn exact_refresh(dot_clock: u32, htotal: u32, vtotal: u32, interlace: bool) -> f64 {
     let vtotal = if interlace {
         f64::from(vtotal) / 2.0
     } else {
@@ -293,9 +328,9 @@ fn refresh_hz(dot_clock: u32, htotal: u32, vtotal: u32, interlace: bool) -> u32 
     };
     let pixels = f64::from(htotal) * vtotal;
     if pixels <= 0.0 {
-        return 0;
+        return 0.0;
     }
-    (f64::from(dot_clock) / pixels).round() as u32
+    f64::from(dot_clock) / pixels
 }
 
 fn mode_from_randr(mode: &RandrMode) -> DisplayMode {
@@ -632,11 +667,7 @@ fn verify_placements<B: RandrBus>(
     Ok(())
 }
 
-fn set_layout_from<B: RandrBus>(
-    bus: &mut B,
-    placements: &[DisplayPlacement],
-) -> Result<(), DisplayError> {
-    validate_layout(placements)?;
+fn check_x11_range(placements: &[DisplayPlacement]) -> Result<(), DisplayError> {
     for placement in placements {
         if i16::try_from(placement.x).is_err() || i16::try_from(placement.y).is_err() {
             return Err(DisplayError::LayoutInvalid {
@@ -647,6 +678,15 @@ fn set_layout_from<B: RandrBus>(
             });
         }
     }
+    Ok(())
+}
+
+fn set_layout_from<B: RandrBus>(
+    bus: &mut B,
+    placements: &[DisplayPlacement],
+) -> Result<(), DisplayError> {
+    validate_layout(placements)?;
+    check_x11_range(placements)?;
     let state = bus.read_state()?;
     let mut targets = Vec::with_capacity(placements.len());
     for placement in placements {
@@ -1850,5 +1890,325 @@ mod tests {
             Err(DisplayError::LayoutInvalid { .. })
         ));
         assert_eq!(bus.reads, 0);
+    }
+
+    struct FakeMuffin {
+        owner: bool,
+        state: muffin::MuffinState,
+        applied: Vec<(u32, u32, Vec<muffin::LogicalMonitorConfig>)>,
+    }
+
+    impl muffin::MuffinBus for FakeMuffin {
+        fn has_owner(&mut self) -> Result<bool, DisplayError> {
+            Ok(self.owner)
+        }
+
+        fn current_state(&mut self) -> Result<muffin::MuffinState, DisplayError> {
+            Ok(self.state.clone())
+        }
+
+        fn apply(
+            &mut self,
+            serial: u32,
+            method: u32,
+            logical_monitors: &[muffin::LogicalMonitorConfig],
+        ) -> Result<(), DisplayError> {
+            self.applied
+                .push((serial, method, logical_monitors.to_vec()));
+            Ok(())
+        }
+    }
+
+    fn muffin_mode(
+        id: &str,
+        width: i32,
+        height: i32,
+        refresh: f64,
+        current: bool,
+    ) -> muffin::MuffinMode {
+        muffin::MuffinMode {
+            id: id.into(),
+            width,
+            height,
+            refresh,
+            current,
+        }
+    }
+
+    fn muffin_logical(
+        x: i32,
+        y: i32,
+        primary: bool,
+        connector: &str,
+    ) -> muffin::MuffinLogicalMonitor {
+        muffin::MuffinLogicalMonitor {
+            x,
+            y,
+            scale: 1.0,
+            transform: 0,
+            primary,
+            connectors: vec![connector.into()],
+        }
+    }
+
+    fn fake_muffin(owner: bool) -> FakeMuffin {
+        FakeMuffin {
+            owner,
+            state: muffin::MuffinState {
+                serial: 3,
+                monitors: vec![
+                    muffin::MuffinMonitor {
+                        connector: "card0-DP-1".into(),
+                        modes: vec![
+                            muffin_mode("1920x1080@60.000", 1920, 1080, 60.0, true),
+                            muffin_mode("1920x1080i@60.000", 1920, 1080, 60.0, false),
+                        ],
+                    },
+                    muffin::MuffinMonitor {
+                        connector: "card0-DP-2".into(),
+                        modes: vec![muffin_mode(
+                            "2560x1440@59.951",
+                            2560,
+                            1440,
+                            exact_refresh(241_500_000, 2720, 1481, false),
+                            true,
+                        )],
+                    },
+                ],
+                logical_monitors: vec![
+                    muffin_logical(0, 0, true, "card0-DP-1"),
+                    muffin_logical(1920, 0, false, "card0-DP-2"),
+                ],
+                layout_mode: Some(2),
+            },
+            applied: Vec::new(),
+        }
+    }
+
+    fn requested_mode(token: u64) -> DisplayMode {
+        DisplayMode {
+            token,
+            width: 1,
+            height: 1,
+            refresh_hz: 1,
+        }
+    }
+
+    fn current_placements() -> Vec<DisplayPlacement> {
+        vec![
+            fake_placement("card0-DP-1", 0, 0, true),
+            fake_placement("card0-DP-2", 1920, 0, false),
+        ]
+    }
+
+    #[test]
+    fn exact_refresh_keeps_the_fraction_and_doubles_interlace() {
+        let progressive = exact_refresh(241_500_000, 2720, 1481, false);
+        assert!((progressive - 59.951).abs() < 0.001);
+        assert_eq!(exact_refresh(74_250_000, 2200, 1125, true), 60.0);
+        assert_eq!(exact_refresh(148_500_000, 2200, 0, false), 0.0);
+    }
+
+    #[test]
+    fn set_mode_through_muffin_uses_the_method_for_the_persistence() {
+        for (persistence, method) in [(Persistence::Session, 1), (Persistence::Saved, 2)] {
+            let mut bus = fake_bus(fake_state());
+            let mut muffin = fake_muffin(true);
+            muffin::set_mode_with(
+                &mut muffin,
+                &mut bus,
+                &fake_handle("card0-DP-1"),
+                &requested_mode(10),
+                persistence,
+            )
+            .unwrap();
+            assert_eq!(muffin.applied.len(), 1);
+            assert_eq!(muffin.applied[0].0, 3);
+            assert_eq!(muffin.applied[0].1, method);
+            assert!(bus.writes.is_empty());
+        }
+    }
+
+    #[test]
+    fn set_mode_through_muffin_sends_the_matching_mode_id() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        let _ = muffin::set_mode_with(
+            &mut muffin,
+            &mut bus,
+            &fake_handle("card0-DP-1"),
+            &requested_mode(11),
+            Persistence::Saved,
+        );
+        let sent = &muffin.applied[0].2;
+        assert_eq!(sent[0].monitors[0].mode_id, "1920x1080i@60.000");
+        assert_eq!(sent[1].monitors[0].mode_id, "2560x1440@59.951");
+        assert_eq!((sent[1].x, sent[1].y, sent[1].primary), (1920, 0, false));
+    }
+
+    #[test]
+    fn set_mode_through_muffin_refuses_when_the_crtc_does_not_show_the_mode() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        let error = muffin::set_mode_with(
+            &mut muffin,
+            &mut bus,
+            &fake_handle("card0-DP-1"),
+            &requested_mode(11),
+            Persistence::Saved,
+        )
+        .unwrap_err();
+        match error {
+            DisplayError::LayoutInvalid { reason } => assert!(reason.contains("did not verify")),
+            other => panic!("expected LayoutInvalid, got {other:?}"),
+        }
+        assert_eq!(muffin.applied.len(), 1);
+    }
+
+    #[test]
+    fn set_mode_through_muffin_accepts_an_identical_timing_duplicate() {
+        let mut state = fake_state();
+        let mut duplicate = state.modes[0].clone();
+        duplicate.id = 12;
+        state.modes.push(duplicate);
+        state.outputs[0].modes.push(12);
+        let mut bus = fake_bus(state);
+        let mut muffin = fake_muffin(true);
+        muffin::set_mode_with(
+            &mut muffin,
+            &mut bus,
+            &fake_handle("card0-DP-1"),
+            &requested_mode(12),
+            Persistence::Saved,
+        )
+        .unwrap();
+        assert_eq!(
+            muffin.applied[0].2[0].monitors[0].mode_id,
+            "1920x1080@60.000"
+        );
+    }
+
+    #[test]
+    fn set_mode_through_muffin_refuses_an_unoffered_token_and_an_unknown_connector() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        assert!(matches!(
+            muffin::set_mode_with(
+                &mut muffin,
+                &mut bus,
+                &fake_handle("card0-DP-1"),
+                &requested_mode(21),
+                Persistence::Saved,
+            ),
+            Err(DisplayError::LayoutInvalid { .. })
+        ));
+        assert!(matches!(
+            muffin::set_mode_with(
+                &mut muffin,
+                &mut bus,
+                &fake_handle("card0-DP-9"),
+                &requested_mode(10),
+                Persistence::Saved,
+            ),
+            Err(DisplayError::NotFound { .. })
+        ));
+        assert!(muffin.applied.is_empty());
+    }
+
+    #[test]
+    fn set_mode_falls_back_to_randr_without_a_muffin_owner() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(false);
+        muffin::set_mode_with(
+            &mut muffin,
+            &mut bus,
+            &fake_handle("card0-DP-1"),
+            &requested_mode(11),
+            Persistence::Saved,
+        )
+        .unwrap();
+        assert!(muffin.applied.is_empty());
+        assert_eq!(bus.writes.len(), 1);
+        assert_eq!(bus.writes[0].mode, 11);
+    }
+
+    #[test]
+    fn set_layout_through_muffin_uses_the_method_for_the_persistence() {
+        for (persistence, method) in [(Persistence::Session, 1), (Persistence::Saved, 2)] {
+            let mut bus = fake_bus(fake_state());
+            let mut muffin = fake_muffin(true);
+            muffin::set_layout_with(&mut muffin, &mut bus, &current_placements(), persistence)
+                .unwrap();
+            assert_eq!(muffin.applied.len(), 1);
+            assert_eq!(muffin.applied[0].1, method);
+            assert!(bus.writes.is_empty());
+        }
+    }
+
+    #[test]
+    fn set_layout_through_muffin_refuses_when_the_position_does_not_read_back() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        let placements = vec![
+            fake_placement("card0-DP-1", 0, 0, true),
+            fake_placement("card0-DP-2", 1920, 100, false),
+        ];
+        let error = muffin::set_layout_with(&mut muffin, &mut bus, &placements, Persistence::Saved)
+            .unwrap_err();
+        assert!(matches!(error, DisplayError::LayoutInvalid { .. }));
+        assert_eq!(muffin.applied.len(), 1);
+        assert_eq!(muffin.applied[0].2[1].y, 100);
+    }
+
+    #[test]
+    fn set_layout_through_muffin_keeps_the_validation_and_range_checks() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        let out_of_range = vec![
+            fake_placement("card0-DP-1", 0, 0, true),
+            fake_placement("card0-DP-2", 40_000, 0, false),
+        ];
+        let no_primary = vec![
+            fake_placement("card0-DP-1", 0, 0, false),
+            fake_placement("card0-DP-2", 1920, 0, false),
+        ];
+        for placements in [out_of_range, no_primary] {
+            assert!(matches!(
+                muffin::set_layout_with(&mut muffin, &mut bus, &placements, Persistence::Saved),
+                Err(DisplayError::LayoutInvalid { .. })
+            ));
+        }
+        assert!(muffin.applied.is_empty());
+    }
+
+    #[test]
+    fn set_layout_falls_back_to_randr_without_a_muffin_owner() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(false);
+        muffin::set_layout_with(
+            &mut muffin,
+            &mut bus,
+            &current_placements(),
+            Persistence::Saved,
+        )
+        .unwrap();
+        assert!(muffin.applied.is_empty());
+        assert_eq!(bus.writes.len(), 2);
+    }
+
+    #[test]
+    fn set_layout_falls_back_to_randr_in_logical_layout_mode() {
+        let mut bus = fake_bus(fake_state());
+        let mut muffin = fake_muffin(true);
+        muffin.state.layout_mode = Some(1);
+        muffin::set_layout_with(
+            &mut muffin,
+            &mut bus,
+            &current_placements(),
+            Persistence::Saved,
+        )
+        .unwrap();
+        assert!(muffin.applied.is_empty());
+        assert_eq!(bus.writes.len(), 2);
     }
 }

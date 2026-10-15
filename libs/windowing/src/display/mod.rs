@@ -12,6 +12,13 @@ use crate::geometry::MonitorBounds;
 
 pub use platform::{DisplayEnumerator, Platform};
 
+/// Whether the desktop should keep a display write past the current session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persistence {
+    Session,
+    Saved,
+}
+
 /// Platform-neutral handle for one connected display.
 ///
 /// The identity binds the connector into the EDID-derived hash, so two

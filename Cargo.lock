@@ -7601,6 +7601,7 @@ dependencies = [
  "windows-sys 0.59.0",
  "workspace-hack",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]
