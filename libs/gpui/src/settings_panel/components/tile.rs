@@ -14,7 +14,7 @@ use crate::kit::Kit;
 use crate::pictures::{self, PictureContext};
 
 use super::hint_bar::SettingsHint;
-use super::settings_tile_spinner;
+use super::{settings_tile_spinner, RowGround};
 
 pub const TILE_HEIGHT: f32 = 116.0;
 
@@ -156,6 +156,39 @@ pub fn settings_tile_rows(per_row: usize, tiles: Vec<AnyElement>) -> Vec<Div> {
 }
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+fn tick_image(color: u32, scale: f32) -> Option<gpui::Img> {
+    let width = (TICK_WIDTH * scale).round() as u32;
+    let height = (TICK_HEIGHT * scale).round() as u32;
+    pictures::tick(color, width, height)
+        .map(|image| img(image).w(px(TICK_WIDTH)).h(px(TICK_HEIGHT)))
+}
+
+#[derive(IntoElement)]
+pub struct SettingsTick {
+    row: RowGround,
+    kit: Kit,
+}
+
+impl SettingsTick {
+    pub fn new(row: RowGround, kit: Kit) -> Self {
+        Self { row, kit }
+    }
+}
+
+impl RenderOnce for SettingsTick {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let color = match self.row {
+            RowGround::Band => self.kit.grounds.band.ink,
+            RowGround::Pane => self.kit.grounds.pane.mark,
+        };
+        div()
+            .flex_none()
+            .w(px(TICK_WIDTH))
+            .h(px(TICK_HEIGHT))
+            .children(tick_image(color, window.scale_factor()))
+    }
+}
 
 #[derive(IntoElement)]
 pub struct SettingsTile {
@@ -320,15 +353,11 @@ impl RenderOnce for SettingsTile {
 
         let tick = if ticked && !waiting {
             let color = if highlighted { band.ink } else { ground.mark };
-            let width = (TICK_WIDTH * scale).round() as u32;
-            let height = (TICK_HEIGHT * scale).round() as u32;
-            pictures::tick(color, width, height).map(|image| {
-                img(image)
+            tick_image(color, scale).map(|image| {
+                image
                     .absolute()
                     .top(px(qol_theme::SPACE_CELL))
                     .right(px(qol_theme::SPACE_INSET))
-                    .w(px(TICK_WIDTH))
-                    .h(px(TICK_HEIGHT))
             })
         } else {
             None

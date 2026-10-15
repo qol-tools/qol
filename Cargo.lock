@@ -1170,6 +1170,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link 0.2.1",
 ]
 
@@ -7506,6 +7507,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-update-manager"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "indexmap",
+ "log",
+ "qol-apps",
+ "qol-audio",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-host-fixes",
+ "qol-log",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-process",
+ "serde",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-voice"
 version = "0.53.2"
 dependencies = [
@@ -11539,6 +11564,7 @@ dependencies = [
  "block2",
  "bytemuck",
  "cc",
+ "chrono",
  "cipher",
  "codespan-reporting",
  "compact_str",

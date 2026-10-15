@@ -1,0 +1,7 @@
+schema_version = 1
+title = "Update Manager"
+description = "What updates wait on this computer, when they install, and when it restarts."
+
+[pages]
+query = "pages"
+action = "press"

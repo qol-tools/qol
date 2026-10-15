@@ -14,6 +14,7 @@ pub(crate) fn spawn(
     _label: &str,
     _program: &Path,
     _args: &[OsString],
+    _piped: bool,
 ) -> Result<std::process::Child> {
     bail!("privileged host fixes have no macOS backend yet")
 }

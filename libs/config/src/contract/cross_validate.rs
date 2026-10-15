@@ -18,6 +18,7 @@ pub fn validate_contracts(
         validate_row_action_ref(id, field, runtime, &mut errors);
         validate_item_card_field_ref(id, field, config, &mut errors);
     }
+    validate_pages(config, runtime, &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -411,6 +412,41 @@ fn validate_item_card_field_ref(
             path,
             format!("names undeclared field `{target}`"),
         )),
+    }
+}
+
+fn validate_pages(
+    config: &ConfigSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(pages) = config.pages.as_ref() else {
+        return;
+    };
+    if !config.fields.is_empty() || !config.sections.is_empty() {
+        errors.push(ValidationError::new(
+            "pages",
+            "replaces fields and sections; declare neither alongside it",
+        ));
+    }
+    let Some(runtime) = runtime else {
+        errors.push(ValidationError::new(
+            "pages",
+            "requires qol-runtime.toml but none is present",
+        ));
+        return;
+    };
+    if !runtime.queries.contains_key(&pages.query) {
+        errors.push(ValidationError::new(
+            "pages.query",
+            format!("references undeclared query: {}", pages.query),
+        ));
+    }
+    if !runtime.actions.contains_key(&pages.action) {
+        errors.push(ValidationError::new(
+            "pages.action",
+            format!("references undeclared action: {}", pages.action),
+        ));
     }
 }
 
@@ -1329,5 +1365,42 @@ poll_interval_ms = 1000
         .expect("parse runtime");
         let result = validate_contracts(&config, Some(&runtime));
         assert!(result.is_err(), "dangling row_action should fail");
+    }
+
+    fn pages_config(extra: &str) -> ConfigSpec {
+        parse_spec_str(&format!(
+            "schema_version = 1\n\n[pages]\nquery = \"pages\"\naction = \"press\"\n{extra}"
+        ))
+        .expect("parse config")
+    }
+
+    #[test]
+    fn pages_must_name_a_declared_query_and_action() {
+        let declared = parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.pages]\ndescription = \"Pages\"\npoll_interval_ms = 2000\n\n[action.press]\ndescription = \"Press\"\n",
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&pages_config(""), Some(&declared)).is_ok());
+
+        let empty = parse_runtime_spec_str("schema_version = 1\n").expect("parse runtime");
+        let errors = validate_contracts(&pages_config(""), Some(&empty)).unwrap_err();
+        let paths: Vec<&str> = errors.iter().map(|error| error.path.as_str()).collect();
+        assert_eq!(paths, ["pages.query", "pages.action"]);
+
+        let errors = validate_contracts(&pages_config(""), None).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path, "pages");
+    }
+
+    #[test]
+    fn pages_refuse_fields_beside_them() {
+        let runtime = parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.pages]\ndescription = \"Pages\"\npoll_interval_ms = 2000\n\n[action.press]\ndescription = \"Press\"\n",
+        )
+        .expect("parse runtime");
+        let config = pages_config("\n[field.enabled]\ntype = \"boolean\"\ndefault = true\n");
+        let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path, "pages");
     }
 }

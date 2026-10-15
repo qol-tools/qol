@@ -1,0 +1,32 @@
+[package]
+name = "qol-update-manager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log.workspace = true
+qol-log.workspace = true
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+indexmap = "2.12"
+qol-apps.workspace = true
+qol-audio.workspace = true
+qol-config.workspace = true
+qol-conventions.workspace = true
+qol-fs.workspace = true
+qol-headless.workspace = true
+qol-host-fixes.workspace = true
+qol-plugin-daemon.workspace = true
+qol-process.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+workspace-hack.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true
+
+[lints]
+workspace = true

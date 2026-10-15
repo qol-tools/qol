@@ -31,17 +31,34 @@ pub(super) fn query(base: &str, query: &str) -> Result<serde_json::Value, String
     let route = format!("{base}/queries/{query}");
     #[cfg(debug_assertions)]
     let started = std::time::Instant::now();
-    let (status, body) = tray_http_session(&route).map_err(|error| error.to_string())?;
+    let (status, body) =
+        tray_http_session(Method::Get, &route, None).map_err(|error| error.to_string())?;
     #[cfg(debug_assertions)]
     qol_runtime::probe!(
         "SURFACE_ACTIVATION",
         "panel={base} phase=runtime-query query={query} status={status} elapsed_ms={}",
         started.elapsed().as_millis()
     );
+    query_answer(query, status, &body)
+}
+
+pub(super) fn query_with_input(
+    base: &str,
+    query: &str,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let route = format!("{base}/queries/{query}");
+    let body = serde_json::to_string(input).map_err(|error| error.to_string())?;
+    let (status, answer) =
+        tray_http_session(Method::Post, &route, Some(&body)).map_err(|error| error.to_string())?;
+    query_answer(query, status, &answer)
+}
+
+fn query_answer(query: &str, status: u16, body: &str) -> Result<serde_json::Value, String> {
     if status != 200 {
         return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
     }
-    serde_json::from_str(&body)
+    serde_json::from_str(body)
         .map_err(|error| format!("query `{query}` returned invalid JSON: {error}"))
 }
 
@@ -70,7 +87,7 @@ fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, Strin
 
 pub(super) fn daemon_port(base: &str) -> Option<u16> {
     let route = format!("{base}/config-form");
-    let (status, body) = tray_http_session(&route).ok()?;
+    let (status, body) = tray_http_session(Method::Get, &route, None).ok()?;
     if status != 200 {
         return None;
     }
@@ -176,14 +193,18 @@ thread_local! {
     static QUERY_SESSION: RefCell<Option<Session>> = const { RefCell::new(None) };
 }
 
-fn tray_http_session(route: &str) -> anyhow::Result<(u16, String)> {
+fn tray_http_session(
+    method: Method,
+    route: &str,
+    body: Option<&str>,
+) -> anyhow::Result<(u16, String)> {
     QUERY_SESSION.with(|session| {
         let mut session = session.borrow_mut();
         let session = match &mut *session {
             Some(session) => session,
             none => none.insert(Session::new(tray_client()?)),
         };
-        let response = session.request(Method::Get, route, None)?;
+        let response = session.request(method, route, body)?;
         Ok((response.status, response.body))
     })
 }

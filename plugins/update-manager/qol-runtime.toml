@@ -1,0 +1,10 @@
+schema_version = 1
+
+[query.pages]
+description = "The Update Manager pages the panel shows: input names the open pages, and the answer holds them and the first page"
+poll_interval_ms = 1000
+input = { open = "string_array" }
+
+[action.press]
+description = "Do what a row on an Update Manager page does: input names the page, the row and the open pages"
+input = { page = "string", row = "string", open = "string_array" }

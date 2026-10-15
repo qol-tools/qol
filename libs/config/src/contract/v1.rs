@@ -21,6 +21,8 @@ pub struct ConfigSpecV1 {
     pub sections: IndexMap<String, SectionSpec>,
     #[serde(default, rename = "field")]
     pub fields: IndexMap<String, FieldSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<PagesSpec>,
 }
 
 impl ConfigSpecV1 {
@@ -31,6 +33,13 @@ impl ConfigSpecV1 {
     pub fn section(&self, id: &str) -> Option<&SectionSpec> {
         self.sections.get(id)
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesSpec {
+    pub query: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
@@ -732,5 +741,43 @@ active_action = "set_mode"
         assert_eq!(field.active_query.as_deref(), Some("modes"));
         assert_eq!(field.action.as_deref(), Some("arrange"));
         assert_eq!(field.active_action.as_deref(), Some("set_mode"));
+    }
+
+    #[test]
+    fn parses_pages_table() {
+        let spec = parse_spec_str(
+            "
+schema_version = 1
+
+[pages]
+query = \"pages\"
+action = \"press\"
+",
+        )
+        .expect("valid spec");
+        assert_eq!(
+            spec.pages,
+            Some(PagesSpec {
+                query: "pages".into(),
+                action: "press".into(),
+            })
+        );
+        assert!(spec.fields.is_empty());
+    }
+
+    #[test]
+    fn rejects_unknown_pages_keys() {
+        let error = parse_spec_str(
+            "
+schema_version = 1
+
+[pages]
+query = \"pages\"
+action = \"press\"
+poll = 5
+",
+        )
+        .expect_err("unknown key");
+        assert!(error.to_string().contains("poll"), "{error}");
     }
 }
