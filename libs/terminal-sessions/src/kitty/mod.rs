@@ -180,20 +180,14 @@ impl KittyBackend {
         target: &SessionBinding,
         extent: &str,
     ) -> Result<String, TerminalError> {
+        self.get_text(target, &["--extent", extent])
+    }
+
+    fn get_text(&self, target: &SessionBinding, options: &[&str]) -> Result<String, TerminalError> {
         let (endpoint, window_id) = self.route_target(target)?;
-        self.run_at(
-            &endpoint,
-            "read screen",
-            &strings([
-                "@",
-                "get-text",
-                "--match",
-                &matcher(window_id),
-                "--extent",
-                extent,
-            ]),
-            None,
-        )
+        let mut args = strings(["@", "get-text", "--match", &matcher(window_id)]);
+        args.extend(options.iter().map(|option| (*option).to_owned()));
+        self.run_at(&endpoint, "read screen", &args, None)
     }
 }
 
@@ -263,6 +257,10 @@ impl ScreenReader for KittyBackend {
 
     fn read_screen_unscrolled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen_command(target, "all")
+    }
+
+    fn read_screen_styled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.get_text(target, &["--extent", "screen", "--ansi"])
     }
 }
 
@@ -1014,6 +1012,25 @@ mod tests {
         assert_eq!(
             calls[0].1,
             ["@", "get-text", "--match", "id:42", "--extent", "screen"]
+        );
+    }
+
+    #[test]
+    fn styled_reads_ask_kitty_for_the_visible_screen_with_ansi_styling() {
+        let runner = FakeRunner::with_outputs(vec![success("\u{1b}[2mghost".to_owned())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let target = binding(42, 900);
+
+        assert_eq!(
+            backend.read_screen_styled(&target).unwrap(),
+            "\u{1b}[2mghost"
+        );
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].1,
+            ["@", "get-text", "--match", "id:42", "--extent", "screen", "--ansi"]
         );
     }
 

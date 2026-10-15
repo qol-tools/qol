@@ -388,6 +388,66 @@ pub fn editor_draft(text: &str) -> Option<String> {
     (!draft.trim().is_empty()).then_some(draft)
 }
 
+pub fn without_faint_text(styled: &str) -> String {
+    let mut text = String::with_capacity(styled.len());
+    let mut faint = false;
+    let mut characters = styled.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            if !faint || character == '\n' {
+                text.push(character);
+            }
+            continue;
+        }
+        match characters.next() {
+            Some('[') => {
+                let mut sequence = String::new();
+                for next in characters.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        if next == 'm' {
+                            faint = sgr_faint(&sequence, faint);
+                        }
+                        break;
+                    }
+                    sequence.push(next);
+                }
+            }
+            Some(']') => {
+                while let Some(next) = characters.next() {
+                    if next == '\u{7}'
+                        || (next == '\u{1b}' && characters.next_if_eq(&'\\').is_some())
+                    {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    text
+}
+
+fn sgr_faint(parameters: &str, mut faint: bool) -> bool {
+    let mut codes = parameters.split(';');
+    while let Some(code) = codes.next() {
+        match code {
+            "" | "0" | "22" => faint = false,
+            "2" => faint = true,
+            "38" | "48" | "58" => match codes.next() {
+                Some("5") => {
+                    codes.next();
+                }
+                Some("2") => {
+                    codes.nth(2);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    faint
+}
+
 pub fn activity_signature(text: &str) -> String {
     let mut signature = String::with_capacity(text.len());
     let mut pending_space = false;
@@ -552,8 +612,36 @@ mod tests {
     use super::{
         claude_dialog, claude_working, contains_any, has_braille_spinner, has_choice_hint,
         has_done_marker, has_interrupt_hint, has_numbered_choice, has_picker_cluster, kimi_live,
-        kimi_questionnaire, kimi_working, pi_live,
+        kimi_questionnaire, kimi_working, pi_live, without_faint_text,
     };
+
+    #[test]
+    fn without_faint_text_drops_dim_runs_and_every_escape_sequence() {
+        let placeholder = "\u{1b}[m\u{276F}\u{a0}\u{1b}[22;2mTry\u{1b}[22m \u{1b}[22;2m\"create\u{1b}[22m \u{1b}[22;2mlogging.py\"";
+        assert_eq!(without_faint_text(placeholder), "\u{276F}\u{a0}  ");
+
+        let cases: &[(&str, &str)] = &[
+            (
+                "\u{1b}[m\u{276F}\u{a0}please fork an agent",
+                "\u{276F}\u{a0}please fork an agent",
+            ),
+            ("\u{1b}[2mghost\u{1b}[0m typed", " typed"),
+            ("\u{1b}[2mghost\u{1b}[m typed", " typed"),
+            ("\u{1b}[2mline one\nline two", "\n"),
+            ("\u{1b}[38;2;2;2;2mcolored\u{1b}[39m", "colored"),
+            ("\u{1b}[38;5;2mcolored", "colored"),
+            (
+                "\u{1b}[22;2;38:2:153:153:153mdim\u{1b}[22m bright",
+                " bright",
+            ),
+            ("\u{1b}]8;;https://x\u{1b}\\link\u{1b}]8;;\u{7}", "link"),
+            ("\u{1b}[?25h\u{1b}[49;3Hplain", "plain"),
+            ("plain", "plain"),
+        ];
+        for (styled, plain) in cases {
+            assert_eq!(without_faint_text(styled), *plain, "styled: {styled:?}");
+        }
+    }
 
     fn screen(tail: &[&str]) -> String {
         let mut lines = vec!["$ echo done", "done", ""];

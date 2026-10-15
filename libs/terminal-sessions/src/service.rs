@@ -22,6 +22,13 @@ pub trait ScreenReader {
     fn read_screen_unscrolled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.read_screen(target)
     }
+
+    fn read_screen_styled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        Err(TerminalError::Unsupported {
+            target: target.session_id().clone(),
+            capability: "styled screen reading",
+        })
+    }
 }
 
 pub trait SessionFocus {
@@ -251,6 +258,11 @@ impl ScreenReader for TerminalSessionService {
     fn read_screen_unscrolled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
         self.backend_for(target.session_id())?
             .read_screen_unscrolled(target)
+    }
+
+    fn read_screen_styled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+        self.backend_for(target.session_id())?
+            .read_screen_styled(target)
     }
 }
 
