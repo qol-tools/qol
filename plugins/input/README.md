@@ -1,0 +1,38 @@
+<div align="center">
+
+# Input
+
+Set how the mouse, touchpad and keyboard respond.
+
+</div>
+
+## Quick start
+
+```sh
+qol-input status
+qol-input set pointer-speed 60
+qol-input set acceleration off
+qol-input set tap-to-click on
+qol-input set repeat-delay 300
+qol-input toggle-touchpad
+qol-input doctor
+```
+
+Input works from a terminal on its own. qol-tray is one way to use it, not a requirement.
+
+It changes the desktop's own settings, so the desktop's settings app shows the same values. On Linux it works on Cinnamon and GNOME. On Windows the touchpad rows need Windows 11 24H2 or later, and Windows does not let apps turn the touchpad on or off or give a mouse natural scrolling.
+
+## Settings
+
+- Mouse sets pointer speed, acceleration, swapped buttons, double-click time and natural scrolling.
+- Touchpad turns the touchpad on or off and sets tap to click, natural scrolling and pointer speed. Its rows read unavailable when no touchpad is connected.
+- Keyboard sets how long a held key waits before it repeats, and how fast it repeats.
+
+## Hotkeys
+
+- Toggle Touchpad turns the touchpad off when it is on, and on when it is off.
+- Turn Touchpad On and Turn Touchpad Off set it either way.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE)

@@ -6600,6 +6600,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-desktop-settings"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-dev-build"
 version = "1.0.0"
 dependencies = [
@@ -6822,6 +6830,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-input"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-desktop-settings",
+ "qol-headless",
+ "qol-log",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-keyremap"
 version = "1.59.2"
 dependencies = [
@@ -7037,6 +7065,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",

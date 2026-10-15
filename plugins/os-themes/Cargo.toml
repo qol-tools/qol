@@ -20,6 +20,7 @@ serde.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+qol-desktop-settings.workspace = true
 x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
 libc = "0.2"
 

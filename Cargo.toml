@@ -21,6 +21,7 @@ qol-cinnamon = { path = "libs/cinnamon" }
 qol-color = { path = "libs/color" }
 qol-config = { path = "libs/config" }
 qol-conventions = { path = "libs/conventions" }
+qol-desktop-settings = { path = "libs/desktop-settings" }
 qol-dev-build = { path = "libs/dev-build" }
 qol-dev-env = { path = "libs/dev-env" }
 qol-dev-guest = { path = "libs/dev-guest" }

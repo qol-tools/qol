@@ -1,0 +1,36 @@
+[package]
+name = "qol-input"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log.workspace = true
+qol-log.workspace = true
+anyhow = "1"
+qol-apps.workspace = true
+qol-conventions.workspace = true
+qol-headless.workspace = true
+qol-plugin-daemon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+workspace-hack.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+qol-desktop-settings.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-config.workspace = true
+qol-plugin-api.workspace = true
+
+[lints]
+workspace = true

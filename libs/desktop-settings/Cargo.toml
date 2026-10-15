@@ -1,0 +1,13 @@
+[package]
+name = "qol-desktop-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The running Linux desktop and its gsettings store for qol-tools"
+
+[dependencies]
+anyhow = "1"
+workspace-hack.workspace = true
+
+[lints]
+workspace = true

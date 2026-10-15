@@ -1,0 +1,72 @@
+schema_version = 1
+
+[query.mouse]
+description = "Pointer speed from 0 to 100, acceleration, swapped buttons, double-click time in milliseconds and natural scrolling; null where this computer has no such setting"
+poll_interval_ms = 2000
+
+[query.touchpad]
+description = "Whether the touchpad is on, tap to click, natural scrolling and speed from 0 to 100; null values and the reason in missing when no touchpad can be set"
+poll_interval_ms = 2000
+
+[query.keyboard]
+description = "How many milliseconds a held key waits before it repeats, and how many times a second it repeats"
+poll_interval_ms = 2000
+
+[action.set_pointer_speed]
+description = "Set how far the pointer travels when the mouse moves: input requires a value between 0 and 100"
+input = { value = "number" }
+
+[action.acceleration_on]
+description = "Make fast mouse moves carry the pointer further than slow ones"
+
+[action.acceleration_off]
+description = "Make the pointer travel the same distance at every mouse speed"
+
+[action.swap_buttons_on]
+description = "Make the right mouse button click and the left one open menus"
+
+[action.swap_buttons_off]
+description = "Make the left mouse button click and the right one open menus"
+
+[action.set_double_click]
+description = "Set the longest gap between two clicks that still counts as a double-click: input requires milliseconds between 100 and 1000"
+input = { value = "number" }
+
+[action.mouse_natural_scroll_on]
+description = "Make the mouse wheel move the page the way the wheel turns"
+
+[action.mouse_natural_scroll_off]
+description = "Make the mouse wheel scroll the classic way"
+
+[action.touchpad_on]
+description = "Turn the touchpad on"
+
+[action.touchpad_off]
+description = "Turn the touchpad off"
+
+[action.toggle_touchpad]
+description = "Turn the touchpad off when it is on, and on when it is off"
+
+[action.tap_to_click_on]
+description = "Make a tap on the touchpad click"
+
+[action.tap_to_click_off]
+description = "Make only a press of the touchpad click"
+
+[action.touchpad_natural_scroll_on]
+description = "Make content follow your fingers when you scroll on the touchpad"
+
+[action.touchpad_natural_scroll_off]
+description = "Make content move against your fingers when you scroll on the touchpad"
+
+[action.set_touchpad_speed]
+description = "Set how far the pointer travels when a finger moves on the touchpad: input requires a value between 0 and 100"
+input = { value = "number" }
+
+[action.set_repeat_delay]
+description = "Set how long a key is held before it starts repeating: input requires milliseconds between 100 and 1000"
+input = { value = "number" }
+
+[action.set_repeat_rate]
+description = "Set how many times a second a held key repeats: input requires a value between 2 and 50"
+input = { value = "number" }

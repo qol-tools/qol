@@ -19,6 +19,7 @@ pub enum Mark {
     Controllers,
     Display,
     IdeCheckout,
+    Input,
     KeyRemap,
     Launcher,
     Lights,
@@ -35,7 +36,7 @@ pub enum Mark {
 const LINE_LIFT: f32 = 0.25;
 
 impl Mark {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Qol,
         Self::Settings,
         Self::Shortcuts,
@@ -53,6 +54,7 @@ impl Mark {
         Self::Controllers,
         Self::Display,
         Self::IdeCheckout,
+        Self::Input,
         Self::KeyRemap,
         Self::Launcher,
         Self::Lights,
@@ -85,6 +87,7 @@ impl Mark {
             Self::Controllers => "controllers",
             Self::Display => "display",
             Self::IdeCheckout => "ide-checkout",
+            Self::Input => "input",
             Self::KeyRemap => "key-remap",
             Self::Launcher => "launcher",
             Self::Lights => "lights",
@@ -172,6 +175,9 @@ impl Mark {
             }
             Self::IdeCheckout => {
                 r#"<circle cx="15" cy="11" r="4"/><circle cx="15" cy="37" r="4"/><circle cx="33" cy="17" r="4"/><path d="M15 15v18"/><path d="M33 21v1a8 8 0 0 1-8 8h-2a8 8 0 0 0-8 3"/>"#
+            }
+            Self::Input => {
+                r#"<rect x="11" y="4" width="26" height="40" rx="13"/><path d="M24 11v8"/>"#
             }
             Self::KeyRemap => {
                 r#"<rect x="5" y="5" width="17" height="17" rx="4.5"/><rect x="26" y="26" width="17" height="17" rx="4.5"/><path d="M27 11h4a5 5 0 0 1 5 5v4"/><path d="M32 17l4 4 4-4"/><path d="M21 37h-4a5 5 0 0 1-5-5v-4"/><path d="M16 31l-4-4-4 4"/>"#

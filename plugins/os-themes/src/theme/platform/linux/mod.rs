@@ -1,6 +1,4 @@
 mod backends;
-mod desktop;
-mod gsettings;
 mod kconfig;
 
 use anyhow::{bail, Result};
@@ -11,7 +9,8 @@ use crate::theme::ColorScheme;
 use super::snapshot as theme_session;
 use super::ThemePlatform;
 use backends::DesktopBackend;
-use desktop::{classify_desktop, DesktopEnvironment};
+use qol_desktop_settings::desktop::{classify_desktop, DesktopEnvironment};
+use qol_desktop_settings::gsettings;
 
 pub struct Platform;
 
