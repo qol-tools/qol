@@ -30,6 +30,7 @@ pub(crate) enum Op {
 pub(crate) struct Job {
     pub(crate) updates: Vec<Update>,
     pub(crate) done: usize,
+    pub(crate) started: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +73,7 @@ pub(crate) enum Act {
     Install(Vec<String>),
     Guard,
     Hold(bool),
+    Retry,
     Tonight(bool),
     Time(Clock),
     Hours(Option<Hours>),
@@ -226,11 +228,11 @@ impl Session {
     }
 
     pub(crate) fn guarding(&self) -> bool {
-        self.rules.guard && !matches!(self.rules.helper, Helper::Failed(_))
+        self.rules.guard && self.rules.helper == Helper::Ready
     }
 
     pub(crate) fn holding_all(&self) -> bool {
-        self.rules.hold && !matches!(self.rules.helper, Helper::Failed(_))
+        self.rules.hold && self.rules.helper == Helper::Ready
     }
 
     pub(crate) fn want_helper(&self) -> bool {
@@ -272,19 +274,17 @@ impl Session {
         match act {
             Act::Install(ids) => self.begin_install(ids).map(Some),
             Act::Guard => {
-                if matches!(self.rules.helper, Helper::Failed(_)) {
-                    self.rules.helper = Helper::Off;
-                    self.rules.guard = true;
-                } else {
-                    self.rules.guard = !self.rules.guard;
-                }
+                self.rules.guard = !self.rules.guard;
+                self.switched(self.rules.guard);
                 Ok(Some(Task::Rules))
             }
             Act::Hold(on) => {
-                if matches!(self.rules.helper, Helper::Failed(_)) {
-                    self.rules.helper = Helper::Off;
-                }
                 self.rules.hold = *on;
+                self.switched(*on);
+                Ok(Some(Task::Rules))
+            }
+            Act::Retry => {
+                self.switched(true);
                 Ok(Some(Task::Rules))
             }
             Act::Tonight(on) => {
@@ -346,6 +346,13 @@ impl Session {
         }
     }
 
+    fn switched(&mut self, on: bool) {
+        let failed = matches!(self.rules.helper, Helper::Failed(_));
+        if failed && (on || !(self.rules.guard || self.rules.hold)) {
+            self.rules.helper = Helper::Off;
+        }
+    }
+
     fn refuse_during_install(&self) -> Result<(), String> {
         if self.job.is_some() {
             return Err("Wait for the install that is running to finish first".into());
@@ -378,6 +385,7 @@ impl Session {
         self.job = Some(Job {
             updates: updates.clone(),
             done: 0,
+            started: false,
         });
         Ok(Task::Install(updates))
     }
@@ -385,6 +393,7 @@ impl Session {
     pub(crate) fn progress(&mut self, done: usize) {
         if let Some(job) = self.job.as_mut() {
             job.done = done;
+            job.started = true;
         }
     }
 
@@ -646,9 +655,32 @@ mod tests {
         session.rules.helper = Helper::Failed(Refusal::Dismissed);
         assert!(!session.want_helper());
         assert!(!session.guarding());
-        session.apply(&Act::Guard, now).expect("retry");
+        session.apply(&Act::Retry, now).expect("retry");
         assert!(session.rules.guard);
         assert_eq!(session.rules.helper, Helper::Off);
+        assert!(session.want_helper());
+    }
+
+    #[test]
+    fn a_rule_the_helper_failed_for_switches_off_without_asking_again() {
+        let mut session = session();
+        let now = at("2026-10-14 12:00");
+        session.apply(&Act::Guard, now).expect("guard");
+        session.apply(&Act::Hold(true), now).expect("hold");
+        session.rules.helper = Helper::Failed(Refusal::Dismissed);
+        assert_eq!(session.apply(&Act::Hold(false), now), Ok(Some(Task::Rules)));
+        assert!(!session.rules.hold);
+        assert!(session.rules.guard);
+        assert!(matches!(session.rules.helper, Helper::Failed(_)));
+        assert!(!session.want_helper());
+        session.apply(&Act::Guard, now).expect("guard off");
+        assert!(!session.rules.guard);
+        assert_eq!(session.rules.helper, Helper::Off);
+        assert!(!session.want_helper());
+        session.rules.helper = Helper::Failed(Refusal::TimedOut);
+        session.apply(&Act::Hold(true), now).expect("hold again");
+        assert_eq!(session.rules.helper, Helper::Off);
+        assert!(session.want_helper());
     }
 
     #[test]
@@ -657,6 +689,10 @@ mod tests {
         session
             .apply(&Act::Hold(true), at("2026-10-14 12:00"))
             .expect("hold");
+        session.rules.helper = Helper::Starting;
+        assert!(!session.holding_all());
+        assert_eq!(session.run_at().as_deref(), Some("Mint's run at 00:37"));
+        session.rules.helper = Helper::Ready;
         assert!(session.holding_all());
         assert_eq!(session.run_at(), None);
         session.rules.helper = Helper::Failed(Refusal::Dismissed);
@@ -671,6 +707,7 @@ mod tests {
         session.job = Some(Job {
             updates: Vec::new(),
             done: 0,
+            started: false,
         });
         let was = session.time;
         assert_ne!(was, Clock::hm(5, 0));

@@ -75,6 +75,9 @@ fn job_detail(session: &Session, update: &Update) -> Option<String> {
     if !job.updates.iter().any(|queued| queued.id == update.id) {
         return None;
     }
+    if !job.started {
+        return Some("waits for the password".into());
+    }
     Some(match position(&job.updates, job.done) {
         Some((current, done)) if current.id == update.id => format!(
             "installing, {done} of {}",

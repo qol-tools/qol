@@ -5,9 +5,7 @@ use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use super::super::PrivilegedExit;
-
-const PRIVILEGED_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+use super::super::{PrivilegedExit, PRIVILEGED_COMMAND_TIMEOUT};
 
 pub(crate) fn available() -> bool {
     Command::new("pkexec")

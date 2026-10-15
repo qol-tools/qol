@@ -6,13 +6,16 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, ExitStatus};
 use std::time::{Duration, Instant};
 
-use qol_host_fixes::elevation::{run_privileged, spawn_privileged_piped, PrivilegedExit};
+use qol_host_fixes::elevation::{
+    run_privileged, spawn_privileged_piped, wait_until_authorized, PrivilegedExit, PromptTimedOut,
+};
 
 use crate::updates::{Failure, Holding, Reason, Refusal};
 
 const SHELL: &str = "/bin/sh";
 const LABEL: &str = "qol-update-manager";
 const STOP_WAIT: Duration = Duration::from_secs(5);
+const READY: &str = "ready";
 
 const HELPER_SH: &str = r#"
 timer="$1"
@@ -40,7 +43,7 @@ done
 release
 "#;
 
-const INSTALL_SH: &str = r#"exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1"#;
+const INSTALL_SH: &str = r#"echo ready; exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1"#;
 
 pub(crate) struct Helper {
     child: Child,
@@ -51,19 +54,16 @@ pub(crate) struct Helper {
 impl Helper {
     pub(crate) fn start() -> Result<Self, Refusal> {
         let mut child = spawn(HELPER_SH, &[super::mint::TIMER.to_string()])?;
+        wait_until_authorized(&mut child, READY).map_err(|error| classify(&error))?;
         let stdin = child.stdin.take();
         let Some(stdout) = child.stdout.take() else {
             return Err(Refusal::Failed("the helper has no output".into()));
         };
-        let mut helper = Self {
+        Ok(Self {
             child,
             stdin,
             stdout: BufReader::new(stdout),
-        };
-        match helper.answer()?.as_str() {
-            "ready" => Ok(helper),
-            other => Err(Refusal::Failed(format!("the helper answered {other}"))),
-        }
+        })
     }
 
     pub(crate) fn hold(&mut self) -> Result<Holding, Refusal> {
@@ -134,6 +134,9 @@ fn refusal(status: ExitStatus) -> Refusal {
 }
 
 fn classify(error: &anyhow::Error) -> Refusal {
+    if error.is::<PromptTimedOut>() {
+        return Refusal::TimedOut;
+    }
     match error.downcast_ref::<PrivilegedExit>() {
         Some(exit) if exit.dismissed() => Refusal::Dismissed,
         Some(exit) if exit.not_authorized() => Refusal::Denied,
@@ -163,6 +166,8 @@ pub(super) fn install_apt(
     };
     let mut child = spawn(INSTALL_SH, targets).map_err(|refusal| failed(0, refusal))?;
     drop(child.stdin.take());
+    wait_until_authorized(&mut child, READY).map_err(|error| failed(0, classify(&error)))?;
+    progress(0);
     let mut seen = BTreeSet::new();
     let mut scan = Scan::default();
     if let Some(stdout) = child.stdout.take() {
@@ -284,5 +289,19 @@ mod tests {
         assert!(!refused("Unit not found"));
         assert_eq!(holder("unattended-upgr"), "Unattended upgrades");
         assert_eq!(holder("apt-get"), "Another apt-get");
+    }
+
+    #[test]
+    fn a_password_prompt_left_open_is_a_timed_out_refusal() {
+        assert_eq!(
+            classify(&anyhow::Error::from(PromptTimedOut)),
+            Refusal::TimedOut
+        );
+        assert_eq!(
+            Reason::Refused(Refusal::TimedOut).label(),
+            "The password prompt timed out"
+        );
+        assert!(INSTALL_SH.starts_with("echo ready;"));
+        assert!(HELPER_SH.contains("echo ready\n"));
     }
 }

@@ -385,6 +385,14 @@ fn install_asks_first_then_starts_one_job() {
     };
     assert_eq!(list.len(), 4);
     let pages = build(&session, now()).pages;
+    assert_eq!(label(&pages, ROOT, "waiting"), "Waiting for the password");
+    assert_eq!(detail(&pages, ROOT, "waiting"), "To install 30 updates");
+    assert_eq!(
+        detail(&pages, "waiting", "update:apt:nvidia"),
+        "waits for the password"
+    );
+    session.progress(0);
+    let pages = build(&session, now()).pages;
     assert_eq!(label(&pages, ROOT, "waiting"), "Installing 30 updates");
     assert!(pages.page(&all).is_none());
     assert_eq!(
@@ -524,6 +532,7 @@ fn rules_and_changes_list_what_qol_holds() {
     let mut session = mint();
     let outcome = press(&mut session, ROOT, "guard", now());
     assert_eq!(outcome.task, Some(Task::Rules));
+    session.rules.helper = Helper::Ready;
     session.host.restart_at = Some(at("2026-10-15 01:30"));
     let pages = build(&session, now()).pages;
     assert_eq!(
@@ -545,6 +554,14 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     let mut session = mint();
     let held = press(&mut session, ROOT, "hold", now());
     assert_eq!(held.task, Some(Task::Rules));
+    session.rules.helper = Helper::Starting;
+    let pages = build(&session, now()).pages;
+    assert_eq!(detail(&pages, ROOT, "changes"), "Nothing so far");
+    assert_eq!(
+        detail(&pages, ROOT, "hold"),
+        "Waiting for the password, to hold Mint's run"
+    );
+    session.rules.helper = Helper::Ready;
     assert_eq!(
         detail(&build(&session, now()).pages, ROOT, "changes"),
         "Hold all updates"
@@ -555,6 +572,55 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     assert_eq!(
         detail(&pages, ROOT, "hold"),
         "Could not hold: the password prompt was closed."
+    );
+}
+
+#[test]
+fn rules_the_password_prompt_refused_switch_off_and_retry() {
+    let mut session = mint();
+    press(&mut session, ROOT, "guard", now());
+    press(&mut session, ROOT, "hold", now());
+    session.rules.helper = Helper::Failed(Refusal::TimedOut);
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        detail(&pages, ROOT, "guard"),
+        "Could not hold: the password prompt timed out."
+    );
+    assert_eq!(
+        page(&pages, ROOT)
+            .row("hold")
+            .and_then(|row| row.control.clone()),
+        Some(Control::Toggle(true))
+    );
+    assert_eq!(label(&pages, ROOT, "retry"), "Try again");
+    assert_eq!(
+        press(&mut session, ROOT, "hold", now()).task,
+        Some(Task::Rules)
+    );
+    assert!(!session.rules.hold);
+    assert!(!session.want_helper());
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        detail(&pages, ROOT, "hold"),
+        "Nothing installs until you switch it off"
+    );
+    assert!(page(&pages, ROOT).row("retry").is_some());
+    press(&mut session, ROOT, "retry", now());
+    assert_eq!(session.rules.helper, Helper::Off);
+    assert!(session.rules.guard);
+    assert!(session.want_helper());
+    session.rules.helper = Helper::Failed(Refusal::Dismissed);
+    press(&mut session, ROOT, "guard", now());
+    assert!(!session.rules.guard);
+    assert_eq!(session.rules.helper, Helper::Off);
+    assert!(!session.want_helper());
+    let pages = build(&session, now()).pages;
+    assert!(page(&pages, ROOT).row("retry").is_none());
+    assert_eq!(
+        page(&pages, ROOT)
+            .row("guard")
+            .and_then(|row| row.control.clone()),
+        Some(Control::Toggle(false))
     );
 }
 

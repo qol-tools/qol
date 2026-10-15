@@ -81,7 +81,20 @@ fn notes(sheet: &mut Sheet, session: &Session) {
 
 fn status(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
     sheet.group("updates", "what is ready to install or finish.");
-    if let (Some(job), Some((current, done))) = (session.job.as_ref(), session.job_position()) {
+    if let Some(job) = session.job.as_ref().filter(|job| !job.started) {
+        sheet.row(
+            Row::new("waiting", "Waiting for the password")
+                .detail(format!(
+                    "To install {}",
+                    plural(total(job.updates.iter()), "update", "updates")
+                ))
+                .attention(true)
+                .busy(true)
+                .open("waiting"),
+        );
+    } else if let (Some(job), Some((current, done))) =
+        (session.job.as_ref(), session.job_position())
+    {
         let all = total(job.updates.iter());
         sheet.row(
             Row::new(

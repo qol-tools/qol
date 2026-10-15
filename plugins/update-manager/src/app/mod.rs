@@ -480,6 +480,7 @@ mod tests {
         shared.lock().session.job = Some(crate::session::Job {
             updates: Vec::new(),
             done: 0,
+            started: false,
         });
         work(&shared, Task::Install(Vec::new()));
         let state = shared.lock();

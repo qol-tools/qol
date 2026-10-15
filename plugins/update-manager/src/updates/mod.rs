@@ -141,6 +141,7 @@ pub(crate) enum Holding {
 pub(crate) enum Refusal {
     Dismissed,
     Denied,
+    TimedOut,
     Failed(String),
 }
 
@@ -311,6 +312,7 @@ impl fmt::Display for Refusal {
         match self {
             Self::Dismissed => formatter.write_str("the password prompt was closed"),
             Self::Denied => formatter.write_str("the password was not accepted"),
+            Self::TimedOut => formatter.write_str("the password prompt timed out"),
             Self::Failed(reason) => formatter.write_str(reason),
         }
     }
@@ -322,6 +324,7 @@ impl Reason {
             Self::Locked(_) => "Another install held the package lock",
             Self::Refused(Refusal::Dismissed) => "The password prompt was closed",
             Self::Refused(Refusal::Denied) => "The password was not accepted",
+            Self::Refused(Refusal::TimedOut) => "The password prompt timed out",
             Self::Refused(Refusal::Failed(_)) | Self::Stopped(_) => {
                 "The installer stopped with an error"
             }
@@ -332,7 +335,9 @@ impl Reason {
         match self {
             Self::Locked(Some(by)) => format!("{by} was installing at the same time"),
             Self::Locked(None) => "Another program was installing at the same time".into(),
-            Self::Refused(Refusal::Dismissed) => "Nothing installs without it".into(),
+            Self::Refused(Refusal::Dismissed | Refusal::TimedOut) => {
+                "Nothing installs without it".into()
+            }
             Self::Refused(Refusal::Denied) => "Nothing installs without an administrator".into(),
             Self::Refused(Refusal::Failed(reason)) | Self::Stopped(reason) => reason.clone(),
         }

@@ -8,6 +8,7 @@ use crate::session::{Act, Helper, Op, Proposal, Session, MINT_DEFAULT};
 use crate::updates::{day, when, AutoKey, Clock, Hours, RunBy};
 
 const LOCKED: &str = "Needs an administrator once, to pause Mint's run.";
+const ASKING: &str = "Waiting for the password, to hold Mint's run";
 
 pub(super) fn hours_value(session: &Session) -> String {
     let hours = session.hours();
@@ -19,7 +20,7 @@ fn could_not(row: Row, refusal: &impl std::fmt::Display) -> Row {
         .value("could not hold")
         .tone(Tone::Attention)
         .attention(true)
-        .button("retry")
+        .toggle(true)
 }
 
 pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
@@ -34,18 +35,19 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
         Helper::Failed(refusal) => Some(refusal),
         _ => None,
     };
-    let starting = session.rules.helper == Helper::Starting;
+    let asking = matches!(session.rules.helper, Helper::Off | Helper::Starting);
     let (guard, hold) = (session.rules.guard, session.rules.hold);
     let row = Row::new("guard", "Wait while in use");
     let row = match failed {
         Some(refusal) if guard => could_not(row, refusal),
         _ if guard => row
             .detail(match session.in_use.as_ref() {
+                _ if asking => ASKING.to_string(),
                 Some(in_use) => format!("{} is playing, so updates wait", in_use.label),
                 None => "Updates wait while something plays".to_string(),
             })
             .toggle(true)
-            .busy(starting),
+            .busy(asking),
         _ if session.locked() => row.detail(LOCKED).toggle(false),
         _ => row
             .detail("Off. Updates install at their time")
@@ -54,11 +56,15 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
     sheet.press(row, Act::Guard);
     let row = Row::new("hold", "Hold all updates");
     let (row, act) = match failed {
-        Some(refusal) if hold => (could_not(row, refusal), Act::Hold(true)),
+        Some(refusal) if hold => (could_not(row, refusal), Act::Hold(false)),
         _ if hold => (
-            row.detail("Nothing installs until you switch it off")
-                .toggle(true)
-                .busy(starting),
+            row.detail(if asking {
+                ASKING
+            } else {
+                "Nothing installs until you switch it off"
+            })
+            .toggle(true)
+            .busy(asking),
             Act::Hold(false),
         ),
         _ if session.locked() => (row.detail(LOCKED).toggle(false), Act::Hold(true)),
@@ -69,6 +75,14 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
         ),
     };
     sheet.press(row, act);
+    if failed.is_some() && (guard || hold) {
+        sheet.press(
+            Row::new("retry", "Try again")
+                .detail("Asks for the password again, to hold Mint's run")
+                .button("retry"),
+            Act::Retry,
+        );
+    }
 }
 
 pub(super) fn pages(session: &Session, now: NaiveDateTime) -> Vec<Sheet> {

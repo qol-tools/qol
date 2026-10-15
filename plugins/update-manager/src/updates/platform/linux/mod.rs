@@ -177,6 +177,9 @@ pub(crate) fn install(
         .filter(|package| !package.target.is_empty())
         .map(|package| package.target.clone())
         .collect();
+    if apt.is_empty() {
+        progress(0);
+    }
     if !apt.is_empty() {
         let mut report = |count: usize| progress(count);
         privileged::install_apt(&apt, &mut file, &mut report)?;
