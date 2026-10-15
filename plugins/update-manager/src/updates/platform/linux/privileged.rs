@@ -16,6 +16,7 @@ const SHELL: &str = "/bin/sh";
 const LABEL: &str = "qol-update-manager";
 const STOP_WAIT: Duration = Duration::from_secs(5);
 const READY: &str = "ready";
+const REFRESHED: &str = "refreshed";
 
 const HELPER_SH: &str = r#"
 timer="$1"
@@ -43,7 +44,7 @@ done
 release
 "#;
 
-const INSTALL_SH: &str = r#"echo ready; exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1"#;
+const INSTALL_SH: &str = r#"echo ready; env LANG=C LC_ALL=C apt-get update -o DPkg::Lock::Timeout=30 2>&1; echo refreshed; exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1"#;
 
 pub(crate) struct Helper {
     child: Child,
@@ -205,6 +206,10 @@ pub(super) struct Scan {
 
 impl Scan {
     pub(super) fn line(&mut self, line: &str) -> Option<String> {
+        if line == REFRESHED {
+            *self = Scan::default();
+            return None;
+        }
         if let Some((_, rest)) = line.split_once("held by process ") {
             let name = rest
                 .split_once('(')
@@ -281,6 +286,26 @@ mod tests {
     }
 
     #[test]
+    fn a_refresh_failure_is_not_the_install_reason() {
+        let mut scan = Scan::default();
+        scan.line("Waiting for cache lock: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (mintUpdate)");
+        scan.line("E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (mintUpdate)");
+        assert_eq!(scan.line(REFRESHED), None);
+        scan.line("E: Packages need to be removed but remove is disabled.");
+        assert_eq!(
+            scan.reason(),
+            Reason::Stopped("Packages need to be removed but remove is disabled.".into())
+        );
+        let mut quiet = Scan::default();
+        quiet.line("E: Failed to fetch http://archive.ubuntu.com/ubuntu/dists/noble/InRelease");
+        quiet.line(REFRESHED);
+        assert_eq!(
+            quiet.reason(),
+            Reason::Stopped("apt stopped without saying why".into())
+        );
+    }
+
+    #[test]
     fn polkit_refusals_are_recognised() {
         assert!(refused(
             "Failed to reboot system via logind: Interactive authentication required."
@@ -302,6 +327,17 @@ mod tests {
             "The password prompt timed out"
         );
         assert!(INSTALL_SH.starts_with("echo ready;"));
+        let order: Vec<usize> = [
+            "echo ready;",
+            "apt-get update -o DPkg::Lock::Timeout=30 2>&1;",
+            "echo refreshed;",
+            "exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install ",
+        ]
+        .iter()
+        .filter_map(|step| INSTALL_SH.find(step))
+        .collect();
+        assert_eq!(order.len(), 4);
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(HELPER_SH.contains("echo ready\n"));
     }
 }

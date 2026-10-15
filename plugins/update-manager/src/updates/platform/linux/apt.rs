@@ -235,10 +235,7 @@ fn items(sim: &Sim, holds: &BTreeSet<String>, policies: &BTreeMap<String, Policy
             name: inst.name.clone(),
             version: inst.new.clone(),
             installed: inst.old.clone(),
-            target: inst
-                .old
-                .as_ref()
-                .map(|_| format!("{}={}", inst.name, inst.new)),
+            target: inst.old.as_ref().map(|_| inst.name.clone()),
             security: inst.security,
             held: None,
         })
@@ -576,10 +573,7 @@ Description: An open and reliable container runtime
             ]
         );
         assert_eq!(updates[1].why, "A security fix. Restarts nothing.");
-        assert_eq!(
-            updates[1].packages[0].target,
-            "python3-urllib3=2.0.7-1ubuntu0.8"
-        );
+        assert_eq!(updates[1].packages[0].target, "python3-urllib3");
         assert_eq!(updates[2].packages[0].target, "");
         assert_eq!(updates[2].why, "A security fix. Needs a restart.");
         assert_eq!(
