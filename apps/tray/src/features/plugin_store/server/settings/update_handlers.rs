@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
-use super::super::super::github::{current_timestamp, CACHE_FORMAT_VERSION, CACHE_TTL_SECS};
 use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
@@ -80,27 +79,34 @@ struct CatalogHealth {
     checking: bool,
     failed: bool,
     fetched_at: Option<u64>,
-    fresh: bool,
+    fetched_this_run: bool,
 }
 
 impl CatalogHealth {
     fn read(state: &AppState) -> Self {
-        let cache = state.plugins_cache.read().ok();
-        let cache = cache.as_deref().and_then(Option::as_ref);
+        let fetched_at = state
+            .plugins_cache
+            .read()
+            .ok()
+            .and_then(|cache| cache.as_ref().map(|cache| cache.timestamp));
         Self {
             checking: state.plugins_revalidating.load(Ordering::SeqCst),
             failed: state.plugins_revalidation_failed_at.load(Ordering::SeqCst) != 0,
-            fetched_at: cache.map(|cache| cache.timestamp),
-            fresh: cache.is_some_and(|cache| {
-                cache.format_version == CACHE_FORMAT_VERSION
-                    && current_timestamp().saturating_sub(cache.timestamp) < CACHE_TTL_SECS
-            }),
+            fetched_at,
+            fetched_this_run: fetched_at
+                .is_some_and(|fetched_at| fetched_since(fetched_at, crate::updates::tray_start())),
         }
     }
 
     fn checked(&self) -> bool {
-        self.fetched_at.is_some() && self.fresh && !self.failed
+        self.fetched_at.is_some() && self.fetched_this_run && !self.failed
     }
+}
+
+fn fetched_since(fetched_at: u64, start: SystemTime) -> bool {
+    start
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .is_ok_and(|start| fetched_at >= start.as_secs())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -242,6 +248,7 @@ fn start_host_update() -> Response {
         crate::updates::checks_enabled(),
         jobs::get(jobs::HOST_ID).is_some_and(|job| job.state != JobState::Failed),
         available,
+        crate::updates::check_health().latest_succeeded(),
     ) {
         return action_error(StatusCode::CONFLICT, message);
     }
@@ -315,7 +322,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
     let catalog = CatalogHealth::read(state);
     let checks_enabled = crate::updates::checks_enabled();
     let plugins = plugin_views(state).map_err(|status| Box::new(status.into_response()))?;
-    let host_checked = health.last_success.is_some() && health.last_error.is_none();
+    let host_checked = health.latest_succeeded();
     Ok(UpdatesView {
         checking: health.checking || catalog.checking || super::super::update_check::running(state),
         checks_enabled,
@@ -539,6 +546,7 @@ fn host_update_refusal(
     checks_enabled: bool,
     running: bool,
     available: bool,
+    checked: bool,
 ) -> Option<&'static str> {
     if !checks_enabled {
         return Some("Development builds update through Recompile");
@@ -547,7 +555,11 @@ fn host_update_refusal(
         return Some(crate::updates::UPDATE_ALREADY_RUNNING);
     }
     if !available {
-        return Some("qol-tray is up to date");
+        return Some(if checked {
+            "qol-tray is up to date"
+        } else {
+            NO_UPDATE
+        });
     }
     None
 }
@@ -817,17 +829,25 @@ mod tests {
 
     #[test]
     fn rows_claim_up_to_date_only_after_the_latest_check_succeeded() {
-        let health = |failed, fetched_at, fresh| CatalogHealth {
+        let health = |failed, fetched_at, fetched_this_run| CatalogHealth {
             checking: false,
             failed,
             fetched_at,
-            fresh,
+            fetched_this_run,
         };
         assert!(health(false, Some(1), true).checked());
         assert!(!health(false, Some(1), false).checked());
         assert!(!health(true, Some(1), true).checked());
         assert!(!health(false, None, true).checked());
         assert!(!health(true, None, false).checked());
+    }
+
+    #[test]
+    fn only_a_plugin_list_fetched_since_the_tray_started_counts_as_checked() {
+        let start = SystemTime::UNIX_EPOCH + Duration::from_millis(1_000_700);
+        assert!(fetched_since(1_000, start));
+        assert!(fetched_since(19_000, start));
+        assert!(!fetched_since(999, start));
     }
 
     #[test]
@@ -1066,18 +1086,27 @@ mod tests {
                 false,
                 false,
                 true,
+                true,
                 Some("Development builds update through Recompile"),
             ),
-            (true, true, true, Some("An update is already running")),
-            (true, true, false, Some("An update is already running")),
-            (true, false, false, Some("qol-tray is up to date")),
-            (true, false, true, None),
+            (true, true, true, true, Some("An update is already running")),
+            (
+                true,
+                true,
+                false,
+                false,
+                Some("An update is already running"),
+            ),
+            (true, false, false, true, Some("qol-tray is up to date")),
+            (true, false, false, false, Some("No update is available")),
+            (true, false, true, false, None),
+            (true, false, true, true, None),
         ];
-        for (checks_enabled, running, available, expected) in cases {
+        for (checks_enabled, running, available, checked, expected) in cases {
             assert_eq!(
-                host_update_refusal(checks_enabled, running, available),
+                host_update_refusal(checks_enabled, running, available, checked),
                 expected,
-                "checks_enabled={checks_enabled} running={running} available={available}"
+                "checks_enabled={checks_enabled} running={running} available={available} checked={checked}"
             );
         }
     }

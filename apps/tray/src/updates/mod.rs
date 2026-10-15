@@ -54,6 +54,12 @@ pub struct CheckHealth {
     pub last_error: Option<String>,
 }
 
+impl CheckHealth {
+    pub fn latest_succeeded(&self) -> bool {
+        self.last_success.is_some() && self.last_error.is_none()
+    }
+}
+
 pub fn current_version() -> &'static str {
     CURRENT_VERSION
 }
