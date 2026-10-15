@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::plugin_services;
 use super::types::AppState;
 
-struct Claim(Arc<AtomicBool>);
+pub(super) struct Claim(Arc<AtomicBool>);
 
 impl Drop for Claim {
     fn drop(&mut self) {
@@ -44,7 +44,7 @@ pub(super) fn running(state: &AppState) -> bool {
     state.update_check_running.load(Ordering::SeqCst)
 }
 
-fn take(flag: &Arc<AtomicBool>) -> Option<Claim> {
+pub(super) fn take(flag: &Arc<AtomicBool>) -> Option<Claim> {
     flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .ok()
         .map(|_| Claim(flag.clone()))

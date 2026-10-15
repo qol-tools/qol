@@ -113,18 +113,12 @@ fn claim_revalidation(
     if !refresh && !retry_due(failed_at, current_timestamp()) {
         return None;
     }
-    if state
-        .plugins_revalidating
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return None;
-    }
+    let claim = super::super::update_check::take(&state.plugins_revalidating)?;
     let cache = state.plugins_cache.clone();
-    let flag = state.plugins_revalidating.clone();
     let failed_at = state.plugins_revalidation_failed_at.clone();
     let events = state.daemon.events.clone();
     Some(async move {
+        let _claim = claim;
         let result = revalidate_from_sources().await;
         let failed = !matches!(&result, Ok(plugins) if !plugins.is_empty());
         failed_at.store(
@@ -153,7 +147,6 @@ fn claim_revalidation(
                 log::warn!("Plugin revalidation failed: {:#}", error);
             }
         }
-        flag.store(false, Ordering::SeqCst);
     })
 }
 

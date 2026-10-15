@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
+use super::super::super::github::{current_timestamp, CACHE_FORMAT_VERSION, CACHE_TTL_SECS};
 use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
@@ -79,23 +80,26 @@ struct CatalogHealth {
     checking: bool,
     failed: bool,
     fetched_at: Option<u64>,
+    fresh: bool,
 }
 
 impl CatalogHealth {
     fn read(state: &AppState) -> Self {
+        let cache = state.plugins_cache.read().ok();
+        let cache = cache.as_deref().and_then(Option::as_ref);
         Self {
             checking: state.plugins_revalidating.load(Ordering::SeqCst),
             failed: state.plugins_revalidation_failed_at.load(Ordering::SeqCst) != 0,
-            fetched_at: state
-                .plugins_cache
-                .read()
-                .ok()
-                .and_then(|cache| cache.as_ref().map(|cache| cache.timestamp)),
+            fetched_at: cache.map(|cache| cache.timestamp),
+            fresh: cache.is_some_and(|cache| {
+                cache.format_version == CACHE_FORMAT_VERSION
+                    && current_timestamp().saturating_sub(cache.timestamp) < CACHE_TTL_SECS
+            }),
         }
     }
 
     fn checked(&self) -> bool {
-        self.fetched_at.is_some() && !self.failed
+        self.fetched_at.is_some() && self.fresh && !self.failed
     }
 }
 
@@ -813,15 +817,17 @@ mod tests {
 
     #[test]
     fn rows_claim_up_to_date_only_after_the_latest_check_succeeded() {
-        let health = |failed, fetched_at| CatalogHealth {
+        let health = |failed, fetched_at, fresh| CatalogHealth {
             checking: false,
             failed,
             fetched_at,
+            fresh,
         };
-        assert!(health(false, Some(1)).checked());
-        assert!(!health(true, Some(1)).checked());
-        assert!(!health(false, None).checked());
-        assert!(!health(true, None).checked());
+        assert!(health(false, Some(1), true).checked());
+        assert!(!health(false, Some(1), false).checked());
+        assert!(!health(true, Some(1), true).checked());
+        assert!(!health(false, None, true).checked());
+        assert!(!health(true, None, false).checked());
     }
 
     #[test]
