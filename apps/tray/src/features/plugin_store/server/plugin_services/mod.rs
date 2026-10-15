@@ -13,6 +13,7 @@ pub(super) fn list_plugins(
     catalog::list_plugins(state, refresh)
 }
 
+pub(super) use catalog::claim_catalog_revalidation;
 pub(super) use operations::run_operation;
 
 pub(super) fn list_installed(state: &AppState) -> Result<InstalledPluginsResponse, StatusCode> {

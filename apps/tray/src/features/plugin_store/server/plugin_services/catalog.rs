@@ -88,25 +88,37 @@ fn retry_due(failed_at: u64, now: u64) -> bool {
 }
 
 fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
+    if let Some(revalidation) = claim_revalidation(state, refresh, stale) {
+        tokio::spawn(revalidation);
+    }
+}
+
+pub(in super::super) fn claim_catalog_revalidation(
+    state: &AppState,
+    refresh: bool,
+) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+    let stale = is_stale(read_cache_snapshot(state).as_ref(), refresh);
+    claim_revalidation(state, refresh, stale)
+}
+
+fn claim_revalidation(
+    state: &AppState,
+    refresh: bool,
+    stale: bool,
+) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
     if !(stale || refresh) {
-        return;
+        return None;
     }
     let failed_at = state.plugins_revalidation_failed_at.load(Ordering::SeqCst);
     if !refresh && !retry_due(failed_at, current_timestamp()) {
-        return;
+        return None;
     }
-    if state
-        .plugins_revalidating
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return;
-    }
+    let claim = super::super::update_check::take(&state.plugins_revalidating)?;
     let cache = state.plugins_cache.clone();
-    let flag = state.plugins_revalidating.clone();
     let failed_at = state.plugins_revalidation_failed_at.clone();
     let events = state.daemon.events.clone();
-    tokio::spawn(async move {
+    Some(async move {
+        let _claim = claim;
         let result = revalidate_from_sources().await;
         let failed = !matches!(&result, Ok(plugins) if !plugins.is_empty());
         failed_at.store(
@@ -135,8 +147,7 @@ fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
                 log::warn!("Plugin revalidation failed: {:#}", error);
             }
         }
-        flag.store(false, Ordering::SeqCst);
-    });
+    })
 }
 
 async fn revalidate_from_sources() -> anyhow::Result<Vec<PluginMetadata>> {

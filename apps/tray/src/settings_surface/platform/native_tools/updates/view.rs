@@ -685,7 +685,10 @@ fn fade_opacity(elapsed: Duration) -> f32 {
 }
 
 fn finished(state: TargetState) -> bool {
-    matches!(state, TargetState::UpToDate | TargetState::DevLinked)
+    matches!(
+        state,
+        TargetState::UpToDate | TargetState::Unchecked | TargetState::DevLinked
+    )
 }
 
 fn navigable(rows: &[PageRow]) -> Vec<(usize, Selection)> {
@@ -723,9 +726,25 @@ fn value_tone(tone: ValueTone) -> SettingsValueTone {
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{CheckRow, Summary, TargetRow, ValueTone};
-    use super::{fade_opacity, navigable, nearest_navigable, PageRow, Selection};
+    use super::super::model::{CheckRow, Summary, TargetRow, TargetState, ValueTone};
+    use super::{fade_opacity, finished, navigable, nearest_navigable, PageRow, Selection};
     use std::time::Duration;
+
+    #[test]
+    fn only_rows_with_nothing_left_to_do_count_as_finished() {
+        let cases = [
+            (TargetState::UpToDate, true),
+            (TargetState::Unchecked, true),
+            (TargetState::DevLinked, true),
+            (TargetState::Available, false),
+            (TargetState::Queued, false),
+            (TargetState::Updating, false),
+            (TargetState::Failed, false),
+        ];
+        for (state, expected) in cases {
+            assert_eq!(finished(state), expected, "state: {state:?}");
+        }
+    }
 
     fn summary() -> Summary {
         Summary {

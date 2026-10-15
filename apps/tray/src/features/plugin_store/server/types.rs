@@ -46,6 +46,7 @@ pub(super) struct AppState {
     pub(super) plugins_cache: Arc<RwLock<Option<PluginCache>>>,
     pub(super) plugins_revalidating: Arc<AtomicBool>,
     pub(super) plugins_revalidation_failed_at: Arc<AtomicU64>,
+    pub(super) update_check_running: Arc<AtomicBool>,
     #[cfg(feature = "dev")]
     pub(super) daemon_health:
         tokio::sync::watch::Receiver<crate::plugins::daemon_health::HealthSnapshot>,
@@ -99,6 +100,7 @@ impl AppState {
             plugins_cache: Arc::new(RwLock::new(super::super::github::read_cache())),
             plugins_revalidating: Arc::new(AtomicBool::new(false)),
             plugins_revalidation_failed_at: Arc::new(AtomicU64::new(0)),
+            update_check_running: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "dev")]
             dev_state: Arc::new(crate::dev::state::DevState::new()),
             #[cfg(feature = "dev")]

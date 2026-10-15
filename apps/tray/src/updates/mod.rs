@@ -24,6 +24,7 @@ pub(super) const GITHUB_REPO: &str = "qol-tools/qol";
 pub(super) const HOST_TAG_PREFIX: &str = "qol-tray";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const NO_CONNECTION: &str = "No connection to GitHub";
+const UNREADABLE_REPLY: &str = "GitHub sent a reply qol-tray could not read";
 
 struct UpdateState {
     last_attempt: Option<SystemTime>,
@@ -228,7 +229,7 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
     let releases: Vec<GitHubRelease> = response
         .json()
         .await
-        .map_err(|_| NO_CONNECTION.to_string())?;
+        .map_err(|error| release_list_failure(error.is_decode()).to_string())?;
     if releases.len() == crate::features::plugin_store::source::RELEASES_PER_PAGE {
         log::warn!(
             "release list page is full ({} releases); the newest tag may be outside the fetched window",
@@ -254,6 +255,14 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
         latest: newest.filter(|_| update_found).map(|(_, version)| version),
         etag: new_etag,
     })
+}
+
+fn release_list_failure(unreadable: bool) -> &'static str {
+    if unreadable {
+        UNREADABLE_REPLY
+    } else {
+        NO_CONNECTION
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -814,6 +823,15 @@ mod tests {
         for (status, expected) in cases {
             assert_eq!(github_status_message(status), expected, "status={status}");
         }
+    }
+
+    #[test]
+    fn an_unreadable_release_list_is_not_reported_as_a_lost_connection() {
+        assert_eq!(
+            release_list_failure(true),
+            "GitHub sent a reply qol-tray could not read"
+        );
+        assert_eq!(release_list_failure(false), "No connection to GitHub");
     }
 
     #[test]
