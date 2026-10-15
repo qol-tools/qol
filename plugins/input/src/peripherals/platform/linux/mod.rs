@@ -33,9 +33,9 @@ const GNOME: Desktop = Desktop {
     keyboard: "org.gnome.desktop.peripherals.keyboard",
 };
 
-struct Values(BTreeMap<String, String>);
+struct SchemaValues(BTreeMap<String, String>);
 
-impl Values {
+impl SchemaValues {
     fn read(schema: &str) -> Result<Self> {
         Ok(Self(gsettings::list(schema)?.into_iter().collect()))
     }
@@ -62,7 +62,7 @@ pub(crate) fn backend() -> Result<&'static str> {
 }
 
 pub(crate) fn mouse() -> Result<Mouse> {
-    let values = Values::read(desktop()?.mouse)?;
+    let values = SchemaValues::read(desktop()?.mouse)?;
     Ok(Mouse {
         speed: values.number("speed").map(speed_percent),
         acceleration: values
@@ -79,7 +79,7 @@ pub(crate) fn touchpad() -> Result<Touchpad> {
     if let Some(reason) = touchpad_missing() {
         return Ok(Touchpad::missing(reason));
     }
-    let values = Values::read(desktop.touchpad)?;
+    let values = SchemaValues::read(desktop.touchpad)?;
     Ok(Touchpad {
         enabled: values.text("send-events").map(|mode| mode != "disabled"),
         tap_to_click: values.flag("tap-to-click"),
@@ -90,7 +90,7 @@ pub(crate) fn touchpad() -> Result<Touchpad> {
 }
 
 pub(crate) fn keyboard() -> Result<Keyboard> {
-    let values = Values::read(desktop()?.keyboard)?;
+    let values = SchemaValues::read(desktop()?.keyboard)?;
     Ok(Keyboard {
         repeat_delay: values.number("delay").map(whole),
         repeat_rate: values
@@ -268,7 +268,7 @@ mod tests {
 
     #[test]
     fn values_read_gsettings_text_as_typed_settings() {
-        let values = Values(BTreeMap::from([
+        let values = SchemaValues(BTreeMap::from([
             ("left-handed".to_string(), "true".to_string()),
             ("speed".to_string(), "-0.5".to_string()),
             ("delay".to_string(), "uint32 500".to_string()),
