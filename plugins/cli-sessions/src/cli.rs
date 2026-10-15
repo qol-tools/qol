@@ -192,14 +192,14 @@ where
                 }),
         )
         .command(
-            Command::new("pin")
-                .about("Pin a conversation so CLI Sessions never closes its terminal.")
-                .usage(crate::pin::USAGE)
-                .detail("A pinned conversation still parks and waits in the background, but its result is submitted into the same terminal, and no park, lane or session close shuts it.")
-                .detail("The pin follows the conversation id, so it survives a resume. With no argument it toggles; --id defaults to the calling terminal's conversation.")
-                .output("`pinned` or `unpinned` on stdout; diagnostics on stderr.")
-                .exit_behavior("Exits non-zero when the conversation cannot be resolved or the pin cannot be written.")
-                .run_plain_text(|context| Ok(PlainTextOutput::text(crate::pin::run(context.args())?))),
+            Command::new("parking")
+                .about("Turn parking on or off for a conversation.")
+                .usage(crate::parking::USAGE)
+                .detail("With parking off, a park keeps the terminal open and submits the result into it. With parking on, a park closes the terminal once the turn ends and resumes the conversation in a new tab when the command exits.")
+                .detail("A conversation starts with parking off unless it was launched with QOL_SESSIONS_PARK=1 (qol sessions fork --park). The choice follows the conversation id, so it survives a resume. With no argument it toggles; --id defaults to the calling terminal's conversation.")
+                .output("`parking on` or `parking off` on stdout; diagnostics on stderr.")
+                .exit_behavior("Exits non-zero when the conversation cannot be resolved or the choice cannot be written.")
+                .run_plain_text(|context| Ok(PlainTextOutput::text(crate::parking::run(context.args())?))),
         )
         .command(
             Command::new("snapshot")

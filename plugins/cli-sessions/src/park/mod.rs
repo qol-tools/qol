@@ -2,7 +2,7 @@ mod args;
 mod prompt;
 mod resume;
 mod runner;
-mod store;
+pub(crate) mod store;
 
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,12 +10,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
+use qol_terminal_sessions::parking::{self, ParkingStore};
 use qol_terminal_sessions::{SessionBinding, SessionInventory, TerminalSessionService};
 use serde::Serialize;
 
 use args::ParkArgs;
 pub use args::HELP;
-use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION};
+use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
 use runner::{caller_state, CallerState};
 pub(crate) use runner::{target, Target};
@@ -93,10 +94,6 @@ fn park(
         Target::Unknown => bail!("session discovery failed"),
     };
     let descriptor = interpreter.describe(&facts);
-    let instruction = interpreter.keep_open_reason(&facts).map_or_else(
-        || PARKED_INSTRUCTION.to_owned(),
-        |reason| kept_open_instruction(&reason),
-    );
     let title = parsed
         .title
         .clone()
@@ -111,6 +108,17 @@ fn park(
     if interpreter.resume_args_for(&tool, &external_id).is_none() {
         bail!("`{tool}` has no resume command, so its sessions cannot be parked");
     }
+    let closes_terminal =
+        ParkingStore::system().is_on(&external_id, parking::launched_with_parking());
+    let keep_open_reason = if closes_terminal {
+        interpreter.keep_open_reason(&facts)
+    } else {
+        Some(PARKING_OFF_REASON.to_owned())
+    };
+    let instruction = keep_open_reason.map_or_else(
+        || PARKED_INSTRUCTION.to_owned(),
+        |reason| kept_open_instruction(&reason),
+    );
     let executable = std::env::current_exe()
         .context("cannot resolve the CLI Sessions executable for the park runner")?;
     let created_at = now_seconds();
@@ -131,6 +139,7 @@ fn park(
         state: ParkState::Waiting,
         runner_pid: None,
         runner_identity: None,
+        closes_terminal,
         caller_closed: false,
         exit_code: None,
         resumed_session: None,
@@ -277,6 +286,7 @@ pub(crate) mod tests {
             state,
             runner_pid: None,
             runner_identity: None,
+            closes_terminal: false,
             caller_closed: false,
             exit_code: None,
             resumed_session: None,

@@ -39,6 +39,8 @@ pub struct ParkRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_identity: Option<String>,
     #[serde(default)]
+    pub closes_terminal: bool,
+    #[serde(default)]
     pub caller_closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
@@ -150,6 +152,7 @@ mod tests {
             state,
             runner_pid: Some(7),
             runner_identity: None,
+            closes_terminal: false,
             caller_closed: false,
             exit_code: None,
             resumed_session: None,

@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
-use qol_terminal_sessions::pin::PinStore;
+use qol_terminal_sessions::parking::ParkingStore;
 use qol_terminal_sessions::{
     DeliveryMode, SessionBinding, SessionFacts, TerminalSessionService, TextInput,
 };
@@ -124,6 +124,7 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                         record.caller_closed = true;
                         let _ = store.record(&record);
                     } else if gate.observe(&state)
+                        && parking_on(&record)
                         && matches!(
                             interpreter.keep_open_reason_for(&terminals, &caller),
                             Ok(None)
@@ -151,6 +152,10 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
         &caller,
         &prompt,
     )
+}
+
+fn parking_on(record: &ParkRecord) -> bool {
+    ParkingStore::system().is_on(&record.external_id, record.closes_terminal)
 }
 
 fn start_command(record: &ParkRecord, log_path: &Path) -> Result<std::process::Child> {
@@ -196,7 +201,7 @@ fn wake(
         terminals,
         interpreter,
         record,
-        &if PinStore::system().is_pinned(&record.external_id) {
+        &if !parking_on(record) {
             prompt.to_owned()
         } else {
             format!("{prompt}{CLOSE_NOTE}")
@@ -293,6 +298,11 @@ fn watch_woken(
                 }
             }
             WokenTurn::Engaged => break "engaged",
+            WokenTurn::Finished(report) if !parking_on(record) => {
+                record.state = ParkState::Finished;
+                record.report = Some(report);
+                break "kept_open";
+            }
             WokenTurn::Finished(report) => {
                 match interpreter.keep_open_reason_for(terminals, &woken) {
                     Err(_) => continue,

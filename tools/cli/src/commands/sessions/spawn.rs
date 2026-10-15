@@ -1934,6 +1934,7 @@ pub(super) fn spawn_detached(
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
     resume: Option<&[String]>,
+    park: bool,
 ) -> Result<DetachedLaunch> {
     if resume.is_none() {
         require_model_for_launch(model)?;
@@ -1965,6 +1966,9 @@ pub(super) fn spawn_detached(
         caller_config_dir().as_deref(),
         &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
     )?;
+    launch
+        .env
+        .push(qol_terminal_sessions::parking::launch_env(park));
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
@@ -6302,6 +6306,47 @@ mod tests {
     }
 
     #[test]
+    fn only_a_fork_launched_with_park_lets_its_park_close_the_terminal() {
+        for park in [false, true] {
+            let root = tempfile::TempDir::new().unwrap();
+            let cwd = managed_workdir(&root);
+            let (terminals, backend) = harness(vec![vec![]]);
+            let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+            super::super::fork::fork(
+                &terminals,
+                &CliSessionInterpreter::system(),
+                &SpawnLedger::with_dir(root.path().join("spawn-records")),
+                &locks(&root),
+                &forks,
+                Some("pi"),
+                &cwd,
+                "lane-fork-park",
+                None,
+                Some("flash"),
+                None,
+                None,
+                "wait on the pull request",
+                None,
+                None,
+                None,
+                false,
+                park,
+                &AgentDispatch::unconfigured(),
+            )
+            .unwrap();
+            let request = backend.last_request.lock().unwrap().clone().unwrap();
+            assert!(
+                request
+                    .launch
+                    .env
+                    .contains(&qol_terminal_sessions::parking::launch_env(park)),
+                "{:?}",
+                request.launch.env
+            );
+        }
+    }
+
+    #[test]
     fn a_dry_run_fork_launches_without_the_prompt_and_types_it_unsubmitted() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = managed_workdir(&root);
@@ -6325,6 +6370,7 @@ mod tests {
             None,
             None,
             true,
+            false,
             &AgentDispatch::unconfigured(),
         )
         .unwrap();
@@ -6371,6 +6417,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             &dispatch,
         )
         .unwrap();
@@ -6396,6 +6443,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             false,
             &dispatch,
         )
