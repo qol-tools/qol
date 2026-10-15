@@ -3,7 +3,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use qol_terminal_sessions::park::ParkRecord;
+use qol_terminal_sessions::park::{ParkRecord, ParkState};
 
 pub struct ParkStore {
     dir: PathBuf,
@@ -130,6 +130,18 @@ impl ParkStore {
 
     pub fn exited(&self, external_id: &str) -> Vec<ParkRecord> {
         qol_terminal_sessions::park::exited(&self.dir, external_id)
+    }
+
+    /// How many results were delivered into a session.
+    pub fn delivered_into(&self, session: &str) -> usize {
+        self.list()
+            .unwrap_or_default()
+            .iter()
+            .filter(|record| {
+                record.state == ParkState::Delivered
+                    && record.resumed_session.as_deref() == Some(session)
+            })
+            .count()
     }
 
     pub fn parks_again(&self, session: &str) -> bool {

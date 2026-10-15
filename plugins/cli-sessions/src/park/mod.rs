@@ -177,13 +177,9 @@ pub fn unpark(id: &str) -> Result<String> {
     let Some(_lock) = store.lock_unpark(id)? else {
         bail!("`{id}` is already being resumed or reopened");
     };
-    let mut record = store.load(id)?;
+    let record = store.load(id)?;
     if record.state == ParkState::Finished {
         return reopen(&store, record);
-    }
-    let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
-    if record.state != ParkState::Waiting && !retry {
-        bail!("`{id}` is no longer waiting ({:?})", record.state);
     }
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
@@ -200,6 +196,11 @@ pub fn unpark(id: &str) -> Result<String> {
     let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
         bail!("`{id}` is already being resumed");
     };
+    let mut record = store.load(id)?;
+    let retry = record.state == ParkState::Failed && record.resumed_session.is_none();
+    if record.state != ParkState::Waiting && !retry {
+        bail!("`{id}` is no longer waiting ({:?})", record.state);
+    }
     ensure_not_open(&store, &terminals, &interpreter, &record, &caller)?;
     if !store.claim_resume(id)? {
         bail!("`{id}` is already being resumed");
@@ -233,7 +234,7 @@ pub fn unpark(id: &str) -> Result<String> {
     Ok(format!("resumed {id} in {session}"))
 }
 
-fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<String> {
+fn reopen(store: &ParkStore, record: ParkRecord) -> Result<String> {
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
     let caller = record
@@ -243,6 +244,10 @@ fn reopen(store: &ParkStore, mut record: ParkRecord) -> Result<String> {
     let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
         bail!("`{}` is already being resumed", record.id);
     };
+    let mut record = store.load(&record.id)?;
+    if record.state != ParkState::Finished {
+        bail!("`{}` is no longer finished ({:?})", record.id, record.state);
+    }
     ensure_not_open(store, &terminals, &interpreter, &record, &caller)?;
     let session = resume(&terminals, &interpreter, &record, "")?;
     record.state = ParkState::Resumed;

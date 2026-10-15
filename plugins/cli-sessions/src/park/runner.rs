@@ -23,6 +23,7 @@ const POLL: Duration = Duration::from_secs(2);
 const READY_POLLS_BEFORE_CLOSE: u32 = 2;
 const WOKEN_UNREAD_LIMIT: u32 = 30;
 const UNKNOWN_POLLS_BEFORE_RESUME: u32 = 30;
+const BUSY_POLLS_BEFORE_GIVING_UP: u32 = 1800;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CallerState {
@@ -223,11 +224,7 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     record.wake = Some(wake_section(&record, &exit, &tail, &log_path));
     record.state = ParkState::Exited;
     store.record(&record)?;
-    let resumed = {
-        let _turn = store.lock_conversation(&record.external_id)?;
-        deliver(&terminals, &interpreter, store, &mut record, &caller)?
-    };
-    if resumed {
+    if deliver(&terminals, &interpreter, store, &mut record, &caller)? {
         watch_woken(&terminals, &interpreter, store, &mut record)?;
     }
     Ok(())
@@ -254,8 +251,9 @@ fn start_command(record: &ParkRecord, log_path: &Path) -> Result<std::process::C
 }
 
 /// Delivers every finished result of this conversation to the one session that holds it once its
-/// prompt is free, or resumes the conversation once when no session holds it. Returns whether
-/// this runner resumed it and so watches the woken session.
+/// prompt is free, or resumes the conversation once when no session holds it. Each attempt holds
+/// the conversation lock; the wait between attempts does not. Returns whether this runner resumed
+/// it and so watches the woken session.
 fn deliver(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -264,53 +262,78 @@ fn deliver(
     caller: &SessionBinding,
 ) -> Result<bool> {
     let mut unknown = 0;
+    let mut busy = 0;
     let mut settle = SettleGate::default();
     loop {
-        let batch = store.exited(&record.external_id);
-        if !batch.iter().any(|parked| parked.id == record.id) {
-            return Ok(false);
-        }
-        if !settle.settled(&batch) {
-            thread::sleep(POLL);
-            continue;
-        }
-        let prompt = wake_prompt(
-            &batch
-                .iter()
-                .filter_map(|parked| parked.wake.clone())
-                .collect::<Vec<_>>(),
-        );
-        match holder(terminals, interpreter, store, record, caller) {
-            Holder::Live(binding) => {
-                unknown = 0;
-                if prompt_free(terminals, interpreter, &binding)
-                    && terminals
-                        .send_text(&binding, &prompt, DeliveryMode::Submit)
-                        .is_ok()
-                {
-                    for parked in &batch {
-                        store.record(&ParkRecord {
-                            state: ParkState::Delivered,
-                            runner_pid: None,
-                            ..parked.clone()
-                        })?;
-                    }
-                    qol_runtime::probe!(
-                        "CLI_SESSION_PARK",
-                        "event=delivered id={} batch={} session={}",
-                        record.id,
-                        batch.len(),
-                        binding
-                    );
-                    return Ok(false);
-                }
+        {
+            let _turn = store.lock_conversation(&record.external_id)?;
+            let batch = store.exited(&record.external_id);
+            if !batch.iter().any(|parked| parked.id == record.id) {
+                return Ok(false);
             }
-            Holder::Unknown if unknown < UNKNOWN_POLLS_BEFORE_RESUME => unknown += 1,
-            Holder::Unknown | Holder::None => {
-                return resume_batch(terminals, interpreter, store, record, &batch, &prompt)
+            if settle.settled(&batch) {
+                let prompt = wake_prompt(
+                    &batch
+                        .iter()
+                        .filter_map(|parked| parked.wake.clone())
+                        .collect::<Vec<_>>(),
+                );
+                match holder(terminals, interpreter, store, record, caller) {
+                    Holder::Live(binding) => {
+                        unknown = 0;
+                        if prompt_free(terminals, interpreter, &binding)
+                            && terminals
+                                .send_text(&binding, &prompt, DeliveryMode::Submit)
+                                .is_ok()
+                        {
+                            settle_batch(store, &batch, ParkState::Delivered, &binding, None);
+                            qol_runtime::probe!(
+                                "CLI_SESSION_PARK",
+                                "event=delivered id={} batch={} session={}",
+                                record.id,
+                                batch.len(),
+                                binding
+                            );
+                            return Ok(false);
+                        }
+                        busy += 1;
+                        if busy >= BUSY_POLLS_BEFORE_GIVING_UP {
+                            let detail = format!("`{binding}` stayed busy or held a draft for an hour, so the result was not submitted; it is in the park log");
+                            settle_batch(store, &batch, ParkState::Failed, &binding, Some(&detail));
+                            return Ok(false);
+                        }
+                    }
+                    Holder::Unknown if unknown < UNKNOWN_POLLS_BEFORE_RESUME => unknown += 1,
+                    Holder::Unknown | Holder::None => {
+                        return resume_batch(terminals, interpreter, store, record, &batch, &prompt)
+                    }
+                }
             }
         }
         thread::sleep(POLL);
+    }
+}
+
+/// Settles a batch the session `binding` holds; a failed batch names no session, so the user is
+/// told and can retry it.
+fn settle_batch(
+    store: &ParkStore,
+    batch: &[ParkRecord],
+    state: ParkState,
+    binding: &SessionBinding,
+    detail: Option<&str>,
+) {
+    for parked in batch {
+        let settled = ParkRecord {
+            state,
+            runner_pid: None,
+            resumed_session: (state == ParkState::Delivered).then(|| binding.to_string()),
+            detail: detail.map(str::to_owned).or_else(|| parked.detail.clone()),
+            ..parked.clone()
+        };
+        if let Err(error) = store.record(&settled) {
+            log::warn!("[cli-sessions] park {} not settled: {error:#}", parked.id);
+        }
     }
 }
 
@@ -335,7 +358,6 @@ fn resume_batch(
     batch: &[ParkRecord],
     prompt: &str,
 ) -> Result<bool> {
-    record.runner_pid = None;
     if !store.claim_resume(&record.id)? {
         return Ok(false);
     }
@@ -346,25 +368,30 @@ fn resume_batch(
     };
     match resume(terminals, interpreter, record, &prompt) {
         Ok(session) => {
-            for parked in batch.iter().filter(|parked| parked.id != record.id) {
-                store.record(&ParkRecord {
-                    state: ParkState::Delivered,
-                    runner_pid: None,
-                    resumed_session: Some(session.clone()),
-                    ..parked.clone()
-                })?;
-            }
             record.state = ParkState::Resumed;
             record.resumed_session = Some(session);
             record.runner_pid = Some(std::process::id());
         }
         Err(error) => {
             record.state = ParkState::Failed;
+            record.runner_pid = None;
             record.detail = Some(format!("{error:#}"));
             store.release(&record.id);
         }
     }
     store.record(record)?;
+    if let Some(session) = record
+        .resumed_session
+        .as_deref()
+        .and_then(|token| token.parse::<SessionBinding>().ok())
+    {
+        let siblings = batch
+            .iter()
+            .filter(|parked| parked.id != record.id)
+            .cloned()
+            .collect::<Vec<_>>();
+        settle_batch(store, &siblings, ParkState::Delivered, &session, None);
+    }
     qol_runtime::probe!(
         "CLI_SESSION_PARK",
         "event=woke id={} batch={} state={:?} session={}",
@@ -374,6 +401,17 @@ fn resume_batch(
         record.resumed_session.as_deref().unwrap_or("-")
     );
     Ok(record.state == ParkState::Resumed)
+}
+
+fn woken_turns(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    woken: &SessionBinding,
+) -> Vec<ChatTurn> {
+    match target(terminals, woken) {
+        Target::Live(facts) => interpreter.chat_transcript(&facts).unwrap_or_default(),
+        Target::Gone | Target::Unknown => Vec::new(),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -430,11 +468,8 @@ fn watch_woken(
         if !gate.observe(&state) {
             continue;
         }
-        let turns = match target(terminals, &woken) {
-            Target::Live(facts) => interpreter.chat_transcript(&facts).unwrap_or_default(),
-            Target::Gone | Target::Unknown => Vec::new(),
-        };
-        match woken_turn(&turns) {
+        let delivered = store.delivered_into(&token);
+        match woken_turn(&woken_turns(terminals, interpreter, &woken)) {
             WokenTurn::Working => {
                 unread += 1;
                 if unread >= WOKEN_UNREAD_LIMIT {
@@ -459,7 +494,11 @@ fn watch_woken(
                         let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
                             continue;
                         };
-                        if !store.exited(&record.external_id).is_empty() {
+                        if !store.exited(&record.external_id).is_empty()
+                            || store.delivered_into(&token) != delivered
+                            || woken_turn(&woken_turns(terminals, interpreter, &woken))
+                                != WokenTurn::Finished(report.clone())
+                        {
                             continue;
                         }
                         let _ = terminals.close(&woken);
