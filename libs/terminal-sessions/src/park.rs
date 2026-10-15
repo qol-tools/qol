@@ -4,6 +4,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+pub const PARK_CLOSES_ENV: &str = "QOL_SESSIONS_PARK";
+
+pub fn park_closes_from_env() -> bool {
+    std::env::var_os(PARK_CLOSES_ENV).is_some_and(|value| value == "1")
+}
+
+pub fn park_closes_env() -> (String, String) {
+    (PARK_CLOSES_ENV.to_owned(), "1".to_owned())
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParkState {
@@ -38,6 +48,8 @@ pub struct ParkRecord {
     pub runner_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_identity: Option<String>,
+    #[serde(default)]
+    pub closes_terminal: bool,
     #[serde(default)]
     pub caller_closed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +162,7 @@ mod tests {
             state,
             runner_pid: Some(7),
             runner_identity: None,
+            closes_terminal: false,
             caller_closed: false,
             exit_code: None,
             resumed_session: None,

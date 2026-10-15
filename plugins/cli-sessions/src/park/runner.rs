@@ -123,7 +123,8 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                     if state == CallerState::Gone {
                         record.caller_closed = true;
                         let _ = store.record(&record);
-                    } else if gate.observe(&state)
+                    } else if record.closes_terminal
+                        && gate.observe(&state)
                         && matches!(
                             interpreter.keep_open_reason_for(&terminals, &caller),
                             Ok(None)
@@ -196,7 +197,7 @@ fn wake(
         terminals,
         interpreter,
         record,
-        &if PinStore::system().is_pinned(&record.external_id) {
+        &if !record.closes_terminal || PinStore::system().is_pinned(&record.external_id) {
             prompt.to_owned()
         } else {
             format!("{prompt}{CLOSE_NOTE}")
@@ -293,6 +294,11 @@ fn watch_woken(
                 }
             }
             WokenTurn::Engaged => break "engaged",
+            WokenTurn::Finished(report) if !record.closes_terminal => {
+                record.state = ParkState::Finished;
+                record.report = Some(report);
+                break "kept_open";
+            }
             WokenTurn::Finished(report) => {
                 match interpreter.keep_open_reason_for(terminals, &woken) {
                     Err(_) => continue,

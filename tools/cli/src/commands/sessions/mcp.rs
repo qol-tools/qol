@@ -410,6 +410,15 @@ impl McpSessionServer {
             })
             .transpose()?
             .unwrap_or(true);
+        let park = arguments
+            .get("park")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_fork `park` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
         if arguments.get("task").is_some() {
             return Err("session_fork takes no `task`: a fork owns its brief end to end and never reports a round. Put the problem in `brief`.".to_owned());
         }
@@ -465,6 +474,7 @@ impl McpSessionServer {
             chat.as_ref(),
             self.spawn_cap.as_ref(),
             false,
+            park,
             &dispatch,
         )
         .map_err(|error| error.to_string())?;
@@ -4418,6 +4428,7 @@ mod tests {
             Some(token().as_str()),
             Some(&chat),
             None,
+            false,
             false,
             &super::super::agent_policy::AgentDispatch::unconfigured(),
         )

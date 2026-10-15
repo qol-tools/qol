@@ -38,6 +38,11 @@ pub fn resume(
         record.claude_config_dir.as_deref().map(Path::new),
         &LaneExecCommand::current(&[crate::park::LANE_EXEC])?,
     )?;
+    if record.closes_terminal {
+        launch
+            .env
+            .push(qol_terminal_sessions::park::park_closes_env());
+    }
     let identity = SpawnIdentity {
         key: SpawnKey::new(record.id.clone())
             .map_err(|error| anyhow!("park id `{}` is not a spawn key: {error}", record.id))?,

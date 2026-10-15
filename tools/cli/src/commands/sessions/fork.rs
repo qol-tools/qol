@@ -270,6 +270,7 @@ pub(super) fn fork(
     chat: Option<&ForkChat>,
     cap: Option<&SpawnCapConfig>,
     dry_run: bool,
+    park: bool,
     dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
     validate_brief(brief)?;
@@ -330,6 +331,7 @@ pub(super) fn fork(
         dry_run,
         admission.assignment.as_ref(),
         None,
+        park,
     )?;
     record.surface = launched.surface.to_owned();
     record.cwd = launched.cwd.clone();
@@ -431,6 +433,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         chat.as_ref(),
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
         parsed.dry_run,
+        parsed.park,
         &dispatch,
     )?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -476,6 +479,7 @@ pub(super) struct ForkArgs {
     pub(super) parent: Option<String>,
     pub(super) no_chat: bool,
     pub(super) dry_run: bool,
+    pub(super) park: bool,
     pub(super) agent_profile: Option<String>,
     pub(super) task_role: Option<super::agent_policy::AgentRole>,
     pub(super) requires: Option<Vec<super::agent_policy::AgentRequirement>>,
@@ -492,7 +496,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends; without it, a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 fn default_key(brief: &str) -> String {
@@ -526,6 +530,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
             "--parent" => parsed.parent = Some(flag_value(args, &mut index, "--parent")?),
             "--no-chat" => parsed.no_chat = true,
             "--dry-run" => parsed.dry_run = true,
+            "--park" => parsed.park = true,
             "--agent-profile" => {
                 parsed.agent_profile = Some(flag_value(args, &mut index, "--agent-profile")?)
             }

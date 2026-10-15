@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use args::ParkArgs;
 pub use args::HELP;
-use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION};
+use prompt::{kept_open_instruction, unpark_prompt, NOT_OPTED_IN_REASON, PARKED_INSTRUCTION};
 use resume::resume;
 use runner::{caller_state, CallerState};
 pub(crate) use runner::{target, Target};
@@ -93,7 +93,13 @@ fn park(
         Target::Unknown => bail!("session discovery failed"),
     };
     let descriptor = interpreter.describe(&facts);
-    let instruction = interpreter.keep_open_reason(&facts).map_or_else(
+    let closes_terminal = qol_terminal_sessions::park::park_closes_from_env();
+    let keep_open_reason = if closes_terminal {
+        interpreter.keep_open_reason(&facts)
+    } else {
+        Some(NOT_OPTED_IN_REASON.to_owned())
+    };
+    let instruction = keep_open_reason.map_or_else(
         || PARKED_INSTRUCTION.to_owned(),
         |reason| kept_open_instruction(&reason),
     );
@@ -131,6 +137,7 @@ fn park(
         state: ParkState::Waiting,
         runner_pid: None,
         runner_identity: None,
+        closes_terminal,
         caller_closed: false,
         exit_code: None,
         resumed_session: None,
@@ -277,6 +284,7 @@ pub(crate) mod tests {
             state,
             runner_pid: None,
             runner_identity: None,
+            closes_terminal: false,
             caller_closed: false,
             exit_code: None,
             resumed_session: None,

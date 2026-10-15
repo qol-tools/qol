@@ -258,6 +258,10 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         "description": "tab or os-window; defaults to fork_surface, then spawn_surface in sessions.toml, then tab",
                         "enum": ["tab", "os-window"],
                     },
+                    "park": {
+                        "type": "boolean",
+                        "description": "Let the fork close its terminal while it is parked on a long wait and reopen in a new tab when the wait ends; false by default, and a fork without it waits in its own terminal",
+                    },
                     "copy_chat": {
                         "type": "boolean",
                         "description": "Copy the parent session's chat transcript beside the brief and point the fork at it; true by default, and false launches without a copy. Best effort: no parent, an unresolvable session, or no transcript simply launches without one",
