@@ -8,7 +8,7 @@ pub mod diagnostics;
 mod doctor;
 pub mod host;
 pub mod park;
-mod pin;
+mod parking;
 pub mod session;
 pub mod signal;
 pub mod storage;

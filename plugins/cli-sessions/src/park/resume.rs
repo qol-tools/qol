@@ -41,7 +41,7 @@ pub fn resume(
     if record.closes_terminal {
         launch
             .env
-            .push(qol_terminal_sessions::park::park_closes_env());
+            .push(qol_terminal_sessions::parking::launch_env());
     }
     let identity = SpawnIdentity {
         key: SpawnKey::new(record.id.clone())

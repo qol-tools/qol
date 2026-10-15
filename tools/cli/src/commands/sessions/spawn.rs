@@ -1969,7 +1969,7 @@ pub(super) fn spawn_detached(
     if park {
         launch
             .env
-            .push(qol_terminal_sessions::park::park_closes_env());
+            .push(qol_terminal_sessions::parking::launch_env());
     }
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
@@ -6341,7 +6341,7 @@ mod tests {
                 request
                     .launch
                     .env
-                    .contains(&qol_terminal_sessions::park::park_closes_env()),
+                    .contains(&qol_terminal_sessions::parking::launch_env()),
                 park,
                 "{:?}",
                 request.launch.env
