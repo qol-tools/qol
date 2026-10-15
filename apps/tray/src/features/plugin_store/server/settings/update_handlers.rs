@@ -5,7 +5,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::time::SystemTime;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime};
 
 use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
@@ -22,6 +23,10 @@ const HOST_UPDATE: Operation = Operation::Host {
     update_plugins: Vec::new(),
 };
 const ATTENTION_AFTER_SECS: u64 = 24 * 60 * 60;
+const PLUGIN_LIST_FAILED: &str = "Couldn't load the plugin list";
+const NO_UPDATE: &str = "No update is available";
+const DEV_LINKED_PLUGIN: &str = "A dev-linked plugin can't be updated here";
+const RUNNING_UPDATE_KEEPS_GOING: &str = "The current update can't be stopped";
 
 type HttpResult<T> = Result<T, Box<Response>>;
 type PlannedJob = (String, Operation);
@@ -30,6 +35,7 @@ type PlannedJob = (String, Operation);
 #[serde(rename_all = "snake_case")]
 enum RowState {
     UpToDate,
+    Unchecked,
     Available,
     Queued,
     Updating,
@@ -53,6 +59,7 @@ struct HostView {
     current: String,
     latest: Option<String>,
     update_available: bool,
+    checked: bool,
     dev_build: bool,
     job: Option<UpdateJob>,
     updated_from: Option<String>,
@@ -63,8 +70,33 @@ struct PluginView {
     name: String,
     current: String,
     latest: Option<String>,
+    checked: bool,
     dev_linked: bool,
     job: Option<UpdateJob>,
+}
+
+struct CatalogHealth {
+    checking: bool,
+    failed: bool,
+    fetched_at: Option<u64>,
+}
+
+impl CatalogHealth {
+    fn read(state: &AppState) -> Self {
+        Self {
+            checking: state.plugins_revalidating.load(Ordering::SeqCst),
+            failed: state.plugins_revalidation_failed_at.load(Ordering::SeqCst) != 0,
+            fetched_at: state
+                .plugins_cache
+                .read()
+                .ok()
+                .and_then(|cache| cache.as_ref().map(|cache| cache.timestamp)),
+        }
+    }
+
+    fn checked(&self) -> bool {
+        self.fetched_at.is_some() && !self.failed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -98,7 +130,6 @@ struct PluginPayload {
     current: String,
     latest: Option<String>,
     state: RowState,
-    progress: Option<u8>,
     error: Option<String>,
 }
 
@@ -158,19 +189,12 @@ pub(super) async fn post_core_action(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> Response {
-    let request: CoreActionRequest = if body.is_empty() {
-        CoreActionRequest::default()
-    } else {
-        match http_json::parse_json_body(body, MAX_CONFIG_SIZE) {
-            Ok(request) => request,
-            Err(response) => return *response,
-        }
+    let request = match action_request(&body) {
+        Ok(request) => request,
+        Err((status, message)) => return action_error(status, message),
     };
     match action.as_str() {
-        "check_updates" => {
-            spawn_refresh(state);
-            action_ok("Checking for updates")
-        }
+        "check_updates" => check_updates_action(&state),
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
@@ -179,10 +203,22 @@ pub(super) async fn post_core_action(
     }
 }
 
-fn spawn_refresh(state: AppState) {
-    tokio::spawn(async move {
-        super::super::refresh_updates(&state, true).await;
-    });
+fn action_request(body: &[u8]) -> Result<CoreActionRequest, (StatusCode, &'static str)> {
+    if body.is_empty() {
+        return Ok(CoreActionRequest::default());
+    }
+    if body.len() > MAX_CONFIG_SIZE {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "Request too large"));
+    }
+    serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON"))
+}
+
+fn check_updates_action(state: &AppState) -> Response {
+    let Some(check) = super::super::update_check::claim(state, true) else {
+        return action_ok("Already checking for updates");
+    };
+    tokio::spawn(check);
+    action_ok("Checking for updates")
 }
 
 fn start_update_action(state: &AppState, id: Option<&str>) -> Response {
@@ -214,18 +250,17 @@ fn start_host_update() -> Response {
 }
 
 fn start_plugin_update(state: &AppState, id: String) -> Response {
-    let installed = match plugin_services::list_installed(state) {
-        Ok(installed) => installed,
+    let plugins = match plugin_views(state) {
+        Ok(plugins) => plugins,
         Err(_) => {
             return action_error(StatusCode::INTERNAL_SERVER_ERROR, "Plugin list unavailable")
         }
     };
-    if !installed
-        .plugins
-        .iter()
-        .any(|plugin| plugin.id.as_str() == id.as_str())
-    {
+    let Some(plugin) = plugins.iter().find(|plugin| plugin.id == id) else {
         return action_error(StatusCode::NOT_FOUND, format!("Unknown plugin: {id}"));
+    };
+    if let Some(message) = plugin_update_refusal(plugin_row_state(plugin)) {
+        return action_error(StatusCode::CONFLICT, message);
     }
     match jobs::push(&id, Operation::Update) {
         Ok(()) => action_ok("Update started"),
@@ -257,27 +292,38 @@ fn stop_updates_action() -> Response {
     let stopped = jobs::QUEUE.cancel_queued(|_, operation| {
         matches!(operation, Operation::Update | Operation::Host { .. })
     });
-    if stopped == 0 {
-        return action_error(StatusCode::CONFLICT, "Nothing to stop");
+    match stop_outcome(stopped, jobs::QUEUE.busy()) {
+        Ok(message) => action_ok(message),
+        Err(message) => action_error(StatusCode::CONFLICT, message),
     }
-    action_ok("Stopping after the current update")
+}
+
+fn stop_outcome(stopped: usize, busy: bool) -> Result<&'static str, &'static str> {
+    match (stopped, busy) {
+        (0, true) => Err(RUNNING_UPDATE_KEEPS_GOING),
+        (0, false) => Err("Nothing to stop"),
+        _ => Ok("Stopping after the current update"),
+    }
 }
 
 fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
     let health = crate::updates::check_health();
+    let catalog = CatalogHealth::read(state);
     let checks_enabled = crate::updates::checks_enabled();
     let plugins = plugin_views(state).map_err(|status| Box::new(status.into_response()))?;
+    let host_checked = health.last_success.is_some() && health.last_error.is_none();
     Ok(UpdatesView {
-        checking: health.checking,
+        checking: health.checking || catalog.checking || super::super::update_check::running(state),
         checks_enabled,
         last_attempt: health.last_attempt,
-        last_success: health.last_success,
-        check_error: health.last_error,
+        last_success: last_good_check(health.last_success, catalog.fetched_at),
+        check_error: check_error(health.last_error, catalog.failed),
         tray_start: crate::updates::tray_start(),
         host: HostView {
             current: crate::updates::current_version().to_string(),
             latest: crate::updates::latest_version(),
             update_available: crate::updates::host_update_available(),
+            checked: host_checked,
             dev_build: !checks_enabled,
             job: jobs::get(jobs::HOST_ID),
             updated_from: crate::updates::updated_from(),
@@ -286,8 +332,21 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
     })
 }
 
+fn last_good_check(
+    host: Option<SystemTime>,
+    catalog_fetched_at: Option<u64>,
+) -> Option<SystemTime> {
+    let catalog = SystemTime::UNIX_EPOCH + Duration::from_secs(catalog_fetched_at?);
+    Some(host?.min(catalog))
+}
+
+fn check_error(host: Option<String>, catalog_failed: bool) -> Option<String> {
+    host.or_else(|| catalog_failed.then(|| PLUGIN_LIST_FAILED.to_string()))
+}
+
 fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
     let installed = plugin_services::list_installed(state)?;
+    let checked = CatalogHealth::read(state).checked();
     let jobs = jobs::snapshot();
     Ok(installed
         .plugins
@@ -297,6 +356,7 @@ fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
             name: plugin.name,
             current: plugin.version,
             latest: plugin.available_version,
+            checked,
             dev_linked: plugin.source == Some("dev_linked"),
             job: update_job(jobs.get(plugin.id.as_str())),
         })
@@ -367,7 +427,6 @@ fn plugin_payload(plugin: &PluginView) -> PluginPayload {
         current: plugin.current.clone(),
         latest: plugin.latest.clone(),
         state,
-        progress: None,
         error: if state == RowState::Failed {
             plugin.job.as_ref().and_then(|job| job.reason.clone())
         } else {
@@ -385,8 +444,10 @@ fn host_row_state(view: &UpdatesView) -> RowState {
     }
     if view.host.update_available {
         RowState::Available
-    } else {
+    } else if view.host.checked {
         RowState::UpToDate
+    } else {
+        RowState::Unchecked
     }
 }
 
@@ -399,8 +460,18 @@ fn plugin_row_state(plugin: &PluginView) -> RowState {
     }
     if is_available(&plugin.current, plugin.latest.as_deref()) {
         RowState::Available
-    } else {
+    } else if plugin.checked {
         RowState::UpToDate
+    } else {
+        RowState::Unchecked
+    }
+}
+
+fn plugin_update_refusal(state: RowState) -> Option<&'static str> {
+    match state {
+        RowState::Available | RowState::Failed | RowState::Queued | RowState::Updating => None,
+        RowState::DevLinked => Some(DEV_LINKED_PLUGIN),
+        RowState::UpToDate | RowState::Unchecked | RowState::DevBuild => Some(NO_UPDATE),
     }
 }
 
@@ -537,7 +608,6 @@ pub(super) fn action_error(status: StatusCode, message: impl Into<String>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn plugin(id: &str, name: &str, current: &str, latest: Option<&str>) -> PluginView {
         PluginView {
@@ -545,6 +615,7 @@ mod tests {
             name: name.to_string(),
             current: current.to_string(),
             latest: latest.map(str::to_string),
+            checked: true,
             dev_linked: false,
             job: None,
         }
@@ -564,6 +635,7 @@ mod tests {
             current: current.to_string(),
             latest: latest.map(str::to_string),
             update_available: is_available(current, latest),
+            checked: true,
             dev_build: false,
             job: None,
             updated_from: None,
@@ -592,7 +664,8 @@ mod tests {
     #[test]
     fn payload_reports_every_field_in_the_wire_shape() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        let mut state = view(host("3.66.1", Some("3.67.0")), vec![]);
+        let launcher = plugin("qol-launcher", "Launcher", "1.63.1", Some("1.64.0"));
+        let mut state = view(host("3.66.1", Some("3.67.0")), vec![launcher]);
         state.checking = true;
         state.last_attempt = Some(now - Duration::from_secs(5));
         state.last_success = Some(now - Duration::from_secs(10));
@@ -616,7 +689,14 @@ mod tests {
                     "error": null,
                     "updated_from": null
                 },
-                "plugins": []
+                "plugins": [{
+                    "id": "qol-launcher",
+                    "name": "Launcher",
+                    "current": "1.63.1",
+                    "latest": "1.64.0",
+                    "state": "available",
+                    "error": null
+                }]
             })
         );
     }
@@ -658,6 +738,12 @@ mod tests {
         state.host.update_available = false;
         assert_eq!(host_row_state(&state), RowState::UpToDate);
 
+        state.host.checked = false;
+        assert_eq!(host_row_state(&state), RowState::Unchecked);
+
+        state.host.update_available = true;
+        assert_eq!(host_row_state(&state), RowState::Available);
+
         state.host.job = job(JobState::Failed, Some("No connection to GitHub"));
         assert_eq!(host_row_state(&state), RowState::Failed);
 
@@ -675,6 +761,12 @@ mod tests {
 
         released.latest = Some("1.63.1".to_string());
         assert_eq!(plugin_row_state(&released), RowState::UpToDate);
+
+        released.checked = false;
+        assert_eq!(plugin_row_state(&released), RowState::Unchecked);
+
+        released.latest = Some("1.64.0".to_string());
+        assert_eq!(plugin_row_state(&released), RowState::Available);
 
         released.dev_linked = true;
         assert_eq!(plugin_row_state(&released), RowState::DevLinked);
@@ -716,8 +808,95 @@ mod tests {
             Some("No connection to GitHub")
         );
         assert_eq!(payload.plugins[2].state, RowState::UpToDate);
-        assert_eq!(payload.plugins[0].progress, None);
         assert!(payload.running);
+    }
+
+    #[test]
+    fn rows_claim_up_to_date_only_after_the_latest_check_succeeded() {
+        let health = |failed, fetched_at| CatalogHealth {
+            checking: false,
+            failed,
+            fetched_at,
+        };
+        assert!(health(false, Some(1)).checked());
+        assert!(!health(true, Some(1)).checked());
+        assert!(!health(false, None).checked());
+        assert!(!health(true, None).checked());
+    }
+
+    #[test]
+    fn the_last_good_check_is_the_older_of_the_two_sources() {
+        let at = |secs| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs));
+        assert_eq!(last_good_check(at(500), Some(300)), at(300));
+        assert_eq!(last_good_check(at(200), Some(300)), at(200));
+        assert_eq!(last_good_check(None, Some(300)), None);
+        assert_eq!(last_good_check(at(500), None), None);
+    }
+
+    #[test]
+    fn a_failed_plugin_list_shows_when_the_host_check_has_no_error() {
+        assert_eq!(
+            check_error(Some("No connection to GitHub".to_string()), true).as_deref(),
+            Some("No connection to GitHub")
+        );
+        assert_eq!(
+            check_error(None, true).as_deref(),
+            Some("Couldn't load the plugin list")
+        );
+        assert_eq!(check_error(None, false), None);
+    }
+
+    #[test]
+    fn a_plugin_updates_only_when_its_row_offers_it() {
+        let cases = [
+            (RowState::Available, None),
+            (RowState::Failed, None),
+            (RowState::Queued, None),
+            (RowState::Updating, None),
+            (RowState::UpToDate, Some("No update is available")),
+            (RowState::Unchecked, Some("No update is available")),
+            (RowState::DevBuild, Some("No update is available")),
+            (
+                RowState::DevLinked,
+                Some("A dev-linked plugin can't be updated here"),
+            ),
+        ];
+        for (state, expected) in cases {
+            assert_eq!(plugin_update_refusal(state), expected, "state: {state:?}");
+        }
+    }
+
+    #[test]
+    fn stop_names_a_running_update_it_cannot_cancel() {
+        let cases = [
+            (2, true, Ok("Stopping after the current update")),
+            (1, false, Ok("Stopping after the current update")),
+            (0, true, Err("The current update can't be stopped")),
+            (0, false, Err("Nothing to stop")),
+        ];
+        for (stopped, busy, expected) in cases {
+            assert_eq!(
+                stop_outcome(stopped, busy),
+                expected,
+                "stopped={stopped} busy={busy}"
+            );
+        }
+    }
+
+    #[test]
+    fn action_bodies_parse_or_refuse_in_json() {
+        assert!(action_request(b"").is_ok_and(|request| request.id.is_none()));
+        assert!(action_request(br#"{"id":"qol-launcher"}"#)
+            .is_ok_and(|request| request.id.as_deref() == Some("qol-launcher")));
+        assert_eq!(
+            action_request(b"{nope").err(),
+            Some((StatusCode::BAD_REQUEST, "Invalid JSON"))
+        );
+        let large = vec![b' '; MAX_CONFIG_SIZE + 1];
+        assert_eq!(
+            action_request(&large).err(),
+            Some((StatusCode::PAYLOAD_TOO_LARGE, "Request too large"))
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[serde(rename_all = "snake_case")]
 pub(super) enum TargetState {
     UpToDate,
+    Unchecked,
     Available,
     Queued,
     Updating,
@@ -116,11 +117,15 @@ pub(super) struct PageModel {
 
 pub(super) fn page(snapshot: &UpdatesSnapshot, visited: &BTreeSet<String>) -> PageModel {
     let plugins = plugin_rows(&snapshot.plugins, visited);
+    let checked = !snapshot
+        .plugins
+        .iter()
+        .any(|plugin| plugin.state == TargetState::Unchecked && !visited.contains(&plugin.id));
     PageModel {
         summary: summary(snapshot),
         check: check_row(snapshot),
         host: host_row(&snapshot.host),
-        fold: fold_text(snapshot.plugins.len(), plugins.len()),
+        fold: fold_text(snapshot.plugins.len(), plugins.len(), checked),
         plugin_total: snapshot.plugins.len(),
         plugins,
     }
@@ -130,7 +135,10 @@ pub(super) fn plugin_rows(plugins: &[UpdateTarget], visited: &BTreeSet<String>) 
     let mut rows = plugins
         .iter()
         .filter_map(|plugin| match plugin.state {
-            TargetState::UpToDate | TargetState::DevLinked | TargetState::DevBuild => visited
+            TargetState::UpToDate
+            | TargetState::Unchecked
+            | TargetState::DevLinked
+            | TargetState::DevBuild => visited
                 .contains(&plugin.id)
                 .then(|| finished_row(plugin, &plugin.current)),
             _ => Some(active_row(plugin)),
@@ -241,6 +249,9 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
             row.tone = ValueTone::Muted;
             row.description = Some("Updates arrive through Recompile".to_string());
         }
+        TargetState::Unchecked => {
+            row.description = Some("Not checked for updates".to_string());
+        }
         TargetState::UpToDate | TargetState::DevLinked => {
             row.description = host
                 .updated_from
@@ -304,6 +315,10 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             action_label: Some("Update all"),
         };
     }
+    let unchecked = unchecked_names(snapshot);
+    if !unchecked.is_empty() {
+        return unchecked_summary(snapshot, unchecked);
+    }
     Summary {
         dot: Some(SummaryDot::Success),
         busy: false,
@@ -317,6 +332,49 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
         action: None,
         action_label: None,
     }
+}
+
+fn unchecked_summary(snapshot: &UpdatesSnapshot, description: String) -> Summary {
+    if snapshot.checking {
+        return Summary {
+            dot: None,
+            busy: true,
+            label: "Checking for updates".to_string(),
+            description,
+            action: None,
+            action_label: None,
+        };
+    }
+    let failed = snapshot.check_error.is_some();
+    Summary {
+        dot: Some(SummaryDot::Warning),
+        busy: false,
+        label: if failed {
+            "Couldn't check for updates"
+        } else {
+            "Not checked yet"
+        }
+        .to_string(),
+        description,
+        action: Some(RowAction::Check),
+        action_label: Some(if failed { "Try again" } else { "Check now" }),
+    }
+}
+
+fn unchecked_names(snapshot: &UpdatesSnapshot) -> String {
+    let plugins = snapshot
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.state == TargetState::Unchecked)
+        .count();
+    let mut names = Vec::new();
+    if snapshot.host.state == TargetState::Unchecked {
+        names.push(snapshot.host.name.clone());
+    }
+    if plugins > 0 {
+        names.push(format!("{plugins} {}", plural(plugins, "plugin")));
+    }
+    join_names(&names)
 }
 
 pub(super) fn check_row(snapshot: &UpdatesSnapshot) -> CheckRow {
@@ -356,10 +414,13 @@ pub(super) fn check_row(snapshot: &UpdatesSnapshot) -> CheckRow {
     }
 }
 
-pub(super) fn fold_text(total: usize, shown: usize) -> Option<String> {
+pub(super) fn fold_text(total: usize, shown: usize, checked: bool) -> Option<String> {
     let hidden = total.saturating_sub(shown);
     if hidden == 0 {
         return None;
+    }
+    if !checked {
+        return Some(unchecked_fold_text(total, shown, hidden));
     }
     if total == 1 {
         return Some("Your plugin is up to date.".to_string());
@@ -371,6 +432,18 @@ pub(super) fn fold_text(total: usize, shown: usize) -> Option<String> {
         return Some("The other 1 is up to date.".to_string());
     }
     Some(format!("The other {hidden} are up to date."))
+}
+
+fn unchecked_fold_text(total: usize, shown: usize, hidden: usize) -> String {
+    if total == 1 {
+        "Your plugin wasn't checked.".to_string()
+    } else if shown == 0 {
+        format!("Your {total} plugins weren't checked.")
+    } else if hidden == 1 {
+        "The other 1 wasn't checked.".to_string()
+    } else {
+        format!("The other {hidden} weren't checked.")
+    }
 }
 
 pub(super) fn age_text(secs: Option<u64>) -> String {
@@ -568,26 +641,28 @@ mod tests {
 
     #[test]
     fn fold_text_hides_only_when_rows_are_hidden() {
-        assert_eq!(fold_text(0, 0), None::<String>);
-        assert_eq!(fold_text(3, 3), None::<String>);
-        assert_eq!(
-            fold_text(1, 0),
-            Some("Your plugin is up to date.".to_string())
-        );
-        assert_eq!(
-            fold_text(9, 1),
-            Some("The other 8 are up to date.".to_string())
-        );
-        assert_eq!(
-            fold_text(2, 1),
-            Some("The other 1 is up to date.".to_string())
-        );
-        assert_eq!(fold_text(2, 0), Some("All 2 are up to date.".to_string()));
-        assert_eq!(fold_text(17, 0), Some("All 17 are up to date.".to_string()));
-        assert_eq!(
-            fold_text(17, 2),
-            Some("The other 15 are up to date.".to_string())
-        );
+        let cases = [
+            (0, 0, true, None),
+            (3, 3, true, None),
+            (3, 3, false, None),
+            (1, 0, true, Some("Your plugin is up to date.")),
+            (9, 1, true, Some("The other 8 are up to date.")),
+            (2, 1, true, Some("The other 1 is up to date.")),
+            (2, 0, true, Some("All 2 are up to date.")),
+            (17, 0, true, Some("All 17 are up to date.")),
+            (17, 2, true, Some("The other 15 are up to date.")),
+            (1, 0, false, Some("Your plugin wasn't checked.")),
+            (17, 0, false, Some("Your 17 plugins weren't checked.")),
+            (2, 1, false, Some("The other 1 wasn't checked.")),
+            (17, 2, false, Some("The other 15 weren't checked.")),
+        ];
+        for (total, shown, checked, expected) in cases {
+            assert_eq!(
+                fold_text(total, shown, checked).as_deref(),
+                expected,
+                "total={total} shown={shown} checked={checked}"
+            );
+        }
     }
 
     #[test]
@@ -618,6 +693,81 @@ mod tests {
     fn plugin_rows_never_show_an_unvisited_dev_linked_plugin() {
         let plugins = vec![target("ides", "IDE Checkout", TargetState::DevLinked)];
         assert!(plugin_rows(&plugins, &BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    fn an_unchecked_plugin_folds_unless_it_just_finished_updating() {
+        let plugins = vec![
+            target("cli", "CLI Sessions", TargetState::Unchecked),
+            target("lights", "Lights", TargetState::Unchecked),
+        ];
+        assert!(plugin_rows(&plugins, &BTreeSet::new()).is_empty());
+
+        let visited = BTreeSet::from(["cli".to_string()]);
+        let rows = plugin_rows(&plugins, &visited);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].value, "Updated to 1.0.0");
+        assert_eq!(rows[0].tone, ValueTone::Success);
+
+        let snapshot = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            plugins,
+        );
+        assert_eq!(
+            page(&snapshot, &visited).fold,
+            Some("The other 1 wasn't checked.".to_string())
+        );
+        assert_eq!(
+            page(&snapshot, &BTreeSet::new()).fold,
+            Some("Your 2 plugins weren't checked.".to_string())
+        );
+    }
+
+    #[test]
+    fn summary_never_calls_unchecked_rows_up_to_date() {
+        let plugins = vec![
+            target("cli", "CLI Sessions", TargetState::Unchecked),
+            target("lights", "Lights", TargetState::Unchecked),
+        ];
+        let mut offline = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Unchecked),
+            plugins,
+        );
+        offline.check_error = Some("No connection to GitHub".to_string());
+        let failed = summary(&offline);
+        assert_eq!(failed.dot, Some(SummaryDot::Warning));
+        assert_eq!(failed.label, "Couldn't check for updates");
+        assert_eq!(failed.description, "qol-tray and 2 plugins");
+        assert_eq!(failed.action, Some(RowAction::Check));
+        assert_eq!(failed.action_label, Some("Try again"));
+
+        offline.checking = true;
+        let checking = summary(&offline);
+        assert!(checking.busy);
+        assert_eq!(checking.dot, None);
+        assert_eq!(checking.label, "Checking for updates");
+        assert_eq!(checking.action, None);
+
+        let fresh = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Unchecked),
+            vec![target("cli", "CLI Sessions", TargetState::UpToDate)],
+        );
+        let fresh = summary(&fresh);
+        assert_eq!(fresh.label, "Not checked yet");
+        assert_eq!(fresh.description, "qol-tray");
+        assert_eq!(fresh.action_label, Some("Check now"));
+
+        let plugin_only = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("cli", "CLI Sessions", TargetState::Unchecked)],
+        );
+        assert_eq!(summary(&plugin_only).description, "1 plugin");
+
+        let waiting = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Unchecked),
+            vec![target("cli", "CLI Sessions", TargetState::Available)],
+        );
+        assert_eq!(summary(&waiting).label, "1 update waiting");
     }
 
     #[test]
@@ -771,6 +921,14 @@ mod tests {
         assert_eq!(current.value, "1.0.0");
         assert_eq!(current.description.as_deref(), Some("Updated from 1.0.0"));
         assert_eq!(current.tone, ValueTone::Normal);
+
+        let unchecked = host_row(&target("qol-tray", "qol-tray", TargetState::Unchecked));
+        assert_eq!(unchecked.value, "1.0.0");
+        assert_eq!(
+            unchecked.description.as_deref(),
+            Some("Not checked for updates")
+        );
+        assert_eq!(unchecked.action, None);
     }
 
     #[test]

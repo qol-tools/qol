@@ -6,6 +6,7 @@ use qol_work_queue::{Entry, Run, State, WorkQueue};
 use super::UPDATE_ALREADY_RUNNING;
 
 pub(crate) const HOST_ID: &str = "qol-tray";
+const ALREADY_QUEUED: &str = "Already queued or updating";
 
 pub(crate) static QUEUE: LazyLock<WorkQueue<Operation>> = LazyLock::new(WorkQueue::new);
 
@@ -43,7 +44,14 @@ pub(crate) fn push(id: &str, operation: Operation) -> Result<(), String> {
     };
     QUEUE
         .push(id, operation, run)
-        .map_err(|_| UPDATE_ALREADY_RUNNING.to_string())
+        .map_err(|_| refusal(QUEUE.get(id).map(|entry| entry.state)).to_string())
+}
+
+fn refusal(own: Option<State>) -> &'static str {
+    match own {
+        Some(State::Queued | State::Running) => ALREADY_QUEUED,
+        _ => UPDATE_ALREADY_RUNNING,
+    }
 }
 
 pub(crate) fn snapshot() -> HashMap<String, UpdateJob> {
@@ -85,6 +93,14 @@ mod tests {
             reason: None,
             order: 3,
         }
+    }
+
+    #[test]
+    fn a_refused_push_names_its_own_job_before_the_one_blocking_everything() {
+        assert_eq!(refusal(Some(State::Queued)), "Already queued or updating");
+        assert_eq!(refusal(Some(State::Running)), "Already queued or updating");
+        assert_eq!(refusal(Some(State::Failed)), "An update is already running");
+        assert_eq!(refusal(None), "An update is already running");
     }
 
     #[test]
