@@ -2730,6 +2730,10 @@ mod tests {
                 screen => Ok(screen),
             }
         }
+
+        fn read_screen_styled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+            self.read_screen_relaxed(target)
+        }
     }
 
     impl SessionFocus for FakeBackend {
