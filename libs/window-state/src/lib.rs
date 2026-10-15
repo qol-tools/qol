@@ -94,12 +94,20 @@ pub fn resolve<'a>(
                 .find(|monitor| monitor.connector == saved.monitor.connector)
         })
         .or_else(|| nearest_to_saved(saved, monitors))?;
+    Some((monitor, place_on(saved, monitor.bounds, monitor.work_area)))
+}
+
+pub fn place_on(
+    saved: &WindowState,
+    bounds: MonitorBounds,
+    work_area: MonitorBounds,
+) -> WindowRect {
     let window = WindowRect {
-        x: f64::from(monitor.bounds.x) + saved.bounds_on_monitor.x,
-        y: f64::from(monitor.bounds.y) + saved.bounds_on_monitor.y,
+        x: f64::from(bounds.x) + saved.bounds_on_monitor.x,
+        y: f64::from(bounds.y) + saved.bounds_on_monitor.y,
         ..saved.bounds_on_monitor
     };
-    Some((monitor, clamp_into(window, monitor.work_area)))
+    clamp_into(window, work_area)
 }
 
 fn nearest_to_saved<'a>(saved: &WindowState, monitors: &'a [Monitor]) -> Option<&'a Monitor> {

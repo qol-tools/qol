@@ -988,10 +988,12 @@ fn panel_monitor(
     tracker: &MonitorTracker,
     cx: &mut App,
 ) -> Option<ActiveMonitor> {
-    active
+    let shown = active.filter(|active| active.surface.is_visible());
+    shown
         .and_then(|active| active.surface.remembered_monitor(cx))
-        .or_else(|| settings_surface().remembered_monitor(cx))
         .or_else(|| tracker.snapshot_monitor())
+        .or_else(|| active.and_then(|active| active.surface.remembered_monitor(cx)))
+        .or_else(|| settings_surface().remembered_monitor(cx))
 }
 
 fn size_prepared_panel(
