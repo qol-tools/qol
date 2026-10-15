@@ -190,14 +190,9 @@ fn switch_names() -> String {
 fn level_ranges() -> String {
     Level::ALL
         .into_iter()
-        .map(|level| format!("{} {}", Setting::Level(level).name(), accepted_range(level)))
+        .map(|level| format!("{} {}", Setting::Level(level).name(), level.accepted()))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn accepted_range(level: Level) -> String {
-    let range = level.range();
-    format!("{} to {}{}", range.start(), range.end(), level.unit())
 }
 
 fn usage_status() -> String {
@@ -258,7 +253,7 @@ fn parse_set_args(args: &[String]) -> std::result::Result<Change, String> {
     };
     let accepted = match setting {
         Setting::Switch(_) => "on or off".to_string(),
-        Setting::Level(level) => format!("a whole number from {}", accepted_range(level)),
+        Setting::Level(level) => format!("a whole number from {}", level.accepted()),
     };
     let Some(value) = value else {
         return Err(usage_error(
@@ -275,7 +270,7 @@ fn parse_set_args(args: &[String]) -> std::result::Result<Change, String> {
         Setting::Level(level) => value
             .parse::<u32>()
             .ok()
-            .filter(|value| level.range().contains(value))
+            .filter(|value| level.values().contains(*value))
             .map(|value| Change::Level(level, value)),
     };
     change.ok_or_else(|| usage_error(&usage, format!("{name} takes {accepted}, got `{value}`")))
@@ -369,8 +364,10 @@ mod tests {
                 setting.name()
             );
         }
-        assert!(help.contains("pointer-speed 0 to 100%"), "{help}");
-        assert!(help.contains("repeat-rate 2 to 50 keys/s"), "{help}");
+        for level in Level::ALL {
+            let line = format!("{} {}", Setting::Level(level).name(), level.accepted());
+            assert!(help.contains(&line), "{line} missing from {help}");
+        }
     }
 
     #[test]
@@ -398,6 +395,7 @@ mod tests {
 
     #[test]
     fn set_reads_a_switch_as_on_or_off_and_a_level_as_a_number_in_range() {
+        let slowest = Level::RepeatRate.values().first;
         assert_eq!(
             parse_set_args(&args(&["touchpad", "off"])),
             Ok(Change::Switch(Switch::Touchpad, false))
@@ -411,8 +409,8 @@ mod tests {
             Ok(Change::Level(Level::PointerSpeed, 40))
         );
         assert_eq!(
-            parse_set_args(&args(&["repeat-rate", "2"])),
-            Ok(Change::Level(Level::RepeatRate, 2))
+            parse_set_args(&args(&["repeat-rate", &slowest.to_string()])),
+            Ok(Change::Level(Level::RepeatRate, slowest))
         );
     }
 
@@ -422,7 +420,7 @@ mod tests {
             (&[], "set requires a setting and a value"),
             (
                 &["pointer-speed"],
-                "set pointer-speed requires a whole number from 0 to 100%",
+                "set pointer-speed requires a whole number from",
             ),
             (&["touchpad"], "set touchpad requires on or off"),
             (&["speed", "40"], "unknown setting `speed`"),
@@ -435,6 +433,16 @@ mod tests {
             let error = parse_set_args(&args(tokens)).unwrap_err();
             assert!(error.contains(reason), "{tokens:?}: {error}");
             assert!(error.contains(&usage_set()), "{tokens:?}: {error}");
+        }
+        for level in Level::ALL {
+            let values = level.values();
+            let name = Setting::Level(level).name();
+            let between = (values.step > 1).then(|| values.first + 1);
+            for value in [values.last + 1].into_iter().chain(between) {
+                let error = parse_set_args(&args(&[&name, &value.to_string()])).unwrap_err();
+                assert!(error.contains(&level.accepted()), "{error}");
+                assert!(error.contains(&format!("got `{value}`")), "{error}");
+            }
         }
     }
 

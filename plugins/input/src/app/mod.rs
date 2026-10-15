@@ -103,12 +103,10 @@ fn dispatch(action: &str, input: &serde_json::Value) -> ReadResult<Command> {
 }
 
 fn set_level(action: &str, level: Level, input: &serde_json::Value) -> ReadResult<Command> {
-    let range = level.range();
     let Some(value) = requested_value(input) else {
         return ReadResult::Error(format!(
-            "{action} requires a value from {} to {}",
-            range.start(),
-            range.end()
+            "{action} requires a value from {}",
+            level.accepted()
         ));
     };
     handled(peripherals::set_level(level, value))
@@ -301,5 +299,26 @@ mod tests {
             .expect("qol-runtime.toml invalid");
         qol_config::contract::validate_contracts(&config, Some(&runtime))
             .expect("qol-config.toml and qol-runtime.toml must validate together");
+    }
+
+    #[test]
+    fn each_level_slider_spans_its_bounds_and_lands_on_both_ends_this_computer_accepts() {
+        let config =
+            qol_config::contract::parse_spec("qol-config.toml").expect("qol-config.toml invalid");
+        for level in Level::ALL {
+            let number = &config.fields[level.key()].number;
+            let (min, max, step) = (
+                number.min.unwrap(),
+                number.max.unwrap(),
+                number.step.unwrap(),
+            );
+            let bounds = level.bounds();
+            assert_eq!(min, f64::from(bounds.first), "{level:?}");
+            assert_eq!(max, f64::from(bounds.last), "{level:?}");
+            let values = level.values();
+            for end in [values.first, values.last] {
+                assert_eq!((f64::from(end) - min) % step, 0.0, "{level:?} {end}");
+            }
+        }
     }
 }

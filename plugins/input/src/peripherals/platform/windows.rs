@@ -1,21 +1,29 @@
 use std::ffi::c_void;
 use std::ptr::{null_mut, without_provenance_mut};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetDoubleClickTime, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_F24, VK_LWIN, VK_MENU, VK_RWIN,
+    VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SystemParametersInfoW, SM_SWAPBUTTON, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
-    SPI_GETKEYBOARDDELAY, SPI_GETKEYBOARDSPEED, SPI_GETMOUSE, SPI_GETMOUSESPEED,
-    SPI_SETDOUBLECLICKTIME, SPI_SETKEYBOARDDELAY, SPI_SETKEYBOARDSPEED, SPI_SETMOUSE,
-    SPI_SETMOUSEBUTTONSWAP, SPI_SETMOUSESPEED, SYSTEM_PARAMETERS_INFO_ACTION,
+    GetSystemMetrics, SendNotifyMessageW, SystemParametersInfoW, HWND_BROADCAST, SM_SWAPBUTTON,
+    SPIF_UPDATEINIFILE, SPI_GETKEYBOARDDELAY, SPI_GETKEYBOARDSPEED, SPI_GETMOUSE,
+    SPI_GETMOUSESPEED, SPI_SETDOUBLECLICKTIME, SPI_SETKEYBOARDDELAY, SPI_SETKEYBOARDSPEED,
+    SPI_SETMOUSE, SPI_SETMOUSEBUTTONSWAP, SPI_SETMOUSESPEED, SYSTEM_PARAMETERS_INFO_ACTION,
+    WM_SETTINGCHANGE,
 };
 
-use super::super::{Keyboard, Level, Mouse, Switch, Touchpad, NO_TOUCHPAD, TOUCHPAD_FIXED};
+use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad, NO_TOUCHPAD};
 
 const SPI_GETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AE;
 const SPI_SETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AF;
 const TOUCHPAD_PARAMETERS_VERSION: u32 = 1;
 const TOUCHPAD_PRESENT: u32 = 1 << 0;
+const TOUCHPAD_ENABLED: u32 = 1 << 3;
 const TAP_ENABLED: u32 = 1 << 2;
 const SCROLL_DIRECTION_REVERSED: u32 = 1 << 9;
 const ACCELERATION_ON: [i32; 3] = [6, 10, 1];
@@ -27,6 +35,10 @@ const RATE_STEPS: u32 = 31;
 const SLOWEST_RATE: f64 = 2.5;
 const FASTEST_RATE: f64 = 30.0;
 const NO_MOUSE_NATURAL_SCROLL: &str = "Windows has no natural scrolling setting for a mouse";
+const TOUCHPAD_SHORTCUT: [VIRTUAL_KEY; 3] = [VK_CONTROL, VK_LWIN, VK_F24];
+const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN];
+const SHORTCUT_SETTLE: Duration = Duration::from_secs(2);
+const SHORTCUT_POLL: Duration = Duration::from_millis(20);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -65,23 +77,11 @@ pub(crate) fn mouse() -> Result<Mouse> {
 }
 
 pub(crate) fn touchpad() -> Result<Touchpad> {
-    let parameters = match touchpad_parameters() {
-        Ok(parameters) => parameters,
-        Err(error) => {
-            return Ok(Touchpad::missing(format!(
-                "touchpad settings need Windows 11 24H2 or later: {error}"
-            )))
-        }
-    };
-    if parameters.status & TOUCHPAD_PRESENT == 0 {
-        return Ok(Touchpad::missing(NO_TOUCHPAD));
-    }
-    Ok(Touchpad {
-        enabled: None,
-        tap_to_click: Some(parameters.settings & TAP_ENABLED != 0),
-        natural_scroll: Some(parameters.settings & SCROLL_DIRECTION_REVERSED == 0),
-        speed: Some(step_percent(parameters.cursor_speed)),
-        missing: None,
+    Ok(match touchpad_parameters() {
+        Ok(parameters) => touchpad_from(&parameters),
+        Err(error) => Touchpad::missing(format!(
+            "touchpad settings need Windows 11 24H2 or later: {error}"
+        )),
     })
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn set_switch(switch: Switch, on: bool) -> Result<()> {
         }
         Switch::SwapButtons => set(SPI_SETMOUSEBUTTONSWAP, u32::from(on), null_mut()),
         Switch::MouseNaturalScroll => bail!(NO_MOUSE_NATURAL_SCROLL),
-        Switch::Touchpad => bail!(TOUCHPAD_FIXED),
+        Switch::Touchpad => switch_touchpad(on),
         Switch::TapToClick => write_touchpad(|parameters| {
             parameters.settings = with_bit(parameters.settings, TAP_ENABLED, on);
         }),
@@ -131,6 +131,110 @@ pub(crate) fn set_level(level: Level, value: u32) -> Result<()> {
         }),
         Level::RepeatDelay => set(SPI_SETKEYBOARDDELAY, delay_step(value), null_mut()),
         Level::RepeatRate => set(SPI_SETKEYBOARDSPEED, rate_step(value), null_mut()),
+    }
+}
+
+pub(crate) fn values(level: Level) -> Steps {
+    match level {
+        Level::PointerSpeed | Level::TouchpadSpeed => Steps {
+            first: step_percent(1),
+            last: step_percent(SPEED_STEPS),
+            step: step_percent(1),
+        },
+        Level::DoubleClick => level.bounds(),
+        Level::RepeatDelay => Steps {
+            first: delay_ms(0),
+            last: delay_ms(DELAY_STEPS),
+            step: DELAY_STEP_MS,
+        },
+        Level::RepeatRate => Steps::span(rate_from_step(0), rate_from_step(RATE_STEPS)),
+    }
+}
+
+fn touchpad_from(parameters: &TouchpadParameters) -> Touchpad {
+    if parameters.status & TOUCHPAD_PRESENT == 0 {
+        return Touchpad::missing(NO_TOUCHPAD);
+    }
+    Touchpad {
+        enabled: Some(parameters.status & TOUCHPAD_ENABLED != 0),
+        tap_to_click: Some(parameters.settings & TAP_ENABLED != 0),
+        natural_scroll: Some(parameters.settings & SCROLL_DIRECTION_REVERSED == 0),
+        speed: Some(step_percent(parameters.cursor_speed)),
+        missing: None,
+    }
+}
+
+fn switch_touchpad(on: bool) -> Result<()> {
+    let enabled = || -> Result<bool> { Ok(touchpad_parameters()?.status & TOUCHPAD_ENABLED != 0) };
+    if enabled()? == on {
+        return Ok(());
+    }
+    settle(|| Ok(!modifiers_held()))?;
+    press(&TOUCHPAD_SHORTCUT)?;
+    if settle(|| Ok(enabled()? == on))? {
+        return Ok(());
+    }
+    bail!(
+        "Windows did not turn the touchpad {}",
+        if on { "on" } else { "off" }
+    )
+}
+
+fn settle(mut done: impl FnMut() -> Result<bool>) -> Result<bool> {
+    let deadline = Instant::now() + SHORTCUT_SETTLE;
+    loop {
+        if done()? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        sleep(SHORTCUT_POLL);
+    }
+}
+
+fn modifiers_held() -> bool {
+    MODIFIERS
+        .iter()
+        .any(|&key| unsafe { GetAsyncKeyState(i32::from(key)) } < 0)
+}
+
+fn press(keys: &[VIRTUAL_KEY]) -> Result<()> {
+    let inputs = chord(keys);
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            size_of::<INPUT>() as i32,
+        )
+    };
+    if sent as usize != inputs.len() {
+        bail!("SendInput failed: {}", std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn chord(keys: &[VIRTUAL_KEY]) -> Vec<INPUT> {
+    let down = keys.iter().map(|&key| key_input(key, 0));
+    let up = keys
+        .iter()
+        .rev()
+        .map(|&key| key_input(key, KEYEVENTF_KEYUP));
+    down.chain(up).collect()
+}
+
+fn key_input(key: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
     }
 }
 
@@ -162,12 +266,14 @@ fn get<T>(action: SYSTEM_PARAMETERS_INFO_ACTION, ui_param: u32, value: &mut T) -
 }
 
 fn set(action: SYSTEM_PARAMETERS_INFO_ACTION, ui_param: u32, pv_param: *mut c_void) -> Result<()> {
-    call(
-        action,
-        ui_param,
-        pv_param,
-        SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
-    )
+    call(action, ui_param, pv_param, SPIF_UPDATEINIFILE)?;
+    if unsafe { SendNotifyMessageW(HWND_BROADCAST, WM_SETTINGCHANGE, action as usize, 0) } == 0 {
+        log::warn!(
+            "WM_SETTINGCHANGE for {action:#06x} was not announced: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+    Ok(())
 }
 
 fn call(
@@ -272,6 +378,86 @@ mod tests {
         for rate in [5, 10, 20, 30] {
             assert_eq!(rate_from_step(rate_step(rate)), rate);
         }
+    }
+
+    #[test]
+    fn every_value_windows_accepts_reads_back_unchanged() {
+        let read_back = |level, value| match level {
+            Level::PointerSpeed | Level::TouchpadSpeed => step_percent(percent_step(value)),
+            Level::DoubleClick => value,
+            Level::RepeatDelay => delay_ms(delay_step(value)),
+            Level::RepeatRate => rate_from_step(rate_step(value)),
+        };
+        assert_eq!(values(Level::RepeatRate), Steps::span(3, 30));
+        assert_eq!(values(Level::RepeatDelay).step, 250);
+        assert_eq!(values(Level::PointerSpeed).first, 5);
+        for level in Level::ALL {
+            let Steps { first, last, step } = values(level);
+            for value in (first..=last).step_by(step as usize) {
+                assert_eq!(read_back(level, value), value, "{level:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_unreversed_scroll_direction_reads_as_natural_scrolling() {
+        let touchpad = TouchpadParameters {
+            status: TOUCHPAD_PRESENT | TOUCHPAD_ENABLED,
+            settings: TAP_ENABLED,
+            cursor_speed: 10,
+            ..TouchpadParameters::default()
+        };
+        assert_eq!(
+            touchpad_from(&touchpad),
+            Touchpad {
+                enabled: Some(true),
+                tap_to_click: Some(true),
+                natural_scroll: Some(true),
+                speed: Some(50),
+                missing: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_reversed_switched_off_touchpad_reads_off_with_traditional_scrolling() {
+        let touchpad = touchpad_from(&TouchpadParameters {
+            status: TOUCHPAD_PRESENT,
+            settings: SCROLL_DIRECTION_REVERSED,
+            cursor_speed: 20,
+            ..TouchpadParameters::default()
+        });
+        assert_eq!(touchpad.enabled, Some(false));
+        assert_eq!(touchpad.tap_to_click, Some(false));
+        assert_eq!(touchpad.natural_scroll, Some(false));
+        assert_eq!(touchpad.speed, Some(100));
+        assert_eq!(
+            touchpad_from(&TouchpadParameters::default()),
+            Touchpad::missing(NO_TOUCHPAD)
+        );
+    }
+
+    #[test]
+    fn the_touchpad_shortcut_presses_ctrl_win_f24_and_lets_go_in_reverse() {
+        let events: Vec<(VIRTUAL_KEY, bool)> = chord(&TOUCHPAD_SHORTCUT)
+            .iter()
+            .map(|input| {
+                assert_eq!(input.r#type, INPUT_KEYBOARD);
+                let key = unsafe { input.Anonymous.ki };
+                (key.wVk, key.dwFlags & KEYEVENTF_KEYUP != 0)
+            })
+            .collect();
+        assert_eq!(
+            events,
+            [
+                (VK_CONTROL, false),
+                (VK_LWIN, false),
+                (VK_F24, false),
+                (VK_F24, true),
+                (VK_LWIN, true),
+                (VK_CONTROL, true),
+            ]
+        );
     }
 
     #[test]

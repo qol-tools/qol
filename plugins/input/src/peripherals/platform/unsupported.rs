@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use super::super::{Keyboard, Level, Mouse, Switch, Touchpad};
+use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad};
 
 const UNSUPPORTED: &str = "input settings work on Linux and Windows only";
 
@@ -26,4 +26,8 @@ pub(crate) fn set_switch(_switch: Switch, _on: bool) -> Result<()> {
 
 pub(crate) fn set_level(_level: Level, _value: u32) -> Result<()> {
     bail!(UNSUPPORTED)
+}
+
+pub(crate) fn values(level: Level) -> Steps {
+    level.bounds()
 }

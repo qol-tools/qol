@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use qol_desktop_settings::desktop::{classify_desktop, DesktopEnvironment};
 use qol_desktop_settings::gsettings;
 
-use super::super::{Keyboard, Level, Mouse, Switch, Touchpad, NO_TOUCHPAD};
+use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad, NO_TOUCHPAD};
 
 const UDEV_DATA: &str = "/run/udev/data";
 const INPUT_DEVICE_PREFIX: &str = "c13:";
@@ -105,6 +105,10 @@ pub(crate) fn set_switch(switch: Switch, on: bool) -> Result<()> {
 pub(crate) fn set_level(level: Level, value: u32) -> Result<()> {
     let (schema, key, value) = level_write(desktop()?, level, value);
     gsettings::set(schema, key, &value)
+}
+
+pub(crate) fn values(level: Level) -> Steps {
+    level.bounds()
 }
 
 fn desktop() -> Result<&'static Desktop> {

@@ -1,7 +1,5 @@
 mod platform;
 
-use std::ops::RangeInclusive;
-
 use anyhow::{bail, Result};
 use serde::Serialize;
 
@@ -101,6 +99,27 @@ impl Switch {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Steps {
+    pub first: u32,
+    pub last: u32,
+    pub step: u32,
+}
+
+impl Steps {
+    pub const fn span(first: u32, last: u32) -> Self {
+        Self {
+            first,
+            last,
+            step: 1,
+        }
+    }
+
+    pub fn contains(self, value: u32) -> bool {
+        (self.first..=self.last).contains(&value) && (value - self.first).is_multiple_of(self.step)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     PointerSpeed,
     DoubleClick,
@@ -146,11 +165,24 @@ impl Level {
         }
     }
 
-    pub fn range(self) -> RangeInclusive<u32> {
+    pub fn bounds(self) -> Steps {
         match self {
-            Self::PointerSpeed | Self::TouchpadSpeed => 0..=100,
-            Self::DoubleClick | Self::RepeatDelay => 100..=1000,
-            Self::RepeatRate => 2..=50,
+            Self::PointerSpeed | Self::TouchpadSpeed => Steps::span(0, 100),
+            Self::DoubleClick | Self::RepeatDelay => Steps::span(100, 1000),
+            Self::RepeatRate => Steps::span(2, 50),
+        }
+    }
+
+    pub fn values(self) -> Steps {
+        platform::values(self)
+    }
+
+    pub fn accepted(self) -> String {
+        let Steps { first, last, step } = self.values();
+        let unit = self.unit();
+        match step {
+            1 => format!("{first} to {last}{unit}"),
+            step => format!("{first} to {last}{unit} in steps of {step}{unit}"),
         }
     }
 
@@ -237,13 +269,11 @@ pub fn set_switch(switch: Switch, on: bool) -> Result<()> {
 }
 
 pub fn set_level(level: Level, value: u32) -> Result<()> {
-    let range = level.range();
-    if !range.contains(&value) {
+    if !level.values().contains(value) {
         bail!(
-            "the {} takes a value from {} to {}",
+            "the {} takes a value from {}",
             level.label(),
-            range.start(),
-            range.end()
+            level.accepted()
         );
     }
     if level == Level::TouchpadSpeed {
@@ -299,19 +329,58 @@ mod tests {
     }
 
     #[test]
-    fn a_level_outside_its_range_is_refused_before_the_host_is_touched() {
+    fn a_level_outside_its_values_is_refused_before_the_host_is_touched() {
         for level in Level::ALL {
-            let range = level.range();
-            for value in range
-                .start()
+            let values = level.values();
+            let between = (values.step > 1).then(|| values.first + 1);
+            for value in values
+                .first
                 .checked_sub(1)
                 .into_iter()
-                .chain([range.end() + 1])
+                .chain([values.last + 1])
+                .chain(between)
             {
                 let error = set_level(level, value).unwrap_err().to_string();
                 assert!(error.contains(level.label()), "{error}");
+                assert!(error.contains(&level.accepted()), "{error}");
             }
         }
+    }
+
+    #[test]
+    fn this_computer_accepts_only_values_inside_the_bounds_the_settings_offer() {
+        for level in Level::ALL {
+            let values = level.values();
+            let bounds = level.bounds();
+            assert!(bounds.contains(values.first), "{level:?}");
+            assert!(bounds.contains(values.last), "{level:?}");
+            assert!(values.step.is_multiple_of(bounds.step), "{level:?}");
+        }
+    }
+
+    #[test]
+    fn values_hold_their_ends_and_steps_and_read_out_with_the_unit() {
+        let quarters = Steps {
+            first: 250,
+            last: 1000,
+            step: 250,
+        };
+        assert!(quarters.contains(250));
+        assert!(quarters.contains(750));
+        assert!(quarters.contains(1000));
+        assert!(!quarters.contains(300));
+        assert!(!quarters.contains(0));
+        assert!(!quarters.contains(1250));
+        assert!(Steps::span(2, 50).contains(33));
+        assert!(!Steps::span(2, 50).contains(51));
+        assert_eq!(
+            Level::RepeatRate.accepted(),
+            format!(
+                "{} to {} keys/s",
+                Level::RepeatRate.values().first,
+                Level::RepeatRate.values().last
+            )
+        );
     }
 
     #[test]
