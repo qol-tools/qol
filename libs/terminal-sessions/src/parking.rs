@@ -12,7 +12,10 @@ pub fn parking_dir() -> Option<PathBuf> {
 }
 
 pub fn launch_env(on: bool) -> (String, String) {
-    (PARKING_ENV.to_owned(), if on { "1" } else { "0" }.to_owned())
+    (
+        PARKING_ENV.to_owned(),
+        if on { "1" } else { "0" }.to_owned(),
+    )
 }
 
 pub fn launched_with_parking() -> bool {
