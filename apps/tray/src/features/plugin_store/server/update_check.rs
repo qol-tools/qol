@@ -18,7 +18,7 @@ pub(super) fn claim(
     force: bool,
 ) -> Option<impl Future<Output = ()> + Send + 'static> {
     let claim = take(&state.update_check_running)?;
-    let catalog = plugin_services::claim_catalog_revalidation(state, force);
+    let catalog = plugin_services::claim_catalog_revalidation(state);
     Some(async move {
         let _claim = claim;
         let host = async {

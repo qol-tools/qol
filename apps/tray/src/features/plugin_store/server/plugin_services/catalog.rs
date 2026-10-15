@@ -95,10 +95,8 @@ fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
 
 pub(in super::super) fn claim_catalog_revalidation(
     state: &AppState,
-    refresh: bool,
 ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
-    let stale = is_stale(read_cache_snapshot(state).as_ref(), refresh);
-    claim_revalidation(state, refresh, stale)
+    claim_revalidation(state, true, false)
 }
 
 fn claim_revalidation(
