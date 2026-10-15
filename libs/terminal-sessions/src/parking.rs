@@ -11,8 +11,8 @@ pub fn parking_dir() -> Option<PathBuf> {
     qol_config::data_subdir("sessions").map(|path| path.join("parking"))
 }
 
-pub fn launch_env() -> (String, String) {
-    (PARKING_ENV.to_owned(), "1".to_owned())
+pub fn launch_env(on: bool) -> (String, String) {
+    (PARKING_ENV.to_owned(), if on { "1" } else { "0" }.to_owned())
 }
 
 pub fn launched_with_parking() -> bool {
@@ -55,7 +55,9 @@ impl ParkingStore {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
         }
-        fs::write(path, if on { ON } else { OFF })
+        let staged = path.with_extension("tmp");
+        fs::write(&staged, if on { ON } else { OFF })?;
+        fs::rename(staged, path)
     }
 
     fn path(&self, external_id: &str) -> Option<PathBuf> {

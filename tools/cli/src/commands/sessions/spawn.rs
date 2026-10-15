@@ -1966,11 +1966,9 @@ pub(super) fn spawn_detached(
         caller_config_dir().as_deref(),
         &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
     )?;
-    if park {
-        launch
-            .env
-            .push(qol_terminal_sessions::parking::launch_env());
-    }
+    launch
+        .env
+        .push(qol_terminal_sessions::parking::launch_env(park));
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
@@ -6337,12 +6335,11 @@ mod tests {
             )
             .unwrap();
             let request = backend.last_request.lock().unwrap().clone().unwrap();
-            assert_eq!(
+            assert!(
                 request
                     .launch
                     .env
-                    .contains(&qol_terminal_sessions::parking::launch_env()),
-                park,
+                    .contains(&qol_terminal_sessions::parking::launch_env(park)),
                 "{:?}",
                 request.launch.env
             );

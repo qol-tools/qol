@@ -3,6 +3,7 @@ use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::parking::{launched_with_parking, ParkingStore};
 use qol_terminal_sessions::TerminalSessionService;
 
+use crate::park::store::ParkStore;
 use crate::park::{calling_session, target, Target};
 
 pub const USAGE: &str = "qol-cli-sessions parking [toggle|on|off|status] [--id CONVERSATION_ID]";
@@ -45,10 +46,25 @@ fn parse(args: &[String]) -> Result<ParkingArgs> {
 pub fn run(args: &[String]) -> Result<String> {
     let parsed = parse(args)?;
     let (id, launch_default) = match parsed.id {
-        Some(id) => (id, false),
+        Some(id) => {
+            let default = parked_default(&id);
+            (id, default)
+        }
         None => (calling_conversation()?, launched_with_parking()),
     };
     apply(&ParkingStore::system(), &id, launch_default, parsed.change)
+}
+
+fn parked_default(external_id: &str) -> bool {
+    ParkStore::system()
+        .and_then(|store| store.list())
+        .ok()
+        .and_then(|records| {
+            records
+                .into_iter()
+                .find(|record| record.external_id == external_id)
+        })
+        .is_some_and(|record| record.closes_terminal)
 }
 
 fn apply(parking: &ParkingStore, id: &str, launch_default: bool, change: Change) -> Result<String> {

@@ -2,7 +2,7 @@ mod args;
 mod prompt;
 mod resume;
 mod runner;
-mod store;
+pub(crate) mod store;
 
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
