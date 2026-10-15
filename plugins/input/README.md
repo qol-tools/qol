@@ -24,7 +24,7 @@ It changes the desktop's own settings, so the desktop's settings app shows the s
 
 On Windows:
 
-- The touchpad rows need Windows 11 24H2 or later.
+- The touchpad rows need Windows 11 24H2 or later and a Precision Touchpad.
 - Turning the touchpad on or off presses Windows' own touchpad shortcut, Ctrl + Win + F24.
 - A mouse has no natural scrolling setting.
 - Pointer and touchpad speed move in steps of 5%, the repeat delay is 250, 500, 750 or 1000 ms, and keys repeat 3 to 30 times a second. Other values are refused.

@@ -23,6 +23,7 @@ const SPI_GETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AE;
 const SPI_SETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AF;
 const TOUCHPAD_PARAMETERS_VERSION: u32 = 1;
 const TOUCHPAD_PRESENT: u32 = 1 << 0;
+const LEGACY_TOUCHPAD_PRESENT: u32 = 1 << 1;
 const TOUCHPAD_ENABLED: u32 = 1 << 3;
 const TAP_ENABLED: u32 = 1 << 2;
 const SCROLL_DIRECTION_REVERSED: u32 = 1 << 9;
@@ -35,6 +36,8 @@ const RATE_STEPS: u32 = 31;
 const SLOWEST_RATE: f64 = 2.5;
 const FASTEST_RATE: f64 = 30.0;
 const NO_MOUSE_NATURAL_SCROLL: &str = "Windows has no natural scrolling setting for a mouse";
+const LEGACY_TOUCHPAD: &str =
+    "this touchpad is not a Precision Touchpad, so its settings are unavailable here";
 const TOUCHPAD_SHORTCUT: [VIRTUAL_KEY; 3] = [VK_CONTROL, VK_LWIN, VK_F24];
 const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN];
 const SHORTCUT_SETTLE: Duration = Duration::from_secs(2);
@@ -153,7 +156,11 @@ pub(crate) fn values(level: Level) -> Steps {
 
 fn touchpad_from(parameters: &TouchpadParameters) -> Touchpad {
     if parameters.status & TOUCHPAD_PRESENT == 0 {
-        return Touchpad::missing(NO_TOUCHPAD);
+        return Touchpad::missing(if parameters.status & LEGACY_TOUCHPAD_PRESENT != 0 {
+            LEGACY_TOUCHPAD
+        } else {
+            NO_TOUCHPAD
+        });
     }
     Touchpad {
         enabled: Some(parameters.status & TOUCHPAD_ENABLED != 0),
@@ -435,6 +442,20 @@ mod tests {
             touchpad_from(&TouchpadParameters::default()),
             Touchpad::missing(NO_TOUCHPAD)
         );
+    }
+
+    #[test]
+    fn a_touchpad_that_is_not_precision_is_named_instead_of_reported_missing() {
+        let legacy = touchpad_from(&TouchpadParameters {
+            status: LEGACY_TOUCHPAD_PRESENT,
+            ..TouchpadParameters::default()
+        });
+        assert_eq!(legacy, Touchpad::missing(LEGACY_TOUCHPAD));
+        let both = touchpad_from(&TouchpadParameters {
+            status: TOUCHPAD_PRESENT | LEGACY_TOUCHPAD_PRESENT,
+            ..TouchpadParameters::default()
+        });
+        assert_eq!(both.missing, None);
     }
 
     #[test]
