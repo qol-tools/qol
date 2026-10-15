@@ -1128,7 +1128,7 @@ fn nudge_missing_marker(
     round: &WatchedRound,
     facts: Option<&SessionFacts>,
 ) -> bool {
-    if composer_holds_draft(terminals, &round.binding).unwrap_or(true) {
+    if composer_holds_draft_or_unreadable(terminals, &round.binding) {
         return false;
     }
     let Ok(marker) = super::bridge::CompletionMarker::from_token(&round.marker) else {
@@ -1851,7 +1851,7 @@ pub(super) fn close_lane_terminal(terminals: &TerminalSessionService, binding: &
         );
         return;
     }
-    if composer_holds_draft(terminals, binding).unwrap_or(true) {
+    if composer_holds_draft_or_unreadable(terminals, binding) {
         qol_runtime::probe!(
             "CLI_SESSION_WATCH",
             "event=autoclose_skipped session={} reason=draft_or_unreadable_composer",
@@ -2215,6 +2215,16 @@ fn composer_holds_draft(
     terminals
         .read_screen_styled(binding)
         .map(|screen| composer_busy(&qol_terminal_sessions::cli::without_faint_text(&screen)))
+}
+
+fn composer_holds_draft_or_unreadable(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+) -> bool {
+    match composer_holds_draft(terminals, binding) {
+        Err(TerminalError::Unsupported { .. }) => false,
+        result => result.unwrap_or(true),
+    }
 }
 
 enum ComposerWait {
