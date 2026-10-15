@@ -1,3 +1,5 @@
+use crate::{ScreenReader, SessionBinding, TerminalError, TerminalSessionService};
+
 const STATUS_TAIL: usize = 8;
 const PI_SPINNER_TAIL: usize = 12;
 const CLAUDE_STATUS_TAIL: usize = 16;
@@ -388,6 +390,70 @@ pub fn editor_draft(text: &str) -> Option<String> {
     (!draft.trim().is_empty()).then_some(draft)
 }
 
+fn composer_line(line: &str) -> Option<&str> {
+    line.trim()
+        .strip_prefix(['>', '❯'])
+        .filter(|rest| rest.chars().next().is_none_or(char::is_whitespace))
+}
+
+/// Whether the harness composer (`>` or `❯`) holds unsent text.
+pub fn composer_busy(screen: &str) -> bool {
+    composer_draft(screen).is_some()
+}
+
+/// The unsent text in the harness composer, continuation lines included.
+pub fn composer_draft(screen: &str) -> Option<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|line| composer_line(line).is_some())?;
+    let rest = composer_line(lines[start])?;
+    if rest.chars().all(char::is_whitespace) {
+        return None;
+    }
+    let continuation = lines[start + 1..]
+        .iter()
+        .take_while(|line| !line.trim_start().starts_with('\u{2500}'))
+        .copied();
+    Some(
+        std::iter::once(rest)
+            .chain(continuation)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// The screen text below the last composer line.
+pub fn below_composer(screen: &str) -> &str {
+    let mut offset = 0;
+    let mut below = "";
+    for line in screen.split_inclusive('\n') {
+        offset += line.len();
+        if composer_line(line).is_some() {
+            below = &screen[offset..];
+        }
+    }
+    below
+}
+
+/// A session's screen with faint placeholder text dropped.
+pub fn composer_screen(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+) -> Result<String, TerminalError> {
+    terminals
+        .read_screen_styled(binding)
+        .map(|screen| without_faint_text(&screen))
+}
+
+/// Whether a session's composer holds a draft the user typed; faint placeholder text is ignored.
+pub fn composer_holds_draft(
+    terminals: &TerminalSessionService,
+    binding: &SessionBinding,
+) -> Result<bool, TerminalError> {
+    composer_screen(terminals, binding).map(|screen| composer_busy(&screen))
+}
+
 pub fn without_faint_text(styled: &str) -> String {
     let mut text = String::with_capacity(styled.len());
     let mut faint = false;
@@ -610,10 +676,43 @@ fn is_choice_affordance(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_dialog, claude_working, contains_any, has_braille_spinner, has_choice_hint,
-        has_done_marker, has_interrupt_hint, has_numbered_choice, has_picker_cluster, kimi_live,
-        kimi_questionnaire, kimi_working, pi_live, without_faint_text,
+        claude_dialog, claude_working, composer_busy, contains_any, has_braille_spinner,
+        has_choice_hint, has_done_marker, has_interrupt_hint, has_numbered_choice,
+        has_picker_cluster, kimi_live, kimi_questionnaire, kimi_working, pi_live,
+        without_faint_text,
     };
+
+    #[test]
+    fn composer_busy_detects_an_in_progress_prompt_and_ignores_bare_prompts() {
+        let cases: &[(&str, bool)] = &[
+            ("> fixing the parser", true),
+            ("> fixing the parser\nidle output", true),
+            ("> draft\nstatus: running", true),
+            ("❯ fixing the parser", true),
+            ("   > fixing the parser", true),
+            ("> old message\n> ", false),
+            ("> old message\n> draft", true),
+            ("❯ old message\n❯ ", false),
+            (">", false),
+            ("> ", false),
+            (">  ", false),
+            ("❯", false),
+            ("❯ ", false),
+            ("❯\u{a0}please fork an agent", true),
+            ("❯\u{a0}", false),
+            ("❯\u{a0}old message\n❯\u{a0}", false),
+            (">quoted output", false),
+            (
+                "❯ old\n\u{2500}\u{2500}\n❯\u{a0}draft\n\u{2500}\u{2500}\n  status line",
+                true,
+            ),
+            ("just output, no prompt", false),
+            ("", false),
+        ];
+        for (screen, expected) in cases {
+            assert_eq!(composer_busy(screen), *expected, "screen: {screen:?}");
+        }
+    }
 
     #[test]
     fn without_faint_text_drops_dim_runs_and_every_escape_sequence() {

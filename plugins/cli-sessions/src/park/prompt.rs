@@ -55,7 +55,15 @@ fn tail_lines(text: &str, lines: usize, max_bytes: usize) -> String {
     tail
 }
 
-pub fn wake_prompt(
+/// Joins the results of commands that finished together into one wake.
+pub fn wake_prompt(sections: &[String]) -> String {
+    format!(
+        "{WAKE_HEADER}\n{}\n\nContinue from where you left off.",
+        sections.join("\n\n")
+    )
+}
+
+pub fn wake_section(
     record: &ParkRecord,
     exit: &Result<ExitStatus>,
     tail: &str,
@@ -78,7 +86,7 @@ pub fn wake_prompt(
         )
     };
     format!(
-        "{WAKE_HEADER}\nYou parked this conversation on `{command}` and CLI Sessions waited for it in the background. It {outcome}.\n\n{output}\n\nContinue from where you left off."
+        "You parked this conversation on `{command}` and CLI Sessions waited for it in the background. It {outcome}.\n\n{output}"
     )
 }
 
@@ -116,19 +124,19 @@ mod tests {
         use crate::park::tests::record;
 
         let log = Path::new("/data/park-1-2.log");
-        let prompt = wake_prompt(
+        let prompt = wake_prompt(&[wake_section(
             &record(ParkState::Waiting),
             &Ok(ExitStatus::from_raw(7 << 8)),
             "review needs you",
             log,
-        );
+        )]);
         assert!(prompt.starts_with(WAKE_HEADER), "{prompt}");
         assert!(prompt.contains("`node watch.cjs 79`"), "{prompt}");
         assert!(prompt.contains("exited with code 7"), "{prompt}");
         assert!(prompt.contains("review needs you"), "{prompt}");
         assert!(prompt.contains("/data/park-1-2.log"), "{prompt}");
 
-        let silent = wake_prompt(
+        let silent = wake_section(
             &record(ParkState::Waiting),
             &Err(anyhow!("no such file")),
             "",
@@ -136,5 +144,20 @@ mod tests {
         );
         assert!(silent.contains("could not start: no such file"), "{silent}");
         assert!(silent.contains("It printed nothing."), "{silent}");
+    }
+
+    #[test]
+    fn results_that_finish_together_share_one_wake() {
+        let prompt = wake_prompt(&["first result".to_owned(), "second result".to_owned()]);
+        assert_eq!(prompt.matches(WAKE_HEADER).count(), 1, "{prompt}");
+        assert_eq!(
+            prompt.matches("Continue from where you left off.").count(),
+            1,
+            "{prompt}"
+        );
+        assert!(
+            prompt.find("first result") < prompt.find("second result"),
+            "{prompt}"
+        );
     }
 }

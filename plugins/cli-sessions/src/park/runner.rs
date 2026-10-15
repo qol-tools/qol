@@ -5,20 +5,24 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{
+    composer_holds_draft, ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter,
+};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::parking::ParkingStore;
 use qol_terminal_sessions::{
-    DeliveryMode, SessionBinding, SessionFacts, TerminalSessionService, TextInput,
+    DeliveryMode, SessionBinding, SessionFacts, TerminalError, TerminalSessionService,
+    TerminalSnapshot, TextInput,
 };
 
-use super::prompt::{read_tail, wake_prompt, CLOSE_NOTE, WAKE_HEADER};
+use super::prompt::{read_tail, wake_prompt, wake_section, CLOSE_NOTE, WAKE_HEADER};
 use super::resume::resume;
 use super::store::ParkStore;
 
 const POLL: Duration = Duration::from_secs(2);
 const READY_POLLS_BEFORE_CLOSE: u32 = 2;
 const WOKEN_UNREAD_LIMIT: u32 = 30;
+const UNKNOWN_POLLS_BEFORE_RESUME: u32 = 30;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CallerState {
@@ -34,10 +38,15 @@ pub enum Target {
 }
 
 pub fn target(terminals: &TerminalSessionService, binding: &SessionBinding) -> Target {
-    let Ok(sessions) = terminals.snapshot() else {
-        return Target::Unknown;
-    };
-    match sessions
+    match terminals.snapshot() {
+        Ok(snapshot) => target_in(&snapshot, binding),
+        Err(_) => Target::Unknown,
+    }
+}
+
+/// A session missing from a snapshot that could not list every terminal is unknown, not gone.
+fn target_in(snapshot: &TerminalSnapshot, binding: &SessionBinding) -> Target {
+    match snapshot
         .sessions()
         .iter()
         .find(|session| session.id == *binding.session_id())
@@ -45,7 +54,56 @@ pub fn target(terminals: &TerminalSessionService, binding: &SessionBinding) -> T
         Some(facts) if facts.binding().as_ref() == Ok(binding) => {
             Target::Live(Box::new(facts.clone()))
         }
-        _ => Target::Gone,
+        Some(_) => Target::Gone,
+        None if snapshot.covers(binding.session_id()) => Target::Gone,
+        None => Target::Unknown,
+    }
+}
+
+pub enum Holder {
+    Live(SessionBinding),
+    Unknown,
+    None,
+}
+
+/// The live session that holds the parked conversation: the caller, a session a park resumed,
+/// or any session running it.
+pub fn holder(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    store: &ParkStore,
+    record: &ParkRecord,
+    caller: &SessionBinding,
+) -> Holder {
+    let Ok(snapshot) = terminals.snapshot() else {
+        return Holder::Unknown;
+    };
+    let resumed = store
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|parked| parked.external_id == record.external_id)
+        .filter_map(|parked| parked.resumed_session?.parse::<SessionBinding>().ok());
+    let caller = (!record.caller_closed).then(|| caller.clone());
+    let mut unknown = false;
+    for binding in caller.into_iter().chain(resumed) {
+        match target_in(&snapshot, &binding) {
+            Target::Live(_) => return Holder::Live(binding),
+            Target::Unknown => unknown = true,
+            Target::Gone => {}
+        }
+    }
+    let running = snapshot
+        .sessions()
+        .iter()
+        .filter(|facts| {
+            interpreter.describe(facts).external_id.as_deref() == Some(record.external_id.as_str())
+        })
+        .find_map(|facts| facts.binding().ok());
+    match running {
+        Some(binding) => Holder::Live(binding),
+        None if unknown => Holder::Unknown,
+        None => Holder::None,
     }
 }
 
@@ -82,6 +140,25 @@ impl CloseGate {
                 false
             }
         }
+    }
+}
+
+/// Holds a delivery until the conversation's finished results stop changing for one poll,
+/// so results that finish together go out together.
+#[derive(Debug, Default)]
+struct SettleGate {
+    ids: Vec<String>,
+}
+
+impl SettleGate {
+    fn settled(&mut self, batch: &[ParkRecord]) -> bool {
+        let ids = batch
+            .iter()
+            .map(|parked| parked.id.clone())
+            .collect::<Vec<_>>();
+        let settled = ids == self.ids;
+        self.ids = ids;
+        settled
     }
 }
 
@@ -143,15 +220,17 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     };
     record.exit_code = exit.as_ref().ok().and_then(ExitStatus::code);
     let tail = read_tail(&log_path);
-    let prompt = wake_prompt(&record, &exit, &tail, &log_path);
-    wake(
-        &terminals,
-        &interpreter,
-        store,
-        &mut record,
-        &caller,
-        &prompt,
-    )
+    record.wake = Some(wake_section(&record, &exit, &tail, &log_path));
+    record.state = ParkState::Exited;
+    store.record(&record)?;
+    let resumed = {
+        let _turn = store.lock_conversation(&record.external_id)?;
+        deliver(&terminals, &interpreter, store, &mut record, &caller)?
+    };
+    if resumed {
+        watch_woken(&terminals, &interpreter, store, &mut record)?;
+    }
+    Ok(())
 }
 
 fn parking_on(record: &ParkRecord) -> bool {
@@ -174,40 +253,107 @@ fn start_command(record: &ParkRecord, log_path: &Path) -> Result<std::process::C
         .with_context(|| format!("failed to start `{program}`"))
 }
 
-fn wake(
+/// Delivers every finished result of this conversation to the one session that holds it once its
+/// prompt is free, or resumes the conversation once when no session holds it. Returns whether
+/// this runner resumed it and so watches the woken session.
+fn deliver(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     store: &ParkStore,
     record: &mut ParkRecord,
     caller: &SessionBinding,
+) -> Result<bool> {
+    let mut unknown = 0;
+    let mut settle = SettleGate::default();
+    loop {
+        let batch = store.exited(&record.external_id);
+        if !batch.iter().any(|parked| parked.id == record.id) {
+            return Ok(false);
+        }
+        if !settle.settled(&batch) {
+            thread::sleep(POLL);
+            continue;
+        }
+        let prompt = wake_prompt(
+            &batch
+                .iter()
+                .filter_map(|parked| parked.wake.clone())
+                .collect::<Vec<_>>(),
+        );
+        match holder(terminals, interpreter, store, record, caller) {
+            Holder::Live(binding) => {
+                unknown = 0;
+                if prompt_free(terminals, interpreter, &binding)
+                    && terminals
+                        .send_text(&binding, &prompt, DeliveryMode::Submit)
+                        .is_ok()
+                {
+                    for parked in &batch {
+                        store.record(&ParkRecord {
+                            state: ParkState::Delivered,
+                            runner_pid: None,
+                            ..parked.clone()
+                        })?;
+                    }
+                    qol_runtime::probe!(
+                        "CLI_SESSION_PARK",
+                        "event=delivered id={} batch={} session={}",
+                        record.id,
+                        batch.len(),
+                        binding
+                    );
+                    return Ok(false);
+                }
+            }
+            Holder::Unknown if unknown < UNKNOWN_POLLS_BEFORE_RESUME => unknown += 1,
+            Holder::Unknown | Holder::None => {
+                return resume_batch(terminals, interpreter, store, record, &batch, &prompt)
+            }
+        }
+        thread::sleep(POLL);
+    }
+}
+
+fn prompt_free(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> bool {
+    caller_state(terminals, interpreter, binding) == CallerState::Ready
+        && match composer_holds_draft(terminals, binding) {
+            Ok(draft) => !draft,
+            Err(TerminalError::Unsupported { .. }) => true,
+            Err(_) => false,
+        }
+}
+
+fn resume_batch(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    store: &ParkStore,
+    record: &mut ParkRecord,
+    batch: &[ParkRecord],
     prompt: &str,
-) -> Result<()> {
+) -> Result<bool> {
     record.runner_pid = None;
-    if !record.caller_closed
-        && caller_state(terminals, interpreter, caller) != CallerState::Gone
-        && terminals
-            .send_text(caller, prompt, DeliveryMode::Submit)
-            .is_ok()
-    {
-        record.state = ParkState::Delivered;
-        store.record(record)?;
-        qol_runtime::probe!("CLI_SESSION_PARK", "event=delivered id={}", record.id);
-        return Ok(());
-    }
     if !store.claim_resume(&record.id)? {
-        return Ok(());
+        return Ok(false);
     }
-    match resume(
-        terminals,
-        interpreter,
-        record,
-        &if !parking_on(record) {
-            prompt.to_owned()
-        } else {
-            format!("{prompt}{CLOSE_NOTE}")
-        },
-    ) {
+    let prompt = if parking_on(record) {
+        format!("{prompt}{CLOSE_NOTE}")
+    } else {
+        prompt.to_owned()
+    };
+    match resume(terminals, interpreter, record, &prompt) {
         Ok(session) => {
+            for parked in batch.iter().filter(|parked| parked.id != record.id) {
+                store.record(&ParkRecord {
+                    state: ParkState::Delivered,
+                    runner_pid: None,
+                    resumed_session: Some(session.clone()),
+                    ..parked.clone()
+                })?;
+            }
             record.state = ParkState::Resumed;
             record.resumed_session = Some(session);
             record.runner_pid = Some(std::process::id());
@@ -221,15 +367,13 @@ fn wake(
     store.record(record)?;
     qol_runtime::probe!(
         "CLI_SESSION_PARK",
-        "event=woke id={} state={:?} session={}",
+        "event=woke id={} batch={} state={:?} session={}",
         record.id,
+        batch.len(),
         record.state,
         record.resumed_session.as_deref().unwrap_or("-")
     );
-    if record.state == ParkState::Resumed {
-        watch_woken(terminals, interpreter, store, record)?;
-    }
-    Ok(())
+    Ok(record.state == ParkState::Resumed)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -312,6 +456,12 @@ fn watch_woken(
                         break "kept_open";
                     }
                     Ok(None) => {
+                        let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
+                            continue;
+                        };
+                        if !store.exited(&record.external_id).is_empty() {
+                            continue;
+                        }
                         let _ = terminals.close(&woken);
                         record.state = ParkState::Finished;
                         record.report = Some(report);
@@ -380,6 +530,19 @@ mod tests {
         for (turns, expected) in cases {
             assert_eq!(woken_turn(&turns), expected, "{turns:?}");
         }
+    }
+
+    #[test]
+    fn a_batch_settles_once_it_is_unchanged_for_one_poll() {
+        let parked = |id: &str| ParkRecord {
+            id: id.to_owned(),
+            ..crate::park::tests::record(ParkState::Exited)
+        };
+        let mut gate = SettleGate::default();
+        assert!(!gate.settled(&[parked("a")]));
+        assert!(!gate.settled(&[parked("a"), parked("b")]));
+        assert!(gate.settled(&[parked("a"), parked("b")]));
+        assert!(!gate.settled(&[parked("b")]));
     }
 
     #[test]

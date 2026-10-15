@@ -180,6 +180,7 @@ impl SessionFacts {
 #[derive(Clone)]
 pub struct TerminalSnapshot {
     sessions: Arc<[SessionFacts]>,
+    unlisted: Arc<[(BackendId, String)]>,
     screens: Arc<Mutex<HashMap<SessionBinding, String>>>,
     created_at: Instant,
 }
@@ -188,13 +189,27 @@ impl TerminalSnapshot {
     pub(crate) fn new(sessions: Vec<SessionFacts>) -> Self {
         Self {
             sessions: Arc::from(sessions),
+            unlisted: Arc::from([]),
             screens: Arc::new(Mutex::new(HashMap::new())),
             created_at: Instant::now(),
         }
     }
 
+    pub(crate) fn with_unlisted(mut self, unlisted: Vec<(BackendId, String)>) -> Self {
+        self.unlisted = Arc::from(unlisted);
+        self
+    }
+
     pub fn sessions(&self) -> &[SessionFacts] {
         &self.sessions
+    }
+
+    /// Whether this snapshot listed every place `id` could live, so its absence means it is gone.
+    pub fn covers(&self, id: &SessionId) -> bool {
+        !self
+            .unlisted
+            .iter()
+            .any(|(backend, prefix)| backend == id.backend() && id.native().starts_with(prefix))
     }
 
     pub(crate) fn validate_screen_target(

@@ -48,18 +48,55 @@ impl ParkStore {
     }
 
     pub fn lock_unpark(&self, id: &str) -> Result<Option<File>> {
-        fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(self.unpark_lock_path(id))
-            .context("failed to open the unpark lock")?;
+        let file = self.lock_file(&self.unpark_lock_path(id))?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(TryLockError::WouldBlock) => Ok(None),
             Err(TryLockError::Error(error)) => Err(error).context("failed to lock the park"),
         }
+    }
+
+    fn conversation_lock_path(&self, external_id: &str) -> PathBuf {
+        let name = external_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        self.dir.join(format!("{name}.conversation"))
+    }
+
+    /// Serializes delivering to and resuming one conversation, so it is resumed at most once.
+    pub fn lock_conversation(&self, external_id: &str) -> Result<File> {
+        let file = self.lock_file(&self.conversation_lock_path(external_id))?;
+        file.lock()
+            .context("failed to lock the parked conversation")?;
+        Ok(file)
+    }
+
+    pub fn try_lock_conversation(&self, external_id: &str) -> Result<Option<File>> {
+        let file = self.lock_file(&self.conversation_lock_path(external_id))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => {
+                Err(error).context("failed to lock the parked conversation")
+            }
+        }
+    }
+
+    fn lock_file(&self, path: &Path) -> Result<File> {
+        fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .context("failed to open a park lock")
     }
 
     fn claim(&self, path: &Path) -> Result<bool> {
@@ -89,6 +126,10 @@ impl ParkStore {
     pub fn list(&self) -> Result<Vec<ParkRecord>> {
         qol_terminal_sessions::park::records(&self.dir)
             .context("failed to read the parked directory")
+    }
+
+    pub fn exited(&self, external_id: &str) -> Vec<ParkRecord> {
+        qol_terminal_sessions::park::exited(&self.dir, external_id)
     }
 
     pub fn parks_again(&self, session: &str) -> bool {
@@ -148,6 +189,17 @@ mod tests {
         assert!(store.lock_unpark("park-9-9").unwrap().is_some());
         drop(held);
         assert!(store.lock_unpark("park-1-2").unwrap().is_some());
+    }
+
+    #[test]
+    fn the_conversation_lock_admits_one_holder_at_a_time() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        let held = store.lock_conversation("abc").unwrap();
+        assert!(store.try_lock_conversation("abc").unwrap().is_none());
+        assert!(store.try_lock_conversation("other").unwrap().is_some());
+        drop(held);
+        assert!(store.try_lock_conversation("abc").unwrap().is_some());
     }
 
     #[test]

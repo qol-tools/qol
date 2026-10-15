@@ -49,6 +49,11 @@ impl Endpoint {
         self.socket_path.as_deref()
     }
 
+    pub(super) fn native_prefix(&self) -> String {
+        self.instance()
+            .map_or_else(String::new, |instance| format!("{instance}."))
+    }
+
     pub(super) fn native_id(&self, window_id: u64) -> String {
         match self.instance() {
             Some(instance) => format!("{instance}.{window_id}"),

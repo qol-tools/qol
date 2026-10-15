@@ -10,6 +10,12 @@ use crate::{
 
 pub trait SessionInventory {
     fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError>;
+
+    /// Discovers sessions and names the native-id prefixes the backend could not list,
+    /// so a session missing under one of them may still exist.
+    fn discover_partial(&self) -> Result<(Vec<SessionFacts>, Vec<String>), TerminalError> {
+        self.discover().map(|sessions| (sessions, Vec::new()))
+    }
 }
 
 pub trait ScreenReader {
@@ -178,12 +184,22 @@ impl SessionInventory for TerminalSessionService {
 impl TerminalSessionService {
     pub fn snapshot(&self) -> Result<TerminalSnapshot, TerminalError> {
         let mut sessions = Vec::new();
+        let mut unlisted = Vec::new();
         let mut first_error = None;
         for backend in self.backends.values() {
-            match backend.discover() {
-                Ok(mut discovered) => sessions.append(&mut discovered),
-                Err(error) if first_error.is_none() => first_error = Some(error),
-                Err(_) => {}
+            match backend.discover_partial() {
+                Ok((mut discovered, prefixes)) => {
+                    sessions.append(&mut discovered);
+                    unlisted.extend(
+                        prefixes
+                            .into_iter()
+                            .map(|prefix| (backend.id().clone(), prefix)),
+                    );
+                }
+                Err(error) => {
+                    unlisted.push((backend.id().clone(), String::new()));
+                    first_error.get_or_insert(error);
+                }
             }
         }
         if sessions.is_empty() {
@@ -192,7 +208,7 @@ impl TerminalSessionService {
             }
         }
         sessions.sort_by(|left, right| left.id.cmp(&right.id));
-        let snapshot = TerminalSnapshot::new(sessions);
+        let snapshot = TerminalSnapshot::new(sessions).with_unlisted(unlisted);
         qol_runtime::probe!(
             "TERMINAL_SESSIONS",
             "operation=snapshot cache=load age_ms=0 sessions={}",

@@ -723,6 +723,11 @@ pub fn live_parks(
 }
 
 fn live_parked_sessions(dir: Option<&std::path::Path>) -> Vec<LivePark> {
+    if let Some(dir) = dir {
+        for id in qol_terminal_sessions::park::fail_stale(dir, park_runner_alive) {
+            log::warn!("[cli-sessions] park {id} lost its runner before delivering");
+        }
+    }
     let records = dir
         .map(qol_terminal_sessions::park::waiting)
         .unwrap_or_default();
