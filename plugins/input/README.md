@@ -22,6 +22,8 @@ Input works from a terminal on its own. qol-tray is one way to use it, not a req
 
 It changes the desktop's own settings, so the desktop's settings app shows the same values. On Linux it works on Cinnamon and GNOME.
 
+When qol is not set to stay on this computer, Input saves each setting before its first change and puts it back when qol-tray exits, or when qol next starts if it did not exit cleanly.
+
 On Windows:
 
 - The touchpad rows need Windows 11 24H2 or later and a Precision Touchpad.

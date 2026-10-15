@@ -1,7 +1,8 @@
 mod platform;
+pub mod session;
 
 use anyhow::{bail, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) const NO_TOUCHPAD: &str = "no touchpad is connected";
 pub(crate) const TOUCHPAD_FIXED: &str =
@@ -46,6 +47,14 @@ pub struct Status {
     pub mouse: Mouse,
     pub touchpad: Touchpad,
     pub keyboard: Keyboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Baseline {
+    Text(String),
+    Number(u32),
+    Numbers(Vec<i32>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,6 +274,7 @@ pub fn set_switch(switch: Switch, on: bool) -> Result<()> {
     if switch.on_touchpad() {
         require_touchpad()?;
     }
+    session::claim(Setting::Switch(switch))?;
     platform::set_switch(switch, on)
 }
 
@@ -279,6 +289,7 @@ pub fn set_level(level: Level, value: u32) -> Result<()> {
     if level == Level::TouchpadSpeed {
         require_touchpad()?;
     }
+    session::claim(Setting::Level(level))?;
     platform::set_level(level, value)
 }
 
@@ -290,6 +301,7 @@ pub fn toggle_touchpad() -> Result<bool> {
     let Some(enabled) = touchpad.enabled else {
         bail!("{TOUCHPAD_FIXED}");
     };
+    session::claim(Setting::Switch(Switch::Touchpad))?;
     platform::set_switch(Switch::Touchpad, !enabled)?;
     Ok(!enabled)
 }

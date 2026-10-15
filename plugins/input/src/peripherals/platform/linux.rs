@@ -4,7 +4,9 @@ use anyhow::{bail, Result};
 use qol_desktop_settings::desktop::{classify_desktop, DesktopEnvironment};
 use qol_desktop_settings::gsettings;
 
-use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad, NO_TOUCHPAD};
+use super::super::{
+    Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, NO_TOUCHPAD,
+};
 
 const UDEV_DATA: &str = "/run/udev/data";
 const INPUT_DEVICE_PREFIX: &str = "c13:";
@@ -111,6 +113,22 @@ pub(crate) fn values(level: Level) -> Steps {
     level.bounds()
 }
 
+pub(crate) fn capture(setting: Setting) -> Result<Baseline> {
+    let (schema, key) = location(desktop()?, setting);
+    Ok(Baseline::Text(gsettings::get(schema, key)?))
+}
+
+pub(crate) fn restore(setting: Setting, baseline: Baseline) -> Result<()> {
+    let Baseline::Text(value) = baseline else {
+        bail!(
+            "the saved {} is not a desktop setting value",
+            setting.name()
+        );
+    };
+    let (schema, key) = location(desktop()?, setting);
+    gsettings::set(schema, key, &value)
+}
+
 fn desktop() -> Result<&'static Desktop> {
     desktop_for(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
 }
@@ -126,28 +144,37 @@ fn desktop_for(raw: &str) -> Result<&'static Desktop> {
     }
 }
 
+fn location(desktop: &Desktop, setting: Setting) -> (&'static str, &'static str) {
+    match setting {
+        Setting::Switch(Switch::Acceleration) => (desktop.mouse, "accel-profile"),
+        Setting::Switch(Switch::SwapButtons) => (desktop.mouse, "left-handed"),
+        Setting::Switch(Switch::MouseNaturalScroll) => (desktop.mouse, "natural-scroll"),
+        Setting::Switch(Switch::Touchpad) => (desktop.touchpad, "send-events"),
+        Setting::Switch(Switch::TapToClick) => (desktop.touchpad, "tap-to-click"),
+        Setting::Switch(Switch::TouchpadNaturalScroll) => (desktop.touchpad, "natural-scroll"),
+        Setting::Level(Level::PointerSpeed) => (desktop.mouse, "speed"),
+        Setting::Level(Level::DoubleClick) => (desktop.mouse, "double-click"),
+        Setting::Level(Level::TouchpadSpeed) => (desktop.touchpad, "speed"),
+        Setting::Level(Level::RepeatDelay) => (desktop.keyboard, "delay"),
+        Setting::Level(Level::RepeatRate) => (desktop.keyboard, "repeat-interval"),
+    }
+}
+
 fn switch_write(
     desktop: &Desktop,
     switch: Switch,
     on: bool,
 ) -> (&'static str, &'static str, &'static str) {
-    let flag = if on { "true" } else { "false" };
-    match switch {
-        Switch::Acceleration => (
-            desktop.mouse,
-            "accel-profile",
-            if on { "adaptive" } else { "flat" },
-        ),
-        Switch::SwapButtons => (desktop.mouse, "left-handed", flag),
-        Switch::MouseNaturalScroll => (desktop.mouse, "natural-scroll", flag),
-        Switch::Touchpad => (
-            desktop.touchpad,
-            "send-events",
-            if on { "enabled" } else { "disabled" },
-        ),
-        Switch::TapToClick => (desktop.touchpad, "tap-to-click", flag),
-        Switch::TouchpadNaturalScroll => (desktop.touchpad, "natural-scroll", flag),
-    }
+    let (schema, key) = location(desktop, Setting::Switch(switch));
+    let value = match (switch, on) {
+        (Switch::Acceleration, true) => "adaptive",
+        (Switch::Acceleration, false) => "flat",
+        (Switch::Touchpad, true) => "enabled",
+        (Switch::Touchpad, false) => "disabled",
+        (_, true) => "true",
+        (_, false) => "false",
+    };
+    (schema, key, value)
 }
 
 fn level_write(
@@ -155,17 +182,13 @@ fn level_write(
     level: Level,
     value: u32,
 ) -> (&'static str, &'static str, String) {
-    match level {
-        Level::PointerSpeed => (desktop.mouse, "speed", percent_speed(value)),
-        Level::DoubleClick => (desktop.mouse, "double-click", value.to_string()),
-        Level::TouchpadSpeed => (desktop.touchpad, "speed", percent_speed(value)),
-        Level::RepeatDelay => (desktop.keyboard, "delay", value.to_string()),
-        Level::RepeatRate => (
-            desktop.keyboard,
-            "repeat-interval",
-            interval_from_rate(value).to_string(),
-        ),
-    }
+    let (schema, key) = location(desktop, Setting::Level(level));
+    let value = match level {
+        Level::PointerSpeed | Level::TouchpadSpeed => percent_speed(value),
+        Level::DoubleClick | Level::RepeatDelay => value.to_string(),
+        Level::RepeatRate => interval_from_rate(value).to_string(),
+    };
+    (schema, key, value)
 }
 
 fn touchpad_missing() -> Option<String> {
@@ -347,6 +370,21 @@ mod tests {
             level_write(&GNOME, Level::RepeatRate, 25),
             (GNOME.keyboard, "repeat-interval", "40".to_string())
         );
+    }
+
+    #[test]
+    fn every_setting_saves_and_puts_back_its_own_key() {
+        let mut keys: Vec<_> = Setting::ALL
+            .into_iter()
+            .map(|setting| location(&CINNAMON, setting))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), Setting::ALL.len());
+        let error = restore(Setting::ALL[0], Baseline::Number(5))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pointer-speed"), "{error}");
     }
 
     #[test]

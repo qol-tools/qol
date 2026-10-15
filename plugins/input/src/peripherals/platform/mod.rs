@@ -6,8 +6,14 @@ mod unsupported;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::{backend, keyboard, mouse, set_level, set_switch, touchpad, values};
+pub(super) use linux::{
+    backend, capture, keyboard, mouse, restore, set_level, set_switch, touchpad, values,
+};
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-pub(super) use unsupported::{backend, keyboard, mouse, set_level, set_switch, touchpad, values};
+pub(super) use unsupported::{
+    backend, capture, keyboard, mouse, restore, set_level, set_switch, touchpad, values,
+};
 #[cfg(target_os = "windows")]
-pub(super) use windows::{backend, keyboard, mouse, set_level, set_switch, touchpad, values};
+pub(super) use windows::{
+    backend, capture, keyboard, mouse, restore, set_level, set_switch, touchpad, values,
+};

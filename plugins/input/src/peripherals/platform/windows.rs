@@ -17,7 +17,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_SETTINGCHANGE,
 };
 
-use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad, NO_TOUCHPAD};
+use super::super::{
+    Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, NO_TOUCHPAD,
+};
 
 const SPI_GETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AE;
 const SPI_SETTOUCHPADPARAMETERS: SYSTEM_PARAMETERS_INFO_ACTION = 0x00AF;
@@ -66,15 +68,11 @@ pub(crate) fn backend() -> Result<&'static str> {
 }
 
 pub(crate) fn mouse() -> Result<Mouse> {
-    let mut speed = 0u32;
-    get(SPI_GETMOUSESPEED, 0, &mut speed)?;
-    let mut acceleration = [0i32; 3];
-    get(SPI_GETMOUSE, 0, &mut acceleration)?;
     Ok(Mouse {
-        speed: Some(step_percent(speed)),
-        acceleration: Some(acceleration[2] != 0),
-        swap_buttons: Some(unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0),
-        double_click: Some(unsafe { GetDoubleClickTime() }),
+        speed: Some(step_percent(read_level(Level::PointerSpeed)?)),
+        acceleration: Some(read_acceleration()?[2] != 0),
+        swap_buttons: Some(read_flag(Switch::SwapButtons)?),
+        double_click: Some(read_level(Level::DoubleClick)?),
         natural_scroll: None,
     })
 }
@@ -89,51 +87,48 @@ pub(crate) fn touchpad() -> Result<Touchpad> {
 }
 
 pub(crate) fn keyboard() -> Result<Keyboard> {
-    let mut delay = 0u32;
-    get(SPI_GETKEYBOARDDELAY, 0, &mut delay)?;
-    let mut speed = 0u32;
-    get(SPI_GETKEYBOARDSPEED, 0, &mut speed)?;
     Ok(Keyboard {
-        repeat_delay: Some(delay_ms(delay)),
-        repeat_rate: Some(rate_from_step(speed)),
+        repeat_delay: Some(delay_ms(read_level(Level::RepeatDelay)?)),
+        repeat_rate: Some(rate_from_step(read_level(Level::RepeatRate)?)),
     })
 }
 
 pub(crate) fn set_switch(switch: Switch, on: bool) -> Result<()> {
-    match switch {
-        Switch::Acceleration => {
-            let mut values = if on {
-                ACCELERATION_ON
-            } else {
-                ACCELERATION_OFF
-            };
-            set(SPI_SETMOUSE, 0, values.as_mut_ptr().cast())
-        }
-        Switch::SwapButtons => set(SPI_SETMOUSEBUTTONSWAP, u32::from(on), null_mut()),
-        Switch::MouseNaturalScroll => bail!(NO_MOUSE_NATURAL_SCROLL),
-        Switch::Touchpad => switch_touchpad(on),
-        Switch::TapToClick => write_touchpad(|parameters| {
-            parameters.settings = with_bit(parameters.settings, TAP_ENABLED, on);
-        }),
-        Switch::TouchpadNaturalScroll => write_touchpad(|parameters| {
-            parameters.settings = with_bit(parameters.settings, SCROLL_DIRECTION_REVERSED, !on);
-        }),
-    }
+    write_flag(switch, on != (switch == Switch::TouchpadNaturalScroll))
 }
 
 pub(crate) fn set_level(level: Level, value: u32) -> Result<()> {
-    match level {
-        Level::PointerSpeed => set(
-            SPI_SETMOUSESPEED,
-            0,
-            without_provenance_mut(percent_step(value) as usize),
+    let native = match level {
+        Level::PointerSpeed | Level::TouchpadSpeed => percent_step(value),
+        Level::DoubleClick => value,
+        Level::RepeatDelay => delay_step(value),
+        Level::RepeatRate => rate_step(value),
+    };
+    write_level(level, native)
+}
+
+pub(crate) fn capture(setting: Setting) -> Result<Baseline> {
+    Ok(match setting {
+        Setting::Level(level) => Baseline::Number(read_level(level)?),
+        Setting::Switch(Switch::Acceleration) => Baseline::Numbers(read_acceleration()?.to_vec()),
+        Setting::Switch(switch) => Baseline::Number(u32::from(read_flag(switch)?)),
+    })
+}
+
+pub(crate) fn restore(setting: Setting, baseline: Baseline) -> Result<()> {
+    match (setting, baseline) {
+        (Setting::Level(level), Baseline::Number(native)) => write_level(level, native),
+        (Setting::Switch(Switch::Acceleration), Baseline::Numbers(values)) => {
+            match <[i32; 3]>::try_from(values) {
+                Ok(values) => write_acceleration(values),
+                Err(values) => bail!("the saved acceleration {values:?} is not three numbers"),
+            }
+        }
+        (Setting::Switch(switch), Baseline::Number(flag)) => write_flag(switch, flag != 0),
+        _ => bail!(
+            "the saved {} is not a Windows setting value",
+            setting.name()
         ),
-        Level::DoubleClick => set(SPI_SETDOUBLECLICKTIME, value, null_mut()),
-        Level::TouchpadSpeed => write_touchpad(|parameters| {
-            parameters.cursor_speed = percent_step(value);
-        }),
-        Level::RepeatDelay => set(SPI_SETKEYBOARDDELAY, delay_step(value), null_mut()),
-        Level::RepeatRate => set(SPI_SETKEYBOARDSPEED, rate_step(value), null_mut()),
     }
 }
 
@@ -151,6 +146,76 @@ pub(crate) fn values(level: Level) -> Steps {
             step: DELAY_STEP_MS,
         },
         Level::RepeatRate => Steps::span(rate_from_step(0), rate_from_step(RATE_STEPS)),
+    }
+}
+
+fn read_level(level: Level) -> Result<u32> {
+    let action = match level {
+        Level::PointerSpeed => SPI_GETMOUSESPEED,
+        Level::DoubleClick => return Ok(unsafe { GetDoubleClickTime() }),
+        Level::TouchpadSpeed => return Ok(touchpad_parameters()?.cursor_speed),
+        Level::RepeatDelay => SPI_GETKEYBOARDDELAY,
+        Level::RepeatRate => SPI_GETKEYBOARDSPEED,
+    };
+    let mut native = 0u32;
+    get(action, 0, &mut native)?;
+    Ok(native)
+}
+
+fn write_level(level: Level, native: u32) -> Result<()> {
+    match level {
+        Level::PointerSpeed => set(
+            SPI_SETMOUSESPEED,
+            0,
+            without_provenance_mut(native as usize),
+        ),
+        Level::DoubleClick => set(SPI_SETDOUBLECLICKTIME, native, null_mut()),
+        Level::TouchpadSpeed => write_touchpad(|parameters| parameters.cursor_speed = native),
+        Level::RepeatDelay => set(SPI_SETKEYBOARDDELAY, native, null_mut()),
+        Level::RepeatRate => set(SPI_SETKEYBOARDSPEED, native, null_mut()),
+    }
+}
+
+fn read_acceleration() -> Result<[i32; 3]> {
+    let mut acceleration = [0i32; 3];
+    get(SPI_GETMOUSE, 0, &mut acceleration)?;
+    Ok(acceleration)
+}
+
+fn write_acceleration(mut values: [i32; 3]) -> Result<()> {
+    set(SPI_SETMOUSE, 0, values.as_mut_ptr().cast())
+}
+
+fn read_flag(switch: Switch) -> Result<bool> {
+    let touchpad_bit =
+        |bit: u32| -> Result<bool> { Ok(touchpad_parameters()?.settings & bit != 0) };
+    match switch {
+        Switch::Acceleration => Ok(read_acceleration()?[2] != 0),
+        Switch::SwapButtons => Ok(unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0),
+        Switch::MouseNaturalScroll => bail!(NO_MOUSE_NATURAL_SCROLL),
+        Switch::Touchpad => Ok(touchpad_parameters()?.status & TOUCHPAD_ENABLED != 0),
+        Switch::TapToClick => touchpad_bit(TAP_ENABLED),
+        Switch::TouchpadNaturalScroll => touchpad_bit(SCROLL_DIRECTION_REVERSED),
+    }
+}
+
+fn write_flag(switch: Switch, native: bool) -> Result<()> {
+    let touchpad_bit = |bit: u32| {
+        write_touchpad(|parameters| {
+            parameters.settings = with_bit(parameters.settings, bit, native)
+        })
+    };
+    match switch {
+        Switch::Acceleration => write_acceleration(if native {
+            ACCELERATION_ON
+        } else {
+            ACCELERATION_OFF
+        }),
+        Switch::SwapButtons => set(SPI_SETMOUSEBUTTONSWAP, u32::from(native), null_mut()),
+        Switch::MouseNaturalScroll => bail!(NO_MOUSE_NATURAL_SCROLL),
+        Switch::Touchpad => switch_touchpad(native),
+        Switch::TapToClick => touchpad_bit(TAP_ENABLED),
+        Switch::TouchpadNaturalScroll => touchpad_bit(SCROLL_DIRECTION_REVERSED),
     }
 }
 
@@ -172,7 +237,7 @@ fn touchpad_from(parameters: &TouchpadParameters) -> Touchpad {
 }
 
 fn switch_touchpad(on: bool) -> Result<()> {
-    let enabled = || -> Result<bool> { Ok(touchpad_parameters()?.status & TOUCHPAD_ENABLED != 0) };
+    let enabled = || read_flag(Switch::Touchpad);
     if enabled()? == on {
         return Ok(());
     }
@@ -479,6 +544,24 @@ mod tests {
                 (VK_CONTROL, true),
             ]
         );
+    }
+
+    #[test]
+    fn a_saved_value_of_the_wrong_shape_is_refused_before_the_host_is_touched() {
+        let error = restore(
+            Setting::Level(Level::PointerSpeed),
+            Baseline::Text("fast".to_string()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("pointer-speed"), "{error}");
+        let error = restore(
+            Setting::Switch(Switch::Acceleration),
+            Baseline::Numbers(vec![6, 10]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("[6, 10]"), "{error}");
     }
 
     #[test]

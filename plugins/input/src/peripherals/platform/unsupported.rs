@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use super::super::{Keyboard, Level, Mouse, Steps, Switch, Touchpad};
+use super::super::{Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad};
 
 const UNSUPPORTED: &str = "input settings work on Linux and Windows only";
 
@@ -25,6 +25,14 @@ pub(crate) fn set_switch(_switch: Switch, _on: bool) -> Result<()> {
 }
 
 pub(crate) fn set_level(_level: Level, _value: u32) -> Result<()> {
+    bail!(UNSUPPORTED)
+}
+
+pub(crate) fn capture(_setting: Setting) -> Result<Baseline> {
+    bail!(UNSUPPORTED)
+}
+
+pub(crate) fn restore(_setting: Setting, _baseline: Baseline) -> Result<()> {
     bail!(UNSUPPORTED)
 }
 

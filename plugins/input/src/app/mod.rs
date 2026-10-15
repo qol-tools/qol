@@ -1,10 +1,12 @@
+mod platform;
+
 use std::process::ExitCode;
 use std::sync::mpsc;
 
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use serde::Serialize;
 
-use crate::peripherals::{self, Level, Switch};
+use crate::peripherals::{self, session, Level, Switch};
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -16,6 +18,7 @@ enum Action {
     Ping,
     Kill,
     Reload,
+    Theme,
     Mouse,
     Touchpad,
     Keyboard,
@@ -30,7 +33,10 @@ enum Command {
 }
 
 pub fn run() -> ExitCode {
+    session::recover();
     let (tx, rx) = mpsc::channel();
+    let stop = tx.clone();
+    platform::on_stop_request(move || drop(stop.send(Command::Kill)));
     if !core_daemon::start_request_listener(&DAEMON_CONFIG, tx, |request| {
         dispatch(&request.action, &request.input)
     }) {
@@ -40,6 +46,7 @@ pub fn run() -> ExitCode {
     match rx.recv() {
         Ok(Command::Kill) | Err(mpsc::RecvError) => core_daemon::cleanup(&DAEMON_CONFIG),
     }
+    session::release();
     ExitCode::SUCCESS
 }
 
@@ -53,6 +60,7 @@ fn classify(action: &str) -> Option<Action> {
         "keyboard" => Some(Action::Keyboard),
         "toggle_touchpad" => Some(Action::ToggleTouchpad),
         "settings" => Some(Action::Settings),
+        theme if theme == "theme" || theme.starts_with("theme ") => Some(Action::Theme),
         _ => None,
     };
     fixed
@@ -84,7 +92,7 @@ fn dispatch(action: &str, input: &serde_json::Value) -> ReadResult<Command> {
         return ReadResult::Error(format!("unknown action `{action}`"));
     };
     match parsed {
-        Action::Ping | Action::Reload => ReadResult::Handled,
+        Action::Ping | Action::Reload | Action::Theme => ReadResult::Handled,
         Action::Kill => ReadResult::Command(Command::Kill),
         Action::Mouse => query(peripherals::mouse(), "failed to read the mouse settings"),
         Action::Touchpad => query(
@@ -223,6 +231,8 @@ mod tests {
             ("keyboard", Action::Keyboard),
             ("toggle_touchpad", Action::ToggleTouchpad),
             ("settings", Action::Settings),
+            ("theme", Action::Theme),
+            ("theme bone amber", Action::Theme),
         ];
         for (name, expected) in cases {
             assert_eq!(classify(name), Some(expected), "`{name}` keeps its branch");
@@ -237,6 +247,7 @@ mod tests {
             "set_speed",
             "_on",
             "touchpad_toggle",
+            "themes",
             "acceleration",
             "Mouse",
             "{\"action\":",
