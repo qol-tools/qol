@@ -1,0 +1,55 @@
+schema_version = 1
+title = "Clipboard"
+description = "Keep a searchable history of everything you copy."
+
+[section.history]
+label = "History"
+description = "How much of the clipboard history is kept. Pinned clips stay until you unpin them."
+
+[field.max_clips]
+type = "number"
+variant = "slider"
+label = "Clips kept"
+description = "Unpinned clips beyond this count are removed, oldest first."
+section = "history"
+default = 200
+min = 10
+max = 1000
+step = 10
+
+[field.max_age_days]
+type = "number"
+variant = "slider"
+label = "Days kept"
+description = "Unpinned clips older than this are removed."
+section = "history"
+default = 7
+min = 1
+max = 90
+step = 1
+
+[section.secrets]
+label = "Secrets"
+description = "Copies that a password manager marks as sensitive."
+
+[field.keep_secrets]
+type = "boolean"
+label = "Keep secrets briefly"
+description = "Show a marked secret masked in the history until it clears. Off drops secrets as soon as they are copied."
+section = "secrets"
+default = true
+
+[field.secret_seconds]
+type = "number"
+variant = "slider"
+label = "Clear secrets after (seconds)"
+description = "How long a secret stays in the history."
+section = "secrets"
+default = 30
+min = 5
+max = 120
+step = 5
+
+[field.secret_seconds.show_when]
+field = "keep_secrets"
+equals = true

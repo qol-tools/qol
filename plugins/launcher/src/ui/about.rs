@@ -16,16 +16,16 @@ use super::view::{tile, TileInk};
 use super::LauncherView;
 use crate::discovery::details::{date_label, AppAbout};
 
-const BAND_SHADE_ALPHA: Alpha = Alpha::Halo;
+pub(super) const BAND_SHADE_ALPHA: Alpha = Alpha::Halo;
 const WELL_SHADE_ALPHA: Alpha = Alpha::Wash;
 const WELL_LINE_ALPHA: Alpha = Alpha::Wash;
 const DONE_ALPHA: Alpha = Alpha::Edge;
 const TAG_ALPHA: Alpha = Alpha::Edge;
-const HEAD_HEIGHT: f32 = 60.0;
-const HEAD_TILE: f32 = 44.0;
+pub(super) const HEAD_HEIGHT: f32 = 60.0;
+pub(super) const HEAD_TILE: f32 = 44.0;
 const HEAD_ICON: f32 = 36.0;
 const BAND_AIR: f32 = 6.0;
-const BAND_INSET: f32 = SPACE_SNUG + SPACE_INSET;
+pub(super) const BAND_INSET: f32 = SPACE_SNUG + SPACE_INSET;
 const WELL_BLOCK: f32 = 24.0;
 const WELL_HEIGHT: f32 = 22.0;
 const WELL_CHARS: usize = 42;
@@ -36,7 +36,7 @@ const DESCRIPTION_LINE: f32 = TextStyle::Detail.spec().size * TextStyle::Detail.
 const DESCRIPTION_LINES: usize = 8;
 const DESCRIPTION_AIR: f32 = 4.0;
 const RULE_BLOCK: f32 = 9.0;
-const LINE_BLOCK: f32 = 22.0;
+pub(super) const LINE_BLOCK: f32 = 22.0;
 const INNER_WIDTH: f32 = APP_PANEL_WIDTH - 2.0 * SPACE_SNUG - 2.0 * SPACE_INSET;
 
 pub struct About<'a> {

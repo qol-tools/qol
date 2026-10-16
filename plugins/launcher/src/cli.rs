@@ -12,11 +12,13 @@ enum Operation {
     Show,
     Settings,
     Kill,
+    Flow,
 }
 
 trait Operations: Clone + Send + Sync + 'static {
     fn run(&self, intent: StartupIntent) -> CommandResult;
     fn send_show(&self) -> bool;
+    fn send_flow(&self, plugin_id: &str) -> bool;
     fn send_kill(&self);
     fn open_settings(&self) -> CommandResult;
 }
@@ -32,6 +34,10 @@ impl Operations for ProductionOperations {
 
     fn send_show(&self) -> bool {
         crate::app::send_show()
+    }
+
+    fn send_flow(&self, plugin_id: &str) -> bool {
+        crate::app::send_flow(plugin_id)
     }
 
     fn send_kill(&self) {
@@ -84,6 +90,14 @@ where
             operations.clone(),
         ))
         .command(operation_command(
+            "--flow",
+            Operation::Flow,
+            "Show the retained launcher opened straight into one plugin's flow.",
+            "launcher --flow <plugin_id>",
+            "No stdout; an unknown plugin id shows the launcher on its apps list.",
+            operations.clone(),
+        ))
+        .command(operation_command(
             "--settings",
             Operation::Settings,
             "Open the Launcher settings surface.",
@@ -121,10 +135,14 @@ where
         )
         .output(output)
         .exit_behavior("Preserves the legacy best-effort zero exit behavior.")
-        .run_result(move |_| Ok(route_operation(&operations, requested)))
+        .run_result(move |context| Ok(route_operation(&operations, requested, context.args())))
 }
 
-fn route_operation(operations: &impl Operations, requested: Operation) -> CommandResult {
+fn route_operation(
+    operations: &impl Operations,
+    requested: Operation,
+    args: &[String],
+) -> CommandResult {
     match requested {
         Operation::Run => operations.run(StartupIntent::Hidden),
         Operation::Show => {
@@ -132,6 +150,15 @@ fn route_operation(operations: &impl Operations, requested: Operation) -> Comman
                 return CommandResult::success("");
             }
             operations.run(StartupIntent::Visible)
+        }
+        Operation::Flow => {
+            let Some(plugin_id) = args.first().filter(|id| !id.trim().is_empty()) else {
+                return CommandResult::usage("[launcher] --flow needs a plugin id\n");
+            };
+            if operations.send_flow(plugin_id) {
+                return CommandResult::success("");
+            }
+            operations.run(StartupIntent::Flow(plugin_id.clone()))
         }
         Operation::Settings => operations.open_settings(),
         Operation::Kill => {
@@ -149,10 +176,18 @@ fn normalize_legacy_argv(args: impl IntoIterator<Item = String>) -> Vec<String> 
     if has_help || has_json || starts_doctor || args.is_empty() {
         return args;
     }
-    for flag in ["--kill", "--settings", "--show"] {
+    for flag in ["--kill", "--settings"] {
         if args.iter().any(|arg| arg == flag) {
             return vec![flag.to_string()];
         }
+    }
+    if let Some(index) = args.iter().position(|arg| arg == "--flow") {
+        return std::iter::once("--flow".to_string())
+            .chain(args.get(index + 1).cloned())
+            .collect();
+    }
+    if args.iter().any(|arg| arg == "--show") {
+        return vec!["--show".to_string()];
     }
     vec!["run".to_string()]
 }
@@ -171,6 +206,7 @@ mod tests {
     struct OperationCalls {
         runs: Mutex<Vec<StartupIntent>>,
         show_signals: AtomicUsize,
+        flow_signals: Mutex<Vec<String>>,
         kill_signals: AtomicUsize,
         settings: AtomicUsize,
         daemon_available: bool,
@@ -189,6 +225,15 @@ mod tests {
 
         fn send_show(&self) -> bool {
             self.calls.show_signals.fetch_add(1, Ordering::SeqCst);
+            self.calls.daemon_available
+        }
+
+        fn send_flow(&self, plugin_id: &str) -> bool {
+            self.calls
+                .flow_signals
+                .lock()
+                .unwrap()
+                .push(plugin_id.to_string());
             self.calls.daemon_available
         }
 
@@ -231,6 +276,7 @@ mod tests {
     fn assert_no_operations(calls: &OperationCalls, args: &[&str]) {
         assert!(calls.runs.lock().unwrap().is_empty(), "{args:?}");
         assert_eq!(calls.show_signals.load(Ordering::SeqCst), 0, "{args:?}");
+        assert!(calls.flow_signals.lock().unwrap().is_empty(), "{args:?}");
         assert_eq!(calls.kill_signals.load(Ordering::SeqCst), 0, "{args:?}");
         assert_eq!(calls.settings.load(Ordering::SeqCst), 0, "{args:?}");
     }
@@ -274,6 +320,45 @@ mod tests {
             calls.runs.lock().unwrap().as_slice(),
             [StartupIntent::Visible]
         );
+    }
+
+    #[test]
+    fn flow_signals_the_daemon_or_starts_visible_in_the_flow() {
+        let (app, calls) = sentinel(true);
+        let execution = execute(&app, ["--flow".to_string(), "qol-clipboard".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(
+            calls.flow_signals.lock().unwrap().as_slice(),
+            ["qol-clipboard".to_string()]
+        );
+        assert!(calls.runs.lock().unwrap().is_empty());
+
+        let (app, calls) = sentinel(false);
+        let execution = execute(
+            &app,
+            [
+                "--show".to_string(),
+                "--flow".to_string(),
+                "qol-clipboard".to_string(),
+            ],
+        );
+
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(calls.show_signals.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            calls.runs.lock().unwrap().as_slice(),
+            [StartupIntent::Flow("qol-clipboard".to_string())]
+        );
+    }
+
+    #[test]
+    fn flow_without_a_plugin_id_is_a_usage_error() {
+        let (app, calls) = sentinel(true);
+        let execution = execute(&app, ["--flow".to_string()]);
+
+        assert_eq!(execution.exit_code, EXIT_USAGE);
+        assert_no_operations(&calls, &["--flow"]);
     }
 
     #[test]
@@ -340,7 +425,11 @@ mod tests {
     fn manifest_action_arguments_are_unchanged_and_have_help() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
-        let expected = [("open", "--show"), ("settings", "--settings")];
+        let expected = [
+            ("open", "--show"),
+            ("flow", "--flow"),
+            ("settings", "--settings"),
+        ];
 
         for (action, command) in expected {
             assert_eq!(
@@ -355,7 +444,7 @@ mod tests {
 
     #[test]
     fn contextual_help_is_equivalent_in_both_positions() {
-        for command in ["run", "--show", "--settings", "--kill", "doctor"] {
+        for command in ["run", "--show", "--flow", "--settings", "--kill", "doctor"] {
             let first = execute(&app(), ["help".to_string(), command.to_string()]);
             let final_token = execute(&app(), [command.to_string(), "help".to_string()]);
 

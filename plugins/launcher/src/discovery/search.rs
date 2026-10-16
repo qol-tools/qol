@@ -509,6 +509,9 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
             icon: None,
+            enter: Default::default(),
+            panel: Default::default(),
+            detail: None,
         }];
 
         let results = filtered(

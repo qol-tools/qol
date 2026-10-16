@@ -22,6 +22,12 @@ pub struct LauncherSpec {
     pub query: Option<String>,
     #[serde(default)]
     pub row_actions: Vec<qol_config::contract::RowActionSpec>,
+    #[serde(default)]
+    pub enter: Option<crate::launcher_flows::FlowEnter>,
+    #[serde(default)]
+    pub panel: Option<crate::launcher_flows::FlowPanel>,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

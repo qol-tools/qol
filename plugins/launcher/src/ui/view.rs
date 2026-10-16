@@ -50,6 +50,13 @@ pub struct SearchBarStatus<'a> {
     pub list_focused: bool,
     pub panel_active: bool,
     pub feedback: Option<&'a Feedback>,
+    pub flow_chip: Option<FlowChip<'a>>,
+}
+
+pub struct FlowChip<'a> {
+    pub title: &'a str,
+    pub art: Option<&'a Path>,
+    pub copied: bool,
 }
 
 pub fn search_bar(
@@ -65,7 +72,7 @@ pub fn search_bar(
     let pane = kit.grounds.pane;
     let mono_font = font(qol_gpui::theme::font_mono());
     let mono_advance = shaped_width(window, "0", mono_font.clone(), TextStyle::Code.spec().size);
-    let trailing = if status.mode.is_some() {
+    let trailing = if status.mode.is_some() || status.flow_chip.is_some() {
         MODE_TRAILING
     } else {
         0.0
@@ -185,6 +192,7 @@ pub fn search_bar(
                         None => bar.child(chip),
                     }
                 })
+                .when_some(status.flow_chip, |bar, chip| bar.child(flow_chip(chip)))
                 .when_some(line, |bar, (text, id)| {
                     bar.child(
                         div()
@@ -212,17 +220,18 @@ pub fn search_bar(
         )
 }
 
-fn mode_chip(
-    mode: SearchMode,
-    panel_active: bool,
-    cx: &mut Context<LauncherView>,
-) -> Stateful<Div> {
+fn chip_inks() -> (u32, u32) {
     let kit = qol_gpui::kit::kit();
     let accent = kit.palette.accent;
-    let ink = qol_color::mix_rgb(accent, kit.grounds.pane.ink, MODE_INK_MIX);
-    let key_ink = qol_color::mix_rgb(accent, kit.grounds.pane.ink, MODE_KEY_MIX);
+    (
+        qol_color::mix_rgb(accent, kit.grounds.pane.ink, MODE_INK_MIX),
+        qol_color::mix_rgb(accent, kit.grounds.pane.ink, MODE_KEY_MIX),
+    )
+}
+
+fn chip_frame(ink: u32) -> Div {
+    let accent = qol_gpui::kit::kit().palette.accent;
     div()
-        .id("launcher-search-mode")
         .flex_none()
         .h(px(MODE_CHIP_HEIGHT))
         .px(px(SPACE_INSET))
@@ -233,6 +242,40 @@ fn mode_chip(
         .bg(rgba(translucent(accent, MODE_FILL_ALPHA)))
         .text(TextStyle::Label)
         .text_color(rgb(ink))
+}
+
+fn chip_key(key: Key, key_ink: u32) -> Div {
+    div()
+        .flex_none()
+        .px(px(SPACE_TIGHT))
+        .rounded(px(RADIUS_THUMB))
+        .border(px(LINE))
+        .border_color(rgba(translucent(key_ink, MODE_KEY_EDGE_ALPHA)))
+        .child(qol_gpui::kit::kit().key_name(&[key], key_ink))
+}
+
+fn flow_chip(chip: FlowChip<'_>) -> Stateful<Div> {
+    let (ink, key_ink) = chip_inks();
+    let label = if chip.copied { "Copied" } else { chip.title };
+    chip_frame(ink)
+        .id("launcher-search-mode")
+        .children(
+            chip.art
+                .and_then(launcher_mark)
+                .map(|drawn| mark(drawn, TextStyle::Label.spec().size, ink)),
+        )
+        .child(cased(TextStyle::Label, label))
+        .when(!chip.copied, |chip| chip.child(chip_key(Key::ESC, key_ink)))
+}
+
+fn mode_chip(
+    mode: SearchMode,
+    panel_active: bool,
+    cx: &mut Context<LauncherView>,
+) -> Stateful<Div> {
+    let (ink, key_ink) = chip_inks();
+    chip_frame(ink)
+        .id("launcher-search-mode")
         .cursor_pointer()
         .child(icon(
             match mode {
@@ -244,15 +287,7 @@ fn mode_chip(
         ))
         .child(cased(TextStyle::Label, mode.label()))
         .when(!panel_active, |chip| {
-            chip.child(
-                div()
-                    .flex_none()
-                    .px(px(SPACE_TIGHT))
-                    .rounded(px(RADIUS_THUMB))
-                    .border(px(LINE))
-                    .border_color(rgba(translucent(key_ink, MODE_KEY_EDGE_ALPHA)))
-                    .child(kit.key_name(&[Key::TAB], key_ink)),
-            )
+            chip.child(chip_key(Key::TAB, key_ink))
         })
         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
             this.set_search_mode(this.state.mode.next(), cx);
@@ -478,7 +513,7 @@ pub fn tile(
     }
 }
 
-fn launcher_mark(art: &Path) -> Option<Mark> {
+pub(super) fn launcher_mark(art: &Path) -> Option<Mark> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     let dir = DIR.get_or_init(launcher_marks::marks_dir).as_deref()?;
     launcher_marks::mark_at(dir, art)
@@ -834,6 +869,7 @@ mod tests {
             subtitle: None,
             copy: None,
             raw: serde_json::json!({ "kind": kind }),
+            spec: Default::default(),
         }
     }
 

@@ -138,13 +138,25 @@ pub(crate) fn activate_or_open_launcher(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
     monitor_snapshot: Option<monitor::ActiveMonitor>,
+    flow: Option<String>,
     cx: &mut App,
 ) {
     apply_ghost_debug();
-    if show_ghost(active.clone(), monitor_snapshot.as_ref(), cx) {
+    if show_ghost(
+        active.clone(),
+        monitor_snapshot.as_ref(),
+        flow.as_deref(),
+        cx,
+    ) {
         return;
     }
-    create_and_show_ghost(entries, active, monitor_snapshot.as_ref(), cx);
+    create_and_show_ghost(
+        entries,
+        active,
+        monitor_snapshot.as_ref(),
+        flow.as_deref(),
+        cx,
+    );
 }
 
 fn mark_non_target_hidden(active: &Rc<RefCell<ActiveLaunchers>>, target: MonitorKey, cx: &mut App) {
@@ -156,6 +168,7 @@ fn mark_non_target_hidden(active: &Rc<RefCell<ActiveLaunchers>>, target: Monitor
 fn show_ghost(
     active: Rc<RefCell<ActiveLaunchers>>,
     monitor_snapshot: Option<&monitor::ActiveMonitor>,
+    flow: Option<&str>,
     cx: &mut App,
 ) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("show");
@@ -180,6 +193,9 @@ fn show_ghost(
                 view.state.mode,
                 view.state.fuzziness,
             );
+            if let Some(plugin_id) = flow {
+                view.open_flow_for(plugin_id, cx);
+            }
             qol_gpui::ghost::sync_window_layout(
                 &title,
                 window,
@@ -206,6 +222,7 @@ fn create_and_show_ghost(
     entries: SharedEntries,
     active: Rc<RefCell<ActiveLaunchers>>,
     monitor_snapshot: Option<&monitor::ActiveMonitor>,
+    flow: Option<&str>,
     cx: &mut App,
 ) {
     let _reason = qol_gpui::popup_window::reason_scope("create");
@@ -224,6 +241,9 @@ fn create_and_show_ghost(
     popup_window::disable_window_shadow(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
+        if let Some(plugin_id) = flow {
+            view.open_flow_for(plugin_id, cx);
+        }
         super::platform::show_topmost_window(&title, &all_titles);
         window.activate_window();
         window.focus(&view.focus_handle(cx));

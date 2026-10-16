@@ -31,12 +31,19 @@ pub enum Mark {
     Sound,
     Voice,
     WindowActions,
+    Clipboard,
+    ClipText,
+    ClipCode,
+    ClipImage,
+    ClipFile,
+    ClipSecret,
+    ClipColor,
 }
 
 const LINE_LIFT: f32 = 0.25;
 
 impl Mark {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 36] = [
         Self::Qol,
         Self::Settings,
         Self::Shortcuts,
@@ -66,6 +73,13 @@ impl Mark {
         Self::Sound,
         Self::Voice,
         Self::WindowActions,
+        Self::Clipboard,
+        Self::ClipText,
+        Self::ClipCode,
+        Self::ClipImage,
+        Self::ClipFile,
+        Self::ClipSecret,
+        Self::ClipColor,
     ];
 
     pub fn name(self) -> &'static str {
@@ -99,6 +113,13 @@ impl Mark {
             Self::Sound => "sound",
             Self::Voice => "voice",
             Self::WindowActions => "window-actions",
+            Self::Clipboard => "clipboard",
+            Self::ClipText => "clip-text",
+            Self::ClipCode => "clip-code",
+            Self::ClipImage => "clip-image",
+            Self::ClipFile => "clip-file",
+            Self::ClipSecret => "clip-secret",
+            Self::ClipColor => "clip-color",
         }
     }
 
@@ -211,6 +232,25 @@ impl Mark {
             }
             Self::WindowActions => {
                 r#"<rect x="5" y="8" width="38" height="32" rx="5"/><path d="M24 8v32M24 24h19"/>"#
+            }
+            Self::Clipboard => {
+                r#"<rect x="9" y="8" width="30" height="35" rx="4"/><rect x="17" y="4" width="14" height="8" rx="2.5"/><path d="M16 21h16M16 28h16M16 35h10"/>"#
+            }
+            Self::ClipText => r#"<path d="M10 12h28M10 20h28M10 28h28M10 36h18"/>"#,
+            Self::ClipCode => {
+                r#"<path d="M17 14L7 24l10 10M31 14l10 10-10 10"/><path d="M27 10l-6 28"/>"#
+            }
+            Self::ClipImage => {
+                r#"<rect x="6" y="9" width="36" height="30" rx="4"/><circle cx="17" cy="19" r="3.5"/><path d="M6 33l11-10 9 8 6-5 10 9"/>"#
+            }
+            Self::ClipFile => {
+                r#"<path d="M6 13a4 4 0 0 1 4-4h9l5 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/>"#
+            }
+            Self::ClipSecret => {
+                r#"<rect x="9" y="21" width="30" height="20" rx="4"/><path d="M16 21v-6a8 8 0 0 1 16 0v6"/><path d="M24 29v5"/>"#
+            }
+            Self::ClipColor => {
+                r#"<circle cx="24" cy="24" r="17"/><circle cx="24" cy="15" r="3"/><circle cx="16" cy="27" r="3"/><circle cx="32" cy="27" r="3"/>"#
             }
         }
     }

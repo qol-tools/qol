@@ -1,0 +1,26 @@
+schema_version = 1
+
+[query.rows]
+description = "Launcher rows: the newest clips matching the typed text"
+poll_interval_ms = 60000
+input = { query = "text typed in the launcher; empty lists the newest clips" }
+
+[query.detail]
+description = "Launcher detail: the head, tail and counts of one clip for the side panel and the sheet"
+poll_interval_ms = 60000
+input = { id = "id of the clip" }
+
+[action.copy]
+description = "Put a clip back on the clipboard"
+input = { id = "id of the clip" }
+
+[action.pin]
+description = "Pin a clip, or unpin it when it is already pinned"
+input = { id = "id of the clip" }
+
+[action.forget]
+description = "Remove a clip from the history"
+input = { id = "id of the clip" }
+
+[action.open]
+description = "Open the launcher straight into the clipboard flow"

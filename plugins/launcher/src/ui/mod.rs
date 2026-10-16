@@ -4,6 +4,7 @@ mod controller;
 mod details;
 mod feedback;
 mod files;
+mod flow_pane;
 mod input;
 pub(crate) mod keepalive;
 mod layout;
