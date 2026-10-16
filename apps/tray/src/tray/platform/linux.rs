@@ -13,7 +13,7 @@ type StartupTx = std::sync::mpsc::Sender<StartupResult>;
 
 static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
 
-pub(crate) const ICON_SIZE: u32 = 24;
+pub(crate) const ICON_SIZE: u32 = 32;
 const TONE_REFRESH_SECONDS: u32 = 10;
 
 pub enum PlatformTray {
