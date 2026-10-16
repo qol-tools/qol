@@ -118,14 +118,23 @@ fn desktop_apps_dir() -> Result<PathBuf> {
 }
 
 fn ensure_linux_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {
-    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
-    let icons_changed = install_icons(&data_dir)?;
+    let icons_changed = include_app_entry && heal_icons();
     let apps_dir = desktop_apps_dir()?;
     std::fs::create_dir_all(&apps_dir)?;
     if write_desktop_entries(&apps_dir, binary_path, include_app_entry)? || icons_changed {
         refresh_caches();
     }
     Ok(())
+}
+
+fn heal_icons() -> bool {
+    dirs::data_dir()
+        .context("Could not determine data directory")
+        .and_then(|data_dir| install_icons(&data_dir))
+        .unwrap_or_else(|error| {
+            log::warn!("app icon self-heal failed: {error:#}");
+            false
+        })
 }
 
 fn write_desktop_entries(
