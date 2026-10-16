@@ -26,6 +26,9 @@ TARGET_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 ATTESTATION_PREFIX = "qol/release-candidate"
 HOST_ID = "qol-tray"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+CANDIDATE_WORKFLOW_PATH = ".github/workflows/plugin-version.yml"
+CANDIDATE_EVENTS = {"workflow_run", "workflow_dispatch"}
+ATTESTATION_CREATOR = "github-actions[bot]"
 PLAN_CI_JOB = "Plan affected crates"
 CHECK_CI_JOB_PREFIX = "lint + test ("
 REQUIRED_CI_JOBS = {
@@ -255,7 +258,29 @@ def require_attestation(
         raise RuntimeError(
             f"{tag.value} attestation does not point to a trusted workflow run"
         )
+    creator = (status.get("creator") or {}).get("login")
+    if creator != ATTESTATION_CREATOR:
+        raise RuntimeError(
+            f"{tag.value} attestation was posted by {creator!r}, not {ATTESTATION_CREATOR}"
+        )
     return status
+
+
+def require_candidate_run(run: dict, run_id: int, repo: str) -> None:
+    checks = {
+        "id": run.get("id") == run_id,
+        "path": run.get("path") == CANDIDATE_WORKFLOW_PATH,
+        "event": run.get("event") in CANDIDATE_EVENTS,
+        "head_branch": run.get("head_branch") == "main",
+        "repository": (run.get("repository") or {}).get("full_name") == repo,
+        "head_repository": (run.get("head_repository") or {}).get("full_name") == repo,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError(
+            f"attested run {run_id} is not a Versioning run on main: "
+            + ", ".join(failed)
+        )
 
 
 def attestation_run_id(target_url: str, repo: str) -> int | None:
@@ -702,6 +727,7 @@ def verify_command(args: argparse.Namespace) -> None:
     started_at = utc_now()
     status = require_attestation(tag, commit_statuses(repo, sha), repo)
     run_id = attestation_run_id(status["target_url"], repo)
+    require_candidate_run(exact_ci_run(repo, run_id), run_id, repo)
     emit_github_output(args.github_output, {"run_id": run_id})
     report = {
         "name": "release-candidate-verification",

@@ -633,6 +633,7 @@ class AttestationTests(unittest.TestCase):
                 "state": "success",
                 "created_at": "2026-07-30T11:00:00Z",
                 "target_url": "https://github.com/qol-tools/qol/actions/runs/1",
+                "creator": {"login": "github-actions[bot]"},
             },
         ]
 
@@ -652,8 +653,40 @@ class AttestationTests(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(rc.attestation_run_id(url, repo), expected)
 
+    def candidate_run(self, **changes):
+        repository = {"full_name": "qol-tools/qol"}
+        run = {
+            "id": 77,
+            "path": ".github/workflows/plugin-version.yml",
+            "event": "workflow_run",
+            "head_branch": "main",
+            "repository": repository,
+            "head_repository": repository,
+        }
+        return {**run, **changes}
+
+    def test_candidate_files_come_only_from_a_versioning_run_on_main(self):
+        rc.require_candidate_run(self.candidate_run(), 77, "qol-tools/qol")
+        rc.require_candidate_run(
+            self.candidate_run(event="workflow_dispatch"), 77, "qol-tools/qol"
+        )
+        cases = [
+            ({"id": 78}, "id"),
+            ({"path": ".github/workflows/ci.yml"}, "path"),
+            ({"event": "pull_request"}, "event"),
+            ({"head_branch": "feature"}, "head_branch"),
+            ({"head_repository": {"full_name": "fork/qol"}}, "head_repository"),
+        ]
+        for changes, failed in cases:
+            with self.subTest(failed=failed):
+                with self.assertRaisesRegex(RuntimeError, failed):
+                    rc.require_candidate_run(
+                        self.candidate_run(**changes), 77, "qol-tools/qol"
+                    )
+
+    @patch.object(rc, "exact_ci_run")
     @patch.object(rc, "commit_statuses")
-    def test_verify_hands_the_candidate_run_to_the_publish_job(self, statuses):
+    def test_verify_hands_the_candidate_run_to_the_publish_job(self, statuses, exact_run):
         tag = rc.parse_release_tags("qol-tray-v3.41.1")[0]
         statuses.return_value = [
             {
@@ -661,8 +694,10 @@ class AttestationTests(unittest.TestCase):
                 "state": "success",
                 "created_at": "2026-07-30T11:00:00Z",
                 "target_url": "https://github.com/qol-tools/qol/actions/runs/77",
+                "creator": {"login": "github-actions[bot]"},
             }
         ]
+        exact_run.return_value = self.candidate_run()
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "github-output"
             args = rc.build_parser().parse_args(
@@ -695,6 +730,16 @@ class AttestationTests(unittest.TestCase):
                     "state": "success",
                     "created_at": "2026-07-30T11:00:00Z",
                     "target_url": "https://example.invalid/run/1",
+                    "creator": {"login": "github-actions[bot]"},
+                }
+            ],
+            [
+                {
+                    "context": rc.attestation_context(tag),
+                    "state": "success",
+                    "created_at": "2026-07-30T11:00:00Z",
+                    "target_url": "https://github.com/qol-tools/qol/actions/runs/1",
+                    "creator": {"login": "someone"},
                 }
             ],
         ]
@@ -732,6 +777,7 @@ class AttestationTests(unittest.TestCase):
             "state": "success",
             "created_at": "2026-07-30T11:00:00Z",
             "target_url": "https://github.com/qol-tools/qol/actions/runs/1",
+            "creator": {"login": "github-actions[bot]"},
         }
         run.return_value = subprocess.CompletedProcess(
             args=[],
