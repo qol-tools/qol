@@ -98,10 +98,7 @@ fn detail_width(toast: &Toast) -> f32 {
     super::pile::CARD_WIDTH - lead - qol_theme::toast::CLOSE
 }
 
-/// The card's height for its words: the source line, the title, the detail
-/// lines and the button bar, never less than the resting card.
-pub(super) fn fit_height(toast: &Toast, detail_lines: usize) -> f32 {
-    use qol_theme::toast::{ACTION_BAR, HEIGHT, HEIGHT_STEP, MARK};
+fn words_height(toast: &Toast, detail_lines: usize) -> f32 {
     let detail = if toast.message.is_empty() {
         0.0
     } else if toast.message_is_path {
@@ -110,12 +107,20 @@ pub(super) fn fit_height(toast: &Toast, detail_lines: usize) -> f32 {
         qol_theme::SPACE_STACK
             + line_of(TextStyle::Detail) * detail_lines.clamp(1, DETAIL_LINES) as f32
     };
-    let words = 2.0 * qol_theme::SPACE_CELL
-        + MARK.max(line_of(TextStyle::Detail))
+    2.0 * qol_theme::SPACE_CELL
+        + qol_theme::toast::MARK.max(line_of(TextStyle::Detail))
         + qol_theme::SPACE_STACK
         + line_of(TextStyle::Title)
-        + detail;
-    let body = ((words / HEIGHT_STEP).round() * HEIGHT_STEP).max(HEIGHT);
+        + detail
+}
+
+/// The card's height for its words: the source line, the title, the detail
+/// lines, the window's border and the button bar, never less than the
+/// resting card.
+pub(super) fn fit_height(toast: &Toast, detail_lines: usize) -> f32 {
+    use qol_theme::toast::{ACTION_BAR, HEIGHT, HEIGHT_STEP};
+    let framed = words_height(toast, detail_lines) + 2.0 * qol_theme::LINE;
+    let body = ((framed / HEIGHT_STEP).ceil() * HEIGHT_STEP).max(HEIGHT);
     if toast.actions.is_empty() {
         body
     } else {
@@ -566,16 +571,26 @@ pub(super) fn card_id(id: RowId) -> (&'static str, u64) {
 mod tests {
     use std::time::Duration;
 
-    use super::{age_label, fit_height, tone_ground};
+    use super::{age_label, fit_height, tone_ground, words_height};
     use crate::toast::{Toast, ToastLayout, ToastTone};
 
     #[test]
     fn a_card_is_as_tall_as_its_words_and_never_below_the_resting_card() {
         let rest = qol_theme::toast::HEIGHT;
+        let bare = Toast::new("Saved", "", ToastLayout::default());
+        assert_eq!(fit_height(&bare, 1), rest);
         let plain = Toast::new("Saved", "One line of detail", ToastLayout::default());
-        assert_eq!(fit_height(&plain, 1), rest);
+        for lines in [1, 2] {
+            let inside = fit_height(&plain, lines) - 2.0 * qol_theme::LINE;
+            assert!(
+                inside >= words_height(&plain, lines),
+                "{lines} detail lines must fit inside the border"
+            );
+        }
+        let short = fit_height(&plain, 1);
+        assert_eq!(short % qol_theme::toast::HEIGHT_STEP, 0.0);
         let long = fit_height(&plain, 2);
-        assert!(long > rest, "a second detail line grows the card");
+        assert!(long > short, "a second detail line grows the card");
         assert_eq!(long % qol_theme::toast::HEIGHT_STEP, 0.0);
         assert_eq!(
             fit_height(&plain, 9),
@@ -583,7 +598,7 @@ mod tests {
             "the detail clamps to two lines"
         );
         let asking = plain.action("Open", |_| Ok(()));
-        assert_eq!(fit_height(&asking, 1), rest + qol_theme::toast::ACTION_BAR);
+        assert_eq!(fit_height(&asking, 1), short + qol_theme::toast::ACTION_BAR);
     }
 
     #[test]
