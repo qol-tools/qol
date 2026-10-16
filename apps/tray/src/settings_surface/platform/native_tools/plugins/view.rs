@@ -1,12 +1,12 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::{
     canvas, div, AnyElement, App, AsyncApp, Bounds, Context, Div, FocusHandle, Focusable,
-    KeyDownEvent, Pixels, Render, ScrollWheelEvent, WeakEntity, Window,
+    KeyDownEvent, Pixels, Render, ScrollWheelEvent, Subscription, WeakEntity, Window,
 };
 use qol_gpui::deck;
 use qol_gpui::key::Key;
@@ -26,7 +26,7 @@ use qol_gpui::settings_panel::{
 use qol_gpui::text_edit::{self, TextField};
 
 use super::data;
-use super::model::{self, Enter, Level, Row, RowAction, RowKind, Snapshot, Visit};
+use super::model::{self, Enter, Level, NewInstalls, Row, RowAction, RowKind, Snapshot, Visit};
 
 const MAX_VISIBLE: usize = 10;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -42,14 +42,14 @@ pub(super) struct PluginsView {
     level: Level,
     return_to: usize,
     requested: Vec<String>,
-    seen: BTreeSet<String>,
+    installs: NewInstalls,
     naming: bool,
     adding: bool,
     field: TextField,
     selected: usize,
     list: ScrollList,
     last_render: Option<Instant>,
-    poll_skipped: bool,
+    activation: Option<Subscription>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     row_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     step: usize,
@@ -72,14 +72,14 @@ impl PluginsView {
             level: Level::Plugins,
             return_to: 1,
             requested: Vec::new(),
-            seen: BTreeSet::new(),
+            installs: NewInstalls::default(),
             naming: false,
             adding: false,
             field: TextField::new(),
             selected: 1,
             list: ScrollList::new(MAX_VISIBLE),
             last_render: None,
-            poll_skipped: false,
+            activation: None,
             body_bounds: Rc::new(Cell::new(None)),
             row_bounds: Rc::new(RefCell::new(HashMap::new())),
             step: 0,
@@ -126,29 +126,25 @@ impl PluginsView {
             .last_render
             .is_none_or(|last| last.elapsed() < POLL_STALE_AFTER);
         if !due {
-            self.poll_skipped = true;
+            self.installs.forget();
         }
         due
     }
 
     fn apply_snapshot(&mut self, snapshot: Snapshot) {
-        if self.poll_skipped {
-            self.poll_skipped = false;
-            self.seen.retain(|id| {
-                snapshot
-                    .plugins
-                    .iter()
-                    .any(|plugin| &plugin.id == id && model::in_queue(plugin.state))
-            });
-        }
-        self.seen.extend(
-            snapshot
-                .plugins
-                .iter()
-                .filter(|plugin| model::in_queue(plugin.state))
-                .map(|plugin| plugin.id.clone()),
-        );
+        self.installs.observe(&snapshot);
         self.snapshot = Some(snapshot);
+    }
+
+    fn watch_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.activation.is_some() {
+            return;
+        }
+        self.installs.watch(window.is_window_active());
+        self.activation = Some(cx.observe_window_activation(window, |view, window, cx| {
+            view.installs.watch(window.is_window_active());
+            cx.notify();
+        }));
     }
 
     fn rows(&self) -> Vec<Row> {
@@ -160,7 +156,7 @@ impl PluginsView {
                 snapshot,
                 &Visit {
                     requested: &self.requested,
-                    seen: &self.seen,
+                    seen: self.installs.ids(),
                 },
             ),
             Level::Sources => model::source_rows(snapshot, self.naming),
@@ -177,7 +173,7 @@ impl PluginsView {
     fn run(&mut self, action: RowAction, cx: &mut Context<Self>) {
         if let RowAction::Install(id) = &action {
             self.requested.push(id.clone());
-            self.seen.insert(id.clone());
+            self.installs.insert(id.clone());
         }
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
@@ -540,6 +536,7 @@ impl Focusable for PluginsView {
 impl Render for PluginsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_render = Some(Instant::now());
+        self.watch_window(window, cx);
         let focused = self.focus.is_focused(window);
         let rows = self.rows();
         self.sync_selection(&rows);
