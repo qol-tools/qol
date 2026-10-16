@@ -56,7 +56,6 @@ pub struct SearchBarStatus<'a> {
 pub struct FlowChip<'a> {
     pub title: &'a str,
     pub art: Option<&'a Path>,
-    pub copied: bool,
 }
 
 pub fn search_bar(
@@ -256,7 +255,6 @@ fn chip_key(key: Key, key_ink: u32) -> Div {
 
 fn flow_chip(chip: FlowChip<'_>) -> Stateful<Div> {
     let (ink, key_ink) = chip_inks();
-    let label = if chip.copied { "Copied" } else { chip.title };
     chip_frame(ink)
         .id("launcher-search-mode")
         .children(
@@ -264,8 +262,8 @@ fn flow_chip(chip: FlowChip<'_>) -> Stateful<Div> {
                 .and_then(launcher_mark)
                 .map(|drawn| mark(drawn, TextStyle::Label.spec().size, ink)),
         )
-        .child(cased(TextStyle::Label, label))
-        .when(!chip.copied, |chip| chip.child(chip_key(Key::ESC, key_ink)))
+        .child(cased(TextStyle::Label, chip.title))
+        .child(chip_key(Key::ESC, key_ink))
 }
 
 fn mode_chip(

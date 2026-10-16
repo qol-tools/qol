@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui::{AppContext as _, AsyncApp, ClipboardItem, Context, WeakEntity, Window};
 use qol_config::contract::RowActionSpec;
 use qol_plugin_api::launcher_flows::FlowEnter;
@@ -9,7 +7,6 @@ use super::super::LauncherView;
 use super::{clipboard_item, finishes_flow};
 use crate::flow::FlowEntry;
 
-const COPIED_HOLD: Duration = Duration::from_millis(350);
 const COPY_ACTION: &str = "copy";
 
 impl LauncherView {
@@ -118,13 +115,13 @@ impl LauncherView {
         cx: &mut Context<Self>,
     ) {
         match enter {
-            FlowEnter::Copy | FlowEnter::Paste => self.copy_flow_row(cx),
+            FlowEnter::Copy | FlowEnter::Paste => self.copy_flow_row(window, cx),
             FlowEnter::Action(id) => self.run_enter_action(&id, window, cx),
             FlowEnter::Detail => {}
         }
     }
 
-    fn copy_flow_row(&mut self, cx: &mut Context<Self>) {
+    fn copy_flow_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
@@ -154,30 +151,9 @@ impl LauncherView {
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
-        flow.copied = true;
         flow.sheet = false;
-        let epoch = flow.epoch;
         trace::flow(self, "copied");
-        cx.notify();
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx.background_executor().timer(COPIED_HOLD).await;
-                this.update(&mut async_cx, |view, cx| {
-                    let current = view
-                        .state
-                        .flow
-                        .as_ref()
-                        .is_some_and(|session| session.epoch == epoch && session.copied);
-                    if current && view.is_showing {
-                        view.request_dismiss("copy");
-                        cx.notify();
-                    }
-                })
-                .ok();
-            }
-        })
-        .detach();
+        self.hide_to_ghost("copy", window);
     }
 
     fn run_enter_action(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {

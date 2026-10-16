@@ -98,7 +98,7 @@ input = { id = "{id}" }
 
 `RowActionSpec` (`libs/config/src/contract/v1.rs`) already carries `action`, `input`, `label`, `description`, `key` and `when`; the launcher only has to honour `key` for flow rows.
 `enter` is the one new verb. `copy` writes the row's `copy` text (or `copy_image`, see below) through gpui's clipboard, shows "Copied …" on the search line, and hides the launcher.
-A row without `copy` text (a secret, or a clip too big to send inline) is copied by the plugin: ↵ runs the declared `copy` row action with the row's id and still shows COPIED. A row action without a `key` is never shown as a key hint and never matches a key.
+A row without `copy` text (a secret, or a clip too big to send inline) is copied by the plugin: ↵ runs the declared `copy` row action with the row's id. A row action without a `key` is never shown as a key hint and never matches a key.
 
 ### Row schema (version 1)
 
@@ -234,7 +234,7 @@ The frame keeps its size for every kind: text fills it as a code block, an image
 
 **Preview.** Space opens a sheet over the whole launcher (8 in from the window's sides, under the search field): the same head band with "↵ copy all" and "esc close" on its right, then the clip's detail in the same frame. A very long clip shows its head and its tail, with their real line numbers, and a "N lines" divider between them. The sheet overlays; nothing under it moves. Esc or space closes it.
 
-**After ↵.** The mode chip in the search field turns from CLIPBOARD to COPIED; the field and list stay as they are, and the launcher hides 350 ms later so the change is seen.
+**After ↵.** The launcher hides at once; nothing is held on screen to show the copy.
 
 ## Launcher work this needs (all generic)
 
