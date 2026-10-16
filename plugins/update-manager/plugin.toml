@@ -4,7 +4,7 @@ uid = "4d185145-2f3e-466a-aa80-5efd11ae7a49"
 name = "Update Manager"
 icon = "updates"
 description = "See what updates wait, install them when you choose, and restart when it suits you"
-version = "0.2.0"
+version = "0.3.0"
 author = "KMRH47"
 platforms = ["linux"]
 
