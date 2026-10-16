@@ -121,8 +121,8 @@ impl SharedState {
             return;
         };
         self.refresh_monitors_synchronously(facade);
-        self.refresh_cursor_synchronously(facade);
         self.refresh_focus_synchronously(facade);
+        self.refresh_cursor_synchronously(facade);
     }
 
     fn refresh_monitors_synchronously(&self, facade: &SharedPlatform) {
@@ -503,6 +503,37 @@ mod tests {
         assert!(!shared.holds_focus(Some(at(800.0))));
         assert!(!shared.focus_held());
         assert!(!shared.holds_focus(Some(at(0.0))));
+    }
+
+    struct Desktop {
+        cursor: (f32, f32),
+        focused: MonitorBounds,
+    }
+
+    impl Platform for Desktop {
+        fn cursor_position(&self) -> Option<(f32, f32)> {
+            Some(self.cursor)
+        }
+
+        fn focused_window_bounds(&self) -> Option<MonitorBounds> {
+            Some(self.focused)
+        }
+
+        fn physical_monitors(&self) -> Vec<MonitorBounds> {
+            vec![at(0.0), at(800.0)]
+        }
+    }
+
+    #[test]
+    fn a_fresh_tray_puts_the_active_monitor_under_the_cursor() {
+        let shared = SharedState::new(Vec::new());
+        shared.attach_platform(std::sync::Arc::new(Desktop {
+            cursor: (100.0, 100.0),
+            focused: at(800.0),
+        }));
+        shared.refresh_snapshot_synchronously();
+        let active = shared.with_input(|input| state::pick_active_monitor(input));
+        assert_eq!(active, Some(at(0.0)));
     }
 
     #[test]
