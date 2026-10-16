@@ -6,9 +6,17 @@ use super::InstallerOps;
 
 pub(in crate::installer) mod desktop_entry;
 
-const ICON_64: &[u8] = include_bytes!("../../../../assets/icons/64.png");
-const ICON_128: &[u8] = include_bytes!("../../../../assets/icons/128.png");
-const ICON_256: &[u8] = include_bytes!("../../../../assets/icons/256.png");
+const ICONS: [(u32, &[u8]); 9] = [
+    (16, include_bytes!("../../../../assets/icons/16.png")),
+    (22, include_bytes!("../../../../assets/icons/22.png")),
+    (24, include_bytes!("../../../../assets/icons/24.png")),
+    (32, include_bytes!("../../../../assets/icons/32.png")),
+    (48, include_bytes!("../../../../assets/icons/48.png")),
+    (64, include_bytes!("../../../../assets/icons/64.png")),
+    (128, include_bytes!("../../../../assets/icons/128.png")),
+    (256, include_bytes!("../../../../assets/icons/256.png")),
+    (512, include_bytes!("../../../../assets/icons/512.png")),
+];
 
 pub(super) struct Platform;
 
@@ -85,16 +93,11 @@ impl InstallerOps for Platform {
 
 fn install_icons() -> Result<()> {
     let data_dir = dirs::data_dir().context("Could not determine data directory")?;
-    let icons = [
-        ("64x64", ICON_64),
-        ("128x128", ICON_128),
-        ("256x256", ICON_256),
-    ];
-    for (size, data) in icons {
+    for (size, data) in ICONS {
         let icon_dir = data_dir
             .join("icons")
             .join("hicolor")
-            .join(size)
+            .join(format!("{size}x{size}"))
             .join("apps");
         std::fs::create_dir_all(&icon_dir)?;
         std::fs::write(icon_dir.join("qol-tray.png"), data)?;

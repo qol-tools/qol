@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use tray_icon::Icon;
 
+pub(crate) const ICON_SIZE: u32 = 64;
+
 pub enum PlatformTray {}
 
 pub(crate) fn request_shutdown(shutdown_tx: &broadcast::Sender<()>) {

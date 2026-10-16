@@ -12,6 +12,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 type ShutdownFn = Box<dyn FnOnce() + Send>;
 static SHUTDOWN_FN: OnceLock<Mutex<Option<ShutdownFn>>> = OnceLock::new();
 
+pub(crate) const ICON_SIZE: u32 = 64;
+
 pub enum PlatformTray {
     MacOS { _tray_icon: TrayIcon },
 }

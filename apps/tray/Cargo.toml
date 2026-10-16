@@ -216,7 +216,15 @@ assets = [
     ["target/release/qol-resident-policy", "usr/lib/qol-tray/", "755"],
     ["scripts/installer/platform/linux/desktop/qol-tray.desktop", "usr/share/applications/", "644"],
     ["scripts/installer/platform/linux/desktop/qol-tray.desktop", "etc/xdg/autostart/", "644"],
-    ["assets/icon.png", "usr/share/icons/hicolor/64x64/apps/qol-tray.png", "644"],
+    ["assets/icons/16.png", "usr/share/icons/hicolor/16x16/apps/qol-tray.png", "644"],
+    ["assets/icons/22.png", "usr/share/icons/hicolor/22x22/apps/qol-tray.png", "644"],
+    ["assets/icons/24.png", "usr/share/icons/hicolor/24x24/apps/qol-tray.png", "644"],
+    ["assets/icons/32.png", "usr/share/icons/hicolor/32x32/apps/qol-tray.png", "644"],
+    ["assets/icons/48.png", "usr/share/icons/hicolor/48x48/apps/qol-tray.png", "644"],
+    ["assets/icons/64.png", "usr/share/icons/hicolor/64x64/apps/qol-tray.png", "644"],
+    ["assets/icons/128.png", "usr/share/icons/hicolor/128x128/apps/qol-tray.png", "644"],
+    ["assets/icons/256.png", "usr/share/icons/hicolor/256x256/apps/qol-tray.png", "644"],
+    ["assets/icons/512.png", "usr/share/icons/hicolor/512x512/apps/qol-tray.png", "644"],
     ["../../libs/gpui/assets/fonts/OFL.txt", "usr/share/doc/qol-tray/IBM-Plex-OFL.txt", "644"],
 ]
 maintainer-scripts = "scripts/installer/platform/linux/debian/"
