@@ -35,10 +35,10 @@ fn tone_from_cinnamon_theme(name: &str) -> PanelTone {
 }
 
 fn tone_from_color_scheme(scheme: &str) -> PanelTone {
-    if unquote(scheme) == "prefer-dark" {
-        PanelTone::Dark
-    } else {
+    if unquote(scheme) == "prefer-light" {
         PanelTone::Light
+    } else {
+        PanelTone::Dark
     }
 }
 
@@ -83,13 +83,13 @@ mod tests {
     }
 
     #[test]
-    fn only_prefer_dark_color_scheme_is_dark() {
+    fn only_prefer_light_color_scheme_is_light() {
         let cases = [
             ("'prefer-dark'\n", PanelTone::Dark),
             ("prefer-dark", PanelTone::Dark),
             ("'prefer-light'\n", PanelTone::Light),
-            ("'default'\n", PanelTone::Light),
-            ("", PanelTone::Light),
+            ("'default'\n", PanelTone::Dark),
+            ("", PanelTone::Dark),
         ];
         for (scheme, expected) in cases {
             assert_eq!(tone_from_color_scheme(scheme), expected, "{scheme:?}");
