@@ -375,33 +375,7 @@ impl SettingsWindowHost {
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
-        self.activate_prepared_with_custom_mode(
-            prepared,
-            custom_factories,
-            false,
-            false,
-            tracker,
-            cx,
-        )
-    }
-
-    /// Opens the panel where it was saved, ignoring which monitor has focus,
-    /// so a window reopened after a restart comes back exactly where it was.
-    pub fn restore_prepared_with_custom(
-        &mut self,
-        prepared: PreparedSettingsPanel,
-        custom_factories: Vec<(String, CustomPanelFactory)>,
-        tracker: &MonitorTracker,
-        cx: &mut App,
-    ) -> anyhow::Result<SettingsActivation> {
-        self.activate_prepared_with_custom_mode(
-            prepared,
-            custom_factories,
-            false,
-            true,
-            tracker,
-            cx,
-        )
+        self.activate_prepared_with_custom_mode(prepared, custom_factories, false, tracker, cx)
     }
 
     pub fn activate_prepared_with_custom_force(
@@ -411,14 +385,7 @@ impl SettingsWindowHost {
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
-        self.activate_prepared_with_custom_mode(
-            prepared,
-            custom_factories,
-            true,
-            false,
-            tracker,
-            cx,
-        )
+        self.activate_prepared_with_custom_mode(prepared, custom_factories, true, tracker, cx)
     }
 
     fn activate_prepared_with_custom_mode(
@@ -426,7 +393,6 @@ impl SettingsWindowHost {
         prepared: PreparedSettingsPanel,
         custom_factories: Vec<(String, CustomPanelFactory)>,
         force_replace: bool,
-        restore_saved: bool,
         tracker: &MonitorTracker,
         cx: &mut App,
     ) -> anyhow::Result<SettingsActivation> {
@@ -447,12 +413,7 @@ impl SettingsWindowHost {
             return Ok(SettingsActivation::Focused);
         }
 
-        let saved = restore_saved
-            .then(|| settings_surface().remembered_monitor(cx))
-            .flatten();
-        let monitor = saved
-            .clone()
-            .or_else(|| panel_monitor(self.active.as_ref(), tracker, cx));
+        let monitor = panel_monitor(self.active.as_ref(), tracker, cx);
         let prepared = size_prepared_panel(prepared, monitor)?;
         if (force_replace || decision == ActivationDecision::Replace || !can_focus)
             && self.active_is_open(cx)
@@ -465,7 +426,6 @@ impl SettingsWindowHost {
             prepared,
             custom_factories,
             self.notifier(),
-            saved.as_ref(),
             tracker,
             cx,
         )?);
@@ -793,15 +753,7 @@ pub async fn open_from_async(
     let prepared = prepare_from_async(panel, runtime, cx).await?;
     cx.update(move |cx| {
         let prepared = size_prepared_panel(prepared, panel_monitor(None, &tracker, cx))?;
-        open_prepared(
-            prepared,
-            Vec::new(),
-            Rc::new(|_, _, _| {}),
-            None,
-            &tracker,
-            cx,
-        )
-        .map(|_| ())
+        open_prepared(prepared, Vec::new(), Rc::new(|_, _, _| {}), &tracker, cx).map(|_| ())
     })?
 }
 
@@ -1085,29 +1037,24 @@ fn open_prepared(
     prepared: PreparedPanel,
     custom_factories: Vec<(String, CustomPanelFactory)>,
     notify: CustomPanelNotifier,
-    saved: Option<&ActiveMonitor>,
     tracker: &MonitorTracker,
     cx: &mut App,
 ) -> anyhow::Result<ActivePanel> {
     let plugin_id = prepared.panel.primary_plugin_id().to_string();
     let title = prepared.panel.heading.clone();
-    let surface = settings_surface().title(title).size(prepared.size);
-    let build = move |dismisser: SurfaceDismisser,
-                      _window: &mut Window,
-                      cx: &mut Context<SettingsPanelView>| {
-        SettingsPanelView::new(
-            prepared.panel,
-            prepared.state,
-            dismisser,
-            custom_factories,
-            notify,
-            cx,
-        )
-    };
-    let opened = match saved {
-        Some(monitor) => surface.show_focused_on(monitor, cx, build)?,
-        None => surface.show_focused(tracker, cx, build)?,
-    };
+    let opened = settings_surface()
+        .title(title)
+        .size(prepared.size)
+        .show_focused(tracker, cx, move |dismisser, _window, cx| {
+            SettingsPanelView::new(
+                prepared.panel,
+                prepared.state,
+                dismisser,
+                custom_factories,
+                notify,
+                cx,
+            )
+        })?;
     Ok(ActivePanel {
         plugin_id,
         surface: opened,

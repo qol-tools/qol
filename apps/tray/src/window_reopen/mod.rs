@@ -76,7 +76,7 @@ fn reopen(plugin_manager: &Arc<Mutex<PluginManager>>, window: Reopen) {
         Reopen::Settings { page } => {
             let _ = crate::settings_surface::wait_until_ready(SETTINGS_READY_TIMEOUT);
             let page = page.unwrap_or_else(|| SETTINGS_FALLBACK_PAGE.to_string());
-            if let Err(error) = crate::settings_surface::reopen(&page) {
+            if let Err(error) = crate::settings_surface::request(&page) {
                 log::warn!("[window-state] failed to reopen settings on {page}: {error:#}");
             }
         }

@@ -72,7 +72,7 @@ pub(crate) fn monitor_for_point(
 pub(crate) fn pick_active_monitor(state: &InputState) -> Option<MonitorBounds> {
     match (state.cursor.as_ref(), state.focus.as_ref()) {
         (Some(cursor), Some(focus)) => {
-            let cursor_wins = cursor.at > focus.at;
+            let cursor_wins = cursor.at >= focus.at;
             log_pick_both(cursor, focus, cursor_wins);
             Some(if cursor_wins {
                 cursor.monitor
@@ -380,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_active_monitor_breaks_equal_timestamp_tie_in_favor_of_focus() {
+    fn pick_active_monitor_breaks_equal_timestamp_tie_in_favor_of_cursor() {
         let now = Instant::now();
         let cursor_mon = mon(100.0, 0.0, 800.0, 600.0);
         let focus_mon = mon(900.0, 0.0, 800.0, 600.0);
@@ -394,7 +394,7 @@ mod tests {
                 at: now,
             }),
         };
-        assert_eq!(pick_active_monitor(&state), Some(focus_mon));
+        assert_eq!(pick_active_monitor(&state), Some(cursor_mon));
     }
 
     #[cfg(debug_assertions)]

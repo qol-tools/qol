@@ -20,7 +20,6 @@ use crate::settings_surface::{CoreTool, HostBoot};
 #[derive(Debug)]
 enum Command {
     Open(String),
-    Reopen(String),
     Toast(Box<ToastCommand>),
     ThemeChanged,
     PluginsChanged,
@@ -428,14 +427,7 @@ fn run_host(initial: Option<String>) -> anyhow::Result<()> {
             let activation_host = host.clone();
             let activation_tracker = tracker.clone();
             cx.spawn(async move |cx| {
-                activate(
-                    activation_host.clone(),
-                    activation_tracker,
-                    plugin_id,
-                    false,
-                    cx,
-                )
-                .await;
+                activate(activation_host.clone(), activation_tracker, plugin_id, cx).await;
                 remember_active_page(&activation_host, cx);
             })
             .detach();
@@ -464,12 +456,7 @@ fn spawn_command_loop(
                         "SURFACE_ACTIVATION",
                         "plugin={plugin_id} phase=command outcome=received"
                     );
-                    activate(host.clone(), tracker, plugin_id, false, &cx).await;
-                    remember_active_page(&host, &cx);
-                    LoopFlow::Continue
-                }
-                Command::Reopen(plugin_id) => {
-                    activate(host.clone(), tracker, plugin_id, true, &cx).await;
+                    activate(host.clone(), tracker, plugin_id, &cx).await;
                     remember_active_page(&host, &cx);
                     LoopFlow::Continue
                 }
@@ -655,7 +642,6 @@ async fn activate(
     host: Rc<RefCell<SettingsWindowHost>>,
     tracker: MonitorTracker,
     plugin_id: String,
-    restore_saved: bool,
     cx: &gpui::AsyncApp,
 ) {
     if let Some(tool) = CoreTool::from_wire_id(&plugin_id) {
@@ -706,13 +692,6 @@ async fn activate(
                                 let mut host = activation_host.borrow_mut();
                                 if matches!(tool, CoreTool::AddHotkey | CoreTool::AddShortcut) {
                                     host.activate_prepared_with_custom_force(
-                                        prepared,
-                                        custom_factories,
-                                        &activation_tracker,
-                                        cx,
-                                    )
-                                } else if restore_saved {
-                                    host.restore_prepared_with_custom(
                                         prepared,
                                         custom_factories,
                                         &activation_tracker,
@@ -802,22 +781,12 @@ async fn activate(
                         let activation_host = host.clone();
                         let custom_factories = super::native_tools::factories(CoreTool::Shortcuts);
                         cx.update(move |cx| {
-                            let mut host = activation_host.borrow_mut();
-                            if restore_saved {
-                                host.restore_prepared_with_custom(
-                                    prepared,
-                                    custom_factories,
-                                    &tracker,
-                                    cx,
-                                )
-                            } else {
-                                host.activate_prepared_with_custom(
-                                    prepared,
-                                    custom_factories,
-                                    &tracker,
-                                    cx,
-                                )
-                            }
+                            activation_host.borrow_mut().activate_prepared_with_custom(
+                                prepared,
+                                custom_factories,
+                                &tracker,
+                                cx,
+                            )
                         })
                         .and_then(|result| result)
                     }
@@ -1004,28 +973,12 @@ fn resolved_plugins() -> anyhow::Result<Vec<crate::plugins::resolver::ResolvedPl
     Ok(crate::plugins::resolver::resolve_effective_registry(&registry, &config_dir).plugins)
 }
 
-/// Reopens the settings window where it was saved, for a window that was open
-/// before qol-tray restarted. Falls back to a plain open when no host answers.
-pub(in crate::settings_surface) fn reopen(plugin_id: &str) -> anyhow::Result<bool> {
-    if !crate::paths::is_safe_path_component(plugin_id) {
-        bail!("invalid plugin ID for native settings: {plugin_id}");
-    }
-    if forward(plugin_id, "reopen") {
-        return Ok(true);
-    }
-    request(plugin_id)
-}
-
 fn forward_open(plugin_id: &str) -> bool {
-    forward(plugin_id, "open")
-}
-
-fn forward(plugin_id: &str, action: &str) -> bool {
     let config = config();
     matches!(
         core_daemon::send_request(
             &config,
-            action,
+            "open",
             serde_json::json!({ "plugin_id": plugin_id }),
             Duration::from_millis(500),
         ),
@@ -1079,18 +1032,6 @@ pub(in crate::settings_surface) fn show_toast(
     ))
 }
 
-fn plugin_command(request: &DaemonRequest, command: fn(String) -> Command) -> ReadResult<Command> {
-    request
-        .input
-        .get("plugin_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|plugin_id| crate::paths::is_safe_path_component(plugin_id))
-        .map(|plugin_id| ReadResult::Command(command(plugin_id.to_string())))
-        .unwrap_or_else(|| {
-            ReadResult::Error(format!("{} requires a valid plugin_id", request.action))
-        })
-}
-
 fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
     match request.action.as_str() {
         "ping" => ReadResult::Handled,
@@ -1099,8 +1040,13 @@ fn parse_request(request: &DaemonRequest) -> ReadResult<Command> {
         action if action == "theme" || action.starts_with("theme ") => {
             ReadResult::Command(Command::ThemeChanged)
         }
-        "open" => plugin_command(request, Command::Open),
-        "reopen" => plugin_command(request, Command::Reopen),
+        "open" => request
+            .input
+            .get("plugin_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|plugin_id| crate::paths::is_safe_path_component(plugin_id))
+            .map(|plugin_id| ReadResult::Command(Command::Open(plugin_id.to_string())))
+            .unwrap_or_else(|| ReadResult::Error("open requires a valid plugin_id".into())),
         "toast" => {
             let text = |key: &str| {
                 request
@@ -1303,21 +1249,16 @@ mod tests {
             ("", false),
         ];
         for (plugin_id, valid) in cases {
-            for action in ["open", "reopen"] {
-                let request = DaemonRequest {
-                    action: action.into(),
-                    input: serde_json::json!({ "plugin_id": plugin_id }),
-                };
-                let parsed = parse_request(&request);
-                assert_eq!(
-                    matches!(
-                        parsed,
-                        ReadResult::Command(Command::Open(_) | Command::Reopen(_))
-                    ),
-                    valid,
-                    "action={action} plugin_id={plugin_id:?}"
-                );
-            }
+            let request = DaemonRequest {
+                action: "open".into(),
+                input: serde_json::json!({ "plugin_id": plugin_id }),
+            };
+            let parsed = parse_request(&request);
+            assert_eq!(
+                matches!(parsed, ReadResult::Command(Command::Open(_))),
+                valid,
+                "plugin_id={plugin_id:?}"
+            );
         }
     }
 
