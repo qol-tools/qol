@@ -1,12 +1,12 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DesktopEnvironment {
+pub enum DesktopEnvironment {
     Gnome,
     Cinnamon,
     Kde,
     Unknown,
 }
 
-pub(crate) fn classify_desktop(raw: &str) -> DesktopEnvironment {
+pub fn classify_desktop(raw: &str) -> DesktopEnvironment {
     for part in raw.split(':') {
         match part.trim().to_ascii_lowercase().as_str() {
             "gnome" => return DesktopEnvironment::Gnome,

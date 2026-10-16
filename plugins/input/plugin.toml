@@ -1,0 +1,124 @@
+[plugin]
+id = "qol-input"
+uid = "5332414d-b3c6-462d-b8b7-1e9527acead4"
+name = "Input"
+icon = "input"
+description = "Set how the mouse, touchpad and keyboard respond"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux", "macos", "windows"]
+
+[runtime]
+command = "qol-input"
+
+[action.toggle_touchpad]
+label = "Toggle Touchpad"
+args = ["toggle-touchpad"]
+
+[action.touchpad_on]
+label = "Turn Touchpad On"
+args = ["set", "touchpad", "on"]
+
+[action.touchpad_off]
+label = "Turn Touchpad Off"
+args = ["set", "touchpad", "off"]
+
+[action.set_pointer_speed]
+label = "Set Pointer Speed"
+args = ["set", "pointer-speed"]
+hotkey = false
+
+[action.acceleration_on]
+label = "Turn Mouse Acceleration On"
+args = ["set", "acceleration", "on"]
+hotkey = false
+
+[action.acceleration_off]
+label = "Turn Mouse Acceleration Off"
+args = ["set", "acceleration", "off"]
+hotkey = false
+
+[action.swap_buttons_on]
+label = "Swap Mouse Buttons"
+args = ["set", "swap-buttons", "on"]
+hotkey = false
+
+[action.swap_buttons_off]
+label = "Restore Mouse Buttons"
+args = ["set", "swap-buttons", "off"]
+hotkey = false
+
+[action.set_double_click]
+label = "Set Double-Click Time"
+args = ["set", "double-click"]
+hotkey = false
+
+[action.mouse_natural_scroll_on]
+label = "Turn Mouse Natural Scrolling On"
+args = ["set", "mouse-natural-scroll", "on"]
+hotkey = false
+
+[action.mouse_natural_scroll_off]
+label = "Turn Mouse Natural Scrolling Off"
+args = ["set", "mouse-natural-scroll", "off"]
+hotkey = false
+
+[action.tap_to_click_on]
+label = "Turn Tap to Click On"
+args = ["set", "tap-to-click", "on"]
+hotkey = false
+
+[action.tap_to_click_off]
+label = "Turn Tap to Click Off"
+args = ["set", "tap-to-click", "off"]
+hotkey = false
+
+[action.touchpad_natural_scroll_on]
+label = "Turn Touchpad Natural Scrolling On"
+args = ["set", "touchpad-natural-scroll", "on"]
+hotkey = false
+
+[action.touchpad_natural_scroll_off]
+label = "Turn Touchpad Natural Scrolling Off"
+args = ["set", "touchpad-natural-scroll", "off"]
+hotkey = false
+
+[action.set_touchpad_speed]
+label = "Set Touchpad Speed"
+args = ["set", "touchpad-speed"]
+hotkey = false
+
+[action.set_repeat_delay]
+label = "Set Key Repeat Delay"
+args = ["set", "repeat-delay"]
+hotkey = false
+
+[action.set_repeat_rate]
+label = "Set Key Repeat Rate"
+args = ["set", "repeat-rate"]
+hotkey = false
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+hotkey = false
+
+[daemon]
+enabled = true
+command = "qol-input"
+socket = "/tmp/qol-input.sock"
+
+[capabilities]
+gpui = true
+doctor = true
+
+[menu]
+label = "Input"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-input"
+repo = "qol-tools/qol-input"
+pattern = "qol-input-{os}-{arch}"

@@ -13,9 +13,6 @@ pub trait ThemePlatform {
 mod fallback;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(all(test, not(target_os = "linux")))]
-#[path = "linux/desktop.rs"]
-mod linux_desktop;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "windows"))]

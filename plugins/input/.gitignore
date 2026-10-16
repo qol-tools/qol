@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+qol-input
+qol-input.new
+.cargo/config.toml
