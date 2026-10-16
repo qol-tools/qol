@@ -1787,6 +1787,22 @@ fn settings_ground_text_clears_its_floor_in_every_accent() {
 }
 
 #[test]
+fn warning_and_error_grounds_carry_the_calm_marks() {
+    let dark = Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM);
+    assert_eq!(dark.invalid.mark, 0xe8807f);
+    assert_eq!(dark.attention.mark, 0xdaa36f);
+    assert_eq!(dark.pane.mark, DARK_SYSTEM.accent);
+    let light = Grounds::from_theme(ThemeMode::Light, LIGHT_SYSTEM);
+    for ground in [light.invalid, light.attention, dark.invalid, dark.attention] {
+        assert_eq!(ground.on_mark, ground.bg);
+        assert!(
+            contrast_ratio(ground.on_mark, ground.mark) >= 4.5,
+            "the button words read on the calm mark"
+        );
+    }
+}
+
+#[test]
 fn desktop_theme_preview_matches_the_locked_slate_picture() {
     let preview = desktop_theme_preview(ThemeMode::Dark, "violet");
     assert_eq!(preview.pane, 0x16171a);
@@ -2143,7 +2159,7 @@ fn every_text_takes_a_text_style() {
     }
     assert!(
         problems.is_empty(),
-        "Text is set with .text(TextStyle::…), so every window uses the same eleven styles.\n{}",
+        "Text is set with .text(TextStyle::…), so every window uses the same twelve styles.\n{}",
         problems.join("\n")
     );
 }
@@ -2165,6 +2181,7 @@ fn text_styles_hold_their_approved_values() {
         [
             (Face::Display, 34.0, 600, 1.0, false),
             (Face::Display, 20.0, 600, 1.15, false),
+            (Face::Ui, 20.0, 600, 1.25, false),
             (Face::Display, 11.5, 600, 1.2, false),
             (Face::Ui, 15.0, 500, 1.25, false),
             (Face::Ui, 13.5, 500, 1.25, false),

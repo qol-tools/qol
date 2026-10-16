@@ -43,7 +43,7 @@ impl CaptureStatus {
     ) -> Self {
         Self {
             timeout: Some(timeout),
-            layout: ToastLayout::compact(),
+            layout: ToastLayout::default(),
             ..Self::persistent(context, stage, title, subtitle)
         }
     }

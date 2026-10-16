@@ -32,11 +32,22 @@ static TOAST_HOST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 type Activation = Rc<dyn Fn(&mut App) -> anyhow::Result<()>>;
 
+#[derive(Clone)]
+struct ToastAction {
+    label: SharedString,
+    run: Activation,
+    happy: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastStyle {
-    Compact,
+    Default,
     Status,
 }
+
+/// The wire style that asks for the top-centre banner. Every other style,
+/// including the older "compact", is the default corner card.
+pub const BANNER_STYLE: &str = "banner";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToastLayout {
@@ -45,20 +56,22 @@ pub struct ToastLayout {
     style: ToastStyle,
 }
 
+impl Default for ToastLayout {
+    fn default() -> Self {
+        Self {
+            placement: MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
+            size: size(px(pile::CARD_WIDTH), px(pile::CARD_HEIGHT)),
+            style: ToastStyle::Default,
+        }
+    }
+}
+
 impl ToastLayout {
     pub fn status() -> Self {
         Self {
             placement: MonitorPlacement::top_center(TOP_CENTER_MARGIN),
             size: size(px(pile::CARD_WIDTH), px(qol_theme::toast::MESSAGE_HEIGHT)),
             style: ToastStyle::Status,
-        }
-    }
-
-    pub fn compact() -> Self {
-        Self {
-            placement: MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
-            size: size(px(pile::CARD_WIDTH), px(pile::CARD_HEIGHT)),
-            style: ToastStyle::Compact,
         }
     }
 
@@ -79,8 +92,8 @@ impl ToastLayout {
         style: Option<&str>,
     ) -> Self {
         let base = match style {
-            Some("compact") => ToastLayout::compact(),
-            _ => ToastLayout::status(),
+            Some(BANNER_STYLE) => ToastLayout::status(),
+            _ => ToastLayout::default(),
         };
         let Some(placement) = anchor.and_then(anchor_placement) else {
             return base;
@@ -151,6 +164,7 @@ pub struct Toast {
     key: Option<SharedString>,
     preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
     preview_action: Option<Activation>,
+    actions: Vec<ToastAction>,
     live: bool,
 }
 
@@ -175,6 +189,7 @@ impl Toast {
             key: None,
             preview: None,
             preview_action: None,
+            actions: Vec::new(),
             live: false,
         }
     }
@@ -201,6 +216,34 @@ impl Toast {
         activation: impl Fn(&mut App) -> anyhow::Result<()> + 'static,
     ) -> Self {
         self.activation = Some(Rc::new(activation));
+        self
+    }
+
+    /// Adds the happy-path button, filled with the card's mark.
+    pub fn action(
+        mut self,
+        label: impl Into<SharedString>,
+        run: impl Fn(&mut App) -> anyhow::Result<()> + 'static,
+    ) -> Self {
+        self.actions.push(ToastAction {
+            label: label.into(),
+            run: Rc::new(run),
+            happy: true,
+        });
+        self
+    }
+
+    /// Adds a quiet button beside the happy path.
+    pub fn quiet_action(
+        mut self,
+        label: impl Into<SharedString>,
+        run: impl Fn(&mut App) -> anyhow::Result<()> + 'static,
+    ) -> Self {
+        self.actions.push(ToastAction {
+            label: label.into(),
+            run: Rc::new(run),
+            happy: false,
+        });
         self
     }
 
@@ -287,14 +330,18 @@ impl Toast {
     }
 
     fn is_message(&self) -> bool {
-        self.tone != ToastTone::Danger && self.preview.is_none()
+        self.tone != ToastTone::Danger && self.preview.is_none() && self.actions.is_empty()
     }
 
     fn in_the_pile(mut self) -> Self {
         if self.layout.style() == ToastStyle::Status {
-            self.layout = ToastLayout::compact();
+            self.layout = ToastLayout::default();
         }
         self
+    }
+
+    fn action_run(&self, index: usize) -> Option<Activation> {
+        self.actions.get(index).map(|action| action.run.clone())
     }
 
     fn effective_timeout(&self) -> Option<Duration> {
@@ -438,40 +485,44 @@ mod tests {
     }
 
     #[test]
-    fn for_push_without_layout_is_the_status_preset() {
+    fn for_push_without_layout_is_the_default_card() {
         assert_eq!(
             ToastLayout::for_push(None, None, None, None),
-            ToastLayout::status()
+            ToastLayout::default()
         );
     }
 
     #[test]
-    fn for_push_with_unknown_anchor_falls_back_to_the_status_preset() {
+    fn for_push_with_unknown_anchor_falls_back_to_the_default_card() {
         assert_eq!(
             ToastLayout::for_push(Some("corner"), Some(400.0), Some(84.0), None),
-            ToastLayout::status()
+            ToastLayout::default()
         );
     }
 
     #[test]
-    fn for_push_with_compact_style_is_the_compact_preset_whole() {
+    fn for_push_keeps_the_older_compact_style_as_the_default_card() {
         assert_eq!(
             ToastLayout::for_push(None, None, None, Some("compact")),
-            ToastLayout::compact()
+            ToastLayout::default()
         );
         assert_eq!(
-            ToastLayout::compact().placement(),
+            ToastLayout::default().placement(),
             MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN)
         );
-        assert_eq!(ToastLayout::compact().size().width.to_f64(), 440.0);
-        assert_eq!(ToastLayout::compact().size().height.to_f64(), 84.0);
+        assert_eq!(ToastLayout::default().size().width.to_f64(), 440.0);
+        assert_eq!(ToastLayout::default().size().height.to_f64(), 84.0);
     }
 
     #[test]
-    fn for_push_with_unknown_style_falls_back_to_the_status_preset() {
+    fn for_push_with_the_banner_style_is_the_status_preset() {
+        assert_eq!(
+            ToastLayout::for_push(None, None, None, Some(super::BANNER_STYLE)),
+            ToastLayout::status()
+        );
         assert_eq!(
             ToastLayout::for_push(None, None, None, Some("headline")),
-            ToastLayout::status()
+            ToastLayout::default()
         );
     }
 
@@ -490,14 +541,13 @@ mod tests {
     fn for_push_with_partial_size_keeps_the_preset_dimensions() {
         let layout = ToastLayout::for_push(Some("center"), Some(600.0), None, None);
         assert_eq!(layout.placement(), MonitorPlacement::center());
-        assert_eq!(layout.size(), ToastLayout::status().size());
+        assert_eq!(layout.size(), ToastLayout::default().size());
     }
 
     #[test]
-    fn for_push_with_compact_style_still_applies_overrides() {
-        let layout =
-            ToastLayout::for_push(Some("top-left"), Some(420.0), Some(90.0), Some("compact"));
-        assert_eq!(layout.style, ToastStyle::Compact);
+    fn for_push_with_the_default_style_still_applies_overrides() {
+        let layout = ToastLayout::for_push(Some("top-left"), Some(420.0), Some(90.0), None);
+        assert_eq!(layout.style, ToastStyle::Default);
         assert_eq!(
             layout.placement(),
             MonitorPlacement::corner(Corner::TopLeft, CORNER_MARGIN)
@@ -510,7 +560,7 @@ mod tests {
     fn layouts_select_shared_placement_and_dimensions() {
         let cases = [
             (
-                ToastLayout::compact(),
+                ToastLayout::default(),
                 MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
                 (440.0, 84.0),
             ),
@@ -598,15 +648,15 @@ mod tests {
     }
 
     #[test]
-    fn toast_host_routes_status_layouts_to_the_banner_and_compact_to_the_slab() {
+    fn toast_host_routes_status_layouts_to_the_banner_and_default_to_the_slab() {
         assert_eq!(ToastLayout::status().style(), ToastStyle::Status);
-        assert_eq!(ToastLayout::compact().style(), ToastStyle::Compact);
+        assert_eq!(ToastLayout::default().style(), ToastStyle::Default);
         assert!(matches!(
             routed_presentation(&Toast::new("t", "m", ToastLayout::status())),
             Presentation::Banner
         ));
         assert!(matches!(
-            routed_presentation(&Toast::new("t", "m", ToastLayout::compact())),
+            routed_presentation(&Toast::new("t", "m", ToastLayout::default())),
             Presentation::Slab
         ));
     }
@@ -631,11 +681,13 @@ mod tests {
     fn errors_and_pictures_go_to_the_pile_never_the_top() {
         let error = Toast::new("t", "m", ToastLayout::status()).tone(ToastTone::Danger);
         assert!(matches!(routed_presentation(&error), Presentation::Slab));
-        assert_eq!(error.in_the_pile().layout, ToastLayout::compact());
+        assert_eq!(error.in_the_pile().layout, ToastLayout::default());
         let picture = Toast::new("t", "m", ToastLayout::status()).artifact("/nowhere/shot.png");
         assert!(matches!(routed_presentation(&picture), Presentation::Slab));
         let saving = Toast::new("t", "m", ToastLayout::status()).persistent();
         assert!(matches!(routed_presentation(&saving), Presentation::Banner));
+        let asking = Toast::new("t", "m", ToastLayout::status()).action("Open", |_| Ok(()));
+        assert!(matches!(routed_presentation(&asking), Presentation::Slab));
     }
 
     #[test]

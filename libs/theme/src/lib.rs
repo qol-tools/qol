@@ -1109,27 +1109,15 @@ impl Grounds {
                 system,
                 washes,
             ),
-            attention: surface_ground(
-                mix_const(
-                    system.surface_elevated,
-                    system.warning,
-                    washes.wash_attention.alpha_milli as u32,
-                ),
-                system.text_primary,
-                system.text_secondary,
-                system.warning,
+            attention: toned_ground(
+                calm_mark(system.warning_ink, system.text_secondary),
+                washes.wash_attention.alpha_milli,
                 system,
                 washes,
             ),
-            invalid: surface_ground(
-                mix_const(
-                    system.surface_elevated,
-                    system.danger,
-                    washes.wash_invalid.alpha_milli as u32,
-                ),
-                system.text_primary,
-                system.text_secondary,
-                system.danger,
+            invalid: toned_ground(
+                calm_mark(system.danger, system.text_secondary),
+                washes.wash_invalid.alpha_milli,
                 system,
                 washes,
             ),
@@ -1165,6 +1153,7 @@ const GROUND_FAINT_MIX: u32 = 660;
 const GROUND_SOFT_FLOOR: f64 = 4.5;
 const GROUND_FAINT_FLOOR: f64 = 3.0;
 const GROUND_WELL_ALPHA: u16 = 140;
+const CALM_MARK_MIX: u32 = 300;
 const GROUND_EDGE_ALPHA: u16 = 240;
 
 pub fn accent_swatch(mode: ThemeMode, accent_key: &str) -> Option<u32> {
@@ -1246,6 +1235,23 @@ fn surface_ground(
         lift: lift(bg, ink),
         halo: css_rgba_milli(mark, Alpha::Edge.milli()),
     }
+}
+
+fn toned_ground(mark: u32, wash: u16, system: SystemPalette, washes: WashPalette) -> Ground {
+    surface_ground(
+        mix_const(system.surface_elevated, mark, wash as u32),
+        system.text_primary,
+        system.text_secondary,
+        mark,
+        system,
+        washes,
+    )
+}
+
+/// A tone colour moved part of the way toward the soft ink, so a filled
+/// warning or error button reads as the tone without shouting.
+pub const fn calm_mark(tone: u32, soft: u32) -> u32 {
+    mix_const(tone, soft, CALM_MARK_MIX)
 }
 
 pub const fn lift(bg: u32, ink: u32) -> u32 {

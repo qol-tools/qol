@@ -99,7 +99,9 @@ pub(super) fn edge_count(count: usize) -> usize {
     count.saturating_sub(1).min(MAX_EDGES)
 }
 
-pub(super) fn layout(count: usize, grow: f32, open: f32, focus: &[f32], scroll: f32) -> Pile {
+pub(super) fn layout(heights: &[f32], grow: f32, open: f32, focus: &[f32], scroll: f32) -> Pile {
+    let count = heights.len();
+    let newest_height = heights.first().copied().unwrap_or(CARD_HEIGHT);
     let focus_of = |index: usize| focus.get(index).copied().unwrap_or(0.0);
     let piled = count >= 2;
     let open = if piled { open } else { 0.0 };
@@ -120,10 +122,10 @@ pub(super) fn layout(count: usize, grow: f32, open: f32, focus: &[f32], scroll: 
         right: 0.0,
         bottom: strip_height - lowered,
         width: CARD_WIDTH * newest_scale,
-        height: CARD_HEIGHT * newest_scale,
+        height: newest_height * newest_scale,
     };
     let rest_strip = if piled { STRIP_HEIGHT } else { 0.0 };
-    let grown_top = (rest_strip + CARD_HEIGHT) * GROW;
+    let grown_top = (rest_strip + newest_height) * GROW;
     let edges = edge_count(count);
     let peek = if edges == 0 {
         0.0
@@ -132,26 +134,28 @@ pub(super) fn layout(count: usize, grow: f32, open: f32, focus: &[f32], scroll: 
     };
 
     let mut anchored = vec![(newest, 1.0, newest_scale, 1.0)];
-    for index in 1..count {
+    let mut listed_bottom = rest_strip + newest_height + LIST_GAP;
+    for (index, &own_height) in heights.iter().enumerate().skip(1) {
         let edge = index.min(edges.max(1)) as f32;
         let resting = Anchored {
             right: EDGE_INSET * edge,
             bottom: rest_strip + EDGE_STEP * edge,
             width: CARD_WIDTH - 2.0 * EDGE_INSET * edge,
-            height: CARD_HEIGHT,
+            height: newest_height,
         };
         let grown = Anchored {
             right: 0.0,
-            bottom: grown_top + peek * edge - CARD_HEIGHT,
+            bottom: grown_top + peek * edge - newest_height,
             width: CARD_WIDTH * GROW,
-            height: CARD_HEIGHT,
+            height: newest_height,
         };
         let listed = Anchored {
             right: 0.0,
-            bottom: rest_strip + LIST_STEP * index as f32 - scroll,
+            bottom: listed_bottom - scroll,
             width: CARD_WIDTH,
-            height: CARD_HEIGHT,
+            height: own_height,
         };
+        listed_bottom += own_height + LIST_GAP;
         let scale = 1.0 + (GROW - 1.0) * focus_of(index) * open;
         let place = resting
             .lerp(grown, grow)
@@ -285,8 +289,8 @@ pub(super) fn edge_fade(centre: f32, room: f32, above: f32, below: f32) -> f32 {
     fade(centre, above).min(fade(room - centre, below))
 }
 
-pub(super) fn overflow(count: usize, room: f32) -> f32 {
-    (layout(count, 0.0, 1.0, &[], 0.0).height + LIST_GAP - room).max(0.0)
+pub(super) fn overflow(heights: &[f32], room: f32) -> f32 {
+    (layout(heights, 0.0, 1.0, &[], 0.0).height + LIST_GAP - room).max(0.0)
 }
 
 pub(super) fn contains(rect: [f32; 4], x: f32, y: f32) -> bool {
@@ -352,6 +356,30 @@ mod tests {
         (a - b).abs() < 0.01
     }
 
+    fn even(count: usize) -> Vec<f32> {
+        vec![CARD_HEIGHT; count]
+    }
+
+    #[test]
+    fn an_open_list_stacks_cards_of_their_own_heights_one_gap_apart() {
+        let heights = [CARD_HEIGHT, 120.0, 88.0, CARD_HEIGHT];
+        let pile = layout(&heights, 1.0, 1.0, &[], 0.0);
+        for (card, height) in pile.cards.iter().zip(heights) {
+            assert!(close(card.frame.height, height));
+        }
+        for pair in pile.cards.windows(2) {
+            let gap = pair[0].frame.top - (pair[1].frame.top + pair[1].frame.height);
+            assert!(close(gap, LIST_GAP), "{gap}");
+        }
+        let resting = layout(&heights, 0.0, 0.0, &[], 0.0);
+        for card in &resting.cards[1..] {
+            assert!(
+                close(card.frame.height, CARD_HEIGHT),
+                "folded cards take the newest card's height"
+            );
+        }
+    }
+
     #[test]
     fn a_point_outside_the_card_rect_is_not_contained() {
         let rect = [10.0, 100.0, 50.0, 40.0];
@@ -365,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_single_toast_is_one_card_with_no_strip_or_band() {
-        let pile = layout(1, 0.0, 1.0, &[1.0], 0.0);
+        let pile = layout(&even(1), 0.0, 1.0, &[1.0], 0.0);
         assert_eq!(pile.cards.len(), 1);
         assert!(pile.strip.is_none());
         assert!(pile.band.is_none());
@@ -374,14 +402,14 @@ mod tests {
             "one toast never opens a list"
         );
         assert_eq!((pile.width, pile.height), (CARD_WIDTH, CARD_HEIGHT));
-        let grown = layout(1, 1.0, 0.0, &[], 0.0);
+        let grown = layout(&even(1), 1.0, 0.0, &[], 0.0);
         assert!(close(grown.cards[0].scale, GROW));
         assert!(grown.band.is_none());
     }
 
     #[test]
     fn a_resting_pile_folds_the_older_toasts_into_inset_edges() {
-        let pile = layout(5, 0.0, 0.0, &[], 0.0);
+        let pile = layout(&even(5), 0.0, 0.0, &[], 0.0);
         let newest = pile.cards[0].frame;
         assert!(close(newest.width, CARD_WIDTH));
         assert!(close(pile.strip.unwrap().frame.height, STRIP_HEIGHT));
@@ -404,7 +432,7 @@ mod tests {
     #[test]
     fn a_grown_pile_spreads_the_edges_to_a_fixed_band_at_full_width() {
         for count in 2..=6 {
-            let pile = layout(count, 1.0, 0.0, &[], 0.0);
+            let pile = layout(&even(count), 1.0, 0.0, &[], 0.0);
             let newest = pile.cards[0].frame;
             assert!(close(newest.width, CARD_WIDTH * GROW));
             let edges = edge_count(count);
@@ -429,7 +457,7 @@ mod tests {
 
     #[test]
     fn an_open_list_keeps_every_toast_at_rest_until_one_is_hovered() {
-        let pile = layout(4, 1.0, 1.0, &[], 0.0);
+        let pile = layout(&even(4), 1.0, 1.0, &[], 0.0);
         assert!(pile.band.is_none());
         for (index, card) in pile.cards.iter().enumerate() {
             assert!(close(card.scale, 1.0), "index={index} stays at rest");
@@ -446,8 +474,8 @@ mod tests {
 
     #[test]
     fn only_the_hovered_toast_grows_in_the_open_list() {
-        let rest = layout(4, 1.0, 1.0, &[], 0.0);
-        let pile = layout(4, 1.0, 1.0, &[0.0, 0.0, 1.0, 0.0], 0.0);
+        let rest = layout(&even(4), 1.0, 1.0, &[], 0.0);
+        let pile = layout(&even(4), 1.0, 1.0, &[0.0, 0.0, 1.0, 0.0], 0.0);
         for (index, card) in pile.cards.iter().enumerate() {
             let expected = if index == 2 { GROW } else { 1.0 };
             assert!(close(card.scale, expected), "index={index}");
@@ -459,7 +487,7 @@ mod tests {
             centre(grown, pile.height),
             centre(before, rest.height)
         ));
-        let newest = layout(4, 1.0, 1.0, &[1.0], 0.0);
+        let newest = layout(&even(4), 1.0, 1.0, &[1.0], 0.0);
         assert!(close(newest.cards[0].scale, GROW));
         assert!(close(
             newest.strip.unwrap().frame.height,
@@ -470,7 +498,7 @@ mod tests {
     #[test]
     fn the_window_bounds_every_visible_part() {
         for (grow, open) in [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 0.5), (0.0, 1.0)] {
-            let pile = layout(5, grow, open, &[0.0, 1.0], 0.0);
+            let pile = layout(&even(5), grow, open, &[0.0, 1.0], 0.0);
             for card in pile.cards.iter().filter(|card| card.opacity > 0.0) {
                 let frame = card.frame;
                 assert!(frame.left >= -0.01 && frame.top >= -0.01, "{grow} {open}");
@@ -482,7 +510,7 @@ mod tests {
 
     #[test]
     fn a_pose_keeps_its_corner_distance_in_any_window() {
-        let pile = layout(3, 0.0, 0.0, &[], 0.0);
+        let pile = layout(&even(3), 0.0, 0.0, &[], 0.0);
         let card = pile.cards[1];
         let pose = Pose::of(card, pile.width, pile.height);
         let wider = pose.card(pile.width + 40.0, pile.height + 30.0);
@@ -493,8 +521,8 @@ mod tests {
 
     #[test]
     fn the_next_toast_glides_into_the_place_of_a_leaving_newest() {
-        let before = layout(3, 0.0, 0.0, &[], 0.0);
-        let after = layout(2, 0.0, 0.0, &[], 0.0);
+        let before = layout(&even(3), 0.0, 0.0, &[], 0.0);
+        let after = layout(&even(2), 0.0, 0.0, &[], 0.0);
         let from = Pose::of(before.cards[1], before.width, before.height);
         let to = Pose::of(after.cards[0], after.width, after.height);
         assert_eq!(from.toward(to, 0.0), from);
@@ -505,7 +533,7 @@ mod tests {
 
     #[test]
     fn a_leaving_toast_fades_and_shrinks_about_its_centre() {
-        let pile = layout(2, 0.0, 0.0, &[], 0.0);
+        let pile = layout(&even(2), 0.0, 0.0, &[], 0.0);
         let pose = Pose::of(pile.cards[0], pile.width, pile.height);
         assert_eq!(pose.leaving(0.0), pose);
         let gone = pose.leaving(1.0).card(pile.width, pile.height);
@@ -525,11 +553,11 @@ mod tests {
     #[test]
     fn a_long_list_scrolls_inside_the_room_and_folds_back_unscrolled() {
         let room = 400.0;
-        let extra = overflow(20, room);
-        let open = layout(20, 1.0, 1.0, &[], 0.0);
+        let extra = overflow(&even(20), room);
+        let open = layout(&even(20), 1.0, 1.0, &[], 0.0);
         assert!(close(extra, open.height + LIST_GAP - room));
-        assert!(close(overflow(2, room), 0.0));
-        let scrolled = layout(20, 1.0, 1.0, &[], extra);
+        assert!(close(overflow(&even(2), room), 0.0));
+        let scrolled = layout(&even(20), 1.0, 1.0, &[], extra);
         for (before, after) in open.cards.iter().zip(&scrolled.cards) {
             assert!(close(
                 open.height - before.frame.top - extra,
@@ -537,8 +565,8 @@ mod tests {
             ));
         }
         assert_eq!(
-            layout(20, 1.0, 0.0, &[], extra),
-            layout(20, 1.0, 0.0, &[], 0.0)
+            layout(&even(20), 1.0, 0.0, &[], extra),
+            layout(&even(20), 1.0, 0.0, &[], 0.0)
         );
     }
 

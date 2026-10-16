@@ -280,6 +280,7 @@ impl CardHost for BannerPresenter {
         match act {
             CardAct::Open => self.run(id, |toast| toast.activation.clone(), cx),
             CardAct::Preview => self.run(id, |toast| toast.preview_action.clone(), cx),
+            CardAct::Action(index) => self.run(id, |toast| toast.action_run(index), cx),
             CardAct::Close => self.remove(id, cx),
         }
     }
