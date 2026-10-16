@@ -517,7 +517,7 @@ fn custom_notifier(toast_host: ToastHost) -> CustomPanelNotifier {
         let toast = Toast::new(
             qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME,
             message,
-            ToastLayout::compact(),
+            ToastLayout::default(),
         )
         .source(qol_conventions::SETTINGS_SURFACE_DISPLAY_NAME)
         .tone(match tone {
@@ -575,8 +575,11 @@ fn show_toast_in_host(
         }
         if let Some(path) = artifact {
             toast = toast.artifact(path);
-        } else if let Some((_, payload)) = action {
-            toast = toast.on_activate(move |_cx| crate::paths::open_url(&payload));
+        } else if let Some((label, payload)) = action {
+            let open = payload.clone();
+            toast = toast
+                .action(label, move |_cx| crate::paths::open_url(&open))
+                .on_activate(move |_cx| crate::paths::open_url(&payload));
         } else if let Some(activate) = activate {
             toast = toast.on_activate(move |cx| {
                 activate.run(cx);

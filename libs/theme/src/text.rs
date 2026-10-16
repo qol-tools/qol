@@ -30,6 +30,7 @@ pub struct TextSpec {
 pub enum TextStyle {
     Masthead,
     Heading,
+    Title,
     Colophon,
     Name,
     ListName,
@@ -61,9 +62,10 @@ const fn spec(face: Face, size: f32, weight: u16, line_height: f32) -> TextSpec 
 }
 
 impl TextStyle {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Masthead,
         Self::Heading,
+        Self::Title,
         Self::Colophon,
         Self::Name,
         Self::ListName,
@@ -80,6 +82,7 @@ impl TextStyle {
         match self {
             Self::Masthead => spec(Display, TEXT_MASTHEAD, WEIGHT_SEMIBOLD, LINE_KEY),
             Self::Heading => spec(Display, TEXT_DISPLAY, WEIGHT_SEMIBOLD, LINE_DISPLAY),
+            Self::Title => spec(Ui, TEXT_DISPLAY, WEIGHT_SEMIBOLD, LINE_TEXT),
             Self::Colophon => spec(Display, TEXT_NANO, WEIGHT_SEMIBOLD, LINE_CAPTION),
             Self::Name => spec(Ui, TEXT_BODY, WEIGHT_MEDIUM, LINE_TEXT),
             Self::ListName => spec(Ui, TEXT_CAPTION, WEIGHT_MEDIUM, LINE_TEXT),

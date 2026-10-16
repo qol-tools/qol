@@ -2,13 +2,14 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
-use qol_theme::TextStyle;
+use qol_theme::{Ground, TextStyle};
 
-use super::{RowId, SlabSnapshotRow, ToastTone};
+use super::{RowId, SlabSnapshotRow, Toast, ToastTone};
 use crate::kit::Kit;
 use crate::text::{cased, TextStyled};
 
 const OPEN_GROUP: &str = "toast-open";
+const DETAIL_LINES: usize = 2;
 
 fn hover_veil(kit: Kit) -> Rgba {
     rgba(qol_theme::translucent(
@@ -17,7 +18,7 @@ fn hover_veil(kit: Kit) -> Rgba {
     ))
 }
 
-pub(super) fn ruled(card: impl IntoElement, left: f32, content: f32, scale: f32, kit: Kit) -> Div {
+pub(super) fn ruled(card: impl IntoElement, left: f32, content: f32, scale: f32, mark: u32) -> Div {
     div().size_full().relative().child(card).child(
         div()
             .absolute()
@@ -26,7 +27,7 @@ pub(super) fn ruled(card: impl IntoElement, left: f32, content: f32, scale: f32,
             .left_0()
             .w(relative(left.clamp(0.0, 1.0)))
             .h(px(qol_theme::toast::RULE * scale))
-            .bg(rgb(kit.palette.accent)),
+            .bg(rgb(mark)),
     )
 }
 
@@ -40,6 +41,7 @@ pub(super) fn counting(row: &SlabSnapshotRow, paused: bool, now: Instant) -> Opt
 pub(super) enum CardAct {
     Open,
     Preview,
+    Action(usize),
     Close,
 }
 
@@ -49,23 +51,27 @@ pub(super) trait CardHost {
 
 pub(super) type Host = Rc<dyn CardHost>;
 
-pub(super) fn row_ground(row: &SlabSnapshotRow, kit: Kit) -> u32 {
+pub(super) fn row_tone(row: &SlabSnapshotRow, kit: Kit) -> Ground {
     if row.toast.live {
-        kit.grounds.menu.bg
+        kit.grounds.menu
     } else {
         tone_ground(row.toast.tone, kit)
     }
+}
+
+pub(super) fn row_ground(row: &SlabSnapshotRow, kit: Kit) -> u32 {
+    row_tone(row, kit).bg
 }
 
 pub(super) fn row_lift(row: &SlabSnapshotRow, kit: Kit) -> Rgba {
     rgb(qol_theme::lift(row_ground(row, kit), kit.grounds.pane.ink))
 }
 
-fn tone_ground(tone: ToastTone, kit: Kit) -> u32 {
-    if tone == ToastTone::Danger {
-        kit.grounds.invalid.bg
-    } else {
-        kit.grounds.pane.bg
+fn tone_ground(tone: ToastTone, kit: Kit) -> Ground {
+    match tone {
+        ToastTone::Danger => kit.grounds.invalid,
+        ToastTone::Warning => kit.grounds.attention,
+        ToastTone::Neutral | ToastTone::Info | ToastTone::Success => kit.grounds.pane,
     }
 }
 
@@ -78,10 +84,66 @@ pub(super) fn age_label(age: Duration) -> String {
     }
 }
 
+fn line_of(style: TextStyle) -> f32 {
+    let spec = style.spec();
+    spec.size * spec.line_height
+}
+
+fn detail_width(toast: &Toast) -> f32 {
+    let lead = if toast.preview.is_some() {
+        qol_theme::toast::PREVIEW + qol_theme::SPACE_CELL
+    } else {
+        qol_theme::SPACE_PAD
+    };
+    super::pile::CARD_WIDTH - lead - qol_theme::toast::CLOSE
+}
+
+/// The card's height for its words: the source line, the title, the detail
+/// lines and the button bar, never less than the resting card.
+pub(super) fn fit_height(toast: &Toast, detail_lines: usize) -> f32 {
+    use qol_theme::toast::{ACTION_BAR, HEIGHT, HEIGHT_STEP, MARK};
+    let detail = if toast.message.is_empty() {
+        0.0
+    } else if toast.message_is_path {
+        qol_theme::SPACE_STACK + line_of(TextStyle::Code)
+    } else {
+        qol_theme::SPACE_STACK
+            + line_of(TextStyle::Detail) * detail_lines.clamp(1, DETAIL_LINES) as f32
+    };
+    let words = 2.0 * qol_theme::SPACE_CELL
+        + MARK.max(line_of(TextStyle::Detail))
+        + qol_theme::SPACE_STACK
+        + line_of(TextStyle::Title)
+        + detail;
+    let body = ((words / HEIGHT_STEP).round() * HEIGHT_STEP).max(HEIGHT);
+    if toast.actions.is_empty() {
+        body
+    } else {
+        body + ACTION_BAR
+    }
+}
+
+pub(super) fn measured_height(toast: &Toast, window: &mut Window) -> f32 {
+    let lines = if toast.message.is_empty() || toast.message_is_path {
+        1
+    } else {
+        let spec = TextStyle::Detail.spec();
+        crate::text::wrapped_line_count(
+            window,
+            &toast.message,
+            font(spec.face.family()),
+            spec.size,
+            detail_width(toast),
+        )
+    };
+    fit_height(toast, lines)
+}
+
 pub(super) fn lone(row: &SlabSnapshotRow, host: Option<Host>, now: Instant) -> Div {
     let kit = crate::kit::kit();
+    let ground = row_tone(row, kit);
     ruled(
-        kit.window().bg(rgb(row_ground(row, kit))).child(content(
+        kit.window().bg(rgb(ground.bg)).child(content(
             row,
             CardParts {
                 scale: 1.0,
@@ -95,7 +157,7 @@ pub(super) fn lone(row: &SlabSnapshotRow, host: Option<Host>, now: Instant) -> D
         counting(row, false, now).unwrap_or(1.0),
         1.0,
         1.0,
-        kit,
+        ground.mark,
     )
 }
 
@@ -153,7 +215,7 @@ pub(super) fn message(row: &SlabSnapshotRow, scale: f32, content: f32, left: f32
                 )),
         );
     }
-    ruled(kit.window().child(body), left, content, scale, kit)
+    ruled(kit.window().child(body), left, content, scale, ground.mark)
 }
 
 pub(super) struct CardParts {
@@ -170,14 +232,26 @@ pub(super) fn content(
     host: Option<Host>,
 ) -> Div {
     let scale = parts.scale;
-    let mut card = div()
-        .size_full()
+    let ground = row_tone(row, kit);
+    let body = div()
+        .flex_grow()
+        .min_h_0()
+        .w_full()
         .flex()
         .flex_row()
-        .opacity(parts.content)
         .child(lead(row, scale, parts.interactive, kit, host.clone()))
-        .child(text_zone(row, &parts, kit, host.clone()))
-        .child(dismiss(row, &parts, kit, host.clone()));
+        .child(text_zone(row, &parts, ground, kit, host.clone()));
+    let mut card = div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        .opacity(parts.content)
+        .child(body);
+    if !row.toast.actions.is_empty() {
+        card = card.child(action_bar(row, &parts, ground, kit, host.clone()));
+    }
+    card = card.child(dismiss(row, &parts, ground, kit, host.clone()));
     if let Some(host) = host.filter(|_| parts.interactive) {
         let id = row.id;
         card = card.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
@@ -224,8 +298,14 @@ fn lead(
         .into_any_element()
 }
 
-fn text_zone(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host>) -> AnyElement {
-    let column = text_column(row, parts, kit);
+fn text_zone(
+    row: &SlabSnapshotRow,
+    parts: &CardParts,
+    ground: Ground,
+    kit: Kit,
+    host: Option<Host>,
+) -> AnyElement {
+    let column = text_column(row, parts, ground, kit);
     let Some(host) = host.filter(|_| parts.interactive && row.toast.activation.is_some()) else {
         return column.into_any_element();
     };
@@ -238,27 +318,41 @@ fn text_zone(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Ho
         .into_any_element()
 }
 
-fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
+fn source_line(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground) -> Div {
     let scale = parts.scale;
-    let ground = kit.grounds.pane;
-    let source_line = div()
+    let mut line = div()
         .w_full()
+        .flex_none()
+        .h(px(qol_theme::toast::MARK * scale))
         .flex()
         .flex_row()
         .items_center()
-        .text_scaled(TextStyle::Label, scale)
-        .text_color(rgb(ground.faint))
-        .child(div().flex_none().child(SharedString::from(cased(
-            TextStyle::Label,
-            &row.toast.source,
-        ))))
-        .child(div().flex_grow())
-        .child(
-            div()
-                .flex_none()
-                .pr(px(qol_theme::SPACE_INSET * scale))
-                .child(SharedString::from(cased(TextStyle::Label, &parts.age))),
-        );
+        .gap(px(qol_theme::SPACE_INSET * scale))
+        .text_scaled(TextStyle::Detail, scale)
+        .text_color(rgb(ground.faint));
+    if let Some(mark) = row.toast.mark {
+        line = line.child(div().flex_none().child(crate::icon::mark(
+            mark,
+            qol_theme::toast::MARK * scale,
+            ground.faint,
+        )));
+    }
+    line.child(
+        div()
+            .min_w_0()
+            .flex_shrink()
+            .child(row.toast.source.clone()),
+    )
+    .child(div().flex_grow())
+    .child(
+        div()
+            .flex_none()
+            .child(SharedString::from(parts.age.clone())),
+    )
+}
+
+fn text_column(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground, kit: Kit) -> Div {
+    let scale = parts.scale;
     let column = div()
         .flex_grow()
         .min_w_0()
@@ -268,11 +362,13 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
         .flex_col()
         .justify_center()
         .gap(px(qol_theme::SPACE_STACK * scale))
-        .child(source_line)
+        .py(px(qol_theme::SPACE_CELL * scale))
+        .pr(px(qol_theme::toast::CLOSE * scale))
+        .child(source_line(row, parts, ground))
         .child(
             div()
                 .w_full()
-                .text_scaled(TextStyle::ListName, scale)
+                .text_scaled(TextStyle::Title, scale)
                 .text_color(rgb(ground.ink))
                 .child(row.toast.title.clone()),
         );
@@ -282,13 +378,16 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
     let opens = parts.interactive && row.toast.activation.is_some();
     let detail = |ink: u32| {
         if row.toast.message_is_path {
-            let (head, tail) = crate::kit::path_label(&row.toast.message);
-            path_line(head, tail, scale, ink)
+            div()
+                .w_full()
+                .text_scaled(TextStyle::Code, scale)
+                .text_color(rgb(ink))
+                .child(file_name(&row.toast.message))
         } else {
             div()
                 .w_full()
                 .text_scaled(TextStyle::Detail, scale)
-                .clamps(2)
+                .clamps(DETAIL_LINES)
                 .text_color(rgb(ink))
                 .child(row.toast.message.clone())
         }
@@ -301,45 +400,94 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit) -> Div {
             .w_full()
             .relative()
             .child(detail(ground.soft))
-            .child(kit.revealed_by(
-                detail(kit.palette.accent).absolute().top_0().left_0(),
-                OPEN_GROUP,
-            )),
+            .child(kit.revealed_by(detail(ground.mark).absolute().top_0().left_0(), OPEN_GROUP)),
     )
 }
 
-fn path_line(head: String, tail: String, scale: f32, ink: u32) -> Div {
-    let piece = |text: String| {
-        div()
-            .min_w_0()
-            .flex_grow()
-            .text_scaled(TextStyle::Code, scale)
-            .text_color(rgb(ink))
-            .child(SharedString::from(text))
-    };
-    let mut line = div().w_full().flex().flex_row().overflow_hidden();
-    if !head.is_empty() {
-        line = line.child(piece(head));
-    }
-    line.child(piece(tail))
+fn file_name(path: &str) -> SharedString {
+    let name = std::path::Path::new(path).file_name().map_or_else(
+        || path.to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    SharedString::from(name)
 }
 
-fn dismiss(row: &SlabSnapshotRow, parts: &CardParts, kit: Kit, host: Option<Host>) -> AnyElement {
+fn action_bar(
+    row: &SlabSnapshotRow,
+    parts: &CardParts,
+    ground: Ground,
+    kit: Kit,
+    host: Option<Host>,
+) -> Div {
     let scale = parts.scale;
-    let side = qol_theme::toast::CLOSE * scale;
+    let host = host.filter(|_| parts.interactive);
+    let mut bar = div()
+        .flex_none()
+        .w_full()
+        .h(px(qol_theme::toast::ACTION_BAR * scale))
+        .flex()
+        .flex_row()
+        .gap(px(qol_theme::LINE))
+        .border_t(px(qol_theme::LINE))
+        .border_color(rgba(ground.edge.packed()));
+    for (index, action) in row.toast.actions.iter().enumerate() {
+        let (fill, ink) = if action.happy {
+            (Some(ground.mark), ground.on_mark)
+        } else {
+            (None, ground.soft)
+        };
+        let mut cell = div()
+            .id(SharedString::from(format!(
+                "toast-action-{}-{index}",
+                row.id.0
+            )))
+            .flex_1()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .px(px(qol_theme::SPACE_PAD * scale))
+            .text_scaled(TextStyle::ListName, scale)
+            .text_color(rgb(ink))
+            .child(action.label.clone());
+        if let Some(fill) = fill {
+            cell = cell.bg(rgb(fill));
+        }
+        if let Some(host) = host.clone() {
+            let id = row.id;
+            let lift = qol_theme::lift(fill.unwrap_or(ground.bg), ground.ink);
+            cell = kit
+                .pointable(cell, rgb(lift))
+                .cursor_pointer()
+                .on_click(move |_, _, cx| host.act(id, CardAct::Action(index), cx));
+        }
+        bar = bar.child(cell);
+    }
+    bar
+}
+
+fn dismiss(
+    row: &SlabSnapshotRow,
+    parts: &CardParts,
+    ground: Ground,
+    kit: Kit,
+    host: Option<Host>,
+) -> AnyElement {
+    let scale = parts.scale;
     let control = div()
         .id(("toast-dismiss", row.id.0))
-        .flex_none()
-        .w(px(side))
-        .h(px(side))
-        .relative()
+        .absolute()
+        .top_0()
+        .right_0()
+        .w(px(qol_theme::toast::CLOSE * scale))
+        .h(px(qol_theme::toast::CLOSE_HEIGHT * scale))
         .flex()
         .items_center()
         .justify_center()
         .child(crate::icon::icon(
             crate::Icon::Close,
             qol_theme::TEXT_MICRO * scale,
-            kit.grounds.pane.soft,
+            ground.soft,
         ));
     let Some(host) = host.filter(|_| parts.interactive) else {
         return control.into_any_element();
@@ -416,7 +564,36 @@ pub(super) fn card_id(id: RowId) -> (&'static str, u64) {
 mod tests {
     use std::time::Duration;
 
-    use super::age_label;
+    use super::{age_label, fit_height, tone_ground};
+    use crate::toast::{Toast, ToastLayout, ToastTone};
+
+    #[test]
+    fn a_card_is_as_tall_as_its_words_and_never_below_the_resting_card() {
+        let rest = qol_theme::toast::HEIGHT;
+        let plain = Toast::new("Saved", "One line of detail", ToastLayout::default());
+        assert_eq!(fit_height(&plain, 1), rest);
+        let long = fit_height(&plain, 2);
+        assert!(long > rest, "a second detail line grows the card");
+        assert_eq!(long % qol_theme::toast::HEIGHT_STEP, 0.0);
+        assert_eq!(
+            fit_height(&plain, 9),
+            long,
+            "the detail clamps to two lines"
+        );
+        let asking = plain.action("Open", |_| Ok(()));
+        assert_eq!(fit_height(&asking, 1), rest + qol_theme::toast::ACTION_BAR);
+    }
+
+    #[test]
+    fn warnings_and_errors_sit_on_their_own_grounds() {
+        let kit = crate::kit::Kit::new(qol_theme::ThemeMode::Dark, qol_theme::DARK_SYSTEM);
+        assert_eq!(tone_ground(ToastTone::Danger, kit), kit.grounds.invalid);
+        assert_eq!(tone_ground(ToastTone::Warning, kit), kit.grounds.attention);
+        for tone in [ToastTone::Neutral, ToastTone::Info, ToastTone::Success] {
+            assert_eq!(tone_ground(tone, kit), kit.grounds.pane);
+        }
+        assert_ne!(kit.grounds.invalid.mark, kit.palette.accent);
+    }
 
     #[test]
     fn ages_read_now_then_minutes_then_hours() {

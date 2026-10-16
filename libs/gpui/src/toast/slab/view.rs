@@ -233,6 +233,10 @@ impl Render for SlabToastView {
         let (snapshot, expanded) = self.host.slab_snapshot();
         let rows: Vec<&SlabSnapshotRow> = snapshot.iter().rev().collect();
         let count = rows.len();
+        let heights: Vec<f32> = rows
+            .iter()
+            .map(|row| card::measured_height(&row.toast, window))
+            .collect();
         let open = expanded && count >= 2;
 
         self.grow.toward(if self.inside { 1.0 } else { 0.0 }, now);
@@ -250,7 +254,7 @@ impl Render for SlabToastView {
         let width = f32::from(shown.width);
         let height = f32::from(shown.height);
         self.scroll_max = if open {
-            pile::overflow(count, height)
+            pile::overflow(&heights, height)
         } else {
             0.0
         };
@@ -272,14 +276,14 @@ impl Render for SlabToastView {
         }
         let scroll = self.scroll.value(now);
         let current = pile::layout(
-            count,
+            &heights,
             self.grow.value(now),
             self.open.value(now),
             &focus_now,
             scroll,
         );
         let settled = pile::layout(
-            count,
+            &heights,
             self.grow.target(),
             self.open.target(),
             &focus_end,
@@ -432,7 +436,7 @@ impl Render for SlabToastView {
                     left_of(row, view, &mut false),
                     timer_shown(row, ghost.index, frame.content),
                     frame.scale,
-                    kit,
+                    card::row_tone(row, kit).mark,
                 ))
                 .into_any_element()
         };
@@ -483,7 +487,7 @@ impl Render for SlabToastView {
                     left,
                     timer_shown(row, index, frame.content),
                     frame.scale,
-                    kit,
+                    card::row_tone(row, kit).mark,
                 ))
                 .into_any_element()
         };
