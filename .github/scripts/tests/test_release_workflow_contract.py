@@ -140,6 +140,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('args+=(--run-id "${SOURCE_CI_RUN_ID}")', workflow)
         self.assertNotIn("push:\n    branches: [main]", workflow)
 
+    def test_only_green_main_pushes_share_the_versioning_queue(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        trigger = workflow.split("  workflow_run:\n", 1)[1].split("permissions:", 1)[0]
+        self.assertIn("branches: [main]", trigger)
+        group = workflow.split("concurrency:\n", 1)[1].split("jobs:\n", 1)[0]
+        prepare = workflow.split("  prepare:\n", 1)[1].split("    runs-on:", 1)[0]
+        condition = prepare.split("${{", 1)[1].split("}}", 1)[0].strip()
+        self.assertIn(" ".join(condition.split()), " ".join(group.split()))
+        self.assertIn("&& 'plugin-version-main'", group)
+        self.assertIn("|| format('plugin-version-idle-{0}', github.run_id)", group)
+        self.assertIn("cancel-in-progress: false", group)
+
     def test_candidates_are_attested_before_tags_are_created(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
 
@@ -159,30 +171,52 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]
         for contract in required:
             self.assertIn(contract, workflow)
+        attest = named_step(workflow, "Attest exact release candidate", "      ")
+        self.assertIn('--plan "${RUNNER_TEMP}/candidate-plan/release-candidate-report.json"', attest)
+        self.assertIn('--build-reports "${RUNNER_TEMP}/candidate-builds"', attest)
+        reports = named_step(workflow, "Download candidate build reports", "      ")
+        self.assertIn("pattern: candidate-*", reports)
 
-    def test_shared_crate_releases_wait_for_binary_probes(self):
+    def test_releases_publish_the_attested_candidate_files(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
-        release = (ROOT / ".github/workflows/release.yml").read_text()
-
-        self.assertIn("needs: [probe_plan, probe]", workflow)
-        self.assertIn("needs.probe.result == 'skipped'", workflow)
-        self.assertLess(workflow.index("release_probe.py"), workflow.index("--probe-reports"))
+        self.assertNotIn("probe", workflow)
+        self.assertFalse((ROOT / ".github/scripts/release_probe.py").exists())
+        plugin = workflow.split("  plugin_candidate:\n", 1)[1].split("  qol_tray_linux_candidate:\n", 1)[0]
+        upload = named_step(plugin, "Upload release files", "      ")
         for contract in [
-            "cache-key: plugin-release-${{ matrix.target }}",
-            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}",
-            "--kind plugin",
+            "name: dist-${{ matrix.tag }}-${{ matrix.target }}",
+            "retention-days: 90",
+            "if-no-files-found: error",
         ]:
             with self.subTest(contract=contract):
-                self.assertIn(contract, release)
-                self.assertIn(contract, workflow)
+                self.assertIn(contract, upload)
+        for platform in ["linux", "macos", "windows"]:
+            with self.subTest(platform=platform):
+                job = workflow.split(f"  qol_tray_{platform}_candidate:\n", 1)[1].split("\n  qol_tray_", 1)[0].split("\n  tag_and_dispatch:", 1)[0]
+                upload = named_step(job, "Upload release files", "      ")
+                self.assertIn(f"name: dist-${{{{ needs.prepare.outputs.qol_tray_tag }}}}-{platform}", upload)
+                self.assertIn("retention-days: 90", upload)
+        for name, needs in [("release.yml", "setup"), ("qol-tray-release.yml", "gate")]:
+            with self.subTest(workflow=name):
+                release = (ROOT / ".github/workflows" / name).read_text()
+                self.assertNotIn("release_candidate.py build", release)
+                self.assertNotIn("cache-key: plugin-release-", release)
+                self.assertNotIn("cache-key: qol-tray-", release)
+                download = named_step(release, "Download candidate files", "      ")
+                self.assertIn(f"run-id: ${{{{ needs.{needs}.outputs.candidate_run }}}}", download)
+                self.assertIn("github-token: ${{ github.token }}", download)
+                self.assertIn("pattern: dist-${{ env.RELEASE_TAG }}-*", download)
+                self.assertIn("candidate_run: ${{ steps.verify.outputs.run_id }}", release)
+                self.assertIn("actions: read", release)
+                self.assertNotIn("actions: write", release.split("  index:\n", 1)[0])
 
     def test_release_workflows_verify_exact_candidate(self):
         for name in ["release.yml", "qol-tray-release.yml"]:
             with self.subTest(workflow=name):
                 workflow = (ROOT / ".github/workflows" / name).read_text()
                 verify = workflow.index("release_candidate.py verify")
-                build = workflow.index("release_candidate.py build")
-                self.assertLess(verify, build)
+                download = workflow.index("- name: Download candidate files")
+                self.assertLess(verify, download)
 
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -288,8 +322,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn(contract, warm)
 
     def test_tray_release_ships_the_windows_executable_and_installer_bundle(self):
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
-        job = workflow.split("  build_windows:\n", 1)[1].split("  release:\n", 1)[0]
+        job = versioning.split("  qol_tray_windows_candidate:\n", 1)[1].split("  tag_and_dispatch:\n", 1)[0]
         for contract in [
             "runs-on: windows-latest",
             "RUSTFLAGS: -D warnings -C link-arg=/Brepro -C target-feature=+crt-static",
@@ -302,9 +337,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, job)
-        self.assertIn(
-            "needs: [build_linux_deb, build_macos, build_windows]", workflow
-        )
+        release = workflow.split("  release:\n", 1)[1]
+        self.assertIn("needs: gate", release)
+        self.assertIn("for platform in linux macos windows; do", named_step(release, "Require every platform", "      "))
         updater = (ROOT / "apps/tray/src/updates/platform/windows.rs").read_text()
         self.assertIn('format!("qol-tray-windows-{}.exe", std::env::consts::ARCH)', updater)
 
@@ -345,11 +380,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_windows_release_jobs_get_a_longer_timeout(self):
         conditional = "timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}"
         cases = [
-            ("release.yml", "  build:\n", "  registry:\n", conditional),
-            ("plugin-version.yml", "  probe:\n", "  prepare:\n", conditional),
             ("plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n", conditional),
             ("plugin-version.yml", "  qol_tray_windows_candidate:\n", "    steps:\n", "timeout-minutes: 75"),
-            ("qol-tray-release.yml", "  build_windows:\n", "    steps:\n", "timeout-minutes: 75"),
         ]
         for name, start, end, timeout in cases:
             with self.subTest(workflow=name, job=start.strip()):
@@ -358,11 +390,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn(timeout, job)
 
     def test_tray_release_builds_drop_checkout_credentials(self):
-        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         for job, end in [
-            ("  build_linux_deb:\n", "  build_macos:\n"),
-            ("  build_macos:\n", "  build_windows:\n"),
-            ("  build_windows:\n", "  release:\n"),
+            ("  qol_tray_linux_candidate:\n", "  qol_tray_macos_candidate:\n"),
+            ("  qol_tray_macos_candidate:\n", "  qol_tray_windows_candidate:\n"),
+            ("  qol_tray_windows_candidate:\n", "  tag_and_dispatch:\n"),
         ]:
             with self.subTest(job=job.strip()):
                 body = workflow.split(job, 1)[1].split(end, 1)[0]
@@ -370,11 +402,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_plugin_release_builds_run_bash_on_windows(self):
         cases = [
-            (".github/workflows/release.yml", "  build:\n", "  registry:\n"),
-            (".github/workflows/plugin-version.yml", "  probe:\n", "  prepare:\n"),
             (".github/workflows/plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n"),
             (".github/workflows/plugin-version.yml", "  qol_tray_windows_candidate:\n", "  tag_and_dispatch:\n"),
-            (".github/workflows/qol-tray-release.yml", "  build_windows:\n", "  release:\n"),
         ]
         for path, start, end in cases:
             with self.subTest(path=path, job=start.strip()):
@@ -388,10 +417,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("gh release", workflow)
         self.assertNotIn("contents: write", workflow)
 
-    def test_plugin_registry_push_runs_after_the_build(self):
+    def test_plugin_registry_push_waits_for_every_target_file(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
-        self.assertIn("needs: [setup, build]", registry)
+        self.assertIn("needs: setup", registry)
+        self.assertLess(
+            registry.index("release_candidate.py require-release-files"),
+            registry.index("- name: Push registry artifact"),
+        )
         self.assertIn("packages: write", registry)
         self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
         push = named_step(registry, "Push registry artifact", "      ")

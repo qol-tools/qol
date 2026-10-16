@@ -34,6 +34,7 @@ REQUIRED_CI_JOBS = {
     "lint + test (macos-latest)",
     "lint + test (windows-latest)",
 }
+HOST_BUILD_KINDS = ("qol-tray-linux", "qol-tray-macos", "qol-tray-windows")
 QUEUE_BUILD_CI_JOBS = {
     PLAN_CI_JOB,
     "release build (ubuntu-latest)",
@@ -89,7 +90,12 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
         outputs = plugin_matrix.release_outputs(root, tag.unit_id, tag.version)
         matrix = json.loads(outputs["matrix"])["include"]
         plugin_entries.extend(
-            {**entry, "package": outputs["package"], "tag": tag.value}
+            {
+                **entry,
+                "package": outputs["package"],
+                "bin_name": outputs["bin_name"],
+                "tag": tag.value,
+            }
             for entry in matrix
         )
 
@@ -111,6 +117,56 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
         "has_qol_tray": bool(host_tags),
         "qol_tray_tag": host_tag,
     }
+
+
+def planned_builds(plan: dict) -> set[tuple[str, str | None, str | None]]:
+    builds = {
+        ("plugin", entry["package"], entry["target"])
+        for entry in plan["plugin_matrix"]["include"]
+    }
+    if plan["has_qol_tray"]:
+        builds.update((kind, None, None) for kind in HOST_BUILD_KINDS)
+    return builds
+
+
+def passed_builds(reports_dir: Path) -> set[tuple[str, str | None, str | None]]:
+    passed = set()
+    for path in sorted(reports_dir.rglob("*.json")):
+        report = json.loads(path.read_text())
+        if report.get("name") != "release-build" or report.get("status") != "pass":
+            continue
+        inputs = report["inputs"]
+        passed.add((inputs["kind"], inputs.get("package"), inputs.get("target")))
+    return passed
+
+
+def require_candidate_builds(plan: dict, reports_dir: Path) -> None:
+    missing = planned_builds(plan) - passed_builds(reports_dir)
+    if missing:
+        names = sorted(
+            "/".join(part for part in build if part) for build in missing
+        )
+        raise RuntimeError(
+            f"no passing candidate build for: {', '.join(names)}"
+        )
+
+
+def plugin_release_files(root: Path, tag: ReleaseTag) -> list[str]:
+    outputs = plugin_matrix.release_outputs(root, tag.unit_id, tag.version)
+    return [
+        f"{entry['artifact_name']}{entry['ext']}"
+        for entry in json.loads(outputs["matrix"])["include"]
+    ]
+
+
+def require_release_files(root: Path, tag: ReleaseTag, files_dir: Path) -> list[str]:
+    expected = plugin_release_files(root, tag)
+    missing = [name for name in expected if not (files_dir / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"{tag.value} is missing candidate files: {', '.join(missing)}"
+        )
+    return expected
 
 
 def attestation_context(tag: ReleaseTag) -> str:
@@ -195,14 +251,19 @@ def require_attestation(
             f"{tag.value} release-candidate attestation is {status.get('state')}"
         )
     target_url = str(status.get("target_url") or "")
-    pattern = re.compile(
-        rf"^https://github\.com/{re.escape(repo)}/actions/runs/[0-9]+(?:/.*)?$"
-    )
-    if not pattern.fullmatch(target_url):
+    if attestation_run_id(target_url, repo) is None:
         raise RuntimeError(
             f"{tag.value} attestation does not point to a trusted workflow run"
         )
     return status
+
+
+def attestation_run_id(target_url: str, repo: str) -> int | None:
+    pattern = re.compile(
+        rf"^https://github\.com/{re.escape(repo)}/actions/runs/([0-9]+)(?:/.*)?$"
+    )
+    match = pattern.fullmatch(target_url)
+    return int(match.group(1)) if match else None
 
 
 def plugin_release_features(root: Path, package: str) -> list[str]:
@@ -606,6 +667,12 @@ def attest_command(args: argparse.Namespace) -> None:
     sha = validate_sha(args.sha)
     tags = parse_release_tags(args.tags)
     started_at = utc_now()
+    plan = json.loads(Path(args.plan).read_text())["artifacts"]["plan"]
+    if plan["tags"] != [tag.value for tag in tags]:
+        raise RuntimeError(
+            f"candidate plan covers {' '.join(plan['tags'])}, not {args.tags}"
+        )
+    require_candidate_builds(plan, Path(args.build_reports))
     statuses = attest(repo, sha, tags, args.target_url)
     report = {
         "name": "release-candidate-attestation",
@@ -634,6 +701,8 @@ def verify_command(args: argparse.Namespace) -> None:
     tag = parse_release_tags(args.tag)[0]
     started_at = utc_now()
     status = require_attestation(tag, commit_statuses(repo, sha), repo)
+    run_id = attestation_run_id(status["target_url"], repo)
+    emit_github_output(args.github_output, {"run_id": run_id})
     report = {
         "name": "release-candidate-verification",
         "started_at": started_at,
@@ -643,12 +712,32 @@ def verify_command(args: argparse.Namespace) -> None:
         "artifacts": {
             "context": status["context"],
             "target_url": status["target_url"],
+            "run_id": run_id,
         },
         "commands": [],
-        "next": ["build", "publish"],
+        "next": ["publish"],
     }
     write_json(args.report, report)
     print(f"Verified {tag.value} at {sha}: {status['target_url']}")
+
+
+def release_files_command(args: argparse.Namespace) -> None:
+    tag = parse_release_tags(args.tag)[0]
+    started_at = utc_now()
+    root = Path(args.root).resolve()
+    files = require_release_files(root, tag, Path(args.files))
+    report = {
+        "name": "release-files",
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "status": "pass",
+        "inputs": {"root": str(root), "tag": tag.value, "files": args.files},
+        "artifacts": {"files": files},
+        "commands": [],
+        "next": ["publish"],
+    }
+    write_json(args.report, report)
+    print(f"{tag.value} has every candidate file: {', '.join(files)}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -677,6 +766,8 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--sha", required=True)
     create.add_argument("--tags", required=True)
     create.add_argument("--target-url", required=True)
+    create.add_argument("--plan", required=True)
+    create.add_argument("--build-reports", required=True)
     create.add_argument("--report")
     create.set_defaults(handler=attest_command)
 
@@ -685,7 +776,17 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--sha", required=True)
     verify.add_argument("--tag", required=True)
     verify.add_argument("--report")
+    verify.add_argument(
+        "--github-output", default=os.environ.get("GITHUB_OUTPUT")
+    )
     verify.set_defaults(handler=verify_command)
+
+    release_files = commands.add_parser("require-release-files")
+    release_files.add_argument("--root", default=".")
+    release_files.add_argument("--tag", required=True)
+    release_files.add_argument("--files", required=True)
+    release_files.add_argument("--report")
+    release_files.set_defaults(handler=release_files_command)
 
     build = commands.add_parser("build")
     build.add_argument(

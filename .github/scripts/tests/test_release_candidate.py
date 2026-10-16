@@ -108,6 +108,9 @@ class CandidatePlanTests(unittest.TestCase):
         self.assertEqual(
             {entry["tag"] for entry in matrix}, {"plugin-fixture-v1.2.3"}
         )
+        self.assertEqual(
+            {entry["bin_name"] for entry in matrix}, {"fixture-package"}
+        )
 
     def test_rejects_host_manifest_version_mismatch(self):
         write_host(self.root, "3.41.0")
@@ -115,6 +118,138 @@ class CandidatePlanTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "tag expects version"):
             rc.candidate_plan(self.root, tags)
+
+
+def write_build_report(directory: Path, kind, package, target, status="pass"):
+    directory.mkdir(parents=True)
+    (directory / "release-build-report.json").write_text(
+        json.dumps(
+            {
+                "name": "release-build",
+                "status": status,
+                "inputs": {"kind": kind, "package": package, "target": target},
+            }
+        )
+    )
+
+
+class CandidateBuildGateTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        write_plugin(self.root, "fixture", "plugin-fixture", "1.2.3", ["linux", "macos"])
+        write_host(self.root, "3.41.1")
+        self.tags = rc.parse_release_tags("plugin-fixture-v1.2.3 qol-tray-v3.41.1")
+        self.plan = rc.candidate_plan(self.root, self.tags)
+        self.reports = self.root / "candidates"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def write_every_build(self, skip=None, failed=None):
+        builds = [
+            ("plugin", "fixture-package", target)
+            for target in (
+                "x86_64-unknown-linux-gnu",
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin",
+            )
+        ] + [(kind, None, None) for kind in rc.HOST_BUILD_KINDS]
+        for index, build in enumerate(builds):
+            if build == skip:
+                continue
+            status = "failed" if build == failed else "pass"
+            write_build_report(self.reports / f"candidate-{index}", *build, status)
+
+    def test_every_planned_target_with_a_passing_build_attests(self):
+        self.write_every_build()
+
+        rc.require_candidate_builds(self.plan, self.reports)
+
+    def test_a_skipped_or_failed_candidate_refuses_the_attestation(self):
+        cases = [
+            {"skip": ("plugin", "fixture-package", "x86_64-apple-darwin")},
+            {"skip": ("qol-tray-windows", None, None)},
+            {"failed": ("plugin", "fixture-package", "aarch64-apple-darwin")},
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory() as reports:
+                    self.reports = Path(reports) / "candidates"
+                    self.write_every_build(**case)
+                    with self.assertRaisesRegex(RuntimeError, "no passing candidate build"):
+                        rc.require_candidate_builds(self.plan, self.reports)
+
+    def test_no_reports_at_all_refuses_the_attestation(self):
+        with self.assertRaisesRegex(RuntimeError, "plugin/fixture-package/x86_64-unknown-linux-gnu"):
+            rc.require_candidate_builds(self.plan, self.root / "missing")
+
+    @patch.object(rc, "gh_json")
+    def test_attest_posts_nothing_without_every_candidate_build(self, gh_json):
+        plan_report = self.root / "plan.json"
+        plan_report.write_text(json.dumps({"artifacts": {"plan": self.plan}}))
+        self.write_every_build(skip=("qol-tray-linux", None, None))
+        args = rc.build_parser().parse_args(
+            [
+                "attest",
+                "--repo", "qol-tools/qol",
+                "--sha", "a" * 40,
+                "--tags", "plugin-fixture-v1.2.3 qol-tray-v3.41.1",
+                "--target-url", "https://github.com/qol-tools/qol/actions/runs/42",
+                "--plan", str(plan_report),
+                "--build-reports", str(self.reports),
+            ]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "qol-tray-linux"):
+            args.handler(args)
+        gh_json.assert_not_called()
+
+    @patch.object(rc, "gh_json")
+    def test_attest_refuses_a_plan_for_other_tags(self, gh_json):
+        plan_report = self.root / "plan.json"
+        plan_report.write_text(json.dumps({"artifacts": {"plan": self.plan}}))
+        self.write_every_build()
+        args = rc.build_parser().parse_args(
+            [
+                "attest",
+                "--repo", "qol-tools/qol",
+                "--sha", "a" * 40,
+                "--tags", "plugin-fixture-v1.2.3",
+                "--target-url", "https://github.com/qol-tools/qol/actions/runs/42",
+                "--plan", str(plan_report),
+                "--build-reports", str(self.reports),
+            ]
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "candidate plan covers"):
+            args.handler(args)
+        gh_json.assert_not_called()
+
+
+class ReleaseFilesTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        write_plugin(self.root, "fixture", "plugin-fixture", "1.2.3", ["linux", "windows"])
+        self.tag = rc.parse_release_tags("plugin-fixture-v1.2.3")[0]
+        self.files = self.root / "release_files"
+        self.files.mkdir()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_every_target_binary_must_come_from_the_candidate_run(self):
+        (self.files / "plugin-fixture-linux-x86_64").write_text("elf")
+
+        with self.assertRaisesRegex(RuntimeError, "plugin-fixture-windows-x86_64.exe"):
+            rc.require_release_files(self.root, self.tag, self.files)
+
+        (self.files / "plugin-fixture-windows-x86_64.exe").write_text("pe")
+        self.assertEqual(
+            rc.require_release_files(self.root, self.tag, self.files),
+            ["plugin-fixture-linux-x86_64", "plugin-fixture-windows-x86_64.exe"],
+        )
 
 
 class SourceCiTests(unittest.TestCase):
@@ -504,6 +639,44 @@ class AttestationTests(unittest.TestCase):
         status = rc.require_attestation(tag, statuses, "qol-tools/qol")
 
         self.assertEqual(status["state"], "success")
+
+    def test_attestation_names_the_run_that_holds_the_candidate_files(self):
+        repo = "qol-tools/qol"
+        cases = [
+            ("https://github.com/qol-tools/qol/actions/runs/42", 42),
+            ("https://github.com/qol-tools/qol/actions/runs/42/attempts/2", 42),
+            ("https://github.com/other/qol/actions/runs/42", None),
+            ("https://github.com/qol-tools/qol/actions/runs/", None),
+        ]
+        for url, expected in cases:
+            with self.subTest(url=url):
+                self.assertEqual(rc.attestation_run_id(url, repo), expected)
+
+    @patch.object(rc, "commit_statuses")
+    def test_verify_hands_the_candidate_run_to_the_publish_job(self, statuses):
+        tag = rc.parse_release_tags("qol-tray-v3.41.1")[0]
+        statuses.return_value = [
+            {
+                "context": rc.attestation_context(tag),
+                "state": "success",
+                "created_at": "2026-07-30T11:00:00Z",
+                "target_url": "https://github.com/qol-tools/qol/actions/runs/77",
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "github-output"
+            args = rc.build_parser().parse_args(
+                [
+                    "verify",
+                    "--repo", "qol-tools/qol",
+                    "--sha", "a" * 40,
+                    "--tag", tag.value,
+                    "--github-output", str(output),
+                ]
+            )
+            args.handler(args)
+
+            self.assertEqual(output.read_text(), "run_id=77\n")
 
     def test_rejects_missing_failed_and_untrusted_attestations(self):
         tag = rc.parse_release_tags("qol-tray-v3.41.1")[0]
