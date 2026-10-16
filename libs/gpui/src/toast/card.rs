@@ -369,6 +369,7 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground, kit: Ki
             div()
                 .w_full()
                 .text_scaled(TextStyle::Title, scale)
+                .truncate()
                 .text_color(rgb(ground.ink))
                 .child(row.toast.title.clone()),
         );
@@ -381,6 +382,7 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground, kit: Ki
             div()
                 .w_full()
                 .text_scaled(TextStyle::Code, scale)
+                .truncate()
                 .text_color(rgb(ink))
                 .child(file_name(&row.toast.message))
         } else {
