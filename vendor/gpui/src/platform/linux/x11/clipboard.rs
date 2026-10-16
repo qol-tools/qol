@@ -988,7 +988,6 @@ impl Clipboard {
         self.inner.write(data, selection, wait)
     }
 
-    #[allow(unused)]
     pub(crate) fn set_image(
         &self,
         image: Image,
@@ -1006,7 +1005,7 @@ impl Clipboard {
         };
         let data = vec![ClipboardData {
             bytes: image.bytes,
-            format: self.inner.atoms.PNG__MIME,
+            format,
         }];
         self.inner.write(data, selection, wait)
     }

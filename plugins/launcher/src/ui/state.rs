@@ -87,7 +87,6 @@ pub struct FlowSession {
     pub detail: bool,
     pub status: Option<Badge>,
     pub sheet: bool,
-    pub copied: bool,
     pub details: std::collections::HashMap<String, FlowDetail>,
     pub asked: std::collections::HashSet<String>,
 }
@@ -161,7 +160,6 @@ impl LauncherState {
             detail: false,
             status: None,
             sheet: false,
-            copied: false,
             details: Default::default(),
             asked: Default::default(),
         });

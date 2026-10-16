@@ -1554,13 +1554,19 @@ impl LinuxClient for X11Client {
 
     fn write_to_clipboard(&self, item: crate::ClipboardItem) {
         let mut state = self.0.borrow_mut();
-        state
-            .clipboard
-            .set_text(
+        let written = match image_entry(&item) {
+            Some(image) => state.clipboard.set_image(
+                image.clone(),
+                clipboard::ClipboardKind::Clipboard,
+                clipboard::WaitConfig::None,
+            ),
+            None => state.clipboard.set_text(
                 std::borrow::Cow::Owned(item.text().unwrap_or_default()),
                 clipboard::ClipboardKind::Clipboard,
                 clipboard::WaitConfig::None,
-            )
+            ),
+        };
+        written
             .context("X11: Failed to write to clipboard (clipboard)")
             .log_with_level(log::Level::Debug);
         state.clipboard_item.replace(item);
@@ -2488,4 +2494,25 @@ fn get_dpi_factor((width_px, height_px): (u32, u32), (width_mm, height_mm): (u64
 #[inline]
 fn valid_scale_factor(scale_factor: f32) -> bool {
     scale_factor.is_sign_positive() && scale_factor.is_normal()
+}
+
+fn image_entry(item: &crate::ClipboardItem) -> Option<&crate::Image> {
+    match item.entries().first() {
+        Some(crate::ClipboardEntry::Image(image)) => Some(image),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::image_entry;
+    use crate::{ClipboardItem, Image, ImageFormat};
+
+    #[test]
+    fn an_image_item_is_written_as_an_image_and_text_as_text() {
+        let png = Image::from_bytes(ImageFormat::Png, vec![0x89, b'P', b'N', b'G']);
+        let image = ClipboardItem::new_image(&png);
+        assert_eq!(image_entry(&image), Some(&png));
+        assert!(image_entry(&ClipboardItem::new_string("text".to_string())).is_none());
+    }
 }

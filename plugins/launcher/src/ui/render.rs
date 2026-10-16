@@ -195,11 +195,6 @@ impl Render for LauncherView {
         if flow_preview {
             self.request_flow_detail(cx);
         }
-        let flow_copied = self
-            .state
-            .flow
-            .as_ref()
-            .is_some_and(|session| session.copied);
         let width = content_width(flow_active && !flow_preview);
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
@@ -362,7 +357,6 @@ impl Render for LauncherView {
                             view::FlowChip {
                                 title: &entry.title,
                                 art: entry.icon.as_deref(),
-                                copied: flow_copied,
                             }
                         }),
                     },
