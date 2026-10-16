@@ -7029,9 +7029,10 @@ mod tests {
             100,
             BrightnessSource::Ddc,
         ));
-        let runtime = Mutex::new(runtime_with(control.clone(), store));
+        let runtime = Arc::new(Mutex::new(runtime_with(control.clone(), store)));
         let (tx, rx) = mpsc::channel();
-        let loop_thread = std::thread::spawn(move || run_loop(&runtime, &rx));
+        let looped = runtime.clone();
+        let loop_thread = std::thread::spawn(move || run_loop(&looped, &rx));
         tx.send(Command::Brightness {
             direction: -1,
             phase: Phase::Start,
@@ -7041,6 +7042,7 @@ mod tests {
             std::thread::yield_now();
         }
         std::thread::sleep(HOLD_DEBOUNCE + Duration::from_millis(10));
+        let held = runtime.lock().unwrap();
         for _ in 0..3 {
             tx.send(Command::Brightness {
                 direction: -1,
@@ -7060,6 +7062,7 @@ mod tests {
             })
             .unwrap();
         }
+        drop(held);
         drop(tx);
         loop_thread.join().expect("the loop must exit");
         assert_eq!(
