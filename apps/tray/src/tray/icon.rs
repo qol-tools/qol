@@ -30,7 +30,6 @@ macro_rules! art_set {
 }
 
 const ART: ArtSet = match ICON_SIZE {
-    24 => art_set!(24),
     32 => art_set!(32),
     64 => art_set!(64),
     _ => panic!("no tray art for this icon size"),
