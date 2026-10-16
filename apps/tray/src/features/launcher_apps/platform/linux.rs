@@ -1,5 +1,6 @@
 use super::super::icon::{LauncherIcon, MarkFiles};
 use super::super::LauncherEntry;
+use crate::installer::platform::linux::INSTALLER_DESKTOP_ENTRIES;
 use crate::shortcuts::model::AppRef;
 use anyhow::{Context, Result};
 use qol_apps::desktop::{
@@ -152,7 +153,7 @@ fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
         if !name_str.starts_with(DESKTOP_PREFIX) || !name_str.ends_with(".desktop") {
             continue;
         }
-        if expected.contains(name_str) {
+        if expected.contains(name_str) || INSTALLER_DESKTOP_ENTRIES.contains(&name_str) {
             continue;
         }
         let _ = std::fs::remove_file(entry.path());
@@ -320,6 +321,26 @@ mod tests {
             mode & 0o111 != 0,
             "desktop entry must be executable, mode={mode:o}"
         );
+    }
+
+    #[test]
+    fn stale_cleanup_keeps_the_installer_entries() {
+        let dir = TempDir::new().unwrap();
+        for name in INSTALLER_DESKTOP_ENTRIES
+            .iter()
+            .chain(&["qol-shortcut-gone.desktop", "qol-command-kept.desktop"])
+        {
+            std::fs::write(dir.path().join(name), "[Desktop Entry]\n").unwrap();
+        }
+        let expected = HashSet::from(["qol-command-kept.desktop".to_string()]);
+
+        clean_stale(dir.path(), &expected).unwrap();
+
+        for name in INSTALLER_DESKTOP_ENTRIES {
+            assert!(dir.path().join(name).exists(), "{name} was removed");
+        }
+        assert!(dir.path().join("qol-command-kept.desktop").exists());
+        assert!(!dir.path().join("qol-shortcut-gone.desktop").exists());
     }
 
     #[test]

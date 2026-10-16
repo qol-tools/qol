@@ -18,6 +18,11 @@ const ICONS: [(u32, &[u8]); 9] = [
     (512, include_bytes!("../../../../assets/icons/512.png")),
 ];
 
+const APP_DESKTOP_ENTRY: &str = "qol-tray.desktop";
+const SETTINGS_SURFACE_DESKTOP_ENTRY: &str = "qol-settings-surface.desktop";
+pub(crate) const INSTALLER_DESKTOP_ENTRIES: [&str; 2] =
+    [APP_DESKTOP_ENTRY, SETTINGS_SURFACE_DESKTOP_ENTRY];
+
 pub(super) struct Platform;
 
 impl InstallerOps for Platform {
@@ -63,9 +68,9 @@ impl InstallerOps for Platform {
         let Ok(current_exe) = std::env::current_exe() else {
             return Ok(());
         };
-        let installed = crate::installer::has_install_marker(&current_exe)
-            && crate::installer::mode::is_production_mode();
-        ensure_linux_desktop_entries(&current_exe, installed)
+        let installed = crate::installer::has_install_marker(&current_exe);
+        let production = installed && crate::installer::mode::is_production_mode();
+        ensure_linux_desktop_entries(&current_exe, installed, production)
     }
 
     fn warn_system_install_conflict(&self) {
@@ -117,8 +122,12 @@ fn desktop_apps_dir() -> Result<PathBuf> {
     Ok(data_dir.join("applications"))
 }
 
-fn ensure_linux_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {
-    let icons_changed = include_app_entry && heal_icons();
+fn ensure_linux_desktop_entries(
+    binary_path: &Path,
+    installed: bool,
+    include_app_entry: bool,
+) -> Result<()> {
+    let icons_changed = installed && heal_icons();
     let apps_dir = desktop_apps_dir()?;
     std::fs::create_dir_all(&apps_dir)?;
     if write_desktop_entries(&apps_dir, binary_path, include_app_entry)? || icons_changed {
@@ -144,14 +153,14 @@ fn write_desktop_entries(
 ) -> Result<bool> {
     let app_changed = if include_app_entry {
         write_if_changed(
-            &apps_dir.join("qol-tray.desktop"),
+            &apps_dir.join(APP_DESKTOP_ENTRY),
             render_app_desktop_entry(binary_path).as_bytes(),
         )?
     } else {
         false
     };
     let settings_changed = write_if_changed(
-        &apps_dir.join("qol-settings-surface.desktop"),
+        &apps_dir.join(SETTINGS_SURFACE_DESKTOP_ENTRY),
         render_settings_surface_desktop_entry(binary_path).as_bytes(),
     )?;
     Ok(app_changed || settings_changed)
@@ -209,6 +218,7 @@ fn refresh_caches() {
             .arg(dir.join("applications"))
             .output();
         let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["--force", "--ignore-theme-index"])
             .arg(dir.join("icons").join("hicolor"))
             .output();
     }
