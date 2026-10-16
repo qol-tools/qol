@@ -80,6 +80,10 @@ pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     platform::request(plugin_id)
 }
 
+pub fn reopen(plugin_id: &str) -> anyhow::Result<bool> {
+    platform::reopen(plugin_id)
+}
+
 pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
     platform::request(tool.wire_id())
 }

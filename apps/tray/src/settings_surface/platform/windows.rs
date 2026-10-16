@@ -2,7 +2,7 @@ use windows_sys::Win32::Foundation::FILETIME;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 
 pub(in crate::settings_surface) use super::gpui_host::{
-    apply_theme, plugins_changed, prewarm, request, run, show_toast, stop, wait_until_ready,
+    apply_theme, plugins_changed, prewarm, reopen, request, run, show_toast, stop, wait_until_ready,
 };
 
 pub(in crate::settings_surface) fn native_available() -> bool {
