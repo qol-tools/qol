@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
-const ICONS: [(u32, &str); 3] = [
+const ICONS: [(u32, &str); 7] = [
+    (16, "assets/icons/16.png"),
+    (24, "assets/icons/24.png"),
+    (32, "assets/icons/32.png"),
+    (48, "assets/icons/48.png"),
     (64, "assets/icons/64.png"),
     (128, "assets/icons/128.png"),
     (256, "assets/icons/256.png"),

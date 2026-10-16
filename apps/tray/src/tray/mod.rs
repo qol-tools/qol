@@ -1,5 +1,6 @@
 pub mod icon;
 pub mod platform;
+pub mod tone;
 
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
@@ -22,11 +23,7 @@ impl TrayManager {
         events: Arc<EventBus>,
         post_pull_task: Option<tokio::task::JoinHandle<()>>,
     ) -> Result<Self> {
-        let icon = if update_available {
-            icon::create_icon_with_dot()
-        } else {
-            icon::create_icon()
-        };
+        let icon = icon::tray_icon(update_available, tone::current());
         let tray = platform::create_tray(
             feature_registry,
             shutdown_tx.clone(),

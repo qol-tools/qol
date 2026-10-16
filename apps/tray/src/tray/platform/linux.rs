@@ -13,6 +13,9 @@ type StartupTx = std::sync::mpsc::Sender<StartupResult>;
 
 static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> = OnceCell::new();
 
+pub(crate) const ICON_SIZE: u32 = 24;
+const TONE_REFRESH_SECONDS: u32 = 10;
+
 pub enum PlatformTray {
     Linux,
 }
@@ -115,9 +118,26 @@ fn run_tray_thread(
         return;
     };
     setup_event_loop(router, shutdown_tx);
+    follow_panel_tone(tray_icon, update_available);
     let _ = startup_tx.send(Ok(()));
-    std::mem::forget(tray_icon);
     gtk::main();
+}
+
+fn follow_panel_tone(tray_icon: TrayIcon, update_available: bool) {
+    use crate::tray::{icon, tone};
+
+    let mut shown = tone::current();
+    glib::timeout_add_seconds_local(TONE_REFRESH_SECONDS, move || {
+        let current = tone::current();
+        if current != shown {
+            shown = current;
+            let art = icon::tray_icon(update_available, current);
+            if let Err(error) = tray_icon.set_icon(Some(art)) {
+                log::warn!("failed to swap the tray icon for the panel tone: {error}");
+            }
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 fn build_menu_and_icon(

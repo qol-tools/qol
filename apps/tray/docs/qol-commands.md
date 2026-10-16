@@ -26,10 +26,9 @@ Two durable conventions worth knowing:
 - Commands are quiet by default; `-v`/`--verbose` surfaces child-command output.
 - Version bumps, tags, and releases are owned by `.github/workflows/plugin-version.yml` and `.github/workflows/qol-tray-release.yml`; `qol` never touches the release machinery.
 
-Two operations stay direct invocations, not `qol` commands:
+One operation stays a direct invocation, not a `qol` command:
 
 ```bash
-bash apps/tray/scripts/generate-icons.sh
 cd plugins/bluetooth && node tools/smoke-daemon.mjs
 ```
 
