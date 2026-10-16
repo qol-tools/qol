@@ -218,6 +218,7 @@ fn refresh_caches() {
             .arg(dir.join("applications"))
             .output();
         let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["--force", "--ignore-theme-index"])
             .arg(dir.join("icons").join("hicolor"))
             .output();
     }
