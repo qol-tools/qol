@@ -575,7 +575,7 @@ class SquashMergeBumpTests(unittest.TestCase):
         self.assertEqual(pv.detect_bump([commit]), "patch")
 
 
-class BinaryGateTests(unittest.TestCase):
+class RebuildScopeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -610,63 +610,11 @@ class BinaryGateTests(unittest.TestCase):
     def plans(self, selected: str | None = None) -> dict[str, "pv.ReleasePlan"]:
         return {plan.unit.id: plan for plan in pv.compute_plans(self.root, selected)}
 
-    def test_shared_crate_change_is_probed(self):
+    def test_shared_crate_change_releases_every_dependent_plugin(self):
         self.commit("fix: shared", "libs/shared/lib.rs")
         plans = self.plans()
-        self.assertTrue(plans["qol-alpha"].probe)
-        self.assertTrue(plans["qol-beta"].probe)
-
-    def test_own_change_releases_without_a_probe(self):
-        self.commit("fix: shared", "libs/shared/lib.rs")
-        self.commit("fix: alpha", "plugins/alpha/main.rs")
-        plans = self.plans()
-        self.assertFalse(plans["qol-alpha"].probe)
-        self.assertTrue(plans["qol-beta"].probe)
-
-    def test_selected_release_is_never_probed(self):
-        self.commit("fix: shared", "libs/shared/lib.rs")
-        self.assertFalse(self.plans("qol-alpha")["qol-alpha"].probe)
-
-    def test_marker_skips_commits_already_proven_unchanged(self):
-        proven = self.commit("fix: shared", "libs/shared/lib.rs")
-        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", proven)
-        plans = self.plans()
-        self.assertNotIn("qol-beta", plans)
-        self.assertIn("qol-alpha", plans)
-
-    def test_newer_shared_commit_after_marker_is_probed_again(self):
-        proven = self.commit("fix: shared", "libs/shared/lib.rs")
-        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", proven)
-        self.commit("fix: shared again", "libs/shared/lib.rs")
-        plan = self.plans()["qol-beta"]
-        self.assertTrue(plan.probe)
-        self.assertEqual(plan.commit_count, 2)
-
-    def test_marker_off_the_current_history_is_ignored(self):
-        shared = self.commit("fix: shared", "libs/shared/lib.rs")
-        rewound = self.commit("fix: shared again", "libs/shared/lib.rs")
-        git(self.root, "update-ref", f"{pv.PROBE_REF_PREFIX}qol-beta", rewound)
-        git(self.root, "reset", "--quiet", "--hard", shared)
-        self.assertTrue(self.plans()["qol-beta"].probe)
-
-    def test_unchanged_units_need_every_target_identical(self):
-        self.commit("fix: shared", "libs/shared/lib.rs")
-        matrix = pv.probe_matrix(self.root, list(self.plans().values()))
-        self.assertEqual(
-            sorted((entry["unit"], entry["previous_tag"]) for entry in matrix),
-            [("qol-alpha", "qol-alpha-v0.1.0"), ("qol-beta", "qol-beta-v0.1.0")],
-        )
-        reports = self.root / "reports"
-        reports.mkdir()
-        target = matrix[0]["target"]
-        (reports / "alpha.json").write_text(
-            f'{{"unit": "qol-alpha", "target": "{target}", "identical": true}}'
-        )
-        (reports / "beta.json").write_text(
-            f'{{"unit": "qol-beta", "target": "{target}", "identical": false}}'
-        )
-        self.assertEqual(pv.unchanged_units(matrix, reports), {"qol-alpha"})
-        self.assertEqual(pv.unchanged_units(matrix, self.root / "missing"), set())
+        self.assertEqual(sorted(plans), ["qol-alpha", "qol-beta"])
+        self.assertEqual({plan.new_version for plan in plans.values()}, {"0.1.1"})
 
     def test_global_build_config_rebuilds_every_plugin(self):
         sha = self.commit("fix: toolchain", "rust-toolchain.toml")

@@ -11,17 +11,27 @@ on:
   workflow_run:
     workflows: [tests]
     types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: plugin-version-main
+  group: >-
+    ${{
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.conclusion == 'success'))
+      && 'plugin-version-main'
+      || format('plugin-version-idle-{0}', github.run_id)
+    }}
   cancel-in-progress: false
 
 jobs:
-  probe_plan:
-    name: Plan binary probes
+  prepare:
+    name: Prepare exact release candidate
     if: >-
       ${{
         (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
@@ -29,120 +39,6 @@ jobs:
          github.event.workflow_run.event == 'push' &&
          github.event.workflow_run.head_branch == 'main' &&
          github.event.workflow_run.conclusion == 'success')
-      }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    env:
-      SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-    outputs:
-      probe_matrix: ${{ steps.plan.outputs.probe_matrix }}
-      has_probes: ${{ steps.plan.outputs.has_probes }}
-    steps:
-      - name: Checkout successful source commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Fetch tags and probe markers
-        run: git fetch --tags --force origin '+refs/qol/release-probe/*:refs/qol/release-probe/*'
-
-      - name: Find plugins changed only through shared crates
-        id: plan
-        shell: bash
-        env:
-          PLUGIN_ID: ${{ inputs.plugin_id }}
-        run: |
-          set -euo pipefail
-          args=()
-          if [[ -n "${PLUGIN_ID}" ]]; then
-            args+=(--plugin-id "${PLUGIN_ID}")
-          fi
-          python .github/scripts/plugin_version.py "${args[@]}"
-
-  probe:
-    name: Probe ${{ matrix.unit }} (${{ matrix.target }})
-    needs: probe_plan
-    if: needs.probe_plan.outputs.has_probes == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
-    permissions:
-      contents: read
-    # Same invocation as release.yml's build, so an unchanged plugin builds
-    # the same bytes as its last release.
-    env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}
-    # /Brepro drops the link timestamp from Windows binaries, so the release
-    # probe sees an unchanged plugin as unchanged. The steps are bash, and a
-    # Windows runner defaults to PowerShell.
-    defaults:
-      run:
-        shell: bash
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.probe_plan.outputs.probe_matrix) }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - uses: ./.github/actions/rust-setup
-        with:
-          cache-key: plugin-release-${{ matrix.target }}
-          targets: ${{ matrix.target }}
-
-      - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
-
-      - name: Build plugin at the source commit
-        run: >
-          python .github/scripts/release_candidate.py build
-          --kind plugin
-          --package "${{ matrix.package }}"
-          --target "${{ matrix.target }}"
-          --report "${{ runner.temp }}/release-build-report.json"
-
-      - name: Compare with the last release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >
-          python .github/scripts/release_probe.py
-          --binary "target/${{ matrix.target }}/release/${{ matrix.bin_name }}${{ matrix.ext }}"
-          --repo "${{ github.repository }}"
-          --unit "${{ matrix.unit }}"
-          --target "${{ matrix.target }}"
-          --previous-tag "${{ matrix.previous_tag }}"
-          --asset "${{ matrix.artifact_name }}${{ matrix.ext }}"
-          --report "${{ runner.temp }}/release-probe-report.json"
-
-      - name: Upload probe report
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-probe-${{ matrix.unit }}-${{ matrix.target }}
-          path: ${{ runner.temp }}/release-probe-report.json
-          if-no-files-found: error
-
-  prepare:
-    name: Prepare exact release candidate
-    needs: [probe_plan, probe]
-    if: >-
-      ${{
-        always() &&
-        needs.probe_plan.result == 'success' &&
-        (needs.probe.result == 'success' || needs.probe.result == 'skipped')
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -173,15 +69,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Fetch tags and probe markers
-        run: git fetch --tags --force origin '+refs/qol/release-probe/*:refs/qol/release-probe/*'
-
-      - name: Download probe reports
-        if: needs.probe_plan.outputs.has_probes == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: release-probe-*
-          path: ${{ runner.temp }}/release-probes
+      - name: Fetch tags
+        run: git fetch --tags --force origin
 
       - name: Verify successful source CI
         env:
@@ -209,25 +98,10 @@ jobs:
           if [[ -n "${PLUGIN_ID}" ]]; then
             args+=(--plugin-id "${PLUGIN_ID}")
           fi
-          mkdir -p "${RUNNER_TEMP}/release-probes"
           python .github/scripts/plugin_version.py \
             --apply \
-            --probe-reports "${RUNNER_TEMP}/release-probes" \
             --tag-file "${RUNNER_TEMP}/release-tags.txt" \
             "${args[@]}"
-
-      - name: Record plugins whose binary is unchanged
-        if: steps.version.outputs.unchanged_units != ''
-        shell: bash
-        env:
-          UNCHANGED_UNITS: ${{ steps.version.outputs.unchanged_units }}
-        run: |
-          set -euo pipefail
-          refs=()
-          for unit in ${UNCHANGED_UNITS}; do
-            refs+=("+${SOURCE_SHA}:refs/qol/release-probe/${unit}")
-          done
-          git push origin "${refs[@]}"
 
       - name: Summarize release plan
         shell: bash
@@ -308,12 +182,12 @@ jobs:
       contents: read
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
-    # Warning parity with CI and release.yml; a new lint failure blocks pre-tag.
+    # Warning parity with CI; a new lint failure blocks pre-tag.
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}
-    # /Brepro drops the link timestamp from Windows binaries, so the release
-    # probe sees an unchanged plugin as unchanged. The steps are bash, and a
-    # Windows runner defaults to PowerShell.
+    # /Brepro drops the link timestamp from Windows binaries, so a rebuild of
+    # the same commit gives the same bytes. The steps are bash, and a Windows
+    # runner defaults to PowerShell.
     defaults:
       run:
         shell: bash
@@ -345,6 +219,29 @@ jobs:
           --package "${{ matrix.package }}"
           --target "${{ matrix.target }}"
           --report "${{ runner.temp }}/release-build-report.json"
+
+      - name: Stage release files
+        env:
+          TARGET: ${{ matrix.target }}
+          BIN_NAME: ${{ matrix.bin_name }}
+          EXT: ${{ matrix.ext }}
+          ARTIFACT_NAME: ${{ matrix.artifact_name }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          cp "target/$TARGET/release/$BIN_NAME$EXT" "$ARTIFACT_NAME$EXT"
+          if cargo tree -p "$PACKAGE" --target "$TARGET" -e normal --prefix none | grep -q '^qol-gpui v'; then
+            cp libs/gpui/assets/fonts/OFL.txt IBM-Plex-OFL.txt
+          fi
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.tag }}-${{ matrix.target }}
+          path: |
+            ${{ matrix.artifact_name }}*
+            IBM-Plex-OFL.txt
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload build report
         if: always()
@@ -393,6 +290,28 @@ jobs:
           --kind qol-tray-linux
           --report "${RUNNER_TEMP}/release-build-report.json"
 
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/debian/*.deb dist/
+          ARCH=$(uname -m)
+          BUNDLE="qol-tray-linux-${ARCH}"
+          mkdir -p "${BUNDLE}"
+          cp target/release/qol-tray "${BUNDLE}/"
+          cp libs/gpui/assets/fonts/OFL.txt "${BUNDLE}/IBM-Plex-OFL.txt"
+          tar czf "${BUNDLE}.tar.gz" "${BUNDLE}"
+          cp "${BUNDLE}.tar.gz" dist/
+          ls -lh dist/
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ needs.prepare.outputs.qol_tray_tag }}-linux
+          path: dist/*
+          retention-days: 90
+          if-no-files-found: error
+
       - name: Upload build report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -411,6 +330,7 @@ jobs:
       contents: read
     env:
       RUSTFLAGS: -D warnings
+      RELEASE_TAG: ${{ needs.prepare.outputs.qol_tray_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -435,6 +355,80 @@ jobs:
           python .github/scripts/release_candidate.py build
           --kind qol-tray-macos
           --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Assemble universal app bundle
+        shell: bash
+        run: |
+          VERSION="${RELEASE_TAG#qol-tray-v}"
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          CONTENTS_DIR="${APP_DIR}/Contents"
+          MACOS_DIR="${CONTENTS_DIR}/MacOS"
+          RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+
+          rm -rf "${APP_DIR}"
+          mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+
+          lipo -create \
+            target/aarch64-apple-darwin/release/qol-tray \
+            target/x86_64-apple-darwin/release/qol-tray \
+            -output "${MACOS_DIR}/qol-tray"
+
+          chmod +x "${MACOS_DIR}/qol-tray"
+          cp apps/tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
+          cp libs/gpui/assets/fonts/OFL.txt "${RESOURCES_DIR}/IBM-Plex-OFL.txt"
+
+          cat > "${CONTENTS_DIR}/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+          <key>CFBundleIdentifier</key>
+          <string>com.qol-tools.qol-tray</string>
+          <key>CFBundleName</key>
+          <string>QoL Tray</string>
+          <key>CFBundleExecutable</key>
+          <string>qol-tray</string>
+          <key>CFBundleIconFile</key>
+          <string>qol-tray</string>
+          <key>CFBundleVersion</key>
+          <string>${VERSION}</string>
+          <key>CFBundleShortVersionString</key>
+          <string>${VERSION}</string>
+          <key>LSUIElement</key>
+          <true/>
+          <key>LSMinimumSystemVersion</key>
+          <string>11.0</string>
+          <key>NSBluetoothAlwaysUsageDescription</key>
+          <string>QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Ad-hoc codesign bundle
+        shell: bash
+        run: |
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          codesign --force --deep --sign - "${APP_DIR}"
+          codesign --verify --deep --strict "${APP_DIR}"
+
+      - name: Build updater archive
+        shell: bash
+        run: |
+          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
+          DIST_DIR="${RUNNER_TEMP}/dist"
+
+          rm -rf "${DIST_DIR}"
+          mkdir -p "${DIST_DIR}"
+
+          tar -C "${RUNNER_TEMP}" -czf "${DIST_DIR}/qol-tray-macos-universal.tar.gz" "QoL Tray.app"
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ needs.prepare.outputs.qol_tray_tag }}-macos
+          path: ${{ runner.temp }}/dist/*
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload build report
         if: always()
@@ -481,6 +475,25 @@ jobs:
           python .github/scripts/release_candidate.py build
           --kind qol-tray-windows
           --report "${RUNNER_TEMP}/release-build-report.json"
+
+      - name: Prepare artifacts
+        run: |
+          BUILT=target/x86_64-pc-windows-msvc/release
+          BUNDLE=qol-tray-windows-x86_64
+          mkdir -p dist "${BUNDLE}"
+          cp "${BUILT}/qol-tray.exe" "dist/${BUNDLE}.exe"
+          cp "${BUILT}/qol-tray.exe" "${BUILT}/qol-tray-install.exe" "${BUNDLE}/"
+          cp libs/gpui/assets/fonts/OFL.txt "${BUNDLE}/IBM-Plex-OFL.txt"
+          7z a -tzip "dist/${BUNDLE}.zip" "${BUNDLE}"
+          ls -l dist/
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ needs.prepare.outputs.qol_tray_tag }}-windows
+          path: dist/*
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Upload build report
         if: always()
@@ -533,6 +546,18 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Download candidate plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-candidate-plan-${{ needs.prepare.outputs.candidate_sha }}
+          path: ${{ runner.temp }}/candidate-plan
+
+      - name: Download candidate build reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: candidate-*
+          path: ${{ runner.temp }}/candidate-builds
+
       - name: Attest exact release candidate
         run: |
           python .github/scripts/release_candidate.py attest \
@@ -540,6 +565,8 @@ jobs:
             --sha "${CANDIDATE_SHA}" \
             --tags "${RELEASE_TAGS}" \
             --target-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --plan "${RUNNER_TEMP}/candidate-plan/release-candidate-report.json" \
+            --build-reports "${RUNNER_TEMP}/candidate-builds" \
             --report "${RUNNER_TEMP}/release-attestation-report.json"
 
       - name: Create immutable tags

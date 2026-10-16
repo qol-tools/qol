@@ -28,13 +28,11 @@ env:
 
 jobs:
   setup:
-    name: Resolve crate and platform matrix
+    name: Verify exact release candidate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      package: ${{ steps.resolve.outputs.package }}
-      bin_name: ${{ steps.resolve.outputs.bin_name }}
-      matrix: ${{ steps.resolve.outputs.matrix }}
+      candidate_run: ${{ steps.verify.outputs.run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,6 +43,7 @@ jobs:
           python-version: "3.12"
 
       - name: Verify exact release candidate
+        id: verify
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -54,98 +53,17 @@ jobs:
             --tag "${RELEASE_TAG}" \
             --report "${RUNNER_TEMP}/release-verification-report.json"
 
-      - name: Resolve tag to crate
-        id: resolve
-        shell: bash
-        run: |
-          tag="${RELEASE_TAG}"
-          if [[ ! "$tag" =~ ^([a-z0-9][a-z0-9-]*)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::tag '$tag' must match <plugin-id>-vX.Y.Z"
-            exit 1
-          fi
-          plugin_id="${BASH_REMATCH[1]}"
-          tag_version="${BASH_REMATCH[2]}"
-          python3 .github/scripts/plugin_matrix.py . "$plugin_id" "$tag_version" >> "$GITHUB_OUTPUT"
-
-  build:
-    name: Build ${{ matrix.target }}
-    needs: setup
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
-    # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
-    # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
-    # Warning parity with CI and the candidate jobs that gated this release.
-    env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C link-arg=/Brepro -C target-feature=+crt-static' || '' }}
-    # /Brepro drops the link timestamp from Windows binaries, so the release
-    # probe sees an unchanged plugin as unchanged. The steps are bash, and a
-    # Windows runner defaults to PowerShell.
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.RELEASE_REF }}
-
-      - uses: ./.github/actions/rust-setup
-        with:
-          cache-key: plugin-release-${{ matrix.target }}
-          targets: ${{ matrix.target }}
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
-
-      - name: Build
-        env:
-          PACKAGE: ${{ needs.setup.outputs.package }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          python .github/scripts/release_candidate.py build \
-            --kind plugin \
-            --package "${PACKAGE}" \
-            --target "${TARGET}" \
-            --report "${RUNNER_TEMP}/release-build-report.json"
-
-      - name: Stage artifact
-        env:
-          TARGET: ${{ matrix.target }}
-          BIN_NAME: ${{ needs.setup.outputs.bin_name }}
-          EXT: ${{ matrix.ext }}
-          ARTIFACT_NAME: ${{ matrix.artifact_name }}
-          PACKAGE: ${{ needs.setup.outputs.package }}
-        run: |
-          cp "target/$TARGET/release/$BIN_NAME$EXT" "$ARTIFACT_NAME$EXT"
-          if cargo tree -p "$PACKAGE" --target "$TARGET" -e normal --prefix none | grep -q '^qol-gpui v'; then
-            cp libs/gpui/assets/fonts/OFL.txt IBM-Plex-OFL.txt
-          fi
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: |
-            ${{ matrix.artifact_name }}*
-            IBM-Plex-OFL.txt
-          retention-days: 90
-          if-no-files-found: error
-
   # Rerunnable: a tag that already holds this release is accepted, different
   # content is refused.
   registry:
     name: Publish registry artifact
-    needs: [setup, build]
+    needs: setup
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       packages: write
+      actions: read
     env:
       RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
@@ -154,15 +72,29 @@ jobs:
           ref: ${{ env.RELEASE_REF }}
           persist-credentials: false
 
-      - name: Download artifacts
+      - name: Download candidate files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          run-id: ${{ needs.setup.outputs.candidate_run }}
+          github-token: ${{ github.token }}
+          pattern: dist-${{ env.RELEASE_TAG }}-*
           path: artifacts
 
       - name: Collect release files
         run: |
           mkdir -p release_files
           find artifacts -type f -exec cp {} release_files/ \;
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Require every target
+        run: |
+          python .github/scripts/release_candidate.py require-release-files \
+            --tag "${RELEASE_TAG}" \
+            --files release_files \
+            --report "${RUNNER_TEMP}/release-files-report.json"
 
       - uses: ./.github/actions/rust-setup
         with:
