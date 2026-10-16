@@ -153,6 +153,9 @@ pub fn collect_flow_entries<'a>(
                 query,
                 row_actions: launcher.row_actions.clone(),
                 icon: Some(marks.path(icon::plugin_mark(plugin))),
+                enter: launcher.enter.clone().unwrap_or_default(),
+                panel: launcher.panel.unwrap_or_default(),
+                detail: launcher.detail.clone(),
             })
         })
         .collect()
@@ -381,6 +384,28 @@ mod tests {
         assert_eq!(flows[0].prompt, "a");
         assert_eq!(flows[0].query, "rows");
         assert_eq!(flows[0].icon, Some(marks.path(Mark::Qol)));
+        assert_eq!(flows[0].enter, launcher_flows::FlowEnter::Detail);
+        assert_eq!(flows[0].panel, launcher_flows::FlowPanel::None);
+        assert_eq!(flows[0].detail, None);
+    }
+
+    #[test]
+    fn collect_flow_entries_carries_enter_panel_and_detail() {
+        let runtime_toml = "schema_version = 1\n\n[query.rows]\ndescription = \"rows\"\npoll_interval_ms = 1000\ninput = { query = \"q\" }\n\n[query.detail]\ndescription = \"detail\"\npoll_interval_ms = 1000\ninput = { id = \"row id\" }\n";
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("qol-runtime.toml"), runtime_toml).unwrap();
+        let manifest = manifest(
+            "[plugin]\nid = \"c\"\nname = \"C\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[launcher]\nkind = \"flow\"\ntitle = \"c\"\nquery = \"rows\"\nenter = \"copy\"\npanel = \"preview\"\ndetail = \"detail\"\n",
+        );
+        let plugins = [Plugin::new(PluginId::new("c"), manifest, dir.path().into())];
+
+        let marks = MarkFiles::in_dir("/marks".into(), 0);
+        let flows = collect_flow_entries(plugins.iter(), &marks);
+
+        assert_eq!(flows.len(), 1);
+        assert_eq!(flows[0].enter, launcher_flows::FlowEnter::Copy);
+        assert_eq!(flows[0].panel, launcher_flows::FlowPanel::Preview);
+        assert_eq!(flows[0].detail.as_deref(), Some("detail"));
     }
 
     #[test]

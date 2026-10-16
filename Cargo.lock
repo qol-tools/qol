@@ -6544,6 +6544,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-clipboard"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "qol-apps",
+ "qol-config",
+ "qol-conventions",
+ "qol-fs",
+ "qol-headless",
+ "qol-log",
+ "qol-plugin-api",
+ "qol-plugin-daemon",
+ "qol-runtime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml 0.9.12+spec-1.1.0",
+ "workspace-hack",
+ "x11rb",
+]
+
+[[package]]
 name = "qol-color"
 version = "0.2.0"
 dependencies = [

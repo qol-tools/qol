@@ -17,8 +17,9 @@ use super::feedback::{self, Copied, Cue, Feedback, Placed};
 use super::files::{self, FileCard, Panel};
 use super::layout::{
     content_width, header_window_height, list_gap, window_height_for, window_height_for_detail,
-    window_height_for_trail, window_height_with_panel, APP_CARD_MIN, APP_GAP, FILES_PANEL_MIN,
-    FILE_CARD_MAX, FILE_INSET, FLOW_ROW_HEIGHT, HEADER_HEIGHT, LIST_PAD_Y, PANEL_GAP, WINDOW_WIDTH,
+    window_height_for_preview, window_height_for_trail, window_height_with_panel, APP_CARD_MIN,
+    APP_GAP, FILES_PANEL_MIN, FILE_CARD_MAX, FILE_INSET, FLOW_ROW_HEIGHT, HEADER_HEIGHT,
+    LIST_PAD_Y, PANEL_GAP, WINDOW_WIDTH,
 };
 use super::sizing;
 use super::state::PanelItem;
@@ -190,7 +191,16 @@ impl Render for LauncherView {
                 });
         let flow_verdict = self.state.flow_verdict();
         let files_mode = !flow_active && self.state.mode == SearchMode::Files;
-        let width = content_width(flow_active);
+        let flow_preview = self.state.flow_preview();
+        if flow_preview {
+            self.request_flow_detail(cx);
+        }
+        let flow_copied = self
+            .state
+            .flow
+            .as_ref()
+            .is_some_and(|session| session.copied);
+        let width = content_width(flow_active && !flow_preview);
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
         let VisibleRows {
@@ -211,7 +221,9 @@ impl Render for LauncherView {
             self.last_layout = placed;
         }
         self.load_details(wants, cx);
-        let content_height = if detail_ready {
+        let content_height = if flow_preview {
+            window_height_for_preview()
+        } else if detail_ready {
             window_height_for_detail()
         } else if flow_active {
             if result_count > 0 {
@@ -261,7 +273,7 @@ impl Render for LauncherView {
         self.sync_input_region(width, target_height, window);
         let results_height = content_height
             - header_window_height()
-            - if flow_active {
+            - if flow_active && !flow_preview {
                 qol_gpui::theme::HEIGHT_HINT_BAR
             } else {
                 0.0
@@ -346,6 +358,13 @@ impl Render for LauncherView {
                         list_focused: self.state.list_focused,
                         panel_active: files_mode && self.state.list_focused,
                         feedback: self.state.feedback.as_ref(),
+                        flow_chip: flow_entry.as_ref().filter(|_| flow_preview).map(|entry| {
+                            view::FlowChip {
+                                title: &entry.title,
+                                art: entry.icon.as_deref(),
+                                copied: flow_copied,
+                            }
+                        }),
                     },
                     flow_prompt
                         .as_deref()
@@ -354,7 +373,10 @@ impl Render for LauncherView {
                     window,
                     cx,
                 ))
-                .when(result_count > 0, |root| {
+                .when(flow_preview, |root| {
+                    root.child(self.flow_pane(results_height, window, cx))
+                })
+                .when(result_count > 0 && !flow_preview, |root| {
                     if flow_active {
                         if detail_ready {
                             match self.state.flow.as_ref().and_then(|session| {
@@ -429,7 +451,10 @@ impl Render for LauncherView {
                     }
                 })
                 .when(
-                    flow_active && result_count == 0 && flow_verdict == FlowVerdict::NoMemory,
+                    flow_active
+                        && !flow_preview
+                        && result_count == 0
+                        && flow_verdict == FlowVerdict::NoMemory,
                     |root| {
                         root.child(
                             div()
@@ -442,7 +467,7 @@ impl Render for LauncherView {
                         )
                     },
                 )
-                .when(flow_active, |root| {
+                .when(flow_active && !flow_preview, |root| {
                     root.child(if detail_ready {
                         view::hint_bar_detail()
                     } else {

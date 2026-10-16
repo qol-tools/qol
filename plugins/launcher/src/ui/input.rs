@@ -26,6 +26,8 @@ pub enum InputEffect {
     FlowDetailScrollDown,
     FlowExit,
     FlowDislike,
+    FlowSheet,
+    FlowRowAction(usize),
 }
 
 impl LauncherState {
@@ -35,6 +37,9 @@ impl LauncherState {
         modifiers: &Modifiers,
         result_count: usize,
     ) -> InputEffect {
+        if self.flow_preview() {
+            return self.apply_preview_key(key, modifiers, result_count);
+        }
         if self.flow.is_some() {
             return self.apply_flow_key(key, modifiers, result_count);
         }
@@ -171,7 +176,7 @@ impl LauncherState {
         }
     }
 
-    fn apply_flow_key(
+    pub(in crate::ui) fn apply_flow_key(
         &mut self,
         key: &str,
         modifiers: &Modifiers,
@@ -191,9 +196,12 @@ impl LauncherState {
         let shift = modifiers.shift;
         let alt = modifiers.alt;
         let span = text_edit::span(modifiers);
+        if let Some(index) = self.keyed_row_action(key, modifiers, result_count) {
+            return InputEffect::FlowRowAction(index);
+        }
         match key {
             "escape" | "esc" => InputEffect::FlowExit,
-            "enter" => InputEffect::FlowDetail,
+            "enter" => self.flow_enter_effect(),
             "up" if !secondary => {
                 self.move_up();
                 InputEffect::Navigate
@@ -270,7 +278,7 @@ impl LauncherState {
         }
     }
 
-    fn move_up(&mut self) {
+    pub(in crate::ui) fn move_up(&mut self) {
         if self.scroll_list.selected == 0 {
             self.previous_selected = None;
             self.register_nav(NavDirection::Up);
@@ -284,7 +292,7 @@ impl LauncherState {
         self.edge_hit = None;
     }
 
-    fn move_down(&mut self, result_count: usize) {
+    pub(in crate::ui) fn move_down(&mut self, result_count: usize) {
         if result_count == 0 {
             return;
         }
@@ -802,6 +810,9 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
             icon: None,
+            enter: Default::default(),
+            panel: Default::default(),
+            detail: None,
         }
     }
 

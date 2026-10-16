@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+qol-clipboard
+qol-clipboard.new
+.cargo/config.toml

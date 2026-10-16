@@ -1,3 +1,11 @@
+mod behavior;
+mod detail;
+mod rows;
+
+pub use behavior::{FlowEnter, FlowPanel};
+pub use detail::{DetailText, FlowDetail};
+pub use rows::{thumb_url, Badge, FlowRow, FlowRows, Preview, Tag, Tone};
+
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,6 +22,12 @@ pub struct FlowEntry {
     pub row_actions: Vec<qol_config::contract::RowActionSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<PathBuf>,
+    #[serde(default)]
+    pub enter: FlowEnter,
+    #[serde(default)]
+    pub panel: FlowPanel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 pub fn flows_path() -> Option<PathBuf> {
@@ -65,6 +79,9 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
             icon: Some(PathBuf::from("/icons/memory.svg")),
+            enter: FlowEnter::Copy,
+            panel: FlowPanel::Preview,
+            detail: Some("detail".to_string()),
         }]
     }
 
@@ -79,6 +96,17 @@ mod tests {
 
         assert_eq!(read_flows(&path), entries);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entries_written_before_enter_and_panel_read_as_defaults() {
+        let raw = r#"[{"plugin_id":"qol-memory","title":"qol memory","prompt":"Ask memory","query":"rows"}]"#;
+
+        let entries: Vec<FlowEntry> = serde_json::from_str(raw).unwrap();
+
+        assert_eq!(entries[0].enter, FlowEnter::Detail);
+        assert_eq!(entries[0].panel, FlowPanel::None);
+        assert_eq!(entries[0].detail, None);
     }
 
     #[test]

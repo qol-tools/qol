@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 pub use qol_plugin_api::launcher_flows::FlowEntry;
+use qol_plugin_api::launcher_flows::{Badge, FlowDetail, FlowPanel};
 
 pub const MAX_ROWS: usize = 8;
 
@@ -12,33 +13,53 @@ pub struct FlowRow {
     pub subtitle: Option<String>,
     pub copy: Option<String>,
     pub raw: serde_json::Value,
+    pub spec: qol_plugin_api::launcher_flows::FlowRow,
 }
 
 pub fn parse_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
+    let mut rows: Vec<FlowRow> = rows_of(payload)?.take(MAX_ROWS).collect();
+    rows.sort_by(|a, b| row_sort_key(a).cmp(&row_sort_key(b)));
+    Ok(rows)
+}
+
+pub fn parse_preview_rows(payload: &serde_json::Value) -> Result<Vec<FlowRow>, String> {
+    Ok(rows_of(payload)?.collect())
+}
+
+fn rows_of(payload: &serde_json::Value) -> Result<impl Iterator<Item = FlowRow> + '_, String> {
     let Some(rows) = payload.get("rows").and_then(|rows| rows.as_array()) else {
         return Err("flow response has no rows array".to_string());
     };
-    let mut rows: Vec<FlowRow> = rows
-        .iter()
-        .filter_map(|item| {
-            let title = item.get("title")?.as_str()?;
-            Some(FlowRow {
-                title: title.to_string(),
-                subtitle: item
-                    .get("subtitle")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string),
-                copy: item
-                    .get("copy")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string),
-                raw: item.clone(),
-            })
-        })
-        .take(MAX_ROWS)
-        .collect();
-    rows.sort_by(|a, b| row_sort_key(a).cmp(&row_sort_key(b)));
-    Ok(rows)
+    Ok(rows.iter().filter_map(row_of))
+}
+
+fn row_of(item: &serde_json::Value) -> Option<FlowRow> {
+    let title = item.get("title")?.as_str()?;
+    let spec = serde_json::from_value(item.clone()).unwrap_or_else(|_| {
+        qol_plugin_api::launcher_flows::FlowRow {
+            title: title.to_string(),
+            ..Default::default()
+        }
+    });
+    Some(FlowRow {
+        title: title.to_string(),
+        subtitle: item
+            .get("subtitle")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        copy: item
+            .get("copy")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        raw: item.clone(),
+        spec,
+    })
+}
+
+pub fn parse_status(payload: &serde_json::Value) -> Option<Badge> {
+    payload
+        .get("status")
+        .and_then(|status| serde_json::from_value(status.clone()).ok())
 }
 
 fn row_sort_key(row: &FlowRow) -> (bool, bool, std::cmp::Reverse<&str>) {
@@ -70,6 +91,7 @@ pub enum FlowVerdict {
 pub struct FlowFetch {
     pub rows: Vec<FlowRow>,
     pub verdict: FlowVerdict,
+    pub status: Option<Badge>,
 }
 
 pub fn parse_verdict(payload: &serde_json::Value) -> FlowVerdict {
@@ -218,9 +240,28 @@ pub fn detail_of(raw: &serde_json::Value) -> Vec<(String, String)> {
 
 pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<FlowFetch, String> {
     let body = serde_json::json!({ "query": text }).to_string();
-    let route = qol_conventions::api_routes::plugin_query(&entry.plugin_id, &entry.query);
+    let payload = post_query(entry, &entry.query, &body)?;
+    let rows = match entry.panel {
+        FlowPanel::Preview => parse_preview_rows(&payload)?,
+        FlowPanel::None => parse_rows(&payload)?,
+    };
+    Ok(FlowFetch {
+        rows,
+        verdict: parse_verdict(&payload),
+        status: parse_status(&payload),
+    })
+}
+
+pub fn fetch_detail(entry: &FlowEntry, query: &str, id: &str) -> Result<FlowDetail, String> {
+    let body = serde_json::json!({ "id": id }).to_string();
+    let payload = post_query(entry, query, &body)?;
+    serde_json::from_value(payload).map_err(|error| error.to_string())
+}
+
+fn post_query(entry: &FlowEntry, query: &str, body: &str) -> Result<serde_json::Value, String> {
+    let route = qol_conventions::api_routes::plugin_query(&entry.plugin_id, query);
     let (status, response) =
-        qol_plugin_api::host_exec::post_to_daemon_with_timeout(&route, &body, FETCH_IO_TIMEOUT)
+        qol_plugin_api::host_exec::post_to_daemon_with_timeout(&route, body, FETCH_IO_TIMEOUT)
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
                     format!(
@@ -233,13 +274,7 @@ pub fn fetch_rows(entry: &FlowEntry, text: &str) -> Result<FlowFetch, String> {
     if !(200..300).contains(&status) {
         return Err(format!("host {status}: {response}"));
     }
-    let payload: serde_json::Value =
-        serde_json::from_str(&response).map_err(|error| error.to_string())?;
-    let rows = parse_rows(&payload)?;
-    Ok(FlowFetch {
-        rows,
-        verdict: parse_verdict(&payload),
-    })
+    serde_json::from_str(&response).map_err(|error| error.to_string())
 }
 
 pub fn send_feedback(entry: &FlowEntry, query: &str, key: &str) -> Result<(), String> {
@@ -336,6 +371,46 @@ mod tests {
         let rows = parse_rows(&payload).unwrap();
         assert_eq!(rows.len(), MAX_ROWS);
         assert_eq!(rows[MAX_ROWS - 1].title, "row 7");
+    }
+
+    #[test]
+    fn preview_rows_keep_plugin_order_without_a_cap_and_carry_the_spec() {
+        let payload = serde_json::json!({
+            "rows": (0..12)
+                .map(|index| serde_json::json!({
+                    "title": format!("clip {index}"),
+                    "kind": if index == 0 { "answer" } else { "link" },
+                    "mono": index == 3,
+                    "facts": [["Kind", "Link"]]
+                }))
+                .collect::<Vec<_>>(),
+            "status": { "text": "12 clips", "tone": "info" }
+        });
+        let rows = parse_preview_rows(&payload).unwrap();
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[0].title, "clip 0");
+        assert_eq!(rows[11].title, "clip 11");
+        assert!(rows[3].spec.mono);
+        assert_eq!(
+            rows[1].spec.facts,
+            vec![("Kind".to_string(), "Link".to_string())]
+        );
+        assert_eq!(
+            parse_status(&payload).map(|status| status.text),
+            Some("12 clips".to_string())
+        );
+        assert_eq!(parse_status(&serde_json::json!({ "rows": [] })), None);
+    }
+
+    #[test]
+    fn a_row_whose_extra_fields_do_not_fit_the_schema_keeps_its_title() {
+        let payload = serde_json::json!({
+            "rows": [{ "title": "odd", "tags": "not a list", "copy": "c" }]
+        });
+        let rows = parse_preview_rows(&payload).unwrap();
+        assert_eq!(rows[0].spec.title, "odd");
+        assert!(rows[0].spec.tags.is_empty());
+        assert_eq!(rows[0].copy.as_deref(), Some("c"));
     }
 
     #[test]
@@ -636,6 +711,7 @@ mod tests {
             subtitle: None,
             copy: None,
             raw: serde_json::json!({ "text": "hello world" }),
+            spec: Default::default(),
         };
 
         let input = render_action_input(&action, &row);

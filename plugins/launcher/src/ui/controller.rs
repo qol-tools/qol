@@ -102,6 +102,8 @@ impl LauncherView {
             InputEffect::FlowDetailScrollUp => self.scroll_flow_detail(-DETAIL_SCROLL_STEP, cx),
             InputEffect::FlowDetailScrollDown => self.scroll_flow_detail(DETAIL_SCROLL_STEP, cx),
             InputEffect::FlowDislike => self.dislike_flow_row(cx),
+            InputEffect::FlowSheet => self.toggle_flow_sheet(cx),
+            InputEffect::FlowRowAction(index) => self.run_flow_row_action(index, window, cx),
         }
     }
 
@@ -360,9 +362,7 @@ impl LauncherView {
             return;
         };
         if let crate::discovery::search::ResultItem::Flow(entry) = item {
-            self.state.enter_flow(entry.clone());
-            trace::flow(self, "entered");
-            cx.notify();
+            self.open_flow(entry.clone(), cx);
             return;
         }
         let is_app = matches!(scored.source, crate::discovery::search::ResultSource::App);
@@ -457,7 +457,8 @@ impl LauncherView {
         }
     }
 
-    fn schedule_flow_query(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn schedule_flow_query(&mut self, cx: &mut Context<Self>) {
+        let preview = self.state.flow_preview();
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
@@ -466,7 +467,7 @@ impl LauncherView {
         flow.verification_deadline = None;
         let epoch = flow.epoch;
         let generation = flow.generation;
-        if self.state.query.text().trim().is_empty() {
+        if !preview && self.state.query.text().trim().is_empty() {
             flow.rows.clear();
             flow.verdict = crate::flow::FlowVerdict::Answered;
             flow.pending = false;
@@ -494,15 +495,16 @@ impl LauncherView {
         .detach();
     }
 
-    fn start_flow_fetch(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn start_flow_fetch(&mut self, cx: &mut Context<Self>) {
         if !self.is_showing {
             return;
         }
+        let preview = self.state.flow_preview();
         let Some(flow) = self.state.flow.as_mut() else {
             return;
         };
         let text = self.state.query.text().to_owned();
-        if text.trim().is_empty() {
+        if !preview && text.trim().is_empty() {
             return;
         }
         let generation = flow.generation;
@@ -528,11 +530,12 @@ impl LauncherView {
                         view.start_flow_fetch(cx);
                         return;
                     }
-                    let (rows, mut verdict, failure) = match outcome {
-                        Ok(fetch) => (fetch.rows, fetch.verdict, None),
+                    let (rows, mut verdict, status, failure) = match outcome {
+                        Ok(fetch) => (fetch.rows, fetch.verdict, fetch.status, None),
                         Err(message) => (
                             Vec::new(),
                             crate::flow::FlowVerdict::Answered,
+                            None,
                             Some(message),
                         ),
                     };
@@ -546,7 +549,18 @@ impl LauncherView {
                     }
                     session.rows = rows;
                     session.verdict = verdict;
+                    session.status = status;
                     session.pending = false;
+                    if session.rows.is_empty() {
+                        session.sheet = false;
+                    }
+                    let count = session.rows.len();
+                    let selected = &mut view.state.scroll_list.selected;
+                    *selected = (*selected).min(count.saturating_sub(1));
+                    if count == 0 {
+                        view.state.list_focused = false;
+                    }
+                    view.state.sync_result_window(count);
                     if let Some(message) = failure {
                         view.state.set_launch_error(message);
                     }
@@ -632,6 +646,11 @@ impl LauncherView {
             return;
         };
         let entry = &flow.entry;
+        if entry.enter != qol_plugin_api::launcher_flows::FlowEnter::Detail {
+            let enter = entry.enter.clone();
+            self.enter_flow_row(enter, window, cx);
+            return;
+        }
         if !entry.row_actions.is_empty() {
             if let Err(message) = crate::flow::run_row_action(entry, &entry.row_actions[0], row) {
                 self.state.set_launch_error(message);

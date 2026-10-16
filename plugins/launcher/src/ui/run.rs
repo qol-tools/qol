@@ -16,14 +16,19 @@ use super::window_host::{
     spawn_topology_listener, ActiveLaunchers,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartupIntent {
     Hidden,
     Visible,
+    Flow(String),
 }
 
 pub fn run(intent: StartupIntent) {
-    let show_immediately = intent == StartupIntent::Visible;
+    let show_immediately = intent != StartupIntent::Hidden;
+    let startup_flow = match intent {
+        StartupIntent::Flow(plugin_id) => Some(plugin_id),
+        StartupIntent::Hidden | StartupIntent::Visible => None,
+    };
     log::debug!("run start show_immediately={show_immediately}");
 
     let (tx, rx) = mpsc::channel();
@@ -71,7 +76,7 @@ pub fn run(intent: StartupIntent) {
                         .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
                         .await;
                     let _ = cx.update(|cx| {
-                        activate_or_open_launcher(entries, active, snapshot, cx);
+                        activate_or_open_launcher(entries, active, snapshot, startup_flow, cx);
                     });
                 }
             })
@@ -96,12 +101,11 @@ fn spawn_command_poll(
         async move {
             match cmd {
                 app::Command::Show => {
-                    wait_for_entries(&entries, &cx).await;
-                    let snapshot = cx
-                        .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
-                        .await;
-                    let _ = cx
-                        .update(move |cx| activate_or_open_launcher(entries, active, snapshot, cx));
+                    show_launcher(entries, active, focus_cache, None, &cx).await;
+                    LoopFlow::Continue
+                }
+                app::Command::Flow(plugin_id) => {
+                    show_launcher(entries, active, focus_cache, Some(plugin_id), &cx).await;
                     LoopFlow::Continue
                 }
                 app::Command::Reload => {
@@ -124,6 +128,20 @@ fn spawn_command_poll(
             }
         }
     });
+}
+
+async fn show_launcher(
+    entries: SharedEntries,
+    active: Rc<RefCell<ActiveLaunchers>>,
+    focus_cache: MonitorTracker,
+    flow: Option<String>,
+    cx: &AsyncApp,
+) {
+    wait_for_entries(&entries, cx).await;
+    let snapshot = cx
+        .background_spawn(async move { focus_cache.snapshot().map(|(m, _)| m) })
+        .await;
+    let _ = cx.update(move |cx| activate_or_open_launcher(entries, active, snapshot, flow, cx));
 }
 
 async fn dispatch_settings(cx: &AsyncApp, focus_cache: MonitorTracker) {

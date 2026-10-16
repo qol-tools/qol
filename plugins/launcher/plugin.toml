@@ -15,6 +15,11 @@ command = "qol-launcher"
 label = "Open Launcher"
 args = ["--show"]
 
+[action.flow]
+label = "Open a Flow"
+args = ["--flow"]
+hotkey = false
+
 [action.settings]
 label = "Settings"
 kind = "settings"

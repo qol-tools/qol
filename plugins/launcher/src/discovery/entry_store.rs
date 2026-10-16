@@ -224,6 +224,13 @@ impl EntryStore {
         self.filter_history.clear();
     }
 
+    pub fn flow_entry(&self, plugin_id: &str) -> Option<FlowEntry> {
+        self.flow_entries
+            .iter()
+            .find(|entry| entry.plugin_id == plugin_id)
+            .cloned()
+    }
+
     pub fn name(&self, scored: &Scored) -> &str {
         match scored.source {
             ResultSource::App => &self.app_entries[scored.index].name,

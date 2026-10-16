@@ -1,8 +1,9 @@
 use super::feedback::Feedback;
-use super::layout::visible_rows;
+use super::layout::{visible_rows, PREVIEW_ROWS};
 use crate::discovery::search::{Fuzziness, SearchMode};
 use crate::flow::{FlowEntry, FlowRow, FlowVerdict};
 use qol_gpui::text_edit::TextField;
+use qol_plugin_api::launcher_flows::{Badge, FlowDetail, FlowPanel};
 use std::time::{Duration, Instant};
 
 const NAV_FAST_WINDOW: Duration = Duration::from_millis(95);
@@ -84,6 +85,11 @@ pub struct FlowSession {
     pub trail_seq: u64,
     pub trail_started: Option<std::time::Instant>,
     pub detail: bool,
+    pub status: Option<Badge>,
+    pub sheet: bool,
+    pub copied: bool,
+    pub details: std::collections::HashMap<String, FlowDetail>,
+    pub asked: std::collections::HashSet<String>,
 }
 
 pub struct LauncherState {
@@ -137,6 +143,7 @@ impl LauncherState {
 
     pub fn enter_flow(&mut self, entry: FlowEntry) {
         static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let preview = entry.panel == FlowPanel::Preview;
         self.flow = Some(FlowSession {
             epoch: EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             entry,
@@ -152,7 +159,15 @@ impl LauncherState {
             trail_seq: 0,
             trail_started: None,
             detail: false,
+            status: None,
+            sheet: false,
+            copied: false,
+            details: Default::default(),
+            asked: Default::default(),
         });
+        if preview {
+            self.scroll_list.max_visible = PREVIEW_ROWS;
+        }
         self.query.clear();
         self.clear_launch_error();
         self.reset_results_position();
@@ -160,6 +175,7 @@ impl LauncherState {
 
     pub fn exit_flow(&mut self) {
         self.flow = None;
+        self.scroll_list.max_visible = visible_rows(self.mode);
         self.query.clear();
         self.clear_launch_error();
         self.reset_results_position();
@@ -211,6 +227,26 @@ impl LauncherState {
         }
     }
 
+    pub fn flow_preview(&self) -> bool {
+        self.flow
+            .as_ref()
+            .is_some_and(|session| session.entry.panel == FlowPanel::Preview)
+    }
+
+    pub fn flow_sheet_open(&self) -> bool {
+        self.flow.as_ref().is_some_and(|session| session.sheet)
+    }
+
+    pub fn toggle_flow_sheet(&mut self) -> bool {
+        match self.flow.as_mut() {
+            Some(session) if session.sheet || !session.rows.is_empty() => {
+                session.sheet = !session.sheet;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn flow_detail_open(&self) -> bool {
         self.flow.as_ref().is_some_and(|session| session.detail)
     }
@@ -220,6 +256,41 @@ impl LauncherState {
             .as_ref()
             .map(|session| session.rows.len())
             .unwrap_or(0)
+    }
+
+    pub fn shown_flow_row_id(&self) -> Option<&str> {
+        self.flow
+            .as_ref()?
+            .rows
+            .get(self.scroll_list.selected)?
+            .spec
+            .id
+            .as_deref()
+    }
+
+    pub fn want_flow_detail(&mut self) -> Option<String> {
+        let id = self.shown_flow_row_id()?.to_string();
+        let session = self.flow.as_mut()?;
+        session.entry.detail.as_ref()?;
+        if session.details.contains_key(&id) || !session.asked.insert(id.clone()) {
+            return None;
+        }
+        Some(id)
+    }
+
+    pub fn accept_flow_detail(&mut self, epoch: u64, id: &str, detail: Option<FlowDetail>) -> bool {
+        let shown = self.shown_flow_row_id() == Some(id);
+        let Some(session) = self.flow.as_mut().filter(|session| session.epoch == epoch) else {
+            return false;
+        };
+        session.asked.remove(id);
+        if !shown {
+            return false;
+        }
+        session
+            .details
+            .insert(id.to_string(), detail.unwrap_or_default());
+        true
     }
 
     pub fn flow_verdict(&self) -> FlowVerdict {
@@ -449,7 +520,56 @@ mod tests {
             query: "rows".to_string(),
             row_actions: Vec::new(),
             icon: None,
+            enter: Default::default(),
+            panel: Default::default(),
+            detail: None,
         }
+    }
+
+    #[test]
+    fn a_preview_flow_shows_its_card_window_and_exit_restores_the_mode_window() {
+        let mut state = LauncherState::new();
+        state.enter_flow(flow_entry("qol memory"));
+        assert!(!state.flow_preview());
+        assert_eq!(state.scroll_list.max_visible, visible_rows(state.mode));
+        state.exit_flow();
+
+        state.enter_flow(FlowEntry {
+            panel: FlowPanel::Preview,
+            ..flow_entry("Clipboard")
+        });
+        assert!(state.flow_preview());
+        assert_eq!(state.scroll_list.max_visible, PREVIEW_ROWS);
+        state.exit_flow();
+        assert_eq!(state.scroll_list.max_visible, visible_rows(state.mode));
+    }
+
+    #[test]
+    fn the_sheet_opens_only_over_a_row_and_always_closes() {
+        let mut state = LauncherState::new();
+        state.enter_flow(FlowEntry {
+            panel: FlowPanel::Preview,
+            ..flow_entry("Clipboard")
+        });
+        assert!(!state.toggle_flow_sheet());
+        assert!(!state.flow_sheet_open());
+
+        if let Some(session) = state.flow.as_mut() {
+            session.rows.push(FlowRow {
+                title: "clip".to_string(),
+                subtitle: None,
+                copy: None,
+                raw: serde_json::json!({}),
+                spec: Default::default(),
+            });
+        }
+        assert!(state.toggle_flow_sheet());
+        assert!(state.flow_sheet_open());
+        if let Some(session) = state.flow.as_mut() {
+            session.rows.clear();
+        }
+        assert!(state.toggle_flow_sheet());
+        assert!(!state.flow_sheet_open());
     }
 
     #[test]
@@ -473,6 +593,7 @@ mod tests {
                 subtitle: None,
                 copy: None,
                 raw: serde_json::json!({}),
+                spec: Default::default(),
             });
         }
         assert_eq!(state.flow_result_count(), 1);
@@ -607,5 +728,77 @@ mod tests {
         assert!(state.close_flow_detail());
         assert!(!state.close_flow_detail());
         assert!(!state.flow_detail_open());
+    }
+
+    fn detail_flow(ids: &[&str]) -> LauncherState {
+        let mut state = LauncherState::new();
+        state.enter_flow(FlowEntry {
+            panel: FlowPanel::Preview,
+            detail: Some("detail".to_string()),
+            ..flow_entry("Clipboard")
+        });
+        if let Some(session) = state.flow.as_mut() {
+            session.rows = ids
+                .iter()
+                .map(|id| FlowRow {
+                    title: id.to_string(),
+                    subtitle: None,
+                    copy: None,
+                    raw: serde_json::json!({ "id": id }),
+                    spec: qol_plugin_api::launcher_flows::FlowRow {
+                        title: id.to_string(),
+                        id: Some(id.to_string()),
+                        ..Default::default()
+                    },
+                })
+                .collect();
+        }
+        state
+    }
+
+    #[test]
+    fn the_shown_row_asks_for_its_detail_once_and_caches_the_answer() {
+        let mut state = detail_flow(&["c1", "c2"]);
+        let epoch = state.flow.as_ref().unwrap().epoch;
+        assert_eq!(state.want_flow_detail().as_deref(), Some("c1"));
+        assert_eq!(state.want_flow_detail(), None);
+
+        assert!(state.accept_flow_detail(epoch, "c1", Some(FlowDetail::default())));
+
+        assert!(state.flow.as_ref().unwrap().details.contains_key("c1"));
+        assert_eq!(state.want_flow_detail(), None);
+        assert!(!state.accept_flow_detail(epoch + 1, "c1", Some(FlowDetail::default())));
+    }
+
+    #[test]
+    fn a_stale_answer_is_dropped_and_asked_again_when_the_row_returns() {
+        let mut state = detail_flow(&["c1", "c2"]);
+        let epoch = state.flow.as_ref().unwrap().epoch;
+        assert_eq!(state.want_flow_detail().as_deref(), Some("c1"));
+        state.scroll_list.selected = 1;
+        assert_eq!(state.want_flow_detail().as_deref(), Some("c2"));
+
+        assert!(!state.accept_flow_detail(epoch, "c1", Some(FlowDetail::default())));
+
+        assert!(!state.flow.as_ref().unwrap().details.contains_key("c1"));
+        state.scroll_list.selected = 0;
+        assert_eq!(state.want_flow_detail().as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn a_failed_detail_falls_back_and_flows_without_details_never_ask() {
+        let mut state = detail_flow(&["c1"]);
+        let epoch = state.flow.as_ref().unwrap().epoch;
+        assert_eq!(state.want_flow_detail().as_deref(), Some("c1"));
+        assert!(state.accept_flow_detail(epoch, "c1", None));
+        let details = &state.flow.as_ref().unwrap().details;
+        assert_eq!(details.get("c1"), Some(&FlowDetail::default()));
+        assert_eq!(state.want_flow_detail(), None);
+
+        let mut state = detail_flow(&["c1"]);
+        if let Some(session) = state.flow.as_mut() {
+            session.entry.detail = None;
+        }
+        assert_eq!(state.want_flow_detail(), None);
     }
 }

@@ -1,3 +1,4 @@
+use crate::launcher_flows::FlowEnter;
 use crate::manifest::{LauncherKind, LauncherSpec, PluginManifest};
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
@@ -34,6 +35,11 @@ pub(super) fn validate_optional_launcher(
             if !is_valid_query_name(query) {
                 bail!("invalid launcher.query name: {query}");
             }
+            if let Some(detail) = launcher.detail.as_deref() {
+                if !is_valid_query_name(detail) {
+                    bail!("invalid launcher.detail name: {detail}");
+                }
+            }
         }
         LauncherKind::App => {
             if launcher.query.is_some() {
@@ -42,6 +48,21 @@ pub(super) fn validate_optional_launcher(
             if !launcher.row_actions.is_empty() {
                 bail!("launcher.row_actions are only valid for kind = \"flow\"");
             }
+            if launcher.enter.is_some() {
+                bail!("launcher.enter is only valid for kind = \"flow\"");
+            }
+            if launcher.panel.is_some() {
+                bail!("launcher.panel is only valid for kind = \"flow\"");
+            }
+            if launcher.detail.is_some() {
+                bail!("launcher.detail is only valid for kind = \"flow\"");
+            }
+        }
+    }
+
+    if let Some(FlowEnter::Action(id)) = launcher.enter.as_ref() {
+        if !executable_action_ids.contains(id) {
+            bail!("launcher.enter references undeclared action: {id}");
         }
     }
 
@@ -75,15 +96,29 @@ pub fn validate_launcher_runtime(
     let Some(spec) = runtime.queries.get(query) else {
         bail!("launcher flow query not declared: {query}");
     };
-    if spec
+    if !spec
         .input
         .as_ref()
         .is_some_and(|input| input.contains_key("query"))
     {
+        bail!("launcher flow query {query} must declare a query input");
+    }
+
+    let Some(detail) = launcher.detail.as_deref() else {
+        return Ok(());
+    };
+    let Some(spec) = runtime.queries.get(detail) else {
+        bail!("launcher flow detail query not declared: {detail}");
+    };
+    if spec
+        .input
+        .as_ref()
+        .is_some_and(|input| input.contains_key("id"))
+    {
         return Ok(());
     }
 
-    bail!("launcher flow query {query} must declare a query input")
+    bail!("launcher flow detail query {detail} must declare an id input")
 }
 
 fn is_valid_query_name(name: &str) -> bool {

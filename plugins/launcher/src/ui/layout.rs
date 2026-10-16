@@ -18,6 +18,9 @@ pub const PANEL_GAP: f32 = 16.0;
 pub const FLOW_WIDTH: f32 = 580.0;
 pub const WINDOW_WIDTH: f32 = 840.0;
 pub const DETAIL_HEIGHT: f32 = 380.0;
+pub const PREVIEW_HEIGHT: f32 = 534.0;
+pub const PREVIEW_CARD: f32 = 64.0;
+pub const PREVIEW_ROWS: usize = 7;
 const FRAME: f32 = 2.0 * qol_gpui::theme::LINE;
 
 pub fn visible_rows(mode: SearchMode) -> usize {
@@ -80,6 +83,11 @@ pub fn full_window_height() -> f32 {
             qol_gpui::trail::motion::ROW_H,
         ))
         .max(window_height_for_detail())
+        .max(window_height_for_preview())
+}
+
+pub fn window_height_for_preview() -> f32 {
+    header_window_height() + LIST_PAD_Y + PREVIEW_HEIGHT + FILE_INSET
 }
 
 pub fn window_height_for_trail(fence: bool, head_height: f32) -> f32 {
@@ -120,5 +128,16 @@ mod tests {
         let inner = WINDOW_WIDTH - 2.0 * qol_gpui::theme::LINE - 2.0 * FILE_INSET;
         assert_eq!(inner - PANEL_GAP - PANEL_WIDTH, 594.0);
         assert_eq!(inner - APP_GAP - APP_PANEL_WIDTH, 494.0);
+    }
+
+    #[test]
+    fn the_preview_flow_matches_the_locked_board() {
+        assert_eq!(window_height_for_preview(), 602.0);
+        assert!(window_height_for_preview() <= full_window_height());
+        let cards = PREVIEW_ROWS as f32 * PREVIEW_CARD + (PREVIEW_ROWS - 1) as f32 * APP_GAP;
+        assert!(cards <= PREVIEW_HEIGHT);
+        assert!(cards + APP_GAP + PREVIEW_CARD > PREVIEW_HEIGHT);
+        let inner = WINDOW_WIDTH - 2.0 * qol_gpui::theme::LINE - 2.0 * FILE_INSET;
+        assert_eq!(inner - PANEL_GAP - APP_PANEL_WIDTH, 486.0);
     }
 }

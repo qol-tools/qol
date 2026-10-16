@@ -1048,6 +1048,112 @@ mod launcher_rules {
         assert!(validate_toml(toml).is_ok());
     }
 
+    fn flow_toml(extra: &str) -> String {
+        format!(
+            r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [action.pin]
+            label = "Pin"
+            args = ["pin"]
+
+            [launcher]
+            kind = "flow"
+            title = "Clipboard"
+            query = "rows"
+            {extra}
+        "#
+        )
+    }
+
+    #[test]
+    fn launcher_flow_accepts_enter_and_panel() {
+        for extra in [
+            "enter = \"copy\"\npanel = \"preview\"",
+            "enter = \"paste\"\npanel = \"none\"",
+            "enter = \"detail\"",
+            "enter = \"action:pin\"",
+        ] {
+            assert!(validate_toml(&flow_toml(extra)).is_ok(), "{extra}");
+        }
+
+        let manifest = manifest_from_toml(&flow_toml("enter = \"copy\"\npanel = \"preview\""));
+        let launcher = manifest.launcher.unwrap();
+        assert_eq!(launcher.enter, Some(crate::launcher_flows::FlowEnter::Copy));
+        assert_eq!(
+            launcher.panel,
+            Some(crate::launcher_flows::FlowPanel::Preview)
+        );
+    }
+
+    #[test]
+    fn launcher_flow_rejects_unknown_enter_and_panel() {
+        for extra in [
+            "enter = \"open\"",
+            "enter = \"action:\"",
+            "panel = \"side\"",
+        ] {
+            assert!(
+                toml::from_str::<PluginManifest>(&flow_toml(extra)).is_err(),
+                "{extra}"
+            );
+        }
+    }
+
+    #[test]
+    fn launcher_enter_action_must_be_declared() {
+        let error = validate_toml(&flow_toml("enter = \"action:missing\"")).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("launcher.enter references undeclared action: missing"));
+    }
+
+    #[test]
+    fn launcher_app_rejects_enter_and_panel() {
+        for (extra, message) in [
+            (
+                "enter = \"copy\"",
+                "launcher.enter is only valid for kind = \"flow\"",
+            ),
+            (
+                "panel = \"preview\"",
+                "launcher.panel is only valid for kind = \"flow\"",
+            ),
+        ] {
+            let toml = format!(
+                r#"
+                [plugin]
+                id = "test-plugin"
+                name = "P"
+                description = ""
+                version = "0.0.1"
+
+                [menu]
+                label = "M"
+                items = []
+
+                [launcher]
+                kind = "app"
+                title = "App"
+                {extra}
+            "#
+            );
+
+            let error = validate_toml(&toml).unwrap_err();
+
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
     fn flow_manifest() -> PluginManifest {
         manifest_from_toml(
             r#"
@@ -1108,5 +1214,69 @@ mod launcher_rules {
         .unwrap();
 
         assert!(validate_launcher_runtime(&manifest, Some(&runtime)).is_ok());
+    }
+
+    #[test]
+    fn launcher_detail_names_a_query_and_belongs_to_flows() {
+        assert!(validate_toml(&flow_toml("detail = \"detail\"")).is_ok());
+        let manifest = manifest_from_toml(&flow_toml("detail = \"detail\""));
+        assert_eq!(manifest.launcher.unwrap().detail.as_deref(), Some("detail"));
+
+        let error = validate_toml(&flow_toml("detail = \"Detail!\"")).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("invalid launcher.detail name: Detail!"));
+
+        let app = r#"
+            [plugin]
+            id = "test-plugin"
+            name = "P"
+            description = ""
+            version = "0.0.1"
+
+            [menu]
+            label = "M"
+            items = []
+
+            [launcher]
+            kind = "app"
+            title = "App"
+            detail = "detail"
+        "#;
+        let error = validate_toml(app).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("launcher.detail is only valid for kind = \"flow\""));
+    }
+
+    #[test]
+    fn launcher_runtime_checks_the_detail_query() {
+        let manifest = manifest_from_toml(&flow_toml("detail = \"detail\""));
+        let rows = "schema_version = 1\n\n[query.rows]\ndescription = \"Rows\"\npoll_interval_ms = 1\ninput = { query = \"typed text\" }\n";
+        let cases = [
+            ("", Some("launcher flow detail query not declared: detail")),
+            (
+                "\n[query.detail]\ndescription = \"Detail\"\npoll_interval_ms = 1\n",
+                Some("launcher flow detail query detail must declare an id input"),
+            ),
+            (
+                "\n[query.detail]\ndescription = \"Detail\"\npoll_interval_ms = 1\ninput = { id = \"row id\" }\n",
+                None,
+            ),
+        ];
+        for (extra, expected) in cases {
+            let runtime =
+                qol_config::contract::parse_runtime_spec_str(&format!("{rows}{extra}")).unwrap();
+
+            let result = validate_launcher_runtime(&manifest, Some(&runtime));
+
+            match expected {
+                Some(message) => assert!(
+                    result.as_ref().unwrap_err().to_string().contains(message),
+                    "{result:?}"
+                ),
+                None => assert!(result.is_ok(), "{result:?}"),
+            }
+        }
     }
 }
