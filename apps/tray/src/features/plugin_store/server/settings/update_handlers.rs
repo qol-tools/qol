@@ -640,6 +640,7 @@ mod tests {
     fn job(state: JobState, reason: Option<&str>) -> Option<UpdateJob> {
         Some(UpdateJob {
             state,
+            operation: Operation::Update,
             progress: None,
             reason: reason.map(str::to_string),
             order: 0,

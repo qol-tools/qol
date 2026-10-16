@@ -32,6 +32,7 @@ pub(crate) enum JobState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UpdateJob {
     pub(crate) state: JobState,
+    pub(crate) operation: Operation,
     pub(crate) progress: Option<u8>,
     pub(crate) reason: Option<String>,
     pub(crate) order: u64,
@@ -67,7 +68,7 @@ pub(crate) fn get(id: &str) -> Option<UpdateJob> {
 }
 
 fn update_job(entry: Entry<Operation>) -> UpdateJob {
-    let state = match (entry.state, entry.task) {
+    let state = match (entry.state, &entry.task) {
         (State::Failed, _) => JobState::Failed,
         (_, Operation::Remove) => JobState::Removing,
         (State::Queued, _) => JobState::Queued,
@@ -75,6 +76,7 @@ fn update_job(entry: Entry<Operation>) -> UpdateJob {
     };
     UpdateJob {
         state,
+        operation: entry.task,
         progress: entry.progress,
         reason: entry.reason,
         order: entry.order,
@@ -121,8 +123,9 @@ mod tests {
         ];
         for (state, task, expected) in cases {
             let label = format!("{state:?} {task:?}");
-            let job = update_job(entry(state, task));
+            let job = update_job(entry(state, task.clone()));
             assert_eq!(job.state, expected, "{label}");
+            assert_eq!(job.operation, task, "{label}");
             assert_eq!((job.progress, job.order), (Some(7), 3));
         }
     }

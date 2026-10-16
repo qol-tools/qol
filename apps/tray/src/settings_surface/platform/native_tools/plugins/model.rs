@@ -10,6 +10,8 @@ pub(super) enum PluginState {
     Installed,
     Queued,
     Installing,
+    UpdateQueued,
+    Updating,
     Failed,
     Removing,
 }
@@ -218,8 +220,54 @@ pub(super) fn source_rows(snapshot: &Snapshot, naming: bool) -> Vec<Row> {
     rows
 }
 
-pub(super) fn in_queue(state: PluginState) -> bool {
+fn in_queue(state: PluginState) -> bool {
+    being_installed(state) || matches!(state, PluginState::UpdateQueued | PluginState::Updating)
+}
+
+fn being_installed(state: PluginState) -> bool {
     matches!(state, PluginState::Queued | PluginState::Installing)
+}
+
+#[derive(Debug, Default)]
+pub(super) struct NewInstalls {
+    ids: BTreeSet<String>,
+    watching: bool,
+}
+
+impl NewInstalls {
+    pub(super) fn ids(&self) -> &BTreeSet<String> {
+        &self.ids
+    }
+
+    pub(super) fn insert(&mut self, id: String) {
+        if self.watching {
+            self.ids.insert(id);
+        }
+    }
+
+    pub(super) fn observe(&mut self, snapshot: &Snapshot) {
+        if !self.watching {
+            return;
+        }
+        self.ids.extend(
+            snapshot
+                .plugins
+                .iter()
+                .filter(|plugin| being_installed(plugin.state))
+                .map(|plugin| plugin.id.clone()),
+        );
+    }
+
+    pub(super) fn watch(&mut self, watching: bool) {
+        self.watching = watching;
+        if !watching {
+            self.forget();
+        }
+    }
+
+    pub(super) fn forget(&mut self) {
+        self.ids.clear();
+    }
 }
 
 fn awaits_answer(state: PluginState) -> bool {
@@ -257,6 +305,12 @@ fn installed_row(plugin: &CatalogPlugin, visit: &Visit<'_>) -> Row {
             .delete(RowAction::Cancel(id), "cancel"),
         PluginState::Installing => Row::item(&plugin.name, description(plugin))
             .value("Installing", SettingsValueTone::Muted)
+            .spinner(),
+        PluginState::UpdateQueued => {
+            Row::item(&plugin.name, description(plugin)).value("Waiting", SettingsValueTone::Muted)
+        }
+        PluginState::Updating => Row::item(&plugin.name, description(plugin))
+            .value("Updating", SettingsValueTone::Muted)
             .spinner(),
         PluginState::Removing => Row::item(&plugin.name, description(plugin))
             .value("Removing", SettingsValueTone::Muted)
@@ -443,6 +497,8 @@ mod tests {
             plugin("voice", "Voice", PluginState::NotInstalled),
             plugin("queued", "Bluetooth", PluginState::Queued),
             plugin("installing", "Shot", PluginState::Installing),
+            plugin("update-queued", "Keyremap", PluginState::UpdateQueued),
+            plugin("updating", "Monitor", PluginState::Updating),
             failed,
             plugin("removing", "Memory", PluginState::Removing),
             plugin("lights", "Lights", PluginState::Installed),
@@ -472,6 +528,24 @@ mod tests {
             (
                 "Shot",
                 "Installing",
+                SettingsValueTone::Muted,
+                true,
+                None,
+                None,
+                None,
+            ),
+            (
+                "Keyremap",
+                "Waiting",
+                SettingsValueTone::Muted,
+                false,
+                None,
+                None,
+                None,
+            ),
+            (
+                "Monitor",
+                "Updating",
                 SettingsValueTone::Muted,
                 true,
                 None,
@@ -585,6 +659,151 @@ mod tests {
         );
     }
 
+    enum Step {
+        Watch(bool),
+        Leave,
+        Request,
+        Poll(PluginState, Option<&'static str>),
+    }
+
+    fn shot(state: PluginState, installed: Option<&str>) -> Snapshot {
+        snapshot(vec![CatalogPlugin {
+            installed: installed.map(str::to_string),
+            ..plugin("shot", "Shot", state)
+        }])
+    }
+
+    fn assert_shot_reads_installed(cases: &[(&str, &[Step], bool)]) {
+        for (case, steps, reads_installed) in cases {
+            let mut installs = NewInstalls::default();
+            for step in *steps {
+                match step {
+                    Step::Watch(watching) => installs.watch(*watching),
+                    Step::Leave => installs.forget(),
+                    Step::Request => installs.insert("shot".to_string()),
+                    Step::Poll(state, installed) => installs.observe(&shot(*state, *installed)),
+                }
+            }
+            let done = shot(PluginState::Installed, Some("1.2.0"));
+            installs.observe(&done);
+            let rows = rows(&done, &[], installs.ids());
+            let row = row(&rows, "Shot");
+            let (value, delete) = if *reads_installed {
+                ("Installed 1.2.0", None)
+            } else {
+                ("1.2.0", Some((RowAction::Remove("shot".into()), "remove")))
+            };
+            assert_eq!(row.value.as_deref(), Some(value), "{case}");
+            assert_eq!(row.delete, delete, "{case}");
+        }
+    }
+
+    #[test]
+    fn an_update_keeps_remove_and_only_a_new_plugin_reads_installed() {
+        use PluginState::{Installing, Queued, UpdateQueued, Updating};
+        use Step::{Poll, Watch};
+        assert_shot_reads_installed(&[
+            (
+                "an update waiting",
+                &[Watch(true), Poll(UpdateQueued, Some("1.1.0"))],
+                false,
+            ),
+            (
+                "an update running",
+                &[Watch(true), Poll(Updating, Some("1.1.0"))],
+                false,
+            ),
+            (
+                "an update read while its folder is swapped",
+                &[
+                    Watch(true),
+                    Poll(UpdateQueued, Some("1.1.0")),
+                    Poll(Updating, None),
+                ],
+                false,
+            ),
+            (
+                "a new plugin waiting then installing",
+                &[Watch(true), Poll(Queued, None), Poll(Installing, None)],
+                true,
+            ),
+            (
+                "a new plugin whose files landed before its job ended",
+                &[Watch(true), Poll(Installing, Some("1.2.0"))],
+                true,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn installed_lasts_only_while_someone_watches() {
+        use PluginState::{Installed, Installing};
+        use Step::{Leave, Poll, Request, Watch};
+        assert_shot_reads_installed(&[
+            (
+                "watched to the end",
+                &[Watch(true), Poll(Installing, None)],
+                true,
+            ),
+            ("requested on this page", &[Watch(true), Request], true),
+            ("never watched", &[Poll(Installing, None)], false),
+            ("requested without focus", &[Request], false),
+            (
+                "the window closed before it finished",
+                &[Watch(true), Poll(Installing, None), Watch(false)],
+                false,
+            ),
+            (
+                "requested, then the window closed",
+                &[Watch(true), Request, Watch(false)],
+                false,
+            ),
+            (
+                "finished while the window was closed",
+                &[
+                    Watch(true),
+                    Poll(Installing, None),
+                    Watch(false),
+                    Poll(Installing, None),
+                    Poll(Installed, Some("1.2.0")),
+                    Watch(true),
+                ],
+                false,
+            ),
+            (
+                "the window reopened before it finished",
+                &[
+                    Watch(true),
+                    Poll(Installing, None),
+                    Watch(false),
+                    Watch(true),
+                    Poll(Installing, None),
+                ],
+                true,
+            ),
+            (
+                "the page was left after it finished",
+                &[
+                    Watch(true),
+                    Poll(Installing, None),
+                    Poll(Installed, Some("1.2.0")),
+                    Leave,
+                ],
+                false,
+            ),
+            (
+                "the page was left and found it still installing",
+                &[
+                    Watch(true),
+                    Poll(Installing, None),
+                    Leave,
+                    Poll(Installing, None),
+                ],
+                true,
+            ),
+        ]);
+    }
+
     #[test]
     fn sent_installs_follow_the_queue_qol_tray_already_reported() {
         let snapshot = snapshot(vec![
@@ -660,6 +879,8 @@ mod tests {
                     { "id": "b", "name": "B", "description": "", "available": "1.0.0", "installed": "1.0.0", "state": "installed", "error": null },
                     { "id": "c", "name": "C", "description": "", "available": "1.0.0", "installed": null, "state": "queued", "error": null },
                     { "id": "d", "name": "D", "description": "", "available": "1.0.0", "installed": null, "state": "installing", "error": null },
+                    { "id": "g", "name": "G", "description": "", "available": "1.1.0", "installed": "1.0.0", "state": "update_queued", "error": null },
+                    { "id": "h", "name": "H", "description": "", "available": "1.1.0", "installed": "1.0.0", "state": "updating", "error": null },
                     { "id": "e", "name": "E", "description": "", "available": "1.0.0", "installed": null, "state": "failed", "error": "no asset" },
                     { "id": "f", "name": "F", "description": "", "available": null, "installed": "1.0.0", "state": "removing", "error": null }
                 ]
@@ -678,6 +899,8 @@ mod tests {
                 PluginState::Installed,
                 PluginState::Queued,
                 PluginState::Installing,
+                PluginState::UpdateQueued,
+                PluginState::Updating,
                 PluginState::Failed,
                 PluginState::Removing,
             ]

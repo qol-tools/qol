@@ -25,6 +25,8 @@ enum PluginState {
     Installed,
     Queued,
     Installing,
+    UpdateQueued,
+    Updating,
     Failed,
     Removing,
 }
@@ -333,9 +335,15 @@ fn plugin_payload(view: PluginView) -> PluginPayload {
 }
 
 fn plugin_state(view: &PluginView) -> PluginState {
+    let install = view
+        .job
+        .as_ref()
+        .is_some_and(|job| job.operation == Operation::Install);
     match view.job.as_ref().map(|job| job.state) {
-        Some(JobState::Queued) => PluginState::Queued,
-        Some(JobState::Updating) => PluginState::Installing,
+        Some(JobState::Queued) if install => PluginState::Queued,
+        Some(JobState::Queued) => PluginState::UpdateQueued,
+        Some(JobState::Updating) if install => PluginState::Installing,
+        Some(JobState::Updating) => PluginState::Updating,
         Some(JobState::Failed) => PluginState::Failed,
         Some(JobState::Removing) => PluginState::Removing,
         None if view.installed.is_some() => PluginState::Installed,
@@ -361,6 +369,7 @@ mod tests {
     fn job(state: JobState, order: u64, reason: Option<&str>) -> Option<UpdateJob> {
         Some(UpdateJob {
             state,
+            operation: Operation::Install,
             progress: None,
             reason: reason.map(str::to_string),
             order,
@@ -374,22 +383,64 @@ mod tests {
 
     #[test]
     fn plugin_state_maps_jobs_before_the_installed_version() {
-        let cases: &[(Option<JobState>, Option<&str>, PluginState)] = &[
+        use JobState::{Failed, Queued, Removing, Updating};
+        use Operation::{Install, Remove, Update};
+        let cases = [
             (None, None, PluginState::NotInstalled),
             (None, Some("1.0.0"), PluginState::Installed),
-            (Some(JobState::Queued), None, PluginState::Queued),
-            (Some(JobState::Updating), None, PluginState::Installing),
-            (Some(JobState::Failed), None, PluginState::Failed),
+            (Some((Queued, Install)), None, PluginState::Queued),
+            (Some((Updating, Install)), None, PluginState::Installing),
             (
-                Some(JobState::Removing),
+                Some((Updating, Install)),
+                Some("1.0.0"),
+                PluginState::Installing,
+            ),
+            (
+                Some((Queued, Update)),
+                Some("1.0.0"),
+                PluginState::UpdateQueued,
+            ),
+            (
+                Some((Updating, Update)),
+                Some("1.0.0"),
+                PluginState::Updating,
+            ),
+            (Some((Updating, Update)), None, PluginState::Updating),
+            (Some((Failed, Install)), None, PluginState::Failed),
+            (Some((Failed, Update)), Some("1.0.0"), PluginState::Failed),
+            (
+                Some((Removing, Remove)),
                 Some("1.0.0"),
                 PluginState::Removing,
             ),
         ];
         for (job_state, installed, expected) in cases {
-            let mut plugin = view("qol-voice", "Voice", *installed);
-            plugin.job = job_state.and_then(|state| job(state, 0, None));
-            assert_eq!(plugin_state(&plugin), *expected, "job: {job_state:?}");
+            let mut plugin = view("qol-voice", "Voice", installed);
+            plugin.job = job_state.clone().and_then(|(state, operation)| {
+                job(state, 0, None).map(|job| UpdateJob { operation, ..job })
+            });
+            assert_eq!(
+                plugin_state(&plugin),
+                expected,
+                "job: {job_state:?} installed: {installed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_state_has_a_stable_wire_name() {
+        let cases = [
+            (PluginState::NotInstalled, "not_installed"),
+            (PluginState::Installed, "installed"),
+            (PluginState::Queued, "queued"),
+            (PluginState::Installing, "installing"),
+            (PluginState::UpdateQueued, "update_queued"),
+            (PluginState::Updating, "updating"),
+            (PluginState::Failed, "failed"),
+            (PluginState::Removing, "removing"),
+        ];
+        for (state, wire) in cases {
+            assert_eq!(serde_json::to_value(state).unwrap(), wire, "{state:?}");
         }
     }
 
