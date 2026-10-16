@@ -53,7 +53,7 @@ impl InstallerOps for Platform {
     }
 
     fn register_application(&self, binary_path: &Path) -> Result<()> {
-        install_icons()?;
+        install_icons(&dirs::data_dir().context("Could not determine data directory")?)?;
         install_desktop_entry(binary_path)?;
         refresh_caches();
         Ok(())
@@ -91,8 +91,8 @@ impl InstallerOps for Platform {
     }
 }
 
-fn install_icons() -> Result<()> {
-    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
+fn install_icons(data_dir: &Path) -> Result<bool> {
+    let mut changed = false;
     for (size, data) in ICONS {
         let icon_dir = data_dir
             .join("icons")
@@ -100,9 +100,9 @@ fn install_icons() -> Result<()> {
             .join(format!("{size}x{size}"))
             .join("apps");
         std::fs::create_dir_all(&icon_dir)?;
-        std::fs::write(icon_dir.join("qol-tray.png"), data)?;
+        changed |= write_if_changed(&icon_dir.join("qol-tray.png"), data)?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 fn install_desktop_entry(binary_path: &Path) -> Result<()> {
@@ -118,12 +118,23 @@ fn desktop_apps_dir() -> Result<PathBuf> {
 }
 
 fn ensure_linux_desktop_entries(binary_path: &Path, include_app_entry: bool) -> Result<()> {
+    let icons_changed = include_app_entry && heal_icons();
     let apps_dir = desktop_apps_dir()?;
     std::fs::create_dir_all(&apps_dir)?;
-    if write_desktop_entries(&apps_dir, binary_path, include_app_entry)? {
+    if write_desktop_entries(&apps_dir, binary_path, include_app_entry)? || icons_changed {
         refresh_caches();
     }
     Ok(())
+}
+
+fn heal_icons() -> bool {
+    dirs::data_dir()
+        .context("Could not determine data directory")
+        .and_then(|data_dir| install_icons(&data_dir))
+        .unwrap_or_else(|error| {
+            log::warn!("app icon self-heal failed: {error:#}");
+            false
+        })
 }
 
 fn write_desktop_entries(
@@ -134,24 +145,23 @@ fn write_desktop_entries(
     let app_changed = if include_app_entry {
         write_if_changed(
             &apps_dir.join("qol-tray.desktop"),
-            render_app_desktop_entry(binary_path),
+            render_app_desktop_entry(binary_path).as_bytes(),
         )?
     } else {
         false
     };
     let settings_changed = write_if_changed(
         &apps_dir.join("qol-settings-surface.desktop"),
-        render_settings_surface_desktop_entry(binary_path),
+        render_settings_surface_desktop_entry(binary_path).as_bytes(),
     )?;
     Ok(app_changed || settings_changed)
 }
 
-fn write_if_changed(path: &Path, content: String) -> Result<bool> {
-    if std::fs::read_to_string(path).is_ok_and(|existing| existing == content) {
+fn write_if_changed(path: &Path, content: &[u8]) -> Result<bool> {
+    if std::fs::read(path).is_ok_and(|existing| existing == content) {
         return Ok(false);
     }
-    std::fs::write(path, content)
-        .with_context(|| format!("Failed to write desktop entry {}", path.display()))?;
+    std::fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(true)
 }
 
@@ -282,5 +292,23 @@ mod tests {
         assert!(settings_entry
             .lines()
             .any(|line| line == format!("Icon={}", qol_conventions::TRAY_ICON_NAME)));
+    }
+
+    #[test]
+    fn icon_self_heal_replaces_stale_art_and_skips_current_art() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let stale_dir = temp.path().join("icons/hicolor/64x64/apps");
+        std::fs::create_dir_all(&stale_dir).expect("icon dir");
+        std::fs::write(stale_dir.join("qol-tray.png"), b"old art").expect("stale icon");
+
+        assert!(install_icons(temp.path()).expect("first heal write"));
+
+        for (size, data) in ICONS {
+            let path = temp
+                .path()
+                .join(format!("icons/hicolor/{size}x{size}/apps/qol-tray.png"));
+            assert_eq!(std::fs::read(&path).unwrap(), data, "{size}px icon");
+        }
+        assert!(!install_icons(temp.path()).expect("idempotent heal write"));
     }
 }
