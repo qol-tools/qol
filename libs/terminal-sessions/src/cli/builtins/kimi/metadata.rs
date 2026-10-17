@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use qol_agent_homes::{Harness, Registry};
 
-use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn};
+use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 use crate::cli::CliActivityEvidence;
 use crate::{SessionBinding, SessionFacts};
 
@@ -297,7 +297,7 @@ fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
             if let Some(summary) = value.get("summary").and_then(Value::as_str) {
                 turns.push(ChatTurn {
                     role: ChatRole::User,
-                    text: format!("[compacted summary]\n{summary}"),
+                    text: format!("{COMPACTED_SUMMARY_HEADER}\n{summary}"),
                 });
             }
         }

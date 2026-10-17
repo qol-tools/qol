@@ -1,11 +1,12 @@
 use anyhow::{anyhow, bail, Result};
 
-pub const HELP: &str = "qol-cli-sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached CLI Sessions process runs the command and, when it exits, submits the exit code and the tail of its output into this terminal.\n\nThe terminal stays open unless parking is on for the conversation: qol-cli-sessions parking toggles it, and a session launched with QOL_SESSIONS_PARK=1 (qol sessions fork --park) starts with it on. With parking on, this terminal closes once the current turn ends (unless its harness reports it must stay open), and when the command exits the same conversation (same tool, same session id, same cwd) resumes in a new tab with the result. A closed terminal is always resumed this way.\n\nWith parking on, the resumed tab closes once its turn ends, unless it parks again or the user writes in it, and its final message is shown in a CLI Sessions notification; clicking it reopens the conversation.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--title names the parked session and its resumed tab; left out, it is the calling session's name.\n--session defaults to the calling terminal.\nqol-cli-sessions parked lists parked sessions; qol-cli-sessions unpark <id> stops the wait and resumes the conversation now, or reopens a finished one.";
+pub const HELP: &str = "qol-cli-sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]\n\nPark the calling harness session on a long wait. A detached CLI Sessions process runs the command and, when it exits, submits the exit code and the tail of its output into this terminal.\n\nThe terminal stays open unless parking is on for the conversation: qol-cli-sessions parking toggles it, and a session launched with QOL_SESSIONS_PARK=1 (qol sessions fork --park) starts with it on. With parking on, this terminal closes once the current turn ends (unless its harness reports it must stay open), and when the command exits the same conversation (same tool, same session id, same cwd) resumes in a new tab with the result. A closed terminal is always resumed this way.\n\nWith parking on, the resumed tab closes once its turn ends, unless it parks again or the user writes in it, and its final message is shown in a CLI Sessions notification; clicking it reopens the conversation. A fork launched with --park and a brief is watched the same way from launch, so its tab closes once its first turn ends. Messages other sessions knock into it do not count as the user writing.\n\n--model and --effort are passed to the resumed harness; left out, the harness picks its own default.\n--title names the parked session and its resumed tab; left out, it is the calling session's name.\n--session defaults to the calling terminal.\nqol-cli-sessions parked lists parked sessions; qol-cli-sessions unpark <id> stops the wait and resumes the conversation now, or reopens a finished one.";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ParkArgs {
     pub help: bool,
     pub run: Option<String>,
+    pub watch: Option<String>,
     pub session: Option<String>,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -30,6 +31,7 @@ pub fn parse(args: &[String]) -> Result<ParkArgs> {
                 return Ok(parsed);
             }
             "--run" => parsed.run = Some(value("--run")?),
+            "--watch" => parsed.watch = Some(value("--watch")?),
             "--session" => parsed.session = Some(value("--session")?),
             "--model" => parsed.model = Some(value("--model")?),
             "--effort" => parsed.effort = Some(value("--effort")?),
@@ -42,7 +44,7 @@ pub fn parse(args: &[String]) -> Result<ParkArgs> {
         }
         index += 1;
     }
-    if parsed.run.is_none() && parsed.command.is_empty() {
+    if parsed.run.is_none() && parsed.watch.is_none() && parsed.command.is_empty() {
         bail!("park needs a command after `--`\nusage: {HELP}");
     }
     Ok(parsed)
@@ -84,6 +86,13 @@ mod tests {
         assert_eq!(
             parse(&args(&["--run", "park-1"])).unwrap().run.as_deref(),
             Some("park-1")
+        );
+        assert_eq!(
+            parse(&args(&["--watch", "v1:kitty:k1_f1.2:3", "--model", "m"]))
+                .unwrap()
+                .watch
+                .as_deref(),
+            Some("v1:kitty:k1_f1.2:3")
         );
         assert!(parse(&args(&["--bogus", "--", "true"])).is_err());
         assert!(parse(&args(&["help"])).unwrap().help);

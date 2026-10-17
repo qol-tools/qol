@@ -5,17 +5,20 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use qol_sessions_engine::knocks::KNOCK_HEADER;
+use qol_sessions_engine::FORK_HEADER;
 use qol_terminal_sessions::cli::{
     composer_holds_draft, ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter,
+    COMPACTED_SUMMARY_HEADER,
 };
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
-use qol_terminal_sessions::parking::ParkingStore;
+use qol_terminal_sessions::parking::{ParkingStore, CLOSE_NOTE};
 use qol_terminal_sessions::{
     DeliveryMode, SessionBinding, SessionFacts, TerminalError, TerminalSessionService,
     TerminalSnapshot, TextInput,
 };
 
-use super::prompt::{read_tail, wake_prompt, wake_section, CLOSE_NOTE, WAKE_HEADER};
+use super::prompt::{read_tail, wake_prompt, wake_section, WAKE_HEADER};
 use super::resume::resume;
 use super::store::ParkStore;
 
@@ -421,28 +424,34 @@ enum WokenTurn {
     Finished(String),
 }
 
+fn opens_watched_turn(turn: &ChatTurn) -> bool {
+    turn.role == ChatRole::User
+        && (turn.text.contains(WAKE_HEADER) || turn.text.starts_with(FORK_HEADER))
+}
+
+fn written_by_the_user(turn: &ChatTurn) -> bool {
+    turn.role == ChatRole::User
+        && !turn.text.starts_with(KNOCK_HEADER)
+        && !turn.text.starts_with(COMPACTED_SUMMARY_HEADER)
+}
+
 fn woken_turn(turns: &[ChatTurn]) -> WokenTurn {
-    let Some(wake) = turns
-        .iter()
-        .rposition(|turn| turn.role == ChatRole::User && turn.text.contains(WAKE_HEADER))
-    else {
+    let Some(start) = turns.iter().rposition(opens_watched_turn) else {
         return WokenTurn::Working;
     };
-    let after = &turns[wake + 1..];
-    if after.iter().any(|turn| turn.role == ChatRole::User) {
+    let after = &turns[start + 1..];
+    if after.iter().any(written_by_the_user) {
         return WokenTurn::Engaged;
     }
-    match after
-        .iter()
-        .map(|turn| turn.text.trim())
-        .rfind(|text| !text.is_empty())
-    {
-        Some(report) => WokenTurn::Finished(report.to_owned()),
-        None => WokenTurn::Working,
+    match after.last() {
+        Some(turn) if turn.role == ChatRole::Assistant && !turn.text.trim().is_empty() => {
+            WokenTurn::Finished(turn.text.trim().to_owned())
+        }
+        _ => WokenTurn::Working,
     }
 }
 
-fn watch_woken(
+pub fn watch_woken(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     store: &ParkStore,
@@ -564,6 +573,65 @@ mod tests {
                     turn(ChatRole::Assistant, "Pruned."),
                 ],
                 WokenTurn::Engaged,
+            ),
+        ];
+        for (turns, expected) in cases {
+            assert_eq!(woken_turn(&turns), expected, "{turns:?}");
+        }
+    }
+
+    #[test]
+    fn a_fork_turn_finishes_through_knocks_and_compaction_but_not_a_user_reply() {
+        let launch = format!("{FORK_HEADER}\nYou are a detached architect.");
+        let knock =
+            format!("{KNOCK_HEADER} 1 new message from switchboard. Read it with session_inbox.");
+        let summary = format!("{COMPACTED_SUMMARY_HEADER}\nEarlier work.");
+        let cases = [
+            (vec![turn(ChatRole::User, &launch)], WokenTurn::Working),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Opened PR 180."),
+                    turn(ChatRole::User, &summary),
+                    turn(ChatRole::Assistant, "PR 180 merged."),
+                ],
+                WokenTurn::Finished("PR 180 merged.".to_owned()),
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Done."),
+                    turn(ChatRole::User, &knock),
+                ],
+                WokenTurn::Working,
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Done."),
+                    turn(ChatRole::User, &knock),
+                    turn(ChatRole::Assistant, "Answered the switchboard."),
+                ],
+                WokenTurn::Finished("Answered the switchboard.".to_owned()),
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Done."),
+                    turn(ChatRole::User, "also bump the version"),
+                    turn(ChatRole::Assistant, "Bumped."),
+                ],
+                WokenTurn::Engaged,
+            ),
+            (
+                vec![
+                    turn(
+                        ChatRole::User,
+                        "write a fork prompt that starts with [qol session fork]",
+                    ),
+                    turn(ChatRole::Assistant, "Here it is."),
+                ],
+                WokenTurn::Working,
             ),
         ];
         for (turns, expected) in cases {

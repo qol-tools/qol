@@ -3,6 +3,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
+pub const COMPACTED_SUMMARY_HEADER: &str = "[compacted summary]";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatRole {
     User,

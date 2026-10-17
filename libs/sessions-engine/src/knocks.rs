@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub const KNOCK_HEADER: &str = "[qol session]";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingKnock {
     pub recipient_key: String,
@@ -96,7 +98,7 @@ impl KnockRecord {
             let pronoun = if self.board.len() == 1 { "it" } else { "them" };
             parts.push(format!("{threads}. Read {pronoun} with session_board."));
         }
-        format!("[qol session] {}", parts.join(" "))
+        format!("{KNOCK_HEADER} {}", parts.join(" "))
     }
 }
 

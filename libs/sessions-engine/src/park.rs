@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
@@ -19,6 +19,53 @@ pub(super) fn forward(subcommand: &str, rest: &[OsString]) -> Result<()> {
         bail!("`{PLUGIN_ID} {subcommand}` failed ({status})");
     }
     Ok(())
+}
+
+pub(super) fn watch_fork(
+    session: &str,
+    model: &str,
+    effort: Option<&str>,
+    title: &str,
+) -> Result<()> {
+    start_watcher(&watch_args(session, model, effort, title))
+}
+
+fn watch_args(session: &str, model: &str, effort: Option<&str>, title: &str) -> Vec<String> {
+    let mut args = [
+        "park", "--watch", session, "--model", model, "--title", title,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if let Some(effort) = effort {
+        args.extend(["--effort".to_owned(), effort.to_owned()]);
+    }
+    args
+}
+
+#[cfg(not(test))]
+fn start_watcher(args: &[String]) -> Result<()> {
+    let program = match std::env::current_exe() {
+        Ok(current) if is_plugin_binary(&current) => current,
+        _ => plugin_binary()?,
+    };
+    qol_process::spawn_detached(Command::new(program).args(args))
+        .context("failed to start the CLI Sessions fork watcher")
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static STARTED_WATCHERS: std::cell::RefCell<Vec<Vec<String>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn start_watcher(args: &[String]) -> Result<()> {
+    STARTED_WATCHERS.with(|started| started.borrow_mut().push(args.to_vec()));
+    Ok(())
+}
+
+pub(super) fn is_plugin_binary(path: &Path) -> bool {
+    path.file_stem().is_some_and(|stem| stem == PLUGIN_ID)
 }
 
 pub(super) fn plugin_binary() -> Result<PathBuf> {

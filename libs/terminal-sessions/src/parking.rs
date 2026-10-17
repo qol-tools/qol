@@ -3,6 +3,7 @@ use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
 pub const PARKING_ENV: &str = "QOL_SESSIONS_PARK";
+pub const CLOSE_NOTE: &str = " This tab closes when your turn ends, and your final message is shown to the user in a notification they can click to reopen the conversation, so end with what they need to know.";
 
 const ON: &str = "on";
 const OFF: &str = "off";
