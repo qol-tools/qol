@@ -17,6 +17,7 @@ static TRAY_START: OnceLock<SystemTime> = OnceLock::new();
 static UPDATED_FROM: OnceLock<String> = OnceLock::new();
 
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60 * 60);
+const OFFLINE_RETRY: Duration = Duration::from_secs(60);
 pub(crate) const UPDATE_ALREADY_RUNNING: &str = "An update is already running";
 pub(crate) const UPDATE_FAILED: &str = "The update could not be installed";
 
@@ -183,6 +184,18 @@ impl Drop for CheckInFlight {
         if let Some(mut state) = lock_update_state() {
             state.checking = false;
         }
+    }
+}
+
+pub(crate) fn next_check_delay() -> Duration {
+    check_delay(check_health().last_error.as_deref())
+}
+
+fn check_delay(last_error: Option<&str>) -> Duration {
+    if last_error == Some(NO_CONNECTION) {
+        OFFLINE_RETRY
+    } else {
+        CHECK_INTERVAL
     }
 }
 
@@ -852,6 +865,20 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(github_status_in(text), expected, "text={text}");
+        }
+    }
+
+    #[test]
+    fn a_check_that_found_no_connection_retries_within_a_minute() {
+        let rate_limited = github_status_message(403);
+        let cases = [
+            ("last check succeeded", None, CHECK_INTERVAL),
+            ("no connection at boot", Some(NO_CONNECTION), OFFLINE_RETRY),
+            ("rate limited", Some(rate_limited.as_str()), CHECK_INTERVAL),
+            ("unreadable reply", Some(UNREADABLE_REPLY), CHECK_INTERVAL),
+        ];
+        for (name, last_error, expected) in cases {
+            assert_eq!(check_delay(last_error), expected, "case: {name}");
         }
     }
 
