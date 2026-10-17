@@ -322,7 +322,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "doctest: ${{ needs.plan.outputs.windows_doctest }}",
             "skip: ${{ needs.plan.outputs.windows_skip }}",
             "    defaults:\n      run:\n        shell: bash\n",
-            "if: runner.os != 'Linux' && matrix.skip != 'true'",
+            "if: runner.os != 'Linux' && matrix.skip != 'true' && github.event_name != 'pull_request'",
             "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
         ]:
             with self.subTest(contract=contract):

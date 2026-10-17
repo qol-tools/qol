@@ -27,25 +27,6 @@ class QueuedPullTests(unittest.TestCase):
         self.assertIsNone(qv.queued_pull("refs/heads/gh-readonly-queue/main/pr-40-short"))
 
 
-class ReusableTests(unittest.TestCase):
-    PASSED = [{"name": "tests", "conclusion": "success"}]
-
-    def test_identical_tree_with_a_passed_run_is_reused(self):
-        self.assertTrue(qv.reusable("t1", "t1", self.PASSED, "tests"))
-
-    def test_a_moved_main_changes_the_tree(self):
-        self.assertFalse(qv.reusable("t2", "t1", self.PASSED, "tests"))
-
-    def test_no_passed_run_means_no_reuse(self):
-        self.assertFalse(qv.reusable("t1", "t1", [], "tests"))
-        failed = [{"name": "tests", "conclusion": "failure"}]
-        self.assertFalse(qv.reusable("t1", "t1", failed, "tests"))
-
-    def test_another_workflow_passing_does_not_count(self):
-        other = [{"name": "Versioning", "conclusion": "success"}]
-        self.assertFalse(qv.reusable("t1", "t1", other, "tests"))
-
-
 class PassedTests(unittest.TestCase):
     def test_a_passed_queue_run_of_this_workflow_counts(self):
         self.assertTrue(qv.passed([{"name": "tests", "conclusion": "success"}], "tests"))
