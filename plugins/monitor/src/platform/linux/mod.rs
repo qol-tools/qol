@@ -22,7 +22,7 @@ pub(crate) use super::unix_signals::install_signal_handlers;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
-        name: "linux",
+        name: qol_platform::Os::Linux.name(),
         supported: true,
     }
 }

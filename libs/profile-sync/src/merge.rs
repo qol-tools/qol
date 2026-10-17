@@ -315,6 +315,7 @@ fn plugin_id_from_path(file: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use serde_json::json;
 
     fn merged(out: &FileMerge) -> &Value {
@@ -455,13 +456,13 @@ mod tests {
         let local = ProfileSnapshot {
             files: BTreeMap::from([(
                 "core/plugins.lock.json".to_string(),
-                json!({"plugins": [{"id": "p-mac", "platforms": ["macos"]}]}),
+                json!({"plugins": [{"id": "p-mac", "platforms": [Os::Macos.name()]}]}),
             )]),
         };
         let remote = ProfileSnapshot {
             files: BTreeMap::from([(
                 "core/plugins.lock.json".to_string(),
-                json!({"plugins": [{"id": "p-linux", "platforms": ["linux"]}]}),
+                json!({"plugins": [{"id": "p-linux", "platforms": [Os::Linux.name()]}]}),
             )]),
         };
 

@@ -3,7 +3,10 @@ use qol_headless::DoctorCheckResult;
 pub(crate) fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::fail(
         "platform_supported",
-        format!("{} is not declared by Window Actions", std::env::consts::OS),
+        format!(
+            "{} is not declared by Window Actions",
+            qol_platform::os::current_label()
+        ),
     )
     .with_fix("Run Window Actions on Linux or macOS")
 }
@@ -13,7 +16,7 @@ pub(crate) fn required_binaries_check() -> DoctorCheckResult {
         "required_binaries",
         format!(
             "Window Actions has no supported {} platform backend",
-            std::env::consts::OS
+            qol_platform::os::current_label()
         ),
     )
     .with_fix("Run Window Actions on Linux or macOS")

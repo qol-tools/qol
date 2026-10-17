@@ -165,6 +165,7 @@ fn atomic_write_file(final_path: &Path, content: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cloud::gist_store::MemoryGistStore;
+    use qol_platform::Os;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -207,7 +208,7 @@ mod tests {
                 "qol-shot": {"fps": 30},
             },
             "plugins": [
-                {"id": "plugin-alt-tab", "repo_url": "https://example.test/alt-tab", "version": "1.2.3", "platforms": ["linux"]},
+                {"id": "plugin-alt-tab", "repo_url": "https://example.test/alt-tab", "version": "1.2.3", "platforms": [Os::Linux.name()]},
             ],
         })
     }

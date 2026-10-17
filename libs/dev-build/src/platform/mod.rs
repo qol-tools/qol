@@ -17,7 +17,6 @@ pub(crate) use macos::Platform;
 pub(crate) use windows::Platform;
 
 pub(crate) trait BuildPlatform {
-    fn name(&self) -> &'static str;
     fn walk_pace_sleep(&self) -> std::time::Duration {
         std::time::Duration::from_millis(10)
     }
@@ -51,7 +50,11 @@ pub(crate) trait BuildPlatform {
             .unwrap_or_else(|| "none".to_string());
         PluginSupport {
             supported: false,
-            reason: format!("Not supported on {} (requires {})", self.name(), declared),
+            reason: format!(
+                "Not supported on {} (requires {})",
+                qol_platform::os::current_name(),
+                declared
+            ),
         }
     }
 }
@@ -78,11 +81,6 @@ pub(crate) struct PluginSupport {
 #[cfg(test)]
 mod tests {
     use super::{BuildPlatform, Platform};
-
-    #[test]
-    fn active_platform_has_name() {
-        assert!(!Platform.name().is_empty());
-    }
 
     #[test]
     fn executable_name_is_idempotent() {

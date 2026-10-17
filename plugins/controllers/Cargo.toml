@@ -1,6 +1,6 @@
 [package]
 name = "qol-controllers"
-version = "0.53.1"
+version = "0.54.0"
 edition = "2021"
 
 [dependencies]
@@ -9,6 +9,7 @@ qol-log.workspace = true
 anyhow = "1"
 serde_json = "1"
 qol-conventions.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
@@ -20,7 +21,6 @@ evdev = "0.13"
 qol-bluetooth-control.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-platform.workspace = true
 windows-sys = { version = "0.59", features = [
   "Win32_Devices_DeviceAndDriverInstallation",
   "Win32_Devices_HumanInterfaceDevice",

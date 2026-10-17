@@ -7,6 +7,7 @@ description = "Canonical QoL native artifact identity emission and source proven
 
 [dependencies]
 qol-conventions.workspace = true
+qol-platform.workspace = true
 serde_json.workspace = true
 tempfile = "3.8"
 toml.workspace = true

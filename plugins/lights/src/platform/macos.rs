@@ -6,7 +6,7 @@ use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
-        name: "macOS",
+        name: qol_platform::Os::Macos.label(),
         supported: true,
         serial_enumeration:
             "IOKit registry metadata with port opening and coordinator probing disabled",

@@ -90,11 +90,12 @@ mod tests {
     use super::super::test_support::repository;
     use super::*;
     use chrono::Utc;
+    use qol_platform::Os;
     use std::path::PathBuf;
 
     fn report_file(root: &Path) -> PathBuf {
         let path = root.join("verification/report.json");
-        let report = CheckReport::new(root, "worktree", "linux", &path, Utc::now());
+        let report = CheckReport::new(root, "worktree", Os::Linux.name(), &path, Utc::now());
         report.write(&path).unwrap();
         path
     }

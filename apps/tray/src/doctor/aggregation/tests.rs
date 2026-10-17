@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugins::registry::{Entry, Slot, SlotSource, CURRENT_REGISTRY_VERSION};
 use qol_headless::{DoctorCheckResult, DoctorStatus};
+use qol_platform::Os;
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -501,9 +502,10 @@ fn write_plugin(root: &Path, id: &str, doctor: bool, platform: Option<&str>) -> 
 }
 
 fn unsupported_platform() -> &'static str {
-    match std::env::consts::OS {
-        "windows" => "linux",
-        _ => "windows",
+    if Os::Windows.is_current() {
+        Os::Linux.name()
+    } else {
+        Os::Windows.name()
     }
 }
 

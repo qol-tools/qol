@@ -1,6 +1,6 @@
 [package]
 name = "qol-memory"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2021"
 
 [dependencies]
@@ -20,6 +20,7 @@ qol-config.workspace = true
 qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true

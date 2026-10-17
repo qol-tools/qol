@@ -3251,7 +3251,7 @@ mod tests {
             definition: EnvironmentDefinition {
                 id: "linux-debian".to_string(),
                 name: "Debian".to_string(),
-                family: "linux".to_string(),
+                family: qol_platform::Os::Linux.name().to_string(),
                 backend: "qemu".to_string(),
                 image: ImageDefinition {
                     kind: "qcow2".to_string(),

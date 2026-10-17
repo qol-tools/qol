@@ -86,7 +86,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         "Bluetooth audio-profile control uses the bundled native Pulse client.",
     )
     .with_details(serde_json::json!({
-        "platform": "linux",
+        "platform": qol_platform::Os::Linux.name(),
         "bundled_client": true,
         "executed": false,
     }))

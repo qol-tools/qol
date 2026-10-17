@@ -152,7 +152,7 @@ fn source_of(binary: Option<&Path>, advertised: bool) -> Option<&'static str> {
     {
         Some("Microsoft Store")
     } else if windows.is_some_and(|root| binary.starts_with(&format!("{root}\\"))) {
-        Some("Windows")
+        Some(qol_platform::Os::Windows.label())
     } else {
         None
     }

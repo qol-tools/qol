@@ -2,7 +2,6 @@ mod cases {
     use super::super::*;
     use crate::core::BuildStatus;
     use crate::fingerprint::fingerprint_plugin;
-    use crate::platform::{BuildPlatform, Platform};
     use crate::{build_linked_plugins_with_progress, write_fingerprint_sidecar};
     use std::fs;
     use std::path::Path;
@@ -24,7 +23,7 @@ mod cases {
             root.join("plugin.toml"),
             format!(
                 "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n",
-                Platform.name()
+                qol_platform::os::current_name()
             ),
         )
         .unwrap();
@@ -35,7 +34,7 @@ mod cases {
             root.join("plugin.toml"),
             format!(
                 "[plugin]\nid = \"test-plugin\"\nname = \"Test\"\ndescription = \"\"\nversion = \"1.0.0\"\nplatforms = [\"{}\"]\n\n[menu]\nlabel = \"Test\"\nitems = []\n\n[daemon]\nenabled = true\ncommand = \"plugin-a\"\n",
-                Platform.name()
+                qol_platform::os::current_name()
             ),
         )
         .unwrap();

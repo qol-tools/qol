@@ -17,7 +17,7 @@ pub struct InputHandlerImpl {
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        name: "linux",
+        name: qol_platform::Os::Linux.name(),
         declared: true,
         input_backend: true,
     }
@@ -27,7 +27,7 @@ pub(in crate::input) fn inspect_readiness() -> InputReadiness {
     let display_env_set = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
     if !display_env_set {
         return InputReadiness {
-            platform: "linux",
+            platform: qol_platform::Os::Linux.name(),
             ready: false,
             authorization_granted: Some(false),
             display_env_set: Some(false),
@@ -38,7 +38,7 @@ pub(in crate::input) fn inspect_readiness() -> InputReadiness {
     let display = unsafe { xlib::XOpenDisplay(std::ptr::null()) };
     if display.is_null() {
         return InputReadiness {
-            platform: "linux",
+            platform: qol_platform::Os::Linux.name(),
             ready: false,
             authorization_granted: Some(false),
             display_env_set: Some(true),
@@ -62,7 +62,7 @@ pub(in crate::input) fn inspect_readiness() -> InputReadiness {
         available
     };
     InputReadiness {
-        platform: "linux",
+        platform: qol_platform::Os::Linux.name(),
         ready: xtest_available,
         authorization_granted: Some(true),
         display_env_set: Some(true),

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use qol_platform::Os;
+
 const ICONS: [(u32, &str); 7] = [
     (16, "assets/icons/16.png"),
     (24, "assets/icons/24.png"),
@@ -15,7 +17,7 @@ const MOVEABLE_DISCARDABLE: u16 = 0x1010;
 const MOVEABLE_PURE_DISCARDABLE: u16 = 0x1030;
 
 pub(crate) fn load_dependencies_from_system32() {
-    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let windows = Os::build_target() == Some(Os::Windows);
     let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     if windows && msvc {
         println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
@@ -23,7 +25,7 @@ pub(crate) fn load_dependencies_from_system32() {
 }
 
 pub(crate) fn embed_windows_icon() {
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+    if Os::build_target() != Some(Os::Windows) {
         return;
     }
     let pngs: Vec<(u32, Vec<u8>)> = ICONS

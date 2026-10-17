@@ -22,6 +22,7 @@ url = "2.5"
 base64 = "0.22"
 blake2b_simd = { version = "1", default-features = false }
 ed25519-compact = { version = "2", default-features = false }
+qol-platform.workspace = true
 
 [lints]
 workspace = true

@@ -339,7 +339,7 @@ mod tests {
     use std::time::Duration;
 
     fn allow_macos_temp_roots() -> bool {
-        cfg!(target_os = "macos")
+        qol_platform::Os::Macos.is_current()
     }
 
     #[test]

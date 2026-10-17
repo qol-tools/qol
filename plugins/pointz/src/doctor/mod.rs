@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use qol_headless::{DoctorCheck, DoctorCheckResult};
+use qol_platform::Os;
 use serde_json::json;
 
 use qol_peers::admin::PointzStatus;
@@ -146,9 +147,9 @@ fn permissions_result(readiness: crate::input::InputReadiness) -> DoctorCheckRes
             .as_deref()
             .unwrap_or("The PointZ input backend is not ready"),
     )
-    .with_fix(match readiness.platform {
-        "macos" => "Enable PointZ in System Settings > Privacy & Security > Accessibility",
-        "linux" => "Run PointZ in an authorized X11 session with the XTEST extension",
+    .with_fix(match Os::from_name(readiness.platform) {
+        Some(Os::Macos) => "Enable PointZ in System Settings > Privacy & Security > Accessibility",
+        Some(Os::Linux) => "Run PointZ in an authorized X11 session with the XTEST extension",
         _ => "Run PointZ on Linux, macOS or Windows",
     })
     .with_details(details)
@@ -361,7 +362,7 @@ mod tests {
         let cases = [
             (
                 crate::input::InputReadiness {
-                    platform: "linux",
+                    platform: Os::Linux.name(),
                     ready: true,
                     authorization_granted: Some(true),
                     display_env_set: Some(true),
@@ -372,7 +373,7 @@ mod tests {
             ),
             (
                 crate::input::InputReadiness {
-                    platform: "macos",
+                    platform: Os::Macos.name(),
                     ready: false,
                     authorization_granted: Some(false),
                     display_env_set: None,

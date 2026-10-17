@@ -129,6 +129,7 @@ mod tests {
     use super::super::document::fixtures::{blob, document};
     use super::fixtures::host;
     use super::*;
+    use qol_platform::Os;
     use serde_json::json;
 
     fn indexed(hosts: serde_json::Value) -> IndexDocument {
@@ -141,16 +142,16 @@ mod tests {
     fn the_host_release_is_the_latest_listed_version_for_the_os() {
         let assets = json!({ "qol-tray-linux-x86_64.tar.gz": blob("sha256:l", 3) });
         let document = indexed(json!({
-            "linux": host("3.2.0", &[("3.1.0", "r1", json!({})), ("3.2.0", "r2", assets)]),
-            "macos": host("3.3.0", &[("3.1.0", "r1", json!({}))]),
+            Os::Linux.name(): host("3.2.0", &[("3.1.0", "r1", json!({})), ("3.2.0", "r2", assets)]),
+            Os::Macos.name(): host("3.3.0", &[("3.1.0", "r1", json!({}))]),
         }));
-        let cases: &[(&str, Option<(&str, &str)>)] = &[
-            ("linux", Some(("3.2.0", "r2"))),
-            ("macos", None),
-            ("windows", None),
+        let cases: &[(Os, Option<(&str, &str)>)] = &[
+            (Os::Linux, Some(("3.2.0", "r2"))),
+            (Os::Macos, None),
+            (Os::Windows, None),
         ];
         for (os, expected) in cases {
-            let release = host_release(&document, os);
+            let release = host_release(&document, os.name());
             assert_eq!(
                 release
                     .as_ref()
@@ -159,7 +160,7 @@ mod tests {
                 "{os}"
             );
         }
-        assert!(host_release(&indexed(json!({})), "linux").is_none());
+        assert!(host_release(&indexed(json!({})), Os::Linux.name()).is_none());
     }
 
     #[test]

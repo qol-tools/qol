@@ -237,7 +237,7 @@ mod tests {
         let cases = [
             (
                 PlatformSupport {
-                    label: "Linux",
+                    label: qol_platform::Os::Linux.label(),
                     supported: true,
                 },
                 DoctorStatus::Ok,
@@ -245,7 +245,7 @@ mod tests {
             ),
             (
                 PlatformSupport {
-                    label: "macOS",
+                    label: qol_platform::Os::Macos.label(),
                     supported: false,
                 },
                 DoctorStatus::Fail,
@@ -253,7 +253,7 @@ mod tests {
             ),
             (
                 PlatformSupport {
-                    label: "Windows",
+                    label: qol_platform::Os::Windows.label(),
                     supported: false,
                 },
                 DoctorStatus::Fail,

@@ -1,5 +1,5 @@
 pub(super) fn os_bucket() -> &'static str {
-    "macos"
+    qol_platform::Os::Macos.name()
 }
 
 #[cfg(not(test))]

@@ -15,7 +15,7 @@ pub(crate) fn inspect() -> PlatformInspection {
     let trash_creation_anchor = home.map(inspect_directory);
 
     PlatformInspection {
-        name: "macOS",
+        name: qol_platform::Os::Macos.label(),
         supported: true,
         inventory_roots,
         trash,

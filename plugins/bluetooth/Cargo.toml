@@ -1,6 +1,6 @@
 [package]
 name = "qol-bluetooth"
-version = "0.62.1"
+version = "0.63.0"
 edition = "2021"
 
 [dependencies]
@@ -17,6 +17,7 @@ qol-conventions.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 workspace-hack.workspace = true
@@ -38,7 +39,6 @@ qol-process.workspace = true
 tokio = { version = "1.35", features = ["macros", "process", "rt", "signal", "sync", "time"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-platform.workspace = true
 qol-audio.workspace = true
 qol-process.workspace = true
 windows = { version = "0.61", features = [

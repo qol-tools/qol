@@ -2,7 +2,7 @@ use super::Inspection;
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
-        platform: "macos",
+        platform: qol_platform::Os::Macos.name(),
         supported: true,
         backend: "appkit-windowserver",
         display_ready: true,

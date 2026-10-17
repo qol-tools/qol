@@ -30,7 +30,7 @@ const RIGHT_STICK_BUTTON: usize = 11;
 
 pub(crate) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        label: "Linux",
+        label: qol_platform::Os::Linux.label(),
         supported: true,
     }
 }

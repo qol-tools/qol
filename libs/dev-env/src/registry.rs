@@ -916,6 +916,7 @@ fn resolve_image(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use tempfile::tempdir;
 
     fn absolute(unix: &str) -> String {
@@ -1058,7 +1059,7 @@ shared_folder = "virtio-9p"
         let definition = parse_definition(MINT, Path::new("mint.toml")).unwrap();
         assert_eq!(definition.id, "linux/mint");
         assert_eq!(definition.name, "Linux Mint");
-        assert_eq!(definition.family, "linux");
+        assert_eq!(definition.family, Os::Linux.name());
         assert_eq!(definition.backend, "qemu");
         assert_eq!(definition.image.kind, "qcow2");
         assert_eq!(
@@ -1246,7 +1247,7 @@ shared_folder = "virtio-9p"
         let root = tempdir().unwrap();
         let image_root = root.path().join("images");
         let run_root = root.path().join("runs");
-        fs::create_dir_all(image_root.join("linux")).unwrap();
+        fs::create_dir_all(image_root.join(Os::Linux.name())).unwrap();
         fs::write(image_root.join("linux/ready.qcow2"), b"image").unwrap();
         fs::write(image_root.join("override.qcow2"), b"image").unwrap();
         let config = LocalConfig {
@@ -1322,7 +1323,7 @@ shared_folder = "virtio-9p"
     fn revision_bearing_definition_rejects_raw_default_and_legacy_override() {
         let root = tempdir().unwrap();
         let image_root = root.path().join("images");
-        fs::create_dir_all(image_root.join("linux")).unwrap();
+        fs::create_dir_all(image_root.join(Os::Linux.name())).unwrap();
         fs::write(image_root.join("linux/mint-base.qcow2"), b"image").unwrap();
         fs::write(image_root.join("legacy.qcow2"), b"image").unwrap();
         let definition =

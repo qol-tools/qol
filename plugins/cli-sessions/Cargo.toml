@@ -1,6 +1,6 @@
 [package]
 name = "qol-cli-sessions"
-version = "0.91.0"
+version = "0.92.0"
 edition = "2021"
 description = "Always-on-top overview of live CLI sessions (Claude Code, Codex, any command) for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -20,6 +20,7 @@ serde_json.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-process.workspace = true
 qol-runtime.workspace = true

@@ -20,7 +20,7 @@ use qol_dev_guest::server::{parse_run_id, read_identity, read_run_id, serve_fore
 
 const RAW_SMBIOS_PROVIDER: u32 = u32::from_be_bytes(*b"RSMB");
 const RAW_SMBIOS_HEADER_BYTES: usize = 8;
-const WINDOWS_DESKTOP: &str = "windows";
+const WINDOWS_DESKTOP: &str = qol_platform::Os::Windows.name();
 const RUNNER_LOG_PATH: &str = r"C:\ProgramData\qol\guest-runner.log";
 const RUNNER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 

@@ -19,8 +19,8 @@ impl GuestStrategy {
             Self::DebianNocloud => "debian-nocloud",
             Self::UbuntuNocloud => "ubuntu-nocloud",
             Self::MintCinnamon => "mint-cinnamon",
-            Self::Macos => "macos",
-            Self::Windows => "windows",
+            Self::Macos => qol_platform::Os::Macos.name(),
+            Self::Windows => qol_platform::Os::Windows.name(),
         }
     }
 }

@@ -8,7 +8,7 @@ const GENERIC_USB_SERIAL_SCORE: u16 = 150;
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
-        name: "Windows",
+        name: qol_platform::Os::Windows.label(),
         supported: true,
         serial_enumeration:
             "SetupAPI COM port metadata with port opening and coordinator probing disabled",

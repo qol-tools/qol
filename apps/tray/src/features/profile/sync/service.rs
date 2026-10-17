@@ -1137,6 +1137,7 @@ fn last_key(key_path: &str) -> &str {
 mod tests {
     use super::*;
     use git2::Repository;
+    use qol_platform::Os;
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::ffi::OsString;
@@ -1268,7 +1269,7 @@ mod tests {
                         "id": "plugin-alt-tab",
                         "repo_url": "https://example.invalid/plugin-alt-tab.git",
                         "version": "1.0.0",
-                        "platforms": ["macos"]
+                        "platforms": [Os::Macos.name()]
                     }]
                 }),
             ),

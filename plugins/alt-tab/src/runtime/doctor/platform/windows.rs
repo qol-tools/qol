@@ -2,7 +2,7 @@ use super::Inspection;
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
-        platform: "windows",
+        platform: qol_platform::Os::Windows.name(),
         supported: true,
         backend: "win32-dwm",
         display_ready: true,

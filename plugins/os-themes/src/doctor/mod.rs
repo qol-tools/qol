@@ -274,6 +274,7 @@ mod tests {
     use std::path::PathBuf;
 
     use qol_headless::DoctorStatus;
+    use qol_platform::Os;
 
     use super::*;
     use crate::doctor::platform::{
@@ -282,7 +283,7 @@ mod tests {
 
     fn metadata() -> PlatformMetadata {
         PlatformMetadata {
-            platform: "Linux",
+            platform: Os::Linux.label(),
             supported: true,
             gsettings: Some(GsettingsMetadata {
                 path: Some(PathBuf::from("/usr/bin/gsettings")),
@@ -326,10 +327,10 @@ mod tests {
     #[test]
     fn gsettings_and_session_checks_follow_the_platform_backend() {
         let mut windows = metadata();
-        windows.platform = "Windows";
+        windows.platform = Os::Windows.label();
         windows.gsettings = None;
-        windows.session.desktop = Some("Windows".to_string());
-        windows.session.desktop_backend = Some("Windows");
+        windows.session.desktop = Some(Os::Windows.label().to_string());
+        windows.session.desktop_backend = Some(Os::Windows.label());
         windows.session.display_available = true;
         windows.session.dbus_available = None;
 
@@ -345,13 +346,23 @@ mod tests {
         no_bus.session.dbus_available = Some(false);
 
         let mut unsupported = metadata();
-        unsupported.platform = "macOS";
+        unsupported.platform = Os::Macos.label();
         unsupported.supported = false;
         unsupported.gsettings = None;
 
         let cases = [
-            ("linux", metadata(), DoctorStatus::Ok, DoctorStatus::Warn),
-            ("windows", windows, DoctorStatus::Ok, DoctorStatus::Ok),
+            (
+                Os::Linux.name(),
+                metadata(),
+                DoctorStatus::Ok,
+                DoctorStatus::Warn,
+            ),
+            (
+                Os::Windows.name(),
+                windows,
+                DoctorStatus::Ok,
+                DoctorStatus::Ok,
+            ),
             (
                 "missing gsettings",
                 missing_gsettings,

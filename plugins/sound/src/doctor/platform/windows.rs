@@ -4,7 +4,7 @@ use super::server::{checks, Host};
 struct Windows;
 
 impl Host for Windows {
-    const NAME: &'static str = "Windows";
+    const NAME: &'static str = qol_platform::Os::Windows.label();
     const START: &'static str = "Start the Windows Audio service";
 }
 

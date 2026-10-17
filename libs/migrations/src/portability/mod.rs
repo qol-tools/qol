@@ -15,5 +15,5 @@ pub use paths::{ensure_path_within_platform_limit, validate_profile_name};
 pub use unicode::normalize_to_nfc;
 
 pub(crate) fn current_os_bucket() -> &'static str {
-    platform::os_bucket()
+    qol_platform::os::current_name()
 }

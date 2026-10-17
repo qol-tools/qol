@@ -280,10 +280,11 @@ impl FileMigration for V3_17ToV3_18PluginConfigsByOs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use std::path::PathBuf;
 
-    const OS_MAC: &str = "macos";
-    const OS_LINUX: &str = "linux";
+    const OS_MAC: &str = Os::Macos.name();
+    const OS_LINUX: &str = Os::Linux.name();
 
     fn migration(target_os: &'static str) -> V3_17ToV3_18PluginConfigsByOs {
         V3_17ToV3_18PluginConfigsByOs::new_for_os(target_os)
@@ -371,7 +372,7 @@ mod tests {
             .join("plugin-configs")
             .join("plugin-keyremap.json");
         write(&src, br#"{"enabled":true}"#);
-        write_lock(&root, &[("plugin-keyremap", &["macos"])]);
+        write_lock(&root, &[("plugin-keyremap", &[Os::Macos.name()])]);
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -380,7 +381,7 @@ mod tests {
         assert!(!src.exists(), "src removed once moved");
         let dst = root
             .join("os")
-            .join("macos")
+            .join(Os::Macos.name())
             .join("plugin-configs")
             .join("plugin-keyremap.json");
         assert!(dst.is_file());
@@ -396,7 +397,7 @@ mod tests {
             .join("plugin-configs")
             .join("plugin-divergent.json");
         write(&src, b"\"x\"");
-        write_lock(&root, &[("plugin-divergent", &["macos"])]);
+        write_lock(&root, &[("plugin-divergent", &[Os::Macos.name()])]);
         write_plugin_manifest(
             dir.path(),
             "plugin-divergent",
@@ -490,7 +491,10 @@ items = []
             .join("plugin-configs")
             .join("plugin-cross.json");
         write(&src, b"{}");
-        write_lock(&root, &[("plugin-cross", &["linux", "macos"])]);
+        write_lock(
+            &root,
+            &[("plugin-cross", &[Os::Linux.name(), Os::Macos.name()])],
+        );
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -550,12 +554,12 @@ default_scope = "device"
             .join("plugin-keyremap.json");
         let dst = root
             .join("os")
-            .join("macos")
+            .join(Os::Macos.name())
             .join("plugin-configs")
             .join("plugin-keyremap.json");
         write(&src, b"\"same\"");
         write(&dst, b"\"same\"");
-        write_lock(&root, &[("plugin-keyremap", &["macos"])]);
+        write_lock(&root, &[("plugin-keyremap", &[Os::Macos.name()])]);
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -586,12 +590,12 @@ default_scope = "device"
             .join("plugin-keyremap.json");
         let dst = root
             .join("os")
-            .join("macos")
+            .join(Os::Macos.name())
             .join("plugin-configs")
             .join("plugin-keyremap.json");
         write(&src, b"\"src-data\"");
         write(&dst, b"\"dst-data\"");
-        write_lock(&root, &[("plugin-keyremap", &["macos"])]);
+        write_lock(&root, &[("plugin-keyremap", &[Os::Macos.name()])]);
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -624,7 +628,7 @@ default_scope = "device"
             .join("plugin-configs")
             .join("plugin-keyremap.json");
         write(&src, b"\"data\"");
-        write_lock(&root, &[("plugin-keyremap", &["macos"])]);
+        write_lock(&root, &[("plugin-keyremap", &[Os::Macos.name()])]);
 
         let m = migration(OS_LINUX);
         let first = m.migrate(dir.path(), &empty_archive(dir.path())).unwrap();
@@ -655,7 +659,7 @@ default_scope = "device"
         }
         let legit = configs.join("legit-plugin.json");
         write(&legit, b"{}");
-        write_lock(&root, &[("legit-plugin", &["macos"])]);
+        write_lock(&root, &[("legit-plugin", &[Os::Macos.name()])]);
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -711,8 +715,8 @@ default_scope = "device"
             &p_work.join("core/plugin-configs/plugin-x.json"),
             b"\"work\"",
         );
-        write_lock(&p_default, &[("plugin-x", &["macos"])]);
-        write_lock(&p_work, &[("plugin-x", &["linux"])]);
+        write_lock(&p_default, &[("plugin-x", &[Os::Macos.name()])]);
+        write_lock(&p_work, &[("plugin-x", &[Os::Linux.name()])]);
 
         migration(OS_LINUX)
             .migrate(dir.path(), &empty_archive(dir.path()))
@@ -740,7 +744,10 @@ default_scope = "device"
         write(&collide_dst, b"\"different-dst\"");
         write_lock(
             &root,
-            &[("plugin-fresh", &["macos"]), ("plugin-collide", &["macos"])],
+            &[
+                ("plugin-fresh", &[Os::Macos.name()]),
+                ("plugin-collide", &[Os::Macos.name()]),
+            ],
         );
 
         let report = migration(OS_LINUX)

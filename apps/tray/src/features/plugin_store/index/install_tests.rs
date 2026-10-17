@@ -11,6 +11,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use qol_platform::Os;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -102,7 +103,7 @@ impl Server {
         let mut published = self.published.lock().unwrap();
         let assets = json!({ asset_name: blob(&digest(bytes), bytes.len() as u64) });
         let mut body = document(serial, &self.base, json!({}));
-        body["host"] = json!({ "linux": host("3.2.0", &[("3.2.0", "r2", assets)]) });
+        body["host"] = json!({ Os::Linux.name(): host("3.2.0", &[("3.2.0", "r2", assets)]) });
         published.blobs.insert(digest(bytes), bytes.to_vec());
         published.index = signer.sign_index(&serde_json::to_vec(&body).unwrap());
     }
@@ -421,7 +422,7 @@ async fn a_host_asset_is_pulled_from_the_registry_and_checked_against_the_index(
     let signer = Signer::generate();
     let asset_name = "qol-tray-linux-x86_64.tar.gz";
     server.publish_host(&signer, 1, asset_name, b"host build");
-    let release = super::host::load_host_release(&server.location(&signer), "linux")
+    let release = super::host::load_host_release(&server.location(&signer), Os::Linux.name())
         .await
         .unwrap()
         .expect("the index lists a linux host");
@@ -443,7 +444,7 @@ async fn a_host_asset_is_pulled_from_the_registry_and_checked_against_the_index(
         "{tampered:#}"
     );
     assert!(
-        super::host::load_host_release(&server.location(&signer), "windows")
+        super::host::load_host_release(&server.location(&signer), Os::Windows.name())
             .await
             .unwrap()
             .is_none()

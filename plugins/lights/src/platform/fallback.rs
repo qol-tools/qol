@@ -5,7 +5,7 @@ use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
-        name: std::env::consts::OS,
+        name: qol_platform::os::current_label(),
         supported: false,
         serial_enumeration: "disabled because Lights is not declared for this platform",
     }

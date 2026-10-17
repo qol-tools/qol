@@ -8,6 +8,7 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use qol_platform::Os;
     use qol_plugin_api::manifest::PluginManifest;
 
     qol_plugin_api::assert_plugin_toml_valid!();
@@ -23,7 +24,7 @@ mod tests {
             .expect("plugin.toml must declare platforms = [\"macos\", \"windows\"]");
         assert_eq!(
             platforms,
-            &vec!["macos".to_string(), "windows".to_string()],
+            &vec![Os::Macos.name().to_string(), Os::Windows.name().to_string()],
             "keyremap needs CGEventTap on macOS or low-level hooks on Windows; the host must never offer it elsewhere"
         );
         assert!(manifest.capabilities.doctor);
@@ -58,7 +59,7 @@ mod tests {
             .iter()
             .find(|dependency| dependency.name == "Karabiner-DriverKit-VirtualHIDDevice")
             .expect("the virtual HID driver must be declared");
-        assert_eq!(driver.platforms, vec!["macos".to_string()]);
+        assert_eq!(driver.platforms, vec![Os::Macos.name().to_string()]);
         assert_eq!(driver.min_version, "8.6.0");
         assert_eq!(driver.license, "Unlicense");
     }

@@ -362,6 +362,7 @@ fn titled_assets<'a>(
 mod tests {
     use super::*;
     use crate::oci::sha256_digest;
+    use qol_platform::Os;
 
     fn sha(label: &str) -> String {
         sha256_digest(label.as_bytes())
@@ -607,7 +608,7 @@ mod tests {
                 Some("qol-tray-linux-x86_64.tar.gz"),
             )
         };
-        let good = host_config("linux", "3.101.4", COMMIT);
+        let good = host_config(Os::Linux.name(), "3.101.4", COMMIT);
         let entry =
             host_version_entry(&release, &sha("m"), &host_manifest(vec![asset()]), &good).unwrap();
         assert_eq!(entry.manifest_digest, sha("m"));
@@ -621,17 +622,17 @@ mod tests {
             ("unreadable config", b"not json".to_vec(), vec![asset()]),
             (
                 "other os",
-                host_config("macos", "3.101.4", COMMIT),
+                host_config(Os::Macos.name(), "3.101.4", COMMIT),
                 vec![asset()],
             ),
             (
                 "other version",
-                host_config("linux", "3.101.3", COMMIT),
+                host_config(Os::Linux.name(), "3.101.3", COMMIT),
                 vec![asset()],
             ),
             (
                 "short revision",
-                host_config("linux", "3.101.4", "abc"),
+                host_config(Os::Linux.name(), "3.101.4", "abc"),
                 vec![asset()],
             ),
             (
@@ -680,7 +681,13 @@ mod tests {
             .iter()
             .map(|(os, host)| (os.as_str(), host.latest.as_str(), host.versions.len()))
             .collect();
-        assert_eq!(latest, [("linux", "3.101.3", 1), ("macos", "3.101.10", 2)]);
+        assert_eq!(
+            latest,
+            [
+                (Os::Linux.name(), "3.101.3", 1),
+                (Os::Macos.name(), "3.101.10", 2)
+            ]
+        );
         assert_eq!(
             warnings,
             [

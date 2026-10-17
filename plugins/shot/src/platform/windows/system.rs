@@ -22,7 +22,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
 
 fn required_binaries_result(ffmpeg: Option<std::path::PathBuf>) -> DoctorCheckResult {
     let details = serde_json::json!({
-        "platform": "windows",
+        "platform": qol_platform::Os::Windows.name(),
         "ffmpeg": ffmpeg.as_ref().map(|path| path.display().to_string()),
     });
     match ffmpeg {
@@ -43,7 +43,7 @@ fn required_binaries_result(ffmpeg: Option<std::path::PathBuf>) -> DoctorCheckRe
 pub fn external_services_check() -> DoctorCheckResult {
     let displays = native_displays().len();
     let details = serde_json::json!({
-        "platform": "windows",
+        "platform": qol_platform::Os::Windows.name(),
         "service": "gdi",
         "display_count": displays,
         "capture_attempted": false,

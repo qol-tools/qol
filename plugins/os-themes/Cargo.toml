@@ -1,6 +1,6 @@
 [package]
 name = "qol-os-themes"
-version = "0.66.2"
+version = "0.67.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +8,7 @@ log.workspace = true
 qol-log.workspace = true
 anyhow = "1"
 serde_json.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-config.workspace = true
@@ -25,7 +26,6 @@ x11 = { version = "2", features = ["xlib", "xcursor", "xfixes"] }
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-platform.workspace = true
 qol-process.workspace = true
 qol-windowing.workspace = true
 windows-sys = { version = "0.59", features = [

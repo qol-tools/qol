@@ -2,7 +2,7 @@ use super::Inspection;
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
-        platform: std::env::consts::OS,
+        platform: qol_platform::os::current_name(),
         supported: false,
         backend: "unsupported",
         display_ready: false,

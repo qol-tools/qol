@@ -2,7 +2,7 @@ use super::{CurrentThemeMetadata, PlatformMetadata, SessionMetadata};
 
 pub(super) fn inspect() -> PlatformMetadata {
     PlatformMetadata {
-        platform: "macOS",
+        platform: qol_platform::Os::Macos.label(),
         supported: false,
         gsettings: None,
         session: SessionMetadata {
