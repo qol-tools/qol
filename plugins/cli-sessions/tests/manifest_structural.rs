@@ -43,6 +43,10 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
         m.catalog_runtime_args("snapshot"),
         Some(vec!["snapshot".to_string()])
     );
+    assert_eq!(
+        m.catalog_runtime_args("switchboard"),
+        Some(vec!["switchboard".to_string()])
+    );
 
     let daemon = m.daemon.as_ref().expect("daemon");
     assert!(
@@ -62,8 +66,17 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
     let shortcut_actions: Vec<&str> = m.shortcuts.iter().map(|s| s.action.as_str()).collect();
     assert_eq!(
         shortcut_actions,
-        ["open", "next", "snapshot"],
-        "open, next-alert, and snapshot-all are bindable shortcuts"
+        ["open", "next", "snapshot", "switchboard"],
+        "open, next-alert, snapshot-all and the switchboard are bindable shortcuts"
+    );
+    let switchboard = m
+        .shortcuts
+        .iter()
+        .find(|s| s.action == "switchboard")
+        .expect("switchboard shortcut");
+    assert_eq!(
+        switchboard.name, "Switchboard",
+        "the Launcher entry is titled Switchboard"
     );
     assert!(m.shortcuts.iter().all(|s| s.export_to_launcher));
 

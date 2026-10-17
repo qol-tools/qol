@@ -12,12 +12,15 @@ use qol_terminal_sessions::{
     SessionId, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
 };
 
+use super::store::ParkStore;
+
 const READY_POLL: Duration = Duration::from_millis(250);
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn resume(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
+    store: &ParkStore,
     record: &ParkRecord,
     prompt: &str,
 ) -> Result<String> {
@@ -42,8 +45,7 @@ pub fn resume(
         record.closes_terminal,
     ));
     let identity = SpawnIdentity {
-        key: SpawnKey::new(record.id.clone())
-            .map_err(|error| anyhow!("park id `{}` is not a spawn key: {error}", record.id))?,
+        key: resumed_key(record, store.spawn_key(&record.id))?,
         tool: tool.clone(),
         surface: qol_agent_launch::surface::config_surface()?.unwrap_or(SpawnSurface::Tab),
     };
@@ -62,7 +64,7 @@ pub fn resume(
     if held {
         bail!(
             "`{}` is already held by a live session; continue there",
-            record.id
+            identity.key
         );
     }
     let request = SpawnRequest {
@@ -75,6 +77,14 @@ pub fn resume(
         .spawn(&request)
         .context("the terminal refused to open the resumed session")?;
     ready_token(terminals, interpreter, &session, &tool)
+}
+
+fn resumed_key(record: &ParkRecord, kept: Option<SpawnKey>) -> Result<SpawnKey> {
+    match kept {
+        Some(key) => Ok(key),
+        None => SpawnKey::new(record.id.clone())
+            .map_err(|error| anyhow!("park id `{}` is not a spawn key: {error}", record.id)),
+    }
 }
 
 fn resume_args(
@@ -160,5 +170,24 @@ mod tests {
             "{joined}"
         );
         assert!(joined.ends_with("--model opus-x --effort high"), "{joined}");
+    }
+
+    #[test]
+    fn a_resumed_session_keeps_its_spawn_key_so_its_mail_still_reaches_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        let parked = record(ParkState::Waiting);
+        assert_eq!(
+            resumed_key(&parked, store.spawn_key(&parked.id)).unwrap(),
+            SpawnKey::new("park-1-2").unwrap(),
+            "a session spawned without a key is keyed by its park"
+        );
+        store
+            .record_spawn_key(&parked.id, &SpawnKey::new("lane-7").unwrap())
+            .unwrap();
+        assert_eq!(
+            resumed_key(&parked, store.spawn_key(&parked.id)).unwrap(),
+            SpawnKey::new("lane-7").unwrap()
+        );
     }
 }

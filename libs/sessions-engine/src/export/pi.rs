@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
-use crate::commands::sessions::contract::{tool_specs, ToolSpec};
+use crate::contract::{tool_specs, ToolSpec};
 
 const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";
@@ -327,10 +327,12 @@ const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _on
       if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
       if (params.task_role != null) args.push("--task-role", params.task_role);
       if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
-      args.push("--brief", params.brief);
+      if (params.blank === true) args.push("--blank");
+      else args.push("--brief", params.brief);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
-      const text = `forked detached architect ${outcome.session} (${outcome.tool} ${outcome.model}${outcome.effort ? " " + outcome.effort : ""}, key ${outcome.key}); it owns the brief at ${outcome.brief} and never reports back`;
+      const owns = outcome.brief ? `it owns the brief at ${outcome.brief}` : "it starts blank";
+      const text = `forked detached architect ${outcome.session} (${outcome.tool} ${outcome.model}${outcome.effort ? " " + outcome.effort : ""}, key ${outcome.key}); ${owns} and never reports back`;
       return { content: [{ type: "text", text }], details: { outcome } };
     },
 "#;
@@ -395,6 +397,16 @@ const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _o
     },
 "#;
 
+const EXECUTE_THROUGH_MCP: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
+      const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_NAME, arguments: params } };
+      const response = JSON.parse(await run(["mcp"], 30_000, `${JSON.stringify(request)}\n`, signal));
+      const result = response?.result;
+      const text = result?.content?.[0]?.text;
+      if (result?.isError || typeof text !== "string") throw new Error(text || `${TOOL_NAME} failed`);
+      return { content: [{ type: "text", text }], details: { result } };
+    },
+"#;
+
 pub(crate) fn pi_extension() -> Result<String> {
     let blocks = tool_specs()
         .iter()
@@ -408,6 +420,7 @@ pub(crate) fn pi_extension() -> Result<String> {
 
 fn render_tool_block(spec: &ToolSpec) -> Result<String> {
     let parameters = typebox_object(&spec.input_schema)?;
+    let through_mcp;
     let execute = match spec.name {
         "sessions_list" => EXECUTE_LIST,
         "session_spawn" => EXECUTE_SPAWN,
@@ -416,6 +429,10 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
+        "session_send" | "session_inbox" | "session_board" => {
+            through_mcp = EXECUTE_THROUGH_MCP.replace("TOOL_NAME", &format!("{:?}", spec.name));
+            through_mcp.as_str()
+        }
         other => bail!("no pi adapter template for contract tool `{other}`"),
     };
     Ok(format!(
@@ -491,6 +508,15 @@ mod tests {
                 spec.name
             );
         }
+    }
+
+    #[test]
+    fn pi_messaging_tools_call_the_sessions_mcp_server_by_name() {
+        let source = pi_extension().expect("render");
+        for name in ["session_send", "session_inbox", "session_board"] {
+            assert!(source.contains(&format!("params: {{ name: {name:?}, arguments: params }}")));
+        }
+        assert!(!source.contains("TOOL_NAME"));
     }
 
     #[test]

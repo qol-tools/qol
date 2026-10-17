@@ -137,7 +137,7 @@ fn model_for_tool(tool: &str, default: Option<&str>, policy: &DispatchPolicy) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::sessions::agent_policy::AssignmentRequest;
+    use crate::agent_policy::AssignmentRequest;
 
     fn dispatch() -> AgentDispatch {
         AgentDispatch::new(

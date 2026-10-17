@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
+use qol_terminal_sessions::SpawnKey;
 
 pub struct ParkStore {
     dir: PathBuf,
@@ -33,6 +34,21 @@ impl ParkStore {
         let encoded = serde_json::to_string(record)?;
         qol_fs::atomic_write(&self.record_path(&record.id), encoded.as_bytes())
             .context("failed to publish the park record")
+    }
+
+    fn spawn_key_path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.key"))
+    }
+
+    pub fn record_spawn_key(&self, id: &str, key: &SpawnKey) -> Result<()> {
+        fs::create_dir_all(&self.dir).context("failed to create the parked directory")?;
+        qol_fs::atomic_write(&self.spawn_key_path(id), key.as_str().as_bytes())
+            .context("failed to keep the parked session's spawn key")
+    }
+
+    pub fn spawn_key(&self, id: &str) -> Option<SpawnKey> {
+        let key = fs::read_to_string(self.spawn_key_path(id)).ok()?;
+        SpawnKey::new(key.trim()).ok()
     }
 
     fn claim_path(&self, id: &str) -> PathBuf {
@@ -212,6 +228,23 @@ mod tests {
         assert!(store.try_lock_conversation("other").unwrap().is_some());
         drop(held);
         assert!(store.try_lock_conversation("abc").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_park_keeps_the_spawn_key_of_the_session_it_parked() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        assert_eq!(store.spawn_key("park-1-2"), None);
+        store
+            .record_spawn_key("park-1-2", &SpawnKey::new("lane-7").unwrap())
+            .unwrap();
+        assert_eq!(
+            store.spawn_key("park-1-2"),
+            Some(SpawnKey::new("lane-7").unwrap())
+        );
+        assert_eq!(store.spawn_key("park-9-9"), None);
+        store.record(&record(ParkState::Waiting)).unwrap();
+        assert_eq!(store.list().unwrap().len(), 1);
     }
 
     #[test]

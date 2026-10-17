@@ -6,10 +6,10 @@ mod pi;
 
 pub(crate) fn run(args: &[OsString]) -> Result<()> {
     match args.first().and_then(|argument| argument.to_str()) {
-        Some("pi") => print!("{}", pi::pi_extension()?),
-        Some("help") | Some("-h") | Some("--help") => print!("{}", help_text()),
+        Some("pi") => crate::cli::text(pi::pi_extension()?),
+        Some("help") | Some("-h") | Some("--help") => crate::cli::text(help_text()),
         Some(other) => bail!("unknown export client `{other}`\n\n{}", help_text()),
-        None => print!("{}", help_text()),
+        None => crate::cli::text(help_text()),
     }
     Ok(())
 }

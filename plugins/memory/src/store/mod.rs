@@ -316,9 +316,11 @@ pub struct NotesLayer {
 }
 
 pub const BRIDGE_TASK_MARKER: &str = "[qol session bridge]";
+pub const SESSION_KNOCK_MARKER: &str = "[qol session] ";
 
-pub const BOILERPLATE_MARKERS: [&str; 5] = [
+pub const BOILERPLATE_MARKERS: [&str; 6] = [
     BRIDGE_TASK_MARKER,
+    SESSION_KNOCK_MARKER,
     "Base directory for this skill:",
     "continued from a previous conversation",
     "Review this change for security vulnerabilities",

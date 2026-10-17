@@ -10,12 +10,15 @@ use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
 use serde::{Deserialize, Serialize};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
+use super::lineage::LineageStore;
 use super::spawn::{
     config_dispatch_policy, config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached,
     SpawnCapConfig, SpawnLedger, SpawnLocks,
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
+pub(super) const REPORT_LINE: &str =
+    "When you finish or get blocked, tell your parent with session_send kind report.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ForkRecord {
@@ -60,6 +63,12 @@ pub(super) struct ForkOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
     pub(super) agent_status: AgentStatus,
+}
+
+pub(super) struct ForkLink<'a> {
+    pub(super) lineage: &'a LineageStore,
+    pub(super) parent_key: Option<&'a str>,
+    pub(super) report: bool,
 }
 
 pub(super) struct ForkChat {
@@ -189,6 +198,7 @@ pub(super) fn fork_prompt(
     brief_path: &Path,
     parent: Option<&str>,
     chat_path: Option<&Path>,
+    report: bool,
 ) -> String {
     let lineage = match parent {
         Some(parent) => format!(
@@ -203,8 +213,13 @@ pub(super) fn fork_prompt(
         ),
         None => String::new(),
     };
+    let contact = if report {
+        "Do not bridge to it; report to it only with session_send kind report, as your brief says."
+    } else {
+        "Do not try to report back to it and do not bridge to it."
+    };
     format!(
-        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} Do not try to report back to it and do not bridge to it. Spawn your own lanes if you need them.",
+        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.",
         brief_path.display()
     )
 }
@@ -251,6 +266,7 @@ pub(super) fn resolve_chat_source(
     })
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fork(
     terminals: &TerminalSessionService,
@@ -265,7 +281,7 @@ pub(super) fn fork(
     model: Option<&str>,
     effort: Option<&str>,
     title: Option<&str>,
-    brief: &str,
+    brief: Option<&str>,
     parent: Option<&str>,
     chat: Option<&ForkChat>,
     cap: Option<&SpawnCapConfig>,
@@ -273,7 +289,69 @@ pub(super) fn fork(
     park: bool,
     dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
-    validate_brief(brief)?;
+    fork_linked(
+        terminals,
+        interpreter,
+        ledger,
+        locks,
+        forks,
+        tool,
+        cwd,
+        key,
+        surface,
+        model,
+        effort,
+        title,
+        brief,
+        parent,
+        chat,
+        cap,
+        dry_run,
+        park,
+        dispatch,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fork_linked(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    forks: &ForkStore,
+    tool: Option<&str>,
+    cwd: &str,
+    key: &str,
+    surface: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    title: Option<&str>,
+    brief: Option<&str>,
+    parent: Option<&str>,
+    chat: Option<&ForkChat>,
+    cap: Option<&SpawnCapConfig>,
+    dry_run: bool,
+    park: bool,
+    dispatch: &AgentDispatch,
+    link: Option<&ForkLink<'_>>,
+) -> Result<ForkOutcome> {
+    super::switchboard::refuse_reserved_key(key)?;
+    if let Some(brief) = brief {
+        validate_brief(brief)?;
+    }
+    let report = link.is_some_and(|link| link.report);
+    if report && brief.is_none() {
+        bail!("report needs a brief to carry the standing report line; a blank fork has none");
+    }
+    if report && link.and_then(|link| link.parent_key).is_none() {
+        bail!("report needs a calling session with a spawn key, so the fork has a parent to report to");
+    }
+    let brief = brief.map(|brief| match report {
+        true => format!("{brief}\n\n{REPORT_LINE}"),
+        false => brief.to_owned(),
+    });
+    let brief = brief.as_deref();
     let tool = match tool {
         Some(tool) => tool.to_owned(),
         None => dispatch.resolve_launch_tool(None, model)?,
@@ -288,15 +366,20 @@ pub(super) fn fork(
         );
     };
     let created_at = now_seconds();
-    let brief_path = forks.write_brief(key, created_at, brief)?;
+    let brief_path = brief
+        .map(|brief| forks.write_brief(key, created_at, brief))
+        .transpose()?;
     let chat_path = match chat {
-        Some(chat) if !chat.turns.is_empty() => {
+        Some(chat) if brief.is_some() && !chat.turns.is_empty() => {
             let rendered = render_chat(&chat.source, &chat.tool, &chat.turns);
             Some(forks.write_chat(key, created_at, &rendered)?)
         }
         _ => None,
     };
-    let prompt = fork_prompt(&brief_path, parent, chat_path.as_deref());
+    let prompt = brief_path
+        .as_deref()
+        .map(|path| fork_prompt(path, parent, chat_path.as_deref(), report))
+        .unwrap_or_default();
     let mut record = ForkRecord {
         key: key.to_owned(),
         tool: tool.clone(),
@@ -306,7 +389,10 @@ pub(super) fn fork(
         cwd: cwd.to_owned(),
         session: String::new(),
         title: title.unwrap_or(key).to_owned(),
-        brief: brief_path.display().to_string(),
+        brief: brief_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         created_at,
         parent: parent.map(str::to_owned),
         chat: chat_path.as_ref().map(|path| path.display().to_string()),
@@ -327,6 +413,7 @@ pub(super) fn fork(
         title,
         config_surface()?,
         cap,
+        &[],
         &prompt,
         dry_run,
         admission.assignment.as_ref(),
@@ -338,6 +425,9 @@ pub(super) fn fork(
     record.session = launched.session.clone();
     record.title = launched.title.clone();
     forks.record(&record)?;
+    if let Some(link) = link {
+        link.lineage.record(key, link.parent_key)?;
+    }
     qol_runtime::probe!(
         "CLI_SESSION_FORK",
         "event=forked key={} tool={} model={} effort={} session={}",
@@ -361,7 +451,11 @@ pub(super) fn fork(
         parent: record.parent.clone(),
         chat: record.chat.clone(),
         elapsed_ms: launched.elapsed_ms,
-        instruction: "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.".to_owned(),
+        instruction: match report {
+            true => "The fork is detached: no round is open on it and session_bridge will refuse it. It reports to you with session_send kind report, which you read with session_inbox. Return to your own work.",
+            false => "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.",
+        }
+        .to_owned(),
         agent_assignment: record.agent_assignment.clone(),
         agent_status: AgentStatus::of(record.agent_assignment.as_ref()),
     })
@@ -370,19 +464,22 @@ pub(super) fn fork(
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     if parsed.help {
-        println!("{}", help());
+        crate::cli::line(help());
         return Ok(());
     }
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
     let brief = match (&parsed.brief, &parsed.brief_file) {
         (Some(_), Some(_)) => bail!("pass --brief or --brief-file, not both"),
-        (Some(brief), None) => brief.clone(),
-        (None, Some(path)) => fs::read_to_string(path)
-            .with_context(|| format!("failed to read the fork brief at {path}"))?,
-        (None, None) => bail!("a fork needs --brief TEXT or --brief-file PATH"),
+        _ if parsed.blank => None,
+        (Some(brief), None) => Some(brief.clone()),
+        (None, Some(path)) => Some(
+            fs::read_to_string(path)
+                .with_context(|| format!("failed to read the fork brief at {path}"))?,
+        ),
+        (None, None) => bail!("a fork needs --brief TEXT or --brief-file PATH, or --blank"),
     };
     let key = if parsed.key.is_empty() {
-        default_key(&brief)
+        default_key(brief.as_deref().unwrap_or_default())
     } else {
         parsed.key.clone()
     };
@@ -391,7 +488,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parent = parsed.parent.clone().or_else(|| {
         Some(super::bridge::driver_token(&terminals)).filter(|token| !token.is_empty())
     });
-    let chat = if parsed.no_chat {
+    let chat = if parsed.no_chat || parsed.blank {
         None
     } else {
         resolve_chat_source(&terminals, &interpreter, parent.as_deref())
@@ -415,7 +512,9 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &defaults,
         &dispatch,
     )?;
-    let outcome = fork(
+    let lineage = LineageStore::system()?;
+    let parent_key = super::lineage::session_key(&terminals, parent.as_deref());
+    let outcome = fork_linked(
         &terminals,
         &interpreter,
         &SpawnLedger::system()?,
@@ -428,38 +527,48 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         launch.model.as_deref(),
         launch.effort.as_deref(),
         parsed.title.as_deref(),
-        &brief,
+        brief.as_deref(),
         parent.as_deref(),
         chat.as_ref(),
         resolve_spawn_cap(config_spawn_cap()?).as_ref(),
         parsed.dry_run,
         parsed.park,
         &dispatch,
+        Some(&ForkLink {
+            lineage: &lineage,
+            parent_key: parent_key.as_deref(),
+            report: false,
+        }),
     )?;
-    println!("{}", serde_json::to_string_pretty(&outcome)?);
+    crate::cli::line(serde_json::to_string_pretty(&outcome)?);
     Ok(())
 }
 
 pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
     let records = ForkStore::system()?.list()?;
     if records.is_empty() {
-        println!("no detached forks recorded");
+        crate::cli::line(format_args!("no detached forks recorded"));
         return Ok(());
     }
     for record in records {
+        let brief = if record.brief.is_empty() {
+            "blank"
+        } else {
+            record.brief.as_str()
+        };
         let mut row = format!(
             "{}\t{}\t{}\t{}\t{}",
             record.key,
             record.tool,
             record.effort.as_deref().unwrap_or(&record.model),
             record.session,
-            record.brief
+            brief
         );
         if let Some(chat) = &record.chat {
             row.push('\t');
             row.push_str(chat);
         }
-        println!("{row}");
+        crate::cli::line(row);
     }
     Ok(())
 }
@@ -478,6 +587,7 @@ pub(super) struct ForkArgs {
     pub(super) brief_file: Option<String>,
     pub(super) parent: Option<String>,
     pub(super) no_chat: bool,
+    pub(super) blank: bool,
     pub(super) dry_run: bool,
     pub(super) park: bool,
     pub(super) agent_profile: Option<String>,
@@ -496,7 +606,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends; without it, a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--blank launches a fresh session with no brief, no chat copy and no launch prompt, so you type its first message; it refuses --brief and --brief-file.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends; without it, a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none or the fork is blank; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 fn default_key(brief: &str) -> String {
@@ -529,6 +639,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
             }
             "--parent" => parsed.parent = Some(flag_value(args, &mut index, "--parent")?),
             "--no-chat" => parsed.no_chat = true,
+            "--blank" => parsed.blank = true,
             "--dry-run" => parsed.dry_run = true,
             "--park" => parsed.park = true,
             "--agent-profile" => {
@@ -555,10 +666,13 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
     if parsed.cwd.is_empty() {
         bail!("fork requires --cwd\n\n{}", help());
     }
+    if parsed.blank && (parsed.brief.is_some() || parsed.brief_file.is_some()) {
+        bail!("a blank fork takes no brief");
+    }
     Ok(parsed)
 }
 
-fn flag_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String> {
+pub(super) fn flag_value(args: &[OsString], index: &mut usize, flag: &str) -> Result<String> {
     *index += 1;
     let value = args
         .get(*index)
@@ -641,6 +755,7 @@ mod tests {
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
+            false,
         );
         assert!(prompt.contains("/data/forks/chase-1.md"));
         assert!(prompt.contains("detached architect"));
@@ -657,11 +772,25 @@ mod tests {
     }
 
     #[test]
+    fn a_reporting_fork_prompt_points_at_session_send_instead_of_forbidding_contact() {
+        let prompt = fork_prompt(
+            Path::new("/data/forks/chase-1.md"),
+            Some("v1:kitty:7:100"),
+            None,
+            true,
+        );
+        assert!(prompt.contains("report to it only with session_send kind report"));
+        assert!(!prompt.contains("Do not try to report back"), "{prompt}");
+        assert!(prompt.contains("Do not bridge to it"));
+    }
+
+    #[test]
     fn the_fork_prompt_names_the_chat_copy_when_one_exists() {
         let prompt = fork_prompt(
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             Some(Path::new("/data/forks/chase-1.chat.md")),
+            false,
         );
         assert!(prompt.contains(
             "Your brief is written to /data/forks/chase-1.md. Read it first, then work the problem."
@@ -766,6 +895,20 @@ mod tests {
 
         let default = parse_args(&args(&["--cwd", "/work", "--key", "k", "--brief", "b"]));
         assert!(!default.unwrap().no_chat, "default must copy");
+    }
+
+    #[test]
+    fn fork_args_accept_blank_and_refuse_it_with_a_brief() {
+        let parsed = parse_args(&args(&["--cwd", "/work", "--blank"])).unwrap();
+        assert!(parsed.blank);
+        assert_eq!(parsed.brief, None);
+
+        for brief in [["--brief", "chase it"], ["--brief-file", "/work/brief.md"]] {
+            let mut values = vec!["--cwd", "/work", "--blank"];
+            values.extend(brief);
+            let error = parse_args(&args(&values)).unwrap_err().to_string();
+            assert!(error.contains("a blank fork takes no brief"), "{error}");
+        }
     }
 
     #[test]

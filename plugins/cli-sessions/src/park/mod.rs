@@ -19,7 +19,7 @@ pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
 use runner::{caller_state, holder, CallerState, Holder};
-pub(crate) use runner::{target, Target};
+pub(crate) use runner::{prompt_free, target, Target};
 use store::ParkStore;
 
 pub const PARK: &str = "park";
@@ -93,6 +93,9 @@ fn park(
         Target::Gone => bail!("`{token}` is no longer present"),
         Target::Unknown => bail!("session discovery failed"),
     };
+    if qol_sessions_engine::switchboard::holds_switchboard_key(&facts) {
+        bail!("`{token}` is the switchboard, which is never parked");
+    }
     let descriptor = interpreter.describe(&facts);
     let title = parsed
         .title
@@ -148,6 +151,9 @@ fn park(
         report: None,
         notified: false,
     };
+    if let Some(identity) = facts.spawn_identity.as_ref() {
+        store.record_spawn_key(&id, &identity.key)?;
+    }
     store.record(&record)?;
     let mut runner = Command::new(executable);
     runner.args([PARK, "--run", &id]).current_dir(&record.cwd);
@@ -211,7 +217,7 @@ pub fn unpark(id: &str) -> Result<String> {
         }
     }
     let prompt = unpark_prompt(&record, &store.log_path(id));
-    let session = match resume(&terminals, &interpreter, &record, &prompt) {
+    let session = match resume(&terminals, &interpreter, &store, &record, &prompt) {
         Ok(session) => session,
         Err(error) => {
             store.release(id);
@@ -249,7 +255,7 @@ fn reopen(store: &ParkStore, record: ParkRecord) -> Result<String> {
         bail!("`{}` is no longer finished ({:?})", record.id, record.state);
     }
     ensure_not_open(store, &terminals, &interpreter, &record, &caller)?;
-    let session = resume(&terminals, &interpreter, &record, "")?;
+    let session = resume(&terminals, &interpreter, store, &record, "")?;
     record.state = ParkState::Resumed;
     record.resumed_session = Some(session.clone());
     record.detail = Some("reopened from its notification".to_owned());

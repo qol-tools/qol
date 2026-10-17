@@ -23,6 +23,10 @@ args = ["next"]
 label = "Snapshot All Sessions"
 args = ["snapshot"]
 
+[action.switchboard]
+label = "Switchboard"
+args = ["switchboard"]
+
 [action.focus]
 label = "Focus Session"
 args = ["focus"]
@@ -69,6 +73,12 @@ export_to_launcher = true
 id = "snapshot"
 name = "CLI Sessions: Snapshot All"
 action = "snapshot"
+export_to_launcher = true
+
+[[shortcuts]]
+id = "switchboard"
+name = "Switchboard"
+action = "switchboard"
 export_to_launcher = true
 
 [[dependencies.binaries]]

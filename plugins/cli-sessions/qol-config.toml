@@ -42,3 +42,41 @@ card_description = "Commands that count as services."
 item_label = "command"
 default = []
 placeholder = "e.g. cargo watch"
+
+[section.switchboard]
+label = "Switchboard"
+description = "The one control chat that starts, lists and closes your sessions."
+
+[field.switchboard_model]
+type = "string"
+section = "switchboard"
+config_key = "switchboard_model"
+label = "Switchboard model"
+description = "The model the switchboard chat runs on."
+card_description = "The model the switchboard runs on."
+default = "claude-sonnet-5-5"
+placeholder = "claude-sonnet-5-5"
+
+[field.switchboard_effort]
+type = "select"
+section = "switchboard"
+config_key = "switchboard_effort"
+label = "Switchboard effort"
+description = "How hard the switchboard thinks before each short reply."
+card_description = "How hard the switchboard thinks."
+default = "low"
+options = ["low", "medium", "high", "xhigh", "max"]
+
+[field.switchboard_effort.option_labels]
+low = "Low"
+medium = "Medium"
+high = "High"
+xhigh = "Extra high"
+max = "Max"
+
+[field.switchboard_effort.option_pictures]
+low = "letters:lo"
+medium = "letters:med"
+high = "letters:hi"
+xhigh = "letters:xhi"
+max = "letters:max"

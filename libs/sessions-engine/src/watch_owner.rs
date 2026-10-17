@@ -14,7 +14,11 @@ pub(super) struct ClientWatcher {
     child: Arc<Mutex<Option<Child>>>,
 }
 
-const WATCH_PROGRAM: &str = "qol";
+const WATCH_PROGRAM_FALLBACK: &str = "qol";
+
+fn watch_program() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from(WATCH_PROGRAM_FALLBACK))
+}
 
 #[cfg(test)]
 const ALWAYS_PRESENT_TEST_PROGRAM: &str = if cfg!(windows) {
@@ -73,7 +77,7 @@ impl ClientWatcher {
         Self {
             dir: sessions_dir(),
             owner_key,
-            program: PathBuf::from(WATCH_PROGRAM),
+            program: watch_program(),
             child: Arc::new(Mutex::new(None)),
         }
     }

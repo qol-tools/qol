@@ -201,7 +201,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &SpawnLocks::system()?,
         &tokens,
         owner.as_deref(),
-        &mut std::io::stdout(),
+        &mut crate::cli::stdout(),
         &trace_dir,
         WatchConfig::default(),
         &mut |duration| std::thread::sleep(duration),
@@ -2094,11 +2094,11 @@ fn publish_silent_evidence(
         assignment,
     ) {
         probe_evidence_failure(session, true, &failure);
-        eprintln!(
+        crate::cli::warn(format_args!(
             "qol sessions: silent completion evidence publication failed (session {}, stage {})",
             session,
             failure.stage.as_str()
-        );
+        ));
     }
 }
 

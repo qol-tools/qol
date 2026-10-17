@@ -62,10 +62,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &super::bridge::trace_dir(),
         &binding,
     )?;
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).context("failed to serialize close outcome")?
-    );
+    crate::cli::line(serde_json::to_string(&outcome).context("failed to serialize close outcome")?);
     Ok(())
 }
 
@@ -99,6 +96,9 @@ pub(super) fn close_spawned_terminal(
             "`{binding}` was not spawned by the session workflow; only spawned implementation sessions can be closed"
         );
     };
+    if identity.key.as_str() == super::switchboard::SWITCHBOARD_KEY {
+        bail!("`{binding}` is the switchboard; the session tools never close it, so close its window yourself");
+    }
     if let Some(reason) = CliSessionInterpreter::system().keep_open_reason(&facts) {
         return Ok(CloseOutcome {
             session: binding.token(),
@@ -287,29 +287,28 @@ pub(super) fn loop_close_from_args(
 
 fn print_loop_close_receipt(receipt: &Value, output_format: OutputFormat) -> Result<()> {
     match output_format {
-        OutputFormat::Json => println!(
-            "{}",
+        OutputFormat::Json => crate::cli::line(
             serde_json::to_string_pretty(receipt)
-                .context("failed to serialize loop-close receipt")?
+                .context("failed to serialize loop-close receipt")?,
         ),
         OutputFormat::PlainText => {
-            println!(
+            crate::cli::line(format_args!(
                 "loop_closed={} outcome={}",
                 receipt["loop_closed"].as_bool().unwrap_or_default(),
-                receipt["outcome"].as_str().unwrap_or_default(),
-            );
+                receipt["outcome"].as_str().unwrap_or_default()
+            ));
             if let Some(state) = receipt.get("terminal_state").and_then(Value::as_str) {
-                println!(
+                crate::cli::line(format_args!(
                     "terminal_closed={} terminal_state={}",
                     receipt["terminal_closed"].as_bool().unwrap_or_default(),
-                    state,
-                );
+                    state
+                ));
             }
             if let Some(lanes) = receipt.get("sibling_lanes").and_then(Value::as_array) {
-                println!("sibling lanes closed: {}", lanes.len());
+                crate::cli::line(format_args!("sibling lanes closed: {}", lanes.len()));
             }
-            println!();
-            println!("{}", receipt["final_report"].as_str().unwrap_or_default());
+            crate::cli::blank();
+            crate::cli::line(receipt["final_report"].as_str().unwrap_or_default());
         }
     }
     Ok(())
@@ -535,6 +534,22 @@ mod tests {
             )
             .unwrap();
         binding
+    }
+
+    #[test]
+    fn close_refuses_the_switchboard_and_leaves_its_window_open() {
+        let root = tempfile::TempDir::new().unwrap();
+        let mut switchboard = facts("1", 100);
+        switchboard.spawn_identity.as_mut().unwrap().key = SpawnKey::new("switchboard").unwrap();
+        let binding = switchboard.binding().unwrap();
+        let (service, backend) = terminals_with_backend(vec![switchboard]);
+
+        let error = execute(&service, &store(&root), root.path(), &binding)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("is the switchboard"), "{error}");
+        assert!(backend.closed.lock().unwrap().is_empty());
     }
 
     #[test]

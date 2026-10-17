@@ -337,7 +337,7 @@ fn settle_batch(
     }
 }
 
-fn prompt_free(
+pub fn prompt_free(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
@@ -366,7 +366,7 @@ fn resume_batch(
     } else {
         prompt.to_owned()
     };
-    match resume(terminals, interpreter, record, &prompt) {
+    match resume(terminals, interpreter, store, record, &prompt) {
         Ok(session) => {
             record.state = ParkState::Resumed;
             record.resumed_session = Some(session);
