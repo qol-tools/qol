@@ -88,13 +88,30 @@ jobs:
             | sort -uV | grep -B1 -Fx "${RELEASE_TAG}" | grep -vFx "${RELEASE_TAG}" || true)"
           echo "tag=${previous}" >> "${GITHUB_OUTPUT}"
 
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          path: source
+          persist-credentials: false
+
+      - name: Write user-facing release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          args=(-f tag_name="${RELEASE_TAG}")
+          [[ -n "${PREVIOUS_TAG}" ]] && args+=(-f previous_tag_name="${PREVIOUS_TAG}")
+          gh api "repos/${GH_REPO}/releases/generate-notes" "${args[@]}" --jq .body \
+            | python3 source/.github/scripts/release_notes.py > "${RUNNER_TEMP}/release-notes.md"
+
       - name: Create release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: QoL Tray ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
-          previous_tag: ${{ steps.previous.outputs.tag }}
+          body_path: ${{ runner.temp }}/release-notes.md
           files: artifacts/**/*
           fail_on_unmatched_files: true
           draft: true
