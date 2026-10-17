@@ -1,6 +1,6 @@
 use qol_config::contract::{
-    interpolate_row_template, resolve_row_actions, runs_on_this_platform, FieldDefault, FieldKind,
-    ResolvedRowAction, RowActionSpec, RowSliderSpec,
+    interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction,
+    RowActionSpec, RowSliderSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -237,7 +237,7 @@ pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<
     for section in config
         .sections
         .iter()
-        .filter(|section| runs_on_this_platform(section.platforms.as_deref()))
+        .filter(|section| section.on_this_platform())
     {
         push_section_rows(&mut rows, section, &field_values, source);
     }
@@ -341,7 +341,7 @@ fn push_row(
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
     source: usize,
 ) {
-    if !runs_on_this_platform(field.platforms.as_deref()) {
+    if !field.on_this_platform() {
         return;
     }
     let control = control_for(field);
@@ -1843,13 +1843,14 @@ switchable = "boolean"
 
     #[test]
     fn fields_and_sections_for_another_os_are_neither_drawn_nor_searchable() {
-        let elsewhere = qol_config::contract::PLATFORMS
+        let here = qol_config::platform::current_platform();
+        let elsewhere = qol_config::platform::PLATFORMS
             .iter()
-            .filter(|platform| **platform != std::env::consts::OS)
+            .filter(|platform| **platform != here)
             .map(|platform| format!("{platform:?}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let here = format!("{:?}", std::env::consts::OS);
+        let here = format!("{here:?}");
         let spec = qol_config::contract::parse_spec_str(&format!(
             r#"
 schema_version = 1

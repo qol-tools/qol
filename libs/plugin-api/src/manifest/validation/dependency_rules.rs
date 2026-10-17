@@ -1,7 +1,7 @@
 use crate::manifest::{BinaryDependency, Dependencies, SystemDependency};
 use anyhow::{bail, Result};
 
-const MANIFEST_PLATFORMS: [&str; 3] = ["linux", "macos", "windows"];
+use qol_config::platform::PLATFORMS as MANIFEST_PLATFORMS;
 
 impl Dependencies {
     pub fn validate(&self) -> Result<()> {

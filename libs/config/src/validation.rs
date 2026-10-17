@@ -1,7 +1,7 @@
 use crate::contract::{
     is_picture_spec, ConfigSpec, FieldDefault, FieldKind, FieldSpec, CARD_DESCRIPTION_MAX,
-    PLATFORMS,
 };
+use crate::platform::validate_platforms;
 use std::fmt;
 
 const ITEM_LABEL_MAX: usize = 24;
@@ -599,27 +599,6 @@ fn validate_show_when(
         format!("field.{id}.show_when.equals"),
         format!("value does not match field type {}", referenced.kind.name()),
     ));
-}
-
-fn validate_platforms(path: &str, platforms: Option<&[String]>, errors: &mut Vec<ValidationError>) {
-    let Some(platforms) = platforms else {
-        return;
-    };
-    if platforms.is_empty() {
-        errors.push(ValidationError::new(
-            format!("{path}.platforms"),
-            "must name at least one platform",
-        ));
-    }
-    for (index, platform) in platforms.iter().enumerate() {
-        if PLATFORMS.contains(&platform.as_str()) {
-            continue;
-        }
-        errors.push(ValidationError::new(
-            format!("{path}.platforms[{index}]"),
-            format!("unknown platform {platform}"),
-        ));
-    }
 }
 
 fn validate_field_value_type(

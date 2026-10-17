@@ -4,19 +4,6 @@ use std::path::Path;
 
 pub type ConfigSpec = ConfigSpecV1;
 
-/// Operating system names a field or section may list in `platforms`, the
-/// same names `plugin.toml` uses.
-pub const PLATFORMS: [&str; 3] = ["linux", "macos", "windows"];
-
-/// Whether a `platforms` list includes the running OS. Omitted means every OS.
-pub fn runs_on_this_platform(platforms: Option<&[String]>) -> bool {
-    platforms.is_none_or(|platforms| {
-        platforms
-            .iter()
-            .any(|platform| platform == std::env::consts::OS)
-    })
-}
-
 #[derive(Debug)]
 pub enum ParseSpecError {
     Io(std::io::Error),
@@ -790,19 +777,6 @@ default = true
             Some(vec!["linux".to_string(), "windows".to_string()])
         );
         assert_eq!(spec.field("everywhere").unwrap().platforms, None);
-    }
-
-    #[test]
-    fn platforms_list_gates_on_the_running_os() {
-        let here = vec![std::env::consts::OS.to_string()];
-        let elsewhere: Vec<String> = PLATFORMS
-            .iter()
-            .filter(|platform| **platform != std::env::consts::OS)
-            .map(|platform| platform.to_string())
-            .collect();
-        assert!(runs_on_this_platform(None));
-        assert!(runs_on_this_platform(Some(&here)));
-        assert!(!runs_on_this_platform(Some(&elsewhere)));
     }
 
     #[test]
