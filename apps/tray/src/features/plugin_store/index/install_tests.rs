@@ -343,39 +343,52 @@ async fn an_index_or_blob_that_cannot_be_reached_names_what_failed() {
 }
 
 #[tokio::test]
-async fn the_registry_index_is_read_first_and_pages_answers_when_it_fails() {
+async fn the_newer_verified_index_of_registry_and_pages_wins() {
     let _env = crate::test_support::env_lock().lock().await;
-    let tmp = tempfile::tempdir().unwrap();
-    let _paths = crate::paths::push_test_path_root(tmp.path());
     let server = Server::start().await;
     let signer = Signer::generate();
     server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
     let pages_copy = server.published.lock().unwrap().index.clone();
     let signed: qol_plugin_index::SignedIndex = serde_json::from_slice(&pages_copy).unwrap();
-    let impostor_copy = Signer::generate().sign_index(signed.index.as_bytes());
-    type Case<'a> = (&'a str, Option<&'a [u8]>, Option<&'a [u8]>, &'a str);
+    let with_serial = |signer: &Signer, serial: u64| {
+        let mut document: serde_json::Value = serde_json::from_str(&signed.index).unwrap();
+        document["serial"] = serial.into();
+        signer.sign_index(&serde_json::to_vec(&document).unwrap())
+    };
+    let newer = with_serial(&signer, 2);
+    let older = with_serial(&signer, 0);
+    let impostor = with_serial(&Signer::generate(), 2);
+    type Case<'a> = (&'a str, Option<&'a [u8]>, Option<&'a [u8]>, u64);
     let cases: &[Case] = &[
         (
-            "registry serves the index",
-            Some(pages_copy.as_slice()),
+            "registry is newer than pages",
+            Some(newer.as_slice()),
             None,
-            "registry",
+            2,
         ),
-        ("registry has no index tag", None, None, "pages"),
+        (
+            "registry is older than pages",
+            Some(older.as_slice()),
+            None,
+            1,
+        ),
+        ("registry has no index tag", None, None, 1),
         (
             "registry blob does not match its descriptor",
-            Some(pages_copy.as_slice()),
+            Some(newer.as_slice()),
             Some(b"{}".as_slice()),
-            "pages",
+            1,
         ),
         (
             "registry index is signed by another key",
-            Some(impostor_copy.as_slice()),
+            Some(impostor.as_slice()),
             None,
-            "pages",
+            1,
         ),
     ];
     for (case, pushed, served_instead, expected) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let _paths = crate::paths::push_test_path_root(tmp.path());
         {
             let mut published = server.published.lock().unwrap();
             published.manifests.clear();
@@ -391,15 +404,10 @@ async fn the_registry_index_is_read_first_and_pages_answers_when_it_fails() {
         let document = super::fetch::load(&server.registry_location(&signer))
             .await
             .unwrap();
-        assert_eq!(document.serial, 1, "{case}");
+        assert_eq!(document.serial, *expected, "{case}");
         assert!(document.plugins.contains_key(PLUGIN_ID), "{case}");
         let published = server.published.lock().unwrap();
-        let read_from = if published.indexes_served == 0 {
-            "registry"
-        } else {
-            "pages"
-        };
-        assert_eq!(read_from, *expected, "{case}");
+        assert_eq!(published.indexes_served, 1, "{case}");
         assert_eq!(published.manifests_served, 1, "{case}");
     }
 }

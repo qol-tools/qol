@@ -39,17 +39,31 @@ struct Served {
     from: String,
 }
 
+// Both sources are read and the higher verified serial wins, so a registry
+// copy that stopped updating cannot hold back what Pages already serves.
 async fn read_verified(client: &reqwest::Client, location: &IndexLocation) -> Result<Served> {
-    if let Some(registry) = &location.registry {
-        match from_registry(client, registry, &location.public_key).await {
-            Ok(served) => return Ok(served),
-            Err(error) => log::warn!(
-                "Could not read the plugin index from {}, reading {} instead: {error:#}",
-                registry.url,
-                location.url
-            ),
+    let Some(registry) = &location.registry else {
+        return from_pages(client, location).await;
+    };
+    let (registry_read, pages_read) = tokio::join!(
+        from_registry(client, registry, &location.public_key),
+        from_pages(client, location)
+    );
+    newest_served(registry_read, pages_read)
+}
+
+fn newest_served(registry_read: Result<Served>, pages_read: Result<Served>) -> Result<Served> {
+    match (registry_read, pages_read) {
+        (Ok(registry), Ok(pages)) if pages.document.serial > registry.document.serial => Ok(pages),
+        (Ok(registry), _) => Ok(registry),
+        (Err(error), pages_read) => {
+            log::warn!("Could not read the plugin index from the registry: {error:#}");
+            pages_read
         }
     }
+}
+
+async fn from_pages(client: &reqwest::Client, location: &IndexLocation) -> Result<Served> {
     let signed = read_body(&location.url, get(client, &location.url).await?.bytes()).await?;
     Ok(Served {
         document: document::verify_signed(&signed, &location.public_key)?,

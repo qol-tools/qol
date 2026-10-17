@@ -3,6 +3,9 @@ use qol_plugin_index::{Blob, IndexedHostVersion};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+// Versioning only releases from main, so every genuine attestation names it.
+const RELEASE_REF: &str = "refs/heads/main";
+
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
 
 pub trait Provenance: Sync {
@@ -31,6 +34,7 @@ impl Provenance for GhAttestation {
                 "--signer-workflow",
                 &format!("{}/{}", self.repo, self.workflow),
             ])
+            .args(["--source-ref", RELEASE_REF, "--deny-self-hosted-runners"])
             .output();
         std::fs::remove_file(&file).ok();
         let output = output.context("could not run gh attestation verify")?;

@@ -60,7 +60,7 @@ jobs:
             --public-key "${PUBLIC_KEY}" \
             --previous-url "${INDEX_URL}" \
             --provenance-repo "${GITHUB_REPOSITORY}" \
-            --provenance-workflow .github/workflows/plugin-version.yml \
+            --provenance-workflow .github/workflows/qol-tray-host-publish.yml \
             --output index.json | tee -a "${GITHUB_STEP_SUMMARY}"
 
       # Every plugin release dispatches this workflow, and one run usually
