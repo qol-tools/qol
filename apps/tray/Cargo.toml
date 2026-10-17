@@ -180,6 +180,7 @@ signal-hook = "0.3"
 
 [build-dependencies]
 qol-build-identity.workspace = true
+qol-platform.workspace = true
 
 [dev-dependencies]
 minisign-verify = "0.3"

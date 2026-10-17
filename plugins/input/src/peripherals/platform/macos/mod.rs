@@ -37,7 +37,7 @@ const TAP_TO_CLICK: [Pref; 3] = [
 ];
 
 pub(crate) fn backend() -> Result<&'static str> {
-    Ok("macOS")
+    Ok(qol_platform::Os::Macos.label())
 }
 
 pub(crate) fn mouse() -> Result<Mouse> {

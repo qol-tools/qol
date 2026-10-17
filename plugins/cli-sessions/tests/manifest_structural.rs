@@ -1,3 +1,4 @@
+use qol_platform::Os;
 use qol_plugin_api::manifest::PluginManifest;
 
 #[test]
@@ -9,14 +10,7 @@ fn manifest_declares_on_demand_actions_and_one_binary() {
     assert_eq!(m.plugin.name, "CLI Sessions");
     assert_eq!(
         m.plugin.platforms.as_deref(),
-        Some(
-            [
-                "linux".to_string(),
-                "macos".to_string(),
-                "windows".to_string()
-            ]
-            .as_slice()
-        )
+        Some(Os::ALL.map(|os| os.name().to_string()).as_slice())
     );
 
     let runtime = m.runtime.as_ref().expect("runtime");

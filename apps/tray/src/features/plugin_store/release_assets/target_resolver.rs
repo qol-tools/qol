@@ -1,4 +1,5 @@
 use anyhow::Result;
+use qol_platform::Os;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::features::plugin_store) struct PlatformTarget {
@@ -7,11 +8,7 @@ pub(in crate::features::plugin_store) struct PlatformTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::features::plugin_store) enum SupportedOs {
-    Linux,
-    Macos,
-    Windows,
-}
+pub(in crate::features::plugin_store) struct SupportedOs(Os);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::features::plugin_store) enum SupportedArch {
@@ -39,26 +36,20 @@ impl PlatformTarget {
 
 impl SupportedOs {
     pub(in crate::features::plugin_store) fn from_token(token: &str) -> Result<Self> {
-        match token {
-            "linux" => Ok(Self::Linux),
-            "macos" => Ok(Self::Macos),
-            "windows" => Ok(Self::Windows),
-            other => anyhow::bail!("unsupported OS for release asset resolution: {}", other),
+        match Os::from_name(token) {
+            Some(os) => Ok(Self(os)),
+            None => anyhow::bail!("unsupported OS for release asset resolution: {}", token),
         }
     }
 
     fn token(self) -> &'static str {
-        match self {
-            Self::Linux => "linux",
-            Self::Macos => "macos",
-            Self::Windows => "windows",
-        }
+        self.0.name()
     }
 
     fn executable_extension(self) -> &'static str {
-        match self {
-            Self::Windows => ".exe",
-            Self::Linux | Self::Macos => "",
+        match self.0 {
+            Os::Windows => ".exe",
+            Os::Linux | Os::Macos => "",
         }
     }
 }
@@ -97,7 +88,7 @@ mod tests {
     #[test]
     fn resolve_asset_pattern_linux_x86_64() {
         let target = PlatformTarget {
-            os: SupportedOs::Linux,
+            os: SupportedOs(Os::Linux),
             arch: SupportedArch::X86_64,
         };
         assert_eq!(
@@ -109,7 +100,7 @@ mod tests {
     #[test]
     fn resolve_asset_pattern_windows_appends_exe() {
         let target = PlatformTarget {
-            os: SupportedOs::Windows,
+            os: SupportedOs(Os::Windows),
             arch: SupportedArch::Aarch64,
         };
         assert_eq!(

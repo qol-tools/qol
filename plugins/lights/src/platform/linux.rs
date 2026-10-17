@@ -6,7 +6,7 @@ use super::{DoctorPlatformMetadata, SerialAccess, SerialMetadata};
 
 pub(crate) fn doctor_platform_metadata() -> DoctorPlatformMetadata {
     DoctorPlatformMetadata {
-        name: "Linux",
+        name: qol_platform::Os::Linux.label(),
         supported: true,
         serial_enumeration:
             "sysfs serial metadata with port opening and coordinator probing disabled",

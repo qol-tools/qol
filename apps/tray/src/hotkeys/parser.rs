@@ -1,5 +1,6 @@
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use qol_hotkeys::grammar::{self, Key, Modifier, NamedKey};
+use qol_platform::Os;
 
 pub(super) fn parse_hotkey(s: &str) -> Option<HotKey> {
     let parsed = grammar::parse(s)?;
@@ -9,7 +10,7 @@ pub(super) fn parse_hotkey(s: &str) -> Option<HotKey> {
         .fold(Modifiers::empty(), |acc, modifier| {
             acc | modifier_to_global(*modifier)
         });
-    if let (true, Key::Symbol(symbol)) = (cfg!(target_os = "linux"), parsed.key) {
+    if let (true, Key::Symbol(symbol)) = (Os::Linux.is_current(), parsed.key) {
         return Some(HotKey::with_keysym(Some(modifiers), u32::from(symbol)));
     }
     Some(HotKey::new(Some(modifiers), key_to_code(parsed.key)?))

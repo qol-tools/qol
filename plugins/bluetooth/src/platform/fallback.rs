@@ -24,7 +24,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         crate::PLUGIN_ID
     ))
     .with_details(serde_json::json!({
-        "platform": std::env::consts::OS,
+        "platform": qol_platform::os::current_name(),
         "executed": false,
     }))
 }

@@ -41,7 +41,7 @@ pub(super) async fn download_and_install(
 }
 
 pub(super) fn index_os() -> &'static str {
-    std::env::consts::OS
+    qol_platform::os::current_name()
 }
 
 pub(crate) fn detect_install_kind() -> InstallKind {

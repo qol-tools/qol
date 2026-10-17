@@ -2,7 +2,7 @@ use super::Inspection;
 
 pub(in crate::runtime::doctor) fn inspect() -> Inspection {
     Inspection {
-        platform: "linux",
+        platform: qol_platform::Os::Linux.name(),
         supported: true,
         backend: "x11",
         display_ready: env_is_set("DISPLAY"),

@@ -139,6 +139,7 @@ pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
 
     #[test]
     fn verified_containment_fails_closed() {
@@ -157,7 +158,7 @@ mod tests {
         let fields = identity.split(':').collect::<Vec<_>>();
 
         assert_eq!(fields.len(), 3);
-        assert_eq!(fields[0], "macos");
+        assert_eq!(fields[0], Os::Macos.name());
         assert!(fields[1].parse::<u64>().is_ok());
         assert!(fields[2].parse::<u64>().is_ok());
     }

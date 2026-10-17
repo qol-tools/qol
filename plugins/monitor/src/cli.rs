@@ -7,6 +7,7 @@ use anyhow::{bail, Context, Result};
 use qol_headless::{
     Command, CommandContext, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTextOutput,
 };
+use qol_platform::Os;
 use qol_windowing::display::DisplayHandle;
 
 use crate::monitor::layout::{
@@ -717,7 +718,7 @@ fn mode_control_result(
         )
         .with_fix("Run the plugin on Linux, macOS or Windows.");
     }
-    if support.name == "macos" {
+    if Os::from_name(support.name) == Some(Os::Macos) {
         return DoctorCheckResult::warn(
             "mode_control",
             "mode writing is gated on macOS while arrangement is available",
@@ -1709,9 +1710,9 @@ mod tests {
     #[test]
     fn platform_support_results_match_the_manifest_contract() {
         let cases = [
-            ("linux", true, DoctorStatus::Ok, None),
-            ("macos", true, DoctorStatus::Ok, None),
-            ("windows", true, DoctorStatus::Ok, None),
+            (Os::Linux.name(), true, DoctorStatus::Ok, None),
+            (Os::Macos.name(), true, DoctorStatus::Ok, None),
+            (Os::Windows.name(), true, DoctorStatus::Ok, None),
             (
                 "other",
                 false,
@@ -2480,15 +2481,15 @@ mod tests {
     #[test]
     fn mode_control_check_maps_every_platform_and_session() {
         let linux = crate::platform::PlatformSupport {
-            name: "linux",
+            name: Os::Linux.name(),
             supported: true,
         };
         let macos = crate::platform::PlatformSupport {
-            name: "macos",
+            name: Os::Macos.name(),
             supported: true,
         };
         let windows = crate::platform::PlatformSupport {
-            name: "windows",
+            name: Os::Windows.name(),
             supported: true,
         };
         let freebsd = crate::platform::PlatformSupport {
@@ -2567,7 +2568,7 @@ mod tests {
         };
         let result = mode_control_result(
             crate::platform::PlatformSupport {
-                name: "linux",
+                name: Os::Linux.name(),
                 supported: true,
             },
             crate::platform::DisplayServer::X11,

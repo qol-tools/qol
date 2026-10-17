@@ -20,7 +20,7 @@ pub(crate) struct Adapter;
 
 impl PlatformAdapter for Adapter {
     fn name(&self) -> &'static str {
-        "macOS"
+        qol_platform::Os::Macos.label()
     }
 
     fn supported(&self) -> bool {

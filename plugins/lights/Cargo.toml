@@ -15,6 +15,7 @@ qol-conventions.workspace = true
 qol-color.workspace = true
 qol-config.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 qol-zigbee.workspace = true

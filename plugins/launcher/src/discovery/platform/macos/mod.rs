@@ -96,7 +96,8 @@ fn source_of(path: &Path) -> Option<&'static str> {
         return Some("App Store");
     }
     let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    real.starts_with("/System").then_some("macOS")
+    real.starts_with("/System")
+        .then_some(qol_platform::Os::Macos.label())
 }
 
 fn kind(category: &str) -> Option<String> {

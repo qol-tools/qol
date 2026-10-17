@@ -2,6 +2,7 @@ use super::CachedPlugin;
 use super::*;
 use crate::features::plugin_store::source::PluginSource;
 use crate::plugins::manifest::{BuildInfo, Capabilities, MenuConfig, PluginInfo, PluginManifest};
+use qol_platform::Os;
 
 fn make_manifest(id: &str, name: &str, version: &str) -> PluginManifest {
     PluginManifest {
@@ -80,7 +81,7 @@ fn plugin_metadata_supports_current_platform_cases() {
         (Some(vec![]), false),
         (Some(vec![current_os]), true),
         (Some(vec!["not-a-real-os"]), false),
-        (Some(vec!["linux", "windows", "macos"]), true),
+        (Some(Os::ALL.map(Os::name).to_vec()), true),
         (Some(vec!["fake1", "fake2"]), false),
         (Some(vec!["LINUX"]), false),
     ];
@@ -104,7 +105,7 @@ fn cached_plugin_roundtrip() {
         description: "A test".to_string(),
         version: "1.2.3".to_string(),
         repo_url: "https://github.com/qol-tools/qol/tree/main/plugins/plugin-test".to_string(),
-        platforms: Some(vec!["linux".to_string()]),
+        platforms: Some(vec![Os::Linux.name().to_string()]),
     };
 
     let cached: CachedPlugin = metadata.clone().into();

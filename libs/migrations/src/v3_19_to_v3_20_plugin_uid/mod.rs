@@ -383,6 +383,7 @@ fn rename_config_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use serde_json::json;
 
     fn migration() -> V3_19ToV3_20PluginUid {
@@ -469,7 +470,7 @@ mod tests {
         write_json(
             &profile.join("core").join("plugins.lock.json"),
             &json!({"version":1,"plugins":[
-                {"id":"plugin-screen-recorder","repo_url":"x","version":"1.0.0","platforms":["linux"]}
+                {"id":"plugin-screen-recorder","repo_url":"x","version":"1.0.0","platforms":[Os::Linux.name()]}
             ]}),
         );
 
@@ -480,7 +481,7 @@ mod tests {
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0]["uid"], QOL_SHOT_UID);
         assert_eq!(plugins[0]["id"], "plugin-screen-recorder");
-        assert_eq!(plugins[0]["platforms"][0], "linux");
+        assert_eq!(plugins[0]["platforms"][0], Os::Linux.name());
     }
 
     #[test]
@@ -490,7 +491,7 @@ mod tests {
         write_json(
             &profile.join("core").join("plugins.lock.json"),
             &json!({"version":1,"plugins":[
-                {"id":"plugin-screen-recorder","repo_url":"old","version":"0.9.0","platforms":["linux"]},
+                {"id":"plugin-screen-recorder","repo_url":"old","version":"0.9.0","platforms":[Os::Linux.name()]},
                 {"id":"qol-shot","repo_url":"new","version":"1.2.0"}
             ]}),
         );
@@ -523,7 +524,10 @@ mod tests {
         );
         let profile = setup_profile(dir.path(), "default");
         write_json(
-            &profile.join("os").join("linux").join("hotkeys.json"),
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
             &json!({"hotkeys":[
                 {"id":"hk-1","key":"Super+Tab","plugin_id":"plugin-alt-tab","action":"open","enabled":true}
             ]}),
@@ -532,7 +536,12 @@ mod tests {
         assert!(migration().applies(dir.path()).unwrap());
         run(dir.path());
 
-        let hotkeys = read_back(&profile.join("os").join("linux").join("hotkeys.json"));
+        let hotkeys = read_back(
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
+        );
         let binding = &hotkeys["hotkeys"][0];
         assert_eq!(binding["plugin_uid"], ALT_TAB_UID);
         assert!(
@@ -814,7 +823,10 @@ mod tests {
         );
         let profile = setup_profile(dir.path(), "default");
         write_json(
-            &profile.join("os").join("linux").join("hotkeys.json"),
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
             &json!({"hotkeys":[
                 {"id":"hk-1","key":"Super+Tab","plugin_id":"plugin-alt-tab","action":"open","enabled":true},
                 {"id":"hk-2","key":"Super+Q","plugin_id":42,"action":"close","enabled":true}
@@ -824,7 +836,12 @@ mod tests {
         assert!(migration().applies(dir.path()).unwrap());
         run(dir.path());
 
-        let hotkeys = read_back(&profile.join("os").join("linux").join("hotkeys.json"));
+        let hotkeys = read_back(
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
+        );
         let bindings = hotkeys["hotkeys"].as_array().unwrap();
         assert_eq!(bindings.len(), 1, "malformed binding must be dropped");
         let surviving = &bindings[0];
@@ -849,7 +866,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let profile = setup_profile(dir.path(), "default");
         write_json(
-            &profile.join("os").join("linux").join("hotkeys.json"),
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
             &json!({"hotkeys":[
                 {"id":"hk-1","key":"K","plugin_id":["not","a","string"],"action":"open","enabled":true}
             ]}),
@@ -857,7 +877,12 @@ mod tests {
 
         run(dir.path());
 
-        let hotkeys = read_back(&profile.join("os").join("linux").join("hotkeys.json"));
+        let hotkeys = read_back(
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
+        );
         let bindings = hotkeys["hotkeys"].as_array().unwrap();
         assert_eq!(
             bindings.len(),

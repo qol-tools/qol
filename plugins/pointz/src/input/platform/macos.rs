@@ -26,7 +26,7 @@ pub struct InputHandlerImpl {
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        name: "macos",
+        name: qol_platform::Os::Macos.name(),
         declared: true,
         input_backend: true,
     }
@@ -35,7 +35,7 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
 pub(in crate::input) fn inspect_readiness() -> InputReadiness {
     let trusted = permission_status(Permission::InputCapture);
     InputReadiness {
-        platform: "macos",
+        platform: qol_platform::Os::Macos.name(),
         ready: trusted.is_allowed(),
         authorization_granted: trusted.granted(),
         display_env_set: None,

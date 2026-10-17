@@ -1,5 +1,6 @@
 use super::*;
 use crate::plugins::resolver::{PluginSource, ResolutionOrigin, ResolvedPlugin};
+use qol_platform::Os;
 use std::fs;
 use tempfile::TempDir;
 
@@ -340,10 +341,10 @@ fn resolved_plugin(id: &str, path: std::path::PathBuf) -> ResolvedPlugin {
 }
 
 fn unsupported_platform_manifest() -> String {
-    let platform = if cfg!(target_os = "linux") {
-        "windows"
+    let platform = if Os::Linux.is_current() {
+        Os::Windows
     } else {
-        "linux"
+        Os::Linux
     };
     format!(
         r#"[plugin]

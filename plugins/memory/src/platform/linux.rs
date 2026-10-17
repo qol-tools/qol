@@ -2,7 +2,7 @@ use super::PlatformSupport;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
-        name: "linux",
+        name: qol_platform::Os::Linux.name(),
         supported: true,
     }
 }

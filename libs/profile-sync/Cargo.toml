@@ -10,6 +10,7 @@ anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qol-fs.workspace = true
 qol-migrations.workspace = true
+qol-platform.workspace = true
 qol-plugin-api.workspace = true
 qol-runtime.workspace = true
 serde.workspace = true

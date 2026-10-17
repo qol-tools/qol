@@ -11,5 +11,7 @@ pub(crate) fn probe() -> Support {
 }
 
 fn unsupported() -> CaptureError {
-    CaptureError::Unsupported { platform: "macOS" }
+    CaptureError::Unsupported {
+        platform: qol_platform::Os::Macos.label(),
+    }
 }

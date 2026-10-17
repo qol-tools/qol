@@ -1,5 +1,5 @@
 pub(super) fn os_bucket() -> &'static str {
-    "windows"
+    qol_platform::Os::Windows.name()
 }
 
 #[cfg(not(test))]

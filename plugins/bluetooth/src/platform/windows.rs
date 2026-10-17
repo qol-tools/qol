@@ -505,7 +505,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
             "The Windows Bluetooth stack reports a radio",
         )
         .with_details(serde_json::json!({
-            "platform": "windows",
+            "platform": qol_platform::Os::Windows.name(),
             "radio": true,
             "powered": health.powered,
             "executed": false,
@@ -516,7 +516,7 @@ pub fn required_binaries_check() -> DoctorCheckResult {
         )
         .with_fix("Check that this PC has a Bluetooth adapter and that its driver is installed and enabled in Device Manager")
         .with_details(serde_json::json!({
-            "platform": "windows",
+            "platform": qol_platform::Os::Windows.name(),
             "radio": false,
             "executed": false,
         })),

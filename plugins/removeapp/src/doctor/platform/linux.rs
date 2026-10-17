@@ -24,7 +24,7 @@ pub(crate) fn inspect() -> PlatformInspection {
         .unwrap_or((None, None));
 
     PlatformInspection {
-        name: "Linux",
+        name: qol_platform::Os::Linux.label(),
         supported: true,
         inventory_roots,
         trash,

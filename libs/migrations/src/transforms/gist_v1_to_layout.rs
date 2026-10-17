@@ -6,11 +6,11 @@
 //! bytes. The caller decides where the profile dir lives.
 
 use anyhow::{anyhow, Result};
+use qol_platform::Os;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const SUPPORTED_TARGET_OS: &[&str] = &["linux", "macos", "windows"];
 const SUPPORTED_GIST_VERSION: u64 = 1;
 const REQUIRED_FIELDS: &[&str] = &["hotkeys", "shortcuts", "plugin_configs", "plugins"];
 
@@ -18,11 +18,11 @@ pub fn transform_gist_v1_to_layout(
     gist_json: &Value,
     target_os: &str,
 ) -> Result<HashMap<PathBuf, Vec<u8>>> {
-    if !SUPPORTED_TARGET_OS.contains(&target_os) {
+    if Os::from_name(target_os).is_none() {
         return Err(anyhow!(
             "unsupported target_os {:?}: expected one of {:?}",
             target_os,
-            SUPPORTED_TARGET_OS
+            Os::ALL.map(Os::name)
         ));
     }
 
@@ -152,7 +152,7 @@ mod tests {
                     "id": "plugin-alt-tab",
                     "repo_url": "https://example.test/alt-tab",
                     "version": "1.2.3",
-                    "platforms": ["linux"],
+                    "platforms": [Os::Linux.name()],
                 }
             ],
         })
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn round_trip_full_gist_produces_expected_file_set_and_contents() {
         let gist = full_gist();
-        let out = transform_gist_v1_to_layout(&gist, "linux").unwrap();
+        let out = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap();
 
         let expected_keys: Vec<PathBuf> = [
             "manifest.json",
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn output_is_pretty_printed_with_two_space_indent() {
         let gist = full_gist();
-        let out = transform_gist_v1_to_layout(&gist, "linux").unwrap();
+        let out = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap();
         let manifest = std::str::from_utf8(&out[&PathBuf::from("manifest.json")]).unwrap();
         assert!(
             manifest.contains("\n  \"version\""),
@@ -236,7 +236,7 @@ mod tests {
             "plugin_configs": {},
             "plugins": [],
         });
-        let out = transform_gist_v1_to_layout(&gist, "linux").unwrap();
+        let out = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap();
 
         let cases: &[(&str, Value)] = &[
             ("os/linux/hotkeys.json", json!({ "hotkeys": [] })),
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn target_os_places_os_bucketed_files_in_correct_subdir() {
         let gist = full_gist();
-        let cases = ["linux", "macos", "windows"];
+        let cases = Os::ALL.map(Os::name);
         let os_bucketed_files = ["hotkeys.json", "shortcuts.json", "task-runner.json"];
         for os in cases {
             let out = transform_gist_v1_to_layout(&gist, os).unwrap();
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn invalid_target_os_errors_with_clear_message() {
         let gist = full_gist();
-        let cases = ["", "freebsd", "Linux", "LINUX", "ios"];
+        let cases = ["", "freebsd", Os::Linux.label(), "LINUX", "ios"];
         for os in cases {
             let err = transform_gist_v1_to_layout(&gist, os).unwrap_err();
             let msg = format!("{err}");
@@ -308,7 +308,7 @@ mod tests {
         for field in cases {
             let mut gist = full_gist();
             gist.as_object_mut().unwrap().remove(field);
-            let err = transform_gist_v1_to_layout(&gist, "linux").unwrap_err();
+            let err = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap_err();
             let msg = format!("{err}");
             assert_eq!(
                 msg,
@@ -322,7 +322,7 @@ mod tests {
     fn missing_task_runner_uses_default_empty_actions() {
         let mut gist = full_gist();
         gist.as_object_mut().unwrap().remove("task_runner");
-        let out = transform_gist_v1_to_layout(&gist, "linux").unwrap();
+        let out = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap();
         let tr = parse(&out[&PathBuf::from("os/linux/task-runner.json")]);
         assert_eq!(tr, json!({ "actions": {} }));
     }
@@ -331,7 +331,7 @@ mod tests {
     fn unsupported_gist_version_errors() {
         let mut gist = full_gist();
         gist["version"] = json!(2);
-        let err = transform_gist_v1_to_layout(&gist, "linux").unwrap_err();
+        let err = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("version"), "msg: {msg}");
     }
@@ -340,14 +340,14 @@ mod tests {
     fn non_object_plugin_configs_errors() {
         let mut gist = full_gist();
         gist["plugin_configs"] = json!([]);
-        let err = transform_gist_v1_to_layout(&gist, "linux").unwrap_err();
+        let err = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap_err();
         assert!(format!("{err}").contains("plugin_configs"));
     }
 
     #[test]
     fn non_object_root_errors() {
         let gist = json!([1, 2, 3]);
-        let err = transform_gist_v1_to_layout(&gist, "linux").unwrap_err();
+        let err = transform_gist_v1_to_layout(&gist, Os::Linux.name()).unwrap_err();
         assert!(format!("{err}").contains("root"));
     }
 }

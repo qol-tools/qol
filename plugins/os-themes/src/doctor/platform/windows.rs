@@ -1,6 +1,6 @@
 use super::{CurrentThemeMetadata, PlatformMetadata, SessionMetadata};
 
-const DESKTOP: &str = "Windows";
+const DESKTOP: &str = qol_platform::Os::Windows.label();
 
 pub(super) fn inspect() -> PlatformMetadata {
     let session_type = std::env::var("SESSIONNAME")
@@ -8,7 +8,7 @@ pub(super) fn inspect() -> PlatformMetadata {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     PlatformMetadata {
-        platform: "Windows",
+        platform: qol_platform::Os::Windows.label(),
         supported: true,
         gsettings: None,
         session: SessionMetadata {

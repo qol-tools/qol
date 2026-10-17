@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo:rerun-if-changed={path}");
     }
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+    if qol_platform::Os::build_target() != Some(qol_platform::Os::Macos) {
         return Ok(());
     }
 

@@ -12,6 +12,6 @@ pub(crate) fn probe() -> Support {
 
 fn unsupported() -> CaptureError {
     CaptureError::Unsupported {
-        platform: "Windows",
+        platform: qol_platform::Os::Windows.label(),
     }
 }

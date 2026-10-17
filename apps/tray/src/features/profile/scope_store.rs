@@ -308,6 +308,7 @@ fn validate_plugin_uid(uid: &PluginUid) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use tempfile::TempDir;
 
     fn store(name: &str, os: &str) -> (TempDir, ProfileScopeStore) {
@@ -320,7 +321,7 @@ mod tests {
 
     #[test]
     fn copy_into_carries_core_os_and_manifest_and_leaves_device_behind() {
-        let (_tmp, source) = store("default", "linux");
+        let (_tmp, source) = store("default", Os::Linux.name());
         source.ensure_dirs().unwrap();
         std::fs::write(source.core_plugin_configs_dir().join("a.json"), "{}").unwrap();
         std::fs::write(source.core_plugin_configs_dir().join("b.json"), "{}").unwrap();
@@ -330,7 +331,7 @@ mod tests {
         let target = ProfileScopeStore::new(
             source.profile_root().to_path_buf(),
             "work".to_string(),
-            "linux".to_string(),
+            Os::Linux.name().to_string(),
         )
         .unwrap();
         assert!(!target.exists());
@@ -346,7 +347,7 @@ mod tests {
 
     #[test]
     fn dir_lookups_compose_root_name_and_scope() {
-        let (_tmp, s) = store("work", "macos");
+        let (_tmp, s) = store("work", Os::Macos.name());
         let root = s.profile_root().to_path_buf();
         let active = root.join("work");
 
@@ -354,7 +355,7 @@ mod tests {
         assert_eq!(s.manifest_path(), active.join("manifest.json"));
         assert_eq!(s.core_dir(), active.join("core"));
         assert_eq!(s.os_dir(), active.join("os/macos"));
-        assert_eq!(s.os_dir_for("linux"), active.join("os/linux"));
+        assert_eq!(s.os_dir_for(Os::Linux.name()), active.join("os/linux"));
         assert_eq!(s.device_dir(), active.join("device"));
         assert_eq!(s.plugins_lock_path(), active.join("core/plugins.lock.json"));
         assert_eq!(
@@ -378,7 +379,7 @@ mod tests {
 
     #[test]
     fn scope_dir_dispatch_returns_same_path_as_named_getter() {
-        let (_tmp, s) = store("default", "linux");
+        let (_tmp, s) = store("default", Os::Linux.name());
         assert_eq!(s.scope_dir(ScopeKind::Core), s.core_dir());
         assert_eq!(s.scope_dir(ScopeKind::Os), s.os_dir());
         assert_eq!(s.scope_dir(ScopeKind::Device), s.device_dir());
@@ -386,7 +387,7 @@ mod tests {
 
     #[test]
     fn config_path_helpers_key_by_uid_not_id() {
-        let (_tmp, s) = store("work", "macos");
+        let (_tmp, s) = store("work", Os::Macos.name());
         let uid = crate::plugins::PluginUid::new("uid-abc123");
         let active = s.dir();
 
@@ -399,14 +400,14 @@ mod tests {
             active.join("device/plugin-configs/uid-abc123.json")
         );
         assert_eq!(
-            s.os_plugin_config_path_for(&uid, "linux").unwrap(),
+            s.os_plugin_config_path_for(&uid, Os::Linux.name()).unwrap(),
             active.join("os/linux/plugin-configs/uid-abc123.json")
         );
     }
 
     #[test]
     fn core_plugin_config_path_rejects_unsafe_uid() {
-        let (_tmp, s) = store("default", "linux");
+        let (_tmp, s) = store("default", Os::Linux.name());
         for evil in ["../etc/passwd", "with/slash", "", ".hidden", "-leading"] {
             let uid = crate::plugins::PluginUid::new(evil);
             let err = s.core_plugin_config_path(&uid).unwrap_err();
@@ -426,7 +427,7 @@ mod tests {
                 ProfileScopeStore::new(
                     tmp.path().to_path_buf(),
                     name.to_string(),
-                    "linux".to_string()
+                    Os::Linux.name().to_string()
                 )
                 .is_err(),
                 "should reject profile name {name:?}"
@@ -445,7 +446,7 @@ mod tests {
 
     #[test]
     fn ensure_dirs_creates_the_full_layout_idempotently() {
-        let (_tmp, s) = store("work", "macos");
+        let (_tmp, s) = store("work", Os::Macos.name());
         for _ in 0..2 {
             s.ensure_dirs().unwrap();
         }
@@ -508,11 +509,11 @@ mod tests {
 
     #[test]
     fn plugin_config_slice_paths_use_store_os_bucket_when_no_signals_provided() {
-        let (_tmp, s) = store("default", "macos");
+        let (_tmp, s) = store("default", Os::Macos.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         let paths = s.plugin_config_slice_paths(&uid, None, None).unwrap();
         let active = s.dir();
-        assert_eq!(paths.os_bucket, "macos");
+        assert_eq!(paths.os_bucket, Os::Macos.name());
         assert_eq!(paths.core, active.join("core/plugin-configs/plugin-x.json"));
         assert_eq!(
             paths.os,
@@ -526,19 +527,19 @@ mod tests {
 
     #[test]
     fn plugin_config_slice_paths_use_lock_single_platform_even_from_another_os() {
-        let (_tmp, s) = store("default", "linux");
+        let (_tmp, s) = store("default", Os::Linux.name());
         let lock = PluginLockEntry {
             uid: crate::plugins::PluginUid::new("qol-keyremap"),
             id: "qol-keyremap".to_string(),
             repo_url: "https://example/r".to_string(),
             version: "1.0.0".to_string(),
-            platforms: Some(vec!["macos".to_string()]),
+            platforms: Some(vec![Os::Macos.name().to_string()]),
         };
         let paths = s
             .plugin_config_slice_paths(&lock.uid, Some(&lock), None)
             .unwrap();
         let active = s.dir();
-        assert_eq!(paths.os_bucket, "macos");
+        assert_eq!(paths.os_bucket, Os::Macos.name());
         assert_eq!(
             paths.os,
             active.join("os/macos/plugin-configs/qol-keyremap.json"),
@@ -548,7 +549,7 @@ mod tests {
 
     #[test]
     fn plugin_config_target_path_dispatches_on_resolution_scope() {
-        let (_tmp, s) = store("default", "linux");
+        let (_tmp, s) = store("default", Os::Linux.name());
         let uid_x = crate::plugins::PluginUid::new("plugin-x");
         let target = s.plugin_config_target_path(&uid_x, None, None).unwrap();
         assert_eq!(
@@ -562,7 +563,7 @@ mod tests {
             id: "qol-keyremap".to_string(),
             repo_url: "https://example/r".to_string(),
             version: "1.0.0".to_string(),
-            platforms: Some(vec!["macos".to_string()]),
+            platforms: Some(vec![Os::Macos.name().to_string()]),
         };
         let target = s
             .plugin_config_target_path(&mac_only_lock.uid, Some(&mac_only_lock), None)
@@ -578,9 +579,10 @@ mod tests {
     fn at_dir_recovers_name_and_root_from_combined_profile_dir() {
         let tmp = TempDir::new().unwrap();
         let profile_dir = tmp.path().join("work");
-        let s = ProfileScopeStore::at_dir(profile_dir.clone(), "linux".to_string()).unwrap();
+        let s =
+            ProfileScopeStore::at_dir(profile_dir.clone(), Os::Linux.name().to_string()).unwrap();
         assert_eq!(s.profile_name(), "work");
-        assert_eq!(s.os_bucket(), "linux");
+        assert_eq!(s.os_bucket(), Os::Linux.name());
         assert_eq!(s.dir(), profile_dir);
         assert_eq!(s.core_dir(), profile_dir.join("core"));
     }

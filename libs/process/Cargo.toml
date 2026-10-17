@@ -9,7 +9,6 @@ description = "Cross-platform process lifecycle primitives for qol-tools"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-qol-platform.workspace = true
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_NetworkManagement_IpHelper",
@@ -26,6 +25,7 @@ windows-sys = { version = "0.59", features = [
 tempfile = "3.8"
 
 [dependencies]
+qol-platform.workspace = true
 workspace-hack.workspace = true
 
 [lints]

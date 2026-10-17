@@ -18,7 +18,7 @@ pub(crate) struct Adapter;
 
 impl PlatformAdapter for Adapter {
     fn name(&self) -> &'static str {
-        "Windows"
+        qol_platform::Os::Windows.label()
     }
 
     fn supported(&self) -> bool {

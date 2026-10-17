@@ -166,11 +166,7 @@ mod tests {
 
     #[test]
     fn native_availability_matches_platform_dispatch() {
-        let expected = cfg!(any(
-            target_os = "linux",
-            target_os = "macos",
-            target_os = "windows"
-        ));
+        let expected = qol_platform::Os::current().is_some();
         assert_eq!(super::native_available(), expected);
     }
 

@@ -15,7 +15,7 @@ pub const BACKUPS_SUBDIR: &str = "backups";
 pub const PLUGIN_CONFIGS_SUBDIR: &str = "plugin-configs";
 
 pub fn current_os_bucket() -> &'static str {
-    std::env::consts::OS
+    qol_platform::os::current_name()
 }
 
 pub const MANIFEST_FILE: &str = "manifest.json";

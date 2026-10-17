@@ -18,13 +18,8 @@ use windows::Platform;
 
 trait PathPlatform {
     fn path_limit(&self) -> usize;
-    fn os_bucket(&self) -> &'static str;
 }
 
 pub(super) fn path_limit() -> usize {
     Platform.path_limit()
-}
-
-pub(super) fn os_bucket() -> &'static str {
-    Platform.os_bucket()
 }

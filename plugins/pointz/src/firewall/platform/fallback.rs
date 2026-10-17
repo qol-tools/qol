@@ -7,7 +7,7 @@ pub(crate) fn check(id: &str) -> DoctorCheckResult {
         id,
         format!(
             "PointZ does not inspect the {} firewall; phones need {} open",
-            std::env::consts::OS,
+            qol_platform::os::current_name(),
             ports_label()
         ),
     )
@@ -17,14 +17,14 @@ pub(crate) fn check(id: &str) -> DoctorCheckResult {
 pub(crate) fn allow(_public: bool) -> Result<String, String> {
     Err(format!(
         "PointZ manages firewall rules only on Windows, not on {}",
-        std::env::consts::OS
+        qol_platform::os::current_name()
     ))
 }
 
 pub(crate) fn remove() -> Result<String, String> {
     Ok(format!(
         "PointZ adds no {} firewall rule, so it removed nothing",
-        std::env::consts::OS
+        qol_platform::os::current_name()
     ))
 }
 

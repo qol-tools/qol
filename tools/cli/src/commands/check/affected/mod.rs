@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use qol_platform::Os;
 use serde::{de, Deserialize, Deserializer};
 use std::ffi::OsString;
 use std::fs;
@@ -26,8 +27,8 @@ impl Platform {
 
     pub(super) fn name(self) -> &'static str {
         match self {
-            Self::Linux => "linux",
-            Self::Macos => "macos",
+            Self::Linux => Os::Linux.name(),
+            Self::Macos => Os::Macos.name(),
         }
     }
 }
@@ -197,8 +198,8 @@ mod tests {
     #[test]
     fn platform_selects_its_own_plan() {
         let plan = || AffectedPlan {
-            ubuntu_clippy: "-p linux --all-targets".to_string(),
-            ubuntu_test: "-p linux".to_string(),
+            ubuntu_clippy: "-p tray --all-targets".to_string(),
+            ubuntu_test: "-p tray".to_string(),
             ubuntu_doctest: false,
             ubuntu_skip: false,
             macos_clippy: "".to_string(),
@@ -208,7 +209,7 @@ mod tests {
         };
 
         let linux = plan().cargo_plan(Platform::Linux);
-        assert_eq!(linux.clippy_args, ["-p", "linux", "--all-targets"]);
+        assert_eq!(linux.clippy_args, ["-p", "tray", "--all-targets"]);
         assert!(!linux.skip);
         assert!(!linux.doctest);
         let macos = plan().cargo_plan(Platform::Macos);

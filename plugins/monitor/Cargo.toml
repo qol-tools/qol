@@ -16,6 +16,7 @@ qol-headless.workspace = true
 qol-host-fixes.workspace = true
 qol-host-session.workspace = true
 qol-hotkeys.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-profile-sync.workspace = true
 qol-runtime.workspace = true
@@ -36,7 +37,6 @@ libc = "0.2"
 x11rb = { workspace = true, features = ["randr"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-platform.workspace = true
 qol-process.workspace = true
 windows-sys = { version = "0.59", features = [
   "Win32_Devices_Display",

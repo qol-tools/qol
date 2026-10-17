@@ -2,7 +2,7 @@ use super::PlatformInspection;
 
 pub(super) fn inspect() -> PlatformInspection {
     PlatformInspection {
-        name: std::env::consts::OS,
+        name: qol_platform::os::current_label(),
         supported: false,
         discovery_backend: "unsupported",
     }

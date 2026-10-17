@@ -188,9 +188,14 @@ mod tests {
     #[test]
     fn platform_support_results_match_the_manifest_contract() {
         let cases = [
-            ("linux", true, DoctorStatus::Ok, None),
-            ("macos", true, DoctorStatus::Ok, None),
-            ("windows", true, DoctorStatus::Ok, None),
+            (qol_platform::Os::Linux.name(), true, DoctorStatus::Ok, None),
+            (qol_platform::Os::Macos.name(), true, DoctorStatus::Ok, None),
+            (
+                qol_platform::Os::Windows.name(),
+                true,
+                DoctorStatus::Ok,
+                None,
+            ),
             (
                 "other",
                 false,

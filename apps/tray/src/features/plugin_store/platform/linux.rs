@@ -1,12 +1,14 @@
 use std::os::unix::fs::PermissionsExt;
 
+use qol_platform::Os;
+
 use super::{HostOs, PluginStorePlatformOps};
 
 pub(crate) struct Platform;
 
 impl PluginStorePlatformOps for Platform {
     fn host_os(&self) -> HostOs {
-        HostOs::from_manifest_token("linux")
+        HostOs::from_manifest_token(Os::Linux.name())
     }
 
     fn lockfile_max_age(&self) -> std::time::Duration {

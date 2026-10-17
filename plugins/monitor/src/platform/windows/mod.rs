@@ -19,7 +19,7 @@ pub(crate) use signals::install_signal_handlers;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
-        name: "windows",
+        name: qol_platform::Os::Windows.name(),
         supported: true,
     }
 }

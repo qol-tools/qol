@@ -231,6 +231,7 @@ mod tests {
     use crate::registry::{
         BootDefinition, EnvironmentDefinition, ImageDefinition, MountDefinition, ResolutionState,
     };
+    use qol_platform::Os;
     use serde_json::{json, Value};
     use tempfile::tempdir;
 
@@ -239,7 +240,7 @@ mod tests {
             definition: EnvironmentDefinition {
                 id: id.to_string(),
                 name: id.to_string(),
-                family: "linux".to_string(),
+                family: Os::Linux.name().to_string(),
                 backend: "qemu".to_string(),
                 image: ImageDefinition {
                     kind: "qcow2".to_string(),

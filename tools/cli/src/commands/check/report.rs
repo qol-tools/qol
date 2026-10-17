@@ -533,10 +533,17 @@ fn tree_observation(value: &qol_process::ProcessTreeObservation) -> serde_json::
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use qol_platform::Os;
     use std::fs;
 
     fn report(mode: &'static str, root: &Path) -> CheckReport {
-        CheckReport::new(root, mode, "linux", &root.join("report.json"), Utc::now())
+        CheckReport::new(
+            root,
+            mode,
+            Os::Linux.name(),
+            &root.join("report.json"),
+            Utc::now(),
+        )
     }
 
     fn read(path: &Path) -> serde_json::Value {
@@ -550,7 +557,7 @@ mod tests {
         let mut report = CheckReport::new(
             directory.path(),
             "staged",
-            "linux",
+            Os::Linux.name(),
             &report_path,
             Utc::now(),
         );
@@ -580,7 +587,7 @@ mod tests {
         let mut report = CheckReport::new(
             directory.path(),
             "staged",
-            "linux",
+            Os::Linux.name(),
             &report_path,
             Utc::now(),
         );
@@ -808,7 +815,7 @@ mod tests {
         let mut report = CheckReport::new(
             directory.path(),
             "validation",
-            "linux",
+            Os::Linux.name(),
             &destination,
             Utc::now(),
         );

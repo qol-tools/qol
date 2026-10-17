@@ -1,5 +1,6 @@
 use super::*;
 use proptest::prelude::*;
+use qol_platform::Os;
 
 fn manifest_from_toml(toml: &str) -> PluginManifest {
     toml::from_str(toml).unwrap()
@@ -667,7 +668,7 @@ mod dependency_rules {
     fn vhid() -> SystemDependency {
         SystemDependency {
             name: "Karabiner-DriverKit-VirtualHIDDevice".to_string(),
-            platforms: vec!["macos".to_string()],
+            platforms: vec![Os::Macos.name().to_string()],
             min_version: "8.6.0".to_string(),
             license: "Unlicense".to_string(),
             url: "https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice".to_string(),

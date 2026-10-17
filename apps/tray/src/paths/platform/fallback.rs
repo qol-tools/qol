@@ -1,5 +1,5 @@
 pub(super) fn os_bucket() -> &'static str {
-    std::env::consts::OS
+    qol_platform::os::current_name()
 }
 
 #[cfg(not(test))]

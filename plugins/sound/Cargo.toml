@@ -12,6 +12,7 @@ qol-audio.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
 qol-headless.workspace = true
+qol-platform.workspace = true
 qol-plugin-daemon.workspace = true
 qol-runtime.workspace = true
 serde.workspace = true

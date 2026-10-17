@@ -116,6 +116,7 @@ fn read_bindings(path: &Path) -> Option<Vec<Value>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
 
     fn binding(id: &str, key: &str, action: &str) -> Value {
         json!({ "id": id, "key": key, "plugin_uid": "p", "action": action, "enabled": true })
@@ -138,10 +139,10 @@ mod tests {
     }
 
     fn other_os() -> &'static str {
-        if current_os_subdir() == "linux" {
-            "macos"
+        if current_os_subdir() == Os::Linux.name() {
+            Os::Macos.name()
         } else {
-            "linux"
+            Os::Linux.name()
         }
     }
 

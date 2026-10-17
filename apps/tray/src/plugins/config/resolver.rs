@@ -85,6 +85,7 @@ mod tests {
     use crate::plugins::manifest::{
         Capabilities, ConfigDeclarations, MenuConfig, PluginInfo, PluginManifest,
     };
+    use qol_platform::Os;
 
     fn entry(id: &str, platforms: Option<Vec<&str>>) -> PluginLockEntry {
         PluginLockEntry {
@@ -161,7 +162,7 @@ mod tests {
             name: "no lock, no manifest, no scope",
             lock: None,
             manifest: None,
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Core,
             expected_os_bucket: None,
         });
@@ -171,11 +172,11 @@ mod tests {
     fn lock_single_platform_routes_to_that_os_bucket_not_current_os() {
         run(&Case {
             name: "lock platforms=[macos] while running on linux must still target os/macos so a sync push from linux preserves the Mac slot",
-            lock: Some(entry("qol-keyremap", Some(vec!["macos"]))),
+            lock: Some(entry("qol-keyremap", Some(vec![Os::Macos.name()]))),
             manifest: None,
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("macos"),
+            expected_os_bucket: Some(Os::Macos.name()),
         });
     }
 
@@ -184,10 +185,10 @@ mod tests {
         run(&Case {
             name: "no lock entry, manifest platforms=[windows]",
             lock: None,
-            manifest: Some(manifest(Some(vec!["windows"]), None)),
-            current_os: "linux",
+            manifest: Some(manifest(Some(vec![Os::Windows.name()]), None)),
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("windows"),
+            expected_os_bucket: Some(Os::Windows.name()),
         });
     }
 
@@ -195,9 +196,12 @@ mod tests {
     fn lock_multi_platform_without_default_scope_falls_through_to_core() {
         run(&Case {
             name: "lock platforms=[linux, macos], no default_scope",
-            lock: Some(entry("plugin-cross", Some(vec!["linux", "macos"]))),
+            lock: Some(entry(
+                "plugin-cross",
+                Some(vec![Os::Linux.name(), Os::Macos.name()]),
+            )),
             manifest: None,
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Core,
             expected_os_bucket: None,
         });
@@ -207,9 +211,12 @@ mod tests {
     fn default_scope_core_wins_over_single_platform_lock() {
         run(&Case {
             name: "lock says macos but plugin author opted into Core",
-            lock: Some(entry("plugin-portable", Some(vec!["macos"]))),
-            manifest: Some(manifest(Some(vec!["macos"]), Some(ConfigScope::Core))),
-            current_os: "macos",
+            lock: Some(entry("plugin-portable", Some(vec![Os::Macos.name()]))),
+            manifest: Some(manifest(
+                Some(vec![Os::Macos.name()]),
+                Some(ConfigScope::Core),
+            )),
+            current_os: Os::Macos.name(),
             expected_scope: ConfigScope::Core,
             expected_os_bucket: None,
         });
@@ -219,9 +226,12 @@ mod tests {
     fn default_scope_device_routes_to_device_regardless_of_platform_signals() {
         run(&Case {
             name: "default_scope=device beats lock single platform",
-            lock: Some(entry("plugin-secrets", Some(vec!["macos"]))),
-            manifest: Some(manifest(Some(vec!["macos"]), Some(ConfigScope::Device))),
-            current_os: "macos",
+            lock: Some(entry("plugin-secrets", Some(vec![Os::Macos.name()]))),
+            manifest: Some(manifest(
+                Some(vec![Os::Macos.name()]),
+                Some(ConfigScope::Device),
+            )),
+            current_os: Os::Macos.name(),
             expected_scope: ConfigScope::Device,
             expected_os_bucket: None,
         });
@@ -231,14 +241,17 @@ mod tests {
     fn default_scope_os_on_cross_platform_plugin_uses_current_os() {
         run(&Case {
             name: "cross-platform plugin opted into per-OS scope routes to current os bucket",
-            lock: Some(entry("plugin-per-os", Some(vec!["linux", "macos"]))),
+            lock: Some(entry(
+                "plugin-per-os",
+                Some(vec![Os::Linux.name(), Os::Macos.name()]),
+            )),
             manifest: Some(manifest(
-                Some(vec!["linux", "macos"]),
+                Some(vec![Os::Linux.name(), Os::Macos.name()]),
                 Some(ConfigScope::Os),
             )),
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("linux"),
+            expected_os_bucket: Some(Os::Linux.name()),
         });
     }
 
@@ -246,11 +259,14 @@ mod tests {
     fn default_scope_os_on_single_platform_plugin_prefers_declared_platform_over_current_os() {
         run(&Case {
             name: "Mac-only plugin written from a Linux machine still routes to os/macos",
-            lock: Some(entry("qol-keyremap", Some(vec!["macos"]))),
-            manifest: Some(manifest(Some(vec!["macos"]), Some(ConfigScope::Os))),
-            current_os: "linux",
+            lock: Some(entry("qol-keyremap", Some(vec![Os::Macos.name()]))),
+            manifest: Some(manifest(
+                Some(vec![Os::Macos.name()]),
+                Some(ConfigScope::Os),
+            )),
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("macos"),
+            expected_os_bucket: Some(Os::Macos.name()),
         });
     }
 
@@ -260,9 +276,9 @@ mod tests {
             name: "no lock, no manifest platforms, default_scope=os",
             lock: None,
             manifest: Some(manifest(None, Some(ConfigScope::Os))),
-            current_os: "macos",
+            current_os: Os::Macos.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("macos"),
+            expected_os_bucket: Some(Os::Macos.name()),
         });
     }
 
@@ -270,11 +286,11 @@ mod tests {
     fn lock_wins_over_manifest_when_both_single_platform_but_disagree() {
         run(&Case {
             name: "lock claims macos, manifest says linux - lock is the cross-machine truth",
-            lock: Some(entry("plugin-divergent", Some(vec!["macos"]))),
-            manifest: Some(manifest(Some(vec!["linux"]), None)),
-            current_os: "linux",
+            lock: Some(entry("plugin-divergent", Some(vec![Os::Macos.name()]))),
+            manifest: Some(manifest(Some(vec![Os::Linux.name()]), None)),
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Os,
-            expected_os_bucket: Some("macos"),
+            expected_os_bucket: Some(Os::Macos.name()),
         });
     }
 
@@ -284,7 +300,7 @@ mod tests {
             name: "platforms=[] is unknown, must not route to os/<empty>",
             lock: Some(entry("plugin-y", Some(vec![]))),
             manifest: None,
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Core,
             expected_os_bucket: None,
         });
@@ -296,7 +312,7 @@ mod tests {
             name: "platforms = None means we cannot classify - leave in core, not os/<current>",
             lock: Some(entry("plugin-z", None)),
             manifest: None,
-            current_os: "linux",
+            current_os: Os::Linux.name(),
             expected_scope: ConfigScope::Core,
             expected_os_bucket: None,
         });
@@ -313,52 +329,55 @@ mod tests {
 
     #[test]
     fn classify_os_bucket_with_no_platform_signal_returns_current_os() {
-        assert_eq!(classify_os_bucket(None, None, "linux").unwrap(), "linux");
+        assert_eq!(
+            classify_os_bucket(None, None, Os::Linux.name()).unwrap(),
+            Os::Linux.name()
+        );
     }
 
     #[test]
     fn classify_os_bucket_uses_lock_single_platform_even_from_another_os() {
-        let lock = entry("qol-keyremap", Some(vec!["macos"]));
+        let lock = entry("qol-keyremap", Some(vec![Os::Macos.name()]));
         assert_eq!(
-            classify_os_bucket(Some(&lock), None, "linux").unwrap(),
-            "macos",
+            classify_os_bucket(Some(&lock), None, Os::Linux.name()).unwrap(),
+            Os::Macos.name(),
             "Linux machine must still target Mac-only plugin's os bucket"
         );
     }
 
     #[test]
     fn classify_os_bucket_uses_manifest_single_platform_when_lock_absent() {
-        let m = manifest(Some(vec!["windows"]), None);
+        let m = manifest(Some(vec![Os::Windows.name()]), None);
         assert_eq!(
-            classify_os_bucket(None, Some(&m), "linux").unwrap(),
-            "windows"
+            classify_os_bucket(None, Some(&m), Os::Linux.name()).unwrap(),
+            Os::Windows.name()
         );
     }
 
     #[test]
     fn classify_os_bucket_prefers_lock_over_manifest_when_both_single_platform() {
-        let lock = entry("p", Some(vec!["macos"]));
-        let m = manifest(Some(vec!["linux"]), None);
+        let lock = entry("p", Some(vec![Os::Macos.name()]));
+        let m = manifest(Some(vec![Os::Linux.name()]), None);
         assert_eq!(
-            classify_os_bucket(Some(&lock), Some(&m), "linux").unwrap(),
-            "macos",
+            classify_os_bucket(Some(&lock), Some(&m), Os::Linux.name()).unwrap(),
+            Os::Macos.name(),
             "lock is the cross-machine truth; manifest is only the local view"
         );
     }
 
     #[test]
     fn classify_os_bucket_with_multi_platform_lock_falls_back_to_current_os() {
-        let lock = entry("p", Some(vec!["linux", "macos"]));
+        let lock = entry("p", Some(vec![Os::Linux.name(), Os::Macos.name()]));
         assert_eq!(
-            classify_os_bucket(Some(&lock), None, "linux").unwrap(),
-            "linux"
+            classify_os_bucket(Some(&lock), None, Os::Linux.name()).unwrap(),
+            Os::Linux.name()
         );
     }
 
     #[test]
     fn classify_os_bucket_rejects_unsafe_bucket_strings() {
         let lock = entry("p", Some(vec!["../etc"]));
-        let err = classify_os_bucket(Some(&lock), None, "linux").unwrap_err();
+        let err = classify_os_bucket(Some(&lock), None, Os::Linux.name()).unwrap_err();
         assert!(format!("{err:#}").contains("invalid os_bucket"));
     }
 }

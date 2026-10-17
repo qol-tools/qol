@@ -122,6 +122,6 @@ impl WindowSystem for UnsupportedWindowSystem {
 fn unsupported(operation: &str) -> String {
     format!(
         "{PLUGIN_ID}: {operation} is not implemented on {}",
-        std::env::consts::OS
+        qol_platform::os::current_label()
     )
 }

@@ -666,6 +666,7 @@ fn combine_results<const N: usize>(results: [Result<()>; N]) -> Result<()> {
 mod tests {
     use super::test_support::{commit_file, git, repository, rustfmt_available};
     use super::*;
+    use qol_platform::Os;
 
     #[test]
     fn explicit_base_overrides_the_default_comparison_base() {
@@ -818,7 +819,8 @@ mod tests {
         let root = directory.path();
         let report_path = root.join("report.json");
         let destination = root.join("external/report.json");
-        let mut report = CheckReport::new(root, "worktree", "linux", &report_path, Utc::now());
+        let mut report =
+            CheckReport::new(root, "worktree", Os::Linux.name(), &report_path, Utc::now());
         let run_result: Result<()> = Ok(());
 
         let outcome = publish_and_finalize(
@@ -858,7 +860,8 @@ mod tests {
         let root = directory.path();
         let report_path = root.join("report.json");
         let destination = root.join("external/report.json");
-        let mut report = CheckReport::new(root, "worktree", "linux", &report_path, Utc::now());
+        let mut report =
+            CheckReport::new(root, "worktree", Os::Linux.name(), &report_path, Utc::now());
         report.set_fingerprint_before("before-digest");
         report.set_fingerprint_after("before-digest");
         let run_result: Result<()> = Ok(());
@@ -905,7 +908,8 @@ mod tests {
         let root = directory.path();
         let report_path = root.join("report.json");
         let destination = root.join("external/report.json");
-        let mut report = CheckReport::new(root, "worktree", "linux", &report_path, Utc::now());
+        let mut report =
+            CheckReport::new(root, "worktree", Os::Linux.name(), &report_path, Utc::now());
         let run_result: Result<()> = Err(anyhow!("check cancelled"));
 
         let outcome = publish_and_finalize(
@@ -940,7 +944,8 @@ mod tests {
         let root = directory.path();
         let report_path = root.join("report.json");
         let destination = root.join("external/report.json");
-        let mut report = CheckReport::new(root, "worktree", "linux", &report_path, Utc::now());
+        let mut report =
+            CheckReport::new(root, "worktree", Os::Linux.name(), &report_path, Utc::now());
         let run_result: Result<()> = Ok(());
 
         let outcome = publish_and_finalize(
@@ -981,7 +986,8 @@ mod tests {
         fs::write(root.join("src/a.rs"), "fn  a() {}\n").unwrap();
         fs::write(root.join("src/b.rs"), "fn broken( {\n").unwrap();
         let report_path = root.join("report.json");
-        let mut report = CheckReport::new(root, "worktree", "linux", &report_path, Utc::now());
+        let mut report =
+            CheckReport::new(root, "worktree", Os::Linux.name(), &report_path, Utc::now());
         let cancellation = CancellationToken::new();
         let requested = [OsString::from("src/a.rs"), OsString::from("src/b.rs")];
 
@@ -1006,7 +1012,7 @@ mod tests {
         let mut report = CheckReport::new(
             root,
             "worktree",
-            "linux",
+            Os::Linux.name(),
             &root.join("report.json"),
             Utc::now(),
         );

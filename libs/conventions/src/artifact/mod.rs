@@ -401,7 +401,7 @@ pub const fn frame_bytes<const LENGTH: usize>(frame: &str) -> [u8; LENGTH] {
 }
 
 #[doc(hidden)]
-pub fn link_section_for_target(target_os: &str) -> String {
+pub fn link_section_for_target(target_os: Option<qol_platform::Os>) -> String {
     platform::link_section(target_os)
 }
 

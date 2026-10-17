@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use qol_platform::Os;
+
 use crate::{PlatformSpawnFailure, PreparedSpawnCleanup};
 
 use super::super::unix::{pid_t, signal_target_alive};
@@ -2210,12 +2212,14 @@ pub(crate) fn process_identity_matches(actual: &str, expected: &str) -> bool {
         && actual_identity.start_ticks == expected_identity.start_ticks
 }
 fn parse_linux_process_identity(identity: &str) -> Option<LinuxProcessIdentity<'_>> {
-    let fields = identity.split(':').collect::<Vec<_>>();
+    let fields = identity
+        .strip_prefix(Os::Linux.name())?
+        .strip_prefix(':')?
+        .split(':')
+        .collect::<Vec<_>>();
     let (boot_id, start_ticks, version) = match fields.as_slice() {
-        ["linux", boot_id, start_ticks] => {
-            (*boot_id, *start_ticks, LinuxProcessIdentityVersion::Legacy)
-        }
-        ["linux", boot_id, device, inode, start_ticks] => {
+        [boot_id, start_ticks] => (*boot_id, *start_ticks, LinuxProcessIdentityVersion::Legacy),
+        [boot_id, device, inode, start_ticks] => {
             canonical_decimal(device)?;
             canonical_decimal(inode)?;
             (
@@ -2459,7 +2463,7 @@ mod tests {
         let fields = identity.split(':').collect::<Vec<_>>();
 
         assert_eq!(fields.len(), 5);
-        assert_eq!(fields[0], "linux");
+        assert_eq!(fields[0], Os::Linux.name());
         assert!(fields[2].parse::<u64>().is_ok());
         assert!(fields[3].parse::<u64>().is_ok());
         assert!(fields[4].parse::<u64>().is_ok());

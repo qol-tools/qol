@@ -1,5 +1,5 @@
 pub(super) fn os_bucket() -> &'static str {
-    "linux"
+    qol_platform::Os::Linux.name()
 }
 
 #[cfg(not(test))]

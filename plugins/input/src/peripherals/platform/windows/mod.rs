@@ -64,7 +64,7 @@ struct TouchpadParameters {
 const TOUCHPAD_PARAMETERS_SIZE: u32 = size_of::<TouchpadParameters>() as u32;
 
 pub(crate) fn backend() -> Result<&'static str> {
-    Ok("Windows")
+    Ok(qol_platform::Os::Windows.label())
 }
 
 pub(crate) fn mouse() -> Result<Mouse> {

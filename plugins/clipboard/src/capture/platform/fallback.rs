@@ -12,6 +12,6 @@ pub(crate) fn probe() -> Support {
 
 fn unsupported() -> CaptureError {
     CaptureError::Unsupported {
-        platform: std::env::consts::OS,
+        platform: qol_platform::os::current_label(),
     }
 }

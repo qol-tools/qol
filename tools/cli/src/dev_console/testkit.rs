@@ -51,7 +51,7 @@ pub(super) fn emu_env(id: &str, state: ResolveState) -> EnvironmentSnapshot {
             definition: EnvironmentDefinition {
                 id: id.to_string(),
                 name: id.to_string(),
-                family: "linux".to_string(),
+                family: qol_platform::Os::Linux.name().to_string(),
                 backend: "qemu".to_string(),
                 image: ImageDefinition {
                     kind: "qcow2".to_string(),
