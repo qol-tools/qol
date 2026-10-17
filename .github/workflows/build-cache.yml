@@ -50,8 +50,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: ./.github/actions/rust-setup
+      - name: Check for a complete build cache
+        uses: ./.github/actions/rust-setup
         id: rust_setup
+        with:
+          cache-key: ci-${{ matrix.os }}
+          components: rustfmt, clippy
+          lookup-only: "true"
+
+      - name: Restore cache and prepare the build
+        if: steps.rust_setup.outputs.build-cache-hit != 'true'
+        uses: ./.github/actions/rust-setup
         with:
           cache-key: ci-${{ matrix.os }}
           components: rustfmt, clippy

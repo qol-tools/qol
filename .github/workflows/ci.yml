@@ -110,6 +110,31 @@ jobs:
       - name: Plugin manifest versions agree
         run: python3 .github/scripts/plugin_version.py --check-manifests
 
+      - name: Reuse a verdict this workflow already reached
+        id: verdict
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/queue_verdict.py
+
+      - name: Compute affected crates
+        id: affected
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/affected_crates.py
+
+  repository-lint:
+    name: Repository lint
+    needs: review
+    if: ${{ !cancelled() && needs.review.result != 'failure' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
       # qac lint runs the qol-project edit-time hooks over the whole repository.
       # Rules about the code as it stands hold on every file. Rules about added
       # code compare each file with the base, so they judge only this change.
@@ -120,7 +145,6 @@ jobs:
       # checks this repository out as qol/qol, so the lint reads a worktree
       # named like a local clone.
       - name: qac lint
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
@@ -137,20 +161,6 @@ jobs:
             console.log(`qac lint: ${r.files} files, ${r.findings.length} findings`);
             process.exit(r.findings.length ? 1 : 0);
           ' "$RUNNER_TEMP/qac.json"
-
-      - name: Reuse a verdict this workflow already reached
-        id: verdict
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/queue_verdict.py
-
-      - name: Compute affected crates
-        id: affected
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: python3 .github/scripts/affected_crates.py
 
   check:
     name: lint + test (${{ matrix.os }})
@@ -196,10 +206,10 @@ jobs:
         if: matrix.skip != 'true'
 
       - uses: ./.github/actions/rust-setup
-        id: rust_setup
         if: matrix.skip != 'true'
         with:
           cache-key: ci-${{ matrix.os }}
+          save-cache: "false"
           components: rustfmt, clippy
 
       - name: Install cargo-hakari
@@ -209,7 +219,7 @@ jobs:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' && github.event_name != 'pull_request'
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
         with:
           tool: cargo-nextest@0.9.143
@@ -249,15 +259,11 @@ jobs:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
-      # A release check compiles different units from a release build, so only
-      # a run that checks can put them in the build cache. Pull requests never
-      # save it, so the main run that saves a new entry checks as well, and
-      # pull requests stop recompiling every third-party crate.
+      # A pull request run builds no release binaries, so this check is its
+      # proof that the release profile compiles. Only the build cache workflow
+      # saves the cache, and it runs the same check, so this one starts warm.
       - name: Release profile check
-        if: >-
-          ${{ matrix.skip != 'true' && (github.event_name == 'pull_request' ||
-          (github.ref == 'refs/heads/main' &&
-          steps.rust_setup.outputs.build-cache-hit != 'true')) }}
+        if: matrix.skip != 'true' && github.event_name == 'pull_request'
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C target-feature=+crt-static' || '' }}
@@ -444,7 +450,7 @@ jobs:
   # skipped run stays skipped for Versioning.
   gate:
     name: merge gate
-    needs: [plan, check, release-build, process-windows, registry-tool]
+    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -452,6 +458,7 @@ jobs:
       - name: Every job passed or was skipped
         env:
           PLAN: ${{ needs.plan.result }}
+          LINT: ${{ needs.repository-lint.result }}
           REUSED: ${{ needs.plan.outputs.reused }}
           CHECK: ${{ needs.check.result }}
           BUILD: ${{ needs.release-build.result }}
@@ -461,6 +468,7 @@ jobs:
         run: |
           echo "plan: $PLAN, all: $RESULTS"
           [ "$PLAN" = success ] || exit 1
+          [ "$LINT" = success ] || exit 1
           if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
             [ "$BUILD" = success ] || exit 1
             [ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1
@@ -496,7 +504,7 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, check, release-build, process-windows, registry-tool]
+    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -18,6 +18,14 @@ inputs:
     description: Comma-separated rustup components to install (optional)
     required: false
     default: ""
+  lookup-only:
+    description: Check for an exact cache entry without downloading, saving, or preparing the build
+    required: false
+    default: "false"
+  save-cache:
+    description: Allow main-branch builds to save this cache namespace
+    required: false
+    default: "true"
   system-dependencies:
     description: >-
       Install the Linux GUI libraries the workspace links against; "false"
@@ -27,7 +35,7 @@ inputs:
 
 outputs:
   build-cache-hit:
-    description: Whether the exact build cache key already exists, so this job saves no new entry
+    description: Whether the exact build cache key already exists
     value: ${{ steps.build-cache.outputs.cache-hit }}
 
 runs:
@@ -37,7 +45,7 @@ runs:
     # and deleting the preinstalled SDKs took one to two minutes per job, so
     # it only runs on a runner that starts short of room.
     - name: Make room for the build
-      if: runner.os == 'Linux'
+      if: runner.os == 'Linux' && inputs.lookup-only != 'true'
       shell: bash
       run: |
         available=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
@@ -63,11 +71,12 @@ runs:
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
         shared-key: ${{ inputs.cache-key }}
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        lookup-only: ${{ inputs.lookup-only }}
+        save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}
         cache-on-failure: true
 
     - name: Install Linux system dependencies
-      if: runner.os == 'Linux' && inputs.system-dependencies == 'true'
+      if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'
       shell: bash
       # A stalled Ubuntu mirror once hung apt-get update until the 45-minute job
       # timeout; bound each call and retry so a dead mirror fails in minutes.
