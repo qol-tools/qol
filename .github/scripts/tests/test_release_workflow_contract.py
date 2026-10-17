@@ -106,6 +106,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         report = workflow.split("  queue-report:\n", 1)[1]
         self.assertIn("needs: [plan, check, release-build, process-windows]", report)
 
+    def test_pull_request_runs_start_only_after_the_review_passes(self):
+        for name, first in [("ci.yml", "  plan:\n"), ("codeql.yml", "  analyze:\n")]:
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                wait = workflow.split("  review:\n", 1)[1].split(first, 1)[0]
+                self.assertIn("if: github.event_name == 'pull_request'", wait)
+                self.assertIn("run: python3 .github/scripts/wait_for_review.py", wait)
+                gated = workflow.split(first, 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("needs: review", gated)
+                self.assertIn("!cancelled() && needs.review.result != 'failure'", gated)
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        stop = workflow.split("  stop-on-failure:\n", 1)[1].split("    runs-on:", 1)[0]
+        self.assertIn("needs: review", stop)
+
     def test_only_a_pass_verdict_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         self.assertIn("  merge_group:\n", workflow.split("jobs:\n", 1)[0])

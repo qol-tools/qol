@@ -11,9 +11,6 @@ sof = importlib.util.module_from_spec(_SPEC)
 sys.modules["stop_on_failure"] = sof
 _SPEC.loader.exec_module(sof)
 
-SHA = "b28d8825b" + "0" * 31
-
-
 def job(name: str, status: str = "in_progress", conclusion: str | None = None) -> dict:
     return {"name": name, "status": status, "conclusion": conclusion}
 
@@ -41,33 +38,29 @@ class GateFinishedTests(unittest.TestCase):
 
 
 class WatchTests(unittest.TestCase):
-    def watch(self, polls: list[list[dict]], reviews: list[dict]):
+    def watch(self, polls: list[list[dict]]):
         responses = iter([{"jobs": jobs} for jobs in polls])
 
         def gh_json(args):
-            if "/workflows/" in args[0]:
-                self.assertIn(f"head_sha={SHA}", args[0])
-                return {"workflow_runs": reviews}
             self.assertIn("runs/9/attempts/2/jobs", args[0])
             return next(responses)
 
         sleep = mock.Mock()
         with mock.patch.object(sof, "gh_json", gh_json), mock.patch.object(sof, "cancel") as cancel:
-            message = sof.watch("o/r", "9", "2", SHA, sleep)
+            message = sof.watch("o/r", "9", "2", sleep)
         return message, [call.args[1] for call in cancel.call_args_list], sleep.call_count
 
-    def test_first_failure_cancels_the_open_review_then_this_run(self):
+    def test_first_failure_cancels_this_run(self):
         message, cancelled, sleeps = self.watch(
-            [[job("plan", "completed", "success"), job("ubuntu")], [job("ubuntu", "completed", "failure")]],
-            [{"id": 5, "status": "in_progress"}, {"id": 4, "status": "completed"}],
+            [[job("plan", "completed", "success"), job("ubuntu")], [job("ubuntu", "completed", "failure")]]
         )
-        self.assertEqual(cancelled, [5, "9"])
+        self.assertEqual(cancelled, ["9"])
         self.assertEqual(sleeps, 1)
-        self.assertEqual(message, "ubuntu failed: cancelled this run and 1 review run(s)")
+        self.assertEqual(message, "ubuntu failed: cancelled this run")
 
     def test_a_green_run_ends_at_the_gate_without_cancelling(self):
         message, cancelled, _ = self.watch(
-            [[job("ubuntu", "completed", "success"), job(sof.GATE, "completed", "success")]], []
+            [[job("ubuntu", "completed", "success"), job(sof.GATE, "completed", "success")]]
         )
         self.assertEqual(cancelled, [])
         self.assertEqual(message, "every job finished")
@@ -75,7 +68,7 @@ class WatchTests(unittest.TestCase):
 
 class MainTests(unittest.TestCase):
     def test_a_refused_cancel_only_warns(self):
-        env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "1", "HEAD_SHA": SHA}
+        env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "1"}
         with (
             mock.patch.dict(sof.os.environ, env),
             mock.patch.object(sof, "watch", side_effect=RuntimeError("HTTP 403")),
