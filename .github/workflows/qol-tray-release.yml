@@ -92,8 +92,10 @@ jobs:
         with:
           ref: ${{ env.RELEASE_REF }}
           path: source
+          persist-credentials: false
 
       - name: Write user-facing release notes
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
