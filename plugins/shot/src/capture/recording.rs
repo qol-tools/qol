@@ -228,7 +228,11 @@ fn start_recording(selected: Rect, config: &Config, feedback: StartedFeedback) -
 fn announce_recording_started(session: &platform::CaptureSession, feedback: StartedFeedback) {
     match feedback {
         StartedFeedback::Platform => {
-            send_notification("Recording started", "Press your hotkey to stop");
+            qol_plugin_daemon::notification::send_banner(
+                "Recording started",
+                "Press your hotkey to stop",
+                None,
+            );
         }
         StartedFeedback::Countdown => qol_runtime::probe!(
             "SHOT_RECORD_FEEDBACK",

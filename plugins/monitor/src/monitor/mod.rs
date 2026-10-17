@@ -47,6 +47,13 @@ impl BrightnessSource {
             Self::Gamma => "gamma",
         }
     }
+
+    pub fn banner_label(self) -> &'static str {
+        match self {
+            Self::Ddc => "Display brightness",
+            Self::Gamma => "Screen dimming",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

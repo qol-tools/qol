@@ -12,7 +12,7 @@ struct NotificationSettings {
     use_system_notifications: bool,
     handler: NativeHandler,
     #[serde(skip_serializing_if = "Option::is_none")]
-    message_seconds: Option<u64>,
+    message_seconds: Option<f64>,
 }
 
 impl Default for NotificationSettings {
@@ -37,7 +37,7 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             #[serde(default)]
             handler: Option<NativeHandler>,
             #[serde(default)]
-            message_seconds: Option<u64>,
+            message_seconds: Option<f64>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let handler = raw.handler.unwrap_or(if raw.use_system_notifications {
@@ -92,15 +92,19 @@ pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
     })
 }
 
-pub fn message_seconds() -> u64 {
+pub fn message_seconds() -> f64 {
     settings()
         .ok()
         .and_then(|settings| settings.message_seconds)
-        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
-        .unwrap_or(qol_theme::STAY_MESSAGE.as_secs())
+        .filter(|seconds| {
+            (qol_theme::STAY_MESSAGE_LEAST.as_secs_f64()
+                ..=qol_theme::STAY_MESSAGE_MOST.as_secs_f64())
+                .contains(seconds)
+        })
+        .unwrap_or(qol_theme::STAY_MESSAGE.as_secs_f64())
 }
 
-pub fn set_message_seconds(seconds: u64) -> Result<()> {
+pub fn set_message_seconds(seconds: f64) -> Result<()> {
     update_settings(|settings| settings.message_seconds = Some(seconds))
 }
 
@@ -210,10 +214,10 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert_eq!(message_seconds(), qol_theme::STAY_MESSAGE.as_secs());
-        set_message_seconds(5).unwrap();
+        assert_eq!(message_seconds(), qol_theme::STAY_MESSAGE.as_secs_f64());
+        set_message_seconds(2.5).unwrap();
         set_native_handler(NativeHandler::Os).unwrap();
-        assert_eq!(message_seconds(), 5);
+        assert_eq!(message_seconds(), 2.5);
         assert_eq!(native_handler(), NativeHandler::Os);
     }
 

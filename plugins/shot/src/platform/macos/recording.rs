@@ -153,7 +153,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Sa
     }
 
     qol_runtime::probe!("SHOT_RECORD_FINALIZE", "stage=open-videos");
-    send_notification("Recording stopped", "Opening Videos");
+    qol_plugin_daemon::notification::send_banner("Recording stopped", "Opening Videos", None);
     let videos_dir = config
         .capture
         .open_folder_after_save
@@ -653,12 +653,12 @@ fn show_recording_ended(output_file: &Path, conversion_needed: bool) {
         path_label(output_file)
     );
     if !conversion_needed {
-        send_notification("Recording stopped", "Saving recording");
+        qol_plugin_daemon::notification::send_banner("Recording stopped", "Saving recording", None);
         return;
     }
 
     let message = format!("Converting to {}", output_format_label(output_file));
-    send_notification("Recording stopped", &message);
+    qol_plugin_daemon::notification::send_banner("Recording stopped", &message, None);
 }
 
 fn recording_saved_message(output_file: &Path, converted: bool) -> String {

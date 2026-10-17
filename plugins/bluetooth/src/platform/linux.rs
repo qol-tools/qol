@@ -1469,7 +1469,7 @@ fn spawn_host_fix(id: String) {
         match BluetoothHostFixes.apply(&id) {
             Ok(message) => {
                 qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=ok");
-                send_notification("Bluetooth", &message);
+                qol_plugin_daemon::notification::send_banner("Bluetooth", &message, None);
             }
             Err(error) => {
                 qol_runtime::probe!("BLUETOOTH_HOST_FIX", "stage=apply fix={id} outcome=failed");

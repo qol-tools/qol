@@ -32,6 +32,10 @@ pub fn send_notification_with_layout(
     });
 }
 
+pub fn send_banner(title: &str, message: &str, value: Option<&str>) {
+    send_notification_with_layout(title, message, Some(NotificationLayout::banner(value)));
+}
+
 /// Like [`send_notification_with_layout`], and a click on the tray's toast
 /// sends `activate` back to this plugin as a regular plugin action. The
 /// platform fallback cannot carry the click, so it shows a plain notification.

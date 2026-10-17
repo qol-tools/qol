@@ -39,6 +39,13 @@ impl MonitorPlacement {
         }
     }
 
+    pub const fn raised(self, by: f32) -> Self {
+        Self {
+            anchor: self.anchor,
+            margin: self.margin - by,
+        }
+    }
+
     pub const fn center() -> Self {
         Self {
             anchor: Anchor::Center,
