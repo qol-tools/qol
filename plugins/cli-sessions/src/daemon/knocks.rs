@@ -85,21 +85,32 @@ impl Courier {
         }) else {
             return;
         };
-        if let Err(error) = self
-            .terminals
-            .send_text(&binding, &knock.text, DeliveryMode::Submit)
+        let claimed = match knocks::claim(&knock.recipient_key) {
+            Ok(Some(claimed)) => claimed,
+            Ok(None) => return,
+            Err(error) => {
+                log::warn!(
+                    "[cli-sessions] knock for {} not claimed: {error}",
+                    knock.recipient_key
+                );
+                return;
+            }
+        };
+        if let Err(error) =
+            self.terminals
+                .send_text(&binding, &claimed.text(), DeliveryMode::Submit)
         {
             log::warn!(
                 "[cli-sessions] knock for {} not typed into {binding}: {error}",
                 knock.recipient_key
             );
+            if let Err(error) = knocks::restore(&claimed) {
+                log::warn!(
+                    "[cli-sessions] knock for {} not put back: {error}",
+                    knock.recipient_key
+                );
+            }
             return;
-        }
-        if let Err(error) = knocks::mark_delivered(&knock.recipient_key) {
-            log::warn!(
-                "[cli-sessions] knock for {} typed but not marked delivered: {error}",
-                knock.recipient_key
-            );
         }
         qol_runtime::probe!(
             "CLI_SESSIONS_KNOCK",

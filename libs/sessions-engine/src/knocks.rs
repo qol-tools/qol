@@ -1,4 +1,4 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
@@ -17,9 +17,24 @@ pub fn pending() -> Vec<PendingKnock> {
         .unwrap_or_default()
 }
 
-pub fn mark_delivered(recipient_key: &str) -> io::Result<()> {
+pub struct ClaimedKnock(KnockRecord);
+
+impl ClaimedKnock {
+    pub fn text(&self) -> String {
+        self.0.text()
+    }
+}
+
+pub fn claim(recipient_key: &str) -> io::Result<Option<ClaimedKnock>> {
     match KnockStore::system() {
-        Some(store) => store.clear(recipient_key),
+        Some(store) => store.claim(recipient_key),
+        None => Ok(None),
+    }
+}
+
+pub fn restore(claimed: &ClaimedKnock) -> io::Result<()> {
+    match KnockStore::system() {
+        Some(store) => store.restore(claimed),
         None => Ok(()),
     }
 }
@@ -106,6 +121,18 @@ impl KnockStore {
         Ok(self.dir.join(format!("{component}.json")))
     }
 
+    fn locked<T>(&self, key: &str, apply: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let path = self.path(key)?.with_extension("lock");
+        fs::create_dir_all(&self.dir)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        lock.lock()?;
+        apply()
+    }
+
     fn load(&self, key: &str) -> io::Result<KnockRecord> {
         match fs::read_to_string(self.path(key)?) {
             Ok(encoded) => {
@@ -130,33 +157,71 @@ impl KnockStore {
         unread: usize,
         senders: &[String],
     ) -> io::Result<()> {
-        let mut record = self.load(key)?;
-        if record.messages == unread && record.senders == senders {
-            return Ok(());
-        }
-        record.messages = unread;
-        record.senders = senders.to_vec();
-        self.save(&record)
+        self.locked(key, || {
+            let mut record = self.load(key)?;
+            if record.messages == unread && record.senders == senders {
+                return Ok(());
+            }
+            record.messages = unread;
+            record.senders = senders.to_vec();
+            self.save(&record)
+        })
     }
 
     pub(super) fn add_board(&self, key: &str, thread: &str, mention: bool) -> io::Result<()> {
-        let mut record = self.load(key)?;
-        if !record.board.iter().any(|knock| knock.thread == thread) {
-            record.board.push(BoardKnock {
-                thread: thread.to_owned(),
-                mention,
-            });
-        }
-        self.save(&record)
+        self.locked(key, || {
+            let mut record = self.load(key)?;
+            if !record.board.iter().any(|knock| knock.thread == thread) {
+                record.board.push(BoardKnock {
+                    thread: thread.to_owned(),
+                    mention,
+                });
+            }
+            self.save(&record)
+        })
     }
 
     pub(super) fn clear_board(&self, key: &str, thread: &str) -> io::Result<()> {
-        if !self.path(key)?.exists() {
-            return Ok(());
-        }
-        let mut record = self.load(key)?;
-        record.board.retain(|knock| knock.thread != thread);
-        self.save(&record)
+        self.locked(key, || {
+            if !self.path(key)?.exists() {
+                return Ok(());
+            }
+            let mut record = self.load(key)?;
+            record.board.retain(|knock| knock.thread != thread);
+            self.save(&record)
+        })
+    }
+
+    pub(super) fn claim(&self, key: &str) -> io::Result<Option<ClaimedKnock>> {
+        self.locked(key, || {
+            if !self.path(key)?.exists() {
+                return Ok(None);
+            }
+            let record = self.load(key)?;
+            self.clear(key)?;
+            Ok((!record.is_empty()).then_some(ClaimedKnock(record)))
+        })
+    }
+
+    pub(super) fn restore(&self, claimed: &ClaimedKnock) -> io::Result<()> {
+        let claimed = &claimed.0;
+        self.locked(&claimed.recipient_key, || {
+            if !self.path(&claimed.recipient_key)?.exists() {
+                return self.save(claimed);
+            }
+            let mut record = self.load(&claimed.recipient_key)?;
+            record.since_ms = record.since_ms.min(claimed.since_ms);
+            if record.messages == 0 {
+                record.messages = claimed.messages;
+                record.senders.clone_from(&claimed.senders);
+            }
+            for knock in &claimed.board {
+                if !record.board.iter().any(|kept| kept.thread == knock.thread) {
+                    record.board.push(knock.clone());
+                }
+            }
+            self.save(&record)
+        })
     }
 
     pub(super) fn clear(&self, key: &str) -> io::Result<()> {
@@ -271,5 +336,55 @@ mod tests {
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].recipient_key, "b");
         assert!(store.clear("..").is_err());
+    }
+
+    #[test]
+    fn a_claimed_knock_leaves_room_for_news_and_a_failed_typing_merges_back() {
+        let (_root, store) = store();
+        assert!(store.claim("lane").unwrap().is_none());
+        store.set_messages("lane", 1, &["a".to_owned()]).unwrap();
+        store.add_board("lane", "t1", false).unwrap();
+        let claimed = store.claim("lane").unwrap().unwrap();
+        assert_eq!(
+            claimed.text(),
+            "[qol session] 1 new message from a. Read it with session_inbox. board reply in thread t1. Read it with session_board."
+        );
+        assert!(store.pending_knocks().is_empty());
+        store.add_board("lane", "t2", true).unwrap();
+        assert_eq!(
+            store.pending_knocks()[0].text,
+            "[qol session] board mention in thread t2. Read it with session_board."
+        );
+        store.restore(&claimed).unwrap();
+        let merged = store.pending_knocks();
+        assert_eq!(
+            merged[0].text,
+            "[qol session] 1 new message from a. Read it with session_inbox. board mention in thread t2, board reply in thread t1. Read them with session_board."
+        );
+        assert_eq!(merged[0].since_ms, claimed.0.since_ms);
+    }
+
+    #[test]
+    fn concurrent_writers_never_drop_each_others_knocks() {
+        let (_root, store) = store();
+        let store = std::sync::Arc::new(store);
+        let writers = (0..8)
+            .map(|index| {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || {
+                    for round in 0..10 {
+                        store
+                            .add_board("lane", &format!("t{index}-{round}"), false)
+                            .unwrap();
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let encoded = fs::read_to_string(store.path("lane").unwrap()).unwrap();
+        let record = serde_json::from_str::<KnockRecord>(&encoded).unwrap();
+        assert_eq!(record.board.len(), 80);
     }
 }

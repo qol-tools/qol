@@ -187,16 +187,17 @@ impl MailboxStore {
             Err(error) => return Err(error).context("failed to read the mail directory"),
         };
         let mut count = 0;
-        for entry in entries {
-            let dir = entry.context("failed to read the mail directory")?.path();
+        for dir in entries.flatten().map(|entry| entry.path()) {
             let Some(key) = dir.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
             if !dir.is_dir() {
                 continue;
             }
-            count += self
-                .messages(key)?
+            let Ok(messages) = self.messages(key) else {
+                continue;
+            };
+            count += messages
                 .iter()
                 .filter(|message| message.from == sender && message.sent_at_ms >= since_ms)
                 .count();
@@ -775,6 +776,19 @@ pub(crate) mod tests {
             &request("child", "parent", MessageKind::Note, "one too many"),
         ));
         assert!(refused.contains("unread messages"), "{refused}");
+    }
+
+    #[test]
+    fn a_stray_mail_directory_does_not_block_sending() {
+        let stores = Stores::new();
+        fs::create_dir_all(stores.mail.dir.join("not a key")).unwrap();
+        stores
+            .messaging()
+            .send(
+                &live(&["lane"]),
+                &request(SWITCHBOARD_KEY, "lane", MessageKind::Note, "hello"),
+            )
+            .unwrap();
     }
 
     #[test]

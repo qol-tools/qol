@@ -221,12 +221,14 @@ impl BoardStore {
             Err(error) => return Err(error).context("failed to read the board directory"),
         };
         let mut count = 0;
-        for entry in entries {
-            let path = entry.context("failed to read the board directory")?.path();
+        for path in entries.flatten().map(|entry| entry.path()) {
             if !path.is_dir() {
                 continue;
             }
-            count += json_files(&path)?
+            let Ok(posts) = json_files(&path) else {
+                continue;
+            };
+            count += posts
                 .iter()
                 .filter_map(|path| fs::read_to_string(path).ok())
                 .filter_map(|encoded| serde_json::from_str::<Post>(&encoded).ok())
