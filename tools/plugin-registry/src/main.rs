@@ -32,7 +32,7 @@ usage: qol-plugin-registry <command> [options]
   index       --registry R --public-key FILE --output FILE [--previous-url URL] [--keep N]
               [--provenance-repo OWNER/REPO --provenance-workflow PATH]
   push-index  --registry R --signed FILE
-  prune       --registry R [--keep-host N] [--dry-run]
+  prune       --registry R --public-key FILE --index-url URL [--keep-host N] [--dry-run]
 
 The registry is ghcr.io/OWNER/plugins or http://HOST:PORT/OWNER/plugins.
 REGISTRY_USERNAME and REGISTRY_PASSWORD log in to the registry and GH_TOKEN
@@ -196,11 +196,16 @@ fn prune(args: &mut pico_args::Arguments) -> Result<()> {
         anyhow::bail!("--keep-host must be at least 1");
     }
     let dry_run = args.contains("--dry-run");
+    let public_key = public_key(args)?;
+    let index_url: String = args.value_from_str("--index-url")?;
+    let deployed = deployed::fetch(&registry::agent(), &index_url, &public_key)?
+        .with_context(|| format!("prune needs the deployed index, {index_url} has none"))?;
     let token = std::env::var("GH_TOKEN").context("prune needs GH_TOKEN")?;
     let packages = prune::Packages::new(&registry::location(&reference)?, token)?;
     let versions = packages.versions()?;
     let pull = Registry::new(&reference, Access::Pull, None)?;
-    let doomed = prune::doomed(&versions, keep_host, |version| {
+    let listed = prune::listed_host_tags(&deployed);
+    let doomed = prune::doomed(&versions, keep_host, &listed, |version| {
         prune::is_index_copy(&pull, version)
     });
     let verb = if dry_run { "would delete" } else { "deleted" };

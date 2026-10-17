@@ -99,7 +99,11 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
-          args=(--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins")
+          args=(
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"
+            --public-key apps/tray/src/features/plugin_store/index/plugin-index.pub
+            --index-url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/plugins/index.signed.json"
+          )
           if [[ "${DRY_RUN}" == "true" ]]; then
             args+=(--dry-run)
           fi

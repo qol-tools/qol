@@ -2,7 +2,7 @@ use crate::oci::{Manifest, INDEX_ARTIFACT_TYPE};
 use crate::registry::{read_body, send, Registry};
 use crate::release::{is_host_tag, newest_per_plugin};
 use anyhow::{Context, Result};
-use qol_plugin_index::RegistryLocation;
+use qol_plugin_index::{host_tag, IndexDocument, RegistryLocation};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -87,11 +87,12 @@ impl Packages {
     }
 }
 
-pub fn doomed(
-    versions: &[PackageVersion],
+pub fn doomed<'a>(
+    versions: &'a [PackageVersion],
     keep_host: usize,
+    listed: &BTreeSet<String>,
     is_index_copy: impl Fn(&PackageVersion) -> bool,
-) -> Vec<&PackageVersion> {
+) -> Vec<&'a PackageVersion> {
     let host_tags = versions
         .iter()
         .flat_map(|version| &version.tags)
@@ -100,6 +101,7 @@ pub fn doomed(
     let kept: BTreeSet<String> = newest_per_plugin(host_tags, keep_host)
         .into_iter()
         .map(|release| release.tag)
+        .chain(listed.iter().cloned())
         .collect();
     versions
         .iter()
@@ -112,6 +114,16 @@ pub fn doomed(
                 .iter()
                 .all(|tag| is_host_tag(tag) && !kept.contains(tag))
         })
+        .collect()
+}
+
+// A host build the deployed index lists stays, even when newer builds that
+// failed verification would otherwise push it out of the newest few.
+pub fn listed_host_tags(index: &IndexDocument) -> BTreeSet<String> {
+    index
+        .host
+        .iter()
+        .flat_map(|(os, host)| host.versions.keys().map(|version| host_tag(os, version)))
         .collect()
 }
 
@@ -173,13 +185,19 @@ mod tests {
             version(12, &["qol-tray-macos-v3.101.10"]),
             version(13, &["qol-tray-macos-v3.101.9"]),
         ];
-        let cases: &[(usize, &[u64])] = &[(2, &[1, 6, 11]), (1, &[1, 5, 6, 11, 13])];
-        for (keep_host, expected) in cases {
-            let ids: Vec<u64> = doomed(&versions, *keep_host, |version| version.id != 14)
+        type Case<'a> = (usize, &'a [&'a str], &'a [u64]);
+        let cases: &[Case] = &[
+            (2, &[], &[1, 6, 11]),
+            (1, &[], &[1, 5, 6, 11, 13]),
+            (1, &["qol-tray-linux-v3.101.2"], &[1, 5, 11, 13]),
+        ];
+        for (keep_host, listed, expected) in cases {
+            let listed = listed.iter().map(|tag| tag.to_string()).collect();
+            let ids: Vec<u64> = doomed(&versions, *keep_host, &listed, |version| version.id != 14)
                 .into_iter()
                 .map(|version| version.id)
                 .collect();
-            assert_eq!(ids, *expected, "keep {keep_host}");
+            assert_eq!(ids, *expected, "keep {keep_host}, listed {listed:?}");
         }
     }
 

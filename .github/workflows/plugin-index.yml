@@ -47,7 +47,7 @@ jobs:
         run: cargo build --locked -p qol-plugin-registry
 
       # New host builds are listed only once gh attestation verify accepts
-      # every file as built by the Versioning workflow of this repository.
+      # every file as built by the host publish workflow on main.
       - name: Build index
         env:
           REGISTRY_USERNAME: ${{ github.actor }}
@@ -70,8 +70,20 @@ jobs:
         id: compare
         run: |
           set -euo pipefail
+          built="$(jq -S 'del(.serial)' index.json)"
           deployed="$(curl -fsSL "${INDEX_URL}" | jq -r .index | jq -S 'del(.serial)')" || deployed=""
-          if [ "${deployed}" = "$(jq -S 'del(.serial)' index.json)" ]; then
+          # A registry push that failed after Pages deployed leaves the
+          # registry copy behind, so it is compared too.
+          repository="${GITHUB_REPOSITORY_OWNER}/plugins"
+          pushed="$(
+            token="$(curl -fsSL "https://ghcr.io/token?scope=repository:${repository}:pull" | jq -r .token)"
+            layer="$(curl -fsSL -H "Authorization: Bearer ${token}" \
+              -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+              "https://ghcr.io/v2/${repository}/manifests/index" | jq -r '.layers[0].digest')"
+            curl -fsSL -H "Authorization: Bearer ${token}" "https://ghcr.io/v2/${repository}/blobs/${layer}" \
+              | jq -r .index | jq -S 'del(.serial)'
+          )" || pushed=""
+          if [ "${deployed}" = "${built}" ] && [ "${pushed}" = "${built}" ]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
             echo "The deployed index already matches, nothing to publish." | tee -a "${GITHUB_STEP_SUMMARY}"
           else
