@@ -6516,7 +6516,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.93.0"
+version = "0.93.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7629,7 +7629,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.59.0"
+version = "0.59.1"
 dependencies = [
  "anyhow",
  "candle-core",
