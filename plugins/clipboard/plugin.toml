@@ -4,7 +4,7 @@ uid = "b61db996-7053-4934-b056-66b6e9e4eb3b"
 name = "Clipboard"
 icon = "clipboard"
 description = "Search everything you copied from the launcher"
-version = "0.2.0"
+version = "0.2.1"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
