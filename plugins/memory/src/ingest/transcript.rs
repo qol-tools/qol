@@ -7,13 +7,13 @@ use serde_json::{json, Value};
 
 use crate::ingest::redact::redact;
 use crate::ingest::{unit_key, ASSISTANT_KIND, COMPACTION_KIND};
-use crate::store::BRIDGE_TASK_MARKER;
+use crate::store::{BRIDGE_TASK_MARKER, SESSION_KNOCK_MARKER};
 
 const REFILL_RUN_REPORT_PATTERN: &str = r"^qolmem: \d+ captured, \d+ unanswerable";
 
 fn is_refill_lane_unit(kind: &str, text: &str) -> bool {
     match kind {
-        "user" => text.contains(BRIDGE_TASK_MARKER),
+        "user" => text.contains(BRIDGE_TASK_MARKER) || text.starts_with(SESSION_KNOCK_MARKER),
         ASSISTANT_KIND => text
             .lines()
             .any(|line| refill_report_regex().is_match(line)),
@@ -716,6 +716,30 @@ mod tests {
             parsed.units[0].get("kind").and_then(Value::as_str),
             Some("assistant")
         );
+    }
+
+    #[test]
+    fn a_session_message_knock_is_skipped() {
+        let dir = TempDir::new("session-knock");
+        let path = dir.0.join("lane.jsonl");
+        let body = transcript_body(&[
+            json!({"type": "session", "id": "lane-3", "cwd": "/tmp/proj"}),
+            pi_event(
+                "user",
+                "[qol session] 1 new message from fix-alt-tab. Read it with session_inbox.",
+                1_787_819_945_554,
+            ),
+            pi_event(
+                "assistant",
+                "read the message, rebasing now",
+                1_787_819_945_600,
+            ),
+        ]);
+        std::fs::write(&path, body).unwrap();
+        let parsed =
+            parse_file(&path, "pi", "/test-home/.pi/agent", ParseCursor::default()).unwrap();
+        assert_eq!(parsed.units.len(), 1);
+        assert_eq!(parsed.units[0]["kind"], ASSISTANT_KIND);
     }
 
     #[test]
