@@ -50,7 +50,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
         self.assertIn("if: ${{ needs.plan.outputs.reused != 'true' }}", check)
-        build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
+        build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
             "if: ${{ github.event_name == 'merge_group' }}",
@@ -96,7 +96,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
         for contract in [
             "name: merge gate",
-            "needs: [plan, check, release-build, process-windows]",
+            "needs: [plan, check, release-build, process-windows, registry-tool]",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
             '*" failure "*|*" cancelled "*) exit 1 ;;',
@@ -104,7 +104,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, gate)
         report = workflow.split("  queue-report:\n", 1)[1]
-        self.assertIn("needs: [plan, check, release-build, process-windows]", report)
+        self.assertIn("needs: [plan, check, release-build, process-windows, registry-tool]", report)
 
     def test_only_a_pass_verdict_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
@@ -346,7 +346,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_merge_queue_builds_windows_release_binaries(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         sandbox = workflow.split("  process-windows:\n", 1)[1].split("  release-build:\n", 1)[0]
-        build = workflow.split("  release-build:\n", 1)[1].split("  gate:\n", 1)[0]
+        build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
 
         self.assertNotIn("windows_apps", workflow)
         self.assertNotIn("cargo build", sandbox)
@@ -464,6 +464,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "release.yml": ("  registry:\n", "  index:\n"),
             "plugin-index.yml": ("  build:\n", "  sign:\n"),
             "plugin-registry-backfill.yml": ("  backfill:\n", "  index:\n"),
+            "ci.yml": ("  registry-tool:\n", "  gate:\n"),
         }
         for name, (begin, finish) in jobs.items():
             with self.subTest(workflow=name):
@@ -472,6 +473,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn("persist-credentials: false", job)
                 self.assertIn("cache-key: plugin-registry", job)
                 self.assertIn('system-dependencies: "false"', job)
+                self.assertIn("RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld", job)
                 self.assertNotIn("actions: write", job)
                 build = named_step(job, "Build registry tool", "      ")
                 self.assertIn("cargo build --locked -p qol-plugin-registry", build)
