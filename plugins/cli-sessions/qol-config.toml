@@ -73,3 +73,10 @@ medium = "Medium"
 high = "High"
 xhigh = "Extra high"
 max = "Max"
+
+[field.switchboard_effort.option_pictures]
+low = "letters:lo"
+medium = "letters:med"
+high = "letters:hi"
+xhigh = "letters:xhi"
+max = "letters:max"
