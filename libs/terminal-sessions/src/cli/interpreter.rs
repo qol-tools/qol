@@ -190,6 +190,10 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.resume_args(external_id))
     }
 
+    pub fn can_resume(&self, tool: &CliToolId) -> bool {
+        self.resume_args_for(tool, "").is_some()
+    }
+
     pub fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
         self.strategy_for(session).permission_mode(session)
     }
@@ -204,6 +208,15 @@ impl CliSessionInterpreter {
         binding: &SessionBinding,
     ) -> Result<Option<String>, TerminalError> {
         Ok(Self::facts_for(terminals, binding)?.and_then(|facts| self.keep_open_reason(&facts)))
+    }
+
+    pub fn harness_busy_for(
+        &self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Result<bool, TerminalError> {
+        Ok(Self::facts_for(terminals, binding)?
+            .is_some_and(|facts| self.strategy_for(&facts).harness_busy(&facts)))
     }
 
     pub fn draft_stash_for(
@@ -488,11 +501,19 @@ mod tests {
                 Some(expected),
                 "tool: {tool}"
             );
+            assert!(
+                interpreter.can_resume(&CliToolId::new(tool).unwrap()),
+                "tool: {tool}"
+            );
         }
         for tool in ["kimi", "generic", "future-tool"] {
             assert_eq!(
                 interpreter.resume_args_for(&CliToolId::new(tool).unwrap(), "abc"),
                 None,
+                "tool: {tool}"
+            );
+            assert!(
+                !interpreter.can_resume(&CliToolId::new(tool).unwrap()),
                 "tool: {tool}"
             );
         }

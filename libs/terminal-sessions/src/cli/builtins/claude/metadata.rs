@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use qol_agent_homes::{Harness, Registry};
 
-use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn};
+use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
 use crate::SessionFacts;
 
@@ -109,6 +109,13 @@ impl ClaudeMetadataResolver {
             .foreground_pids
             .iter()
             .any(|pid| self.environment.remote_controlled(*pid))
+    }
+
+    pub fn busy(&self, session: &SessionFacts) -> bool {
+        session
+            .foreground_pids
+            .iter()
+            .any(|pid| self.environment.busy(*pid))
     }
 
     pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
@@ -414,7 +421,7 @@ fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
                 return;
             }
             if compact_summary {
-                format!("[compacted summary]\n{text}")
+                format!("{COMPACTED_SUMMARY_HEADER}\n{text}")
             } else {
                 text.clone()
             }

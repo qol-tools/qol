@@ -3,6 +3,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
+pub const COMPACTED_SUMMARY_HEADER: &str = "[compacted summary]";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatRole {
     User,
@@ -23,7 +25,7 @@ pub(super) fn merge_chat_turns(turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
             continue;
         }
         match merged.last_mut() {
-            Some(last) if last.role == turn.role => {
+            Some(last) if last.role == ChatRole::Assistant && turn.role == ChatRole::Assistant => {
                 last.text.push_str("\n\n");
                 last.text.push_str(text);
             }

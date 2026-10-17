@@ -38,6 +38,7 @@ mod watch;
 mod watch_owner;
 
 pub use contract::tool_names;
+pub use fork::FORK_HEADER;
 pub use switchboard::SWITCHBOARD_KEY;
 
 pub struct SessionSubcommand {

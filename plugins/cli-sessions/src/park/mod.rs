@@ -5,26 +5,30 @@ mod runner;
 pub(crate) mod store;
 
 use std::process::Command;
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::parking::{self, ParkingStore};
-use qol_terminal_sessions::{SessionBinding, SessionInventory, TerminalSessionService};
+use qol_terminal_sessions::{
+    SessionBinding, SessionFacts, SessionInventory, TerminalSessionService,
+};
 use serde::Serialize;
 
 use args::ParkArgs;
 pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
-use runner::{caller_state, holder, CallerState, Holder};
+use runner::{caller_state, holder, watch_woken, CallerState, Holder};
 pub(crate) use runner::{prompt_free, target, Target};
 use store::ParkStore;
 
 pub const PARK: &str = "park";
 pub const LANE_EXEC: &str = "lane-exec";
 const STOP_GRACE: Duration = Duration::from_secs(3);
+const LAUNCH_POLL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Serialize)]
 pub struct ParkOutcome {
@@ -55,6 +59,16 @@ pub fn run(args: &[String]) -> Result<Invocation> {
         return Ok(Invocation::Ran);
     }
     let terminals = TerminalSessionService::system();
+    if let Some(token) = parsed.watch.as_deref() {
+        watch_launch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store,
+            token,
+            &parsed,
+        )?;
+        return Ok(Invocation::Ran);
+    }
     let outcome = park(
         &terminals,
         &CliSessionInterpreter::system(),
@@ -176,6 +190,90 @@ fn park(
         command: record.command,
         instruction,
     })
+}
+
+fn watch_launch(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    store: &ParkStore,
+    token: &str,
+    parsed: &ParkArgs,
+) -> Result<()> {
+    let binding = token
+        .parse::<SessionBinding>()
+        .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
+    if let Some(ready) = parsed.ready.as_deref() {
+        std::fs::write(ready, "")
+            .with_context(|| format!("failed to confirm the watch at {ready}"))?;
+    }
+    let Some((facts, external_id)) = launched_conversation(terminals, interpreter, &binding) else {
+        bail!("the fork's terminal closed before its conversation started");
+    };
+    let descriptor = interpreter.describe(&facts);
+    let tool = descriptor.tool.id;
+    if interpreter.resume_args_for(&tool, &external_id).is_none() {
+        bail!("{tool} conversations cannot be resumed, so the fork's tab stays open");
+    }
+    let created_at = now_seconds();
+    let mut record = ParkRecord {
+        id: format!("park-{created_at}-{}", std::process::id()),
+        tool: tool.to_string(),
+        cwd: facts.cwd.clone(),
+        external_id,
+        model: parsed.model.clone(),
+        effort: parsed.effort.clone(),
+        title: parsed.title.clone().or(descriptor.display_name),
+        permission_mode: interpreter.permission_mode(&facts),
+        claude_config_dir: std::env::var(qol_agent_launch::account::CONFIG_DIR_ENV).ok(),
+        session: token.to_owned(),
+        command: Vec::new(),
+        created_at,
+        state: ParkState::Resumed,
+        runner_pid: Some(std::process::id()),
+        runner_identity: qol_process::process_identity(std::process::id()).ok(),
+        closes_terminal: true,
+        caller_closed: false,
+        exit_code: None,
+        wake: None,
+        resumed_session: Some(token.to_owned()),
+        detail: None,
+        report: None,
+        notified: false,
+    };
+    if let Some(identity) = facts.spawn_identity.as_ref() {
+        store.record_spawn_key(&record.id, &identity.key)?;
+    }
+    store.record(&record)?;
+    qol_runtime::probe!(
+        "CLI_SESSION_PARK",
+        "event=watching_launch id={} session={}",
+        record.id,
+        token
+    );
+    watch_woken(terminals, interpreter, store, &mut record)
+}
+
+fn launched_conversation(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+) -> Option<(Box<SessionFacts>, String)> {
+    loop {
+        match target(terminals, binding) {
+            Target::Live(facts) => {
+                let external_id = interpreter
+                    .describe(&facts)
+                    .external_id
+                    .filter(|id| !id.trim().is_empty());
+                if let Some(external_id) = external_id {
+                    return Some((facts, external_id));
+                }
+            }
+            Target::Gone => return None,
+            Target::Unknown => {}
+        }
+        thread::sleep(LAUNCH_POLL);
+    }
 }
 
 pub fn unpark(id: &str) -> Result<String> {

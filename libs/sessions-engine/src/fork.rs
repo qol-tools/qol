@@ -17,6 +17,7 @@ use super::spawn::{
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
+pub const FORK_HEADER: &str = "[qol session fork]";
 pub(super) const REPORT_LINE: &str =
     "When you finish or get blocked, tell your parent with session_send kind report.";
 
@@ -219,7 +220,7 @@ pub(super) fn fork_prompt(
         "Do not try to report back to it and do not bridge to it."
     };
     format!(
-        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.",
+        "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.",
         brief_path.display()
     )
 }
@@ -428,6 +429,21 @@ pub(super) fn fork_linked(
     if let Some(link) = link {
         link.lineage.record(key, link.parent_key)?;
     }
+    let watch = match brief_path.as_deref() {
+        Some(brief) if park && !dry_run && interpreter.can_resume(&tool_id) => {
+            Some(match super::park::watch_fork(
+                &record.session,
+                model,
+                effort,
+                &record.title,
+                &brief.with_extension("watching"),
+            ) {
+                Ok(()) => " Its tab closes when its turn ends, unless the user writes in it or it parks, and its final message reaches the user as a notification.".to_owned(),
+                Err(error) => format!(" CLI Sessions could not start watching it ({error:#}), so its tab stays open when its turn ends."),
+            })
+        }
+        _ => None,
+    };
     qol_runtime::probe!(
         "CLI_SESSION_FORK",
         "event=forked key={} tool={} model={} effort={} session={}",
@@ -451,11 +467,14 @@ pub(super) fn fork_linked(
         parent: record.parent.clone(),
         chat: record.chat.clone(),
         elapsed_ms: launched.elapsed_ms,
-        instruction: match report {
-            true => "The fork is detached: no round is open on it and session_bridge will refuse it. It reports to you with session_send kind report, which you read with session_inbox. Return to your own work.",
-            false => "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.",
-        }
-        .to_owned(),
+        instruction: format!(
+            "{}{}",
+            match report {
+                true => "The fork is detached: no round is open on it and session_bridge will refuse it. It reports to you with session_send kind report, which you read with session_inbox. Return to your own work.",
+                false => "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.",
+            },
+            watch.unwrap_or_default()
+        ),
         agent_assignment: record.agent_assignment.clone(),
         agent_status: AgentStatus::of(record.agent_assignment.as_ref()),
     })
@@ -606,7 +625,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--blank launches a fresh session with no brief, no chat copy and no launch prompt, so you type its first message; it refuses --brief and --brief-file.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends; without it, a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none or the fork is blank; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it, then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--blank launches a fresh session with no brief, no chat copy and no launch prompt, so you type its first message; it refuses --brief and --brief-file.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends. A fork with a brief whose tool can resume conversations is also watched from launch: its tab closes once its turn ends, unless the user writes in it or it parks, and its final message is shown in a CLI Sessions notification that reopens the conversation when clicked. Without --park, a fork stays open and a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none or the fork is blank; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 fn default_key(brief: &str) -> String {
@@ -757,6 +776,7 @@ mod tests {
             None,
             false,
         );
+        assert!(prompt.starts_with(FORK_HEADER), "{prompt}");
         assert!(prompt.contains("/data/forks/chase-1.md"));
         assert!(prompt.contains("detached architect"));
         assert!(prompt.contains("no completion marker"));
