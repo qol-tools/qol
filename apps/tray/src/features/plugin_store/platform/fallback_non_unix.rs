@@ -4,7 +4,7 @@ pub(crate) struct Platform;
 
 impl PluginStorePlatformOps for Platform {
     fn host_os(&self) -> HostOs {
-        HostOs::from_manifest_token(std::env::consts::OS)
+        HostOs::from_manifest_token(qol_platform::os::current_name())
     }
 
     fn lockfile_max_age(&self) -> std::time::Duration {

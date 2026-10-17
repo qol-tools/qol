@@ -2,7 +2,7 @@ use super::{CurrentThemeMetadata, PlatformMetadata, SessionMetadata};
 
 pub(super) fn inspect() -> PlatformMetadata {
     PlatformMetadata {
-        platform: std::env::consts::OS,
+        platform: qol_platform::os::current_label(),
         supported: false,
         gsettings: None,
         session: SessionMetadata {

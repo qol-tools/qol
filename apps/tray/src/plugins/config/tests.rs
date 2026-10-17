@@ -1,4 +1,5 @@
 use super::*;
+use qol_platform::Os;
 use serde_json::json;
 use std::ffi::OsString;
 use std::fs;
@@ -348,7 +349,10 @@ fn get_config_restores_from_uid_slice_when_runtime_missing() {
         id: "qol-alt-tab".to_string(),
         repo_url: "https://example.invalid/plugin-alt-tab.git".to_string(),
         version: "1.0.0".to_string(),
-        platforms: Some(vec!["linux".to_string(), "macos".to_string()]),
+        platforms: Some(vec![
+            Os::Linux.name().to_string(),
+            Os::Macos.name().to_string(),
+        ]),
     };
     let expected_config = json!({"display": {"transparent_background": true}});
     fs::create_dir_all(manager.store().core_plugin_configs_dir()).unwrap();
@@ -424,7 +428,7 @@ fn get_config_prefers_manifest_uid_when_lock_uid_defaults_to_plugin_id() {
         id: "qol-alt-tab".to_string(),
         repo_url: "https://example.invalid/plugin-alt-tab.git".to_string(),
         version: "1.0.0".to_string(),
-        platforms: Some(vec!["linux".to_string()]),
+        platforms: Some(vec![Os::Linux.name().to_string()]),
     };
     let manifest: crate::plugins::PluginManifest = toml::from_str(
         r#"
@@ -1258,7 +1262,7 @@ mod scoped_io {
     fn round_trips_single_field_without_manifest_into_core_slot() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         let config = json!({ "presets": ["a"] });
 
@@ -1276,7 +1280,7 @@ mod scoped_io {
     fn merge_precedence_is_core_then_os_then_device_with_later_scope_winning() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-x.json"),
@@ -1303,9 +1307,13 @@ mod scoped_io {
     ) {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
-        let lock = lock_entry("qol-keyremap", Some(vec!["macos"]));
-        let manifest = manifest_with(Some(vec!["macos"]), None, &[("rules", ConfigScope::Os)]);
+        let store = store_at(profile, Os::Linux.name());
+        let lock = lock_entry("qol-keyremap", Some(vec![Os::Macos.name()]));
+        let manifest = manifest_with(
+            Some(vec![Os::Macos.name()]),
+            None,
+            &[("rules", ConfigScope::Os)],
+        );
         let config = json!({ "rules": ["caps_to_ctrl"], "enabled": true });
 
         save_plugin_config_split(&store, &lock.uid, &config, Some(&lock), Some(&manifest)).unwrap();
@@ -1330,7 +1338,7 @@ mod scoped_io {
     fn save_routes_explicit_device_scope_to_device_path() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
         let config = json!({ "broker_url": "10.0.0.1", "presets": ["a"] });
@@ -1347,7 +1355,7 @@ mod scoped_io {
     fn save_does_not_touch_other_plugin_files_in_any_scope() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-other.json"),
@@ -1382,7 +1390,7 @@ mod scoped_io {
     fn load_for_an_unknown_plugin_returns_anything_pre_existing_at_the_resolved_paths() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-unknown");
         pre_seed(
             &profile.join("core/plugin-configs/plugin-unknown.json"),
@@ -1401,7 +1409,7 @@ mod scoped_io {
     fn save_clears_a_slice_file_when_no_fields_in_that_scope_remain() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "linux");
+        let store = store_at(profile, Os::Linux.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, None, &[("broker_url", ConfigScope::Device)]);
 
@@ -1438,7 +1446,7 @@ mod scoped_io {
     fn default_scope_routes_every_unspecified_field_to_that_scope() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "macos");
+        let store = store_at(profile, Os::Macos.name());
         let uid = crate::plugins::PluginUid::new("plugin-x");
         let manifest = manifest_with(None, Some(ConfigScope::Os), &[]);
 
@@ -1460,16 +1468,16 @@ mod scoped_io {
     fn write_then_read_round_trip_with_multi_scope_manifest_preserves_every_field() {
         let tmp = TempDir::new().unwrap();
         let profile = tmp.path();
-        let store = store_at(profile, "macos");
+        let store = store_at(profile, Os::Macos.name());
         let manifest = manifest_with(
-            Some(vec!["linux", "macos"]),
+            Some(vec![Os::Linux.name(), Os::Macos.name()]),
             None,
             &[
                 ("hotkey", ConfigScope::Os),
                 ("broker_url", ConfigScope::Device),
             ],
         );
-        let lock = lock_entry("p", Some(vec!["linux", "macos"]));
+        let lock = lock_entry("p", Some(vec![Os::Linux.name(), Os::Macos.name()]));
         let config = json!({
             "presets": ["a", "b"],
             "hotkey": "Super+Space",

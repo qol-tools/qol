@@ -3,11 +3,13 @@ mod linux;
 mod macos;
 mod windows;
 
-pub(super) fn link_section(target_os: &str) -> String {
+use qol_platform::Os;
+
+pub(super) fn link_section(target_os: Option<Os>) -> String {
     match target_os {
-        "linux" => linux::link_section(),
-        "macos" => macos::link_section(),
-        "windows" => windows::link_section(),
-        _ => fallback::link_section(),
+        Some(Os::Linux) => linux::link_section(),
+        Some(Os::Macos) => macos::link_section(),
+        Some(Os::Windows) => windows::link_section(),
+        None => fallback::link_section(),
     }
 }

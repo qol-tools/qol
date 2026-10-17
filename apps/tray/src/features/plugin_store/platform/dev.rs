@@ -1,3 +1,5 @@
+use qol_platform::Os;
+
 use super::{HostArch, HostOs, Platform, PluginStorePlatformOps};
 
 pub(super) trait PluginStoreDevPlatformOps {
@@ -18,10 +20,9 @@ fn fixture_bundle_name_for(host_os: HostOs, host_arch: HostArch) -> String {
 
 fn fixture_os_token(host_os: HostOs) -> &'static str {
     match host_os {
-        HostOs::Linux => "linux",
-        HostOs::Macos => "macos",
-        HostOs::Windows => "windows",
-        HostOs::Unsupported(_) => "linux",
+        HostOs::Linux | HostOs::Unsupported(_) => Os::Linux.name(),
+        HostOs::Macos => Os::Macos.name(),
+        HostOs::Windows => Os::Windows.name(),
     }
 }
 

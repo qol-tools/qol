@@ -11,6 +11,7 @@ use super::storage::{
 use super::*;
 use crate::plugins::manifest::{Capabilities, MenuConfig, PluginInfo};
 use crate::plugins::{Plugin, PluginId, PluginManifest, PluginSource, PluginUid};
+use qol_platform::Os;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -150,7 +151,7 @@ fn import_plugins_prefers_explicit_lock_entries() {
             id: "plugin-test".to_string(),
             repo_url: "https://github.com/qol-tools/plugin-test".to_string(),
             version: "1.2.3".to_string(),
-            platforms: Some(vec!["linux".to_string()]),
+            platforms: Some(vec![Os::Linux.name().to_string()]),
         }],
         installed_plugins: vec!["plugin-ignored".to_string()],
         plugin_configs: Some(HashMap::new()),
@@ -2335,10 +2336,11 @@ fn run_git<const N: usize>(repo_dir: &Path, args: [&str; N]) {
 }
 
 fn other_platform() -> &'static str {
-    ["linux", "macos", "windows"]
+    Os::ALL
         .into_iter()
-        .find(|platform| *platform != std::env::consts::OS)
+        .find(|platform| !platform.is_current())
         .unwrap()
+        .name()
 }
 
 #[test]
@@ -2382,7 +2384,7 @@ fn plugin_lock_entry_round_trips_through_json() {
         id: "plugin-a".to_string(),
         repo_url: "https://example.com/a.git".to_string(),
         version: "2.3.4".to_string(),
-        platforms: Some(vec!["linux".to_string()]),
+        platforms: Some(vec![Os::Linux.name().to_string()]),
     };
     let serialized = serde_json::to_string(&original).unwrap();
     let deserialized: PluginLockEntry = serde_json::from_str(&serialized).unwrap();

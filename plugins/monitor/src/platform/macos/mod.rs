@@ -17,7 +17,7 @@ pub(crate) use super::unix_signals::install_signal_handlers;
 
 pub(crate) fn current_support() -> PlatformSupport {
     PlatformSupport {
-        name: "macos",
+        name: qol_platform::Os::Macos.name(),
         supported: true,
     }
 }

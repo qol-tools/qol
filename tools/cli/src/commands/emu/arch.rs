@@ -127,7 +127,7 @@ pub(crate) fn infer_arch_from_filename(name: &str) -> Option<GuestArch> {
 
 pub(crate) fn is_windows_image_hint(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    lower.contains("win") || lower.contains("windows") || lower.ends_with(".vhdx")
+    lower.contains("win") || lower.ends_with(".vhdx")
 }
 
 pub(crate) fn infer_firmware(arch: GuestArch, name: &str) -> Firmware {

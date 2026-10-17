@@ -13,7 +13,7 @@ pub(super) fn inspect() -> PlatformMetadata {
     let (desktop_backend, desktop_backend_supported) = classify_session_desktop(desktop.as_deref());
 
     PlatformMetadata {
-        platform: "Linux",
+        platform: qol_platform::Os::Linux.label(),
         supported: true,
         gsettings: Some(inspect_gsettings(std::env::var_os("PATH"))),
         session: SessionMetadata {

@@ -85,6 +85,7 @@ pub fn push(registry: &Registry, build: &HostBuild, source: &str) -> Result<Push
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
 
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -100,18 +101,21 @@ mod tests {
     fn host_config_names_one_build_of_a_known_os() {
         let cases: &[(HostConfig, Option<&str>)] = &[
             (
-                config("linux", "3.101.4", COMMIT),
+                config(Os::Linux.name(), "3.101.4", COMMIT),
                 Some("qol-tray-linux-v3.101.4"),
             ),
             (
-                config("windows", "3.0.0", COMMIT),
+                config(Os::Windows.name(), "3.0.0", COMMIT),
                 Some("qol-tray-windows-v3.0.0"),
             ),
             (config("freebsd", "3.101.4", COMMIT), None),
-            (config("linux", "3.101", COMMIT), None),
-            (config("linux", "3.101.4-v1.0.0", COMMIT), None),
-            (config("linux", "3.101.4", "abc123"), None),
-            (config("linux", "3.101.4", &COMMIT.to_uppercase()), None),
+            (config(Os::Linux.name(), "3.101", COMMIT), None),
+            (config(Os::Linux.name(), "3.101.4-v1.0.0", COMMIT), None),
+            (config(Os::Linux.name(), "3.101.4", "abc123"), None),
+            (
+                config(Os::Linux.name(), "3.101.4", &COMMIT.to_uppercase()),
+                None,
+            ),
         ];
         for (config, tag) in cases {
             assert_eq!(config.tag().ok().as_deref(), *tag, "{config:?}");
@@ -120,7 +124,7 @@ mod tests {
 
     #[test]
     fn host_build_needs_files() {
-        let error = host_build(config("linux", "1.0.0", COMMIT), BTreeMap::new())
+        let error = host_build(config(Os::Linux.name(), "1.0.0", COMMIT), BTreeMap::new())
             .err()
             .unwrap();
         assert!(error.to_string().contains("no files"), "{error:#}");
@@ -129,7 +133,7 @@ mod tests {
     #[test]
     fn manifest_titles_every_file_and_carries_the_config_body() {
         let build = host_build(
-            config("windows", "3.101.4", COMMIT),
+            config(Os::Windows.name(), "3.101.4", COMMIT),
             BTreeMap::from([
                 ("qol-tray-windows-x86_64.exe".to_string(), b"tray".to_vec()),
                 (

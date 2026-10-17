@@ -826,7 +826,7 @@ mod tests {
         println!("{PROBE_CHILD_RAN}");
         let backend_ignores_isolation = qol_audio::devices::list_outputs().is_ok();
         assert!(
-            !(cfg!(target_os = "linux") && backend_ignores_isolation),
+            !(qol_platform::Os::Linux.is_current() && backend_ignores_isolation),
             "the Linux audio backend ignored the isolated runtime dir"
         );
         if backend_ignores_isolation {

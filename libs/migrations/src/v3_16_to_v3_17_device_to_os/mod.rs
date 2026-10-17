@@ -104,10 +104,11 @@ impl FileMigration for V3_16ToV3_17DeviceToOs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use std::path::PathBuf;
 
-    const OS_MAC: &str = "macos";
-    const OS_LINUX: &str = "linux";
+    const OS_MAC: &str = Os::Macos.name();
+    const OS_LINUX: &str = Os::Linux.name();
 
     fn migration(target_os: &'static str) -> V3_16ToV3_17DeviceToOs {
         V3_16ToV3_17DeviceToOs::new_for_os(target_os)
@@ -485,12 +486,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
         write(&root.join("device").join("shortcuts.json"), b"\"m\"");
-        migration("macos")
+        migration(Os::Macos.name())
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
         assert!(root
             .join("os")
-            .join("macos")
+            .join(Os::Macos.name())
             .join("shortcuts.json")
             .is_file());
     }
@@ -500,12 +501,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
         write(&root.join("device").join("shortcuts.json"), b"\"l\"");
-        migration("linux")
+        migration(Os::Linux.name())
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
         assert!(root
             .join("os")
-            .join("linux")
+            .join(Os::Linux.name())
             .join("shortcuts.json")
             .is_file());
     }
@@ -515,12 +516,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = setup_profile(dir.path(), "default");
         write(&root.join("device").join("shortcuts.json"), b"\"w\"");
-        migration("windows")
+        migration(Os::Windows.name())
             .migrate(dir.path(), &empty_archive(dir.path()))
             .unwrap();
         assert!(root
             .join("os")
-            .join("windows")
+            .join(Os::Windows.name())
             .join("shortcuts.json")
             .is_file());
     }

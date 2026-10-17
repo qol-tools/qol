@@ -422,6 +422,7 @@ impl FileMigration for V3_18ToV3_19DeclaredPluginId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
     use serde_json::json;
 
     fn migration() -> V3_18ToV3_19DeclaredPluginId {
@@ -536,7 +537,10 @@ mod tests {
             &json!({"version":1,"plugins":[{"id":"alt-tab","repo_url":"x","version":"1.0.0"}]}),
         );
         write_json(
-            &profile.join("os").join("linux").join("hotkeys.json"),
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
             &json!({"hotkeys":[{"id":"hk-1","key":"Super+Tab","plugin_id":"alt-tab","action":"open","enabled":true}]}),
         );
 
@@ -544,7 +548,12 @@ mod tests {
 
         let lock = read_json(&profile.join("core").join("plugins.lock.json"));
         assert_eq!(lock["plugins"][0]["id"], "plugin-alt-tab");
-        let hotkeys = read_json(&profile.join("os").join("linux").join("hotkeys.json"));
+        let hotkeys = read_json(
+            &profile
+                .join("os")
+                .join(Os::Linux.name())
+                .join("hotkeys.json"),
+        );
         assert_eq!(hotkeys["hotkeys"][0]["plugin_id"], "plugin-alt-tab");
         assert_eq!(
             hotkeys["hotkeys"][0]["id"], "hk-1",

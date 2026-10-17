@@ -564,6 +564,8 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
+    use qol_platform::Os;
+
     use super::*;
 
     fn identity() -> ImageIdentity {
@@ -641,9 +643,9 @@ mod tests {
     fn windows_hello_needs_a_session_but_no_dbus() {
         let mut windows = hello();
         windows.image.environment_id = "windows/desktop".to_string();
-        windows.image.desktop = "windows".to_string();
+        windows.image.desktop = Os::Windows.name().to_string();
         windows.image.display_protocol = WIN32_DISPLAY_PROTOCOL.to_string();
-        windows.session.desktop = Some("windows".to_string());
+        windows.session.desktop = Some(Os::Windows.name().to_string());
         windows.session.session_type = Some(WIN32_DISPLAY_PROTOCOL.to_string());
         windows.session.display = Some("Console".to_string());
         windows.session.runtime_dir = None;

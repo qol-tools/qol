@@ -306,7 +306,7 @@ pub fn external_services_check() -> DoctorCheckResult {
             ),
         )
         .with_details(serde_json::json!({
-            "platform": "macos",
+            "platform": qol_platform::Os::Macos.name(),
             "service": "window_server",
             "display_count": displays.len(),
             "capture_attempted": false,
@@ -317,7 +317,7 @@ pub fn external_services_check() -> DoctorCheckResult {
         )
         .with_fix("Run QoL Shot in an active macOS graphical login session.")
         .with_details(serde_json::json!({
-            "platform": "macos",
+            "platform": qol_platform::Os::Macos.name(),
             "service": "window_server",
             "display_count": null,
             "capture_attempted": false,

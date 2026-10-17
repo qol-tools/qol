@@ -1,4 +1,4 @@
-use qol_plugin_index::HOST_OSES;
+use qol_platform::Os;
 use std::collections::BTreeMap;
 
 const HOST_ID_PREFIX: &str = "qol-tray-";
@@ -37,7 +37,7 @@ impl ReleaseTag {
 
     pub fn host_system(&self) -> Option<&str> {
         let os = self.plugin_id.strip_prefix(HOST_ID_PREFIX)?;
-        HOST_OSES.contains(&os).then_some(os)
+        Os::from_name(os).map(Os::name)
     }
 }
 
@@ -120,9 +120,9 @@ mod tests {
     #[test]
     fn host_tags_name_a_known_os() {
         let cases: &[(&str, bool, Option<&str>)] = &[
-            ("qol-tray-linux-v3.101.4", true, Some("linux")),
-            ("qol-tray-macos-v3.101.4", true, Some("macos")),
-            ("qol-tray-windows-v3.101.4", true, Some("windows")),
+            ("qol-tray-linux-v3.101.4", true, Some(Os::Linux.name())),
+            ("qol-tray-macos-v3.101.4", true, Some(Os::Macos.name())),
+            ("qol-tray-windows-v3.101.4", true, Some(Os::Windows.name())),
             ("qol-tray-freebsd-v3.101.4", true, None),
             ("qol-tray-v3.82.0", false, None),
             ("qol-shot-v1.0.0", false, None),
@@ -133,7 +133,7 @@ mod tests {
             assert_eq!(release.host_system(), *os, "{tag}");
             assert_eq!(is_host_tag(tag), os.is_some(), "{tag}");
         }
-        for os in HOST_OSES {
+        for os in Os::ALL.map(Os::name) {
             let tag = qol_plugin_index::host_tag(os, "1.2.3");
             assert_eq!(ReleaseTag::parse(&tag).unwrap().host_system(), Some(os));
         }

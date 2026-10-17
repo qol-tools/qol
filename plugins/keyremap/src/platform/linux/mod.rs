@@ -1,1 +1,1 @@
-pub(super) const NAME: &str = "Linux";
+pub(super) const NAME: &str = qol_platform::Os::Linux.label();

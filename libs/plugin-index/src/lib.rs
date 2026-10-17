@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const SCHEMA: u32 = 1;
-pub const HOST_OSES: [&str; 3] = ["linux", "macos", "windows"];
 pub const HOST_KEEP: usize = 2;
 pub const INDEX_TAG: &str = "index";
 pub const SIGNED_INDEX_MEDIA_TYPE: &str = "application/vnd.qol.plugin-index.signed.v1+json";
@@ -104,6 +103,7 @@ fn verify(body: &[u8], signature: &str, public_key: &str) -> Result<IndexDocumen
 mod tests {
     use super::*;
     use crate::test_signer::TestSigner;
+    use qol_platform::Os;
 
     fn index(serial: u64) -> IndexDocument {
         let version = IndexedVersion {
@@ -147,7 +147,7 @@ mod tests {
             )]),
         };
         document.host.insert(
-            "linux".to_string(),
+            Os::Linux.name().to_string(),
             IndexedHost {
                 latest: "3.101.4".to_string(),
                 versions: BTreeMap::from([("3.101.4".to_string(), version)]),
@@ -265,13 +265,13 @@ mod tests {
 
     #[test]
     fn host_tags_name_the_os_and_version() {
-        let cases: &[(&str, &str, &str)] = &[
-            ("linux", "3.101.4", "qol-tray-linux-v3.101.4"),
-            ("macos", "0.1.0", "qol-tray-macos-v0.1.0"),
-            ("windows", "10.0.2", "qol-tray-windows-v10.0.2"),
+        let cases: &[(Os, &str, &str)] = &[
+            (Os::Linux, "3.101.4", "qol-tray-linux-v3.101.4"),
+            (Os::Macos, "0.1.0", "qol-tray-macos-v0.1.0"),
+            (Os::Windows, "10.0.2", "qol-tray-windows-v10.0.2"),
         ];
         for (os, version, tag) in cases {
-            assert_eq!(host_tag(os, version), *tag);
+            assert_eq!(host_tag(os.name(), version), *tag);
         }
     }
 

@@ -162,7 +162,7 @@ mod tests {
             assets: BTreeMap::from([
                 ("qol-shot-macos-aarch64".to_string(), b"mac".to_vec()),
                 ("IBM-Plex-OFL.txt".to_string(), b"ofl".to_vec()),
-                ("qol-shot-linux-x86_64".to_string(), b"linux".to_vec()),
+                ("qol-shot-linux-x86_64".to_string(), b"elf".to_vec()),
             ]),
         }
     }

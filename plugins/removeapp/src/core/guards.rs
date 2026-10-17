@@ -17,7 +17,7 @@ impl PackageManager {
             PackageManager::Homebrew => "Homebrew",
             PackageManager::Apt => "APT",
             PackageManager::Flatpak => "Flatpak",
-            PackageManager::Windows => "Windows",
+            PackageManager::Windows => qol_platform::Os::Windows.label(),
             PackageManager::MicrosoftStore => "Microsoft Store",
         }
     }

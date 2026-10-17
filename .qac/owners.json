@@ -1,0 +1,20 @@
+{
+  "os": {
+    "owner": "libs/platform/src/os/",
+    "use": "qol_platform::Os (Os::current, Os::includes_current, Os::label, Os::build_target)",
+    "names": ["linux", "macos", "windows"],
+    "labels": ["Linux", "macOS", "Windows"],
+    "allow": [
+      { "path": "apps/tray/src/installer/platform/windows_rules/run_key.rs", "text": "Windows", "why": "the Software\\Microsoft\\Windows registry key" },
+      { "path": "libs/apps/src/shell_link/tests.rs", "text": "Windows", "why": "the C:\\Windows folder inside a shell link fixture" },
+      { "path": "plugins/cli-sessions/src/diagnostics/snapshot.rs", "text": "windows", "why": "the JSON key listing terminal windows" },
+      { "path": "plugins/cli-sessions/tests/snapshot.rs", "text": "windows", "why": "the JSON key listing terminal windows" },
+      { "path": "plugins/removeapp/src/core/platform/windows/mod.rs", "text": "Windows", "why": "the C:\\Windows folder" },
+      { "path": "plugins/removeapp/src/core/platform/windows/catalog.rs", "text": "windows", "why": "a Start menu folder name" },
+      { "path": "plugins/memory/src/verification/mod.rs", "text": "linux", "why": "a protected word in recalled text, beside android and freebsd" },
+      { "path": "plugins/memory/src/verification/mod.rs", "text": "windows", "why": "a protected word in recalled text, beside android and freebsd" },
+      { "path": "plugins/memory/src/verification/mod.rs", "text": "macos", "why": "a protected word in recalled text, beside android and freebsd" },
+      { "path": "plugins/update-manager/src/updates/platform/linux/names.rs", "text": "linux", "why": "the Debian kernel source package name" }
+    ]
+  }
+}

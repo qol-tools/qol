@@ -3,10 +3,6 @@ use super::BuildPlatform;
 pub(crate) struct Platform;
 
 impl BuildPlatform for Platform {
-    fn name(&self) -> &'static str {
-        "windows"
-    }
-
     fn tray_dev_features(&self) -> &'static str {
         "dev"
     }

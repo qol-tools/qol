@@ -1,7 +1,7 @@
 fn main() {
     let source = "src/daemon/platform/unix/platform/macos_socket.c";
     println!("cargo:rerun-if-changed={source}");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    if qol_platform::Os::build_target() == Some(qol_platform::Os::Macos) {
         cc::Build::new()
             .file(source)
             .warnings_into_errors(true)

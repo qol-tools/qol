@@ -51,7 +51,6 @@ pub fn emit_build_identity() {
         .strip_prefix('{')
         .and_then(|value| value.strip_suffix('}'))
         .expect("build identity fields serialize as an object");
-    let target_os = required_env("CARGO_CFG_TARGET_OS");
     let frame_prefix = format!("{}{{\"binary\":\"", artifact::FRAME_MAGIC);
 
     println!("cargo:rustc-env={}={fields}", artifact::ENV_FRAME_FIELDS);
@@ -62,7 +61,7 @@ pub fn emit_build_identity() {
     println!(
         "cargo:rustc-env={}={}",
         artifact::ENV_LINK_SECTION,
-        artifact::link_section_for_target(&target_os)
+        artifact::link_section_for_target(qol_platform::Os::build_target())
     );
 }
 

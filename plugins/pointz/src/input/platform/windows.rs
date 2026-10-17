@@ -20,7 +20,7 @@ pub struct InputHandlerImpl {
 
 pub(in crate::input) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        name: "windows",
+        name: qol_platform::Os::Windows.name(),
         declared: true,
         input_backend: true,
     }
@@ -28,7 +28,7 @@ pub(in crate::input) fn platform_support() -> PlatformSupport {
 
 pub(in crate::input) fn inspect_readiness() -> InputReadiness {
     InputReadiness {
-        platform: "windows",
+        platform: qol_platform::Os::Windows.name(),
         ready: true,
         authorization_granted: None,
         display_env_set: None,

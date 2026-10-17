@@ -57,7 +57,7 @@ const FALLBACK_XINPUT_NAME: &str = "XInput controller";
 
 pub(crate) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        label: "Windows",
+        label: qol_platform::Os::Windows.label(),
         supported: true,
     }
 }

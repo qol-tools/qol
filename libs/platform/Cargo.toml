@@ -36,6 +36,7 @@ windows-sys = { version = "0.59", features = [
 core-foundation = "0.10"
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3.27"
 
 [lints]

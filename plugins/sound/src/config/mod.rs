@@ -174,7 +174,7 @@ mod tests {
             env.set("XDG_CONFIG_HOME", &config_home);
             let pinned = qol_config::data_dir().is_some_and(|dir| dir.starts_with(&data_home));
             assert!(
-                pinned || !cfg!(target_os = "linux"),
+                pinned || !qol_platform::Os::Linux.is_current(),
                 "the data dir ignored XDG_DATA_HOME"
             );
             if !pinned {

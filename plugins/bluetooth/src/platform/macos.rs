@@ -240,7 +240,7 @@ fn device_handle(address: &str) -> Result<Retained<IOBluetoothDevice>> {
 pub fn required_binaries_check() -> DoctorCheckResult {
     fn details(controller: bool, powered: Option<bool>) -> serde_json::Value {
         serde_json::json!({
-            "platform": "macos",
+            "platform": qol_platform::Os::Macos.name(),
             "controller": controller,
             "powered": powered,
             "executed": false,

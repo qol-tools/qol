@@ -34,6 +34,7 @@ qol-process.workspace = true
 qol-secrets.workspace = true
 qol-sessions-engine.workspace = true
 qol-plugin-daemon.workspace = true
+qol-platform.workspace = true
 qol-runtime.workspace = true
 qol-profile-sync.workspace = true
 qol-workspace.workspace = true
@@ -64,7 +65,6 @@ git2 = { version = "0.20", default-features = false, features = ["https", "vendo
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 
 [target.'cfg(windows)'.dependencies]
-qol-platform.workspace = true
 # Git sync: HTTPS runs on libgit2's native WinHTTP backend here, no vendored OpenSSL
 git2 = { version = "0.20", default-features = false, features = ["https", "vendored-libgit2"] }
 

@@ -17,7 +17,11 @@ pub fn current() -> &'static str {
     HOST.get_or_init(|| {
         let override_env = std::env::var("QOL_MEMORY_HOST").ok();
         let hostname = gethostname::gethostname().to_string_lossy().into_owned();
-        compose(override_env.as_deref(), &hostname, std::env::consts::OS)
+        compose(
+            override_env.as_deref(),
+            &hostname,
+            qol_platform::os::current_name(),
+        )
     })
 }
 
@@ -27,21 +31,33 @@ mod tests {
 
     #[test]
     fn override_wins_when_non_empty_after_trim() {
-        assert_eq!(compose(Some(" box-b "), "box-a", "linux"), "box-b");
+        assert_eq!(
+            compose(Some(" box-b "), "box-a", qol_platform::Os::Linux.name()),
+            "box-b"
+        );
     }
 
     #[test]
     fn empty_override_is_ignored() {
-        assert_eq!(compose(Some("   "), "box-a", "linux"), "box-a/linux");
+        assert_eq!(
+            compose(Some("   "), "box-a", qol_platform::Os::Linux.name()),
+            "box-a/linux"
+        );
     }
 
     #[test]
     fn empty_hostname_becomes_unknown() {
-        assert_eq!(compose(None, "   ", "linux"), "unknown/linux");
+        assert_eq!(
+            compose(None, "   ", qol_platform::Os::Linux.name()),
+            "unknown/linux"
+        );
     }
 
     #[test]
     fn normal_case_yields_name_os() {
-        assert_eq!(compose(None, "box-a", "linux"), "box-a/linux");
+        assert_eq!(
+            compose(None, "box-a", qol_platform::Os::Linux.name()),
+            "box-a/linux"
+        );
     }
 }

@@ -13,7 +13,7 @@ pub(crate) fn inspect() -> PlatformInspection {
     );
     let drive = system_drive();
     PlatformInspection {
-        name: "Windows",
+        name: qol_platform::Os::Windows.label(),
         supported: true,
         inventory_roots,
         trash: drive

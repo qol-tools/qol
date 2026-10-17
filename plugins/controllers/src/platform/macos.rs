@@ -6,7 +6,7 @@ use crate::platform::{NativeInputSnapshot, PlatformSupport};
 
 pub(crate) fn platform_support() -> PlatformSupport {
     PlatformSupport {
-        label: "macOS",
+        label: qol_platform::Os::Macos.label(),
         supported: false,
     }
 }

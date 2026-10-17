@@ -52,7 +52,7 @@ fn external_services_result(
     observation: Result<usize, String>,
 ) -> DoctorCheckResult {
     let details = serde_json::json!({
-        "platform": "linux",
+        "platform": qol_platform::Os::Linux.name(),
         "service": "x11",
         "display": display,
         "screen_count": observation.as_ref().ok(),
