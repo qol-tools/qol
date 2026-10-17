@@ -389,7 +389,7 @@ pub(super) fn check_row(snapshot: &UpdatesSnapshot) -> CheckRow {
             checking: false,
         };
     }
-    match &snapshot.check_error {
+    match snapshot.check_error.as_ref().filter(|_| !snapshot.checking) {
         Some(error) => CheckRow {
             label: "Last checked",
             value: "Couldn't check".to_string(),
@@ -978,6 +978,15 @@ mod tests {
             ..never
         };
         assert_eq!(check_row(&never).description, "No connection to GitHub.");
+
+        let rechecking = UpdatesSnapshot {
+            checking: true,
+            ..never
+        };
+        let row = check_row(&rechecking);
+        assert_eq!(row.value, age_text(rechecking.last_checked_secs));
+        assert_eq!(row.tone, ValueTone::Normal);
+        assert!(row.checking);
 
         let fresh = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
