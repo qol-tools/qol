@@ -454,6 +454,35 @@ impl SpawnLedger {
         Ok(None)
     }
 
+    pub(super) fn recent_cwds(&self, limit: usize, exclude: &Path) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        let mut records = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter_map(|encoded| serde_json::from_str::<SpawnRecord>(&encoded).ok())
+            .collect::<Vec<_>>();
+        records.sort_by_key(|record| std::cmp::Reverse(record.last_seen));
+        let mut cwds: Vec<String> = Vec::new();
+        for record in records {
+            let cwd = Path::new(&record.cwd);
+            if cwds.len() == limit {
+                break;
+            }
+            if cwd.starts_with(exclude) || !cwd.is_dir() || cwds.contains(&record.cwd) {
+                continue;
+            }
+            cwds.push(record.cwd);
+        }
+        cwds
+    }
+
     pub(super) fn load(&self, key: &SpawnKey, cwd: &str) -> Result<Option<SpawnRecord>> {
         let encoded = match fs::read_to_string(self.file_for(key, cwd)) {
             Ok(encoded) => encoded,
@@ -762,7 +791,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         let outcome = run_lanes_with(&terminals, &tool, parsed, &dispatch, surface, &locks, cap)?;
         serde_json::to_string(&outcome).context("failed to serialize lane set outcome")?
     };
-    println!("{encoded}");
+    crate::cli::line(encoded);
     Ok(())
 }
 
@@ -1182,6 +1211,7 @@ pub(super) fn spawn_lanes(
         if lane.key.trim().is_empty() {
             bail!("every lane needs a non-empty key so its round stays idempotent");
         }
+        super::switchboard::refuse_reserved_key(&lane.key)?;
         if !seen.insert(lane.key.as_str()) {
             bail!(
                 "lane key `{}` appears twice; every lane in a set needs its own key",
@@ -1341,6 +1371,9 @@ pub(super) fn spawn_or_reuse(
         bail!(
             "background spawn requires --task so the first round is queued at launch; the reuse path takes no --background"
         );
+    }
+    if let Some(key) = key {
+        super::switchboard::refuse_reserved_key(key)?;
     }
     let prepared = prepare_spawn(interpreter, tool, key, surface, title, config)?;
     let _guard = locks.acquire(&prepared.key)?;
@@ -1917,6 +1950,52 @@ pub(super) struct DetachedLaunch {
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_detached(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    tool: &str,
+    cwd: &str,
+    key: &str,
+    surface: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    title: Option<&str>,
+    config: Option<SpawnSurface>,
+    cap: Option<&SpawnCapConfig>,
+    extra_args: &[String],
+    prompt: &str,
+    dry_run: bool,
+    assignment: Option<&AgentAssignment>,
+    resume: Option<&[String]>,
+    park: bool,
+) -> Result<DetachedLaunch> {
+    super::switchboard::refuse_reserved_key(key)?;
+    launch_detached(
+        terminals,
+        interpreter,
+        ledger,
+        locks,
+        tool,
+        cwd,
+        key,
+        surface,
+        model,
+        effort,
+        title,
+        config,
+        cap,
+        extra_args,
+        prompt,
+        dry_run,
+        assignment,
+        resume,
+        park,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn launch_detached(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     ledger: &SpawnLedger,
@@ -6498,19 +6577,17 @@ mod tests {
     }
 
     #[test]
-    fn the_switchboard_launches_claude_with_its_role_and_no_prompt() {
+    fn the_switchboard_launches_claude_with_its_profile_and_no_prompt() {
         let root = tempfile::TempDir::new().unwrap();
-        let cwd = managed_workdir(&root);
+        let plan = switchboard_plan(&root);
         let (terminals, backend) = harness(vec![vec![]]);
         let outcome = super::super::switchboard::launch(
             &terminals,
             &CliSessionInterpreter::system(),
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &locks(&root),
-            &cwd,
-            None,
-            Some("opus"),
-            "low",
+            &plan,
+            Some("tab"),
             None,
             &AgentDispatch::unconfigured(),
         )
@@ -6518,26 +6595,20 @@ mod tests {
         assert_eq!(outcome.tool, "claude");
         assert_eq!(outcome.key, "switchboard");
         assert_eq!(outcome.title, "switchboard");
+        assert_eq!(outcome.model, "claude-sonnet-5-5");
         assert_eq!(outcome.effort, "low");
         let request = backend.last_request.lock().unwrap().clone().unwrap();
         assert_eq!(request.identity.key.as_str(), "switchboard");
+        assert_eq!(request.cwd, plan.cwd);
         let args = &request.launch.args;
-        let tools = args
-            .iter()
-            .position(|arg| arg == "--tools=ToolSearch")
-            .unwrap_or_else(|| panic!("the switchboard loads only ToolSearch: {args:?}"));
-        assert_eq!(
-            args.get(tools + 1).map(String::as_str),
-            Some("--append-system-prompt")
+        assert!(
+            args.ends_with(&super::super::switchboard::profile_args(&plan)),
+            "the profile is the last thing on the line, so no prompt follows it: {args:?}"
         );
-        assert_eq!(
-            args.get(tools + 2).map(String::as_str),
-            Some(super::super::switchboard::SWITCHBOARD_ROLE)
-        );
-        assert_eq!(
-            args.len(),
-            tools + 3,
-            "the role text is the last argument, so no prompt follows it: {args:?}"
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model", "claude-sonnet-5-5"]),
+            "{args:?}"
         );
         assert!(
             args.windows(2).any(|pair| pair == ["--effort", "low"]),
@@ -6546,11 +6617,21 @@ mod tests {
         assert!(backend.typed.lock().unwrap().is_empty());
     }
 
+    fn switchboard_plan(root: &tempfile::TempDir) -> super::super::switchboard::LaunchPlan {
+        super::super::switchboard::LaunchPlan {
+            model: "claude-sonnet-5-5".to_owned(),
+            effort: "low".to_owned(),
+            cwd: PathBuf::from(managed_workdir(root)),
+            mcp_program: PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
+            projects: Vec::new(),
+        }
+    }
+
     #[test]
     fn the_switchboard_refuses_when_a_live_session_holds_its_key() {
         let root = tempfile::TempDir::new().unwrap();
-        let cwd = managed_workdir(&root);
-        let held = FakeBackend::facts("7", "switchboard", "claude", &cwd);
+        let plan = switchboard_plan(&root);
+        let held = FakeBackend::facts("7", "switchboard", "claude", &managed_workdir(&root));
         let token = held.binding().unwrap().token();
         let (terminals, backend) = harness(vec![vec![held]]);
         let error = super::super::switchboard::launch(
@@ -6558,10 +6639,8 @@ mod tests {
             &CliSessionInterpreter::system(),
             &SpawnLedger::with_dir(root.path().join("spawn-records")),
             &locks(&root),
-            &cwd,
-            None,
-            Some("opus"),
-            "low",
+            &plan,
+            Some("tab"),
             None,
             &AgentDispatch::unconfigured(),
         )
@@ -6572,6 +6651,155 @@ mod tests {
             format!("the switchboard is already running as `{token}`")
         );
         assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_switchboard_launch_refuses_while_another_holds_its_lock() {
+        let root = tempfile::TempDir::new().unwrap();
+        let plan = switchboard_plan(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let locks = locks(&root);
+        let _held = locks
+            .acquire(&SpawnKey::new("switchboard").unwrap())
+            .unwrap();
+        let error = super::super::switchboard::launch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks,
+            &plan,
+            Some("tab"),
+            None,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("already handling spawn key `switchboard`"),
+            "{error}"
+        );
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn every_caller_chosen_launch_refuses_the_switchboard_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let pending = super::super::bridge::PendingBridgeStore::with_dir(root.path().to_path_buf());
+
+        let spawn = run_spawn(
+            &terminals,
+            "pi",
+            &cwd,
+            Some("switchboard"),
+            None,
+            Some("flash"),
+            None,
+            None,
+            &locks(&root),
+        )
+        .unwrap_err()
+        .to_string();
+        let lanes = spawn_lanes(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            "pi",
+            &cwd,
+            &[managed_lane("switchboard", None)],
+            None,
+            Some("flash"),
+            None,
+            None,
+            None,
+            &locks(&root),
+            &ledger,
+            None,
+            None,
+            &pending,
+            root.path(),
+            None,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap_err()
+        .to_string();
+        let detached = spawn_detached(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &ledger,
+            &locks(&root),
+            "claude",
+            &cwd,
+            "switchboard",
+            None,
+            Some("opus"),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            "",
+            false,
+            None,
+            None,
+            false,
+        )
+        .err()
+        .unwrap()
+        .to_string();
+
+        for error in [spawn, lanes, detached] {
+            assert!(error.contains("reserved for the switchboard"), "{error}");
+        }
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
+    fn recent_cwds_are_newest_first_unique_live_and_skip_the_switchboard_folder() {
+        let root = tempfile::TempDir::new().unwrap();
+        let ledger = SpawnLedger::with_dir(root.path().join("spawn-records"));
+        let older = root.path().join("older");
+        let newer = root.path().join("newer");
+        let switchboard = root.path().join("sessions").join("switchboard");
+        for dir in [&older, &newer, &switchboard] {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let gone = root.path().join("gone");
+        let write = |key: &str, cwd: &Path, last_seen: u64| {
+            let record = SpawnRecord {
+                key: key.to_owned(),
+                tool: "pi".to_owned(),
+                surface: "tab".to_owned(),
+                cwd: cwd.to_string_lossy().into_owned(),
+                model: None,
+                external_id: None,
+                session: None,
+                agent_assignment: None,
+                created_at: last_seen,
+                last_seen,
+            };
+            ledger
+                .write_record(&SpawnKey::new(key).unwrap(), &record.cwd, &record)
+                .unwrap();
+        };
+        write("a", &older, 1);
+        write("b", &newer, 3);
+        write("c", &newer, 2);
+        write("d", &gone, 4);
+        write("switchboard", &switchboard, 5);
+
+        assert_eq!(
+            ledger.recent_cwds(10, &switchboard),
+            [
+                newer.to_string_lossy().into_owned(),
+                older.to_string_lossy().into_owned()
+            ]
+        );
+        assert_eq!(ledger.recent_cwds(1, &switchboard).len(), 1);
+        assert!(SpawnLedger::with_dir(root.path().join("missing"))
+            .recent_cwds(10, &switchboard)
+            .is_empty());
     }
 
     #[test]

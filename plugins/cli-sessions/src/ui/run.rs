@@ -72,9 +72,10 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let corner = cfg.corner();
     let service_commands: Arc<[String]> = Arc::from(cfg.service_commands);
     let cli_interpreter = Arc::new(CliSessionInterpreter::system());
-    let reconcile_caches = Arc::new(Mutex::new(reconcile::ReconcileCaches::with_parked_dir(
-        qol_terminal_sessions::park::parked_dir(),
-    )));
+    let reconcile_caches = Arc::new(Mutex::new(
+        reconcile::ReconcileCaches::with_parked_dir(qol_terminal_sessions::park::parked_dir())
+            .with_messaging(),
+    ));
     let service_snapshot = SharedSnapshotCache::default();
 
     let probe =
@@ -501,13 +502,12 @@ fn next_attention_target(
     attention_cursor: &AttentionCursor,
 ) -> Option<SessionBinding> {
     let rows = registry.lock().ok()?.sorted();
-    let statuses: Vec<Status> = rows.iter().map(|row| row.status).collect();
     let current = attention_cursor.lock().ok().and_then(|cursor| {
         cursor
             .as_ref()
             .and_then(|id| rows.iter().position(|row| &row.id == id))
     });
-    let index = crate::ui::nav::next_attention(&statuses, current)?;
+    let index = crate::ui::nav::next_attention_row(&rows, current)?;
     let target = rows.get(index)?;
     let binding = target.binding()?;
     if let Ok(mut cursor) = attention_cursor.lock() {

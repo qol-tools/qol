@@ -1241,6 +1241,7 @@ pub(super) fn submit(
         bail!("cannot submit to the calling terminal; choose an independent session");
     }
     let target = resolve_target(terminals, binding)?;
+    refuse_submit_target(&target, binding, &super::fork::ForkStore::system()?)?;
     let autoclose = target.spawn_identity.is_some();
     let assignment = match resolved {
         Some(assignment) => Some(assignment.clone()),
@@ -1727,6 +1728,23 @@ fn session_gone(terminals: &TerminalSessionService, binding: &SessionBinding) ->
                 .any(|session| session.id == *binding.session_id())
         })
         .unwrap_or(false)
+}
+
+fn refuse_submit_target(
+    target: &SessionFacts,
+    binding: &SessionBinding,
+    forks: &super::fork::ForkStore,
+) -> Result<()> {
+    if super::switchboard::holds_switchboard_key(target) {
+        bail!("`{binding}` is the switchboard; it takes no submitted rounds, so message it with session_send");
+    }
+    if let Some(fork) = forks.find_session(&binding.token())? {
+        bail!(
+            "`{binding}` is the fork `{}`; a fork owns its work and takes no submitted rounds, so message it with session_send",
+            fork.key
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn resolve_target(
@@ -2996,6 +3014,57 @@ mod tests {
         assert_eq!(get_text, outcome.reads + 2);
         assert_eq!(ls, outcome.reads / 10 + 5);
         assert!(ls - 4 <= outcome.reads.div_ceil(10) + 1);
+    }
+
+    #[test]
+    fn submit_refuses_forks_and_the_switchboard_before_opening_a_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+        let binding = SessionBinding::from_str("v1:fake:7:123").unwrap();
+        let mut lane = facts(&binding);
+        lane.spawn_identity = Some(qol_terminal_sessions::SpawnIdentity {
+            key: qol_terminal_sessions::SpawnKey::new("lane-7").unwrap(),
+            tool: qol_terminal_sessions::cli::CliToolId::new("codex").unwrap(),
+            surface: qol_terminal_sessions::SpawnSurface::Tab,
+        });
+        refuse_submit_target(&lane, &binding, &forks).unwrap();
+
+        std::fs::create_dir_all(root.path().join("forks")).unwrap();
+        std::fs::write(
+            root.path().join("forks").join("lane-7-1.json"),
+            serde_json::json!({
+                "key": "lane-7",
+                "tool": "codex",
+                "model": "m",
+                "surface": "tab",
+                "cwd": "/work/demo",
+                "session": binding.token(),
+                "title": "lane-7",
+                "brief": "",
+                "created_at": 1,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let error = refuse_submit_target(&lane, &binding, &forks)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("is the fork `lane-7`"), "{error}");
+
+        let mut switchboard = facts(&binding);
+        switchboard.spawn_identity = Some(qol_terminal_sessions::SpawnIdentity {
+            key: qol_terminal_sessions::SpawnKey::new("switchboard").unwrap(),
+            tool: qol_terminal_sessions::cli::CliToolId::new("claude").unwrap(),
+            surface: qol_terminal_sessions::SpawnSurface::Tab,
+        });
+        let error = refuse_submit_target(
+            &switchboard,
+            &binding,
+            &super::super::fork::ForkStore::with_dir(root.path().join("none")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("is the switchboard"), "{error}");
     }
 
     #[test]

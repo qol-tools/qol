@@ -21,7 +21,7 @@ pub(super) fn forward(subcommand: &str, rest: &[OsString]) -> Result<()> {
     Ok(())
 }
 
-fn plugin_binary() -> Result<PathBuf> {
+pub(super) fn plugin_binary() -> Result<PathBuf> {
     let binary = qol_config::config_dir()
         .context("cannot resolve the qol-tray config directory")?
         .join("plugins")

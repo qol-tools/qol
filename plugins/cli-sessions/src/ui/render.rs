@@ -43,17 +43,32 @@ fn is_idle(status: Status) -> bool {
     status.definition().idle
 }
 
+const MASTER_READY: &str = "master \u{00B7} ready";
+
+fn row_colors(kit: &qol_gpui::kit::Kit, s: &SessionState) -> (u32, u32) {
+    if s.is_master_ready() {
+        let tone = kit.palette.accent;
+        return (
+            tone,
+            qol_gpui::theme::translucent(tone, qol_gpui::theme::Alpha::Halo),
+        );
+    }
+    (s.status.definition().colors)(kit)
+}
+
 fn status_dot_el(
     kit: &qol_gpui::kit::Kit,
-    status: Status,
+    s: &SessionState,
     id: impl Into<gpui::ElementId>,
 ) -> AnyElement {
-    let (tone, halo) = (status.definition().colors)(kit);
-    kit.live_dot(id, tone, halo, status.is_active())
+    let (tone, halo) = row_colors(kit, s);
+    kit.live_dot(id, tone, halo, s.status.is_active())
 }
 
 fn live_count(rows: &[SessionState]) -> usize {
-    rows.iter().filter(|row| !is_idle(row.status)).count()
+    rows.iter()
+        .filter(|row| !is_idle(row.status) && !row.is_master_ready())
+        .count()
 }
 
 fn header(
@@ -192,6 +207,15 @@ fn footer() -> impl IntoElement {
 
 fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyElement {
     let kit = qol_gpui::kit::kit();
+    if s.is_master_ready() {
+        return text_line(
+            MASTER_READY.to_owned(),
+            TextStyle::Detail,
+            row_colors(&kit, s).0,
+        )
+        .h(px(qol_gpui::theme::SPACE_PAD))
+        .into_any_element();
+    }
     if s.status == Status::YourTurn {
         let id = s.id.clone();
         let (tone, _) = (s.status.definition().colors)(&kit);
@@ -298,7 +322,7 @@ fn session_row(
         .child(kit.vertical_identity_tab(s.tool.label.clone(), s.tool.accent.rgb24()))
         .child(status_dot_el(
             &kit,
-            s.status,
+            s,
             SharedString::from(format!("session-status-{}", s.id)),
         ))
         .child(
@@ -669,6 +693,8 @@ mod tests {
             summary: "x".into(),
             last_activity: 0,
             screen_hash: None,
+            key: None,
+            master: false,
             working_since: None,
             settled_since: None,
             bridged: false,
@@ -688,5 +714,53 @@ mod tests {
         ];
         assert_eq!(live_count(&rows), 3);
         assert_eq!(live_count(&[]), 0);
+    }
+
+    #[test]
+    fn the_resting_master_is_left_out_of_the_live_count() {
+        let master = |status| SessionState {
+            master: true,
+            key: Some(qol_sessions_engine::SWITCHBOARD_KEY.to_owned()),
+            ..state(status)
+        };
+        for (status, live) in [
+            (Status::YourTurn, 0),
+            (Status::Acknowledged, 0),
+            (Status::Unknown, 0),
+            (Status::Working, 1),
+            (Status::NeedsYou, 1),
+        ] {
+            assert_eq!(
+                live_count(&[master(status), state(Status::Unknown)]),
+                live,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_resting_master_wears_the_accent_and_otherwise_its_status_colors() {
+        let kit = qol_gpui::kit::kit();
+        let master = |status| SessionState {
+            master: true,
+            ..state(status)
+        };
+        for status in Status::ALL {
+            let expected = if matches!(
+                status,
+                Status::YourTurn | Status::Acknowledged | Status::Unknown
+            ) {
+                kit.palette.accent
+            } else {
+                (status.definition().colors)(&kit).0
+            };
+            assert_eq!(row_colors(&kit, &master(status)).0, expected, "{status:?}");
+            assert_eq!(
+                row_colors(&kit, &state(status)).0,
+                (status.definition().colors)(&kit).0,
+                "{status:?}"
+            );
+        }
+        assert_eq!(MASTER_READY, "master \u{00B7} ready");
     }
 }

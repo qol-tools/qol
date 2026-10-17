@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use qol_sessions_engine::attention::{AttentionRow, AttentionSnapshot, AttentionState};
 use qol_terminal_sessions::cli::generic_tool;
 use qol_terminal_sessions::cli::{
     CliRuntimeState, CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription,
@@ -10,11 +11,14 @@ use qol_terminal_sessions::cli::{
 use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
+use super::knocks;
 use super::screen_analysis::ScreenAnalysis;
 use crate::attention::{reduce_with_policy, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
-use crate::session::registry::{meaningful_name, summary_for, Registry, SessionState};
+use crate::session::registry::{
+    is_master_key, master_ready, meaningful_name, summary_for, Registry, SessionState,
+};
 use crate::session::service::ServiceProbe;
 use crate::session::status::Status;
 use crate::session::tool::{completion_policy, from_cli_session, is_generic, Tool};
@@ -23,6 +27,7 @@ use crate::ui::notify::{self, Notice};
 
 const SCREEN_FALLBACK_SECS: u64 = 60;
 const SUBSCRIPTION_RETRY_SECS: u64 = 30;
+const ATTENTION_HEARTBEAT_SECS: u64 = 10;
 
 #[derive(Default)]
 pub struct ReconcileCaches {
@@ -30,6 +35,7 @@ pub struct ReconcileCaches {
     persisted: Option<(std::path::PathBuf, Vec<SessionState>)>,
     screens: HashMap<SessionId, ScreenCache>,
     parked_dir: Option<std::path::PathBuf>,
+    messaging: Option<Messaging>,
 }
 
 impl ReconcileCaches {
@@ -38,6 +44,82 @@ impl ReconcileCaches {
             parked_dir,
             ..Self::default()
         }
+    }
+
+    pub fn with_messaging(mut self) -> Self {
+        self.messaging = Some(Messaging {
+            courier: knocks::Courier::system(),
+            attention: None,
+        });
+        self
+    }
+}
+
+struct Messaging {
+    courier: knocks::Courier,
+    attention: Option<(Vec<AttentionRow>, u64)>,
+}
+
+impl Messaging {
+    fn tick(
+        &mut self,
+        registry: &Arc<Mutex<Registry>>,
+        cli_interpreter: &CliSessionInterpreter,
+        panes: &[Pane],
+        wall_now: u64,
+    ) {
+        let Ok(reg) = registry.lock() else { return };
+        let rows = attention_rows(&reg);
+        let recipients = knocks::recipients(panes, &reg);
+        drop(reg);
+        if attention_due(self.attention.as_ref(), &rows, wall_now) {
+            let snapshot = AttentionSnapshot {
+                written_at_ms: wall_now.saturating_mul(1000),
+                sessions: rows,
+            };
+            match qol_sessions_engine::attention::write(&snapshot) {
+                Ok(()) => self.attention = Some((snapshot.sessions, wall_now)),
+                Err(error) => log::warn!("[cli-sessions] attention snapshot not written: {error}"),
+            }
+        }
+        self.courier.deliver(cli_interpreter, &recipients);
+    }
+}
+
+fn attention_due(
+    written: Option<&(Vec<AttentionRow>, u64)>,
+    rows: &[AttentionRow],
+    wall_now: u64,
+) -> bool {
+    written.is_none_or(|(written_rows, written_at)| {
+        written_rows != rows || wall_now.saturating_sub(*written_at) >= ATTENTION_HEARTBEAT_SECS
+    })
+}
+
+fn attention_rows(reg: &Registry) -> Vec<AttentionRow> {
+    reg.sorted()
+        .into_iter()
+        .map(|state| AttentionRow {
+            title: state.name.unwrap_or(state.project),
+            state: attention_state(state.status, state.master),
+            key: state.key,
+            master: state.master,
+        })
+        .collect()
+}
+
+fn attention_state(status: Status, master: bool) -> AttentionState {
+    match status {
+        Status::NeedsYou => AttentionState::NeedsYou,
+        Status::YourTurn | Status::Acknowledged | Status::Unknown if master => {
+            AttentionState::Ready
+        }
+        Status::YourTurn | Status::Acknowledged => AttentionState::YourTurn,
+        Status::Working | Status::Service | Status::Coordinating | Status::AwaitingReview => {
+            AttentionState::Working
+        }
+        Status::Parked => AttentionState::Parked,
+        Status::Unknown => AttentionState::Idle,
     }
 }
 
@@ -245,6 +327,9 @@ pub fn tick_with_caches(
 
     show_detached_parks(registry, cli_interpreter, caches, &panes, &parked, wall_now);
     notices.extend(finished_park_notices(caches.parked_dir.as_deref()));
+    if let Some(messaging) = caches.messaging.as_mut() {
+        messaging.tick(registry, cli_interpreter, &panes, wall_now);
+    }
     persist_if_changed(registry, caches);
     #[cfg(debug_assertions)]
     {
@@ -611,8 +696,15 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
             input.parked
         );
     }
+    let key = input
+        .pane
+        .spawn_identity
+        .as_ref()
+        .map(|identity| identity.key.as_str().to_owned());
+    let master = is_master_key(key.as_deref());
     let summary = summary_for(status, &input.tool);
-    let notice = (!(input.closing && status == Status::YourTurn))
+    let quiet = (input.closing && status == Status::YourTurn) || master_ready(master, status);
+    let notice = (!quiet)
         .then(|| {
             attention_notice(
                 pane_id,
@@ -669,6 +761,8 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         s.settled_since = input.reduction.attention.settled_since;
         s.bridged = input.bridged;
         s.driving = input.driving;
+        s.key = key;
+        s.master = master;
         if let Some(h) = input.new_hash {
             s.screen_hash = Some(h);
         }
@@ -686,6 +780,8 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         summary,
         last_activity: input.wall_now,
         screen_hash: input.new_hash,
+        key,
+        master,
         working_since: input.reduction.attention.working_since,
         settled_since: input.reduction.attention.settled_since,
         bridged: input.bridged,
@@ -795,6 +891,11 @@ fn show_detached_parks(
             .and_then(|id| cli_interpreter.tool_for(&id))
             .unwrap_or_else(generic_tool);
         let branch = caches.branch.branch(&record.cwd, wall_now);
+        let key = caches
+            .parked_dir
+            .clone()
+            .and_then(|dir| crate::park::store::ParkStore::with_dir(dir).spawn_key(&record.id))
+            .map(|key| key.as_str().to_owned());
         let Ok(mut reg) = registry.lock() else { return };
         if reg
             .get(&park.id)
@@ -821,6 +922,8 @@ fn show_detached_parks(
             summary: Status::Parked.definition().label.into(),
             last_activity: record.created_at,
             screen_hash: None,
+            master: is_master_key(key.as_deref()),
+            key,
             working_since: None,
             settled_since: None,
             bridged: false,
@@ -940,5 +1043,147 @@ mod bridge_tests {
         let (notice, status) = frame(&mut reg, &pane, Status::NeedsYou, false, true);
         assert_eq!(status, Status::NeedsYou);
         assert!(notice.is_some());
+    }
+
+    fn switchboard_pane() -> Pane {
+        let mut pane = pane();
+        pane.spawn_identity = Some(qol_terminal_sessions::SpawnIdentity {
+            key: qol_terminal_sessions::SpawnKey::new(qol_sessions_engine::SWITCHBOARD_KEY)
+                .unwrap(),
+            tool: CliToolId::new("claude").unwrap(),
+            surface: qol_terminal_sessions::SpawnSurface::OsWindow,
+        });
+        pane
+    }
+
+    #[test]
+    fn the_switchboard_resting_at_its_prompt_never_raises_a_toast() {
+        let pane = switchboard_pane();
+        let mut reg = Registry::default();
+        for runtime in [
+            Status::Working,
+            Status::YourTurn,
+            Status::Working,
+            Status::Unknown,
+            Status::YourTurn,
+        ] {
+            let (notice, status) = frame(&mut reg, &pane, runtime, false, false);
+            assert_eq!(status, runtime);
+            assert!(notice.is_none(), "{runtime:?}");
+        }
+        let row = reg.get(&pane.id).unwrap();
+        assert!(row.master);
+        assert_eq!(
+            row.key.as_deref(),
+            Some(qol_sessions_engine::SWITCHBOARD_KEY)
+        );
+        assert!(row.is_master_ready());
+    }
+
+    #[test]
+    fn the_switchboard_still_alerts_when_it_needs_the_user() {
+        let pane = switchboard_pane();
+        let mut reg = Registry::default();
+        frame(&mut reg, &pane, Status::Working, false, false);
+        let (notice, status) = frame(&mut reg, &pane, Status::NeedsYou, false, false);
+        assert_eq!(status, Status::NeedsYou);
+        assert!(notice.is_some());
+    }
+
+    #[test]
+    fn a_lane_keeps_its_spawn_key_and_is_never_the_master() {
+        let mut pane = switchboard_pane();
+        if let Some(identity) = pane.spawn_identity.as_mut() {
+            identity.key = qol_terminal_sessions::SpawnKey::new("lane-7").unwrap();
+        }
+        let mut reg = Registry::default();
+        let (notice, _) = frame(&mut reg, &pane, Status::YourTurn, false, false);
+        assert!(notice.is_some());
+        let row = reg.get(&pane.id).unwrap();
+        assert!(!row.master);
+        assert_eq!(row.key.as_deref(), Some("lane-7"));
+        frame(&mut reg, &self::pane(), Status::YourTurn, false, false);
+        assert_eq!(reg.get(&pane.id).unwrap().key, None);
+    }
+}
+
+#[cfg(test)]
+mod attention_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn statuses_map_to_attention_and_the_master_reads_ready_when_settled() {
+        let cases = [
+            (
+                Status::NeedsYou,
+                AttentionState::NeedsYou,
+                AttentionState::NeedsYou,
+            ),
+            (
+                Status::YourTurn,
+                AttentionState::YourTurn,
+                AttentionState::Ready,
+            ),
+            (
+                Status::Acknowledged,
+                AttentionState::YourTurn,
+                AttentionState::Ready,
+            ),
+            (Status::Unknown, AttentionState::Idle, AttentionState::Ready),
+            (
+                Status::Working,
+                AttentionState::Working,
+                AttentionState::Working,
+            ),
+            (
+                Status::Service,
+                AttentionState::Working,
+                AttentionState::Working,
+            ),
+            (
+                Status::Coordinating,
+                AttentionState::Working,
+                AttentionState::Working,
+            ),
+            (
+                Status::AwaitingReview,
+                AttentionState::Working,
+                AttentionState::Working,
+            ),
+            (
+                Status::Parked,
+                AttentionState::Parked,
+                AttentionState::Parked,
+            ),
+        ];
+        for (status, session, master) in cases {
+            assert_eq!(attention_state(status, false), session, "{status:?}");
+            assert_eq!(attention_state(status, true), master, "{status:?} master");
+        }
+    }
+
+    #[test]
+    fn the_snapshot_is_rewritten_on_change_and_on_the_heartbeat() {
+        let row = |state| AttentionRow {
+            key: Some("lane".into()),
+            title: "lane".into(),
+            state,
+            master: false,
+        };
+        let written = (vec![row(AttentionState::Working)], 100);
+        let cases = [
+            (None, AttentionState::Working, 100, true),
+            (Some(&written), AttentionState::Working, 100, false),
+            (Some(&written), AttentionState::Working, 109, false),
+            (Some(&written), AttentionState::Working, 110, true),
+            (Some(&written), AttentionState::YourTurn, 101, true),
+        ];
+        for (last, state, now, expected) in cases {
+            assert_eq!(
+                attention_due(last, &[row(state)], now),
+                expected,
+                "{state:?} at {now}"
+            );
+        }
     }
 }

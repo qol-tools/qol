@@ -15,23 +15,31 @@ use qol_terminal_sessions::{
 use agent_policy::{AgentDispatch, AgentRole, AgentStatus, AssignmentRequest};
 
 mod agent_policy;
+pub mod attention;
+mod board;
 mod bridge;
 mod capability;
+mod cli;
 mod close;
 mod contract;
+mod exec;
 mod export;
 mod fork;
+pub mod knocks;
 mod last_send;
 mod launch;
+mod lineage;
+mod mailbox;
 use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
 mod spawn;
-mod switchboard;
+pub mod switchboard;
 mod watch;
 mod watch_owner;
 
 pub use contract::tool_names;
+pub use switchboard::SWITCHBOARD_KEY;
 
 pub struct SessionSubcommand {
     pub name: &'static str,
@@ -160,7 +168,7 @@ pub fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     }
     match subcommand {
         "help" | "-h" | "--help" => {
-            print!("{}", help_text());
+            crate::cli::text(help_text());
             Ok(())
         }
         other => bail!(
@@ -180,7 +188,7 @@ Primary usage:
   qol sessions list [--json]
   qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
   qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions switchboard --cwd PATH [--model MODEL] [--effort LEVEL] [--surface tab|os-window]
+  qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]
   qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]
   qol sessions parked
   qol sessions unpark <id>
@@ -350,9 +358,8 @@ fn list(output_format: OutputFormat) -> Result<()> {
     }
     rows.sort_by(|left, right| left.session.cmp(&right.session));
     match output_format {
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).context("failed to serialize sessions")?
+        OutputFormat::Json => crate::cli::line(
+            serde_json::to_string_pretty(&rows).context("failed to serialize sessions")?,
         ),
         OutputFormat::PlainText => {
             for row in rows {
@@ -361,15 +368,15 @@ fn list(output_format: OutputFormat) -> Result<()> {
                     .activity
                     .map(|active| if active { "active" } else { "idle" })
                     .unwrap_or("-");
-                println!(
+                crate::cli::line(format_args!(
                     "{}\t{}\t{}\t{}\t{}\t{}",
                     row.session,
                     row.tool,
                     row.title,
                     row.cwd,
                     if caps.is_empty() { "-" } else { &caps },
-                    activity,
-                );
+                    activity
+                ));
             }
         }
     }
@@ -391,9 +398,13 @@ fn send(args: &[OsString]) -> Result<()> {
     if let Some(store) = last_send::LastSendStore::system() {
         store.record(&binding, &text);
     }
-    println!("delivered {} to {}", mode_label(mode), binding);
+    crate::cli::line(format_args!(
+        "delivered {} to {}",
+        mode_label(mode),
+        binding
+    ));
     if mode == DeliveryMode::Insert {
-        println!("WARNING: the text sits unsubmitted in the target's input; nothing runs until Enter is pressed there. Pass --submit to deliver and submit in one step.");
+        crate::cli::line(format_args!("WARNING: the text sits unsubmitted in the target's input; nothing runs until Enter is pressed there. Pass --submit to deliver and submit in one step."));
     }
     Ok(())
 }
@@ -416,9 +427,8 @@ fn run_submit(args: &[OsString]) -> Result<()> {
         &dispatch,
         None,
     )?;
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).context("failed to serialize submit outcome")?
+    crate::cli::line(
+        serde_json::to_string(&outcome).context("failed to serialize submit outcome")?,
     );
     Ok(())
 }
@@ -550,9 +560,8 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
     if parsed.gate && outcome.completed {
         outcome.screen = bridge::run_quality_gate(&outcome.screen, &std::env::current_dir()?);
     }
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
+    crate::cli::line(
+        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?,
     );
     Ok(())
 }
@@ -672,9 +681,8 @@ fn run_resume(args: &[OsString]) -> Result<()> {
         kickstart,
         None,
     )?;
-    println!(
-        "{}",
-        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?
+    crate::cli::line(
+        serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?,
     );
     Ok(())
 }
@@ -699,9 +707,7 @@ fn interrupt(args: &[OsString]) -> Result<()> {
     terminals
         .send_key(&binding, key)
         .context("interrupt delivery failed")?;
-    println!(
-        "sent {key} to {binding}; the round stays open - continue via `qol sessions next {binding}`"
-    );
+    crate::cli::line(format_args!("sent {key} to {binding}; the round stays open - continue via `qol sessions next {binding}`"));
     Ok(())
 }
 
@@ -726,30 +732,31 @@ fn next(args: &[OsString], output_format: OutputFormat) -> Result<()> {
         &watched,
     )?;
     match output_format {
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::to_string_pretty(&rows).context("failed to serialize next rounds")?
+        OutputFormat::Json => crate::cli::line(
+            serde_json::to_string_pretty(&rows).context("failed to serialize next rounds")?,
         ),
         OutputFormat::PlainText => {
             for token in &reaped {
-                println!("discarded orphaned round {token} (terminal is gone)");
+                crate::cli::line(format_args!(
+                    "discarded orphaned round {token} (terminal is gone)"
+                ));
             }
             if rows.is_empty() {
-                println!("phase=idle");
-                println!("No pending round. Discover targets with `qol sessions list`, then submit one bounded round: `qol sessions bridge <session> -- <task>`.");
+                crate::cli::line(format_args!("phase=idle"));
+                crate::cli::line(format_args!("No pending round. Discover targets with `qol sessions list`, then submit one bounded round: `qol sessions bridge <session> -- <task>`."));
                 return Ok(());
             }
             for row in &rows {
-                println!(
+                crate::cli::line(format_args!(
                     "phase={} session={} agent_status={}",
                     row["phase"].as_str().unwrap_or_default(),
                     row["session"].as_str().unwrap_or_default(),
-                    row["agent_status"].as_str().unwrap_or_default(),
-                );
-                println!("{}", row["instruction"].as_str().unwrap_or_default());
+                    row["agent_status"].as_str().unwrap_or_default()
+                ));
+                crate::cli::line(row["instruction"].as_str().unwrap_or_default());
                 let command = row["command"].as_str().unwrap_or_default();
                 if !command.is_empty() {
-                    println!("run: {command}");
+                    crate::cli::line(format_args!("run: {command}"));
                 }
             }
         }
@@ -916,10 +923,10 @@ fn discard(args: &[OsString]) -> Result<()> {
         &bridge::trace_dir(),
         &binding,
     )?;
-    println!(
+    crate::cli::line(format_args!(
         "removed pending bridge checkpoint for {} (completion_marker={}, completed={})",
         binding, removed.completion_marker, removed.completed
-    );
+    ));
     Ok(())
 }
 
@@ -983,14 +990,14 @@ fn read_screen(args: &[OsString]) -> Result<()> {
     let screen = service()?
         .read_screen(&binding)
         .context("screen read failed")?;
-    print!("{screen}");
+    crate::cli::text(screen);
     Ok(())
 }
 
 fn focus(args: &[OsString]) -> Result<()> {
     let binding = single_binding(args, "qol sessions focus <session>")?;
     service()?.focus(&binding).context("focus failed")?;
-    println!("focused {}", binding);
+    crate::cli::line(format_args!("focused {}", binding));
     Ok(())
 }
 
@@ -1018,15 +1025,12 @@ fn wait(args: &[OsString]) -> Result<()> {
     )
     .map_err(|error| anyhow!(error))?;
     let elapsed_ms = started.elapsed().as_millis();
-    println!(
-        "{}",
-        serde_json::json!({
-            "settled": settled,
-            "screen": screen,
-            "polls": polls,
-            "elapsed_ms": elapsed_ms,
-        })
-    );
+    crate::cli::line(serde_json::json!({
+        "settled": settled,
+        "screen": screen,
+        "polls": polls,
+        "elapsed_ms": elapsed_ms,
+    }));
     Ok(())
 }
 

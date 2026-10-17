@@ -1,9 +1,12 @@
+use std::ffi::OsString;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp, PlainTextOutput};
+use qol_headless::{
+    Command, CommandResult, DoctorCheck, HeadlessApp, OutputFormat, PlainTextOutput,
+};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 use qol_terminal_sessions::{BackendId, SessionId};
 
@@ -11,6 +14,10 @@ use crate::daemon::actions::CONFIG;
 use crate::storage::paths::PLUGIN_ID;
 
 const OPEN: &str = "open";
+const SESSIONS: &str = "sessions";
+const MCP: &str = "mcp";
+const SWITCHBOARD: &str = "switchboard";
+const HERE: &str = "--here";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
     let args: Vec<String> = args.into_iter().collect();
@@ -24,8 +31,43 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
         if command == crate::park::LANE_EXEC {
             return lane_exec(rest).emit();
         }
+        if let Some(engine_args) = engine_args(command, rest) {
+            return sessions(&engine_args).emit();
+        }
+        if command == SWITCHBOARD && rest == [HERE] {
+            return switchboard_here().emit();
+        }
     }
     app().run(args)
+}
+
+fn engine_args(command: &str, rest: &[String]) -> Option<Vec<OsString>> {
+    match command {
+        SESSIONS => Some(rest.iter().map(OsString::from).collect()),
+        MCP => Some(
+            std::iter::once(MCP)
+                .chain(rest.iter().map(String::as_str))
+                .map(OsString::from)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+fn sessions(args: &[OsString]) -> CommandResult {
+    match qol_sessions_engine::run(args, OutputFormat::PlainText) {
+        Ok(()) => CommandResult::success(""),
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} {SESSIONS}: {error:#}")),
+    }
+}
+
+fn switchboard_here() -> CommandResult {
+    log::set_max_level(log::LevelFilter::Warn);
+    let profile = crate::config::load().switchboard_profile();
+    match qol_sessions_engine::switchboard::here(&profile) {
+        Ok(()) => CommandResult::new("", "", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT),
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} {SWITCHBOARD}: {error:#}")),
+    }
 }
 
 fn lane_exec(args: &[String]) -> CommandResult {
@@ -200,6 +242,22 @@ where
                 .output("`parking on` or `parking off` on stdout; diagnostics on stderr.")
                 .exit_behavior("Exits non-zero when the conversation cannot be resolved or the choice cannot be written.")
                 .run_plain_text(|context| Ok(PlainTextOutput::text(crate::parking::run(context.args())?))),
+        )
+        .command(
+            Command::new(SWITCHBOARD)
+                .about("Open the switchboard, the one chat that starts, lists, closes and messages your sessions.")
+                .usage(format!("{PLUGIN_ID} {SWITCHBOARD} [{HERE}]"))
+                .detail("Focuses the live switchboard, or opens one in a new kitty window; with no kitty running it starts kitty for it.")
+                .detail(format!("{HERE} makes the calling kitty window the switchboard when none is live; when one is, it starts nothing and exits {}, so a wrapper like clauded starts its usual chat.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
+                .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at low effort unless changed.")
+                .output(format!("One line saying what was focused, opened or started on stdout; with {HERE} this process becomes claude."))
+                .exit_behavior("Exits non-zero when the switchboard cannot be focused, opened or started.")
+                .run_plain_text(|context| {
+                    reject_args(context.args())?;
+                    let profile = crate::config::load().switchboard_profile();
+                    let opened = qol_sessions_engine::switchboard::open(&profile)?;
+                    Ok(PlainTextOutput::text(opened.summary()))
+                }),
         )
         .command(
             Command::new("snapshot")
@@ -407,8 +465,33 @@ mod tests {
     }
 
     #[test]
+    fn sessions_and_mcp_pass_straight_through_to_the_engine() {
+        let rest = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            engine_args("sessions", &rest(&["watch", "--owner", "k"])),
+            Some(vec![
+                OsString::from("watch"),
+                OsString::from("--owner"),
+                OsString::from("k")
+            ])
+        );
+        assert_eq!(
+            engine_args("mcp", &rest(&["--profile", "switchboard"])),
+            Some(vec![
+                OsString::from("mcp"),
+                OsString::from("--profile"),
+                OsString::from("switchboard")
+            ])
+        );
+        assert_eq!(engine_args("sessions", &[]), Some(Vec::new()));
+        for command in ["switchboard", "open", "park", "help"] {
+            assert_eq!(engine_args(command, &rest(&["mcp"])), None, "{command}");
+        }
+    }
+
+    #[test]
     fn contextual_help_is_equivalent_in_both_positions() {
-        for command in ["run", "open", "next", "snapshot", "doctor"] {
+        for command in ["run", "open", "next", "snapshot", "switchboard", "doctor"] {
             let first = sentinel_app(Arc::new(OperationCalls::default()))
                 .execute(["help".to_string(), command.to_string()]);
             let final_token = sentinel_app(Arc::new(OperationCalls::default()))

@@ -15,12 +15,35 @@ pub fn contract() -> &'static str {
 pub struct CliSessionsConfig {
     pub corner: Option<String>,
     pub service_commands: Vec<String>,
+    pub switchboard_model: Option<String>,
+    pub switchboard_effort: Option<String>,
 }
 
 impl CliSessionsConfig {
     pub fn corner(&self) -> Corner {
         parse_corner(self.corner.as_deref().unwrap_or_default())
     }
+
+    pub fn switchboard_model(&self) -> &str {
+        non_blank(self.switchboard_model.as_deref())
+            .unwrap_or(qol_sessions_engine::switchboard::DEFAULT_MODEL)
+    }
+
+    pub fn switchboard_effort(&self) -> &str {
+        non_blank(self.switchboard_effort.as_deref())
+            .unwrap_or(qol_sessions_engine::switchboard::DEFAULT_EFFORT)
+    }
+
+    pub fn switchboard_profile(&self) -> qol_sessions_engine::switchboard::Profile {
+        qol_sessions_engine::switchboard::Profile {
+            model: self.switchboard_model().to_owned(),
+            effort: self.switchboard_effort().to_owned(),
+        }
+    }
+}
+
+fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 pub fn load() -> CliSessionsConfig {
@@ -51,5 +74,26 @@ mod tests {
             defaults.service_commands.is_empty(),
             "service_commands defaults to an empty editable list"
         );
+        assert_eq!(defaults.switchboard_model(), "claude-sonnet-5-5");
+        assert_eq!(defaults.switchboard_effort(), "low");
+    }
+
+    #[test]
+    fn blank_switchboard_fields_fall_back_to_the_profile_defaults() {
+        let config = CliSessionsConfig {
+            switchboard_model: Some("  ".to_owned()),
+            switchboard_effort: Some(String::new()),
+            ..CliSessionsConfig::default()
+        };
+        assert_eq!(config.switchboard_model(), "claude-sonnet-5-5");
+        assert_eq!(config.switchboard_effort(), "low");
+
+        let config = CliSessionsConfig {
+            switchboard_model: Some("claude-opus-5-5".to_owned()),
+            switchboard_effort: Some("medium".to_owned()),
+            ..CliSessionsConfig::default()
+        };
+        assert_eq!(config.switchboard_model(), "claude-opus-5-5");
+        assert_eq!(config.switchboard_effort(), "medium");
     }
 }

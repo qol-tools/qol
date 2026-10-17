@@ -298,12 +298,11 @@ impl SessionsView {
 
     pub fn jump_to_next_attention(&mut self, cx: &mut Context<Self>) {
         let rows = self.rows();
-        let statuses: Vec<crate::session::status::Status> = rows.iter().map(|r| r.status).collect();
         let current = self
             .last_jumped
             .as_ref()
             .and_then(|id| rows.iter().position(|row| &row.id == id));
-        if let Some(id) = crate::ui::nav::next_attention(&statuses, current)
+        if let Some(id) = crate::ui::nav::next_attention_row(&rows, current)
             .and_then(|index| rows.get(index))
             .map(|row| row.id.clone())
         {

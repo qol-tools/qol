@@ -6,6 +6,8 @@ use qol_terminal_sessions::SessionId;
 
 use crate::ui::notify::{FOCUS_ACTION, REOPEN_ACTION};
 
+const SWITCHBOARD_ACTION: &str = "switchboard";
+
 pub const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
     support_replace_existing: true,
@@ -55,8 +57,28 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "next" => ReadResult::Command(Command::NextAttention),
         "snapshot" => ReadResult::Command(Command::Snapshot),
         "kill" => ReadResult::Command(Command::Kill),
+        SWITCHBOARD_ACTION => {
+            open_switchboard();
+            ReadResult::Handled
+        }
         _ => ReadResult::Fallback,
     }
+}
+
+fn open_switchboard() {
+    std::thread::spawn(|| {
+        let profile = crate::config::load().switchboard_profile();
+        match qol_sessions_engine::switchboard::open(&profile) {
+            Ok(opened) => log::info!("{}", opened.summary()),
+            Err(error) => {
+                log::warn!("switchboard: {error:#}");
+                qol_plugin_daemon::notification::send_notification(
+                    "Switchboard",
+                    &format!("{error:#}"),
+                );
+            }
+        }
+    });
 }
 
 pub fn start_listener(tx: Sender<Command>) -> bool {

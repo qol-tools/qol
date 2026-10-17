@@ -182,7 +182,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         default_agent_profile: policy.agent.default_profile_name().map(str::to_owned),
         profiles,
     };
-    println!("{}", serde_json::to_string(&capability)?);
+    crate::cli::line(serde_json::to_string(&capability)?);
     Ok(())
 }
 

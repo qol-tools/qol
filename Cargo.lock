@@ -6534,6 +6534,7 @@ dependencies = [
  "qol-plugin-daemon",
  "qol-process",
  "qol-runtime",
+ "qol-sessions-engine",
  "qol-terminal-sessions",
  "serde",
  "serde_json",

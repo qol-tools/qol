@@ -44,6 +44,8 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         summary: "x".into(),
         last_activity: last,
         screen_hash: None,
+        key: None,
+        master: false,
         working_since: None,
         settled_since: None,
         bridged: false,

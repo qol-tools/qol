@@ -10,12 +10,15 @@ use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
 use serde::{Deserialize, Serialize};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
+use super::lineage::LineageStore;
 use super::spawn::{
     config_dispatch_policy, config_spawn_cap, config_surface, resolve_spawn_cap, spawn_detached,
     SpawnCapConfig, SpawnLedger, SpawnLocks,
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
+pub(super) const REPORT_LINE: &str =
+    "When you finish or get blocked, tell your parent with session_send kind report.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ForkRecord {
@@ -60,6 +63,12 @@ pub(super) struct ForkOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
     pub(super) agent_status: AgentStatus,
+}
+
+pub(super) struct ForkLink<'a> {
+    pub(super) lineage: &'a LineageStore,
+    pub(super) parent_key: Option<&'a str>,
+    pub(super) report: bool,
 }
 
 pub(super) struct ForkChat {
@@ -189,6 +198,7 @@ pub(super) fn fork_prompt(
     brief_path: &Path,
     parent: Option<&str>,
     chat_path: Option<&Path>,
+    report: bool,
 ) -> String {
     let lineage = match parent {
         Some(parent) => format!(
@@ -203,8 +213,13 @@ pub(super) fn fork_prompt(
         ),
         None => String::new(),
     };
+    let contact = if report {
+        "Do not bridge to it; report to it only with session_send kind report, as your brief says."
+    } else {
+        "Do not try to report back to it and do not bridge to it."
+    };
     format!(
-        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} Do not try to report back to it and do not bridge to it. Spawn your own lanes if you need them.",
+        "[qol session fork]\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.",
         brief_path.display()
     )
 }
@@ -251,6 +266,7 @@ pub(super) fn resolve_chat_source(
     })
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fork(
     terminals: &TerminalSessionService,
@@ -273,9 +289,69 @@ pub(super) fn fork(
     park: bool,
     dispatch: &AgentDispatch,
 ) -> Result<ForkOutcome> {
+    fork_linked(
+        terminals,
+        interpreter,
+        ledger,
+        locks,
+        forks,
+        tool,
+        cwd,
+        key,
+        surface,
+        model,
+        effort,
+        title,
+        brief,
+        parent,
+        chat,
+        cap,
+        dry_run,
+        park,
+        dispatch,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fork_linked(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    forks: &ForkStore,
+    tool: Option<&str>,
+    cwd: &str,
+    key: &str,
+    surface: Option<&str>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    title: Option<&str>,
+    brief: Option<&str>,
+    parent: Option<&str>,
+    chat: Option<&ForkChat>,
+    cap: Option<&SpawnCapConfig>,
+    dry_run: bool,
+    park: bool,
+    dispatch: &AgentDispatch,
+    link: Option<&ForkLink<'_>>,
+) -> Result<ForkOutcome> {
+    super::switchboard::refuse_reserved_key(key)?;
     if let Some(brief) = brief {
         validate_brief(brief)?;
     }
+    let report = link.is_some_and(|link| link.report);
+    if report && brief.is_none() {
+        bail!("report needs a brief to carry the standing report line; a blank fork has none");
+    }
+    if report && link.and_then(|link| link.parent_key).is_none() {
+        bail!("report needs a calling session with a spawn key, so the fork has a parent to report to");
+    }
+    let brief = brief.map(|brief| match report {
+        true => format!("{brief}\n\n{REPORT_LINE}"),
+        false => brief.to_owned(),
+    });
+    let brief = brief.as_deref();
     let tool = match tool {
         Some(tool) => tool.to_owned(),
         None => dispatch.resolve_launch_tool(None, model)?,
@@ -302,7 +378,7 @@ pub(super) fn fork(
     };
     let prompt = brief_path
         .as_deref()
-        .map(|path| fork_prompt(path, parent, chat_path.as_deref()))
+        .map(|path| fork_prompt(path, parent, chat_path.as_deref(), report))
         .unwrap_or_default();
     let mut record = ForkRecord {
         key: key.to_owned(),
@@ -349,6 +425,9 @@ pub(super) fn fork(
     record.session = launched.session.clone();
     record.title = launched.title.clone();
     forks.record(&record)?;
+    if let Some(link) = link {
+        link.lineage.record(key, link.parent_key)?;
+    }
     qol_runtime::probe!(
         "CLI_SESSION_FORK",
         "event=forked key={} tool={} model={} effort={} session={}",
@@ -372,7 +451,11 @@ pub(super) fn fork(
         parent: record.parent.clone(),
         chat: record.chat.clone(),
         elapsed_ms: launched.elapsed_ms,
-        instruction: "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.".to_owned(),
+        instruction: match report {
+            true => "The fork is detached: no round is open on it and session_bridge will refuse it. It reports to you with session_send kind report, which you read with session_inbox. Return to your own work.",
+            false => "The fork is detached: no round is open on it, session_bridge will refuse it, and it never reports back. Return to your own work.",
+        }
+        .to_owned(),
         agent_assignment: record.agent_assignment.clone(),
         agent_status: AgentStatus::of(record.agent_assignment.as_ref()),
     })
@@ -381,7 +464,7 @@ pub(super) fn fork(
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse_args(args)?;
     if parsed.help {
-        println!("{}", help());
+        crate::cli::line(help());
         return Ok(());
     }
     let dispatch = AgentDispatch::new(config_dispatch_policy()?, parsed.assignment_request());
@@ -429,7 +512,9 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &defaults,
         &dispatch,
     )?;
-    let outcome = fork(
+    let lineage = LineageStore::system()?;
+    let parent_key = super::lineage::session_key(&terminals, parent.as_deref());
+    let outcome = fork_linked(
         &terminals,
         &interpreter,
         &SpawnLedger::system()?,
@@ -449,15 +534,20 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         parsed.dry_run,
         parsed.park,
         &dispatch,
+        Some(&ForkLink {
+            lineage: &lineage,
+            parent_key: parent_key.as_deref(),
+            report: false,
+        }),
     )?;
-    println!("{}", serde_json::to_string_pretty(&outcome)?);
+    crate::cli::line(serde_json::to_string_pretty(&outcome)?);
     Ok(())
 }
 
 pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
     let records = ForkStore::system()?.list()?;
     if records.is_empty() {
-        println!("no detached forks recorded");
+        crate::cli::line(format_args!("no detached forks recorded"));
         return Ok(());
     }
     for record in records {
@@ -478,7 +568,7 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
             row.push('\t');
             row.push_str(chat);
         }
-        println!("{row}");
+        crate::cli::line(row);
     }
     Ok(())
 }
@@ -665,6 +755,7 @@ mod tests {
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
+            false,
         );
         assert!(prompt.contains("/data/forks/chase-1.md"));
         assert!(prompt.contains("detached architect"));
@@ -681,11 +772,25 @@ mod tests {
     }
 
     #[test]
+    fn a_reporting_fork_prompt_points_at_session_send_instead_of_forbidding_contact() {
+        let prompt = fork_prompt(
+            Path::new("/data/forks/chase-1.md"),
+            Some("v1:kitty:7:100"),
+            None,
+            true,
+        );
+        assert!(prompt.contains("report to it only with session_send kind report"));
+        assert!(!prompt.contains("Do not try to report back"), "{prompt}");
+        assert!(prompt.contains("Do not bridge to it"));
+    }
+
+    #[test]
     fn the_fork_prompt_names_the_chat_copy_when_one_exists() {
         let prompt = fork_prompt(
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             Some(Path::new("/data/forks/chase-1.chat.md")),
+            false,
         );
         assert!(prompt.contains(
             "Your brief is written to /data/forks/chase-1.md. Read it first, then work the problem."

@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod knocks;
 pub mod reconcile;
 
 pub fn run(show_on_start: bool) -> anyhow::Result<()> {
