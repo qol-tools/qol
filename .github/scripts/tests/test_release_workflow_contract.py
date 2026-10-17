@@ -49,11 +49,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_release_build_runs_beside_lint_and_test(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
-        self.assertIn("if: ${{ needs.plan.outputs.reused != 'true' }}", check)
+        self.assertIn("if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' }}", check)
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "if: ${{ github.event_name == 'merge_group' }}",
+            "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -99,6 +99,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "needs: [plan, check, release-build, process-windows, registry-tool]",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
+            '[ "$BUILD" = success ] || exit 1',
+            '[ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1',
             '*" failure "*|*" cancelled "*) exit 1 ;;',
         ]:
             with self.subTest(contract=contract):
@@ -119,6 +121,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         stop = workflow.split("  stop-on-failure:\n", 1)[1].split("    runs-on:", 1)[0]
         self.assertIn("needs: review", stop)
+        for job in ["check", "process-windows", "release-build", "registry-tool"]:
+            with self.subTest(job=job):
+                gated = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("!cancelled() && needs.plan.result == 'success' && ", gated)
 
     def test_only_a_pass_verdict_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
@@ -238,7 +244,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("merge_group:", workflow)
         self.assertIn("cargo check --release --locked $BUILD_ARGS", workflow)
         self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
-        self.assertIn("if: ${{ github.event_name == 'merge_group' }}", workflow)
+        self.assertIn("if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)
@@ -316,7 +322,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "doctest: ${{ needs.plan.outputs.windows_doctest }}",
             "skip: ${{ needs.plan.outputs.windows_skip }}",
             "    defaults:\n      run:\n        shell: bash\n",
-            "if: runner.os != 'Linux' && matrix.skip != 'true'",
+            "if: runner.os != 'Linux' && matrix.skip != 'true' && github.event_name != 'pull_request'",
             "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
         ]:
             with self.subTest(contract=contract):
