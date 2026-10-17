@@ -386,13 +386,36 @@ jobs:
           BUILD_ARGS: ${{ matrix.build_args }}
         run: cargo build --release --locked $BUILD_ARGS
 
+  # Every publish job builds the registry tool after merge, on a runner without
+  # the Linux system libraries the jobs above install. Building it the same way
+  # here fails a change that pulls a system library into the tool before it can
+  # stop every release.
+  registry-tool:
+    name: registry tool build
+    needs: plan
+    if: ${{ needs.plan.outputs.reused != 'true' && needs.plan.outputs.ubuntu_skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-registry
+          system-dependencies: "false"
+
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
   # The one check the merge queue ruleset requires. A skipped job reports no
   # status under its matrix name, so requiring the jobs themselves would leave
   # a pull request waiting on a check that never arrives. A push is exempt so a
   # skipped run stays skipped for Versioning.
   gate:
     name: merge gate
-    needs: [plan, check, release-build, process-windows]
+    needs: [plan, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -435,7 +458,7 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, check, release-build, process-windows]
+    needs: [plan, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
