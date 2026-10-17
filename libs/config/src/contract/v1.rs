@@ -313,6 +313,7 @@ pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
 
     #[test]
     fn field_order_follows_declaration_not_alphabet() {
@@ -770,11 +771,14 @@ default = true
         .expect("parse");
         assert_eq!(
             spec.section("host").unwrap().platforms,
-            Some(vec!["linux".to_string()])
+            Some(vec![Os::Linux.name().to_string()])
         );
         assert_eq!(
             spec.field("frame").unwrap().platforms,
-            Some(vec!["linux".to_string(), "windows".to_string()])
+            Some(vec![
+                Os::Linux.name().to_string(),
+                Os::Windows.name().to_string()
+            ])
         );
         assert_eq!(spec.field("everywhere").unwrap().platforms, None);
     }

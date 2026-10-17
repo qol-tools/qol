@@ -1,7 +1,6 @@
 use crate::manifest::{BinaryDependency, Dependencies, SystemDependency};
 use anyhow::{bail, Result};
-
-use qol_config::platform::PLATFORMS as MANIFEST_PLATFORMS;
+use qol_platform::Os;
 
 impl Dependencies {
     pub fn validate(&self) -> Result<()> {
@@ -38,7 +37,7 @@ impl SystemDependency {
         if let Some(unknown) = self
             .platforms
             .iter()
-            .find(|platform| !MANIFEST_PLATFORMS.contains(&platform.as_str()))
+            .find(|platform| Os::from_name(platform).is_none())
         {
             bail!("dependencies.system.platforms has unknown platform {unknown:?}");
         }

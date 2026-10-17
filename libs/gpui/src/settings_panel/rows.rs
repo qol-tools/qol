@@ -1837,14 +1837,14 @@ switchable = "boolean"
 
     #[test]
     fn fields_and_sections_for_another_os_are_neither_drawn_nor_searchable() {
-        let here = qol_config::platform::current_platform();
-        let elsewhere = qol_config::platform::PLATFORMS
-            .iter()
-            .filter(|platform| **platform != here)
-            .map(|platform| format!("{platform:?}"))
+        let here = qol_platform::Os::current().expect("tests run on a supported OS");
+        let elsewhere = qol_platform::Os::ALL
+            .into_iter()
+            .filter(|os| *os != here)
+            .map(|os| format!("{:?}", os.name()))
             .collect::<Vec<_>>()
             .join(", ");
-        let here = format!("{here:?}");
+        let here = format!("{:?}", here.name());
         let spec = qol_config::contract::parse_spec_str(&format!(
             r#"
 schema_version = 1
