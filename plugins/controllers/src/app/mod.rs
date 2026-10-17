@@ -263,7 +263,7 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
 
 fn reclaim_once() -> Result<()> {
     let message = reclaim()?;
-    qol_plugin_daemon::notification::send_banner("Controllers", &message, None);
+    send_notification("Controllers", &message);
     Ok(())
 }
 

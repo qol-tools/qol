@@ -1,6 +1,6 @@
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::*;
 use qol_theme::toast::{MESSAGE_RISE, MESSAGE_RULE_TRACE};
@@ -418,10 +418,9 @@ impl BannerToastView {
             .toast
             .effective_timeout()
             .unwrap_or(qol_theme::STAY_MESSAGE);
-        let shown_for = now.saturating_duration_since(shown.arrived).as_secs_f32();
         let banner = card::Banner {
             content: pose.content,
-            rule: 1.0 - (1.0 - MESSAGE_RULE_TRACE) * (shown_for / stay.as_secs_f32()).min(1.0),
+            rule: family_rule(shown.arrived, stay, now),
             cool: 1.0 - card::counting(row, self.inside, now).unwrap_or(1.0),
             roll: shown.roll.as_ref().map(|(from, at)| card::Roll {
                 from: from.clone(),
@@ -541,6 +540,11 @@ fn pose(
     }
 }
 
+fn family_rule(family_arrived: Instant, stay: Duration, now: Instant) -> f32 {
+    let shown_for = now.saturating_duration_since(family_arrived).as_secs_f32();
+    1.0 - (1.0 - MESSAGE_RULE_TRACE) * (shown_for / stay.as_secs_f32()).min(1.0)
+}
+
 fn message_pose(arrived: Instant, leaving: Option<Instant>, now: Instant) -> (f32, f32, bool) {
     let shown = ARRIVE.progress(now.saturating_duration_since(arrived));
     let gone = leaving.map_or(0.0, |start| {
@@ -552,10 +556,25 @@ fn message_pose(arrived: Instant, leaving: Option<Instant>, now: Instant) -> (f3
 
 #[cfg(test)]
 mod tests {
+    use super::{family_rule, message_pose, pose, same_message, MESSAGE_RULE_TRACE};
+    use crate::toast::{Toast, ToastLayout};
     use std::time::{Duration, Instant};
 
-    use super::{message_pose, pose, same_message};
-    use crate::toast::{Toast, ToastLayout};
+    #[test]
+    fn the_rule_fades_once_per_family_and_never_restarts_on_a_push_or_hover() {
+        let arrived = Instant::now();
+        let stay = Duration::from_millis(1200);
+        let at = |millis: u64| arrived + Duration::from_millis(millis);
+        assert_eq!(family_rule(arrived, stay, at(0)), 1.0);
+        let midway = family_rule(arrived, stay, at(600));
+        assert!(midway < 1.0 && midway > MESSAGE_RULE_TRACE);
+        assert_eq!(family_rule(arrived, stay, at(1200)), MESSAGE_RULE_TRACE);
+        assert_eq!(
+            family_rule(arrived, stay, at(5000)),
+            MESSAGE_RULE_TRACE,
+            "later pushes from the same family keep the trace; only a new family restarts it"
+        );
+    }
 
     #[test]
     fn a_message_fades_in_and_rises_away() {
