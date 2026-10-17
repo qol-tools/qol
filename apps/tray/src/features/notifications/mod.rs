@@ -92,10 +92,13 @@ pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
     })
 }
 
+const PINNED_OLD_DEFAULT_SECONDS: f64 = 3.0;
+
 pub fn message_seconds() -> f64 {
     settings()
         .ok()
         .and_then(|settings| settings.message_seconds)
+        .filter(|seconds| *seconds != PINNED_OLD_DEFAULT_SECONDS)
         .filter(|seconds| {
             (qol_theme::STAY_MESSAGE_LEAST.as_secs_f64()
                 ..=qol_theme::STAY_MESSAGE_MOST.as_secs_f64())
@@ -105,6 +108,9 @@ pub fn message_seconds() -> f64 {
 }
 
 pub fn set_message_seconds(seconds: f64) -> Result<()> {
+    if seconds == message_seconds() {
+        return Ok(());
+    }
     update_settings(|settings| settings.message_seconds = Some(seconds))
 }
 
@@ -219,6 +225,21 @@ mod tests {
         set_native_handler(NativeHandler::Os).unwrap();
         assert_eq!(message_seconds(), 2.5);
         assert_eq!(native_handler(), NativeHandler::Os);
+    }
+
+    #[test]
+    fn saving_the_shown_message_time_keeps_following_the_default() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        set_message_seconds(qol_theme::STAY_MESSAGE.as_secs_f64()).unwrap();
+        assert_eq!(settings().unwrap().message_seconds, None);
+        update_settings(|settings| settings.message_seconds = Some(3.0)).unwrap();
+        assert_eq!(
+            message_seconds(),
+            qol_theme::STAY_MESSAGE.as_secs_f64(),
+            "a whole-form save pinned the old 3 s default, so it counts as unset"
+        );
     }
 
     #[test]
