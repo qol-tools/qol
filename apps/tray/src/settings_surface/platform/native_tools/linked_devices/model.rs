@@ -16,7 +16,7 @@ use qol_plugin_api::operations::OperationKey;
 mod tests;
 
 pub(super) const NAME_RULE: &str =
-    "A name cannot be empty, start or end with a space, or run past 256 bytes.";
+    "A name cannot be empty, start or end with a space, or be very long.";
 
 #[derive(Clone)]
 pub(super) enum Action {
@@ -104,9 +104,7 @@ pub(super) fn rows(
 ) -> Vec<Row> {
     let mut rows = vec![Row::header("this device", "how other devices see this one")];
     let Some(snapshot) = snapshot else {
-        rows.push(
-            Row::new("Refresh", "Read linking state again", Some(Action::Refresh)).chip("refresh"),
-        );
+        rows.push(Row::new("Refresh", "Check for changes", Some(Action::Refresh)).chip("refresh"));
         return rows;
     };
     let Some(authority) = &snapshot.status.authority else {
@@ -403,7 +401,7 @@ fn connection_detail(snapshot: &Snapshot, peer_id: PeerId) -> &'static str {
         .iter()
         .any(|session| session.peer_id == peer_id)
     {
-        "Authenticated connection at last refresh"
+        "Connected at last refresh"
     } else {
         "Not connected at last refresh"
     }
@@ -485,14 +483,14 @@ fn linked_card(
     }
     if catalog.is_none() {
         rows.push(Row::new(
-            "Permission catalog unavailable",
+            "Permissions could not be loaded",
             "Refresh to retry. Existing permissions are retained.",
             None,
         ));
     }
     if catalog.is_some_and(|operations| operations.is_empty()) {
         rows.push(Row::new(
-            "No available peer operations",
+            "Nothing to allow yet",
             "Existing permissions are retained.",
             None,
         ));
@@ -636,7 +634,7 @@ fn outbound_rows(
     {
         rows.push(
             enroll(
-                "Recover original transaction",
+                "Finish the earlier link request",
                 &detail,
                 EnrollmentRequest::Recover {
                     expected,

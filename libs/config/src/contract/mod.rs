@@ -19,7 +19,7 @@ pub use runtime::{
     ParseRuntimeSpecError, QuerySpec, RuntimeSpec, StreamSpec,
 };
 pub use v1::{
-    parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, FieldAlign, FieldDefault, FieldKind,
-    FieldSpec, ItemSpec, NestedListSpec, NumberConstraints, PagesSpec, ParseSpecError,
-    RowActionSpec, RowSliderSpec, SectionSpec,
+    parse_spec, parse_spec_str, runs_on_this_platform, ConfigSpec, ConfigSpecV1, FieldAlign,
+    FieldDefault, FieldKind, FieldSpec, ItemSpec, NestedListSpec, NumberConstraints, PagesSpec,
+    ParseSpecError, RowActionSpec, RowSliderSpec, SectionSpec, PLATFORMS,
 };

@@ -35,7 +35,7 @@ label = "Copy Screenshot Path"
 args = ["copy-path"]
 
 [action.settings]
-label = "Settings..."
+label = "Settings"
 kind = "settings"
 picture = "gear"
 args = ["settings"]
@@ -48,7 +48,7 @@ permissions = ["screen-capture"]
 [menu]
 label = "Shot"
 items = [
-    { type = "checkbox", id = "audio-enable", label = "Enable Audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
+    { type = "checkbox", id = "audio-enable", label = "Enable audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
 ]
 
 [daemon]

@@ -166,7 +166,7 @@ fn parse_action_catalog_entries() {
         args = ["settings"]
 
         [action.audio_enable]
-        label = "Enable Audio"
+        label = "Enable audio"
         kind = "toggle-config"
         config_key = "audio.enabled"
         checked = true

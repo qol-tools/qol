@@ -117,7 +117,7 @@ impl BluetoothHostFixes {
             return Finding::advice(
                 SERVICE_FIX_ID,
                 "Bluetooth service",
-                "state unavailable on this platform",
+                "Can't check Bluetooth here.",
             );
         };
         if !service_is_wedged(&journal) {
@@ -131,13 +131,13 @@ impl BluetoothHostFixes {
         let finding = Finding::fixable(
             SERVICE_FIX_ID,
             "Bluetooth service",
-            "repeated AVDTP failures are wedging audio sessions; restarting bluetoothd is a separate transport recovery",
+            "Bluetooth audio keeps failing to start. Restarting Bluetooth may fix it.",
             FixState::Pending,
         );
         if elevation::available() {
             return finding;
         }
-        finding.unavailable("needs polkit for the privileged restart")
+        finding.unavailable("Needs permission to restart Bluetooth.")
     }
 
     fn manager_findings(&self) -> Vec<Finding> {
@@ -152,7 +152,7 @@ impl BluetoothHostFixes {
                     Finding::fixable(
                         manager_fix_id(manager.process),
                         format!("{} is managing Bluetooth", manager.label),
-                        "it pages bonded devices on its own and competes with qol for the radio; this ownership fix does not repair AVDTP transport flaps",
+                        "It reconnects devices on its own and clashes with qol. Fixing stops it from starting.",
                         FixState::Pending,
                     )
                 })
@@ -161,8 +161,8 @@ impl BluetoothHostFixes {
         if orphaned_autostart_override() {
             findings.push(Finding::fixable(
                 ORPHANED_AUTOSTART_FIX_ID,
-                "Blueman autostart override is orphaned",
-                "a previous qol ownership claim ended without restoring the desktop autostart entry",
+                "Blueman is set to stay off but qol no longer manages it",
+                "qol stopped managing it without turning its startup back on. Fixing restores it.",
                 FixState::Pending,
             ));
         }
@@ -175,7 +175,7 @@ impl BluetoothHostFixes {
             None => Finding::advice(
                 "audio-server",
                 "Audio server",
-                "unreachable; Bluetooth audio cannot be routed",
+                "Not responding, so Bluetooth audio will not play.",
             ),
         }
     }

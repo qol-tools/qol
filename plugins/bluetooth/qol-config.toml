@@ -38,7 +38,7 @@ action = "start_search"
 active_action = "stop_search"
 active_query = "search_status"
 active_value_from = "searching"
-label_map = { false = "Scan", true = "Stop" }
+label_map = { false = "Start search", true = "Stop search" }
 
 [field.devices]
 type = "list"
@@ -128,7 +128,7 @@ default = true
 [field.power_on_adapter]
 type = "boolean"
 label = "Allow automatic power-on"
-description = "Allow startup, searches, and explicit connection actions to power on the default adapter when needed."
+description = "Turn Bluetooth on by itself when a search or connection needs it."
 section = "reconnection"
 default = true
 
@@ -153,16 +153,17 @@ max = 600
 step = 5
 
 [section.host]
-label = "Host"
-description = "How this computer's own Bluetooth stack is behaving."
+label = "System"
+description = "Whether Bluetooth is working properly on this computer."
+platforms = ["linux"]
 
 [field.host_status]
 type = "status"
-label = "Host stack"
+label = "Bluetooth health"
 section = "host"
 query = "host_fixes"
 value_from = "state"
-label_map = { none = "Nothing detected", ok = "Host stack healthy", attention = "Host stack needs attention" }
+label_map = { none = "Nothing detected", ok = "Bluetooth is healthy", attention = "Bluetooth needs attention" }
 tone_map = { ok = "success", attention = "warning" }
 
 [field.host_findings]
@@ -172,13 +173,13 @@ section = "host"
 query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
-empty_message = "Nothing to report about this computer's Bluetooth stack."
-card_description = "What the Bluetooth stack reports."
+empty_message = "No Bluetooth problems found on this computer."
+card_description = "Problems found with Bluetooth on this computer."
 
 [field.host_findings.row_action]
 action = "apply_host_fix"
 label = "Fix"
-description = "Applies the fix to this computer's Bluetooth stack."
+description = "Fixes this Bluetooth problem on this computer."
 when = "actionable"
 input = { id = "{id}" }
 

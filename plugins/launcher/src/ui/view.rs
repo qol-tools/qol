@@ -296,8 +296,8 @@ const CARET_WIDTH: f32 = 2.0;
 
 pub fn search_placeholder(mode: SearchMode) -> &'static str {
     match mode {
-        SearchMode::Apps => "search \u{b7} alt+h keys",
-        SearchMode::Files => "search files \u{b7} alt+h keys",
+        SearchMode::Apps => "Search \u{b7} alt+h for shortcuts",
+        SearchMode::Files => "Search files \u{b7} alt+h for shortcuts",
     }
 }
 
@@ -656,7 +656,7 @@ fn answer_card(kit: &qol_gpui::kit::Kit, row: &FlowRow, nodes: &[crate::flow::Tr
         );
     }
     let mut meta = div().mt(px(4.0)).flex().items_center().gap(px(8.0));
-    meta = meta.child(kit.chip(Chip::Tag("true now".into()), kit.grounds.pane));
+    meta = meta.child(kit.chip(Chip::Tag("Current".into()), kit.grounds.pane));
     if let Some(sources) = sources_of(&row.raw).filter(|count| *count >= 2) {
         meta = meta.child(
             div()
@@ -714,16 +714,16 @@ fn vague_fence(kit: &qol_gpui::kit::Kit, checking: bool) -> Div {
                 .text(TextStyle::Label)
                 .text_color(rgb(kit.palette.text_secondary))
                 .child(if checking {
-                    "CHECKING ANSWER · RELATED MEMORIES"
+                    "Checking answer · related memories"
                 } else {
-                    "NO CONFIDENT ANSWER · RELATED MEMORIES"
+                    "No confident answer · related memories"
                 }),
         )
         .child(div().flex_1().h(px(1.0)).bg(rgb(kit.palette.border_subtle)))
 }
 
 pub fn flow_empty_state(kit: &qol_gpui::kit::Kit) -> Div {
-    kit.empty("no memory covers this", None)
+    kit.empty("Nothing in memory about this.", None)
 }
 
 pub fn detail_body(
@@ -834,11 +834,11 @@ mod tests {
     fn empty_line_names_the_search_and_the_key_list() {
         assert_eq!(
             search_placeholder(SearchMode::Apps),
-            "search \u{b7} alt+h keys"
+            "Search \u{b7} alt+h for shortcuts"
         );
         assert_eq!(
             search_placeholder(SearchMode::Files),
-            "search files \u{b7} alt+h keys"
+            "Search files \u{b7} alt+h for shortcuts"
         );
     }
 

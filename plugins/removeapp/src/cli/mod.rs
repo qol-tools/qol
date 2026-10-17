@@ -364,7 +364,7 @@ fn confirmation_verb(force: bool, package: Option<&ManagedPackage>) -> String {
     if let Some(package) = package {
         format!("UNINSTALL with {}", package.manager().label())
     } else if force {
-        "PERMANENTLY DELETE".to_string()
+        "Delete permanently".to_string()
     } else {
         "move to Trash".to_string()
     }
@@ -527,7 +527,7 @@ mod tests {
             "UNINSTALL with APT"
         );
         assert_eq!(confirmation_verb(false, None), "move to Trash");
-        assert_eq!(confirmation_verb(true, None), "PERMANENTLY DELETE");
+        assert_eq!(confirmation_verb(true, None), "Delete permanently");
     }
 
     #[test]

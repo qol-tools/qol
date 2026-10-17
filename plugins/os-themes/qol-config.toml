@@ -4,19 +4,19 @@ description = "Desktop theming and cursor effects."
 
 [section.shake_to_grow]
 label = "Shake to grow"
-description = "Shake the cursor fast back and forth to enlarge it, macOS style."
+description = "Shake the mouse back and forth to make the cursor big and easy to find."
 actions = ["run"]
 
 [field.enabled]
 type = "boolean"
-label = "Enabled"
+label = "Enable shake to grow"
 section = "shake_to_grow"
 default = true
 
 [field.pause_in_games]
 type = "boolean"
 label = "Pause in games"
-description = "Disable shake to grow while a game window is focused: Steam, Lutris or GameMode on Linux; Steam, Xbox or Epic libraries and exclusive full-screen Direct3D on Windows."
+description = "Disable shake to grow while a game is in front."
 section = "shake_to_grow"
 default = true
 
@@ -38,7 +38,7 @@ equals = true
 [field.shake_strictness]
 type = "number"
 label = "Shake strictness"
-description = "Path length divided by covered area needed inside the window. Higher means faster shaking."
+description = "How hard you must shake. Higher needs faster, wilder shaking."
 section = "shake_to_grow"
 default = 5.0
 min = 1
@@ -51,7 +51,7 @@ equals = true
 [field.regrow_strictness]
 type = "number"
 label = "Regrow strictness"
-description = "Shake strictness used while the cursor is still enlarged. Lower lets a short shake grow it again before it shrinks back."
+description = "How hard you must shake while the cursor is big. Lower regrows it sooner."
 section = "shake_to_grow"
 default = 2.5
 min = 1
@@ -63,8 +63,8 @@ equals = true
 
 [field.regrow_min_extent_px]
 type = "number"
-label = "Regrow min size"
-description = "Smallest distance in pixels a shake must cover to grow the cursor again while it is still enlarged."
+label = "Regrow minimum size"
+description = "Smallest shake, in pixels, that regrows a cursor that is still big."
 section = "shake_to_grow"
 default = 60
 min = 10
@@ -76,8 +76,8 @@ equals = true
 
 [field.shake_min_extent_px]
 type = "number"
-label = "Min shake size"
-description = "Smallest distance in pixels a shake must cover to grow the cursor. Smaller wiggles are ignored."
+label = "Minimum shake size"
+description = "Smallest shake, in pixels, that grows the cursor. Smaller wiggles are ignored."
 section = "shake_to_grow"
 default = 150
 min = 20
@@ -89,8 +89,8 @@ equals = true
 
 [field.shake_window_ms]
 type = "number"
-label = "Detection window"
-description = "How long a shake has to be sustained. A shorter window demands a faster shake."
+label = "Shake time"
+description = "How long you must keep shaking. Shorter needs faster shaking."
 section = "shake_to_grow"
 default = 600
 min = 100
@@ -141,7 +141,7 @@ equals = true
 
 [field.shrink_ms]
 type = "number"
-label = "Shrink duration"
+Time for the cursor to return to normal size.label = "Shrink duration"
 section = "shake_to_grow"
 default = 100
 min = 20

@@ -38,7 +38,7 @@ mod tests {
             ("set_mode", "Set Display Mode", "set-mode"),
             ("set_primary", "Set Primary Display", "primary"),
             ("arrange", "Arrange Displays", "arrange"),
-            ("apply_layout", "Apply positions", "apply-layout"),
+            ("apply_layout", "Apply Display Positions", "apply-layout"),
         ] {
             assert_eq!(
                 manifest.catalog_runtime_args(action),

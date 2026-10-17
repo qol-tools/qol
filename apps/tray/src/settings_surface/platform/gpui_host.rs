@@ -1196,7 +1196,6 @@ mod tests {
             .expect("core contract must parse");
         for (name, kind) in [
             ("native_theme", qol_config::contract::FieldKind::Select),
-            ("theme", qol_config::contract::FieldKind::Select),
             ("accent", qol_config::contract::FieldKind::Select),
             ("profile", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),

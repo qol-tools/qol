@@ -544,7 +544,7 @@ impl Render for PluginsView {
             settings_page()
                 .child(settings_busy_message(
                     "plugins-loading",
-                    "Reading your plugins",
+                    "Loading plugins",
                     kit(),
                 ))
                 .into_any_element()

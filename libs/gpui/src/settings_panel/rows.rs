@@ -1,6 +1,6 @@
 use qol_config::contract::{
-    interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction,
-    RowActionSpec, RowSliderSpec,
+    interpolate_row_template, resolve_row_actions, runs_on_this_platform, FieldDefault, FieldKind,
+    ResolvedRowAction, RowActionSpec, RowSliderSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -234,7 +234,11 @@ pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<
     for field in &config.fields {
         push_row(&mut rows, None, None, field, &field_values, source);
     }
-    for section in &config.sections {
+    for section in config
+        .sections
+        .iter()
+        .filter(|section| runs_on_this_platform(section.platforms.as_deref()))
+    {
         push_section_rows(&mut rows, section, &field_values, source);
     }
     rows
@@ -337,6 +341,9 @@ fn push_row(
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
     source: usize,
 ) {
+    if !runs_on_this_platform(field.platforms.as_deref()) {
+        return;
+    }
     let control = control_for(field);
     let visibility = field.show_when.clone().and_then(|show_when| {
         field_values
@@ -1835,6 +1842,67 @@ switchable = "boolean"
     }
 
     #[test]
+    fn fields_and_sections_for_another_os_are_neither_drawn_nor_searchable() {
+        let elsewhere = qol_config::contract::PLATFORMS
+            .iter()
+            .filter(|platform| **platform != std::env::consts::OS)
+            .map(|platform| format!("{platform:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let here = format!("{:?}", std::env::consts::OS);
+        let spec = qol_config::contract::parse_spec_str(&format!(
+            r#"
+schema_version = 1
+
+[section.main]
+label = "Main"
+
+[section.host]
+label = "System"
+platforms = [{elsewhere}]
+
+[field.shared]
+type = "boolean"
+section = "main"
+default = true
+
+[field.local]
+type = "boolean"
+section = "main"
+default = true
+platforms = [{here}]
+
+[field.foreign]
+type = "boolean"
+section = "main"
+default = true
+platforms = [{elsewhere}]
+
+[field.host_fix]
+type = "boolean"
+section = "host"
+default = true
+"#
+        ))
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["shared", "local"]
+        );
+        assert_eq!(
+            sections_from_resolved(&resolved, &rows, 0)
+                .iter()
+                .map(|section| section.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Main"]
+        );
+    }
+
+    #[test]
     fn a_list_item_card_field_leaves_the_page_but_keeps_its_row() {
         const SPEC: &str = r#"
 schema_version = 1
@@ -3246,7 +3314,7 @@ schema_version = 1
 
 [field.download_qr]
 type = "qr_code"
-label = "Scan to download"
+label = "Get the phone app"
 query = "connection_info"
 value_from = "app_download_url"
 "#,

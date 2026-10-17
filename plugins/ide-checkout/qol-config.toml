@@ -4,28 +4,28 @@ description = "Application launchers and checkout temp storage."
 
 [section.general]
 label = "General"
-description = "Shared runtime defaults for checkout and execution."
+description = "Where checked-out branches are stored."
 
 [field.temp_dir]
 type = "string"
 config_key = "tempDir"
 label = "Temp directory"
-description = "Leave empty to use a qol-ide-checkout folder in the system temp directory."
+description = "Leave empty to keep checkouts in your system's temporary files."
 section = "general"
-placeholder = "qol-ide-checkout in the system temp directory"
+placeholder = "System temporary files"
 default = ""
 
 [section.apps]
 label = "Applications"
-description = "Named applications that can open checked-out paths."
+description = "Apps that can open a checked-out branch."
 
 [field.apps]
 type = "object_map"
 config_key = "apps"
-key_label = "App ID"
+key_label = "Short name"
 label = "Applications"
 section = "apps"
-card_description = "Apps that open checked-out paths."
+card_description = "Apps your browser can open a branch in."
 item_label = "application"
 
 [field.apps.default.idea]

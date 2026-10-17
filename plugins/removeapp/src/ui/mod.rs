@@ -546,11 +546,11 @@ impl RemoveAppView {
         }
         let subtitle: AnyElement = match self.app_size(app) {
             Some(size) => {
-                format!("App bundle \u{00B7} {}", qol_gpui::format_bytes(size)).into_any_element()
+                format!("App \u{00B7} {}", qol_gpui::format_bytes(size)).into_any_element()
             }
             None => qol_gpui::Busy::new(
                 "qol-removeapp-size",
-                "measuring size",
+                "Measuring size",
                 rgb(kit.grounds.pane.faint),
             )
             .into_any_element(),
@@ -687,12 +687,9 @@ impl RemoveAppView {
                 _ => None,
             });
         let (disp_label, disp_color) = match (managed, self.disposal) {
-            (Some(package), _) => (
-                format!("Uninstall with {}", package.manager().label()),
-                kit.palette.accent,
-            ),
+            (Some(_), _) => ("Uninstall".to_string(), kit.palette.accent),
             (None, Disposal::Trash) => ("Move to Trash".to_string(), kit.palette.success),
-            (None, Disposal::Delete) => ("PERMANENTLY DELETE".to_string(), kit.palette.danger),
+            (None, Disposal::Delete) => ("Delete permanently".to_string(), kit.palette.danger),
         };
         let mut hints: Vec<(Key, &str, Command)> = Vec::new();
         if let Some(g) = &self.guards {
@@ -703,7 +700,7 @@ impl RemoveAppView {
                 if let PackageStatus::Managed(package) = &g.package {
                     let label = match package.manager() {
                         crate::core::PackageManager::Homebrew => "uninstall with Homebrew",
-                        crate::core::PackageManager::Apt => "uninstall with APT",
+                        crate::core::PackageManager::Apt => "uninstall",
                         crate::core::PackageManager::Flatpak => "uninstall with Flatpak",
                         crate::core::PackageManager::Windows => "uninstall with Windows",
                         crate::core::PackageManager::MicrosoftStore => {
@@ -716,9 +713,17 @@ impl RemoveAppView {
         }
         if primary_action(self.guards.as_ref()) == PrimaryAction::Remove {
             hints.push((Key::ENTER, "confirm", Command::Primary));
-            hints.push((Key::letter('d'), "trash/delete", Command::ToggleDisposal));
+            hints.push((
+                Key::letter('d'),
+                "switch trash or delete",
+                Command::ToggleDisposal,
+            ));
         }
-        hints.push((Key::letter('t'), "trash anyway", Command::TrashAnyway));
+        hints.push((
+            Key::letter('t'),
+            "move to Trash anyway",
+            Command::TrashAnyway,
+        ));
         hints.push((Key::ESC, "back", Command::Back));
         div()
             .flex()
@@ -768,8 +773,8 @@ impl RemoveAppView {
                             .text_color(rgb(kit.grounds.pane.ink))
                             .text(TextStyle::Detail)
                             .child(format!(
-                                "{} items \u{00b7} {}",
-                                plan.items.len(),
+                                "{} \u{00b7} {}",
+                                qol_gpui::plural(plan.items.len(), "item", "items"),
                                 qol_gpui::format_bytes(plan.total_bytes)
                             )),
                     ),
@@ -821,27 +826,20 @@ impl RemoveAppView {
         let mut lines: Vec<AnyElement> = Vec::new();
         if g.running {
             let text = if self.quit_failed {
-                "still running - couldn't quit; press Q to retry"
+                "The app is still running. Press Q to try quitting it again."
             } else {
-                "is running - press Q to quit first"
+                "The app is running. Press Q to quit it first."
             };
             lines.push(banner_line(kit.palette.warning, text).into_any_element());
         }
         match &g.package {
-            PackageStatus::Managed(package) => lines.push(
+            PackageStatus::Managed(_) => lines.push(
                 banner_line(
                     kit.palette.accent,
-                    &if g.running {
-                        format!(
-                            "{}-managed - quit it before uninstalling",
-                            package.manager().label()
-                        )
+                    if g.running {
+                        "Quit the app before uninstalling it."
                     } else {
-                        format!(
-                            "{}-managed - Enter uninstalls through {}",
-                            package.manager().label(),
-                            package.manager().label()
-                        )
+                        "Press Enter to uninstall it properly."
                     },
                 )
                 .into_any_element(),
@@ -849,7 +847,7 @@ impl RemoveAppView {
             PackageStatus::Unavailable(reason) => lines.push(
                 banner_line(
                     kit.grounds.pane.faint,
-                    &format!("couldn't confirm package ownership - {reason}"),
+                    &format!("Could not check how this app was installed. {reason}"),
                 )
                 .into_any_element(),
             ),
@@ -887,7 +885,10 @@ impl RemoveAppView {
             };
             kit.notice(
                 tone,
-                format!("Removed {} item(s)", outcome.removed.len()),
+                format!(
+                    "Removed {}",
+                    qol_gpui::plural(outcome.removed.len(), "item", "items")
+                ),
                 Some(detail.into_any_element()),
             )
         };
@@ -1099,7 +1100,7 @@ fn banner_busy(color: u32) -> AnyElement {
     banner_frame(color)
         .child(qol_gpui::Busy::new(
             "qol-removeapp-guards-busy",
-            "Checking package manager",
+            "Checking how this app was installed",
             rgb(color),
         ))
         .into_any_element()

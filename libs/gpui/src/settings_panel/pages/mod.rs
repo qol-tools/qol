@@ -719,7 +719,10 @@ fn read_pages(value: serde_json::Value) -> Result<Pages, String> {
     let pages: Pages = serde_json::from_value(value)
         .map_err(|error| format!("the plugin sent pages qol cannot read: {error}"))?;
     match pages.problems().into_iter().next() {
-        Some(problem) => Err(format!("the plugin sent broken pages: {problem}")),
+        Some(problem) => {
+            log::warn!("the plugin sent broken pages: {problem}");
+            Err("This plugin's settings could not be shown.".to_string())
+        }
         None => Ok(pages),
     }
 }

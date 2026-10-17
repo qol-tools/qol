@@ -1,6 +1,6 @@
 schema_version = 1
 title = "Voice"
-description = "Enable speech recognition and route completed turns to a live terminal."
+description = "Speak and have your words typed into a terminal session."
 
 [section.activation]
 label = "Voice"
@@ -9,8 +9,8 @@ description = "Whether qol listens on this computer at all."
 [field.voice_enabled]
 type = "boolean"
 config_key = "activation.enabled"
-label = "Enable Voice"
-description = "Listen globally and route completed speech while this device is running."
+label = "Enable voice"
+description = "Listen for speech and type it into your terminal while qol is running."
 section = "activation"
 default = false
 
@@ -39,14 +39,14 @@ empty_message = "Speak while Voice is listening to see your transcript."
 card_description = "What the session hears right now."
 
 [section.audio]
-label = "Audio input"
+label = "Microphone"
 description = "Which microphone the session listens to."
 
 [field.input_device]
 type = "select"
 config_key = "audio.input_device"
 label = "Microphone"
-description = "The source used for speech recognition."
+description = "The microphone used to hear you."
 section = "audio"
 default = "default"
 query = "audio_sources"
@@ -105,7 +105,7 @@ description = "Which engine turns speech into text."
 [field.stt_enabled]
 type = "boolean"
 config_key = "recognition.enabled"
-label = "Enable transcription"
+label = "Enable speech recognition"
 section = "recognition"
 default = true
 
@@ -113,7 +113,7 @@ default = true
 type = "select"
 config_key = "recognition.provider"
 label = "Provider"
-description = "Automatic selection prefers an available local provider."
+description = "Automatic uses a recognizer on this computer when one is available."
 section = "recognition"
 default = "auto"
 query = "stt_providers"
@@ -130,7 +130,7 @@ auto = "prefer-local"
 type = "select"
 config_key = "recognition.model_dir"
 label = "Model"
-description = "Models found in this device's Voice model directory."
+description = "Speech models found on this computer."
 section = "recognition"
 default = ""
 query = "stt_models"
@@ -151,7 +151,7 @@ equals = "sherpa-onnx"
 type = "select"
 config_key = "recognition.model_kind"
 label = "Model family"
-description = "Automatic reads the family from the model directory."
+description = "Automatic detects the model type from its files."
 section = "recognition"
 default = "auto"
 card_description = "The kind of model in the folder."
@@ -169,7 +169,7 @@ options = [
 [field.stt_model_kind.option_labels]
 auto = "Automatic"
 transducer = "Zipformer transducer"
-nemo-transducer = "NeMo Transducer (Parakeet)"
+nemo-transducer = "NeMo transducer (Parakeet)"
 whisper = "Whisper"
 sense-voice = "SenseVoice"
 paraformer = "Paraformer"
@@ -193,8 +193,8 @@ moonshine = "letters:MS"
 [field.websocket_endpoint]
 type = "string"
 config_key = "recognition.websocket_endpoint"
-label = "WebSocket endpoint"
-description = "Required when the WebSocket compatibility provider is selected."
+label = "Server address"
+description = "Address of the speech server to send your audio to."
 section = "recognition"
 default = ""
 
@@ -206,7 +206,7 @@ equals = "websocket"
 type = "string"
 config_key = "recognition.websocket_engine"
 label = "Server engine"
-description = "Engine identifier understood by the selected WebSocket server."
+description = "Name of the recognizer the server should use."
 section = "recognition"
 default = ""
 
@@ -215,7 +215,7 @@ field = "stt_provider"
 equals = "websocket"
 
 [section.segmentation]
-label = "Utterance segmentation"
+label = "Speech detection"
 description = "When qol decides you have started and stopped talking."
 
 [field.threshold]
@@ -223,7 +223,7 @@ type = "number"
 variant = "slider"
 config_key = "segmentation.threshold_permille"
 label = "Speech level threshold"
-description = "Input level, in thousandths of full scale, that counts as speech. Higher ignores quieter sound."
+description = "How loud sound must be to count as speech. Higher ignores quieter sound."
 section = "segmentation"
 default = 10
 min = 1
@@ -233,8 +233,8 @@ step = 1
 [field.onset]
 type = "number"
 config_key = "segmentation.onset_ms"
-label = "Onset duration (ms)"
-description = "Milliseconds of continuous speech needed before a turn starts."
+label = "Speech start time (ms)"
+description = "How long you must keep talking before it counts as speech."
 section = "segmentation"
 default = 100
 min = 10
@@ -244,8 +244,8 @@ step = 10
 [field.silence]
 type = "number"
 config_key = "segmentation.silence_ms"
-label = "Silence duration (ms)"
-description = "Milliseconds of silence that end a turn."
+label = "Silence duration"
+description = "How long a pause must last to end what you said."
 section = "segmentation"
 default = 700
 min = 50
@@ -255,8 +255,8 @@ step = 50
 [field.pre_roll]
 type = "number"
 config_key = "segmentation.pre_roll_ms"
-label = "Pre-roll (ms)"
-description = "Milliseconds of audio kept from just before speech is detected, so the first word is not cut off."
+label = "Lead-in audio (ms)"
+description = "Audio kept from just before you speak, so the first word is not cut off."
 section = "segmentation"
 default = 300
 min = 0
@@ -266,8 +266,8 @@ step = 50
 [field.max_utterance]
 type = "number"
 config_key = "segmentation.max_utterance_ms"
-label = "Maximum utterance (ms)"
-description = "Milliseconds of continuous speech after which a turn is split."
+label = "Longest speech (ms)"
+description = "Longest stretch of speech before it is split into a new message."
 section = "segmentation"
 default = 30000
 min = 1000

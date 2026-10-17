@@ -1,22 +1,16 @@
 use super::*;
 
 #[test]
-fn host_os_data_preserves_contract_tokens_and_labels() {
+fn host_os_data_preserves_contract_tokens() {
     let cases = [
-        (HostOs::Linux, "linux", "Linux", ""),
-        (HostOs::Macos, "macos", "macOS", ""),
-        (HostOs::Windows, "windows", "Windows", ".exe"),
-        (
-            HostOs::Unsupported("dragonfly"),
-            "dragonfly",
-            "dragonfly",
-            "",
-        ),
+        (HostOs::Linux, "linux", ""),
+        (HostOs::Macos, "macos", ""),
+        (HostOs::Windows, "windows", ".exe"),
+        (HostOs::Unsupported("dragonfly"), "dragonfly", ""),
     ];
 
-    for (host, token, label, extension) in cases {
+    for (host, token, extension) in cases {
         assert_eq!(host.manifest_token(), token);
-        assert_eq!(host.display_label(), label);
         assert_eq!(host.executable_extension(), extension);
     }
 }

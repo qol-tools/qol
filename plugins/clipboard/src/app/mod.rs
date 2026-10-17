@@ -36,7 +36,7 @@ impl Daemon {
         match (&self.clipboard, self.paused_reason()) {
             (Some(clipboard), None) => Ok(clipboard),
             (_, reason) => anyhow::bail!(
-                "capture is paused: {}",
+                "History is paused: {}",
                 reason.unwrap_or_else(|| "no clipboard backend".to_string())
             ),
         }

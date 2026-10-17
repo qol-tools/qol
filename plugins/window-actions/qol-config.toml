@@ -81,12 +81,12 @@ equals = "percent"
 
 [section.snap]
 label = "Snap"
-description = "Default fraction used by snap actions."
+description = "How much of the screen a snapped window fills."
 actions = ["snap-left", "snap-right", "snap-bottom"]
 
 [field.snap_fraction]
 type = "number"
-label = "Snap fraction"
+label = "Snap size"
 section = "snap"
 default = 0.5
 min = 0.1
@@ -95,14 +95,15 @@ step = 0.05
 variant = "slider"
 
 [section.monitor_move]
-label = "Monitor move"
-description = "Behavior applied after moving a window between monitors."
+label = "Display move"
+description = "What happens after you move a window to another display."
 actions = ["move-monitor-left", "move-monitor-right"]
 
 [field.reveal_taskbar_after_move]
 type = "boolean"
-label = "Reveal taskbar after move"
+label = "Show taskbar after move"
 section = "monitor_move"
+platforms = ["linux"]
 default = true
 
 [section.glide]
@@ -122,5 +123,5 @@ variant = "slider"
 
 [section.window_state]
 label = "Window state"
-description = "Direct window state actions without additional configuration."
+description = "These actions have no settings."
 actions = ["maximize", "minimize", "restore"]

@@ -1,9 +1,9 @@
 [plugin]
 id = "qol-memory"
 uid = "a2d9cb99-1d62-4f73-ab8e-51de1fa7ac63"
-name = "QoL Memory"
+name = "Memory"
 icon = "memory"
-description = "Long-context memory: retrieve settled facts from your agent session history"
+description = "Look up facts from your past AI coding sessions"
 version = "0.30.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
@@ -34,7 +34,7 @@ prompt = "Ask memory"
 query = "rows"
 
 [menu]
-label = "QoL Memory"
+label = "Memory"
 items = []
 
 [[dependencies.binaries]]

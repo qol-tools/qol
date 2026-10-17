@@ -5313,10 +5313,7 @@ mod tests {
             section_id: None,
             section_label: None,
             label: "Card".into(),
-            description: Some(
-                "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
-                    .into(),
-            ),
+            description: Some("How big window cards and previews are. Higher is larger.".into()),
             placeholder: None,
             variant: None,
             config_key: "display.card_scale".into(),

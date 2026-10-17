@@ -304,7 +304,7 @@ mod tests {
                 ..FlowRow::default()
             }],
             status: Some(Badge {
-                text: "Capture is paused".to_string(),
+                text: "History is paused".to_string(),
                 tone: Some(Tone::Error),
             }),
         };

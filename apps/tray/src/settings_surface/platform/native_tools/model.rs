@@ -56,7 +56,7 @@ impl AppRefKind {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::BundleId => "Bundle ID",
+            Self::BundleId => "App ID",
             Self::Name => "Name",
             Self::Path => "Path",
         }
@@ -110,7 +110,7 @@ pub(super) enum ShortcutActionKind {
 impl ShortcutActionKind {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::App => "Launch App",
+            Self::App => "Launch app",
             Self::Url => "Open URL",
         }
     }
@@ -614,7 +614,7 @@ mod tests {
         );
         assert_eq!(
             MANAGED_FIELD_COUNT, 2,
-            "only Enabled and Export to launcher stay editable"
+            "only Enabled and Show in launcher stay editable"
         );
         assert!(draft.can_save(), "toggling enabled is always saveable");
         assert_eq!(

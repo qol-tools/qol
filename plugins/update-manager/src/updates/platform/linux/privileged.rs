@@ -229,7 +229,7 @@ impl Scan {
         match (self.holder, self.error) {
             (Some(holder), Some(error)) if error.contains("lock") => Reason::Locked(holder),
             (_, Some(error)) => Reason::Stopped(error),
-            (_, None) => Reason::Stopped("apt stopped without saying why".into()),
+            (_, None) => Reason::Stopped("The installer stopped without saying why".into()),
         }
     }
 }
@@ -281,7 +281,7 @@ mod tests {
         );
         assert_eq!(
             Scan::default().reason(),
-            Reason::Stopped("apt stopped without saying why".into())
+            Reason::Stopped("The installer stopped without saying why".into())
         );
     }
 
@@ -301,7 +301,7 @@ mod tests {
         quiet.line(REFRESHED);
         assert_eq!(
             quiet.reason(),
-            Reason::Stopped("apt stopped without saying why".into())
+            Reason::Stopped("The installer stopped without saying why".into())
         );
     }
 

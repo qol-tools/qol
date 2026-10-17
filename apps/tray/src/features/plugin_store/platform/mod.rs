@@ -82,16 +82,6 @@ impl HostOs {
         }
     }
 
-    #[cfg_attr(windows, allow(dead_code))]
-    fn display_label(self) -> &'static str {
-        match self {
-            Self::Linux => "Linux",
-            Self::Macos => "macOS",
-            Self::Windows => "Windows",
-            Self::Unsupported(token) => token,
-        }
-    }
-
     fn executable_extension(self) -> &'static str {
         match self {
             Self::Windows => ".exe",
@@ -120,11 +110,6 @@ impl HostArch {
 
 pub(super) fn current_manifest_token() -> &'static str {
     Platform.host_os().manifest_token()
-}
-
-#[cfg_attr(windows, allow(dead_code))]
-pub(crate) fn display_label() -> &'static str {
-    Platform.host_os().display_label()
 }
 
 pub(super) fn release_target() -> Result<PlatformTarget> {

@@ -215,7 +215,7 @@ fn handle_checkout<W: Write>(stream: &mut W, request: &Request, config: &Config)
         write_json(
             stream,
             400,
-            &json!({ "success": false, "error": "Missing projectPath or branch" }),
+            &json!({ "success": false, "error": "The project folder or branch is missing." }),
         );
         return;
     };

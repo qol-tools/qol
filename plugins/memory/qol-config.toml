@@ -1,22 +1,22 @@
 schema_version = 1
-title = "QoL Memory"
+title = "Memory"
 description = "Recall recorded answers across different question wordings."
 
 [section.answers]
 label = "Answers"
-description = "How qol memory decides what a question is asking for."
+description = "How Memory decides what a question is asking for."
 
 [field.verify_answers]
 type = "boolean"
 label = "Understand question variations (experimental)"
-description = "Check unfamiliar wording locally while memories appear immediately. Some valid variations may still be missed. Install Ollama, then run ollama pull qwen3:8b. Takes effect after restarting Memory."
+description = "Match reworded questions using a model on this computer. Restart Memory to apply."
 section = "answers"
 default = false
 
 [field.verifier_endpoint]
 type = "string"
-label = "Local model server"
-description = "Leave empty to start a private Ollama server when needed, or use an existing loopback server. Takes effect after restarting Memory."
+label = "Model server address"
+description = "Leave empty to let qol run one for you. Restart Memory to apply."
 section = "answers"
 placeholder = "http://127.0.0.1:11434"
 default = ""
@@ -32,8 +32,8 @@ description = "How much disk the memory history keeps."
 [field.notes_runs_kept]
 type = "number"
 variant = "slider"
-label = "Notes run retention"
-description = "How many recent notes run folders to keep on disk. 0 keeps everything and disables pruning. Takes effect after restarting Memory."
+label = "Saved note history"
+description = "How many past note updates to keep. 0 keeps all of them."
 section = "storage"
 default = 0
 min = 0

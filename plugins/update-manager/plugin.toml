@@ -12,7 +12,7 @@ platforms = ["linux"]
 command = "qol-update-manager"
 
 [action.press]
-label = "Press an Update Manager row"
+label = "Press a Row"
 args = ["press"]
 hotkey = false
 

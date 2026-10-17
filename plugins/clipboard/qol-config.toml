@@ -35,15 +35,15 @@ description = "Copies that a password manager marks as sensitive."
 [field.keep_secrets]
 type = "boolean"
 label = "Keep secrets briefly"
-description = "Show a marked secret masked in the history until it clears. Off drops secrets as soon as they are copied."
+description = "Show copied secrets masked until they clear. Off drops them straight away."
 section = "secrets"
 default = true
 
 [field.secret_seconds]
 type = "number"
 variant = "slider"
-label = "Clear secrets after (seconds)"
-description = "How long a secret stays in the history."
+label = "Clear secrets after"
+description = "Seconds a secret stays in the history."
 section = "secrets"
 default = 30
 min = 5

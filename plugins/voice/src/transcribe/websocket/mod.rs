@@ -70,7 +70,7 @@ impl WebSocketTranscriber {
 pub(crate) fn probe_endpoint(endpoint: &str) -> Result<(), TranscriptionError> {
     if endpoint.trim().is_empty() {
         return Err(TranscriptionError::InvalidConfiguration(
-            "WebSocket endpoint cannot be empty".to_owned(),
+            "Server address cannot be empty".to_owned(),
         ));
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -264,7 +264,7 @@ fn validate_config(
 ) -> Result<(), TranscriptionError> {
     if config.endpoint.trim().is_empty() {
         return Err(TranscriptionError::InvalidConfiguration(
-            "WebSocket endpoint cannot be empty".to_owned(),
+            "Server address cannot be empty".to_owned(),
         ));
     }
     if config.engine.trim().is_empty() {

@@ -11,7 +11,7 @@ type = "select"
 label = "Desktop theme"
 section = "appearance"
 default = "bone"
-card_description = "Colours for native qol windows."
+card_description = "Colours for qol windows."
 options = ["bone", "slate"]
 
 [field.native_theme.option_labels]
@@ -21,22 +21,6 @@ slate = "Slate"
 [field.native_theme.option_pictures]
 bone = "desktop-theme:bone"
 slate = "desktop-theme:slate"
-
-[field.theme]
-type = "select"
-label = "Web UI theme"
-section = "appearance"
-default = "slate"
-card_description = "Colours for qol in the browser."
-options = ["slate", "midnight"]
-
-[field.theme.option_labels]
-slate = "Slate"
-midnight = "Midnight"
-
-[field.theme.option_pictures]
-slate = "web-theme:slate"
-midnight = "web-theme:midnight"
 
 [field.accent]
 type = "select"
@@ -63,7 +47,7 @@ blue = "swatch:blue"
 violet = "swatch:violet"
 
 [section.host]
-label = "Host"
+label = "This computer"
 description = "What qol is allowed to change on this computer."
 
 [field.profile]
@@ -77,8 +61,8 @@ card_description = "The profile this device loads."
 
 [field.residency]
 type = "boolean"
-label = "Resident on this device"
-description = "Keep qol's host policy in place while qol-tray is not running."
+label = "Keep settings in place when qol is closed"
+description = "Your qol settings stay applied even when qol is not running."
 section = "host"
 default = false
 
@@ -88,7 +72,7 @@ description = "How qol tells you something happened."
 
 [field.handler]
 type = "select"
-label = "Notification handler"
+label = "Show notifications in"
 section = "notifications"
 default = "qol"
 card_description = "Where qol notifications appear."
@@ -96,7 +80,7 @@ options = ["qol", "os", "both"]
 
 [field.handler.option_labels]
 qol = "qol toasts"
-os = "Operating system"
+os = "System notifications"
 both = "Both"
 
 [field.handler.option_pictures]

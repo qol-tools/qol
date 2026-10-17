@@ -163,7 +163,7 @@ impl LinkedDevicesView {
                         }
                         Err(_) => {
                             view.notice = Some((
-                                "Result unknown. Refresh before another change.".into(),
+                                "Not sure it worked. Refresh before trying again.".into(),
                                 true,
                             ))
                         }
@@ -264,10 +264,19 @@ impl LinkedDevicesView {
             Err(error) => {
                 self.notice = Some((
                     match error {
-                        Failure::OutcomeUnknown => "Result unknown. Refresh, then recover the original transaction. Never prepare a replacement.".into(),
-                        Failure::Authority(qol_peers::admin::Error::Authority { error: qol_peers::AuthorityError::InvalidName }) => NAME_RULE.into(),
-                        Failure::Authority(error) => format!("Linking refused the change: {error}. Refresh before changing anything."),
-                        Failure::Transport(_) | Failure::Inconsistent => "Linking state is unavailable. Refresh to read it again.".into(),
+                        Failure::OutcomeUnknown => {
+                            "Not sure it worked. Refresh, then finish the earlier link request."
+                                .into()
+                        }
+                        Failure::Authority(qol_peers::admin::Error::Authority {
+                            error: qol_peers::AuthorityError::InvalidName,
+                        }) => NAME_RULE.into(),
+                        Failure::Authority(error) => {
+                            format!("That change was not accepted: {error}. Refresh and try again.")
+                        }
+                        Failure::Transport(_) | Failure::Inconsistent => {
+                            "Linked devices could not be loaded. Refresh to try again.".into()
+                        }
                     },
                     true,
                 ))
@@ -814,7 +823,7 @@ impl Render for LinkedDevicesView {
             }
             page.child(settings_busy_message(
                 "linked-devices-loading",
-                "Reading linking state",
+                "Loading linked devices",
                 kit(),
             ))
             .into_any_element()

@@ -3,7 +3,7 @@ id = "qol-window-actions"
 uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
 icon = "window-actions"
-description = "Window snapping, centering, and multi-monitor management"
+description = "Snap, center and move windows across displays"
 version = "2.61.1"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
@@ -45,11 +45,11 @@ label = "Center"
 args = ["center"]
 
 [action.move-monitor-left]
-label = "Move to Left Monitor"
+label = "Move to Left Display"
 args = ["move-monitor-left"]
 
 [action.move-monitor-right]
-label = "Move to Right Monitor"
+label = "Move to Right Display"
 args = ["move-monitor-right"]
 
 [action.glide-left]
