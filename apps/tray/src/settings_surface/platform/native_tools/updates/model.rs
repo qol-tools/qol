@@ -220,7 +220,7 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
         TargetState::Available => {
             row.value = version_jump(&host.current, host.latest.as_deref());
             row.tone = ValueTone::Attention;
-            row.description = Some("Restarts qol-tray to finish".to_string());
+            row.description = Some("Restarts qol to finish".to_string());
             row.action = Some(RowAction::Update(host.id.clone()));
             row.action_label = Some("Update");
             row.attention = true;
@@ -228,12 +228,12 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
         TargetState::Queued => {
             row.value = "Waiting".to_string();
             row.tone = ValueTone::Muted;
-            row.description = Some("Waits for the plugins, then restarts qol-tray".to_string());
+            row.description = Some("Waits for the plugins, then restarts qol".to_string());
         }
         TargetState::Updating => {
             row.value = download_value(host.progress);
             row.tone = ValueTone::Muted;
-            row.description = Some("Restarts qol-tray to finish".to_string());
+            row.description = Some("Restarts qol to finish".to_string());
             row.spinner = true;
         }
         TargetState::Failed => {
@@ -247,7 +247,7 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
         TargetState::DevBuild => {
             row.value = "Development build".to_string();
             row.tone = ValueTone::Muted;
-            row.description = Some("Updates arrive through Recompile".to_string());
+            row.description = Some("Updates come from rebuilding".to_string());
         }
         TargetState::Unchecked => {
             row.description = Some("Not checked for updates".to_string());
@@ -269,7 +269,7 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             TargetState::Queued | TargetState::Updating
         );
         let description = if host_updating {
-            "qol-tray restarts when the download is done".to_string()
+            "qol restarts when the download is done".to_string()
         } else {
             pending_names(snapshot, &[TargetState::Queued, TargetState::Updating])
         };
@@ -406,7 +406,7 @@ pub(super) fn check_row(snapshot: &UpdatesSnapshot) -> CheckRow {
             label: "Last checked",
             value: age_text(snapshot.last_checked_secs),
             tone: ValueTone::Normal,
-            description: "qol-tray checks on its own every 5 hours".to_string(),
+            description: "qol checks for updates by itself every 5 hours".to_string(),
             action: Some(RowAction::Check),
             action_label: Some("Check now"),
             checking: snapshot.checking,
@@ -780,10 +780,7 @@ mod tests {
         let busy = summary(&running);
         assert!(busy.busy);
         assert_eq!(busy.label, "Updating qol-tray");
-        assert_eq!(
-            busy.description,
-            "qol-tray restarts when the download is done"
-        );
+        assert_eq!(busy.description, "qol restarts when the download is done");
         assert_eq!(busy.action, None);
 
         let mut host_running = snapshot(
@@ -793,10 +790,7 @@ mod tests {
         host_running.running = true;
         let host = summary(&host_running);
         assert_eq!(host.label, "Updating qol-tray");
-        assert_eq!(
-            host.description,
-            "qol-tray restarts when the download is done"
-        );
+        assert_eq!(host.description, "qol restarts when the download is done");
 
         let plugin_running = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -879,7 +873,7 @@ mod tests {
         assert_eq!(available.action, Some(RowAction::Update("qol-tray".into())));
         assert_eq!(
             available.description.as_deref(),
-            Some("Restarts qol-tray to finish")
+            Some("Restarts qol to finish")
         );
         assert!(available.attention);
 
@@ -889,7 +883,7 @@ mod tests {
         assert_eq!(queued.action, None);
         assert_eq!(
             queued.description.as_deref(),
-            Some("Waits for the plugins, then restarts qol-tray")
+            Some("Waits for the plugins, then restarts qol")
         );
 
         let mut updating = target("qol-tray", "qol-tray", TargetState::Updating);
@@ -911,7 +905,7 @@ mod tests {
         assert_eq!(dev.value, "Development build");
         assert_eq!(
             dev.description.as_deref(),
-            Some("Updates arrive through Recompile")
+            Some("Updates come from rebuilding")
         );
         assert_eq!(dev.action, None);
 
@@ -994,7 +988,10 @@ mod tests {
         );
         let row = check_row(&fresh);
         assert_eq!(row.value, "2 min ago");
-        assert_eq!(row.description, "qol-tray checks on its own every 5 hours");
+        assert_eq!(
+            row.description,
+            "qol checks for updates by itself every 5 hours"
+        );
         assert_eq!(row.action_label, Some("Check now"));
     }
 

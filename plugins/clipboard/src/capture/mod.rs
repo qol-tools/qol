@@ -40,11 +40,8 @@ pub enum CaptureError {
 impl fmt::Display for CaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unsupported { platform } => {
-                write!(f, "clipboard capture is not supported on {platform} yet")
-            }
-            Self::Unavailable(reason) => write!(f, "clipboard capture is unavailable: {reason}"),
-            Self::Failed(reason) => write!(f, "clipboard capture failed: {reason}"),
+            Self::Unsupported { .. } => write!(f, "Clipboard history is not available yet."),
+            Self::Unavailable(reason) | Self::Failed(reason) => f.write_str(reason),
         }
     }
 }

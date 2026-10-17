@@ -12,7 +12,7 @@ platforms = ["linux", "macos", "windows"]
 command = "qol-removeapp"
 
 [action.open]
-label = "Open"
+label = "Open Remove App"
 args = ["open"]
 
 [capabilities]

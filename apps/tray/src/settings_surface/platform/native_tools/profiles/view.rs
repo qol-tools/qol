@@ -793,7 +793,7 @@ impl Render for ProfilesView {
             settings_page()
                 .child(settings_busy_message(
                     "profiles-loading",
-                    "Reading your profiles",
+                    "Loading profiles",
                     kit(),
                 ))
                 .into_any_element()

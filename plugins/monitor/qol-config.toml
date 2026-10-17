@@ -1,6 +1,6 @@
 schema_version = 1
 title = "Display"
-description = "Display brightness, gamma, and mode control."
+description = "Control display brightness, night mode and resolution."
 
 [section.display]
 label = "Display"
@@ -8,7 +8,7 @@ description = "Brightness and layout for connected displays."
 
 [section.night]
 label = "Night mode"
-description = "Warm display colours manually or on a daily schedule."
+description = "Warm your display colors manually or on a daily schedule."
 
 [section.preferences]
 label = "Preferences"
@@ -29,14 +29,14 @@ label = "Night mode status"
 section = "night"
 query = "night_mode"
 value_from = "state"
-label_map = { active = "Night mode on", capped = "Night mode on, as warm as the system allows", inactive = "Night mode off", unsupported = "Night mode is not available on this platform yet", conflict = "OS night light could not be taken over", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Under qol control", limited = "Another program keeps taking it", uncontrolled = "Warm calibration blocks the tint" }
+label_map = { active = "Night mode on", capped = "Night mode on, as warm as the system allows", inactive = "Night mode off", unsupported = "Night mode is not available on this computer", conflict = "Another night light is in the way", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Night mode is working", limited = "Another program keeps changing the tint", uncontrolled = "This display's color profile blocks night mode" }
 tone_map = { active = "success", capped = "warning", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
 
 [field.night_toggle]
 type = "action"
 label = "Night mode"
 active_label = "Night mode"
-description = "Switch the warm colour filter on or off."
+description = "Switch the warm color filter on or off."
 section = "night"
 action = "night_on"
 active_action = "night_off"
@@ -48,8 +48,8 @@ variant = "toggle"
 type = "number"
 variant = "slider"
 config_key = "night_temperature"
-label = "Colour temperature"
-description = "Colour temperature in kelvin while night mode is on; lower is warmer."
+label = "Warmth"
+description = "How warm the screen looks while night mode is on. Lower is warmer."
 section = "night"
 default = 3500
 min = 1500
@@ -78,7 +78,7 @@ daily = "schedule-daily"
 type = "string"
 config_key = "night_from"
 label = "From"
-description = "Daily start time in 24-hour HH:MM format."
+description = "When night mode turns on each day, like 20:00."
 section = "night"
 default = "20:00"
 
@@ -90,7 +90,7 @@ equals = "daily"
 type = "string"
 config_key = "night_to"
 label = "To"
-description = "Daily end time in 24-hour HH:MM format."
+description = "When night mode turns off each day, like 06:00."
 section = "night"
 default = "06:00"
 
@@ -101,8 +101,8 @@ equals = "daily"
 [field.night_coordination]
 type = "select"
 config_key = "night_coordination"
-label = "Other night lights"
-description = "What happens when another app already tints a display. Take over replaces its tint; Yield leaves that display to the other app."
+label = "Other night mode apps"
+description = "When another app already tints a display: take over its tint, or leave it alone."
 section = "night"
 default = "own"
 card_description = "When another app tints a display."
@@ -110,7 +110,7 @@ options = ["own", "detect"]
 
 [field.night_coordination.option_labels]
 own = "Take over"
-detect = "Yield"
+detect = "Leave alone"
 
 [field.night_coordination.option_pictures]
 own = "letters:T"
@@ -119,12 +119,12 @@ detect = "letters:Y"
 [field.policy]
 type = "object_map"
 config_key = "policy"
-label = "Control policy"
+label = "Brightness method"
 section = "preferences"
 key_label = "Display ID"
-description = "How each display is controlled. Labels: auto (prefer DDC, fall back to gamma), ddc, gamma, or off. Unknown labels are ignored."
+description = "Type auto, ddc, gamma or off for a display. Displays not listed use auto."
 card_description = "How each display is controlled."
-item_label = "display policy"
+item_label = "display setting"
 entry_fields = { policy = "string" }
 default = {}
 
@@ -146,7 +146,7 @@ config_key = "sync_brightness_levels"
 label = "Sync brightness levels"
 section = "display"
 default = true
-description = "Changing a display's brightness sets every connected display to the same percentage. Brightness hotkeys step them together."
+description = "Changing one display's brightness sets all connected displays to the same level."
 
 [field.notify_on_change]
 type = "boolean"
@@ -154,4 +154,4 @@ config_key = "notify_on_change"
 label = "Brightness notifications"
 section = "display"
 default = true
-description = "Show a notification with the new brightness level whenever brightness changes. Turn this off to silence the brightness toasts."
+description = "Show the new brightness level whenever it changes."

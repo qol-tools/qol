@@ -229,6 +229,7 @@ pub(super) struct RowSection {
 }
 
 pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
+    let config = &config.for_this_platform();
     let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
     for field in &config.fields {
@@ -1835,6 +1836,68 @@ switchable = "boolean"
     }
 
     #[test]
+    fn fields_and_sections_for_another_os_are_neither_drawn_nor_searchable() {
+        let here = qol_platform::Os::current().expect("tests run on a supported OS");
+        let elsewhere = qol_platform::Os::ALL
+            .into_iter()
+            .filter(|os| *os != here)
+            .map(|os| format!("{:?}", os.name()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let here = format!("{:?}", here.name());
+        let spec = qol_config::contract::parse_spec_str(&format!(
+            r#"
+schema_version = 1
+
+[section.main]
+label = "Main"
+
+[section.host]
+label = "System"
+platforms = [{elsewhere}]
+
+[field.shared]
+type = "boolean"
+section = "main"
+default = true
+
+[field.local]
+type = "boolean"
+section = "main"
+default = true
+platforms = [{here}]
+
+[field.foreign]
+type = "boolean"
+section = "main"
+default = true
+platforms = [{elsewhere}]
+
+[field.host_fix]
+type = "boolean"
+section = "host"
+default = true
+"#
+        ))
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            vec!["shared", "local"]
+        );
+        assert_eq!(
+            sections_from_resolved(&resolved, &rows, 0)
+                .iter()
+                .map(|section| section.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Main"]
+        );
+    }
+
+    #[test]
     fn a_list_item_card_field_leaves_the_page_but_keeps_its_row() {
         const SPEC: &str = r#"
 schema_version = 1
@@ -3202,21 +3265,29 @@ default = true
         for (plugin, spec) in &contracts {
             let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
                 .unwrap_or_else(|errors| panic!("{plugin}: {errors:?}"));
-            let field_count = resolved.fields.len()
-                + resolved
+            let shown = resolved.for_this_platform();
+            let field_count = shown.fields.len()
+                + shown
                     .sections
                     .iter()
                     .map(|section| section.fields.len())
                     .sum::<usize>();
             let rows = rows_from_resolved(&resolved, 0);
+            let shown_ids = shown
+                .fields
+                .iter()
+                .chain(shown.sections.iter().flat_map(|section| &section.fields))
+                .map(|field| field.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
             for field in resolved
                 .fields
                 .iter()
                 .chain(resolved.sections.iter().flat_map(|section| &section.fields))
             {
-                assert!(
+                assert_eq!(
                     rows.iter().any(|row| row.id == field.id),
-                    "{plugin}: field {} ({}) produced no row",
+                    shown_ids.contains(field.id.as_str()),
+                    "{plugin}: field {} ({}) must have a row exactly when it is shown on this OS",
                     field.id,
                     field.kind.name()
                 );
@@ -3246,7 +3317,7 @@ schema_version = 1
 
 [field.download_qr]
 type = "qr_code"
-label = "Scan to download"
+label = "Get the phone app"
 query = "connection_info"
 value_from = "app_download_url"
 "#,

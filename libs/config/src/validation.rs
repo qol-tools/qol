@@ -1,6 +1,7 @@
 use crate::contract::{
     is_picture_spec, ConfigSpec, FieldDefault, FieldKind, FieldSpec, CARD_DESCRIPTION_MAX,
 };
+use crate::platform::validate_platforms;
 use std::fmt;
 
 const ITEM_LABEL_MAX: usize = 24;
@@ -67,6 +68,11 @@ fn validate_schema_version(spec: &ConfigSpec, errors: &mut Vec<ValidationError>)
 
 fn validate_sections(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
     for (id, section) in &spec.sections {
+        validate_platforms(
+            &format!("section.{id}"),
+            section.platforms.as_deref(),
+            errors,
+        );
         if valid_id(id) {
             validate_section_actions(id, &section.actions, errors);
             continue;
@@ -112,6 +118,7 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_row_slider(id, field, errors);
         validate_level_slider(id, field, errors);
         validate_show_when(id, field, spec, errors);
+        validate_platforms(&format!("field.{id}"), field.platforms.as_deref(), errors);
     }
     validate_config_key_collisions(spec, errors);
 }
@@ -1295,6 +1302,56 @@ level_value_from = "output"
                 "level_slider variant",
             );
         }
+    }
+
+    #[test]
+    fn platforms_must_name_known_operating_systems() {
+        let errors = validate_contract(
+            r#"
+schema_version = 1
+
+[section.host]
+platforms = ["linux", "bsd"]
+
+[field.frame]
+type = "boolean"
+default = true
+platforms = ["Windows"]
+
+[field.nowhere]
+type = "boolean"
+default = true
+platforms = []
+"#,
+        );
+        assert_has_error(&errors, "section.host.platforms[1]", "unknown platform bsd");
+        assert_has_error(
+            &errors,
+            "field.frame.platforms[0]",
+            "unknown platform Windows",
+        );
+        assert_has_error(
+            &errors,
+            "field.nowhere.platforms",
+            "must name at least one platform",
+        );
+        assert_eq!(errors.len(), 3, "{errors:?}");
+
+        let valid = validate_contract(
+            r#"
+schema_version = 1
+
+[section.host]
+platforms = ["linux"]
+
+[field.frame]
+type = "boolean"
+section = "host"
+default = true
+platforms = ["linux", "macos", "windows"]
+"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
     }
 
     fn validate_contract(contract: &str) -> Vec<ValidationError> {

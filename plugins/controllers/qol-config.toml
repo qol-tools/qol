@@ -4,7 +4,7 @@ description = "Connected game controllers, active drivers, and available capabil
 
 [section.controllers]
 label = "Controllers"
-description = "Which pads this computer can see and whether they need a fix."
+description = "Which controllers this computer can see and whether they need a fix."
 
 [field.fixes_status]
 type = "status"
@@ -23,19 +23,19 @@ query = "controllers_snapshot"
 row_label = "{name}"
 row_subtitle = "{transport} · {driver} · {verdict}"
 empty_message = "No controllers detected."
-card_description = "Pads this computer can see."
+card_description = "Controllers this computer can see."
 item_card_field = "input_test"
 
 [[field.detected_pads.row_actions]]
 action = "apply_fixes"
 label = "Fix driver"
-description = "Applies the compatibility fix that matches this controller's active driver. Asks for your password once."
+description = "Applies the fix for this controller. Asks for your password once."
 when = "fixable"
 
 [[field.detected_pads.row_actions]]
 action = "reclaim_controller"
 label = "Unstick"
-description = "Keeps apps like Steam from grabbing the controller, then reconnects it. Press Home on the controller afterwards."
+description = "Stops other apps grabbing it, then reconnects it. Press Home afterwards."
 when = "reclaimable"
 
 [field.input_test]
@@ -44,4 +44,4 @@ label = "Controller input"
 description = "Press a controller button, then move every stick, trigger, D-pad direction, and face button."
 section = "controllers"
 query = "controller_input"
-card_description = "Live input from the pad under test."
+card_description = "Live input from your controller."

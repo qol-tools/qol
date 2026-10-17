@@ -1,22 +1,22 @@
 schema_version = 1
 title = "Launcher"
-description = "Universal search with action modifiers."
+description = "Search apps and files, then open them from the keyboard."
 
 [section.launcher]
 label = "Launcher"
-description = "Universal search with action modifiers."
+description = "How search finds and shows apps and files."
 actions = ["open"]
 
 [field.extra_file_scan_roots]
 type = "string_array"
 config_key = "extra_file_scan_roots"
-label = "Extra file scan roots"
-description = "Additional folders whose files should appear in launcher search."
+label = "Extra search folders"
+description = "More folders to include when you search for files."
 section = "launcher"
 card_description = "Folders the launcher also searches."
 item_label = "folder"
 default = []
-placeholder = "/path/to/files"
+placeholder = "Folder to search"
 
 [field.most_used_apps]
 type = "boolean"
@@ -32,6 +32,7 @@ config_key = "recent_files"
 label = "Recent files before you type"
 description = "Show recently opened files while a Files search is empty."
 section = "launcher"
+platforms = ["linux", "windows"]
 default = true
 
 [field.escape_clears_text]

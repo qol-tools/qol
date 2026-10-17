@@ -8,6 +8,8 @@ use qol_runtime::local_http::{Client, Method, Session};
 struct ActionResult {
     #[serde(default)]
     data: Option<serde_json::Value>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
@@ -56,7 +58,8 @@ pub(super) fn query_with_input(
 
 fn query_answer(query: &str, status: u16, body: &str) -> Result<serde_json::Value, String> {
     if status != 200 {
-        return Err(format!("query `{query}` failed with HTTP {status}: {body}"));
+        log::debug!("query `{query}` failed with HTTP {status}: {body}");
+        return Err("Could not load this page. Try again.".to_string());
     }
     serde_json::from_str(body)
         .map_err(|error| format!("query `{query}` returned invalid JSON: {error}"))
@@ -74,9 +77,16 @@ pub(super) fn run_action(
     if (200..300).contains(&status) {
         return action_result_data(&response);
     }
-    Err(format!(
-        "action `{action}` failed with HTTP {status}: {response}"
-    ))
+    log::warn!("action `{action}` failed with HTTP {status}: {response}");
+    if status == 409 {
+        if let Some(message) = serde_json::from_str::<ActionResult>(&response)
+            .ok()
+            .and_then(|result| result.message)
+        {
+            return Err(message);
+        }
+    }
+    Err("That did not work. Try again.".to_string())
 }
 
 fn action_result_data(response: &str) -> Result<Option<serde_json::Value>, String> {

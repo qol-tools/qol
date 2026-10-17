@@ -12,7 +12,7 @@ type = "select"
 label = "Action mode"
 section = "behavior"
 default = "hold_to_switch"
-card_description = "What letting go of the hotkey does."
+card_description = "What releasing the shortcut does."
 options = ["hold_to_switch", "sticky"]
 
 [field.action_mode.option_labels]
@@ -53,8 +53,9 @@ actions = ["open", "open-reverse"]
 [field.switchable_panels]
 type = "object_array"
 label = "Switchable panels"
-description = "Always-on-top panels the picker may list. It hides them unless you add them here."
+description = "Always-on-top panels to include in the window list."
 section = "windows"
+platforms = ["macos"]
 card_description = "Panels the picker may switch to."
 item_label = "switchable panel"
 default = []
@@ -73,20 +74,20 @@ default = true
 [field.display_show_hotkey_hints]
 type = "boolean"
 config_key = "display.show_hotkey_hints"
-label = "Show hotkey hints"
+label = "Show shortcut hints"
 section = "windows"
 default = true
 
 [section.layout]
 label = "Layout"
-description = "Display tuning for the window picker."
+description = "How the window picker looks."
 actions = ["open", "open-reverse"]
 
 [field.display_card_scale]
 type = "number"
 config_key = "display.card_scale"
 label = "Card size"
-description = "Scale multiplier for window cards and previews. 1.0 is the compact legacy size."
+description = "How big window cards and previews are. Higher is larger."
 section = "layout"
 default = 1.5
 min = 0.5
@@ -108,7 +109,7 @@ config_key = "display.card_padding"
 label = "Card padding"
 description = "Inner padding around each card preview and title."
 section = "layout"
-default = 4
+default = 0
 min = 0
 max = 24
 step = 1

@@ -39,9 +39,7 @@ const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
 const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
 const HOTKEY_FIELDS: usize = 5;
-static OS_ONLY_LABEL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!("Only on {}", crate::features::plugin_store::host_os_label())
-});
+const OS_ONLY_LABEL: &str = "Only on this kind of computer";
 const EDITOR_ANIMATION: &str = "native-tools-editor-slide";
 const CHOOSE_ANIMATION: &str = "native-tools-choose-slide";
 
@@ -608,10 +606,7 @@ impl NativeToolsView {
                         Ok(_) => {
                             draft.recording = false;
                             draft.capture_session = None;
-                            view.fail(
-                                "Hotkeys cannot be recorded here; on macOS, grant qol-tray Accessibility permission to enable recording",
-                                cx,
-                            );
+                            view.fail(crate::hotkeys::capture::RECORDING_UNAVAILABLE, cx);
                         }
                         Err(error) => {
                             draft.recording = false;
@@ -1144,10 +1139,7 @@ impl NativeToolsView {
             .map(|action| action.label.clone())
             .unwrap_or_else(|| hotkey.action.clone());
         let action = if hotkey.os_only {
-            format!(
-                "{action} · {} only",
-                crate::features::plugin_store::host_os_label()
-            )
+            format!("{action} · this kind of computer only")
         } else {
             action
         };
@@ -1218,7 +1210,7 @@ impl NativeToolsView {
                 .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
                 .child(self.boolean_field(
                     1,
-                    "Export to launcher",
+                    "Show in launcher",
                     draft.export_to_launcher,
                     draft.selected == 1,
                     cx,
@@ -1231,7 +1223,7 @@ impl NativeToolsView {
             .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
             .child(self.boolean_field(
                 1,
-                "Export to launcher",
+                "Show in launcher",
                 draft.export_to_launcher,
                 draft.selected == 1,
                 cx,
@@ -1258,7 +1250,7 @@ impl NativeToolsView {
                 body = body
                     .child(self.select_field(
                         4,
-                        "App reference",
+                        "Find app by",
                         draft.target_kind.label(),
                         draft.selected == 4,
                         cx,
@@ -1288,7 +1280,7 @@ impl NativeToolsView {
                     ))
                     .child(self.boolean_field(
                         5,
-                        "Browser override",
+                        "Open in a specific browser",
                         draft.browser_override,
                         draft.selected == 5,
                         cx,
@@ -1297,7 +1289,7 @@ impl NativeToolsView {
                     body = body
                         .child(self.select_field(
                             6,
-                            "Browser reference",
+                            "Find browser by",
                             draft.browser_kind.label(),
                             draft.selected == 6,
                             cx,
@@ -1339,17 +1331,11 @@ impl NativeToolsView {
                 }
             });
         self.editor_body(crumb, draft.sub_header())
-            .child(self.boolean_field(0, "Active", draft.enabled, draft.selected == 0, cx))
+            .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
             .child(self.select_field(1, "Plugin", plugin_label, draft.selected == 1, cx))
             .child(self.select_field(2, "Action", action_label, draft.selected == 2, cx))
             .child(self.capture_field(draft, cx))
-            .child(self.boolean_field(
-                4,
-                OS_ONLY_LABEL.as_str(),
-                draft.os_only,
-                draft.selected == 4,
-                cx,
-            ))
+            .child(self.boolean_field(4, OS_ONLY_LABEL, draft.os_only, draft.selected == 4, cx))
             .into_any_element()
     }
 
@@ -2027,8 +2013,8 @@ fn hotkey_crumb(draft: &HotkeyDraft, plugins: &[PluginOption]) -> String {
 fn choose_label(select: SelectField) -> &'static str {
     match select {
         SelectField::ActionKind | SelectField::Action => "Action",
-        SelectField::TargetKind => "App reference",
-        SelectField::BrowserKind => "Browser reference",
+        SelectField::TargetKind => "Find app by",
+        SelectField::BrowserKind => "Find browser by",
         SelectField::Plugin => "Plugin",
     }
 }
@@ -2178,8 +2164,8 @@ fn shortcut_text_target(draft: &mut ShortcutDraft) -> Option<&mut String> {
 fn app_placeholder(kind: AppRefKind) -> &'static str {
     match kind {
         AppRefKind::BundleId => "com.example.App",
-        AppRefKind::Name => "App Name",
-        AppRefKind::Path => "/Applications/App.app",
+        AppRefKind::Name => "App name",
+        AppRefKind::Path => "Path to the app",
     }
 }
 
@@ -2253,7 +2239,7 @@ mod breadcrumb_tests {
     fn a_choose_card_appends_its_label() {
         assert_eq!(
             labels(&breadcrumbs("Docs", Some(SelectField::TargetKind))),
-            ["Docs", "App reference"]
+            ["Docs", "Find app by"]
         );
     }
 }

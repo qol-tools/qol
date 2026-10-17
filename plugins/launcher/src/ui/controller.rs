@@ -430,8 +430,9 @@ impl LauncherView {
             }
             Err(error) => {
                 trace::open_folder(source, "error", &error.to_string());
+                log::warn!("could not open containing folder: {error}");
                 self.state
-                    .set_launch_error(format!("Could not open containing folder: {error}"));
+                    .set_launch_error("Could not open the folder.".to_string());
                 cx.notify();
             }
         }
@@ -450,8 +451,9 @@ impl LauncherView {
         match qol_apps::desktop_integration::open_with_default_app(url) {
             Ok(()) => self.hide_to_ghost("website", window),
             Err(error) => {
+                log::warn!("could not open {url}: {error}");
                 self.state
-                    .set_launch_error(format!("Could not open {url}: {error}"));
+                    .set_launch_error(format!("Could not open {url}."));
                 cx.notify();
             }
         }

@@ -97,7 +97,7 @@ pub struct FixEntry {
 
 pub const FIXES: &[FixEntry] = &[FixEntry {
     id: "gulikit-xw-bt-rumble",
-    summary: "Optional xpadneo rumble workaround",
+    summary: "Rumble fix available",
     module: "hid_xpadneo",
     bound_driver: "xpadneo",
     bus: 0x0005,

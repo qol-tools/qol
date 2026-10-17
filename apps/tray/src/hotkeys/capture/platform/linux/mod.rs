@@ -15,6 +15,9 @@ mod recorder;
 
 pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
 
+/// Shown when shortcut recording could not start.
+pub(crate) const RECORDING_UNAVAILABLE: &str = "Shortcut recording could not start. Try again.";
+
 #[cfg(feature = "linux_evdev")]
 pub(crate) fn install(
     bindings: Vec<Binding>,

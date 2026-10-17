@@ -22,6 +22,8 @@ pub struct ResolvedSection {
     pub description: Option<String>,
     pub actions: Vec<String>,
     pub fields: Vec<ResolvedField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platforms: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -50,6 +52,8 @@ pub struct ResolvedField {
     pub entry_fields: std::collections::BTreeMap<String, FieldKind>,
     pub item: Option<ResolvedItemSpec>,
     pub show_when: Option<ResolvedShowWhen>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platforms: Option<Vec<String>>,
     pub number: NumberConstraints,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<bool>,
@@ -180,6 +184,7 @@ pub fn resolve_config(
                 field: show_when.field.clone(),
                 equals: show_when.equals.clone(),
             }),
+            platforms: field.platforms.clone(),
             number: field.number.clone(),
             alpha: field.alpha,
             action: field.action.clone(),
@@ -334,6 +339,7 @@ fn build_sections(spec: &ConfigSpec, include_dev_only: bool) -> Vec<ResolvedSect
             description: section.description.clone(),
             actions: section.actions.clone(),
             fields: Vec::new(),
+            platforms: section.platforms.clone(),
         })
         .collect()
 }

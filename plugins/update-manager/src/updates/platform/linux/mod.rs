@@ -96,13 +96,13 @@ pub(crate) fn read_updates() -> Updates {
     let tag = if Path::new(MINT_AUTOMATION).exists() {
         "Update Manager"
     } else {
-        "APT"
+        "System"
     };
     let mut updates = Updates::default();
     for (source, read) in [
         ("APT", apt::read(&running, tag)),
         ("Flatpak", flatpak::read()),
-        ("fwupd", fwupd::read()),
+        ("Firmware", fwupd::read()),
     ] {
         match read {
             Ok(list) => updates.list.extend(list),

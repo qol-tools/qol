@@ -1,25 +1,25 @@
 schema_version = 1
 title = "Key Remap"
-description = "Remap keyboard, mouse, and scroll inputs without relying on per-plugin settings UIs."
+description = "Change what keys, mouse clicks and scrolling do."
 
 [section.general]
 label = "General"
-description = "Global enablement and app-level exclusions."
+description = "Turn remapping on or off, and skip chosen apps."
 
 [field.enabled]
 type = "boolean"
-label = "Enabled"
+label = "Enable remapping"
 section = "general"
 default = true
 
 [field.excluded_apps]
 type = "string_array"
 label = "Excluded apps"
-description = "Bundle IDs on macOS or executable names such as Code.exe on Windows where non-global remaps should be ignored."
+description = "Remaps are skipped in these apps, except rules marked global."
 section = "general"
 card_description = "Apps where remaps stay off."
 item_label = "app"
-placeholder = "com.example.app"
+placeholder = "App ID"
 default = [
   "net.kovidgoyal.kitty",
   "com.apple.Terminal",
@@ -38,7 +38,7 @@ default = [
 
 [section.char_rules]
 label = "Character rules"
-description = "Translate modifier combinations directly into emitted characters."
+description = "Type a character when you press a shortcut."
 
 [field.char_rules]
 type = "object_array"
@@ -56,7 +56,7 @@ global = "boolean"
 
 [section.key_rules]
 label = "Key rules"
-description = "Translate keys or key groups into other modifier or key combinations."
+description = "Make a key or shortcut act as another one."
 
 [field.key_rules]
 type = "object_array"
@@ -86,7 +86,7 @@ card_description = "Keys this rule translates."
 
 [section.mouse_rules]
 label = "Mouse rules"
-description = "Apply modifier remaps to mouse button clicks."
+description = "Change what modifier keys do when you click."
 
 [field.mouse_rules]
 type = "object_array"
@@ -106,7 +106,7 @@ global = "boolean"
 
 [section.scroll_rules]
 label = "Scroll rules"
-description = "Apply modifier remaps to scroll gestures."
+description = "Change what modifier keys do when you scroll."
 
 [field.scroll_rules]
 type = "object_array"
@@ -125,7 +125,7 @@ global = "boolean"
 
 [section.modifier_keys]
 label = "Modifier keys"
-description = "Choose what each modifier key does, like the macOS Modifier Keys setting. Needs the keyboard helper on macOS. Windows has no Globe / fn key."
+description = "Choose what each modifier key does."
 
 [field.modifier_caps_lock]
 type = "select"
@@ -240,6 +240,7 @@ type = "select"
 config_key = "modifier_keys.fn"
 label = "Globe / fn key"
 section = "modifier_keys"
+platforms = ["macos"]
 default = "fn"
 card_description = "What Globe / fn acts as."
 options = ["caps_lock", "control", "option", "command", "fn", "escape", "none"]

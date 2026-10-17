@@ -849,9 +849,9 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         for handle in handles {
             if self.session.control().warned(&handle) {
                 (self.notify)(
-                    "Monitor",
+                    "Display",
                     &format!(
-                        "Brightness restore failed on {}: the gamma LUT is co-owned by another program",
+                        "Brightness could not be restored on {}: another program is controlling it",
                         handle.connector()
                     ),
                 );
@@ -1038,7 +1038,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             && config.notify_on_change
         {
             if decision.active {
-                (self.banner)("Night mode on", &format!("{kelvin}K"), Some("on"));
+                (self.banner)("Night mode on", "", Some("on"));
             } else {
                 (self.banner)("Night mode off", "", Some("off"));
             }
@@ -1776,10 +1776,11 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         {
             Ok(()) => true,
             Err(error) => {
+                log::error!("the restore snapshot could not be written: {error:#}");
                 (self.notify)(
                     "Monitor",
                     &format!(
-                        "{failure_prefix}: the restore snapshot could not be written: {error:#}"
+                        "{failure_prefix}: your current layout could not be saved for recovery"
                     ),
                 );
                 false
@@ -1791,10 +1792,11 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         match self.session.store().touch_layout() {
             Ok(()) => true,
             Err(error) => {
+                log::error!("the restore snapshot could not be updated: {error:#}");
                 (self.notify)(
                     "Monitor",
                     &format!(
-                        "{failure_prefix}: the restore snapshot could not be updated: {error:#}"
+                        "{failure_prefix}: your current layout could not be saved for recovery"
                     ),
                 );
                 false
@@ -7322,7 +7324,7 @@ mod tests {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("gamma LUT is co-owned")),
+                .any(|body| body.contains("another program is controlling it")),
             "the warn-at-3 mismatch must surface through the production restore path: {bodies:?}"
         );
     }
@@ -8542,7 +8544,10 @@ mod tests {
         let bodies = toasts.lock().unwrap().clone();
         assert!(
             bodies.last().unwrap().contains("Layout not applied")
-                && bodies.last().unwrap().contains("could not be updated"),
+                && bodies
+                    .last()
+                    .unwrap()
+                    .contains("could not be saved for recovery"),
             "{bodies:?}"
         );
         assert!(path.is_dir());

@@ -140,11 +140,8 @@ fn build_row(
     let state = compute(paths, &target);
     let (verdict, fixable) = match state {
         FixState::Pending => (target.entry.summary.to_string(), true),
-        FixState::LiveOnly => (
-            "xpadneo rumble workaround active until reboot".to_string(),
-            true,
-        ),
-        FixState::Applied => ("xpadneo rumble workaround applied".to_string(), false),
+        FixState::LiveOnly => ("Rumble fix active until restart".to_string(), true),
+        FixState::Applied => ("Rumble fix applied".to_string(), false),
     };
     ControllerRow {
         name: device.name.clone(),
@@ -167,15 +164,14 @@ fn apply_link_verdict(verdict: String, link: Option<&LinkEvidence>, state: LinkS
     };
     match state {
         LinkState::Contended => format!(
-            "Not responding: {} is grabbing it from the driver. Fix stops that and reconnects it.",
+            "Not responding: {} is using it. Fix frees it and reconnects it.",
             holders_label(&link.holders)
         ),
-        LinkState::Stalled if link.driver_timeouts >= TIMEOUT_THRESHOLD => format!(
-            "Not responding: the driver timed out {} times in the last minute. Fix reconnects it.",
-            link.driver_timeouts
-        ),
+        LinkState::Stalled if link.driver_timeouts >= TIMEOUT_THRESHOLD => {
+            "Not responding. Fix reconnects it.".to_string()
+        }
         LinkState::Stalled => {
-            "Not responding: both sticks read stuck at their limits. Fix reconnects it.".to_string()
+            "Not responding: the sticks are stuck. Fix reconnects it.".to_string()
         }
         LinkState::Shared => format!("{verdict}; shared with {}", holders_label(&link.holders)),
         LinkState::Ok => verdict,
@@ -190,7 +186,7 @@ fn capability_row(
     let verdict = if device.has_force_feedback {
         "Input and rumble available"
     } else {
-        "Input available; no kernel rumble interface"
+        "Input works; rumble is not available"
     };
     ControllerRow {
         name: device.name.clone(),
@@ -766,10 +762,7 @@ mod tests {
 
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].driver, "hid-generic");
-        assert_eq!(
-            rows[0].verdict,
-            "Input available; no kernel rumble interface"
-        );
+        assert_eq!(rows[0].verdict, "Input works; rumble is not available");
         assert!(!rows[0].fixable);
         assert_eq!(rows[0].fix_state, None);
         assert_eq!(rows[1].driver, "xpadneo");
@@ -803,7 +796,7 @@ mod tests {
                 0x0005,
                 LinkEvidence::default(),
                 LinkState::Ok,
-                "Input available; no kernel rumble interface",
+                "Input works; rumble is not available",
                 "",
                 false,
             ),
@@ -815,7 +808,7 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Shared,
-                "Input available; no kernel rumble interface; shared with steam (pid 4242)",
+                "Input works; rumble is not available; shared with steam (pid 4242)",
                 "steam (pid 4242)",
                 false,
             ),
@@ -828,7 +821,7 @@ mod tests {
                     holders: vec![steam.clone()],
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
+                "Not responding: steam (pid 4242) is using it. Fix frees it and reconnects it.",
                 "steam (pid 4242)",
                 true,
             ),
@@ -841,7 +834,7 @@ mod tests {
                     holders: vec![],
                 },
                 LinkState::Stalled,
-                "Not responding: the driver timed out 5 times in the last minute. Fix reconnects it.",
+                "Not responding. Fix reconnects it.",
                 "",
                 true,
             ),
@@ -853,7 +846,7 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Stalled,
-                "Not responding: both sticks read stuck at their limits. Fix reconnects it.",
+                "Not responding: the sticks are stuck. Fix reconnects it.",
                 "",
                 true,
             ),
@@ -866,7 +859,7 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
+                "Not responding: steam (pid 4242) is using it. Fix frees it and reconnects it.",
                 "steam (pid 4242)",
                 true,
             ),
@@ -879,7 +872,7 @@ mod tests {
                     ..Default::default()
                 },
                 LinkState::Contended,
-                "Not responding: steam (pid 4242) is grabbing it from the driver. Fix stops that and reconnects it.",
+                "Not responding: steam (pid 4242) is using it. Fix frees it and reconnects it.",
                 "steam (pid 4242)",
                 false,
             ),

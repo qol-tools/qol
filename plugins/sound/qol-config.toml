@@ -7,7 +7,7 @@ label = "Output"
 description = "The output every app plays on."
 
 [section.input]
-label = "Input"
+label = "Microphone"
 description = "The microphone every app listens to."
 
 [field.output_device]
@@ -32,7 +32,7 @@ default = "speaker-default"
 [field.volume]
 type = "number"
 label = "Volume"
-description = "Lit is what is playing; the knob is how loud it can get."
+description = "Drag the knob to set the volume. The lit part shows what is playing now."
 section = "output"
 default = 0
 min = 0
@@ -79,7 +79,7 @@ default = "mic-default"
 [field.input_volume]
 type = "number"
 label = "Volume"
-description = "Lit is what every app hears; the knob is how loud you can get."
+description = "Drag the knob to set the microphone volume. The lit part shows what it hears now."
 section = "input"
 default = 0
 min = 0

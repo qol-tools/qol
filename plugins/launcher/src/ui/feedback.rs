@@ -109,8 +109,8 @@ impl Cue {
     pub fn badge(&self) -> Option<String> {
         match self {
             Self::Moved { place, .. } => Some(ordinal(place + 1)),
-            Self::AlreadyTop { .. } => Some("already 1st".to_owned()),
-            Self::NotRaised { .. } => Some("not raised".to_owned()),
+            Self::AlreadyTop { .. } => Some("Already first".to_owned()),
+            Self::NotRaised { .. } => Some("Can't raise".to_owned()),
             _ => None,
         }
     }
@@ -130,8 +130,8 @@ impl Cue {
                 level.label(),
                 if *count == 1 { "result" } else { "results" }
             )),
-            Self::Strictest => Some("Already strict".to_owned()),
-            Self::Loosest => Some("Already loose".to_owned()),
+            Self::Strictest => Some("Already narrowest".to_owned()),
+            Self::Loosest => Some("Already broadest".to_owned()),
             Self::OpeningFolder { folder } => Some(format!("Opening folder {folder}")),
             Self::Copied {
                 what: Copied::Path, ..

@@ -202,7 +202,7 @@ pub(super) fn source_rows(snapshot: &Snapshot, naming: bool) -> Vec<Row> {
             Row::new(
                 RowKind::Field,
                 "New source",
-                Some("Type owner/repo, then Enter.".to_string()),
+                Some("Type a GitHub repository like owner/repo, then press Enter.".to_string()),
             )
             .enter(Enter::CommitAdd, "add")
         } else {
@@ -276,8 +276,8 @@ fn awaits_answer(state: PluginState) -> bool {
 
 fn source_row(source: &Source) -> Row {
     let origin = match &source.index {
-        Some(url) => format!("Signed index, {}", url.trim_start_matches("https://")),
-        None => format!("GitHub releases, github.com/{}", source.repo),
+        Some(url) => format!("Verified catalog, {}", url.trim_start_matches("https://")),
+        None => format!("From GitHub, {}", source.repo),
     };
     let row = Row::item(&source.repo, Some(origin));
     if source.builtin {
@@ -474,7 +474,7 @@ mod tests {
         let builtin = row(&rows, "qol-tools/qol");
         assert_eq!(
             builtin.description.as_deref(),
-            Some("Signed index, qol-tools.github.io/qol/plugins/index.json")
+            Some("Verified catalog, qol-tools.github.io/qol/plugins/index.json")
         );
         assert_eq!(builtin.value.as_deref(), Some("default"));
         assert_eq!(builtin.enter, Some((Enter::OpenSources, "open")));
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(rows[1].delete, None);
         assert_eq!(
             rows[2].description.as_deref(),
-            Some("GitHub releases, github.com/me/tools")
+            Some("From GitHub, me/tools")
         );
         assert_eq!(
             rows[2].delete,

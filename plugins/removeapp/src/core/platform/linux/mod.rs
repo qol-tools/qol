@@ -23,6 +23,9 @@ use crate::core::{
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOVE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const STDERR_CAP: usize = 4096;
+const UNKNOWN_ORIGIN: &str = "Could not tell where this app came from.";
+const PREFLIGHT_FAILED: &str = "Could not check what removing this app would change.";
+const OWNERSHIP_CHANGED: &str = "This app changed since it was checked. Start the removal again.";
 const SELF_LAUNCHERS: &[&str] = &["qol-tray.desktop", "qol-removeapp.desktop"];
 const GENERIC_KEYS: &[&str] = &[
     "applications",
@@ -117,12 +120,10 @@ impl Platform {
             if let Some(id) = flatpak_id(app) {
                 candidates.push((app, id));
             } else if is_flatpak_launcher_path(&app.path) {
+                log::warn!("cannot determine Flatpak app id for {}", app.path.display());
                 index.insert(
                     app.path.clone(),
-                    PackageStatus::Unavailable(format!(
-                        "cannot determine Flatpak app id for {}",
-                        app.path.display()
-                    )),
+                    PackageStatus::Unavailable(UNKNOWN_ORIGIN.into()),
                 );
             }
         }
@@ -134,7 +135,9 @@ impl Platform {
             for (app, _) in candidates {
                 index.insert(
                     app.path.clone(),
-                    PackageStatus::Unavailable("flatpak command not found".into()),
+                    PackageStatus::Unavailable(
+                        "The installer for this app is not available.".into(),
+                    ),
                 );
             }
             return BTreeSet::new();
@@ -165,26 +168,26 @@ impl Platform {
             let Some(scopes) = installed.get(&id) else {
                 index.insert(
                     app.path.clone(),
-                    PackageStatus::Unavailable(format!(
-                        "{id} is not present in Flatpak's installed app list"
-                    )),
+                    PackageStatus::Unavailable("This app is no longer installed.".into()),
                 );
                 continue;
             };
             let scope = match select_flatpak_scope(&app.path, scopes) {
                 Ok(scope) => scope,
                 Err(reason) => {
+                    log::warn!("{reason:#}");
                     index.insert(
                         app.path.clone(),
-                        PackageStatus::Unavailable(reason.to_string()),
+                        PackageStatus::Unavailable(UNKNOWN_ORIGIN.into()),
                     );
                     continue;
                 }
             };
             let Some(package) = ManagedPackage::parse(PackageManager::Flatpak, &id, scope) else {
+                log::warn!("invalid Flatpak app id {id:?}");
                 index.insert(
                     app.path.clone(),
-                    PackageStatus::Unavailable(format!("invalid Flatpak app id {id:?}")),
+                    PackageStatus::Unavailable(UNKNOWN_ORIGIN.into()),
                 );
                 continue;
             };
@@ -238,21 +241,17 @@ impl Platform {
                     ManagedPackage::parse(PackageManager::Apt, &packages[0], PackageScope::System)
                         .map(PackageStatus::Managed)
                         .unwrap_or_else(|| {
-                            PackageStatus::Unavailable(format!(
-                                "invalid dpkg package id {:?}",
-                                packages[0]
-                            ))
+                            log::warn!("invalid dpkg package id {:?}", packages[0]);
+                            PackageStatus::Unavailable(UNKNOWN_ORIGIN.into())
                         })
                 }
-                Some(packages) => PackageStatus::Unavailable(format!(
-                    "{} packages own {}",
-                    packages.len(),
-                    app.path.display()
-                )),
-                None => PackageStatus::Unavailable(format!(
-                    "no dpkg package owns {}",
-                    app.path.display()
-                )),
+                Some(packages) => {
+                    log::warn!("{} packages own {}", packages.len(), app.path.display());
+                    PackageStatus::Unavailable(UNKNOWN_ORIGIN.into())
+                }
+                None => {
+                    PackageStatus::Unavailable("This app was not installed by the system.".into())
+                }
             };
             index.insert(app.path.clone(), status);
         }
@@ -287,10 +286,11 @@ impl Platform {
             QUERY_TIMEOUT,
         )?;
         if !simulation.status.success() {
-            anyhow::bail!(
-                "{PLUGIN_ID}: apt preflight failed: {}",
+            log::warn!(
+                "apt preflight failed: {}",
                 sanitize_stderr(&simulation.stderr, STDERR_CAP)
             );
+            anyhow::bail!(PREFLIGHT_FAILED);
         }
         ensure_apt_removes_only_target(&simulation.stdout, package.id())?;
 
@@ -320,10 +320,8 @@ impl Platform {
             PackageScope::System => "--system",
         };
         if flatpak_id(app).as_deref() != Some(package.id()) {
-            anyhow::bail!(
-                "{PLUGIN_ID}: Flatpak ownership changed for {}",
-                app.path.display()
-            )
+            log::warn!("Flatpak ownership changed for {}", app.path.display());
+            anyhow::bail!(OWNERSHIP_CHANGED)
         }
         let info = run_command(
             flatpak,
@@ -331,10 +329,11 @@ impl Platform {
             QUERY_TIMEOUT,
         )?;
         if !info.status.success() {
-            anyhow::bail!(
-                "{PLUGIN_ID}: cannot confirm Flatpak ownership: {}",
+            log::warn!(
+                "cannot confirm Flatpak ownership: {}",
                 sanitize_stderr(&info.stderr, STDERR_CAP)
-            )
+            );
+            anyhow::bail!("Could not confirm this app is still installed.")
         }
         log::debug!(
             "[{PLUGIN_ID}] package-remove manager=flatpak id={} scope={scope}",
@@ -528,10 +527,7 @@ impl AppPlatform for Platform {
             PackageManager::Apt => self.uninstall_apt(app, package),
             PackageManager::Flatpak => self.uninstall_flatpak(app, package),
             PackageManager::Homebrew | PackageManager::Windows | PackageManager::MicrosoftStore => {
-                anyhow::bail!(
-                    "{PLUGIN_ID}: {} packages are not supported on Linux",
-                    package.manager().label()
-                )
+                anyhow::bail!("This app cannot be uninstalled here.")
             }
         }
     }
@@ -592,10 +588,11 @@ fn ensure_success(manager: &str, output: Output) -> Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        anyhow::bail!(
-            "{PLUGIN_ID}: {manager} uninstall failed: {}",
+        log::warn!(
+            "{manager} uninstall failed: {}",
             sanitize_stderr(&output.stderr, STDERR_CAP)
-        )
+        );
+        anyhow::bail!("The app could not be uninstalled.")
     }
 }
 
@@ -679,10 +676,8 @@ fn ensure_dpkg_owns_launcher(dpkg_query: &Path, launcher: &Path, package: &str) 
     if output.status.success() && matches == [package] {
         return Ok(());
     }
-    anyhow::bail!(
-        "{PLUGIN_ID}: dpkg ownership changed for {}",
-        launcher.display()
-    )
+    log::warn!("dpkg ownership changed for {}", launcher.display());
+    anyhow::bail!(OWNERSHIP_CHANGED)
 }
 
 fn ensure_apt_package_is_removable(dpkg_query: &Path, package: &str) -> Result<()> {
@@ -697,10 +692,11 @@ fn ensure_apt_package_is_removable(dpkg_query: &Path, package: &str) -> Result<(
         QUERY_TIMEOUT,
     )?;
     if !output.status.success() {
-        anyhow::bail!(
-            "{PLUGIN_ID}: cannot inspect apt package {package}: {}",
+        log::warn!(
+            "cannot inspect apt package {package}: {}",
             sanitize_stderr(&output.stderr, STDERR_CAP)
         );
+        anyhow::bail!("Could not check {package}. Try again.");
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let mut fields = text.trim().split('\t');
@@ -708,12 +704,11 @@ fn ensure_apt_package_is_removable(dpkg_query: &Path, package: &str) -> Result<(
     let essential = fields.next().unwrap_or_default();
     let priority = fields.next().unwrap_or_default();
     if !status.starts_with("ii") {
-        anyhow::bail!("{PLUGIN_ID}: apt package {package} is not installed")
+        anyhow::bail!("{package} is no longer installed.")
     }
     if essential == "yes" || matches!(priority, "required" | "important") {
-        anyhow::bail!(
-            "{PLUGIN_ID}: refusing to remove protected apt package {package} ({priority})"
-        )
+        log::warn!("refusing to remove protected apt package {package} ({priority})");
+        anyhow::bail!("{package} is part of the system and cannot be removed.")
     }
     Ok(())
 }
@@ -737,10 +732,11 @@ fn ensure_apt_removes_only_target(raw: &[u8], target: &str) -> Result<()> {
         return Ok(());
     }
     if removals.is_empty() {
-        anyhow::bail!("{PLUGIN_ID}: apt preflight did not plan removal of {target}")
+        log::warn!("apt preflight did not plan removal of {target}");
+        anyhow::bail!(PREFLIGHT_FAILED)
     }
     anyhow::bail!(
-        "{PLUGIN_ID}: apt would also remove {}; use the system package manager to review that plan",
+        "Removing this app would also remove {}. Use your software manager to review it.",
         removals.into_iter().collect::<Vec<_>>().join(", ")
     )
 }

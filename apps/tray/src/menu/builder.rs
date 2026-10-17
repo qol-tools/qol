@@ -63,7 +63,7 @@ fn create_feature_route(
 fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
     let version_label = updates::latest_version()
         .map(|v| format!("⬆ Update to v{}", v))
-        .unwrap_or_else(|| "⬆ Update Available".to_string());
+        .unwrap_or_else(|| "⬆ Update available".to_string());
     let _ = menu.append(&MenuItem::with_id("__update__", &version_label, true, None));
 
     EventRoute {

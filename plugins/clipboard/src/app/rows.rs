@@ -11,7 +11,7 @@ const APP_BYTES: usize = 48;
 const INLINE_COPY_BYTES: usize = 256;
 const LINE_LIST_MIN: usize = 4;
 const LINE_LIST_WIDTH: usize = 80;
-const PAUSED: &str = "Capture is paused";
+const PAUSED: &str = "History is paused";
 
 pub struct RowContext<'a> {
     pub now: u64,
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(
             rows.status,
             Some(Badge {
-                text: "Capture is paused".to_string(),
+                text: "History is paused".to_string(),
                 tone: Some(Tone::Warning)
             })
         );

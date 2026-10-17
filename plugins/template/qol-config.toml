@@ -10,7 +10,7 @@ description = "Settings for a qol-tray plugin scaffolded from the template."
 [field.enabled]
 type = "boolean"
 config_key = "general.enabled"
-label = "Enabled"
+label = "Enable plugin"
 default = true
 
 [field.display_name]

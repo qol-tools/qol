@@ -215,7 +215,7 @@ impl Held {
         match self {
             Self::Phasing(_) => "Held by Ubuntu",
             Self::Administrator => "Held by an administrator",
-            Self::KeptBack => "Kept back by apt",
+            Self::KeptBack => "Kept back by the system",
         }
     }
 
@@ -301,7 +301,7 @@ impl AutoKey {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Packages => "System packages",
-            Self::Spices => "Cinnamon spices",
+            Self::Spices => "Cinnamon add-ons",
             Self::Flatpak => "Flatpak",
         }
     }
@@ -321,7 +321,7 @@ impl fmt::Display for Refusal {
 impl Reason {
     pub(crate) fn label(&self) -> &'static str {
         match self {
-            Self::Locked(_) => "Another install held the package lock",
+            Self::Locked(_) => "Another installer was already running",
             Self::Refused(Refusal::Dismissed) => "The password prompt was closed",
             Self::Refused(Refusal::Denied) => "The password was not accepted",
             Self::Refused(Refusal::TimedOut) => "The password prompt timed out",

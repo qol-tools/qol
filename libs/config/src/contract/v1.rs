@@ -52,6 +52,8 @@ pub struct SectionSpec {
     pub actions: Vec<String>,
     #[serde(default)]
     pub dev_only: bool,
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -92,6 +94,8 @@ pub struct FieldSpec {
     pub entry_fields: IndexMap<String, FieldKind>,
     #[serde(default)]
     pub show_when: Option<ShowWhenSpec>,
+    #[serde(default)]
+    pub platforms: Option<Vec<String>>,
     #[serde(default)]
     pub alpha: Option<bool>,
     #[serde(default)]
@@ -309,6 +313,7 @@ pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_platform::Os;
 
     #[test]
     fn field_order_follows_declaration_not_alphabet() {
@@ -741,6 +746,41 @@ active_action = "set_mode"
         assert_eq!(field.active_query.as_deref(), Some("modes"));
         assert_eq!(field.action.as_deref(), Some("arrange"));
         assert_eq!(field.active_action.as_deref(), Some("set_mode"));
+    }
+
+    #[test]
+    fn parses_platforms_on_fields_and_sections() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[section.host]
+label = "System"
+platforms = ["linux"]
+
+[field.frame]
+type = "boolean"
+default = true
+platforms = ["linux", "windows"]
+
+[field.everywhere]
+type = "boolean"
+default = true
+"#,
+        )
+        .expect("parse");
+        assert_eq!(
+            spec.section("host").unwrap().platforms,
+            Some(vec![Os::Linux.name().to_string()])
+        );
+        assert_eq!(
+            spec.field("frame").unwrap().platforms,
+            Some(vec![
+                Os::Linux.name().to_string(),
+                Os::Windows.name().to_string()
+            ])
+        );
+        assert_eq!(spec.field("everywhere").unwrap().platforms, None);
     }
 
     #[test]

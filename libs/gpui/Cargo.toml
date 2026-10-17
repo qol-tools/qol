@@ -33,6 +33,7 @@ workspace-hack.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 log = "0.4"
 proptest = "1.6"
+qol-platform.workspace = true
 taffy = "0.9"
 tempfile = "3"
 

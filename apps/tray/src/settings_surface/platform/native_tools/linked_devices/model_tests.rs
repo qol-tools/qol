@@ -166,9 +166,7 @@ fn unavailable_views_have_no_mutating_controls_and_connection_labels_require_ses
     });
     assert!(rows(Some(&snapshot), None, None, None, &[])
         .iter()
-        .any(|row| row
-            .detail
-            .contains("Authenticated connection at last refresh")));
+        .any(|row| row.detail.contains("Connected at last refresh")));
     for lifecycle in [Lifecycle::Stopping, Lifecycle::Standby] {
         snapshot.status.lifecycle = lifecycle;
         assert!(!rows(Some(&snapshot), None, None, None, &[])
@@ -247,13 +245,13 @@ fn permission_additions_preserve_unavailable_grants_and_freeze_the_displayed_aut
         assert_eq!(
             presented
                 .iter()
-                .any(|row| row.label == "Permission catalog unavailable"),
+                .any(|row| row.label == "Permissions could not be loaded"),
             catalog.is_none()
         );
         assert_eq!(
             presented
                 .iter()
-                .any(|row| row.label == "No available peer operations"),
+                .any(|row| row.label == "Nothing to allow yet"),
             catalog.is_some()
         );
     }

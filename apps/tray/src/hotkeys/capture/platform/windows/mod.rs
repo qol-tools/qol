@@ -35,6 +35,9 @@ mod recorder;
 
 pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = true;
 
+/// Shown when shortcut recording could not start.
+pub(crate) const RECORDING_UNAVAILABLE: &str = "Shortcut recording could not start. Try again.";
+
 const MENU_MASK_KEY: VIRTUAL_KEY = 0xE8;
 const LIVENESS_INTERVAL_MS: u32 = 10_000;
 const ARM_PENDING: u8 = 0;

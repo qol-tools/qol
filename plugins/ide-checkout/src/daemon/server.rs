@@ -215,7 +215,7 @@ fn handle_checkout<W: Write>(stream: &mut W, request: &Request, config: &Config)
         write_json(
             stream,
             400,
-            &json!({ "success": false, "error": "Missing projectPath or branch" }),
+            &json!({ "success": false, "error": "The project folder or branch is missing." }),
         );
         return;
     };
@@ -337,7 +337,10 @@ mod tests {
     fn checkout_missing_fields_is_400_failure() {
         let response = route_to_string(&request("POST", "/checkout", r#"{"branch":"x"}"#));
         assert!(response.contains("400 Bad Request"), "{response}");
-        assert!(response.contains("Missing projectPath"), "{response}");
+        assert!(
+            response.contains("The project folder or branch is missing."),
+            "{response}"
+        );
     }
 
     #[test]

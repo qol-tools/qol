@@ -115,7 +115,7 @@ fn format_ieee(addr: &[u8; 8]) -> String {
 const CONNECTION_STATUS_QUERY: &str = "connection_status";
 const LIST_DEVICES_QUERY: &str = "list_devices";
 const PING_ACTION: &str = "ping";
-const NO_COORDINATOR_MESSAGE: &str = "No compatible Zigbee coordinator detected on this PC. Plug in a supported Zigbee dongle, then scan again.";
+const NO_COORDINATOR_MESSAGE: &str = "No light dongle found. Plug one in, then scan again.";
 
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     let outcome = dispatch_action(runtime, action);

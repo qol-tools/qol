@@ -20,11 +20,11 @@ label = "Reconnect Paired and Trusted Devices"
 args = ["reconnect_trusted"]
 
 [action.enable_adapter]
-label = "Enable Bluetooth Adapter"
+label = "Turn Bluetooth Adapter On"
 args = ["enable_adapter"]
 
 [action.disable_adapter]
-label = "Disable Bluetooth Adapter"
+label = "Turn Bluetooth Adapter Off"
 args = ["disable_adapter"]
 
 [action.start_search]
@@ -68,7 +68,7 @@ label = "Apply Bluetooth Host Fix"
 args = ["apply_host_fix"]
 
 [action.release_for_handoff]
-label = "Release Bluetooth Device For A Linked Computer"
+label = "Release Bluetooth Device for a Linked Computer"
 args = ["release-for-handoff"]
 
 [action.resume_reconnect]

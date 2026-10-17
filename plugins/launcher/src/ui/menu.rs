@@ -35,9 +35,9 @@ impl OptionAction {
             Self::Apps => "Apps",
             Self::Files => "Files",
             Self::Open => "Open",
-            Self::OpenFolder => "Open containing folder",
-            Self::BoostUp => "Boost result",
-            Self::BoostDown => "Reduce boost",
+            Self::OpenFolder => "Open folder",
+            Self::BoostUp => "Raise rank in list",
+            Self::BoostDown => "Lower rank in list",
         }
     }
 
@@ -86,7 +86,7 @@ const HELP_SEARCH_RIGHT_ROWS: HelpRows = &[
 
 const HELP_QUERY_ROWS: HelpRows = &[
     ("Query", &[]),
-    ("Move caret", &[Key::LEFT, Key::RIGHT]),
+    ("Move cursor", &[Key::LEFT, Key::RIGHT]),
     ("Select text", &[Key::LEFT.shift(), Key::RIGHT.shift()]),
     ("Start / end", &[Key::HOME, Key::END]),
     ("Delete text", &[Key::BACKSPACE, Key::DELETE]),

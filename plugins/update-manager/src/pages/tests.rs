@@ -418,7 +418,7 @@ fn a_failed_install_offers_a_retry_and_the_log() {
     );
     assert_eq!(
         detail(&pages, ROOT, "failed"),
-        "Another install held the package lock. Nothing changed; it still waits."
+        "Another installer was already running. Nothing changed; it still waits."
     );
     assert_eq!(
         detail(&pages, "failed", "reason"),

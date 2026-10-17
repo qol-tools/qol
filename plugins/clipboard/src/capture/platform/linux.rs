@@ -69,9 +69,10 @@ pub(crate) fn probe() -> Support {
 
 fn connect() -> Result<(RustConnection, usize), CaptureError> {
     let (conn, screen) = x11rb::connect(None).map_err(|error| {
-        CaptureError::Unavailable(format!(
-            "no X11 display ({error}); Wayland data-control capture is not built yet"
-        ))
+        log::warn!("no X11 display ({error}); Wayland data-control capture is not built yet");
+        CaptureError::Unavailable(
+            "Clipboard history is not available in this desktop session.".to_string(),
+        )
     })?;
     if conn
         .extension_information(xfixes::X11_EXTENSION_NAME)
@@ -79,7 +80,7 @@ fn connect() -> Result<(RustConnection, usize), CaptureError> {
         .is_none()
     {
         return Err(CaptureError::Unavailable(
-            "the X server has no XFixes extension".to_string(),
+            "Clipboard history is not available in this desktop session.".to_string(),
         ));
     }
     conn.xfixes_query_version(5, 0)
@@ -173,9 +174,10 @@ impl Clipboard for X11Clipboard {
             Payload::Png(png) => png.len(),
         };
         if !self.servable(size) {
-            return Err(CaptureError::Failed(format!(
-                "a {size} byte clip is too large to put back on the X11 clipboard"
-            )));
+            log::warn!("a {size} byte clip is too large to put back on the X11 clipboard");
+            return Err(CaptureError::Failed(
+                "This clip is too large to copy again.".to_string(),
+            ));
         }
         *lock(&self.offer) = Some(payload);
         self.conn
@@ -191,7 +193,7 @@ impl Clipboard for X11Clipboard {
             .owner;
         if owner != self.window {
             return Err(CaptureError::Failed(
-                "another client took the clipboard back".to_string(),
+                "Another app took the clipboard. Try copying again.".to_string(),
             ));
         }
         Ok(())

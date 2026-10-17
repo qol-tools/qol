@@ -50,7 +50,7 @@ pub fn git_checkout(
     let remote = git_remote_url(project_path)?;
     let temp_path = temp_path_for(project_path, branch, config);
     std::fs::create_dir_all(config.checkout_root()).map_err(|error| {
-        CheckoutError::ExecutionFailed(format!("Failed to create temp dir: {error}"))
+        CheckoutError::ExecutionFailed(format!("Could not create the checkout folder: {error}"))
     })?;
 
     if temp_path.is_dir() {
@@ -85,8 +85,11 @@ fn validate_branch(branch: &str) -> Result<(), CheckoutError> {
 }
 
 pub fn open_app(app_id: &str, path: &str, config: &Config) -> Result<(), CheckoutError> {
-    let executable = find_executable(app_id, config)
-        .ok_or_else(|| CheckoutError::ExecutionFailed(format!("App '{app_id}' not found")))?;
+    let executable = find_executable(app_id, config).ok_or_else(|| {
+        CheckoutError::ExecutionFailed(format!(
+            "Could not find '{app_id}'. Add its location in IDE Checkout settings."
+        ))
+    })?;
     let launch_path = super::platform::launch_path(Path::new(path)).map_err(|error| {
         CheckoutError::InvalidParams(format!("Could not resolve app path: {error}"))
     })?;
@@ -115,7 +118,7 @@ fn validate_path(path: &str) -> Result<(), CheckoutError> {
     }
     if path.contains("..") {
         return Err(CheckoutError::InvalidParams(
-            "Path contains directory traversal".to_string(),
+            "The project path cannot contain '..'.".to_string(),
         ));
     }
     Ok(())

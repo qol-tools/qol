@@ -192,7 +192,7 @@ fn quit_and_wait_with(
             std::thread::sleep(delay);
         }
     }
-    anyhow::bail!("{PLUGIN_ID}: {} is still running", app.name)
+    anyhow::bail!("{} is still running. Quit it and try again.", app.name)
 }
 
 pub fn is_running(app: &InstalledApp) -> bool {
@@ -392,16 +392,13 @@ fn remove_with(
 
 fn validate_plan_with(plat: &impl AppPlatform, plan: &RemovalPlan) -> Result<()> {
     if plat.is_protected(&plan.app) {
-        anyhow::bail!(
-            "{PLUGIN_ID}: {} is protected and cannot be removed",
-            plan.app.name
-        );
+        anyhow::bail!("{} is protected and cannot be removed.", plan.app.name);
     }
     ensure_snapshot_alignment(plan)?;
     for (item, snap) in plan.items.iter().zip(&plan.snapshots) {
         if !snap.matches(&item.path) {
             anyhow::bail!(
-                "{PLUGIN_ID}: {} changed on disk; aborting",
+                "{} changed on disk. Start the removal again.",
                 item.path.display()
             );
         }

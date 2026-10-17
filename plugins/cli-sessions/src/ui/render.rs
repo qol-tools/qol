@@ -131,7 +131,7 @@ fn header(
 fn empty_state() -> impl IntoElement {
     qol_gpui::kit::kit().empty(
         "No sessions running",
-        Some("Spawned lanes appear here.".into()),
+        Some("Sessions you start will appear here.".into()),
     )
 }
 

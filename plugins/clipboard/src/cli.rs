@@ -124,9 +124,12 @@ fn capture_result(support: Support) -> DoctorCheckResult {
         Support::Ready { backend } => {
             DoctorCheckResult::ok("capture", format!("Clipboard capture runs on {backend}."))
         }
-        Support::Unavailable(error @ CaptureError::Unsupported { .. }) => {
-            DoctorCheckResult::warn("capture", format!("{error}; the history stays as it is."))
-        }
+        Support::Unavailable(CaptureError::Unsupported { platform }) => DoctorCheckResult::warn(
+            "capture",
+            format!(
+                "Clipboard capture is not supported on {platform} yet; the history stays as it is."
+            ),
+        ),
         Support::Unavailable(error) => DoctorCheckResult::warn("capture", error.to_string())
             .with_fix("Run qol-tray inside an X11 session."),
     }

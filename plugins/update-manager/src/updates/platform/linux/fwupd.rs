@@ -51,8 +51,10 @@ pub(super) fn read() -> Result<Vec<Update>, String> {
 }
 
 pub(super) fn parse(text: &str) -> Result<Vec<Update>, String> {
-    let report: Report = serde_json::from_str(text)
-        .map_err(|error| format!("fwupd answered in a way qol cannot read: {error}"))?;
+    let report: Report = serde_json::from_str(text).map_err(|error| {
+        log::warn!("fwupd answered in a way qol cannot read: {error}");
+        "Could not read the firmware update list.".to_string()
+    })?;
     Ok(report.devices.into_iter().filter_map(update).collect())
 }
 

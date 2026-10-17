@@ -3,7 +3,6 @@ mod index;
 pub mod installer;
 mod platform;
 pub(crate) use index::blob_client;
-pub(crate) use platform::display_label as host_os_label;
 mod release_assets;
 pub(crate) mod release_integrity;
 pub(crate) mod server;

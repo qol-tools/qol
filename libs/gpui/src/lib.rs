@@ -41,7 +41,7 @@ pub mod window;
 pub mod window_options;
 
 pub use busy::Busy;
-pub use format::format_bytes;
+pub use format::{format_bytes, plural};
 pub use icon::Icon;
 pub use key::Key;
 pub use status_indicator::StatusIndicator;

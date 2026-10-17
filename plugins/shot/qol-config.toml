@@ -11,7 +11,7 @@ actions = ["record"]
 type = "boolean"
 config_key = "audio.enabled"
 label = "Enable audio"
-description = "macOS captures the default microphone only; explicit input choices apply on Linux and Windows."
+description = "Record sound along with the screen."
 section = "audio"
 default = true
 
@@ -19,8 +19,9 @@ default = true
 type = "string_array"
 config_key = "audio.inputs"
 label = "Audio inputs"
-description = "Linux and Windows. Microphone and system audio, from PulseAudio on Linux and WASAPI on Windows."
+description = "Choose whether recordings include your microphone, system sound, or both."
 section = "audio"
+platforms = ["linux", "windows"]
 placeholder = "mic"
 default = ["mic"]
 card_description = "What recordings capture."
@@ -37,9 +38,10 @@ system = "speaker-default"
 [field.audio_mic_device]
 type = "select"
 config_key = "audio.mic_device"
-label = "Mic device"
-description = "Linux and Windows. The PulseAudio source or WASAPI capture endpoint."
+label = "Microphone"
+description = "The microphone used for recordings."
 section = "audio"
+platforms = ["linux", "windows"]
 default = "default"
 query = "audio_sources"
 lookup_label = "microphones"
@@ -54,9 +56,10 @@ default = "mic-default"
 [field.audio_system_device]
 type = "select"
 config_key = "audio.system_device"
-label = "System device"
-description = "Linux and Windows. The PulseAudio output whose monitor is recorded, or the WASAPI output recorded through loopback."
+label = "System audio output"
+description = "The speakers or headphones whose sound is recorded."
 section = "audio"
+platforms = ["linux", "windows"]
 default = "default"
 query = "audio_sinks"
 lookup_label = "outputs"
@@ -77,8 +80,8 @@ actions = ["record"]
 type = "number"
 variant = "slider"
 config_key = "video.crf"
-label = "Video quality (CRF)"
-description = "Lower is better quality and a bigger file; 0 is lossless and 51 is the worst. Used by Linux and Windows capture and macOS ffmpeg conversion. Native MOV and avconvert ignore this."
+label = "Video quality"
+description = "Lower looks better but makes bigger files. 0 is lossless."
 section = "video"
 default = 18
 min = 0
@@ -88,8 +91,8 @@ step = 1
 [field.video_preset]
 type = "select"
 config_key = "video.preset"
-label = "Preset"
-description = "Used by Linux and Windows capture and macOS ffmpeg conversion for H.264 outputs."
+label = "Encoding speed"
+description = "Slower settings make smaller files at the same quality. Not used for WebM."
 section = "video"
 default = "veryfast"
 card_description = "Encoding speed against file size."
@@ -109,9 +112,10 @@ veryslow = "preset:12,52"
 [field.video_framerate]
 type = "number"
 config_key = "video.framerate"
-label = "Framerate"
-description = "Linux and Windows. macOS screencapture does not expose a framerate setting."
+label = "Frame rate"
+description = "How many frames per second recordings capture."
 section = "video"
+platforms = ["linux", "windows"]
 default = 60
 min = 1
 max = 240
@@ -121,7 +125,7 @@ step = 1
 type = "select"
 config_key = "video.format"
 label = "Format"
-description = "macOS records natively as MOV, then converts after stop when needed. Windows encodes WebM as VP9 and the others as H.264."
+description = "MP4 and MOV play almost everywhere. WebM suits sharing on the web."
 section = "video"
 default = "mov"
 card_description = "The file type recordings save as."
@@ -135,22 +139,23 @@ webm = "format:WEBM"
 
 [section.capture]
 label = "Capture"
-description = "Region selector behavior and screenshot previews."
+description = "How you pick an area to capture and how screenshots are shown afterwards."
 actions = ["screenshot", "record"]
 
 [field.capture_include_window_frame]
 type = "boolean"
 config_key = "capture.include_window_frame"
 label = "Include window frame"
-description = "Linux and Windows. Include the title bar and borders when capturing a detected window. Disable to capture the client area only."
+description = "Include the title bar and borders when capturing a window."
 section = "capture"
+platforms = ["linux", "windows"]
 default = true
 
 [field.capture_pin_border]
 type = "boolean"
 config_key = "capture.pin_border"
 label = "Pinned preview border"
-description = "Draw a thin border around pinned screenshot previews to keep them distinct from the screen behind them."
+description = "Draw a thin border around pinned screenshots so they stand out from the screen."
 section = "capture"
 default = true
 
@@ -158,20 +163,20 @@ default = true
 type = "boolean"
 config_key = "capture.open_folder_after_save"
 label = "Open folder after saving"
-description = "Open the containing folder after you finish a saved capture preview. Completion notifications remain clickable when disabled."
+description = "Open the folder once you finish a saved capture preview."
 section = "capture"
 default = false
 
 [section.shortcuts]
 label = "Preview"
-description = "Action ordering in screenshot thumbnail previews."
+description = "Which buttons come first on screenshot previews."
 actions = ["preview"]
 
 [field.shortcuts_copy_command]
 type = "select"
 config_key = "shortcuts.copy_command"
 label = "Default copy action"
-description = "Choose whether Copy Image or Copy Path appears first and starts selected in screenshot thumbnails."
+description = "Choose whether Copy image or Copy path comes first and is selected on screenshot previews."
 section = "shortcuts"
 default = "copy_image"
 card_description = "Which copy button comes first."

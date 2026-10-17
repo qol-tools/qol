@@ -1,10 +1,10 @@
 schema_version = 1
 title = "CLI Sessions"
-description = "Always-on-top overview of live Claude Code sessions."
+description = "Always-on-top overview of your running terminal sessions."
 
 [section.panel]
 label = "Panel"
-description = "Where the always-on-top panel sits and how it refreshes."
+description = "Where the always-on-top panel sits on screen."
 
 [section.detection]
 label = "Service detection"
@@ -37,7 +37,7 @@ type = "string_array"
 section = "detection"
 config_key = "service_commands"
 label = "Service commands"
-description = "Command names treated as long-running services even when they hold no listening socket. One command per row."
+description = "Commands to show as running services. One command per row."
 card_description = "Commands that count as services."
 item_label = "command"
 default = []

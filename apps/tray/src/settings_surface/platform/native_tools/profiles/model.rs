@@ -359,7 +359,7 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
         .dot(Dot::Danger)
         .chip("sync"),
         Health::Attention => Row::new(
-            "Sync needs a look",
+            "Sync needs attention",
             sync.incident
                 .as_ref()
                 .map(|incident| incident.message.clone())
@@ -663,7 +663,7 @@ mod tests {
             message: "Another computer replaced your changes".to_string(),
         });
         let rows = main_rows(&page(&snapshot));
-        assert_eq!(rows[3].label, "Sync needs a look");
+        assert_eq!(rows[3].label, "Sync needs attention");
         assert_eq!(rows[3].action, Some(Action::OpenBackups));
     }
 

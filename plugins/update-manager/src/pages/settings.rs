@@ -199,7 +199,7 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
         sheet.row(
             Row::info("timer", "Mint's timer")
                 .detail(format!(
-                    "Runs {} to {}{}, through a systemd override",
+                    "Runs {} to {}{}.",
                     hours.from,
                     hours.until,
                     if hours.startup {
@@ -304,7 +304,7 @@ fn auto(session: &Session) -> Sheet {
     }
     sheet.row(
         Row::info("firmware", "Firmware")
-            .detail("fwupd never installs on its own")
+            .detail("Firmware never installs on its own")
             .value("when you say"),
     );
     sheet
@@ -383,7 +383,7 @@ fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
 fn lower(key: AutoKey) -> &'static str {
     match key {
         AutoKey::Packages => "system packages",
-        AutoKey::Spices => "Cinnamon spices",
+        AutoKey::Spices => "Cinnamon add-ons",
         AutoKey::Flatpak => "Flatpak",
     }
 }

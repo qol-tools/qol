@@ -1,4 +1,3 @@
-mod platform;
 mod schema;
 mod validation;
 
@@ -39,10 +38,5 @@ pub fn default_manifest_version() -> u32 {
 }
 
 pub fn supports_current_platform(platforms: &Option<Vec<String>>) -> bool {
-    match platforms {
-        None => true,
-        Some(platforms) => platforms
-            .iter()
-            .any(|platform| platform == platform::current_manifest_token()),
-    }
+    qol_config::platform::supports_current_platform(platforms.as_deref())
 }

@@ -775,7 +775,7 @@ mod tests {
             name: "Version".to_string(),
             value: "3.66.1".to_string(),
             tone: ValueTone::Muted,
-            description: Some("Updates arrive through Recompile".to_string()),
+            description: Some("Updates come from rebuilding".to_string()),
             action: None,
             action_label: None,
             attention: false,

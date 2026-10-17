@@ -5,6 +5,7 @@ mod inspection;
 pub mod normalized;
 pub mod object_array;
 pub mod pages;
+pub mod platform;
 pub mod validation;
 
 pub use defaults::{

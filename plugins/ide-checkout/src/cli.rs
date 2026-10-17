@@ -63,15 +63,12 @@ fn result_for(result: std::io::Result<()>) -> CommandResult {
 
 fn run_status() -> u8 {
     let message = if daemon_is_running() {
-        format!(
-            "IDE Checkout daemon is running on port {}",
-            crate::daemon::daemon_port()
-        )
+        "IDE Checkout is ready."
     } else {
-        "IDE Checkout daemon is NOT running".to_string()
+        "IDE Checkout is not running."
     };
 
-    qol_plugin_daemon::notification::send_banner("IDE Checkout", &message, None);
+    qol_plugin_daemon::notification::send_banner("IDE Checkout", message, None);
     0
 }
 
