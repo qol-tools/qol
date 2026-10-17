@@ -396,7 +396,7 @@ fn start_update_loop(app_state: &AppState) {
             }
             tokio::select! {
                 _ = shutdown_rx.recv() => return,
-                _ = tokio::time::sleep(crate::updates::CHECK_INTERVAL) => {}
+                _ = tokio::time::sleep(crate::updates::next_check_delay()) => {}
             }
         }
     });

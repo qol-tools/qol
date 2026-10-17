@@ -16,6 +16,12 @@ use crate::settings_surface::CoreTool;
 use model::ToolKind;
 use view::NativeToolsView;
 
+pub(super) fn check_due_updates() {
+    if let Err(error) = updates::data::action("check_due_updates", None) {
+        log::warn!("Settings could not start an update check: {error:#}");
+    }
+}
+
 pub(super) fn factories(target: CoreTool) -> Vec<(String, CustomPanelFactory)> {
     vec![
         (

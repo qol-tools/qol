@@ -204,7 +204,8 @@ pub(super) async fn post_core_action(
         Err((status, message)) => return action_error(status, message),
     };
     match action.as_str() {
-        "check_updates" => check_updates_action(&state),
+        "check_updates" => check_updates_action(&state, true),
+        "check_due_updates" => check_updates_action(&state, false),
         "update" => start_update_action(&state, request.id.as_deref()),
         "update_all" => start_update_all_action(&state),
         "stop_updates" => stop_updates_action(),
@@ -223,8 +224,8 @@ fn action_request(body: &[u8]) -> Result<CoreActionRequest, (StatusCode, &'stati
     serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON"))
 }
 
-fn check_updates_action(state: &AppState) -> Response {
-    let Some(check) = super::super::update_check::claim(state, true) else {
+fn check_updates_action(state: &AppState, force: bool) -> Response {
+    let Some(check) = super::super::update_check::claim(state, force) else {
         return action_ok("Already checking for updates");
     };
     tokio::spawn(check);
