@@ -34,6 +34,9 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
         if let Some(engine_args) = engine_args(command, rest) {
             return sessions(&engine_args).emit();
         }
+        if let Some(engine_args) = engine_help(command, rest) {
+            return sessions(&engine_args).emit();
+        }
         if command == SWITCHBOARD && rest == [HERE] {
             return switchboard_here().emit();
         }
@@ -50,6 +53,13 @@ fn engine_args(command: &str, rest: &[String]) -> Option<Vec<OsString>> {
                 .map(OsString::from)
                 .collect(),
         ),
+        _ => None,
+    }
+}
+
+fn engine_help(command: &str, rest: &[String]) -> Option<Vec<OsString>> {
+    match rest {
+        [target] if command == "help" => engine_args(target, &[command.to_string()]),
         _ => None,
     }
 }
@@ -251,13 +261,31 @@ where
                 .detail(format!("{HERE} makes the calling kitty window the switchboard when none is live; when one is, it starts nothing and exits {}, so a wrapper like clauded starts its usual chat.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
                 .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at low effort unless changed.")
                 .output(format!("One line saying what was focused, opened or started on stdout; with {HERE} this process becomes claude."))
-                .exit_behavior("Exits non-zero when the switchboard cannot be focused, opened or started.")
+                .exit_behavior(format!("With {HERE}, exits {} when a switchboard is already live. Exits non-zero when the switchboard cannot be focused, opened or started.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
                 .run_plain_text(|context| {
                     reject_args(context.args())?;
                     let profile = crate::config::load().switchboard_profile();
                     let opened = qol_sessions_engine::switchboard::open(&profile)?;
                     Ok(PlainTextOutput::text(opened.summary()))
                 }),
+        )
+        .command(
+            Command::new(SESSIONS)
+                .about("Spawn, fork, bridge, message and list terminal sessions with the qol sessions engine.")
+                .usage(format!("{PLUGIN_ID} {SESSIONS} <command> [args]"))
+                .detail(format!("Runs the same commands as `qol sessions`. `{PLUGIN_ID} {SESSIONS} help` lists them."))
+                .output("The sessions command's own output.")
+                .exit_behavior("Exits non-zero when the sessions command fails.")
+                .run_result(|context| Ok(sessions(&engine_args(SESSIONS, context.args()).unwrap_or_default()))),
+        )
+        .command(
+            Command::new(MCP)
+                .about("Serve the sessions tools to an agent over the Model Context Protocol on stdio.")
+                .usage(format!("{PLUGIN_ID} {MCP} [--profile default|switchboard]"))
+                .detail(format!("Point an agent's MCP server config at this command. `{PLUGIN_ID} {MCP} help` lists the tools and profiles."))
+                .output("JSON-RPC messages on stdout, one per line.")
+                .exit_behavior("Exits when stdin closes; non-zero when the server cannot start.")
+                .run_result(|context| Ok(sessions(&engine_args(MCP, context.args()).unwrap_or_default()))),
         )
         .command(
             Command::new("snapshot")
@@ -487,6 +515,21 @@ mod tests {
         for command in ["switchboard", "open", "park", "help"] {
             assert_eq!(engine_args(command, &rest(&["mcp"])), None, "{command}");
         }
+    }
+
+    #[test]
+    fn help_before_sessions_or_mcp_prints_the_engine_help() {
+        let rest = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            engine_help("help", &rest(&["sessions"])),
+            Some(vec![OsString::from("help")])
+        );
+        assert_eq!(
+            engine_help("help", &rest(&["mcp"])),
+            Some(vec![OsString::from("mcp"), OsString::from("help")])
+        );
+        assert_eq!(engine_help("help", &rest(&["switchboard"])), None);
+        assert_eq!(engine_help("sessions", &rest(&["help"])), None);
     }
 
     #[test]
