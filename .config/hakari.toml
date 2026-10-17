@@ -32,6 +32,7 @@ workspace-hack-line-style = "workspace-dotted"
 workspace-members = [
     "qol-build-identity",
     "qol-conventions",
+    "qol-platform",
     "qol-plugin-index",
     "qol-plugin-registry",
 ]

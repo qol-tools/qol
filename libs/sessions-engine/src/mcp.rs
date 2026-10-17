@@ -307,10 +307,11 @@ impl McpSessionServer {
             format!("unknown kind `{kind_token}`; expected note, ask, reply or report")
         })?;
         let reply_to = optional_string(arguments, "reply_to", "session_send")?;
+        let live_keys = self.live_keys()?;
         let message = self
             .messaging()
             .send(
-                &self.live_keys()?,
+                &live_keys,
                 &super::mailbox::SendRequest {
                     from: &from,
                     to,
@@ -327,6 +328,7 @@ impl McpSessionServer {
             "to": message.to,
             "kind": message.kind,
             "hops": message.hops,
+            "live": live_keys.contains(&message.to),
         }))
         .map_err(|error| format!("serialization failed: {error}"))
     }
@@ -5327,6 +5329,26 @@ mod tests {
             json!({"action": "list"}),
         ));
         assert_eq!(listed["threads"], json!([]));
+    }
+
+    #[test]
+    fn a_send_says_whether_the_recipient_is_still_live() {
+        let (server, backend, _root) = keyed_server(&["switchboard", "open"]);
+        server.lineage.record("open", Some("switchboard")).unwrap();
+        server
+            .lineage
+            .record("closed", Some("switchboard"))
+            .unwrap();
+        act_as(&backend, "switchboard");
+        for (to, live) in [("open", true), ("closed", false)] {
+            let sent = tool_json(&tool_call(
+                &server,
+                "session_send",
+                json!({"to": to, "text": "note", "kind": "note"}),
+            ));
+            assert_eq!(sent["sent"], true, "{sent}");
+            assert_eq!(sent["live"], live, "{to}: {sent}");
+        }
     }
 
     #[test]

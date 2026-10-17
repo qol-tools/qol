@@ -22,7 +22,6 @@ mod capability;
 mod cli;
 mod close;
 mod contract;
-mod exec;
 mod export;
 mod fork;
 pub mod knocks;

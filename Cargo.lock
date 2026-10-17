@@ -6516,7 +6516,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.92.0"
+version = "0.92.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7170,7 +7170,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys 0.59.0",
- "workspace-hack",
 ]
 
 [[package]]

@@ -6624,6 +6624,7 @@ mod tests {
             cwd: PathBuf::from(managed_workdir(root)),
             mcp_program: PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
             projects: Vec::new(),
+            path: None,
         }
     }
 
