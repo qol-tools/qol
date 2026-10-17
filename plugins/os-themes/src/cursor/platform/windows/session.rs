@@ -2,11 +2,14 @@ use std::collections::HashMap;
 use std::ptr::null_mut;
 
 use qol_host_session::SessionStore;
+use qol_platform::native::registry::{self, Hive, View};
+use qol_platform::native::wide::wide_nul;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CopyImage, DestroyCursor, GetCursorInfo, LoadCursorW, SetSystemCursor, SystemParametersInfoW,
-    CURSORINFO, CURSOR_SHOWING, HCURSOR, IMAGE_CURSOR, LR_COPYFROMRESOURCE, OCR_APPSTARTING,
-    OCR_CROSS, OCR_HAND, OCR_HELP, OCR_IBEAM, OCR_NO, OCR_NORMAL, OCR_SIZEALL, OCR_SIZENESW,
-    OCR_SIZENS, OCR_SIZENWSE, OCR_SIZEWE, OCR_UP, OCR_WAIT, SPI_SETCURSORS, SYSTEM_CURSOR_ID,
+    CopyImage, DestroyCursor, GetCursorInfo, LoadCursorW, LoadImageW, SetSystemCursor,
+    SystemParametersInfoW, CURSORINFO, CURSOR_SHOWING, HCURSOR, IMAGE_CURSOR, LR_COPYFROMRESOURCE,
+    LR_LOADFROMFILE, OCR_APPSTARTING, OCR_CROSS, OCR_HAND, OCR_HELP, OCR_IBEAM, OCR_NO, OCR_NORMAL,
+    OCR_SIZEALL, OCR_SIZENESW, OCR_SIZENS, OCR_SIZENWSE, OCR_SIZEWE, OCR_UP, OCR_WAIT,
+    SPI_SETCURSORS, SYSTEM_CURSOR_ID,
 };
 
 use crate::cursor::platform::scale_journal::{self, ScaleJournal};
@@ -14,21 +17,24 @@ use crate::cursor::platform::shake;
 
 use super::raster::{self, Raster};
 
-const SYSTEM_CURSORS: [SYSTEM_CURSOR_ID; 14] = [
-    OCR_NORMAL,
-    OCR_IBEAM,
-    OCR_WAIT,
-    OCR_CROSS,
-    OCR_UP,
-    OCR_SIZENWSE,
-    OCR_SIZENESW,
-    OCR_SIZEWE,
-    OCR_SIZENS,
-    OCR_SIZEALL,
-    OCR_NO,
-    OCR_HAND,
-    OCR_APPSTARTING,
-    OCR_HELP,
+const SCHEME_KEY: &str = r"Control Panel\Cursors";
+
+/// Each replaceable system cursor and its file value under `SCHEME_KEY`.
+const SYSTEM_CURSORS: [(SYSTEM_CURSOR_ID, &str); 14] = [
+    (OCR_NORMAL, "Arrow"),
+    (OCR_IBEAM, "IBeam"),
+    (OCR_WAIT, "Wait"),
+    (OCR_CROSS, "Crosshair"),
+    (OCR_UP, "UpArrow"),
+    (OCR_SIZENWSE, "SizeNWSE"),
+    (OCR_SIZENESW, "SizeNESW"),
+    (OCR_SIZEWE, "SizeWE"),
+    (OCR_SIZENS, "SizeNS"),
+    (OCR_SIZEALL, "SizeAll"),
+    (OCR_NO, "No"),
+    (OCR_HAND, "Hand"),
+    (OCR_APPSTARTING, "AppStarting"),
+    (OCR_HELP, "Help"),
 ];
 
 struct Source {
@@ -117,7 +123,7 @@ impl CursorSession {
             .find(|(cursor_id, _)| *cursor_id == id)
             .map(|(_, handle)| *handle)?;
         let base = raster::capture(shared)?;
-        let detailed = detailed_raster(shared, &base, self.source_factor);
+        let detailed = detailed_raster(id, shared, &base, self.source_factor);
         log::debug!(
             "captured cursor {id}: base={}x{} source={}x{}",
             base.width,
@@ -196,10 +202,47 @@ pub(super) fn reload_system_cursors() {
     }
 }
 
-fn detailed_raster(shared: HCURSOR, base: &Raster, factor: f32) -> Raster {
+fn detailed_raster(id: SYSTEM_CURSOR_ID, shared: HCURSOR, base: &Raster, factor: f32) -> Raster {
     let Some((width, height)) = raster::target_size(base.width, base.height, factor) else {
         return base.clone();
     };
+    scheme_raster(id, width, height)
+        .or_else(|| resource_raster(shared, width, height))
+        .filter(|detailed| detailed.longest_side() > base.longest_side())
+        .unwrap_or_else(|| base.clone())
+}
+
+/// Scheme cursors are loaded from .cur/.ani files, which carry the large
+/// sizes. CopyImage cannot reach those: with no resource behind the handle it
+/// stretches the small image instead.
+fn scheme_raster(id: SYSTEM_CURSOR_ID, width: u32, height: u32) -> Option<Raster> {
+    let (_, name) = SYSTEM_CURSORS
+        .iter()
+        .find(|(cursor_id, _)| *cursor_id == id)?;
+    let path = registry::read_string(Hive::CurrentUser, SCHEME_KEY, name, View::Default)
+        .ok()
+        .flatten()
+        .filter(|path| !path.is_empty())?;
+    let path = wide_nul(path);
+    let loaded = unsafe {
+        LoadImageW(
+            null_mut(),
+            path.as_ptr(),
+            IMAGE_CURSOR,
+            width as i32,
+            height as i32,
+            LR_LOADFROMFILE,
+        )
+    };
+    if loaded.is_null() {
+        return None;
+    }
+    let detailed = raster::capture(loaded);
+    unsafe { DestroyCursor(loaded) };
+    detailed
+}
+
+fn resource_raster(shared: HCURSOR, width: u32, height: u32) -> Option<Raster> {
     let copy = unsafe {
         CopyImage(
             shared,
@@ -210,19 +253,17 @@ fn detailed_raster(shared: HCURSOR, base: &Raster, factor: f32) -> Raster {
         )
     };
     if copy.is_null() {
-        return base.clone();
+        return None;
     }
     let detailed = raster::capture(copy);
     unsafe { DestroyCursor(copy) };
     detailed
-        .filter(|detailed| detailed.longest_side() > base.longest_side())
-        .unwrap_or_else(|| base.clone())
 }
 
 fn shared_cursors() -> Vec<(SYSTEM_CURSOR_ID, HCURSOR)> {
     SYSTEM_CURSORS
         .iter()
-        .filter_map(|id| {
+        .filter_map(|(id, _)| {
             let handle = unsafe { LoadCursorW(null_mut(), *id as usize as *const u16) };
             (!handle.is_null()).then_some((*id, handle))
         })
