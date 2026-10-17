@@ -69,9 +69,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         rustflags = (
             "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && "
             "'-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && "
-            "'-C target-feature=+crt-static' || '' }}"
+            "'-C linker=rust-lld -C target-feature=+crt-static' || '' }}"
         )
-        self.assertIn(rustflags, tests)
+        # The check job, its release check step and the release build share
+        # the cache key the warm job saves, so each restates its RUSTFLAGS.
+        self.assertEqual(tests.count(rustflags), 3)
         for contract in [
             "branches: [main]",
             "cancel-in-progress: false",
@@ -90,6 +92,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("github.token", warm)
         versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         self.assertIn("workflows: [tests]", versioning)
+        self.assertNotIn("linker=rust-lld", versioning)
 
     def test_one_gate_job_carries_the_merge_verdict(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -351,7 +354,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("windows_apps", workflow)
         self.assertNotIn("cargo build", sandbox)
         self.assertNotIn("upload-artifact", sandbox)
-        self.assertIn("RUSTFLAGS: -D warnings -C target-feature=+crt-static", sandbox)
+        self.assertIn(
+            "RUSTFLAGS: -D warnings -C linker=rust-lld -C target-feature=+crt-static", sandbox
+        )
         for contract in [
             "          - os: windows-latest\n"
             "            build_args: ${{ needs.plan.outputs.windows_build }}\n"
