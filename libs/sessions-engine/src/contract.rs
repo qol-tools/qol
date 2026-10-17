@@ -95,7 +95,7 @@ pub(crate) struct ToolSpec {
     pub(crate) input_schema: Value,
 }
 
-pub(crate) fn tool_names() -> String {
+pub fn tool_names() -> String {
     tool_specs()
         .iter()
         .map(|spec| spec.name)

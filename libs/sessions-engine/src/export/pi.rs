@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
-use crate::commands::sessions::contract::{tool_specs, ToolSpec};
+use crate::contract::{tool_specs, ToolSpec};
 
 const HEADER: &str = r#"import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawn } from "node:child_process";

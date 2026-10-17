@@ -6284,7 +6284,6 @@ dependencies = [
  "git2",
  "libc",
  "qol-agent-homes",
- "qol-agent-launch",
  "qol-apps",
  "qol-artifact",
  "qol-build-identity",
@@ -6298,7 +6297,6 @@ dependencies = [
  "qol-headless",
  "qol-host-fixes",
  "qol-log",
- "qol-mcp",
  "qol-peers",
  "qol-platform",
  "qol-plugin-daemon",
@@ -6306,6 +6304,7 @@ dependencies = [
  "qol-profile-sync",
  "qol-runtime",
  "qol-secrets",
+ "qol-sessions-engine",
  "qol-terminal-sessions",
  "qol-workspace",
  "ratatui",
@@ -7364,6 +7363,29 @@ dependencies = [
  "anyhow",
  "qol-platform",
  "windows-sys 0.59.0",
+ "workspace-hack",
+]
+
+[[package]]
+name = "qol-sessions-engine"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "qol-agent-launch",
+ "qol-config",
+ "qol-fs",
+ "qol-headless",
+ "qol-mcp",
+ "qol-plugin-daemon",
+ "qol-process",
+ "qol-runtime",
+ "qol-terminal-sessions",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
  "workspace-hack",
 ]
 

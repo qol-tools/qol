@@ -1,3 +1,5 @@
+//! Terminal session orchestration shared by the dev CLI and CLI Sessions: spawn, fork, bridge, close and the sessions MCP server.
+
 use std::ffi::OsString;
 use std::str::FromStr;
 
@@ -29,14 +31,14 @@ mod switchboard;
 mod watch;
 mod watch_owner;
 
-pub(crate) use contract::tool_names;
+pub use contract::tool_names;
 
-pub(crate) struct SessionSubcommand {
-    pub(crate) name: &'static str,
+pub struct SessionSubcommand {
+    pub name: &'static str,
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 25] = [
+pub const SUBCOMMANDS: [SessionSubcommand; 25] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -139,7 +141,7 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 25] = [
     },
 ];
 
-pub(super) fn marker_present(screen: &str, marker: &str) -> bool {
+pub(crate) fn marker_present(screen: &str, marker: &str) -> bool {
     qol_terminal_sessions::marker::marker_close(screen, marker)
 }
 
@@ -151,7 +153,7 @@ fn split_subcommand(args: &[OsString]) -> (&str, &[OsString]) {
     (name, args.get(1..).unwrap_or_default())
 }
 
-pub(crate) fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
+pub fn run(args: &[OsString], output_format: OutputFormat) -> Result<()> {
     let (subcommand, rest) = split_subcommand(args);
     if let Some(subcommand) = SUBCOMMANDS.iter().find(|entry| entry.name == subcommand) {
         return (subcommand.run)(rest, output_format);

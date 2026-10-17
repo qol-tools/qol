@@ -1917,7 +1917,7 @@ mod tests {
                 .unwrap();
         assert_eq!(outcome["submitted"], true);
 
-        let watcher = crate::commands::sessions::watch_owner::ClientWatcher::with_dir(
+        let watcher = crate::watch_owner::ClientWatcher::with_dir(
             root.path().join("watch-state"),
             "test-owner".to_owned(),
         );
