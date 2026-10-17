@@ -141,7 +141,8 @@ equals = true
 
 [field.shrink_ms]
 type = "number"
-Time for the cursor to return to normal size.label = "Shrink duration"
+label = "Shrink duration"
+description = "Time for the cursor to return to normal size."
 section = "shake_to_grow"
 default = 100
 min = 20

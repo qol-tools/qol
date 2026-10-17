@@ -229,16 +229,13 @@ pub(super) struct RowSection {
 }
 
 pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
+    let config = &config.for_this_platform();
     let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
     for field in &config.fields {
         push_row(&mut rows, None, None, field, &field_values, source);
     }
-    for section in config
-        .sections
-        .iter()
-        .filter(|section| section.on_this_platform())
-    {
+    for section in &config.sections {
         push_section_rows(&mut rows, section, &field_values, source);
     }
     rows
@@ -341,9 +338,6 @@ fn push_row(
     field_values: &std::collections::BTreeMap<String, FieldDefault>,
     source: usize,
 ) {
-    if !field.on_this_platform() {
-        return;
-    }
     let control = control_for(field);
     let visibility = field.show_when.clone().and_then(|show_when| {
         field_values
@@ -3271,21 +3265,29 @@ default = true
         for (plugin, spec) in &contracts {
             let resolved = qol_config::normalized::resolve_config(spec, &serde_json::json!({}))
                 .unwrap_or_else(|errors| panic!("{plugin}: {errors:?}"));
-            let field_count = resolved.fields.len()
-                + resolved
+            let shown = resolved.for_this_platform();
+            let field_count = shown.fields.len()
+                + shown
                     .sections
                     .iter()
                     .map(|section| section.fields.len())
                     .sum::<usize>();
             let rows = rows_from_resolved(&resolved, 0);
+            let shown_ids = shown
+                .fields
+                .iter()
+                .chain(shown.sections.iter().flat_map(|section| &section.fields))
+                .map(|field| field.id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
             for field in resolved
                 .fields
                 .iter()
                 .chain(resolved.sections.iter().flat_map(|section| &section.fields))
             {
-                assert!(
+                assert_eq!(
                     rows.iter().any(|row| row.id == field.id),
-                    "{plugin}: field {} ({}) produced no row",
+                    shown_ids.contains(field.id.as_str()),
+                    "{plugin}: field {} ({}) must have a row exactly when it is shown on this OS",
                     field.id,
                     field.kind.name()
                 );

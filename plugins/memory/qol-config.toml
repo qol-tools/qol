@@ -9,14 +9,14 @@ description = "How Memory decides what a question is asking for."
 [field.verify_answers]
 type = "boolean"
 label = "Understand question variations (experimental)"
-description = "Match reworded questions using a model on this computer. Restart Memory to apply."
+description = "Match reworded questions. Needs Ollama and qwen3:8b. Restart Memory to apply."
 section = "answers"
 default = false
 
 [field.verifier_endpoint]
 type = "string"
 label = "Model server address"
-description = "Leave empty to let qol run one for you. Restart Memory to apply."
+description = "Leave empty to let qol start Ollama when needed. Restart Memory to apply."
 section = "answers"
 placeholder = "http://127.0.0.1:11434"
 default = ""

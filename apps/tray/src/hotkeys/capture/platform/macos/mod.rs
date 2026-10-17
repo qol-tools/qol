@@ -26,6 +26,11 @@ mod recorder;
 
 pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
 
+/// Shown when shortcut recording could not start: the key tap needs
+/// Accessibility permission.
+pub(crate) const RECORDING_UNAVAILABLE: &str =
+    "Recording is off. Allow qol under Accessibility in System Settings, then try again.";
+
 pub(crate) fn start_recording(session_id: u64, events: Arc<crate::daemon::EventBus>) -> bool {
     recorder::global().start(session_id, events)
 }

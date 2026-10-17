@@ -474,7 +474,7 @@ mod tests {
         let builtin = row(&rows, "qol-tools/qol");
         assert_eq!(
             builtin.description.as_deref(),
-            Some("Signed index, qol-tools.github.io/qol/plugins/index.json")
+            Some("Verified catalog, qol-tools.github.io/qol/plugins/index.json")
         );
         assert_eq!(builtin.value.as_deref(), Some("default"));
         assert_eq!(builtin.enter, Some((Enter::OpenSources, "open")));
@@ -846,7 +846,7 @@ mod tests {
         assert_eq!(rows[1].delete, None);
         assert_eq!(
             rows[2].description.as_deref(),
-            Some("GitHub releases, github.com/me/tools")
+            Some("From GitHub, me/tools")
         );
         assert_eq!(
             rows[2].delete,

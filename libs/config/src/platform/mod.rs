@@ -1,4 +1,4 @@
-use crate::normalized::{ResolvedField, ResolvedSection};
+use crate::normalized::ResolvedConfig;
 use crate::validation::ValidationError;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -32,17 +32,23 @@ pub fn supports_current_platform(platforms: Option<&[String]>) -> bool {
     })
 }
 
-impl ResolvedField {
-    /// Whether the settings panel shows this field on the running OS.
-    pub fn on_this_platform(&self) -> bool {
-        supports_current_platform(self.platforms.as_deref())
-    }
-}
-
-impl ResolvedSection {
-    /// Whether the settings panel shows this section on the running OS.
-    pub fn on_this_platform(&self) -> bool {
-        supports_current_platform(self.platforms.as_deref())
+impl ResolvedConfig {
+    /// The config as the settings panel shows it on the running OS, without
+    /// the fields and sections whose `platforms` leave this OS out.
+    pub fn for_this_platform(&self) -> ResolvedConfig {
+        let mut config = self.clone();
+        config
+            .fields
+            .retain(|field| supports_current_platform(field.platforms.as_deref()));
+        config
+            .sections
+            .retain(|section| supports_current_platform(section.platforms.as_deref()));
+        for section in &mut config.sections {
+            section
+                .fields
+                .retain(|field| supports_current_platform(field.platforms.as_deref()));
+        }
+        config
     }
 }
 

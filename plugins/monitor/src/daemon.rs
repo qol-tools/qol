@@ -7324,7 +7324,7 @@ mod tests {
         assert!(
             bodies
                 .iter()
-                .any(|body| body.contains("gamma LUT is co-owned")),
+                .any(|body| body.contains("another program is controlling it")),
             "the warn-at-3 mismatch must surface through the production restore path: {bodies:?}"
         );
     }
@@ -8544,7 +8544,10 @@ mod tests {
         let bodies = toasts.lock().unwrap().clone();
         assert!(
             bodies.last().unwrap().contains("Layout not applied")
-                && bodies.last().unwrap().contains("could not be updated"),
+                && bodies
+                    .last()
+                    .unwrap()
+                    .contains("could not be saved for recovery"),
             "{bodies:?}"
         );
         assert!(path.is_dir());

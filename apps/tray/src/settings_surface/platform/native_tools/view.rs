@@ -606,10 +606,7 @@ impl NativeToolsView {
                         Ok(_) => {
                             draft.recording = false;
                             draft.capture_session = None;
-                            view.fail(
-                                "Recording is off. Allow qol in your system's accessibility settings, then try again.",
-                                cx,
-                            );
+                            view.fail(crate::hotkeys::capture::RECORDING_UNAVAILABLE, cx);
                         }
                         Err(error) => {
                             draft.recording = false;

@@ -8,6 +8,8 @@ use qol_runtime::local_http::{Client, Method, Session};
 struct ActionResult {
     #[serde(default)]
     data: Option<serde_json::Value>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
@@ -76,6 +78,14 @@ pub(super) fn run_action(
         return action_result_data(&response);
     }
     log::warn!("action `{action}` failed with HTTP {status}: {response}");
+    if status == 409 {
+        if let Some(message) = serde_json::from_str::<ActionResult>(&response)
+            .ok()
+            .and_then(|result| result.message)
+        {
+            return Err(message);
+        }
+    }
     Err("That did not work. Try again.".to_string())
 }
 
