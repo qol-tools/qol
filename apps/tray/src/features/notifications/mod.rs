@@ -233,7 +233,9 @@ mod tests {
 
         set_message_seconds(qol_theme::STAY_MESSAGE.as_secs_f64()).unwrap();
         assert_eq!(settings().unwrap().message_stay_seconds, None);
-        std::fs::write(settings_path().unwrap(), r#"{"message_seconds": 3}"#).unwrap();
+        let path = settings_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"message_seconds": 3}"#).unwrap();
         assert_eq!(
             message_seconds(),
             qol_theme::STAY_MESSAGE.as_secs_f64(),
@@ -241,7 +243,7 @@ mod tests {
         );
         set_message_seconds(3.0).unwrap();
         assert_eq!(message_seconds(), 3.0, "an explicit 3 s pick is kept");
-        std::fs::write(settings_path().unwrap(), r#"{"message_seconds": 5}"#).unwrap();
+        std::fs::write(&path, r#"{"message_seconds": 5}"#).unwrap();
         assert_eq!(
             message_seconds(),
             5.0,
