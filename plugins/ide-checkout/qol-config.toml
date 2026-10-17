@@ -25,7 +25,7 @@ config_key = "apps"
 key_label = "Short name"
 label = "Applications"
 section = "apps"
-card_description = "Apps your browser can open a branch in."
+card_description = "Apps that can open a branch."
 item_label = "application"
 
 [field.apps.default.idea]

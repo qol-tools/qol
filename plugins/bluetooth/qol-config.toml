@@ -174,7 +174,7 @@ query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
 empty_message = "No Bluetooth problems found on this computer."
-card_description = "Problems found with Bluetooth on this computer."
+card_description = "Problems found with Bluetooth."
 
 [field.host_findings.row_action]
 action = "apply_host_fix"

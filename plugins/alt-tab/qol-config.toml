@@ -12,7 +12,7 @@ type = "select"
 label = "Action mode"
 section = "behavior"
 default = "hold_to_switch"
-card_description = "What letting go of the shortcut does."
+card_description = "What releasing the shortcut does."
 options = ["hold_to_switch", "sticky"]
 
 [field.action_mode.option_labels]
