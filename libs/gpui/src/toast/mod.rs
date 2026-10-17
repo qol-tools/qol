@@ -376,13 +376,14 @@ fn message_timeout() -> Duration {
             std::fs::read_to_string(dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)).ok()
         })
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|settings| settings.get("message_seconds")?.as_f64())
-        .filter(|seconds| {
-            (qol_theme::STAY_MESSAGE_LEAST.as_secs_f64()
-                ..=qol_theme::STAY_MESSAGE_MOST.as_secs_f64())
-                .contains(seconds)
+        .map(|settings: serde_json::Value| {
+            let seconds = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            qol_theme::message_stay(qol_theme::stored_message_stay(
+                seconds(qol_conventions::MESSAGE_STAY_KEY),
+                seconds(qol_conventions::LEGACY_MESSAGE_SECONDS_KEY),
+            ))
         })
-        .map_or(qol_theme::STAY_MESSAGE, Duration::from_secs_f64)
+        .unwrap_or(qol_theme::STAY_MESSAGE)
 }
 
 #[derive(Default)]

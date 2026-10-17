@@ -61,6 +61,19 @@ pub const STAY_LONG: Duration = Duration::from_secs(8);
 pub const STAY_MESSAGE: Duration = Duration::from_millis(1200);
 pub const STAY_MESSAGE_LEAST: Duration = Duration::from_millis(500);
 pub const STAY_MESSAGE_MOST: Duration = Duration::from_secs(15);
+const LEGACY_PINNED_STAY_MESSAGE_SECONDS: f64 = 3.0;
+
+pub fn stored_message_stay(stored: Option<f64>, legacy: Option<f64>) -> Option<f64> {
+    stored.or(legacy.filter(|seconds| *seconds != LEGACY_PINNED_STAY_MESSAGE_SECONDS))
+}
+
+pub fn message_stay(stored: Option<f64>) -> Duration {
+    stored
+        .filter(|seconds| {
+            (STAY_MESSAGE_LEAST.as_secs_f64()..=STAY_MESSAGE_MOST.as_secs_f64()).contains(seconds)
+        })
+        .map_or(STAY_MESSAGE, Duration::from_secs_f64)
+}
 pub const STAY_ERROR: Duration = Duration::from_secs(10);
 pub const WAIT_BEFORE_BUSY: Duration = Duration::from_millis(300);
 pub const MOTION_LOOP: Duration = Duration::from_millis(1200);
