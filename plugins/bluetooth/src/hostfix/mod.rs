@@ -226,7 +226,7 @@ impl BluetoothHostFixes {
             }
         }
         Ok(format!(
-            "{} stopped; qol restores it when the plugin shuts down",
+            "{} stopped until the plugin shuts down",
             manager.label
         ))
     }

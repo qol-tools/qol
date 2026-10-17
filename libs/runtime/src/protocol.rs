@@ -135,6 +135,20 @@ pub struct NotificationLayout {
     pub height: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+impl NotificationLayout {
+    pub const BANNER: &'static str = "banner";
+
+    pub fn banner(value: Option<&str>) -> Self {
+        Self {
+            style: Some(Self::BANNER.to_string()),
+            value: value.map(str::to_string),
+            ..Default::default()
+        }
+    }
 }
 
 /// Ack for the plugin-to-host push requests (`PushNotification`, `PushStatus`).
@@ -466,6 +480,7 @@ mod tests {
                 width: Some(400.0),
                 height: Some(84.0),
                 style: Some("compact".to_string()),
+                value: None,
             }),
             activate: None,
         };
@@ -485,6 +500,7 @@ mod tests {
                 width: Some(400.0),
                 height: Some(84.0),
                 style: Some("compact".to_string()),
+                value: None,
             })
         );
     }

@@ -145,7 +145,7 @@ fn readiness(exited: Option<ExitStatus>, output_len: Option<u64>, timed_out: boo
 pub fn recording_started(_session: &CaptureSession) {}
 
 pub fn recording_stopped(session: &CaptureSession, _config: &Config) -> Option<SavedRecording> {
-    send_notification("Recording stopped", "Saving recording");
+    qol_plugin_daemon::notification::send_banner("Recording stopped", "Saving recording", None);
     let output_file = session.output_file.as_deref()?;
     recorder::await_capture_file(session, output_file)?;
     let message = output_file

@@ -573,6 +573,9 @@ fn show_toast_in_host(
         if let Some(mark) = mark.as_deref().and_then(qol_theme::Mark::from_name) {
             toast = toast.mark(mark);
         }
+        if let Some(value) = layout.and_then(|layout| layout.value) {
+            toast = toast.value(value);
+        }
         if let Some(path) = artifact {
             toast = toast.artifact(path);
         } else if let Some((label, payload)) = action {

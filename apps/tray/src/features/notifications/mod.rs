@@ -12,7 +12,7 @@ struct NotificationSettings {
     use_system_notifications: bool,
     handler: NativeHandler,
     #[serde(skip_serializing_if = "Option::is_none")]
-    message_seconds: Option<u64>,
+    message_stay_seconds: Option<f64>,
 }
 
 impl Default for NotificationSettings {
@@ -20,7 +20,7 @@ impl Default for NotificationSettings {
         Self {
             use_system_notifications: false,
             handler: NativeHandler::Qol,
-            message_seconds: None,
+            message_stay_seconds: None,
         }
     }
 }
@@ -37,7 +37,9 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             #[serde(default)]
             handler: Option<NativeHandler>,
             #[serde(default)]
-            message_seconds: Option<u64>,
+            message_seconds: Option<f64>,
+            #[serde(default)]
+            message_stay_seconds: Option<f64>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let handler = raw.handler.unwrap_or(if raw.use_system_notifications {
@@ -48,7 +50,10 @@ impl<'de> Deserialize<'de> for NotificationSettings {
         Ok(Self {
             use_system_notifications: raw.use_system_notifications,
             handler,
-            message_seconds: raw.message_seconds,
+            message_stay_seconds: qol_theme::stored_message_stay(
+                raw.message_stay_seconds,
+                raw.message_seconds,
+            ),
         })
     }
 }
@@ -92,16 +97,20 @@ pub fn set_native_handler(handler: NativeHandler) -> Result<()> {
     })
 }
 
-pub fn message_seconds() -> u64 {
-    settings()
-        .ok()
-        .and_then(|settings| settings.message_seconds)
-        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
-        .unwrap_or(qol_theme::STAY_MESSAGE.as_secs())
+pub fn message_seconds() -> f64 {
+    qol_theme::message_stay(
+        settings()
+            .ok()
+            .and_then(|settings| settings.message_stay_seconds),
+    )
+    .as_secs_f64()
 }
 
-pub fn set_message_seconds(seconds: u64) -> Result<()> {
-    update_settings(|settings| settings.message_seconds = Some(seconds))
+pub fn set_message_seconds(seconds: f64) -> Result<()> {
+    if seconds == message_seconds() {
+        return Ok(());
+    }
+    update_settings(|settings| settings.message_stay_seconds = Some(seconds))
 }
 
 pub fn apply_native_handler(previous: NativeHandler) {
@@ -210,11 +219,36 @@ mod tests {
         let root = TempDir::new().unwrap();
         let _guard = crate::paths::push_test_path_root(root.path());
 
-        assert_eq!(message_seconds(), qol_theme::STAY_MESSAGE.as_secs());
-        set_message_seconds(5).unwrap();
+        assert_eq!(message_seconds(), qol_theme::STAY_MESSAGE.as_secs_f64());
+        set_message_seconds(2.5).unwrap();
         set_native_handler(NativeHandler::Os).unwrap();
-        assert_eq!(message_seconds(), 5);
+        assert_eq!(message_seconds(), 2.5);
         assert_eq!(native_handler(), NativeHandler::Os);
+    }
+
+    #[test]
+    fn saving_the_shown_message_time_keeps_following_the_default() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        set_message_seconds(qol_theme::STAY_MESSAGE.as_secs_f64()).unwrap();
+        assert_eq!(settings().unwrap().message_stay_seconds, None);
+        let path = settings_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"message_seconds": 3}"#).unwrap();
+        assert_eq!(
+            message_seconds(),
+            qol_theme::STAY_MESSAGE.as_secs_f64(),
+            "a whole-form save pinned the old 3 s default, so it counts as unset"
+        );
+        set_message_seconds(3.0).unwrap();
+        assert_eq!(message_seconds(), 3.0, "an explicit 3 s pick is kept");
+        std::fs::write(&path, r#"{"message_seconds": 5}"#).unwrap();
+        assert_eq!(
+            message_seconds(),
+            5.0,
+            "a deliberate older pick carries over"
+        );
     }
 
     #[test]

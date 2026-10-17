@@ -12,7 +12,8 @@ use super::http_json::{self, blocking};
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
-const MESSAGE_SECONDS_MAX: f64 = qol_theme::STAY_MESSAGE_MOST.as_secs() as f64;
+const MESSAGE_SECONDS_MIN: f64 = qol_theme::STAY_MESSAGE_LEAST.as_secs_f64();
+const MESSAGE_SECONDS_MAX: f64 = qol_theme::STAY_MESSAGE_MOST.as_secs_f64();
 
 #[derive(Serialize)]
 struct CoreConfigResponse {
@@ -22,7 +23,7 @@ struct CoreConfigResponse {
     profile: String,
     residency: bool,
     handler: NativeHandler,
-    message_seconds: u64,
+    message_seconds: f64,
 }
 
 #[derive(Deserialize)]
@@ -138,15 +139,14 @@ fn as_bool(field: &str, value: &serde_json::Value) -> HttpResult<bool> {
         .ok_or_else(|| Box::new(bad_request(&format!("{field} expects a boolean"))))
 }
 
-fn as_seconds(field: &str, value: &serde_json::Value) -> HttpResult<u64> {
+fn as_seconds(field: &str, value: &serde_json::Value) -> HttpResult<f64> {
     value
         .as_f64()
-        .map(f64::round)
-        .filter(|seconds| (1.0..=MESSAGE_SECONDS_MAX).contains(seconds))
-        .map(|seconds| seconds as u64)
+        .map(|seconds| (seconds * 10.0).round() / 10.0)
+        .filter(|seconds| (MESSAGE_SECONDS_MIN..=MESSAGE_SECONDS_MAX).contains(seconds))
         .ok_or_else(|| {
             Box::new(bad_request(&format!(
-                "{field} expects 1 to {MESSAGE_SECONDS_MAX} seconds"
+                "{field} expects {MESSAGE_SECONDS_MIN} to {MESSAGE_SECONDS_MAX} seconds"
             )))
         })
 }

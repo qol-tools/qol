@@ -633,7 +633,7 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
 pub fn recording_started(_session: &CaptureSession) {}
 
 pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<SavedRecording> {
-    send_notification("Recording stopped", "Saving recording");
+    qol_plugin_daemon::notification::send_banner("Recording stopped", "Saving recording", None);
     let output_file = session.output_file.as_deref()?;
     let capture_file = session.capture_file.as_deref().unwrap_or(output_file);
     recorder::await_capture_file(session, capture_file)?;

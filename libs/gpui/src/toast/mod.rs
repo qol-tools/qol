@@ -47,7 +47,7 @@ pub enum ToastStyle {
 
 /// The wire style that asks for the top-centre banner. Every other style,
 /// including the older "compact", is the default corner card.
-pub const BANNER_STYLE: &str = "banner";
+pub const BANNER_STYLE: &str = qol_runtime::protocol::NotificationLayout::BANNER;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToastLayout {
@@ -162,6 +162,7 @@ pub struct Toast {
     source: SharedString,
     mark: Option<qol_theme::Mark>,
     key: Option<SharedString>,
+    value: Option<SharedString>,
     preview: Option<Rc<dyn crate::artifact::ArtifactPreview>>,
     preview_action: Option<Activation>,
     actions: Vec<ToastAction>,
@@ -187,6 +188,7 @@ impl Toast {
             source: "".into(),
             mark: None,
             key: None,
+            value: None,
             preview: None,
             preview_action: None,
             actions: Vec::new(),
@@ -257,6 +259,11 @@ impl Toast {
         self
     }
 
+    pub fn value(mut self, value: impl Into<SharedString>) -> Self {
+        self.value = Some(value.into());
+        self
+    }
+
     pub fn detail_path(mut self, path: impl Into<SharedString>) -> Self {
         self.message = path.into();
         self.message_is_path = true;
@@ -306,7 +313,17 @@ impl Toast {
             deadline: None,
         };
         match routed_presentation(self) {
-            Presentation::Banner => card::message(&row, 1.0, 1.0, 1.0, crate::kit::kit()),
+            Presentation::Banner => card::message(
+                &row,
+                card::Banner {
+                    content: 1.0,
+                    rule: 1.0,
+                    cool: 1.0,
+                    roll: None,
+                },
+                crate::kit::kit(),
+                None,
+            ),
             Presentation::Slab => card::lone(&row, None, now),
         }
     }
@@ -359,9 +376,14 @@ fn message_timeout() -> Duration {
             std::fs::read_to_string(dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)).ok()
         })
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|settings| settings.get("message_seconds")?.as_u64())
-        .filter(|seconds| (1..=qol_theme::STAY_MESSAGE_MOST.as_secs()).contains(seconds))
-        .map_or(qol_theme::STAY_MESSAGE, Duration::from_secs)
+        .map(|settings: serde_json::Value| {
+            let seconds = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
+            qol_theme::message_stay(qol_theme::stored_message_stay(
+                seconds(qol_conventions::MESSAGE_STAY_KEY),
+                seconds(qol_conventions::LEGACY_MESSAGE_SECONDS_KEY),
+            ))
+        })
+        .unwrap_or(qol_theme::STAY_MESSAGE)
 }
 
 #[derive(Default)]

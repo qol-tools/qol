@@ -233,7 +233,7 @@ fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
         "apply_fixes" => match apply_pending() {
             Ok(message) => {
                 runtime.snapshots.invalidate();
-                send_notification("Controller fixes", &message);
+                qol_plugin_daemon::notification::send_banner("Controller fixes", &message, None);
                 ReadResult::Handled
             }
             Err(error) => ReadResult::Error(format!("{error:#}")),

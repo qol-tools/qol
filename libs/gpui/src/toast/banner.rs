@@ -1,8 +1,9 @@
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::*;
+use qol_theme::toast::{MESSAGE_RISE, MESSAGE_RULE_TRACE};
 use qol_theme::Motion;
 
 use super::card::{self, CardAct, CardHost};
@@ -16,6 +17,9 @@ use crate::popup_window::InputEvent;
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind};
 
 const MOST: usize = MAX_EDGES + 1;
+const ARRIVE: Motion = Motion::QUICK;
+const LEAVE: Motion = Motion::TRAVEL;
+const ROLL: Motion = Motion::SETTLE;
 
 struct BannerState {
     surface: Option<OpenedSurface<BannerToastView>>,
@@ -114,10 +118,10 @@ impl BannerPresenter {
         let card = layout.size();
         let surface = Surface::new(SurfaceKind::Toast)
             .title(&*self.title)
-            .placement(layout.placement())
+            .placement(layout.placement().raised(MESSAGE_RISE))
             .size(size(
                 card.width,
-                card.height + px(EDGE_STEP * MAX_EDGES as f32),
+                card.height + px(MESSAGE_RISE + EDGE_STEP * MAX_EDGES as f32),
             ))
             .open_on(monitor.as_ref(), cx, move |dismisser, _window, _cx| {
                 BannerToastView::new(host, dismisser, card)
@@ -170,7 +174,7 @@ impl BannerPresenter {
         self.notify(cx);
         if let Some(emptied) = emptied {
             let presenter = self.clone();
-            rows::after(Motion::LEAVE.duration, cx, move |cx| {
+            rows::after(LEAVE.duration, cx, move |cx| {
                 let still = {
                     let state = presenter.state.borrow();
                     state.emptied == emptied && state.rows.is_empty()
@@ -300,6 +304,7 @@ struct Shown {
     arrived: Instant,
     left: Option<Instant>,
     depth: pile::Tween,
+    roll: Option<(SharedString, Instant)>,
 }
 
 struct BannerToastView {
@@ -366,6 +371,14 @@ impl BannerToastView {
                 .find(|shown| shown.row.id == row.id && shown.left.is_none())
             {
                 Some(shown) => {
+                    if !Rc::ptr_eq(&shown.row.toast, &row.toast) {
+                        let held = &shown.row.toast;
+                        let (_, value, _) = card::split_value(
+                            &held.title,
+                            held.value.as_ref().map(|value| value.as_ref()),
+                        );
+                        shown.roll = Some((SharedString::from(value.to_string()), now));
+                    }
                     shown.row = row.clone();
                     shown.depth.toward(depth, now);
                 }
@@ -374,6 +387,7 @@ impl BannerToastView {
                     arrived: now,
                     left: None,
                     depth: pile::Tween::at(depth).gliding(),
+                    roll: None,
                 }),
             }
         }
@@ -385,7 +399,7 @@ impl BannerToastView {
         self.shown.retain(|shown| {
             shown
                 .left
-                .is_none_or(|left| now.saturating_duration_since(left) < Motion::LEAVE.duration)
+                .is_none_or(|left| now.saturating_duration_since(left) < LEAVE.duration)
         });
     }
 
@@ -400,6 +414,20 @@ impl BannerToastView {
     ) -> AnyElement {
         let row = &shown.row;
         let frame = pose.frame;
+        let stay = row
+            .toast
+            .effective_timeout()
+            .unwrap_or(qol_theme::STAY_MESSAGE);
+        let banner = card::Banner {
+            content: pose.content,
+            rule: family_rule(shown.arrived, stay, now),
+            cool: 1.0 - card::counting(row, self.inside, now).unwrap_or(1.0),
+            roll: shown.roll.as_ref().map(|(from, at)| card::Roll {
+                from: from.clone(),
+                progress: ROLL.progress(now.saturating_duration_since(*at)),
+            }),
+        };
+        let host = front.then(|| self.card.clone());
         let mut layer = div()
             .id(("toast-message", row.id.0))
             .absolute()
@@ -408,13 +436,7 @@ impl BannerToastView {
             .w(px(frame.width))
             .h(px(frame.height))
             .opacity(pose.opacity)
-            .child(card::message(
-                row,
-                pose.scale,
-                pose.content,
-                card::counting(row, self.inside, now).unwrap_or(1.0),
-                kit,
-            ));
+            .child(card::message(row, banner, kit, host));
         if !front {
             return layer.into_any_element();
         }
@@ -457,7 +479,11 @@ impl Render for BannerToastView {
         let mut layers = Vec::with_capacity(order.len());
         for (depth, shown) in order {
             let pose = pose(depth, card, shown.arrived, shown.left, now);
-            moving |= pose.moving || shown.depth.moving(now);
+            let rolling = shown
+                .roll
+                .as_ref()
+                .is_some_and(|(_, at)| now.saturating_duration_since(*at) < ROLL.duration);
+            moving |= pose.moving || rolling || shown.depth.moving(now);
             deepest = deepest.max(shown.depth.target().max(depth));
             if pose.opacity > 0.0 {
                 let front = shown.left.is_none() && shown.depth.target() == 0.0;
@@ -477,7 +503,7 @@ impl Render for BannerToastView {
         self.shape.reach(
             title,
             |view: &mut Self| &mut view.shape,
-            [0.0, 0.0, card.0, reach],
+            [0.0, MESSAGE_RISE, card.0, reach],
             cx,
         );
         div().size_full().relative().children(layers)
@@ -487,7 +513,6 @@ impl Render for BannerToastView {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pose {
     frame: Frame,
-    scale: f32,
     opacity: f32,
     content: f32,
     moving: bool,
@@ -500,64 +525,78 @@ fn pose(
     left: Option<Instant>,
     now: Instant,
 ) -> Pose {
-    let (scale, opacity, moving) = message_pose(arrived, left, now);
+    let (rise, opacity, moving) = message_pose(arrived, left, now);
     let edge = depth.clamp(0.0, MAX_EDGES as f32);
-    let width = (card.0 - 2.0 * EDGE_INSET * edge) * scale;
-    let height = card.1 * scale;
     Pose {
         frame: Frame {
-            left: EDGE_INSET * edge + (card.0 - 2.0 * EDGE_INSET * edge - width) / 2.0,
-            top: EDGE_STEP * edge + (card.1 - height) / 2.0,
-            width,
-            height,
+            left: EDGE_INSET * edge,
+            top: MESSAGE_RISE + EDGE_STEP * edge - rise,
+            width: card.0 - 2.0 * EDGE_INSET * edge,
+            height: card.1,
         },
-        scale,
         opacity,
         content: (1.0 - depth).clamp(0.0, 1.0),
         moving,
     }
 }
 
+fn family_rule(family_arrived: Instant, stay: Duration, now: Instant) -> f32 {
+    let shown_for = now.saturating_duration_since(family_arrived).as_secs_f32();
+    1.0 - (1.0 - MESSAGE_RULE_TRACE) * (shown_for / stay.as_secs_f32()).min(1.0)
+}
+
 fn message_pose(arrived: Instant, leaving: Option<Instant>, now: Instant) -> (f32, f32, bool) {
-    let lerp = |from: f32, to: f32, t: f32| from + (to - from) * t;
-    let grown = Motion::TRAVEL.progress(now.saturating_duration_since(arrived));
+    let shown = ARRIVE.progress(now.saturating_duration_since(arrived));
     let gone = leaving.map_or(0.0, |start| {
-        Motion::LEAVE.progress(now.saturating_duration_since(start))
+        LEAVE.progress(now.saturating_duration_since(start))
     });
-    let scale = lerp(qol_theme::toast::MESSAGE_ARRIVE_SCALE, 1.0, grown)
-        * lerp(1.0, qol_theme::toast::MESSAGE_LEAVE_SCALE, gone);
-    let moving = grown < 1.0 || (leaving.is_some() && gone < 1.0);
-    (scale, grown * (1.0 - gone), moving)
+    let moving = shown < 1.0 || (leaving.is_some() && gone < 1.0);
+    (MESSAGE_RISE * gone, shown * (1.0 - gone), moving)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{family_rule, message_pose, pose, same_message, MESSAGE_RULE_TRACE};
+    use crate::toast::{Toast, ToastLayout};
     use std::time::{Duration, Instant};
 
-    use super::{message_pose, pose, same_message};
-    use crate::toast::{Toast, ToastLayout};
+    #[test]
+    fn the_rule_fades_once_per_family_and_never_restarts_on_a_push_or_hover() {
+        let arrived = Instant::now();
+        let stay = Duration::from_millis(1200);
+        let at = |millis: u64| arrived + Duration::from_millis(millis);
+        assert_eq!(family_rule(arrived, stay, at(0)), 1.0);
+        let midway = family_rule(arrived, stay, at(600));
+        assert!(midway < 1.0 && midway > MESSAGE_RULE_TRACE);
+        assert_eq!(family_rule(arrived, stay, at(1200)), MESSAGE_RULE_TRACE);
+        assert_eq!(
+            family_rule(arrived, stay, at(5000)),
+            MESSAGE_RULE_TRACE,
+            "later pushes from the same family keep the trace; only a new family restarts it"
+        );
+    }
 
     #[test]
-    fn a_message_grows_in_and_shrinks_out() {
+    fn a_message_fades_in_and_rises_away() {
         let start = Instant::now();
         let at = |millis: u64| start + Duration::from_millis(millis);
         let leave = |millis: u64| Some(at(millis));
-        let close = |(scale, opacity, moving): (f32, f32, bool), want: (f32, f32, bool)| {
-            (scale - want.0).abs() < 1e-4 && (opacity - want.1).abs() < 1e-4 && moving == want.2
+        let close = |(rise, opacity, moving): (f32, f32, bool), want: (f32, f32, bool)| {
+            (rise - want.0).abs() < 1e-4 && (opacity - want.1).abs() < 1e-4 && moving == want.2
         };
-        assert!(close(message_pose(start, None, at(0)), (0.96, 0.0, true)));
-        let (scale, opacity, _) = message_pose(start, None, at(130));
-        assert!(scale > 0.96 && scale < 1.0 && opacity > 0.0 && opacity < 1.0);
-        assert!(close(message_pose(start, None, at(260)), (1.0, 1.0, false)));
+        assert!(close(message_pose(start, None, at(0)), (0.0, 0.0, true)));
+        let (rise, opacity, _) = message_pose(start, None, at(70));
+        assert!(rise == 0.0 && opacity > 0.0 && opacity < 1.0);
+        assert!(close(message_pose(start, None, at(140)), (0.0, 1.0, false)));
         assert!(close(
             message_pose(start, leave(1000), at(1000)),
-            (1.0, 1.0, true)
+            (0.0, 1.0, true)
         ));
-        let (scale, opacity, _) = message_pose(start, leave(1000), at(1060));
-        assert!(scale < 1.0 && scale > 0.85 && opacity < 1.0 && opacity > 0.0);
+        let (rise, opacity, _) = message_pose(start, leave(1000), at(1130));
+        assert!(rise > 0.0 && rise < 12.0 && opacity < 1.0 && opacity > 0.0);
         assert!(close(
-            message_pose(start, leave(1000), at(1120)),
-            (0.85, 0.0, false)
+            message_pose(start, leave(1000), at(1260)),
+            (12.0, 0.0, false)
         ));
     }
 
@@ -575,17 +614,17 @@ mod tests {
                 front.frame.width,
                 front.frame.height
             ),
-            (0.0, 0.0, 440.0, 64.0)
+            (0.0, 12.0, 440.0, 64.0)
         );
         assert_eq!(front.content, 1.0);
         let second = at(1.0);
         assert_eq!(
             (second.frame.left, second.frame.top, second.frame.width),
-            (12.0, 6.0, 416.0)
+            (12.0, 18.0, 416.0)
         );
         assert_eq!(second.content, 0.0);
         let third = at(2.0);
-        assert_eq!((third.frame.left, third.frame.top), (24.0, 12.0));
+        assert_eq!((third.frame.left, third.frame.top), (24.0, 24.0));
         assert_eq!(at(5.0).frame, at(3.0).frame);
         assert!(!front.moving);
     }

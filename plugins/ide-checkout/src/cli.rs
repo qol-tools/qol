@@ -71,7 +71,7 @@ fn run_status() -> u8 {
         "IDE Checkout daemon is NOT running".to_string()
     };
 
-    qol_plugin_daemon::notification::send_notification("IDE Checkout", &message);
+    qol_plugin_daemon::notification::send_banner("IDE Checkout", &message, None);
     0
 }
 

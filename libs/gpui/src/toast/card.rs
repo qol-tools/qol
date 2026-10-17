@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 use qol_theme::{Ground, TextStyle};
 
 use super::{RowId, SlabSnapshotRow, Toast, ToastTone};
@@ -166,61 +166,162 @@ pub(super) fn lone(row: &SlabSnapshotRow, host: Option<Host>, now: Instant) -> D
     )
 }
 
-pub(super) fn message(row: &SlabSnapshotRow, scale: f32, content: f32, left: f32, kit: Kit) -> Div {
+pub(super) struct Banner {
+    pub content: f32,
+    pub rule: f32,
+    pub cool: f32,
+    pub roll: Option<Roll>,
+}
+
+pub(super) struct Roll {
+    pub from: SharedString,
+    pub progress: f32,
+}
+
+pub(super) fn message(row: &SlabSnapshotRow, banner: Banner, kit: Kit, host: Option<Host>) -> Div {
     let ground = kit.grounds.pane;
-    let line = |style: TextStyle, ink: u32, lines: usize, text: SharedString| {
-        div()
-            .w_full()
-            .text_scaled(style, scale)
-            .text_color(rgb(ink))
-            .clamps(lines)
-            .child(text)
+    let parts = CardParts {
+        scale: 1.0,
+        content: banner.content,
+        interactive: host.is_some(),
+        age: String::new(),
     };
     let mut words = div()
-        .size_full()
+        .flex_grow()
+        .min_h_0()
+        .w_full()
         .flex()
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(qol_theme::SPACE_STACK * scale))
-        .px(px(qol_theme::toast::MESSAGE_TEXT_INSET * scale))
-        .text_center()
-        .child(line(
-            TextStyle::ListName,
-            ground.ink,
-            1,
-            row.toast.title.clone(),
-        ));
+        .gap(px(qol_theme::SPACE_STACK))
+        .px(px(qol_theme::toast::CLOSE))
+        .child(banner_title(row, &banner, ground));
     if !row.toast.message.is_empty() {
-        words = words.child(line(
-            TextStyle::Detail,
-            ground.soft,
-            2,
-            row.toast.message.clone(),
-        ));
-    }
-    let below_rule = qol_theme::toast::RULE - qol_theme::LINE;
-    let mut body = div()
-        .size_full()
-        .relative()
-        .pt(px(below_rule * scale))
-        .opacity(content)
-        .child(words);
-    if let Some(mark) = row.toast.mark {
-        let inset = qol_theme::toast::MESSAGE_MARK_INSET;
-        body = body.child(
+        words = words.child(
             div()
-                .absolute()
-                .left(px(inset * scale))
-                .top(px((inset + below_rule) * scale))
-                .child(crate::icon::mark(
-                    mark,
-                    qol_theme::toast::MESSAGE_MARK * scale,
-                    ground.faint,
-                )),
+                .w_full()
+                .text_center()
+                .text_scaled(TextStyle::Detail, 1.0)
+                .text_color(rgb(ground.soft))
+                .truncate()
+                .child(row.toast.message.clone()),
         );
     }
-    ruled(kit.window().child(body), left, content, scale, ground.mark)
+    let body = div()
+        .size_full()
+        .relative()
+        .flex()
+        .flex_col()
+        .pt(px(qol_theme::SPACE_CELL))
+        .opacity(banner.content)
+        .child(
+            div()
+                .w_full()
+                .pl(px(qol_theme::SPACE_PAD))
+                .pr(px(qol_theme::toast::CLOSE))
+                .child(source_line(row, &parts, ground)),
+        )
+        .child(words)
+        .child(dismiss(row, &parts, ground, kit, host));
+    ruled(
+        kit.window().child(body),
+        1.0,
+        banner.content * banner.rule,
+        1.0,
+        ground.mark,
+    )
+}
+
+fn banner_title(row: &SlabSnapshotRow, banner: &Banner, ground: Ground) -> Div {
+    let title = row.toast.title.as_ref();
+    let lit = rgb(qol_color::mix_rgb(ground.mark, ground.ink, banner.cool));
+    let (before, value, after) =
+        split_value(title, row.toast.value.as_ref().map(|value| value.as_ref()));
+    let rolling = banner.roll.as_ref().filter(|roll| roll.progress < 1.0);
+    let value_chars = rolled(
+        value,
+        rolling.map(|roll| roll.from.as_ref()),
+        rolling.map_or(1.0, |roll| roll.progress),
+    );
+    let line = div()
+        .flex()
+        .flex_row()
+        .justify_center()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_scaled(TextStyle::Title, 1.0)
+        .text_color(rgb(ground.ink));
+    let line = if before.is_empty() && after.is_empty() && value.is_empty() {
+        line.text_color(lit)
+            .child(SharedString::from(title.to_string()))
+    } else {
+        line.child(SharedString::from(before.to_string()))
+            .child(value_chars.text_color(lit))
+            .child(SharedString::from(after.to_string()))
+    };
+    div().w_full().flex().justify_center().child(line)
+}
+
+pub(super) fn split_value<'a>(title: &'a str, value: Option<&str>) -> (&'a str, &'a str, &'a str) {
+    match value.filter(|value| !value.is_empty()) {
+        Some(value) => match title.rfind(value) {
+            Some(at) => (
+                &title[..at],
+                &title[at..at + value.len()],
+                &title[at + value.len()..],
+            ),
+            None => ("", "", ""),
+        },
+        None => ("", "", ""),
+    }
+}
+
+fn rolled(value: &str, from: Option<&str>, progress: f32) -> Div {
+    let line = line_of(TextStyle::Title);
+    let old: Option<Vec<char>> = from
+        .map(|from| from.chars().collect::<Vec<_>>())
+        .filter(|old| old.len() == value.chars().count());
+    let rising = match (number_in(value), from.and_then(number_in)) {
+        (Some(new), Some(old)) => new >= old,
+        _ => true,
+    };
+    let travel = if rising { line } else { -line };
+    let mut row = div().flex().flex_row();
+    for (index, ch) in value.chars().enumerate() {
+        let prev = old
+            .as_ref()
+            .and_then(|old| old.get(index).copied())
+            .filter(|prev| *prev != ch && prev.is_ascii_digit() && ch.is_ascii_digit());
+        row = match prev {
+            Some(prev) => row.child(
+                div()
+                    .relative()
+                    .overflow_hidden()
+                    .h(px(line))
+                    .child(
+                        div()
+                            .relative()
+                            .top(px((1.0 - progress) * travel))
+                            .child(SharedString::from(ch.to_string())),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(-progress * travel))
+                            .child(SharedString::from(prev.to_string())),
+                    ),
+            ),
+            None => row.child(SharedString::from(ch.to_string())),
+        };
+    }
+    row
+}
+
+fn number_in(text: &str) -> Option<u64> {
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    digits.parse().ok()
 }
 
 pub(super) struct CardParts {
@@ -349,11 +450,13 @@ fn source_line(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground) -> Div 
             .child(row.toast.source.clone()),
     )
     .child(div().flex_grow())
-    .child(
-        div()
-            .flex_none()
-            .child(SharedString::from(parts.age.clone())),
-    )
+    .when(!parts.age.is_empty(), |line| {
+        line.child(
+            div()
+                .flex_none()
+                .child(SharedString::from(parts.age.clone())),
+        )
+    })
 }
 
 fn text_column(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground, kit: Kit) -> Div {

@@ -43,7 +43,7 @@ const UNCONTROLLED_REASON: &str = "a foreign warm calibration forbids the night 
 const REASSERT_FAILED_REASON: &str = "the gamma re-assert did not verify";
 const FOREIGN_WRITER_REASON: &str = "a foreign writer keeps changing the gamma table";
 const DETECT_FOREIGN_OWNER_REASON: &str = "detect mode leaves the foreign warm table alone";
-const FLOOR_NOTICE: &str = "as dim as this display allows";
+const FLOOR_NOTICE: &str = "As dim as this display allows";
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -719,6 +719,7 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
     stepper: HoldStepper,
     stop_requested: bool,
     notify: Notify,
+    banner: Banner,
     config: Arc<Mutex<DeviceConfig>>,
     preferred: BTreeMap<String, u8>,
     config_root: Option<PathBuf>,
@@ -742,6 +743,7 @@ pub(crate) struct Runtime<C: DisplayControl + ?Sized> {
 }
 
 type Notify = Arc<dyn Fn(&str, &str) + Send + Sync>;
+type Banner = Arc<dyn Fn(&str, &str, Option<&str>) + Send + Sync>;
 type PreferredSave = Arc<dyn Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync>;
 type ResidencyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
 type Clock = Arc<dyn Fn() -> Now + Send + Sync>;
@@ -756,11 +758,17 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
         preferred_save: impl Fn(&BTreeMap<String, u8>) -> anyhow::Result<()> + Send + Sync + 'static,
         residency: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Self {
+        let notify: Notify = Arc::new(notify);
+        let banner: Banner = {
+            let notify = Arc::clone(&notify);
+            Arc::new(move |title: &str, detail: &str, _value: Option<&str>| notify(title, detail))
+        };
         Self {
             session: Session::new(control, store, lut),
             stepper: HoldStepper::new(HOLD_DEBOUNCE),
             stop_requested: false,
-            notify: Arc::new(notify),
+            notify,
+            banner,
             config: Arc::new(Mutex::new(DeviceConfig::default())),
             preferred: BTreeMap::new(),
             config_root,
@@ -790,6 +798,14 @@ impl<C: DisplayControl + GammaStateControl + ?Sized> Runtime<C> {
 
     fn is_resident(&self) -> bool {
         (self.residency)()
+    }
+
+    fn with_banner(
+        mut self,
+        banner: impl Fn(&str, &str, Option<&str>) + Send + Sync + 'static,
+    ) -> Self {
+        self.banner = Arc::new(banner);
+        self
     }
 
     fn with_host_night_light(mut self, host_night_light: Arc<dyn HostNightLight>) -> Self {
@@ -1021,12 +1037,11 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             && previous.map(|state| state.0).unwrap_or(false) != decision.active
             && config.notify_on_change
         {
-            let message = if decision.active {
-                format!("Night mode on ({kelvin}K)")
+            if decision.active {
+                (self.banner)("Night mode on", &format!("{kelvin}K"), Some("on"));
             } else {
-                "Night mode off".to_string()
-            };
-            (self.notify)("Monitor", &message);
+                (self.banner)("Night mode off", "", Some("off"));
+            }
         }
         trace_night(
             decision,
@@ -2055,9 +2070,9 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     .filter(|set| *set != value)
                     .max();
                 if let Some(floor) = floor {
-                    (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+                    self.brightness_banner(floor, FLOOR_NOTICE);
                 } else if self.config().notify_on_change {
-                    (self.notify)("Monitor", &format!("Brightness {value}%"));
+                    self.brightness_banner(value, "");
                 }
                 self.reset_gamma_reclaims(applied.into_iter().map(|(id, _)| id));
                 true
@@ -2209,12 +2224,13 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
 
     fn notify_applied(&self, applied: usize) {
         if applied > 0 {
-            (self.notify)(
-                "Monitor",
+            (self.banner)(
+                "Preferred brightness applied",
                 &format!(
-                    "Applied preferred brightness to {applied} display{}",
+                    "On {applied} display{}",
                     if applied == 1 { "" } else { "s" }
                 ),
+                None,
             );
         }
     }
@@ -2253,7 +2269,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
         } else {
             None
         };
-        let mut stepped: Vec<(u8, &'static str)> = Vec::new();
+        let mut stepped: Vec<(u8, crate::monitor::BrightnessSource)> = Vec::new();
         let mut floor = None;
         for handle in &handles {
             let Some(current) = self.cached_brightness(handle) else {
@@ -2276,25 +2292,29 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
             if set != next {
                 floor = floor.max(Some(set));
             }
-            stepped.push((set, current.source.label()));
+            stepped.push((set, current.source));
         }
         if let Some(floor) = floor {
-            (self.notify)("Monitor", &format!("Brightness {floor}%, {FLOOR_NOTICE}"));
+            self.brightness_banner(floor, FLOOR_NOTICE);
             return;
         }
-        let message = match stepped.as_slice() {
-            [] => return,
-            [(value, source)] => format!("Brightness {value}% ({source})"),
-            many if sync => format!("Brightness {}% on {} displays", many[0].0, many.len()),
-            many => format!(
-                "Brightness {} on {} displays",
-                if direction > 0 { "up" } else { "down" },
-                many.len()
-            ),
-        };
-        if self.config().notify_on_change {
-            (self.notify)("Monitor", &message);
+        if stepped.is_empty() || !self.config().notify_on_change {
+            return;
         }
+        let displays = format!("On {} displays", stepped.len());
+        match stepped.as_slice() {
+            [(value, source)] => self.brightness_banner(*value, source.banner_label()),
+            many if sync => self.brightness_banner(many[0].0, &displays),
+            _ => {
+                let way = if direction > 0 { "up" } else { "down" };
+                (self.banner)(&format!("Brightness {way}"), &displays, Some(way));
+            }
+        }
+    }
+
+    fn brightness_banner(&self, value: u8, detail: &str) {
+        let percent = format!("{value}%");
+        (self.banner)(&format!("Brightness {percent}"), detail, Some(&percent));
     }
 
     fn cached_brightness(&self, handle: &DisplayHandle) -> Option<BrightnessState> {
@@ -2433,6 +2453,7 @@ fn build_runtime(
         || HostResidency::current().is_resident(),
     )
     .with_host_night_light(host_night_light)
+    .with_banner(qol_plugin_daemon::notification::send_banner)
     .with_applet(Arc::new(backends::AppletOwner::new(
         backends::GsettingsRunner,
     )))
@@ -3375,6 +3396,7 @@ mod tests {
     ) -> (Runtime<FakeControl>, Toasts) {
         let toasts: Toasts = Arc::new(StdMutex::new(Vec::new()));
         let sink = toasts.clone();
+        let banners = toasts.clone();
         let runtime = Runtime::new(
             control,
             store,
@@ -3385,7 +3407,15 @@ mod tests {
             None,
             |_preferred| Ok(()),
             || false,
-        );
+        )
+        .with_banner(move |title, detail, _value| {
+            let shown = if detail.is_empty() {
+                title.to_string()
+            } else {
+                format!("{title} · {detail}")
+            };
+            banners.lock().unwrap().push(shown);
+        });
         (runtime, toasts)
     }
 
@@ -5505,7 +5535,7 @@ mod tests {
         );
         assert_eq!(
             toasts.lock().unwrap().as_slice(),
-            ["Brightness 55% on 3 displays"]
+            ["Brightness 55% · On 3 displays"]
         );
     }
 
@@ -5674,7 +5704,7 @@ mod tests {
         );
         assert_eq!(
             *toasts.lock().unwrap(),
-            vec!["Brightness 50%, as dim as this display allows"; 2],
+            vec!["Brightness 50% · As dim as this display allows"; 2],
             "a request below the floor and a step at the floor both say why"
         );
     }
