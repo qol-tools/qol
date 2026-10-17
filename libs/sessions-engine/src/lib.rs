@@ -187,7 +187,7 @@ Bridge work between independent terminal sessions.
 Primary usage:
   qol sessions list [--json]
   qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park]
   qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]
   qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]
   qol sessions parked
