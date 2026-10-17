@@ -19,7 +19,7 @@ pub use builtins::{
     CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID, KIMI_TOOL_ACCENT, KIMI_TOOL_ID,
     PI_TOOL_ACCENT, PI_TOOL_ID,
 };
-pub use chat::{ChatRole, ChatTurn};
+pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 pub use evidence::{
     CliActivityEvidence, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliRuntimeState,
     CliScreenEvidence, CliSessionEvidence, CliViewportState,
@@ -145,6 +145,10 @@ pub trait CliSessionStrategy: Send + Sync {
 
     fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {
         None
+    }
+
+    fn harness_busy(&self, _session: &SessionFacts) -> bool {
+        false
     }
 
     fn draft_stash(&self) -> Option<CliDraftStash> {

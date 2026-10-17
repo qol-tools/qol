@@ -124,6 +124,10 @@ impl CliSessionStrategy for ClaudeStrategy {
             .then(|| REMOTE_CONTROL_REASON.to_owned())
     }
 
+    fn harness_busy(&self, session: &SessionFacts) -> bool {
+        self.metadata.busy(session)
+    }
+
     fn draft_stash(&self) -> Option<CliDraftStash> {
         Some(CliDraftStash {
             key: "ctrl+s",

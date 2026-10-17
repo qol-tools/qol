@@ -46,6 +46,20 @@ impl ClaudeEnvironment for RemoteControlledEnvironment {
     }
 }
 
+struct BusyEnvironment {
+    pid: i32,
+}
+
+impl ClaudeEnvironment for BusyEnvironment {
+    fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
+        None
+    }
+
+    fn busy(&self, pid: i32) -> bool {
+        pid == self.pid
+    }
+}
+
 #[derive(Default)]
 struct SwitchableEnvironment {
     location: std::sync::Mutex<Option<ClaudeSessionLocation>>,
@@ -356,6 +370,14 @@ fn remote_control_on_the_foreground_claude_process_keeps_its_terminal_open() {
 }
 
 #[test]
+fn a_foreground_claude_process_that_reports_work_reads_busy() {
+    for (pid, expected) in [(22, true), (23, false)] {
+        let strategy = ClaudeStrategy::with_environment(Arc::new(BusyEnvironment { pid }));
+        assert_eq!(strategy.harness_busy(&session()), expected, "pid {pid}");
+    }
+}
+
+#[test]
 fn a_missing_transcript_reads_unknown() {
     let root = TempDir::new().unwrap();
     let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
@@ -659,6 +681,46 @@ fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
         },
     }));
     assert_eq!(strategy.chat_transcript(&session()), Some(expected));
+}
+
+#[test]
+fn chat_transcript_keeps_a_message_typed_before_any_reply_apart_from_the_prompt() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"user","message":{"role":"user","content":"[qol session fork]\nRead the brief."}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"brief"}]}}"#,
+            "\n",
+            r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"also bump the version","commandMode":"prompt"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Bumped."}]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        super::metadata::chat_transcript(&transcript),
+        Some(vec![
+            ChatTurn {
+                role: ChatRole::User,
+                text: "[qol session fork]\nRead the brief.".to_owned(),
+            },
+            ChatTurn {
+                role: ChatRole::User,
+                text: "also bump the version".to_owned(),
+            },
+            ChatTurn {
+                role: ChatRole::Assistant,
+                text: "Bumped.".to_owned(),
+            },
+        ])
+    );
 }
 
 #[test]

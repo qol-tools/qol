@@ -6388,6 +6388,7 @@ mod tests {
 
     #[test]
     fn only_a_fork_launched_with_park_lets_its_park_close_the_terminal() {
+        super::super::park::STARTED_WATCHERS.with(|started| started.borrow_mut().clear());
         for park in [false, true] {
             let root = tempfile::TempDir::new().unwrap();
             let cwd = managed_workdir(&root);
@@ -6424,6 +6425,9 @@ mod tests {
                 "{:?}",
                 request.launch.env
             );
+            let watched = super::super::park::STARTED_WATCHERS
+                .with(|started| started.borrow().iter().any(|args| args[1] == "--watch"));
+            assert_eq!(watched, park, "only a parked fork is watched from launch");
         }
     }
 
