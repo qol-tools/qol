@@ -29,7 +29,6 @@ pub const PARK: &str = "park";
 pub const LANE_EXEC: &str = "lane-exec";
 const STOP_GRACE: Duration = Duration::from_secs(3);
 const LAUNCH_POLL: Duration = Duration::from_secs(2);
-const LAUNCH_POLLS_BEFORE_GIVING_UP: u32 = 150;
 
 #[derive(Debug, Serialize)]
 pub struct ParkOutcome {
@@ -203,13 +202,17 @@ fn watch_launch(
     let binding = token
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
+    if let Some(ready) = parsed.ready.as_deref() {
+        std::fs::write(ready, "")
+            .with_context(|| format!("failed to confirm the watch at {ready}"))?;
+    }
     let Some((facts, external_id)) = launched_conversation(terminals, interpreter, &binding) else {
-        return Ok(());
+        bail!("the fork's terminal closed before its conversation started");
     };
     let descriptor = interpreter.describe(&facts);
     let tool = descriptor.tool.id;
     if interpreter.resume_args_for(&tool, &external_id).is_none() {
-        return Ok(());
+        bail!("{tool} conversations cannot be resumed, so the fork's tab stays open");
     }
     let created_at = now_seconds();
     let mut record = ParkRecord {
@@ -255,7 +258,7 @@ fn launched_conversation(
     interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
 ) -> Option<(Box<SessionFacts>, String)> {
-    for _ in 0..LAUNCH_POLLS_BEFORE_GIVING_UP {
+    loop {
         match target(terminals, binding) {
             Target::Live(facts) => {
                 let external_id = interpreter
@@ -271,7 +274,6 @@ fn launched_conversation(
         }
         thread::sleep(LAUNCH_POLL);
     }
-    None
 }
 
 pub fn unpark(id: &str) -> Result<String> {

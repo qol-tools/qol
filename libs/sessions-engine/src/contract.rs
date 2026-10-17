@@ -353,7 +353,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "park": {
                         "type": "boolean",
-                        "description": "Let the fork close its terminal while it is parked on a long wait and reopen in a new tab when the wait ends, and close the tab of a fork with a brief once its turn ends, unless the user writes in it, with its final message shown in a CLI Sessions notification that reopens it when clicked; false by default and true from the switchboard, and a fork without it stays open and waits in its own terminal",
+                        "description": "Let the fork close its terminal while it is parked on a long wait and reopen in a new tab when the wait ends, and close the tab of a fork with a brief whose tool can resume conversations once its turn ends, unless the user writes in it, with its final message shown in a CLI Sessions notification that reopens it when clicked; false by default and true from the switchboard, and a fork without it stays open and waits in its own terminal",
                     },
                     "report": {
                         "type": "boolean",

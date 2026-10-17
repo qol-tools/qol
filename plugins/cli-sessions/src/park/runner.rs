@@ -12,13 +12,13 @@ use qol_terminal_sessions::cli::{
     COMPACTED_SUMMARY_HEADER,
 };
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
-use qol_terminal_sessions::parking::{ParkingStore, CLOSE_NOTE};
+use qol_terminal_sessions::parking::ParkingStore;
 use qol_terminal_sessions::{
     DeliveryMode, SessionBinding, SessionFacts, TerminalError, TerminalSessionService,
     TerminalSnapshot, TextInput,
 };
 
-use super::prompt::{read_tail, wake_prompt, wake_section, WAKE_HEADER};
+use super::prompt::{read_tail, wake_prompt, wake_section, CLOSE_NOTE, WAKE_HEADER};
 use super::resume::resume;
 use super::store::ParkStore;
 
@@ -574,6 +574,14 @@ mod tests {
                 ],
                 WokenTurn::Engaged,
             ),
+            (
+                vec![
+                    turn(ChatRole::User, &wake),
+                    turn(ChatRole::User, "prune it now"),
+                    turn(ChatRole::Assistant, "Pruned."),
+                ],
+                WokenTurn::Engaged,
+            ),
         ];
         for (turns, expected) in cases {
             assert_eq!(woken_turn(&turns), expected, "{turns:?}");
@@ -618,6 +626,34 @@ mod tests {
                 vec![
                     turn(ChatRole::User, &launch),
                     turn(ChatRole::Assistant, "Done."),
+                    turn(ChatRole::User, "also bump the version"),
+                    turn(ChatRole::Assistant, "Bumped."),
+                ],
+                WokenTurn::Engaged,
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::User, "also bump the version"),
+                    turn(ChatRole::Assistant, "Bumped."),
+                ],
+                WokenTurn::Engaged,
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Done."),
+                    turn(ChatRole::User, &knock),
+                    turn(ChatRole::User, "also bump the version"),
+                    turn(ChatRole::Assistant, "Bumped."),
+                ],
+                WokenTurn::Engaged,
+            ),
+            (
+                vec![
+                    turn(ChatRole::User, &launch),
+                    turn(ChatRole::Assistant, "Opened PR 180."),
+                    turn(ChatRole::User, &summary),
                     turn(ChatRole::User, "also bump the version"),
                     turn(ChatRole::Assistant, "Bumped."),
                 ],

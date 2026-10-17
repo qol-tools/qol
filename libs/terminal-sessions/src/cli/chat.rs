@@ -25,7 +25,7 @@ pub(super) fn merge_chat_turns(turns: Vec<ChatTurn>) -> Vec<ChatTurn> {
             continue;
         }
         match merged.last_mut() {
-            Some(last) if last.role == turn.role => {
+            Some(last) if last.role == ChatRole::Assistant && turn.role == ChatRole::Assistant => {
                 last.text.push_str("\n\n");
                 last.text.push_str(text);
             }

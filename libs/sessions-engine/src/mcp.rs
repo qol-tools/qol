@@ -5697,16 +5697,20 @@ mod tests {
             "{:?}",
             launch.env
         );
-        assert!(launch
-            .args
-            .last()
-            .unwrap()
-            .ends_with(qol_terminal_sessions::parking::CLOSE_NOTE));
         let started = watchers();
         assert_eq!(started.len(), 1, "{started:?}");
         assert_eq!(
-            started[0][..3],
-            ["park", "--watch", outcome["session"].as_str().unwrap()]
+            started[0][..4],
+            [
+                "park",
+                "--watch",
+                outcome["session"].as_str().unwrap(),
+                "--ready"
+            ]
+        );
+        assert!(
+            !std::path::Path::new(&started[0][4]).exists(),
+            "the confirmed ready marker is removed"
         );
         assert!(outcome["instruction"]
             .as_str()
@@ -5723,5 +5727,22 @@ mod tests {
             .env
             .contains(&qol_terminal_sessions::parking::launch_env(false)));
         assert_eq!(watchers().len(), 1, "an unparked fork is not watched");
+
+        super::super::park::WATCHERS_START.with(|start| start.set(false));
+        let unconfirmed = tool_json(&tool_call(
+            &server,
+            "session_fork",
+            json!({"tool": "claude", "cwd": cwd, "key": "fork-unwatched", "model": "opus", "brief": "check the PR", "copy_chat": false}),
+        ));
+        super::super::park::WATCHERS_START.with(|start| start.set(true));
+        let instruction = unconfirmed["instruction"].as_str().unwrap();
+        assert!(
+            instruction.contains("could not start watching it"),
+            "{instruction}"
+        );
+        assert!(
+            !instruction.contains("Its tab closes when its turn ends"),
+            "{instruction}"
+        );
     }
 }

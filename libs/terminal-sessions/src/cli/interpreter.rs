@@ -190,6 +190,10 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.resume_args(external_id))
     }
 
+    pub fn can_resume(&self, tool: &CliToolId) -> bool {
+        self.resume_args_for(tool, "").is_some()
+    }
+
     pub fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
         self.strategy_for(session).permission_mode(session)
     }
@@ -488,11 +492,19 @@ mod tests {
                 Some(expected),
                 "tool: {tool}"
             );
+            assert!(
+                interpreter.can_resume(&CliToolId::new(tool).unwrap()),
+                "tool: {tool}"
+            );
         }
         for tool in ["kimi", "generic", "future-tool"] {
             assert_eq!(
                 interpreter.resume_args_for(&CliToolId::new(tool).unwrap(), "abc"),
                 None,
+                "tool: {tool}"
+            );
+            assert!(
+                !interpreter.can_resume(&CliToolId::new(tool).unwrap()),
                 "tool: {tool}"
             );
         }
