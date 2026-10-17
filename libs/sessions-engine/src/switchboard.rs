@@ -113,7 +113,7 @@ pub(super) struct LaunchPlan {
 }
 
 impl LaunchPlan {
-    fn system(profile: &Profile, ledger: &SpawnLedger) -> Result<Self> {
+    fn system(profile: &Profile, ledger: &SpawnLedger, path: Option<String>) -> Result<Self> {
         let cwd = neutral_cwd()?;
         Ok(Self {
             model: profile.model.clone(),
@@ -123,7 +123,7 @@ impl LaunchPlan {
                 std::env::current_exe().ok(),
             )?,
             projects: ledger.recent_cwds(PROJECTS_SHOWN, &cwd),
-            path: login_shell_path(),
+            path,
             cwd,
         })
     }
@@ -489,7 +489,7 @@ fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
         }
         OpenStep::Launch => {
             let ledger = SpawnLedger::system()?;
-            let plan = LaunchPlan::system(profile, &ledger)?;
+            let plan = LaunchPlan::system(profile, &ledger, login_shell_path())?;
             launch(
                 &terminals,
                 &interpreter,
@@ -505,19 +505,20 @@ fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
     }
 }
 
-/// Runs the switchboard in the calling kitty window and returns true once it exits,
-/// or returns false without starting anything when a switchboard is already live.
-pub fn here(profile: &Profile) -> Result<bool> {
+/// Runs the switchboard in the calling kitty window and returns its exit code once it
+/// exits, or returns None without starting anything when a switchboard is already live.
+pub fn here(profile: &Profile) -> Result<Option<u8>> {
     let terminals = super::service()?;
     let interpreter = CliSessionInterpreter::system();
     let locks = SpawnLocks::system()?;
+    let path = login_shell_path();
     let guard = locks.acquire(&switchboard_key()?).ok();
     let live = terminals
         .snapshot()
         .ok()
         .is_some_and(|snapshot| live_switchboard(&interpreter, snapshot.sessions()).is_some());
     match here_step(guard.is_some(), live) {
-        HereStep::Taken => Ok(false),
+        HereStep::Taken => Ok(None),
         HereStep::Become => {
             let window = std::env::var(KITTY_WINDOW_ENV)
                 .ok()
@@ -525,21 +526,29 @@ pub fn here(profile: &Profile) -> Result<bool> {
                 .with_context(|| {
                     format!("--here makes this kitty window the switchboard, but {KITTY_WINDOW_ENV} is not set; run it inside kitty")
                 })?;
-            let plan = LaunchPlan::system(profile, &SpawnLedger::system()?)?;
+            let plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path)?;
             let (model, _) = admitted_model(&system_dispatch()?, &plan)?;
             let argv = here_argv(&plan, &model)?;
-            tag_window(&tag_args(&window))?;
-            drop(guard);
             // The window outlives the switchboard (a wrapper's shell), so its tag is removed
             // on exit; a kept tag makes the next chat in the window pass for the switchboard.
+            // An interrupt or terminate signal therefore only ends claude, never this wait.
+            qol_process::CancellationToken::install()
+                .context("failed to hold off interrupts while the switchboard runs")?;
+            tag_window(&tag_args(&window))?;
+            drop(guard);
             let ran = Command::new(SWITCHBOARD_TOOL)
                 .args(&argv)
                 .current_dir(&plan.cwd)
                 .status()
                 .with_context(|| format!("failed to run {SWITCHBOARD_TOOL}"));
-            let untagged = tag_window(&untag_args(&window));
-            ran?;
-            untagged.map(|()| true)
+            if let Err(error) = tag_window(&untag_args(&window)) {
+                crate::cli::warn(format!("the switchboard window kept its tag: {error:#}"));
+            }
+            Ok(Some(
+                ran?.code()
+                    .and_then(|code| u8::try_from(code).ok())
+                    .unwrap_or(1),
+            ))
         }
     }
 }
@@ -551,10 +560,11 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         return Ok(());
     }
     if parsed.here {
-        if !here(&parsed.profile())? {
-            bail!("a switchboard is already live, so this window started nothing");
-        }
-        return Ok(());
+        return match here(&parsed.profile())? {
+            None => bail!("a switchboard is already live, so this window started nothing"),
+            Some(0) => Ok(()),
+            Some(code) => bail!("the switchboard exited {code}"),
+        };
     }
     let outcome = open_on(
         &parsed.profile(),

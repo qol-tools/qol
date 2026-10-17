@@ -75,8 +75,8 @@ fn switchboard_here() -> CommandResult {
     log::set_max_level(log::LevelFilter::Warn);
     let profile = crate::config::load().switchboard_profile();
     match qol_sessions_engine::switchboard::here(&profile) {
-        Ok(true) => CommandResult::success(""),
-        Ok(false) => CommandResult::new("", "", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT),
+        Ok(Some(code)) => CommandResult::new("", "", code),
+        Ok(None) => CommandResult::new("", "", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT),
         Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} {SWITCHBOARD}: {error:#}")),
     }
 }
