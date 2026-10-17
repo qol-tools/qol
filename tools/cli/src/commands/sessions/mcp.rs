@@ -398,7 +398,22 @@ impl McpSessionServer {
     fn tool_fork(&self, arguments: Value) -> Result<String, String> {
         let cwd = string_argument(&arguments, "cwd")?;
         let key = string_argument(&arguments, "key")?;
-        let brief = string_argument(&arguments, "brief")?;
+        let blank = arguments
+            .get("blank")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "session_fork `blank` must be a boolean".to_owned())
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let brief = match blank {
+            true if arguments.get("brief").is_some() => {
+                return Err("a blank fork takes no brief".to_owned());
+            }
+            true => None,
+            false => Some(string_argument(&arguments, "brief")?),
+        };
         let launch_args = launch_arguments(&arguments, "session_fork")?;
         let title = optional_string(&arguments, "title", "session_fork")?;
         let copy_chat = arguments
@@ -427,7 +442,7 @@ impl McpSessionServer {
         }
         let parent = Some(super::bridge::driver_token(self.terminals.as_ref()))
             .filter(|token| !token.is_empty());
-        let chat = if copy_chat {
+        let chat = if copy_chat && !blank {
             super::fork::resolve_chat_source(
                 self.terminals.as_ref(),
                 &self.interpreter,
@@ -4424,7 +4439,7 @@ mod tests {
             Some("opus"),
             None,
             None,
-            "the lockfile goes stale",
+            Some("the lockfile goes stale"),
             Some(token().as_str()),
             Some(&chat),
             None,
@@ -4448,6 +4463,83 @@ mod tests {
             "{prompt}"
         );
         assert!(prompt.contains("The brief is authoritative"), "{prompt}");
+    }
+
+    #[test]
+    fn e2e_a_blank_fork_launches_without_a_brief_and_refuses_one() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = spawn_cwd(&root);
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        backend.set_current(FakeBackend::session());
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+
+        let refused = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": cwd,
+                "key": "fork-blank-brief",
+                "model": "opus",
+                "blank": true,
+                "brief": "a problem worth its own tree",
+            }),
+        );
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let message = refused["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("a blank fork takes no brief"), "{message}");
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
+
+        let response = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": cwd,
+                "key": "fork-blank",
+                "model": "opus",
+                "blank": true,
+            }),
+        );
+        assert_eq!(
+            response["result"]["isError"], false,
+            "blank fork failed: {response}"
+        );
+        let outcome: Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(outcome["brief"], "");
+        assert!(outcome.get("chat").is_none(), "{outcome}");
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert!(
+            !launch
+                .args
+                .iter()
+                .any(|arg| arg.contains("[qol session fork]")),
+            "a blank fork carries no launch prompt: {:?}",
+            launch.args
+        );
+        let records = server.forks.list().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].brief.is_empty());
+
+        let missing = tool_call(
+            &server,
+            "session_fork",
+            json!({
+                "tool": "claude",
+                "cwd": cwd,
+                "key": "fork-no-brief",
+                "model": "opus",
+                "blank": false,
+            }),
+        );
+        assert_eq!(missing["result"]["isError"], true, "{missing}");
+        let message = missing["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(message.contains("missing `brief`"), "{message}");
     }
 
     #[test]

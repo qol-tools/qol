@@ -224,7 +224,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_fork",
             label: "Fork a detached architect",
-            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. The forking session's chat is copied beside the brief and its path is added to the launch prompt, so the fork reads the context it missed. Pass copy_chat: false to skip that copy. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. A claude fork starts with --dangerously-skip-permissions. The fork is recorded and listable; nothing else links it back. Pass agent_profile, task_role and requires to bind the detached architect to a user-owned agent profile; the profile supplies the default model when the fork passes none, an explicit model that conflicts with the profile is refused, and the resolved assignment is recorded with the fork.",
+            description: "Launch a detached architect that owns a problem end to end and never reports back. Use it when a second problem surfaces mid-session and chasing it yourself would cost you the thread you are already holding: fork it away and carry on. The fork is the root of a new tree, not a lane - no round is opened on it, no completion marker is embedded in its launch, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the fork at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls. The forking session's chat is copied beside the brief and its path is added to the launch prompt, so the fork reads the context it missed. Pass copy_chat: false to skip that copy. A fork carries its own model and, where the tool supports one, its own effort level, so a problem that needs a stronger tier than the forking session gets one. A claude fork starts with --dangerously-skip-permissions. The fork is recorded and listable; nothing else links it back. Pass agent_profile, task_role and requires to bind the detached architect to a user-owned agent profile; the profile supplies the default model when the fork passes none, an explicit model that conflicts with the profile is refused, and the resolved assignment is recorded with the fork. Pass blank: true instead of a brief to launch a fresh session with no brief, no chat copy and no launch prompt, so the user types its first message.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -247,7 +247,11 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     "effort": effort_property(),
                     "brief": {
                         "type": "string",
-                        "description": "Required problem statement. Write it for someone with none of your context: what is wrong, what you already know, what done looks like",
+                        "description": "Problem statement, required unless blank is true. Write it for someone with none of your context: what is wrong, what you already know, what done looks like",
+                    },
+                    "blank": {
+                        "type": "boolean",
+                        "description": "Launch a fresh session with no brief, no chat copy and no launch prompt, so the user types its first message; false by default, and refused together with a brief",
                     },
                     "title": {
                         "type": "string",
@@ -284,7 +288,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                         },
                     },
                 },
-                "required": ["cwd", "key", "brief"],
+                "required": ["cwd", "key"],
             }),
         },
         ToolSpec {
