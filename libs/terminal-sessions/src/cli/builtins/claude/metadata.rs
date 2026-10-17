@@ -111,6 +111,13 @@ impl ClaudeMetadataResolver {
             .any(|pid| self.environment.remote_controlled(*pid))
     }
 
+    pub fn busy(&self, session: &SessionFacts) -> bool {
+        session
+            .foreground_pids
+            .iter()
+            .any(|pid| self.environment.busy(*pid))
+    }
+
     pub fn subscription_dir(&self, session: &SessionFacts) -> Option<PathBuf> {
         let root = if let Some(root) = &self.projects_root {
             root.clone()

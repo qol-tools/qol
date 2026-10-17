@@ -147,6 +147,10 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn harness_busy(&self, _session: &SessionFacts) -> bool {
+        false
+    }
+
     fn draft_stash(&self) -> Option<CliDraftStash> {
         None
     }

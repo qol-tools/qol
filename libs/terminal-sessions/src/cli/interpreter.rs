@@ -210,6 +210,15 @@ impl CliSessionInterpreter {
         Ok(Self::facts_for(terminals, binding)?.and_then(|facts| self.keep_open_reason(&facts)))
     }
 
+    pub fn harness_busy_for(
+        &self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+    ) -> Result<bool, TerminalError> {
+        Ok(Self::facts_for(terminals, binding)?
+            .is_some_and(|facts| self.strategy_for(&facts).harness_busy(&facts)))
+    }
+
     pub fn draft_stash_for(
         &self,
         terminals: &TerminalSessionService,

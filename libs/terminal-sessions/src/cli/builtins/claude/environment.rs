@@ -16,6 +16,10 @@ pub(super) trait ClaudeEnvironment: Send + Sync {
     fn remote_controlled(&self, _pid: i32) -> bool {
         false
     }
+
+    fn busy(&self, _pid: i32) -> bool {
+        false
+    }
 }
 
 pub(super) struct SystemClaudeEnvironment;
@@ -42,6 +46,11 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
         read_record(&Registry::load().current(Harness::Claude).path, pid)
             .is_some_and(|record| record.bridge_session_id.is_some_and(|id| !id.is_empty()))
     }
+
+    fn busy(&self, pid: i32) -> bool {
+        read_record(&Registry::load().current(Harness::Claude).path, pid)
+            .is_some_and(|record| record.busy())
+    }
 }
 
 fn read_record(home: &Path, pid: i32) -> Option<ClaudeSessionRecord> {
@@ -56,7 +65,19 @@ struct ClaudeSessionRecord {
     cwd: String,
     #[serde(rename = "bridgeSessionId", default)]
     bridge_session_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
 }
+
+impl ClaudeSessionRecord {
+    fn busy(&self) -> bool {
+        self.status
+            .as_deref()
+            .is_some_and(|status| status != IDLE_STATUS)
+    }
+}
+
+const IDLE_STATUS: &str = "idle";
 
 fn encode_project_dir(cwd: &str) -> String {
     cwd.chars()
@@ -109,6 +130,25 @@ mod tests {
             assert_eq!(marked, expected, "{record}");
         }
         assert!(read_record(home.path(), 8).is_none());
+    }
+
+    #[test]
+    fn every_status_but_idle_marks_the_session_busy() {
+        let home = tempfile::TempDir::new().unwrap();
+        let sessions = home.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let cases = [
+            (r#"{"sessionId":"s","cwd":"/w"}"#, false),
+            (r#"{"sessionId":"s","cwd":"/w","status":"idle"}"#, false),
+            (r#"{"sessionId":"s","cwd":"/w","status":"busy"}"#, true),
+            (r#"{"sessionId":"s","cwd":"/w","status":"shell"}"#, true),
+            (r#"{"sessionId":"s","cwd":"/w","status":"waiting"}"#, true),
+        ];
+        for (record, expected) in cases {
+            std::fs::write(sessions.join("7.json"), record).unwrap();
+            let busy = read_record(home.path(), 7).is_some_and(|record| record.busy());
+            assert_eq!(busy, expected, "{record}");
+        }
     }
 
     #[test]

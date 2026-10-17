@@ -210,6 +210,7 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                             interpreter.keep_open_reason_for(&terminals, &caller),
                             Ok(None)
                         )
+                        && matches!(interpreter.harness_busy_for(&terminals, &caller), Ok(false))
                     {
                         let _ = terminals.close(&caller);
                         record.caller_closed = true;
@@ -486,6 +487,11 @@ pub fn watch_woken(
                 }
             }
             WokenTurn::Engaged => break "engaged",
+            WokenTurn::Finished(_)
+                if !matches!(interpreter.harness_busy_for(terminals, &woken), Ok(false)) =>
+            {
+                continue
+            }
             WokenTurn::Finished(report) if !parking_on(record) => {
                 record.state = ParkState::Finished;
                 record.report = Some(report);

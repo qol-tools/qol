@@ -46,6 +46,20 @@ impl ClaudeEnvironment for RemoteControlledEnvironment {
     }
 }
 
+struct BusyEnvironment {
+    pid: i32,
+}
+
+impl ClaudeEnvironment for BusyEnvironment {
+    fn session(&self, _pid: i32) -> Option<ClaudeSessionLocation> {
+        None
+    }
+
+    fn busy(&self, pid: i32) -> bool {
+        pid == self.pid
+    }
+}
+
 #[derive(Default)]
 struct SwitchableEnvironment {
     location: std::sync::Mutex<Option<ClaudeSessionLocation>>,
@@ -352,6 +366,14 @@ fn remote_control_on_the_foreground_claude_process_keeps_its_terminal_open() {
             expected,
             "pid {pid}"
         );
+    }
+}
+
+#[test]
+fn a_foreground_claude_process_that_reports_work_reads_busy() {
+    for (pid, expected) in [(22, true), (23, false)] {
+        let strategy = ClaudeStrategy::with_environment(Arc::new(BusyEnvironment { pid }));
+        assert_eq!(strategy.harness_busy(&session()), expected, "pid {pid}");
     }
 }
 
