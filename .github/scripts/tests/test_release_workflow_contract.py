@@ -1,4 +1,7 @@
+import os
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -18,26 +21,29 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         cache = named_step(action, "Restore or save build cache", "    ")
         self.assertIn("id: build-cache", cache)
         self.assertIn("uses: Swatinem/rust-cache@", cache)
-        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' }}", cache)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}", cache)
         outputs = action.split("outputs:\n", 1)[1].split("runs:\n", 1)[0]
         self.assertIn("build-cache-hit:", outputs)
         self.assertIn("value: ${{ steps.build-cache.outputs.cache-hit }}", outputs)
 
-    def test_main_run_that_saves_the_build_cache_also_checks_the_release_profile(self):
+    def test_only_pull_requests_check_the_release_profile(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
-        self.assertIn("id: rust_setup", check)
         step = named_step(check, "Release profile check", "      ")
         for contract in [
-            "matrix.skip != 'true'",
-            "github.event_name == 'pull_request' ||",
-            "github.ref == 'refs/heads/main'",
-            "steps.rust_setup.outputs.build-cache-hit != 'true'",
+            "if: matrix.skip != 'true' && github.event_name == 'pull_request'",
             "cargo check --release --locked $BUILD_ARGS",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, step)
         self.assertNotIn("cargo build --release", check)
+
+    def test_checks_restore_the_cache_without_competing_with_the_warmer(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        setup = check.split("      - uses: ./.github/actions/rust-setup\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("cache-key: ci-${{ matrix.os }}", setup)
+        self.assertIn('save-cache: "false"', setup)
 
     def test_build_jobs_never_hold_a_cache_deletion_token(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -99,9 +105,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
         for contract in [
             "name: merge gate",
-            "needs: [plan, check, release-build, process-windows, registry-tool]",
+            "needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
+            "LINT: ${{ needs.repository-lint.result }}",
+            '[ "$LINT" = success ] || exit 1',
             '[ "$BUILD" = success ] || exit 1',
             '[ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1',
             '*" failure "*|*" cancelled "*) exit 1 ;;',
@@ -109,7 +117,58 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, gate)
         report = workflow.split("  queue-report:\n", 1)[1]
-        self.assertIn("needs: [plan, check, release-build, process-windows, registry-tool]", report)
+        self.assertIn("needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]", report)
+        self.assertIn("contains(needs.*.result, 'failure')", report)
+
+    def test_repository_lint_runs_beside_planning_after_review(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  repository-lint:\n", 1)[0]
+        lint = workflow.split("  repository-lint:\n", 1)[1].split("  check:\n", 1)[0]
+        self.assertNotIn("qac lint", plan)
+        self.assertNotIn("needs: plan", lint)
+        for contract in [
+            "needs: review",
+            "!cancelled() && needs.review.result != 'failure'",
+            "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+            "fetch-depth: 0",
+            "BASE_SHA: ${{ github.event.merge_group.base_sha }}",
+            'base="${BASE_SHA:-$(git rev-parse HEAD^1)}"',
+            'git worktree add --quiet --detach "$RUNNER_TEMP/qol-monorepo" HEAD',
+            'lint "--cwd=$RUNNER_TEMP/qol-monorepo" "--base=$base"',
+            "process.exit(r.findings.length ? 1 : 0);",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, lint)
+        for job in ["check", "process-windows", "release-build", "registry-tool"]:
+            with self.subTest(job=job):
+                dependencies = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("needs: plan", dependencies)
+                self.assertNotIn("repository-lint", dependencies)
+
+    def test_merge_gate_requires_successful_repository_lint(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        gate = workflow.split("  gate:\n", 1)[1].split("  stop-on-failure:\n", 1)[0]
+        step = named_step(gate, "Every job passed or was skipped", "      ")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        for event in ["pull_request", "merge_group"]:
+            for lint in ["success", "failure", "cancelled", "skipped"]:
+                with self.subTest(event=event, lint=lint):
+                    result = subprocess.run(
+                        ["bash", "-e", "-c", script],
+                        capture_output=True,
+                        text=True,
+                        env={
+                            **os.environ,
+                            "GITHUB_EVENT_NAME": event,
+                            "PLAN": "success",
+                            "LINT": lint,
+                            "REUSED": "false",
+                            "CHECK": "success",
+                            "BUILD": "success",
+                            "RESULTS": f"success {lint} success success skipped skipped",
+                        },
+                    )
+                    self.assertEqual(result.returncode == 0, lint == "success", result.stdout + result.stderr)
 
     def test_pull_request_runs_start_only_after_the_review_passes(self):
         for name, first in [("ci.yml", "  plan:\n"), ("codeql.yml", "  analyze:\n")]:
@@ -285,6 +344,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         test_steps = re.findall(r"      - name: Test\n(.*?)(?=\n      - name:|\Z)", check_job, re.S)
         self.assertEqual(len(test_steps), 2)
         self.assertRegex(check_job, r"tool: cargo-nextest@\d+\.\d+\.\d+")
+        install = named_step(check_job, "Install cargo-nextest", "      ")
+        self.assertIn("if: matrix.skip != 'true' && github.event_name != 'pull_request'", install)
         for step in test_steps:
             with self.subTest(step=step.splitlines()[0]):
                 self.assertIn("TEST_ARGS: ${{ matrix.test_args }}", step)
