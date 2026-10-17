@@ -1,5 +1,5 @@
-use super::document::{self, IndexDocument};
-use super::IndexLocation;
+use super::document::{self, IndexDocument, RegistryLocation};
+use super::{registry, IndexLocation};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -13,20 +13,62 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) async fn load(location: &IndexLocation) -> Result<IndexDocument> {
-    let client = http_client();
-    let signed = read_body(&location.url, get(&client, &location.url).await?.bytes()).await?;
-    let served = document::verify_signed(&signed, &location.public_key)?;
-    let served_serial = served.serial;
-    let document = keep_newest(&crate::paths::base_data_dir()?, location, served, &signed)?;
+    let served = read_verified(&http_client(), location).await?;
+    let served_serial = served.document.serial;
+    let document = keep_newest(
+        &crate::paths::base_data_dir()?,
+        location,
+        served.document,
+        &served.signed,
+    )?;
     qol_runtime::probe!(
         "PLUGIN_INDEX",
-        "event=loaded url={} serial={} served={} plugins={}",
+        "event=loaded url={} from={} serial={} served={} plugins={}",
         location.url,
+        served.from,
         document.serial,
         served_serial,
         document.plugins.len()
     );
     Ok(document)
+}
+
+struct Served {
+    signed: Vec<u8>,
+    document: IndexDocument,
+    from: String,
+}
+
+async fn read_verified(client: &reqwest::Client, location: &IndexLocation) -> Result<Served> {
+    if let Some(registry) = &location.registry {
+        match from_registry(client, registry, &location.public_key).await {
+            Ok(served) => return Ok(served),
+            Err(error) => log::warn!(
+                "Could not read the plugin index from {}, reading {} instead: {error:#}",
+                registry.url,
+                location.url
+            ),
+        }
+    }
+    let signed = read_body(&location.url, get(client, &location.url).await?.bytes()).await?;
+    Ok(Served {
+        document: document::verify_signed(&signed, &location.public_key)?,
+        signed: signed.to_vec(),
+        from: location.url.clone(),
+    })
+}
+
+async fn from_registry(
+    client: &reqwest::Client,
+    registry: &RegistryLocation,
+    public_key: &str,
+) -> Result<Served> {
+    let signed = registry::fetch_signed_index(client, registry).await?;
+    Ok(Served {
+        document: document::verify_signed(&signed, public_key)?,
+        signed,
+        from: format!("{}/{}", registry.url, registry.repository),
+    })
 }
 
 pub(super) fn http_client() -> reqwest::Client {
@@ -144,6 +186,7 @@ mod tests {
         IndexLocation {
             url: url.to_string(),
             public_key: signer.public_key(),
+            registry: None,
         }
     }
 

@@ -3,11 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::features::plugin_store::release_integrity::{self, GitHubRelease};
 use crate::plugins::PluginManager;
 
-use super::super::{latest_version, verify_host_update, verify_release_binary, GITHUB_REPO};
-use super::download;
+use super::super::{verify_host_update, verify_release_binary, FoundUpdate};
+use super::download::{self, HostUpdate};
 use super::windows_install_kind::install_kind_for;
 use super::InstallKind;
 
@@ -125,6 +124,7 @@ fn replace_binary_with(
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
     plugin_manager: Arc<Mutex<PluginManager>>,
+    update: Option<FoundUpdate>,
 ) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
@@ -149,46 +149,22 @@ pub(super) async fn download_and_install(
         .prefix("qol-tray-update-")
         .tempdir()?;
     let dest = work_dir.path().join(asset_name());
-    let expected_version = if dev_override {
+    let update = if dev_override {
         None
     } else {
-        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+        Some(download::resolve_update(update).await?)
     };
-    let release = match expected_version.as_deref() {
-        Some(version) => {
-            let tag = format!("qol-tray-v{version}");
-            Some(release_integrity::fetch_release(GITHUB_REPO, &tag).await?)
-        }
-        None => None,
-    };
-    let verified_asset = release
-        .as_ref()
-        .map(|release| release_integrity::verified_asset(release, &asset_name()))
-        .transpose()?;
-    let url = dev_url
-        .or_else(|| {
-            verified_asset
-                .as_ref()
-                .map(|asset| asset.browser_download_url.clone())
-        })
-        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
-
-    log::info!("Downloading update from {}", url);
-    download::download_asset(&url, &dest, &events).await?;
-    if let Some(asset) = &verified_asset {
-        release_integrity::verify_file(asset, &dest)?;
-    }
+    download::download_update_asset(update.as_ref(), dev_url, &asset_name(), &dest, &events)
+        .await?;
     verify_host_update(
         &dest,
-        expected_version.as_deref(),
+        update.as_ref().map(HostUpdate::version),
         qol_artifact::ArtifactExpectation::with_exact_target,
     )?;
 
-    let installer = match (&release, expected_version.as_deref()) {
-        (Some(release), Some(version)) => {
-            download_installer(release, version, work_dir.path()).await
-        }
-        _ => None,
+    let installer = match &update {
+        Some(update) => download_installer(update, work_dir.path()).await,
+        None => None,
     };
 
     let current_exe = std::env::current_exe()?;
@@ -221,13 +197,9 @@ pub(super) async fn download_and_install(
     }
 }
 
-async fn download_installer(
-    release: &GitHubRelease,
-    version: &str,
-    work_dir: &Path,
-) -> Option<PathBuf> {
+async fn download_installer(update: &HostUpdate, work_dir: &Path) -> Option<PathBuf> {
     let name = installer_asset_name();
-    let asset = match release_integrity::verified_asset(release, &name) {
+    let asset = match update.asset(&name) {
         Ok(asset) => asset,
         Err(error) => {
             log::warn!("Keeping the installed uninstaller: {error:#}");
@@ -236,12 +208,11 @@ async fn download_installer(
     };
     let dest = work_dir.join(&name);
     let downloaded = async {
-        download::download_to(&asset.browser_download_url, &dest, |_| {}).await?;
-        release_integrity::verify_file(&asset, &dest)?;
+        asset.download(&dest, |_| {}).await?;
         verify_release_binary(
             &dest,
             qol_conventions::artifact::TRAY_INSTALLER_BINARY_NAME,
-            Some(version),
+            Some(update.version()),
             qol_artifact::ArtifactExpectation::with_exact_target,
         )
     };

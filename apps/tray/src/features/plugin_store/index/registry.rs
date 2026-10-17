@@ -2,8 +2,8 @@ use super::document::{Blob, IndexedRelease, RegistryLocation};
 use super::fetch::{blob_client, get, read_body};
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
-use qol_plugin_index::BearerChallenge;
-use reqwest::header::WWW_AUTHENTICATE;
+use qol_plugin_index::{BearerChallenge, INDEX_TAG, SIGNED_INDEX_MEDIA_TYPE};
+use reqwest::header::{ACCEPT, WWW_AUTHENTICATE};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -11,6 +11,8 @@ use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
 static PULL_TOKENS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Mutex::default);
+
+const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 
 pub(crate) async fn download_asset(
     release: &IndexedRelease,
@@ -26,6 +28,46 @@ pub(crate) async fn download_asset(
     Ok(true)
 }
 
+pub(super) async fn fetch_signed_index(
+    client: &reqwest::Client,
+    registry: &RegistryLocation,
+) -> Result<Vec<u8>> {
+    let url = manifest_url(registry, INDEX_TAG);
+    let response = pull(client, registry, &url, Some(OCI_MANIFEST_MEDIA_TYPE)).await?;
+    let manifest: Manifest = read_body(&url, response.json()).await?;
+    let layer = signed_index_layer(manifest)?;
+    fetch_blob(client, registry, &layer, "the signed plugin index").await
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    layers: Vec<Descriptor>,
+}
+
+#[derive(Deserialize)]
+struct Descriptor {
+    #[serde(rename = "mediaType")]
+    media_type: String,
+    digest: String,
+    size: u64,
+}
+
+fn signed_index_layer(manifest: Manifest) -> Result<Blob> {
+    let mut layers = manifest
+        .layers
+        .into_iter()
+        .filter(|layer| layer.media_type == SIGNED_INDEX_MEDIA_TYPE);
+    let (Some(layer), None) = (layers.next(), layers.next()) else {
+        anyhow::bail!(
+            "the {INDEX_TAG} manifest does not hold exactly one signed plugin index layer"
+        );
+    };
+    Ok(Blob {
+        digest: layer.digest,
+        size: layer.size,
+    })
+}
+
 pub(super) async fn fetch_blob(
     client: &reqwest::Client,
     registry: &RegistryLocation,
@@ -33,32 +75,9 @@ pub(super) async fn fetch_blob(
     label: &str,
 ) -> Result<Vec<u8>> {
     let url = blob_url(registry, &blob.digest);
-    let scope = format!("{}/{}", registry.url, registry.repository);
-    let mut request = client.get(&url);
-    if let Some(token) = remembered_token(&scope) {
-        request = request.bearer_auth(token);
-    }
-    let mut response = send(request, &url).await?;
-    if response.status() == StatusCode::UNAUTHORIZED {
-        let token = anonymous_token(client, registry, &response)
-            .await
-            .map_err(|error| anyhow::anyhow!("{url} refused an anonymous pull: {error:#}"))?;
-        remember_token(&scope, &token);
-        response = send(client.get(&url).bearer_auth(token), &url).await?;
-    }
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!("{url} answered {status}"));
-    }
+    let response = pull(client, registry, &url, None).await?;
     let bytes = read_body(&url, response.bytes()).await?;
-    if bytes.len() as u64 != blob.size {
-        anyhow::bail!(
-            "{label} is {} bytes but the plugin index says {}",
-            bytes.len(),
-            blob.size
-        );
-    }
-    release_integrity::verify_sha256(&blob.digest, &bytes, label)?;
+    verify_blob(blob, &bytes, label)?;
     qol_runtime::probe!(
         "PLUGIN_INDEX",
         "event=blob_verified name={} digest={} bytes={}",
@@ -69,7 +88,72 @@ pub(super) async fn fetch_blob(
     Ok(bytes.to_vec())
 }
 
-fn blob_url(registry: &RegistryLocation, digest: &str) -> String {
+pub(super) async fn open_blob(
+    registry: &RegistryLocation,
+    blob: &Blob,
+) -> Result<reqwest::Response> {
+    pull(
+        &blob_client(),
+        registry,
+        &blob_url(registry, &blob.digest),
+        None,
+    )
+    .await
+}
+
+pub(super) fn verify_blob(blob: &Blob, bytes: &[u8], label: &str) -> Result<()> {
+    if bytes.len() as u64 != blob.size {
+        anyhow::bail!(
+            "{label} is {} bytes but the plugin index says {}",
+            bytes.len(),
+            blob.size
+        );
+    }
+    release_integrity::verify_sha256(&blob.digest, bytes, label)
+}
+
+async fn pull(
+    client: &reqwest::Client,
+    registry: &RegistryLocation,
+    url: &str,
+    accept: Option<&str>,
+) -> Result<reqwest::Response> {
+    let scope = format!("{}/{}", registry.url, registry.repository);
+    let request = |token: Option<&str>| {
+        let mut request = client.get(url);
+        if let Some(accept) = accept {
+            request = request.header(ACCEPT, accept);
+        }
+        match token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    };
+    let mut response = send(request(remembered_token(&scope).as_deref()), url).await?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let token = anonymous_token(client, registry, &response)
+            .await
+            .map_err(|error| anyhow::anyhow!("{url} refused an anonymous pull: {error:#}"))?;
+        remember_token(&scope, &token);
+        response = send(request(Some(&token)), url).await?;
+    }
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("{url} answered {status}"));
+    }
+    Ok(response)
+}
+
+fn manifest_url(registry: &RegistryLocation, reference: &str) -> String {
+    format!(
+        "{}/v2/{}/manifests/{}",
+        registry.url.trim_end_matches('/'),
+        registry.repository,
+        reference
+    )
+}
+
+pub(super) fn blob_url(registry: &RegistryLocation, digest: &str) -> String {
     format!(
         "{}/v2/{}/blobs/{}",
         registry.url.trim_end_matches('/'),
@@ -144,6 +228,49 @@ mod tests {
         ];
         for (url, expected) in cases {
             assert_eq!(blob_url(&registry(url), "sha256:ab"), *expected);
+        }
+        assert_eq!(
+            manifest_url(&registry("https://ghcr.io/"), INDEX_TAG),
+            "https://ghcr.io/v2/qol-tools/plugins/manifests/index"
+        );
+    }
+
+    #[test]
+    fn the_index_manifest_must_hold_exactly_one_signed_index_layer() {
+        let layer = |media_type: &str, digest: &str| serde_json::json!({ "mediaType": media_type, "digest": digest, "size": 7 });
+        let signed = SIGNED_INDEX_MEDIA_TYPE;
+        let other = "application/octet-stream";
+        let cases: Vec<(&str, Vec<serde_json::Value>, Option<&str>)> = vec![
+            (
+                "one signed layer",
+                vec![layer(signed, "sha256:a")],
+                Some("sha256:a"),
+            ),
+            (
+                "signed layer beside another",
+                vec![layer(other, "sha256:b"), layer(signed, "sha256:a")],
+                Some("sha256:a"),
+            ),
+            ("no layers", vec![], None),
+            ("only other layers", vec![layer(other, "sha256:b")], None),
+            (
+                "two signed layers",
+                vec![layer(signed, "sha256:a"), layer(signed, "sha256:c")],
+                None,
+            ),
+        ];
+        for (case, layers, expected) in cases {
+            let manifest: Manifest =
+                serde_json::from_value(serde_json::json!({ "layers": layers })).unwrap();
+            let picked = signed_index_layer(manifest).ok();
+            assert_eq!(
+                picked.as_ref().map(|blob| blob.digest.as_str()),
+                expected,
+                "{case}"
+            );
+            if let Some(blob) = picked {
+                assert_eq!(blob.size, 7, "{case}");
+            }
         }
     }
 }

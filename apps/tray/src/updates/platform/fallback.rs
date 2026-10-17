@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::daemon::EventBus;
 use crate::plugins::PluginManager;
 
+use super::super::FoundUpdate;
 use super::InstallKind;
 
 pub(super) fn recover_interrupted_update() {}
@@ -24,6 +25,7 @@ pub(super) fn detect_install_kind() -> InstallKind {
 pub(super) async fn download_and_install(
     _events: Arc<EventBus>,
     _plugin_manager: Arc<Mutex<PluginManager>>,
+    _update: Option<FoundUpdate>,
 ) -> Result<()> {
     let _ = InstallKind::detect();
     anyhow::bail!("self-update is unavailable on this platform")

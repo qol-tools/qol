@@ -1,6 +1,7 @@
 mod catalog;
 mod document;
 mod fetch;
+mod host;
 #[cfg(test)]
 mod install_tests;
 mod registry;
@@ -9,22 +10,30 @@ mod stage;
 pub(crate) use catalog::list_plugins;
 pub(crate) use document::IndexedRelease;
 pub(crate) use fetch::blob_client;
+pub(crate) use host::{latest_host_release, IndexedHostAsset, IndexedHostRelease};
 pub(crate) use registry::download_asset;
 pub(crate) use stage::{load_config_contract, stage_release};
 
 const CORE_INDEX_URL: &str = "https://qol-tools.github.io/qol/plugins/index.signed.json";
 const CORE_INDEX_PUBLIC_KEY_FILE: &str = include_str!("plugin-index.pub");
+const CORE_INDEX_REGISTRY_URL: &str = "https://ghcr.io";
+const CORE_INDEX_REPOSITORY: &str = "qol-tools/plugins";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IndexLocation {
     pub(crate) url: String,
     pub(crate) public_key: String,
+    pub(crate) registry: Option<qol_plugin_index::RegistryLocation>,
 }
 
 pub(crate) fn core_index() -> IndexLocation {
     IndexLocation {
         url: CORE_INDEX_URL.to_string(),
         public_key: qol_plugin_index::public_key_line(CORE_INDEX_PUBLIC_KEY_FILE).to_string(),
+        registry: Some(qol_plugin_index::RegistryLocation {
+            url: CORE_INDEX_REGISTRY_URL.to_string(),
+            repository: CORE_INDEX_REPOSITORY.to_string(),
+        }),
     }
 }
 

@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      attestations: read
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
     env:
@@ -45,16 +46,21 @@ jobs:
       - name: Build registry tool
         run: cargo build --locked -p qol-plugin-registry
 
+      # New host builds are listed only once gh attestation verify accepts
+      # every file as built by the Versioning workflow of this repository.
       - name: Build index
         env:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           target/debug/qol-plugin-registry index \
             --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
             --public-key "${PUBLIC_KEY}" \
             --previous-url "${INDEX_URL}" \
+            --provenance-repo "${GITHUB_REPOSITORY}" \
+            --provenance-workflow .github/workflows/plugin-version.yml \
             --output index.json | tee -a "${GITHUB_STEP_SUMMARY}"
 
       # Every plugin release dispatches this workflow, and one run usually
@@ -140,6 +146,13 @@ jobs:
           jq -j .index site/plugins/index.signed.json | cmp - site/plugins/index.json
           jq -j .signature site/plugins/index.signed.json | cmp - site/plugins/index.json.minisig
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plugin-index-signed
+          path: site/plugins/index.signed.json
+          retention-days: 1
+          if-no-files-found: error
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
@@ -158,3 +171,43 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The registry copy has no CDN cache, so trays read it first. This job holds
+  # no signing key; it pushes the file sign already signed and verified.
+  registry:
+    name: Publish index to the registry
+    needs: sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-registry
+          system-dependencies: "false"
+
+      # Built in its own step, which holds no token.
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: plugin-index-signed
+
+      - name: Push signed index
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target/debug/qol-plugin-registry push-index \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --signed index.signed.json | tee -a "${GITHUB_STEP_SUMMARY}"
