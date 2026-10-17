@@ -66,3 +66,45 @@ jobs:
             args+=(--dry-run)
           fi
           python3 .github/scripts/cache_prune.py "${args[@]}" | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  # Separate from the release prune, so it compiles the registry tool without
+  # the workflow's contents and actions write scopes.
+  registry:
+    name: Prune registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-registry
+          system-dependencies: "false"
+
+      # Built in its own step, which holds no token.
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
+      - name: Prune registry versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"
+            --public-key apps/tray/src/features/plugin_store/index/plugin-index.pub
+            --index-url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/plugins/index.signed.json"
+          )
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          target/debug/qol-plugin-registry prune "${args[@]}" 2>&1 | tee -a "${GITHUB_STEP_SUMMARY}"

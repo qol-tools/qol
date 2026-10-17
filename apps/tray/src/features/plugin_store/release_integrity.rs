@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+pub(crate) use super::index::{latest_host_release, IndexedHostAsset, IndexedHostRelease};
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct GitHubRelease {
     pub(crate) tag_name: String,

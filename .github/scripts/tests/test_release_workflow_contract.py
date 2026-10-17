@@ -389,6 +389,29 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 job = workflow.split(start, 1)[1].split(end, 1)[0]
                 self.assertIn(timeout, job)
 
+    def test_each_tray_build_publishes_to_the_index_without_waiting_for_the_others(self):
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        publish = (ROOT / ".github/workflows/qol-tray-host-publish.yml").read_text()
+        for platform in ["linux", "macos", "windows"]:
+            with self.subTest(platform=platform):
+                job = versioning.split(f"  qol_tray_{platform}_publish:\n", 1)[1].split("\n  qol_tray_", 1)[0]
+                needs = job.split("    needs:\n", 1)[1].split("    if:", 1)[0]
+                self.assertEqual(needs.split(), ["-", "prepare", "-", f"qol_tray_{platform}_candidate"])
+                self.assertIn("uses: ./.github/workflows/qol-tray-host-publish.yml", job)
+                self.assertIn(f"os: {platform}", job)
+        attest = publish.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
+        self.assertIn("actions/attest-build-provenance@", attest)
+        self.assertNotIn("cargo", attest)
+        registry = publish.split("  registry:\n", 1)[1].split("\n  index:\n", 1)[0]
+        self.assertIn("needs: attest", registry)
+        self.assertIn("persist-credentials: false", registry)
+        self.assertNotIn("id-token", registry)
+        build = named_step(registry, "Build registry tool", "      ")
+        self.assertNotIn("token", build)
+        index = publish.split("  index:\n", 1)[1]
+        self.assertIn("needs: registry", index)
+        self.assertIn("gh workflow run plugin-index.yml --ref main", index)
+
     def test_tray_release_builds_drop_checkout_credentials(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         for job, end in [

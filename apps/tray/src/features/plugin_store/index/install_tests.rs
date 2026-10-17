@@ -1,4 +1,5 @@
 use super::document::fixtures::{blob, document, version, Signer};
+use super::host::fixtures::host;
 use super::stage::fixtures::tree;
 use super::IndexLocation;
 use crate::features::plugin_store::installer::PluginInstaller;
@@ -23,8 +24,10 @@ const TOKEN: &str = "anonymous-pull";
 struct Published {
     index: Vec<u8>,
     blobs: HashMap<String, Vec<u8>>,
+    manifests: HashMap<String, Value>,
     tokens_issued: usize,
     indexes_served: usize,
+    manifests_served: usize,
 }
 
 #[derive(Clone)]
@@ -49,6 +52,10 @@ impl Server {
             .route("/plugins/index.signed.json", get(serve_index))
             .route("/token", get(serve_token))
             .route("/v2/qol-tools/plugins/blobs/{digest}", get(serve_blob))
+            .route(
+                "/v2/qol-tools/plugins/manifests/{reference}",
+                get(serve_manifest),
+            )
             .with_state(server.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         server
@@ -58,7 +65,46 @@ impl Server {
         IndexLocation {
             url: format!("{}/plugins/index.signed.json", self.base),
             public_key: signer.public_key(),
+            registry: None,
         }
+    }
+
+    fn registry_location(&self, signer: &Signer) -> IndexLocation {
+        IndexLocation {
+            registry: Some(qol_plugin_index::RegistryLocation {
+                url: self.base.clone(),
+                repository: "qol-tools/plugins".to_string(),
+            }),
+            ..self.location(signer)
+        }
+    }
+
+    fn push_index(&self, signed: &[u8]) {
+        let mut published = self.published.lock().unwrap();
+        let layer = json!({
+            "mediaType": qol_plugin_index::SIGNED_INDEX_MEDIA_TYPE,
+            "digest": digest(signed),
+            "size": signed.len(),
+        });
+        let manifest = json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "artifactType": "application/vnd.qol.plugin-index.v1",
+            "layers": [layer],
+        });
+        published.blobs.insert(digest(signed), signed.to_vec());
+        published
+            .manifests
+            .insert(qol_plugin_index::INDEX_TAG.to_string(), manifest);
+    }
+
+    fn publish_host(&self, signer: &Signer, serial: u64, asset_name: &str, bytes: &[u8]) {
+        let mut published = self.published.lock().unwrap();
+        let assets = json!({ asset_name: blob(&digest(bytes), bytes.len() as u64) });
+        let mut body = document(serial, &self.base, json!({}));
+        body["host"] = json!({ "linux": host("3.2.0", &[("3.2.0", "r2", assets)]) });
+        published.blobs.insert(digest(bytes), bytes.to_vec());
+        published.index = signer.sign_index(&serde_json::to_vec(&body).unwrap());
     }
 
     fn publish(&self, signer: &Signer, serial: u64, releases: &[(&str, &[u8])]) {
@@ -117,27 +163,52 @@ async fn serve_token(State(server): State<Server>) -> Json<Value> {
     Json(json!({ "token": TOKEN }))
 }
 
+fn unauthorized(server: &Server, headers: &HeaderMap) -> Option<Response> {
+    let authorized = headers
+        .get(header::AUTHORIZATION)
+        .is_some_and(|value| value == format!("Bearer {TOKEN}").as_str());
+    if authorized {
+        return None;
+    }
+    let challenge = format!(
+        r#"Bearer realm="{}/token",service="test",scope="repository:qol-tools/plugins:pull""#,
+        server.base
+    );
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, challenge)],
+        )
+            .into_response(),
+    )
+}
+
 async fn serve_blob(
     State(server): State<Server>,
     UrlPath(digest): UrlPath<String>,
     headers: HeaderMap,
 ) -> Response {
-    let authorized = headers
-        .get(header::AUTHORIZATION)
-        .is_some_and(|value| value == format!("Bearer {TOKEN}").as_str());
-    if !authorized {
-        let challenge = format!(
-            r#"Bearer realm="{}/token",service="test",scope="repository:qol-tools/plugins:pull""#,
-            server.base
-        );
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, challenge)],
-        )
-            .into_response();
+    if let Some(refused) = unauthorized(&server, &headers) {
+        return refused;
     }
     match server.published.lock().unwrap().blobs.get(&digest) {
         Some(bytes) => bytes.clone().into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn serve_manifest(
+    State(server): State<Server>,
+    UrlPath(reference): UrlPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(refused) = unauthorized(&server, &headers) {
+        return refused;
+    }
+    let mut published = server.published.lock().unwrap();
+    published.manifests_served += 1;
+    match published.manifests.get(&reference) {
+        Some(manifest) => Json(manifest.clone()).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -247,6 +318,7 @@ async fn an_index_or_blob_that_cannot_be_reached_names_what_failed() {
     let missing_index = IndexLocation {
         url: format!("{}/missing/index.signed.json", server.base),
         public_key: signer.public_key(),
+        registry: None,
     };
 
     let staging = tmp.path().join("staging");
@@ -268,4 +340,112 @@ async fn an_index_or_blob_that_cannot_be_reached_names_what_failed() {
     ] {
         assert!(format!("{error:#}").contains(cause), "{error:#}");
     }
+}
+
+#[tokio::test]
+async fn the_newer_verified_index_of_registry_and_pages_wins() {
+    let _env = crate::test_support::env_lock().lock().await;
+    let server = Server::start().await;
+    let signer = Signer::generate();
+    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    let pages_copy = server.published.lock().unwrap().index.clone();
+    let signed: qol_plugin_index::SignedIndex = serde_json::from_slice(&pages_copy).unwrap();
+    let with_serial = |signer: &Signer, serial: u64| {
+        let mut document: serde_json::Value = serde_json::from_str(&signed.index).unwrap();
+        document["serial"] = serial.into();
+        signer.sign_index(&serde_json::to_vec(&document).unwrap())
+    };
+    let newer = with_serial(&signer, 2);
+    let older = with_serial(&signer, 0);
+    let impostor = with_serial(&Signer::generate(), 2);
+    type Case<'a> = (&'a str, Option<&'a [u8]>, Option<&'a [u8]>, u64);
+    let cases: &[Case] = &[
+        (
+            "registry is newer than pages",
+            Some(newer.as_slice()),
+            None,
+            2,
+        ),
+        (
+            "registry is older than pages",
+            Some(older.as_slice()),
+            None,
+            1,
+        ),
+        ("registry has no index tag", None, None, 1),
+        (
+            "registry blob does not match its descriptor",
+            Some(newer.as_slice()),
+            Some(b"{}".as_slice()),
+            1,
+        ),
+        (
+            "registry index is signed by another key",
+            Some(impostor.as_slice()),
+            None,
+            1,
+        ),
+    ];
+    for (case, pushed, served_instead, expected) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let _paths = crate::paths::push_test_path_root(tmp.path());
+        {
+            let mut published = server.published.lock().unwrap();
+            published.manifests.clear();
+            published.indexes_served = 0;
+            published.manifests_served = 0;
+        }
+        if let Some(pushed) = pushed {
+            server.push_index(pushed);
+            if let Some(served) = served_instead {
+                server.replace_blob(pushed, served);
+            }
+        }
+        let document = super::fetch::load(&server.registry_location(&signer))
+            .await
+            .unwrap();
+        assert_eq!(document.serial, *expected, "{case}");
+        assert!(document.plugins.contains_key(PLUGIN_ID), "{case}");
+        let published = server.published.lock().unwrap();
+        assert_eq!(published.indexes_served, 1, "{case}");
+        assert_eq!(published.manifests_served, 1, "{case}");
+    }
+}
+
+#[tokio::test]
+async fn a_host_asset_is_pulled_from_the_registry_and_checked_against_the_index() {
+    let _env = crate::test_support::env_lock().lock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let _paths = crate::paths::push_test_path_root(tmp.path());
+    let server = Server::start().await;
+    let signer = Signer::generate();
+    let asset_name = "qol-tray-linux-x86_64.tar.gz";
+    server.publish_host(&signer, 1, asset_name, b"host build");
+    let release = super::host::load_host_release(&server.location(&signer), "linux")
+        .await
+        .unwrap()
+        .expect("the index lists a linux host");
+    assert_eq!(
+        (release.version.as_str(), release.revision.as_str()),
+        ("3.2.0", "r2")
+    );
+    let asset = release.asset(asset_name).unwrap();
+    let path = tmp.path().join(asset_name);
+
+    std::fs::write(&path, asset.open().await.unwrap().bytes().await.unwrap()).unwrap();
+    asset.verify_file(&path).unwrap();
+
+    server.replace_blob(b"host build", b"host bui1d");
+    std::fs::write(&path, asset.open().await.unwrap().bytes().await.unwrap()).unwrap();
+    let tampered = asset.verify_file(&path).unwrap_err();
+    assert!(
+        format!("{tampered:#}").contains("SHA-256 mismatch"),
+        "{tampered:#}"
+    );
+    assert!(
+        super::host::load_host_release(&server.location(&signer), "windows")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

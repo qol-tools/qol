@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
+use super::FoundUpdate;
 use crate::daemon::EventBus;
 use crate::plugins::PluginManager;
 
@@ -34,8 +35,13 @@ pub(crate) use install_kind::InstallKind;
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
     plugin_manager: Arc<Mutex<PluginManager>>,
+    update: Option<FoundUpdate>,
 ) -> Result<()> {
-    active::download_and_install(events, plugin_manager).await
+    active::download_and_install(events, plugin_manager, update).await
+}
+
+pub(super) fn index_os() -> &'static str {
+    std::env::consts::OS
 }
 
 pub(crate) fn detect_install_kind() -> InstallKind {

@@ -97,24 +97,38 @@ pub fn manifest(release: &Release, source: &str) -> Manifest {
 }
 
 pub fn push(registry: &Registry, release: &Release, source: &str) -> Result<Pushed> {
-    let manifest = manifest(release, source);
-    let manifest_bytes = serde_json::to_vec(&manifest)?;
-    if let Some(published) = registry.manifest(&release.tag)? {
+    let blobs: Vec<&[u8]> = [release.config.as_slice(), release.tree.as_slice()]
+        .into_iter()
+        .chain(release.assets.values().map(Vec::as_slice))
+        .collect();
+    push_once(registry, &release.tag, &manifest(release, source), &blobs)
+}
+
+pub fn push_once(
+    registry: &Registry,
+    tag: &str,
+    manifest: &Manifest,
+    blobs: &[&[u8]],
+) -> Result<Pushed> {
+    let manifest_bytes = serde_json::to_vec(manifest)?;
+    if let Some(published) = registry.manifest(tag)? {
         if published.digest == sha256_digest(&manifest_bytes) {
             return Ok(Pushed::AlreadyThere);
         }
         anyhow::bail!(
-            "{} already holds different content; a published release is never overwritten",
-            release.tag
+            "{tag} already holds different content; a published release is never overwritten"
         );
     }
-    let blobs = [release.config.as_slice(), release.tree.as_slice()]
-        .into_iter()
-        .chain(release.assets.values().map(Vec::as_slice));
+    upload(registry, manifest, blobs)?;
+    registry.put_manifest(tag, &manifest_bytes)?;
+    Ok(Pushed::New)
+}
+
+pub fn upload(registry: &Registry, manifest: &Manifest, blobs: &[&[u8]]) -> Result<()> {
     let uploads: Vec<(&str, &[u8])> = std::iter::once(&manifest.config)
         .chain(&manifest.layers)
         .map(|descriptor| descriptor.digest.as_str())
-        .zip(blobs)
+        .zip(blobs.iter().copied())
         .collect();
     parallel_map(&uploads, UPLOAD_WORKERS, |(digest, bytes)| {
         if !registry.has_blob(digest)? {
@@ -122,8 +136,7 @@ pub fn push(registry: &Registry, release: &Release, source: &str) -> Result<Push
         }
         Ok(())
     })?;
-    registry.put_manifest(&release.tag, &manifest_bytes)?;
-    Ok(Pushed::New)
+    Ok(())
 }
 
 fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {

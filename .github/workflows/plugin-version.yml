@@ -611,3 +611,81 @@ jobs:
           name: release-attestation-${{ needs.prepare.outputs.candidate_sha }}
           path: ${{ runner.temp }}/release-attestation-report.json
           if-no-files-found: error
+
+  # Each OS's tray build reaches the registry and the signed index as soon as
+  # that build finishes, before the tags and the GitHub Release.
+
+  qol_tray_linux_publish:
+    name: Publish qol-tray (linux) to the plugin index
+    needs:
+      - prepare
+      - qol_tray_linux_candidate
+    if: >-
+      ${{
+        needs.prepare.outputs.should_release == 'true' &&
+        needs.prepare.outputs.superseded != 'true' &&
+        needs.prepare.outputs.qol_tray_tag != '' &&
+        needs.qol_tray_linux_candidate.result == 'success'
+      }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+      actions: write
+    uses: ./.github/workflows/qol-tray-host-publish.yml
+    with:
+      os: linux
+      tag: ${{ needs.prepare.outputs.qol_tray_tag }}
+      revision: ${{ needs.prepare.outputs.candidate_sha }}
+      files: qol-tray-linux-x86_64.tar.gz
+
+  qol_tray_macos_publish:
+    name: Publish qol-tray (macos) to the plugin index
+    needs:
+      - prepare
+      - qol_tray_macos_candidate
+    if: >-
+      ${{
+        needs.prepare.outputs.should_release == 'true' &&
+        needs.prepare.outputs.superseded != 'true' &&
+        needs.prepare.outputs.qol_tray_tag != '' &&
+        needs.qol_tray_macos_candidate.result == 'success'
+      }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+      actions: write
+    uses: ./.github/workflows/qol-tray-host-publish.yml
+    with:
+      os: macos
+      tag: ${{ needs.prepare.outputs.qol_tray_tag }}
+      revision: ${{ needs.prepare.outputs.candidate_sha }}
+      files: qol-tray-macos-universal.tar.gz
+
+  qol_tray_windows_publish:
+    name: Publish qol-tray (windows) to the plugin index
+    needs:
+      - prepare
+      - qol_tray_windows_candidate
+    if: >-
+      ${{
+        needs.prepare.outputs.should_release == 'true' &&
+        needs.prepare.outputs.superseded != 'true' &&
+        needs.prepare.outputs.qol_tray_tag != '' &&
+        needs.qol_tray_windows_candidate.result == 'success'
+      }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+      actions: write
+    uses: ./.github/workflows/qol-tray-host-publish.yml
+    with:
+      os: windows
+      tag: ${{ needs.prepare.outputs.qol_tray_tag }}
+      revision: ${{ needs.prepare.outputs.candidate_sha }}
+      files: qol-tray-windows-x86_64.exe

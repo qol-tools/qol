@@ -5,10 +5,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::features::plugin_store::release_integrity;
 use crate::plugins::PluginManager;
 
-use super::super::{latest_version, verify_host_update, GITHUB_REPO};
+use super::super::{verify_host_update, FoundUpdate};
+use super::download::HostUpdate;
 use super::InstallKind;
 use super::{download, unix};
 
@@ -92,6 +92,7 @@ fn tar_update_blocked(
 pub(super) async fn download_and_install(
     events: Arc<EventBus>,
     _plugin_manager: Arc<Mutex<PluginManager>>,
+    update: Option<FoundUpdate>,
 ) -> Result<()> {
     let install_kind = InstallKind::detect();
     log::info!("Install kind: {install_kind:?}");
@@ -127,37 +128,20 @@ pub(super) async fn download_and_install(
         .prefix("qol-tray-update-")
         .tempdir()?;
     let dest = work_dir.path().join("update.tar.gz");
-    let expected_version = if dev_override {
+    let update = if dev_override {
         None
     } else {
-        Some(latest_version().ok_or_else(|| anyhow::anyhow!("No update version available"))?)
+        Some(download::resolve_update(update).await?)
     };
-    let verified_asset = if let Some(version) = expected_version.as_deref() {
-        let release =
-            release_integrity::fetch_release(GITHUB_REPO, &format!("qol-tray-v{version}")).await?;
-        Some(release_integrity::verified_asset(&release, &asset_name())?)
-    } else {
-        None
-    };
-    let url = dev_url
-        .or_else(|| {
-            verified_asset
-                .as_ref()
-                .map(|asset| asset.browser_download_url.clone())
-        })
-        .ok_or_else(|| anyhow::anyhow!("No verified update asset available"))?;
-
-    log::info!("Downloading update from {}", url);
-    download::download_asset(&url, &dest, &events).await?;
-    if let Some(asset) = &verified_asset {
-        release_integrity::verify_file(asset, &dest)?;
-    }
+    let expected_version = update.as_ref().map(HostUpdate::version);
+    download::download_update_asset(update.as_ref(), dev_url, &asset_name(), &dest, &events)
+        .await?;
 
     let current_exe = std::env::current_exe()?;
     let install_result = unix::extract_tar_gz_entry(&dest, "qol-tray", false).and_then(|binary| {
         verify_host_update(
             &binary,
-            expected_version.as_deref(),
+            expected_version,
             qol_artifact::ArtifactExpectation::with_exact_target,
         )?;
         atomic_replace(&binary, &current_exe)

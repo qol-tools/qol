@@ -1,3 +1,4 @@
+use crate::features::plugin_store::release_integrity::{self, IndexedHostRelease};
 use anyhow::Result;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -10,7 +11,7 @@ pub mod version;
 
 pub use platform::recover_interrupted_update;
 
-static LATEST_VERSION: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static LATEST_UPDATE: OnceLock<Mutex<Option<FoundUpdate>>> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 static UPDATE_STATE: OnceLock<Mutex<UpdateState>> = OnceLock::new();
 static TRAY_START: OnceLock<SystemTime> = OnceLock::new();
@@ -43,8 +44,23 @@ struct GitHubRelease {
 
 struct FetchedRelease {
     update_found: bool,
-    latest: Option<String>,
+    latest: Option<FoundUpdate>,
     etag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FoundUpdate {
+    PluginIndex(IndexedHostRelease),
+    GitHubRelease { version: String },
+}
+
+impl FoundUpdate {
+    pub(super) fn version(&self) -> &str {
+        match self {
+            Self::PluginIndex(release) => &release.version,
+            Self::GitHubRelease { version } => version,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +82,11 @@ pub fn current_version() -> &'static str {
 }
 
 pub fn latest_version() -> Option<String> {
-    match lock_latest_version() {
+    latest_update().map(|update| update.version().to_string())
+}
+
+fn latest_update() -> Option<FoundUpdate> {
+    match lock_latest_update() {
         Some(latest) => (*latest).clone(),
         None => None,
     }
@@ -156,7 +176,7 @@ async fn check_for_updates_inner(force: bool) -> Result<bool> {
     }
     let _in_flight = CheckInFlight;
 
-    let outcome = fetch_host_release().await;
+    let outcome = fetch_host_update().await;
 
     let Some(mut state) = lock_update_state() else {
         return Ok(false);
@@ -167,7 +187,7 @@ async fn check_for_updates_inner(force: bool) -> Result<bool> {
             state.last_error = None;
             state.etag = release.etag;
             state.update_found = release.update_found;
-            store_latest_version(release.latest);
+            store_latest_update(release.latest);
             Ok(state.update_found)
         }
         Err(message) => {
@@ -206,6 +226,42 @@ fn check_skippable(checking: bool, force: bool, last_success_age: Option<Duratio
     !force && last_success_age.is_some_and(|age| age < CHECK_INTERVAL)
 }
 
+async fn fetch_host_update() -> Result<FetchedRelease, String> {
+    let indexed = release_integrity::latest_host_release(platform::index_os()).await;
+    let Some(release) = newer_index_release(indexed, CURRENT_VERSION) else {
+        return fetch_host_release().await;
+    };
+    if runs_a_workspace_build() && !workspace_build_precedes_release(&release.revision).await {
+        return fetch_host_release().await;
+    }
+    log::info!(
+        "Update available: {} -> {} (plugin index)",
+        CURRENT_VERSION,
+        release.version
+    );
+    Ok(FetchedRelease {
+        update_found: true,
+        latest: Some(FoundUpdate::PluginIndex(release)),
+        etag: None,
+    })
+}
+
+fn newer_index_release(
+    indexed: Result<Option<IndexedHostRelease>>,
+    current: &str,
+) -> Option<IndexedHostRelease> {
+    match indexed {
+        Ok(Some(release)) if version::is_newer_version(&release.version, current) => Some(release),
+        Ok(Some(_) | None) => None,
+        Err(error) => {
+            log::warn!(
+                "Could not read qol-tray updates from the plugin index, checking GitHub Releases: {error:#}"
+            );
+            None
+        }
+    }
+}
+
 async fn fetch_host_release() -> Result<FetchedRelease, String> {
     let url = format!(
         "https://api.github.com/repos/{}/releases?per_page={}",
@@ -233,7 +289,7 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
         };
         return Ok(FetchedRelease {
             update_found: state.update_found,
-            latest: latest_version(),
+            latest: latest_update(),
             etag: state.etag.clone(),
         });
     }
@@ -271,7 +327,9 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
     }
     Ok(FetchedRelease {
         update_found,
-        latest: newest.filter(|_| update_found).map(|(_, version)| version),
+        latest: newest
+            .filter(|_| update_found)
+            .map(|(_, version)| FoundUpdate::GitHubRelease { version }),
         etag: new_etag,
     })
 }
@@ -289,13 +347,13 @@ struct GitHubComparison {
     status: Option<String>,
 }
 
-async fn workspace_build_precedes_release(tag: &str) -> bool {
+async fn workspace_build_precedes_release(release: &str) -> bool {
     let Some(commit) = running_source_commit() else {
         return false;
     };
     let url = format!(
         "https://api.github.com/repos/{}/compare/{}...{}",
-        GITHUB_REPO, tag, commit
+        GITHUB_REPO, release, commit
     );
     let token = crate::credentials::github_bearer_token();
     let request = crate::features::plugin_store::github::build_github_request(
@@ -366,8 +424,8 @@ fn record_update_progress(percent: u8) {
     jobs::QUEUE.set_progress(jobs::HOST_ID, percent);
 }
 
-fn lock_latest_version() -> Option<MutexGuard<'static, Option<String>>> {
-    match LATEST_VERSION.get_or_init(|| Mutex::new(None)).lock() {
+fn lock_latest_update() -> Option<MutexGuard<'static, Option<FoundUpdate>>> {
+    match LATEST_UPDATE.get_or_init(|| Mutex::new(None)).lock() {
         Ok(guard) => Some(guard),
         Err(error) => {
             log::error!("Latest version lock is poisoned: {}", error);
@@ -376,8 +434,8 @@ fn lock_latest_version() -> Option<MutexGuard<'static, Option<String>>> {
     }
 }
 
-fn store_latest_version(latest: Option<String>) {
-    if let Some(mut guard) = lock_latest_version() {
+fn store_latest_update(latest: Option<FoundUpdate>) {
+    if let Some(mut guard) = lock_latest_update() {
         *guard = latest;
     }
 }
@@ -435,8 +493,10 @@ pub(crate) async fn install_host_update(
         .then(|| write_restart_record(update_plugins))
         .flatten();
     record_update_progress(0);
-    store_latest_version(newest_version_before_install().await);
-    let Err(error) = platform::download_and_install(events.clone(), plugin_manager).await else {
+    let update = newest_update_before_install().await;
+    store_latest_update(update.clone());
+    let Err(error) = platform::download_and_install(events.clone(), plugin_manager, update).await
+    else {
         return Ok(());
     };
     log::error!("Self-update failed: {error:#}");
@@ -451,13 +511,16 @@ pub(crate) async fn install_host_update(
     Err(message)
 }
 
-async fn newest_version_before_install() -> Option<String> {
-    let cached = latest_version();
-    let refreshed = check_for_updates_force().await.map(|_| latest_version());
+async fn newest_update_before_install() -> Option<FoundUpdate> {
+    let cached = latest_update();
+    let refreshed = check_for_updates_force().await.map(|_| latest_update());
     version_to_install(refreshed, cached)
 }
 
-fn version_to_install(refreshed: Result<Option<String>>, cached: Option<String>) -> Option<String> {
+fn version_to_install<T: std::fmt::Debug>(
+    refreshed: Result<Option<T>>,
+    cached: Option<T>,
+) -> Option<T> {
     match refreshed {
         Ok(latest) => latest,
         Err(error) => {
@@ -626,6 +689,49 @@ mod tests {
                 expected,
                 "installed={installed:?} running={running:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_plugin_index_answers_only_when_it_names_a_newer_host() {
+        let listed = |version: &str| Ok(Some(IndexedHostRelease::test_fixture(version, &[])));
+        type Case = (
+            &'static str,
+            Result<Option<IndexedHostRelease>>,
+            Option<&'static str>,
+        );
+        let cases: Vec<Case> = vec![
+            ("index newer", listed("3.2.0"), Some("3.2.0")),
+            ("index the running version", listed("3.1.0"), None),
+            ("index older", listed("3.0.9"), None),
+            (
+                "index prerelease of the running version",
+                listed("3.1.0-rc.1"),
+                None,
+            ),
+            ("index has no entry for this os", Ok(None), None),
+            ("index unavailable", Err(anyhow::anyhow!("offline")), None),
+        ];
+        for (case, indexed, expected) in cases {
+            let picked = newer_index_release(indexed, "3.1.0");
+            assert_eq!(
+                picked.as_ref().map(|release| release.version.as_str()),
+                expected,
+                "case: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_found_update_names_its_version_from_either_source() {
+        let cases = [
+            FoundUpdate::PluginIndex(IndexedHostRelease::test_fixture("3.2.0", &[])),
+            FoundUpdate::GitHubRelease {
+                version: "3.2.0".to_string(),
+            },
+        ];
+        for update in cases {
+            assert_eq!(update.version(), "3.2.0", "{update:?}");
         }
     }
 

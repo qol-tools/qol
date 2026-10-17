@@ -284,7 +284,7 @@ impl Registry {
     }
 }
 
-fn location(reference: &str) -> Result<RegistryLocation> {
+pub fn location(reference: &str) -> Result<RegistryLocation> {
     let (scheme, rest) = reference.split_once("://").unwrap_or(("https", reference));
     if scheme != "https" && scheme != "http" {
         anyhow::bail!("registry {reference} must use http or https");

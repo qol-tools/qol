@@ -1,0 +1,126 @@
+name: Publish qol-tray host build
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: linux, macos or windows
+        required: true
+        type: string
+      tag:
+        description: QoL Tray release tag, for example qol-tray-v3.101.4
+        required: true
+        type: string
+      revision:
+        description: Commit the candidate was built from
+        required: true
+        type: string
+      files:
+        description: Space-separated updater files taken from the candidate's dist artifact
+        required: true
+        type: string
+
+permissions: {}
+
+# Three jobs keep the scopes apart: the attestation is made from the
+# candidate's own files in a job that compiles nothing, so the job that
+# compiles the registry tool can neither attest nor dispatch.
+jobs:
+  attest:
+    name: Attest host files
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download candidate files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-${{ inputs.tag }}-${{ inputs.os }}
+          path: artifacts
+
+      - name: Collect host files
+        env:
+          FILES: ${{ inputs.files }}
+        run: |
+          set -euo pipefail
+          mkdir -p host_files
+          for file in ${FILES}; do
+            cp "artifacts/${file}" host_files/
+          done
+
+      - name: Attest host files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: host_files/*
+
+      - name: Upload host files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-${{ inputs.tag }}-${{ inputs.os }}
+          path: host_files/*
+          retention-days: 7
+          if-no-files-found: error
+
+  # Rerunnable: push-host accepts a tag that already holds this build.
+  registry:
+    name: Push to the registry
+    needs: attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+      HOST_OS: ${{ inputs.os }}
+      QOL_TRAY_TAG: ${{ inputs.tag }}
+      REVISION: ${{ inputs.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+
+      - name: Download host files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host-${{ inputs.tag }}-${{ inputs.os }}
+          path: host_files
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-registry
+          system-dependencies: "false"
+
+      # Built in its own step, which holds no token.
+      - name: Build registry tool
+        run: cargo build --locked -p qol-plugin-registry
+
+      - name: Push host build
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target/debug/qol-plugin-registry push-host \
+            --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
+            --source "https://github.com/${GITHUB_REPOSITORY}" \
+            --os "${HOST_OS}" --version "${QOL_TRAY_TAG#qol-tray-v}" \
+            --revision "${REVISION}" --files host_files | tee -a "${GITHUB_STEP_SUMMARY}"
+
+  index:
+    name: Refresh plugin index
+    needs: registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the index build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run plugin-index.yml --ref main

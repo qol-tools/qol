@@ -7,6 +7,11 @@ pub const ARTIFACT_TYPE: &str = "application/vnd.qol.plugin.v1";
 pub const CONFIG_MEDIA_TYPE: &str = "application/vnd.qol.plugin.manifest.v1+toml";
 pub const TREE_MEDIA_TYPE: &str = "application/vnd.qol.plugin.tree.v1.tar+gzip";
 pub const ASSET_MEDIA_TYPE: &str = "application/octet-stream";
+pub const HOST_ARTIFACT_TYPE: &str = "application/vnd.qol.host.v1";
+pub const HOST_CONFIG_MEDIA_TYPE: &str = "application/vnd.qol.host.config.v1+json";
+pub const INDEX_ARTIFACT_TYPE: &str = "application/vnd.qol.plugin-index.v1";
+pub const EMPTY_MEDIA_TYPE: &str = "application/vnd.oci.empty.v1+json";
+pub const EMPTY_CONFIG: &[u8] = b"{}";
 pub const TITLE_ANNOTATION: &str = "org.opencontainers.image.title";
 pub const DIR_ANNOTATION: &str = "dev.qol.plugin.dir";
 pub const SOURCE_ANNOTATION: &str = "org.opencontainers.image.source";
@@ -60,12 +65,16 @@ pub fn sha256_digest(bytes: &[u8]) -> String {
 }
 
 pub fn is_sha256_digest(digest: &str) -> bool {
-    digest.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
+    digest
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| is_lower_hex(hex, 64))
+}
+
+pub fn is_lower_hex(text: &str, len: usize) -> bool {
+    text.len() == len
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
