@@ -327,10 +327,12 @@ const EXECUTE_FORK: &str = r#"    async execute(_toolCallId, params, signal, _on
       if (params.agent_profile != null) args.push("--agent-profile", params.agent_profile);
       if (params.task_role != null) args.push("--task-role", params.task_role);
       if (Array.isArray(params.requires)) args.push("--requires", params.requires.join(","));
-      args.push("--brief", params.brief);
+      if (params.blank === true) args.push("--blank");
+      else args.push("--brief", params.brief);
       const stdout = await run(args, 60_000, undefined, signal);
       const outcome = JSON.parse(stdout);
-      const text = `forked detached architect ${outcome.session} (${outcome.tool} ${outcome.model}${outcome.effort ? " " + outcome.effort : ""}, key ${outcome.key}); it owns the brief at ${outcome.brief} and never reports back`;
+      const owns = outcome.brief ? `it owns the brief at ${outcome.brief}` : "it starts blank";
+      const text = `forked detached architect ${outcome.session} (${outcome.tool} ${outcome.model}${outcome.effort ? " " + outcome.effort : ""}, key ${outcome.key}); ${owns} and never reports back`;
       return { content: [{ type: "text", text }], details: { outcome } };
     },
 "#;

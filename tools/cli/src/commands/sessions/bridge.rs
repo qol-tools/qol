@@ -1406,6 +1406,12 @@ fn resume_owned(
         None => {
             let forks = super::fork::ForkStore::with_dir(trace_dir.join("forks"));
             if let Ok(Some(record)) = forks.find_session(&binding.token()) {
+                if record.brief.is_empty() {
+                    bail!(
+                        "`{binding}` is the blank fork `{}`; it never reports back, so there is nothing to collect",
+                        record.key
+                    );
+                }
                 bail!(
                     "`{binding}` is the detached fork `{}`; it owns its brief alone and never reports back, so there is nothing to collect. Its brief is at {}",
                     record.key,

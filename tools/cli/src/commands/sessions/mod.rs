@@ -25,6 +25,7 @@ use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
 mod spawn;
+mod switchboard;
 mod watch;
 mod watch_owner;
 
@@ -35,7 +36,7 @@ pub(crate) struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
+pub(crate) const SUBCOMMANDS: [SessionSubcommand; 25] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -55,6 +56,10 @@ pub(crate) const SUBCOMMANDS: [SessionSubcommand; 24] = [
     SessionSubcommand {
         name: "forks",
         run: |rest, _format| fork::run_list(rest),
+    },
+    SessionSubcommand {
+        name: "switchboard",
+        run: |rest, _format| switchboard::run(rest),
     },
     SessionSubcommand {
         name: "park",
@@ -172,7 +177,8 @@ Bridge work between independent terminal sessions.
 Primary usage:
   qol sessions list [--json]
   qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions fork [--tool TOOL] --cwd PATH --key KEY [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions switchboard --cwd PATH [--model MODEL] [--effort LEVEL] [--surface tab|os-window]
   qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]
   qol sessions parked
   qol sessions unpark <id>

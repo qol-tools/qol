@@ -1930,6 +1930,7 @@ pub(super) fn spawn_detached(
     title: Option<&str>,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
+    extra_args: &[String],
     prompt: &str,
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
@@ -1960,6 +1961,7 @@ pub(super) fn spawn_detached(
         None => super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?,
     };
     launch.args.extend(flags);
+    launch.args.extend(extra_args.iter().cloned());
     qol_agent_launch::account::apply(
         &mut launch,
         &prepared.tool_id,
@@ -2002,7 +2004,7 @@ pub(super) fn spawn_detached(
         .binding()
         .context("spawned session cannot bind to a stable token")?;
     ledger.bind_session(&prepared.key, &facts.cwd, &binding.token(), assignment)?;
-    if dry_run {
+    if dry_run && !prompt.is_empty() {
         terminals
             .send_text(
                 &binding,
@@ -6325,7 +6327,7 @@ mod tests {
                 Some("flash"),
                 None,
                 None,
-                "wait on the pull request",
+                Some("wait on the pull request"),
                 None,
                 None,
                 None,
@@ -6365,7 +6367,7 @@ mod tests {
             Some("flash"),
             None,
             None,
-            "chase the stale lockfile",
+            Some("chase the stale lockfile"),
             None,
             None,
             None,
@@ -6391,6 +6393,188 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_fork_launches_with_no_prompt_and_writes_no_brief_or_chat() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+        let chat = super::super::fork::ForkChat {
+            source: "v1:kitty:7:100".to_owned(),
+            tool: "pi".to_owned(),
+            turns: vec![qol_terminal_sessions::cli::ChatTurn {
+                role: qol_terminal_sessions::cli::ChatRole::User,
+                text: "what broke?".to_owned(),
+            }],
+        };
+        let outcome = super::super::fork::fork(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks(&root),
+            &forks,
+            Some("pi"),
+            &cwd,
+            "lane-fork-blank",
+            None,
+            Some("flash"),
+            None,
+            None,
+            None,
+            Some("v1:kitty:7:100"),
+            Some(&chat),
+            None,
+            false,
+            false,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+        assert!(outcome.brief.is_empty(), "{}", outcome.brief);
+        assert!(outcome.chat.is_none(), "a blank fork copies no chat");
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        let expected = super::super::launch_flags::launch_flags(
+            &CliToolId::new("pi").unwrap(),
+            Some("flash"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            request.launch.args.ends_with(&expected),
+            "a blank fork launches with nothing after its tier flags: {:?}",
+            request.launch.args
+        );
+        assert!(
+            !request
+                .launch
+                .args
+                .iter()
+                .any(|arg| arg.contains("[qol session fork]")),
+            "{:?}",
+            request.launch.args
+        );
+        assert!(backend.typed.lock().unwrap().is_empty());
+        let written = fs::read_dir(root.path().join("forks"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            written.iter().all(|name| name.ends_with(".json")),
+            "a blank fork writes only its record: {written:?}"
+        );
+        let records = forks.list().unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].brief.is_empty());
+        assert!(records[0].chat.is_none());
+    }
+
+    #[test]
+    fn a_blank_dry_run_fork_types_nothing() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        super::super::fork::fork(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks(&root),
+            &super::super::fork::ForkStore::with_dir(root.path().join("forks")),
+            Some("pi"),
+            &cwd,
+            "lane-fork-blank-dry",
+            None,
+            Some("flash"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            false,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+        assert!(backend.typed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_switchboard_launches_claude_with_its_role_and_no_prompt() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let (terminals, backend) = harness(vec![vec![]]);
+        let outcome = super::super::switchboard::launch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks(&root),
+            &cwd,
+            None,
+            Some("opus"),
+            "low",
+            None,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap();
+        assert_eq!(outcome.tool, "claude");
+        assert_eq!(outcome.key, "switchboard");
+        assert_eq!(outcome.title, "switchboard");
+        assert_eq!(outcome.effort, "low");
+        let request = backend.last_request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.identity.key.as_str(), "switchboard");
+        let args = &request.launch.args;
+        let tools = args
+            .iter()
+            .position(|arg| arg == "--tools=ToolSearch")
+            .unwrap_or_else(|| panic!("the switchboard loads only ToolSearch: {args:?}"));
+        assert_eq!(
+            args.get(tools + 1).map(String::as_str),
+            Some("--append-system-prompt")
+        );
+        assert_eq!(
+            args.get(tools + 2).map(String::as_str),
+            Some(super::super::switchboard::SWITCHBOARD_ROLE)
+        );
+        assert_eq!(
+            args.len(),
+            tools + 3,
+            "the role text is the last argument, so no prompt follows it: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["--effort", "low"]),
+            "{args:?}"
+        );
+        assert!(backend.typed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_switchboard_refuses_when_a_live_session_holds_its_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = managed_workdir(&root);
+        let held = FakeBackend::facts("7", "switchboard", "claude", &cwd);
+        let token = held.binding().unwrap().token();
+        let (terminals, backend) = harness(vec![vec![held]]);
+        let error = super::super::switchboard::launch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &SpawnLedger::with_dir(root.path().join("spawn-records")),
+            &locks(&root),
+            &cwd,
+            None,
+            Some("opus"),
+            "low",
+            None,
+            &AgentDispatch::unconfigured(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(
+            error,
+            format!("the switchboard is already running as `{token}`")
+        );
+        assert_eq!(backend.spawn_count.load(AtomicOrdering::Relaxed), 0);
+    }
+
+    #[test]
     fn a_fork_with_a_selected_profile_takes_the_profile_model_and_rejects_a_conflict() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = managed_workdir(&root);
@@ -6412,7 +6596,7 @@ mod tests {
             None,
             None,
             None,
-            "chase the stale lockfile",
+            Some("chase the stale lockfile"),
             None,
             None,
             None,
@@ -6439,7 +6623,7 @@ mod tests {
             Some("pro"),
             None,
             None,
-            "chase the stale lockfile",
+            Some("chase the stale lockfile"),
             None,
             None,
             None,
