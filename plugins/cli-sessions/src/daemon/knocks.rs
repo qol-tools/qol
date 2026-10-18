@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::process::Command;
+
 use qol_sessions_engine::knocks::{self, PendingKnock};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{DeliveryMode, SessionBinding, TerminalSessionService, TextInput};
@@ -67,19 +70,46 @@ pub fn next<'a>(
     })
 }
 
+pub fn unreached(
+    pending: &[PendingKnock],
+    panes: &[Pane],
+    tried: &HashMap<String, String>,
+) -> Vec<PendingKnock> {
+    pending
+        .iter()
+        .filter(|knock| {
+            let live = panes.iter().any(|pane| {
+                pane.spawn_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.key.as_str() == knock.recipient_key)
+            });
+            !live && tried.get(&knock.recipient_key) != Some(&knock.text)
+        })
+        .cloned()
+        .collect()
+}
+
 pub struct Courier {
     terminals: TerminalSessionService,
+    tried: HashMap<String, String>,
 }
 
 impl Courier {
     pub fn system() -> Self {
         Self {
             terminals: TerminalSessionService::system(),
+            tried: HashMap::new(),
         }
     }
 
-    pub fn deliver(&self, interpreter: &CliSessionInterpreter, recipients: &[Recipient]) {
+    pub fn deliver(
+        &mut self,
+        interpreter: &CliSessionInterpreter,
+        recipients: &[Recipient],
+        panes: &[Pane],
+    ) {
         let pending = knocks::pending();
+        self.wake_unreached(&pending, panes);
         let Some((knock, binding)) = next(&pending, recipients, |binding| {
             crate::park::prompt_free(&self.terminals, interpreter, binding)
         }) else {
@@ -117,6 +147,48 @@ impl Courier {
             "event=delivered key={} session={binding}",
             knock.recipient_key
         );
+    }
+}
+
+impl Courier {
+    fn wake_unreached(&mut self, pending: &[PendingKnock], panes: &[Pane]) {
+        self.tried
+            .retain(|key, _| pending.iter().any(|knock| &knock.recipient_key == key));
+        let unreached = unreached(pending, panes, &self.tried);
+        if unreached.is_empty() {
+            return;
+        }
+        let store = match crate::park::store::ParkStore::system() {
+            Ok(store) => store,
+            Err(error) => {
+                log::warn!("[cli-sessions] parked sessions not readable for a wake: {error:#}");
+                return;
+            }
+        };
+        for knock in unreached {
+            self.tried
+                .insert(knock.recipient_key.clone(), knock.text.clone());
+            if crate::park::wakeable(&store, &knock.recipient_key).is_none() {
+                continue;
+            }
+            spawn_wake(&knock.recipient_key);
+        }
+    }
+}
+
+fn spawn_wake(key: &str) {
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            log::warn!("[cli-sessions] no executable to wake {key}: {error}");
+            return;
+        }
+    };
+    let mut command = Command::new(executable);
+    command.arg(crate::park::WAKE).arg(key);
+    match qol_process::spawn_detached(&mut command) {
+        Ok(()) => qol_runtime::probe!("CLI_SESSIONS_KNOCK", "event=wake_started key={key}"),
+        Err(error) => log::warn!("[cli-sessions] wake for {key} not started: {error}"),
     }
 }
 
@@ -265,6 +337,24 @@ mod tests {
         let (chosen, _) = next(&pending, &recipients, |binding| *binding != busy).unwrap();
         assert_eq!(chosen.recipient_key, "lane-b");
         assert!(next(&pending, &recipients, |_| false).is_none());
+    }
+
+    #[test]
+    fn only_a_knock_with_no_live_terminal_is_woken_once_per_text() {
+        let panes = [pane(1, Some("live")), pane(2, None)];
+        let pending = [knock("live", 1), knock("gone", 2), knock("closed", 3)];
+        let keys = |tried: &HashMap<String, String>| {
+            unreached(&pending, &panes, tried)
+                .into_iter()
+                .map(|knock| knock.recipient_key)
+                .collect::<Vec<_>>()
+        };
+        let mut tried = HashMap::new();
+        assert_eq!(keys(&tried), ["gone", "closed"]);
+        tried.insert("gone".to_owned(), pending[1].text.clone());
+        assert_eq!(keys(&tried), ["closed"]);
+        tried.insert("closed".to_owned(), "an older knock".to_owned());
+        assert_eq!(keys(&tried), ["closed"]);
     }
 
     #[test]

@@ -3,6 +3,7 @@ mod prompt;
 mod resume;
 mod runner;
 pub(crate) mod store;
+mod wake;
 
 use std::process::Command;
 use std::thread;
@@ -24,9 +25,11 @@ use resume::resume;
 use runner::{caller_state, holder, watch_woken, CallerState, Holder};
 pub(crate) use runner::{prompt_free, target, Target};
 use store::ParkStore;
+pub use wake::{wake, wakeable};
 
 pub const PARK: &str = "park";
 pub const LANE_EXEC: &str = "lane-exec";
+pub const WAKE: &str = "wake";
 const STOP_GRACE: Duration = Duration::from_secs(3);
 const LAUNCH_POLL: Duration = Duration::from_secs(2);
 

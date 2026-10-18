@@ -4,11 +4,13 @@ use std::path::Path;
 use std::process::ExitStatus;
 
 use anyhow::Result;
-use qol_terminal_sessions::park::ParkRecord;
+use qol_terminal_sessions::park::{ParkRecord, ParkState};
 
 const TAIL_LINES: usize = 80;
 const TAIL_MAX_BYTES: usize = 12 * 1024;
 pub const WAKE_HEADER: &str = "[qol parked session woke]";
+pub const UNKNOCKED_WAKE: &str =
+    "[qol session] Messages may be waiting for you. Read them with session_inbox.";
 pub const CLOSE_NOTE: &str = " This tab closes when your turn ends, and your final message is shown to the user in a notification they can click to reopen the conversation, so end with what they need to know.";
 pub const PARKING_OFF_REASON: &str = "parking is off for this session (`qols park` turns it on)";
 pub const PARKED_INSTRUCTION: &str = "Parked. End your turn now with a one-line note of what you are waiting for. This terminal closes once your turn ends, and CLI Sessions resumes this conversation in a new tab with the command's exit code and output when it exits.";
@@ -98,6 +100,17 @@ pub fn unpark_prompt(record: &ParkRecord, log_path: &Path) -> String {
     )
 }
 
+pub fn message_wake_prompt(record: &ParkRecord, knock: &str) -> String {
+    let mut prompt = format!("{knock}\nCLI Sessions reopened this conversation for it.");
+    if record.state == ParkState::Waiting && !record.command.is_empty() {
+        prompt.push_str(&format!(
+            " Your parked command `{}` is still running; its result is submitted here when it exits.",
+            record.command.join(" ")
+        ));
+    }
+    prompt
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +157,22 @@ mod tests {
         );
         assert!(silent.contains("could not start: no such file"), "{silent}");
         assert!(silent.contains("It printed nothing."), "{silent}");
+    }
+
+    #[test]
+    fn a_message_wake_names_the_parked_command_only_while_it_still_runs() {
+        use crate::park::tests::record;
+
+        let knock = "[qol session] 1 new message from switchboard. Read it with session_inbox.";
+        let waiting = message_wake_prompt(&record(ParkState::Waiting), knock);
+        assert!(waiting.starts_with(knock), "{waiting}");
+        assert!(
+            waiting.contains("`node watch.cjs 79` is still running"),
+            "{waiting}"
+        );
+        let finished = message_wake_prompt(&record(ParkState::Finished), knock);
+        assert!(finished.starts_with(knock), "{finished}");
+        assert!(!finished.contains("still running"), "{finished}");
     }
 
     #[test]
