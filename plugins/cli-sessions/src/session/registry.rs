@@ -125,9 +125,20 @@ impl Registry {
         self.sessions.get_mut(id)
     }
 
-    pub fn refresh_mail(&mut self, counts: impl Fn(&str) -> (usize, usize)) {
+    pub fn keys(&self) -> Vec<String> {
+        self.sessions
+            .values()
+            .filter_map(|state| state.key.clone())
+            .collect()
+    }
+
+    pub fn set_mail(&mut self, counts: &HashMap<String, (usize, usize)>) {
         for state in self.sessions.values_mut() {
-            (state.unread, state.open_asks) = state.key.as_deref().map(&counts).unwrap_or_default();
+            (state.unread, state.open_asks) = state
+                .key
+                .as_ref()
+                .and_then(|key| counts.get(key).copied())
+                .unwrap_or_default();
         }
     }
 
@@ -201,13 +212,11 @@ mod tests {
         let mut registry = Registry::default();
         registry.upsert(state(9, Status::YourTurn, true));
         registry.upsert(state(1, Status::Working, false));
-        registry.refresh_mail(|key| {
-            if key == qol_sessions_engine::SWITCHBOARD_KEY {
-                (2, 1)
-            } else {
-                (5, 5)
-            }
-        });
+        assert_eq!(registry.keys(), [qol_sessions_engine::SWITCHBOARD_KEY]);
+        registry.set_mail(&HashMap::from([
+            (qol_sessions_engine::SWITCHBOARD_KEY.to_owned(), (2, 1)),
+            ("elsewhere".to_owned(), (5, 5)),
+        ]));
         let counts: Vec<_> = registry
             .sorted()
             .into_iter()

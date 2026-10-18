@@ -68,8 +68,18 @@ impl Messaging {
         panes: &[Pane],
         wall_now: u64,
     ) {
+        let Ok(keys) = registry.lock().map(|reg| reg.keys()) else {
+            return;
+        };
+        let counts = keys
+            .into_iter()
+            .map(|key| {
+                let counts = qol_sessions_engine::mail_counts(&key);
+                (key, counts)
+            })
+            .collect();
         let Ok(mut reg) = registry.lock() else { return };
-        reg.refresh_mail(qol_sessions_engine::mail_counts);
+        reg.set_mail(&counts);
         let rows = attention_rows(&reg);
         let recipients = knocks::recipients(panes, &reg);
         drop(reg);
