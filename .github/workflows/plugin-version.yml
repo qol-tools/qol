@@ -44,6 +44,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      checks: read
     env:
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}

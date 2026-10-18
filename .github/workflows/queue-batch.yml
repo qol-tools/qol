@@ -1,0 +1,43 @@
+name: queue batch
+
+# Only the tail of the merge queue runs the release build, and the entries
+# ahead of it pass their merge gate when that build covers them. When the tail
+# leaves without a build (its own jobs failed, or it was dequeued, closed or
+# pushed to), nothing else would build the entries ahead before the check
+# timeout. After each queue run ends this reruns the batch role of the new
+# tail, which then builds, and passes the merge gate of any entry whose own
+# jobs and covering build both passed while neither run saw the other.
+# It runs from main's definition, so a queued change cannot switch it off.
+
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: queue-batch
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Build the new tail
+    if: github.event.workflow_run.event == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Rerun the batch role of an unbuilt tail
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/queue_batch.py reconcile
