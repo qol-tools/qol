@@ -1678,11 +1678,11 @@ fn a_parked_pane_woken_in_its_kept_terminal_shows_working_until_its_turn_ends() 
         screen: CODEX_WORKING_LINE.into(),
     };
     let mut seen = Vec::new();
-    for now in 100..=108 {
-        if now == 104 {
+    for now in 100..=110 {
+        if now == 102 {
             host.screen = CODEX_ANSWER_LIST.to_owned();
         }
-        if now == 108 {
+        if now == 110 {
             host.panes[0].title = "project | Ready | finished".into();
         }
         tick_with_caches(
