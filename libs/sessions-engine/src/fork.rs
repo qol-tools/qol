@@ -20,6 +20,7 @@ const BRIEF_MAX_BYTES: usize = 256 * 1024;
 pub const FORK_HEADER: &str = "[qol session fork]";
 pub(super) const REPORT_LINE: &str =
     "When you finish or get blocked, tell your parent with session_send kind report.";
+const DELIVERY_LINE: &str = "When your work leaves commits on a branch, push the branch and open a draft pull request without asking, unless your brief says otherwise; never merge it, mark it ready or force-push it on your own.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ForkRecord {
@@ -220,7 +221,7 @@ pub(super) fn fork_prompt(
         "Do not try to report back to it and do not bridge to it."
     };
     format!(
-        "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.",
+        "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\nYour brief is written to {}. Read it first, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.\n\n{DELIVERY_LINE}",
         brief_path.display()
     )
 }
@@ -784,6 +785,10 @@ mod tests {
         assert!(prompt.contains("detached architect"));
         assert!(prompt.contains("no completion marker"));
         assert!(prompt.contains("v1:kitty:7:100"));
+        assert!(
+            prompt.ends_with(DELIVERY_LINE),
+            "a fork opens its own draft pull request instead of asking: {prompt}"
+        );
         assert!(
             !prompt.contains("Completion fragments"),
             "a fork never carries a completion marker: {prompt}"

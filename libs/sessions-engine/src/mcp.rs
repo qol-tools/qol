@@ -321,16 +321,23 @@ impl McpSessionServer {
                 },
             )
             .map_err(|error| error.to_string())?;
-        serde_json::to_string(&json!({
+        let live = live_keys.contains(&message.to);
+        let mut sent = json!({
             "sent": true,
             "id": message.id,
             "from": message.from,
             "to": message.to,
             "kind": message.kind,
             "hops": message.hops,
-            "live": live_keys.contains(&message.to),
-        }))
-        .map_err(|error| format!("serialization failed: {error}"))
+            "live": live,
+        });
+        if !live {
+            sent["note"] = json!(format!(
+                "`{}` is closed: the message waits unread in its mailbox and nothing acts on it until a session with that key is resumed, so do not report it as delivered",
+                message.to
+            ));
+        }
+        serde_json::to_string(&sent).map_err(|error| format!("serialization failed: {error}"))
     }
 
     fn tool_inbox(&self, arguments: &Value) -> Result<String, String> {
@@ -5349,6 +5356,13 @@ mod tests {
             ));
             assert_eq!(sent["sent"], true, "{sent}");
             assert_eq!(sent["live"], live, "{to}: {sent}");
+            assert_eq!(
+                sent["note"]
+                    .as_str()
+                    .is_some_and(|note| note.contains("waits unread")),
+                !live,
+                "only a closed recipient's send says the message is not delivered: {sent}"
+            );
         }
     }
 
