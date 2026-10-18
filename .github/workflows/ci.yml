@@ -571,15 +571,18 @@ jobs:
         run: python3 .github/scripts/queue_batch.py gate
 
   # Any failure on a pull request means a fix and a new push that runs every
-  # job again, so the first failed job cancels this run. The queue keeps running
-  # to the end: its failure report and the review that diagnoses it need a
-  # failed run, not a cancelled one.
+  # job again, and any failure in the queue sends the entry back, so the first
+  # failed job cancels this run and frees its runners for the entries behind.
+  # The gate, the batch combine and the queue failure report run anyway: they
+  # run always(), and the failed job keeps its failure result. A watcher that
+  # outlives its timeout only stops watching, so it never fails a green run.
   stop-on-failure:
     name: Stop on first failure
     needs: review
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'pull_request' && needs.review.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    continue-on-error: true
     permissions:
       contents: read
       actions: write

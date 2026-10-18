@@ -276,10 +276,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         stop = workflow.split("  stop-on-failure:\n", 1)[1].split("    runs-on:", 1)[0]
         self.assertIn("needs: review", stop)
+        self.assertIn("github.event_name == 'pull_request' && needs.review.result == 'success'", stop)
         for job in ["check", "process-windows", "batch", "registry-tool"]:
             with self.subTest(job=job):
                 gated = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("!cancelled() && needs.plan.result == 'success' && ", gated)
+
+    def test_a_queue_run_stops_at_its_first_failure_and_still_reports_it(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        stop = workflow.split("  stop-on-failure:\n", 1)[1].split("\n\n  #", 1)[0]
+        for contract in [
+            "github.event_name == 'merge_group' ||",
+            "continue-on-error: true",
+            "actions: write",
+            "run: python3 .github/scripts/stop_on_failure.py",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, stop)
+        for job in ["gate", "queue-report", "batch-failure"]:
+            with self.subTest(job=job):
+                condition = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("if: ${{ always() && ", condition)
+        self.assertIn("contains(needs.*.result, 'failure')", workflow.split("  queue-report:\n", 1)[1])
 
     def test_only_a_queue_run_cancels_superseded_runs_and_compiles_nothing(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
