@@ -3,24 +3,34 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::CliRuntimeState;
 
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
+const MTIME_SETTLE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FileStamp {
     modified: Option<SystemTime>,
     length: u64,
+    settled: bool,
 }
 
 impl FileStamp {
     pub(crate) fn of(metadata: &fs::Metadata) -> Self {
+        let modified = metadata.modified().ok();
         Self {
-            modified: metadata.modified().ok(),
+            modified,
             length: metadata.len(),
+            settled: modified
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age >= MTIME_SETTLE),
         }
+    }
+
+    pub(crate) fn still_matches(&self, current: &FileStamp) -> bool {
+        self.settled && self == current
     }
 }
 
@@ -43,7 +53,7 @@ impl RuntimeTail {
         };
         let mut known = self.known.lock().unwrap_or_else(|error| error.into_inner());
         if let Some((known_stamp, runtime)) = known.get(path) {
-            if *known_stamp == stamp {
+            if known_stamp.still_matches(&stamp) {
                 return *runtime;
             }
         }
@@ -198,6 +208,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let path = root.path().join("turns.jsonl");
         std::fs::write(&path, "{}\n").unwrap();
+        age(&path);
         let tail = super::RuntimeTail::default();
         let reads = std::cell::Cell::new(0);
         let read = |state: CliRuntimeState| {
@@ -223,6 +234,12 @@ mod tests {
             CliRuntimeState::Ready
         );
         assert_eq!(reads.get(), 2);
+        assert_eq!(
+            tail.latest(&path, read(CliRuntimeState::Working)),
+            CliRuntimeState::Working,
+            "a transcript written within the mtime settle window is read again"
+        );
+        assert_eq!(reads.get(), 3);
 
         let missing = root.path().join("missing.jsonl");
         assert_eq!(
@@ -233,6 +250,16 @@ mod tests {
             tail.latest(&missing, read(CliRuntimeState::Unknown)),
             CliRuntimeState::Unknown
         );
-        assert_eq!(reads.get(), 4, "a missing transcript is never cached");
+        assert_eq!(reads.get(), 5, "a missing transcript is never cached");
+    }
+
+    fn age(path: &std::path::Path) {
+        let past = std::time::SystemTime::now() - super::MTIME_SETTLE * 2;
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(past))
+            .unwrap();
     }
 }

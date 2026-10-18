@@ -63,7 +63,7 @@ impl LiveBridgeReader {
             };
             let stamp = FileStamp::of(&metadata);
             let open = match self.rounds.remove(&path) {
-                Some(known) if known.stamp == stamp => known.open,
+                Some(known) if known.stamp.still_matches(&stamp) => known.open,
                 _ => open_round(&path),
             };
             rounds.insert(path, ReadRound { stamp, open });
@@ -180,6 +180,14 @@ mod tests {
     fn the_reader_rereads_only_rounds_whose_file_changed() {
         let root = tempfile::TempDir::new().unwrap();
         let path = checkpoint(root.path(), "a", "v1:kitty:1:10", "", false, false);
+        let set_modified = |modified: std::time::SystemTime| {
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        };
         let mut reader = LiveBridgeReader::default();
         let only = |token: &str| LiveBridges {
             driven: HashSet::from([token.to_owned()]),
@@ -187,26 +195,32 @@ mod tests {
         };
         assert_eq!(reader.read(root.path()), only("v1:kitty:1:10"));
 
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let fresh = fs::metadata(&path).unwrap().modified().unwrap();
         checkpoint(root.path(), "a", "v1:kitty:2:20", "", false, false);
-        fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_times(fs::FileTimes::new().set_modified(modified))
-            .unwrap();
+        set_modified(fresh);
         assert_eq!(
             reader.read(root.path()),
-            only("v1:kitty:1:10"),
-            "a file with the same size and mtime is not parsed again"
+            only("v1:kitty:2:20"),
+            "a rewrite inside the mtime settle window is parsed again even at the same size"
+        );
+
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        set_modified(old);
+        assert_eq!(reader.read(root.path()), only("v1:kitty:2:20"));
+        checkpoint(root.path(), "a", "v1:kitty:3:30", "", false, false);
+        set_modified(old);
+        assert_eq!(
+            reader.read(root.path()),
+            only("v1:kitty:2:20"),
+            "a settled file with the same size and mtime is not parsed again"
         );
 
         checkpoint(root.path(), "a", "v1:kitty:2:20", "", true, true);
         assert_eq!(reader.read(root.path()), LiveBridges::default());
 
         fs::remove_file(&path).unwrap();
-        checkpoint(root.path(), "b", "v1:kitty:3:30", "", false, false);
-        assert_eq!(reader.read(root.path()), only("v1:kitty:3:30"));
+        checkpoint(root.path(), "b", "v1:kitty:4:40", "", false, false);
+        assert_eq!(reader.read(root.path()), only("v1:kitty:4:40"));
     }
 
     #[test]
