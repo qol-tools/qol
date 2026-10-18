@@ -255,10 +255,15 @@ impl SessionInventory for ConsoleBackend {
             probe_consoles(&pids)?
         };
         self.remember(&reports);
-        let sessions: Vec<SessionFacts> = listed(&reports, &roots)
+        let shown = listed(&reports, &roots);
+        let focused = focused_root(&shown, &table);
+        let sessions: Vec<SessionFacts> = shown
             .into_iter()
             .filter_map(|report| {
-                session_facts(&BACKEND_ID, &native_id(report.root), report, &table)
+                let mut facts =
+                    session_facts(&BACKEND_ID, &native_id(report.root), report, &table)?;
+                facts.focused = focused == Some(report.root);
+                Some(facts)
             })
             .collect();
         qol_runtime::probe!(
@@ -380,6 +385,11 @@ fn owns_window(report: &ConsoleReport) -> bool {
 }
 
 fn focus_window(report: &ConsoleReport) -> Option<Window> {
+    direct_window(report)
+        .or_else(|| ancestor_window(report, &process_table(), &top_level_windows()))
+}
+
+fn direct_window(report: &ConsoleReport) -> Option<Window> {
     let console = report.window as usize as HWND;
     if owns_window(report) {
         return window_from(report.window);
@@ -390,9 +400,15 @@ fn focus_window(report: &ConsoleReport) -> Option<Window> {
             return window_from(owner as usize as u64);
         }
     }
-    let table = process_table();
-    let windows = top_level_windows();
-    ancestors(&table, report.root).into_iter().find_map(|pid| {
+    None
+}
+
+fn ancestor_window(
+    report: &ConsoleReport,
+    table: &[ProcessEntry],
+    windows: &[Window],
+) -> Option<Window> {
+    ancestors(table, report.root).into_iter().find_map(|pid| {
         windows.iter().copied().find(|window| {
             window.is_switchable()
                 && window
@@ -400,6 +416,35 @@ fn focus_window(report: &ConsoleReport) -> Option<Window> {
                     .is_some_and(|owner| i32::try_from(owner).ok() == Some(pid))
         })
     })
+}
+
+fn focused_root(reports: &[&ConsoleReport], table: &[ProcessEntry]) -> Option<i32> {
+    let foreground = Window::foreground()?;
+    let windows = top_level_windows();
+    let hosted: Vec<&ConsoleReport> = reports
+        .iter()
+        .copied()
+        .filter(|report| {
+            direct_window(report)
+                .or_else(|| ancestor_window(report, table, &windows))
+                .is_some_and(|window| window.handle() == foreground.handle())
+        })
+        .collect();
+    let titles: Vec<String> = hosted.iter().map(|report| report.title.clone()).collect();
+    let index = hosted_focus(&titles, || {
+        foreground.id().as_u32().and_then(tabs::selected_name)
+    })?;
+    hosted.get(index).map(|report| report.root)
+}
+
+/// Which of the sessions the foreground window hosts has focus: the only one, or the
+/// one titled like the selected tab when several share the window.
+fn hosted_focus(titles: &[String], selected: impl FnOnce() -> Option<String>) -> Option<usize> {
+    match titles {
+        [] => None,
+        [_] => Some(0),
+        _ => tabs::pick(titles, &selected()?),
+    }
 }
 
 fn select_tab(window: Window, report: &ConsoleReport) -> bool {
@@ -541,6 +586,55 @@ fn joined(reader: Option<JoinHandle<String>>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_focused_session_is_the_only_one_hosted_or_the_selected_tab() {
+        let titles = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        let cases = [
+            (
+                titles(&[]),
+                Some("lane-1"),
+                None,
+                "the window hosts no session",
+            ),
+            (
+                titles(&["lane-1"]),
+                None,
+                Some(0),
+                "one session needs no tab read",
+            ),
+            (
+                titles(&["lane-1", "lane-2"]),
+                Some("lane-2"),
+                Some(1),
+                "the selected tab",
+            ),
+            (
+                titles(&["lane-1", "lane-2"]),
+                Some("pwsh"),
+                None,
+                "another tab is selected",
+            ),
+            (
+                titles(&["lane-1", "lane-2"]),
+                None,
+                None,
+                "the tab strip is unreadable",
+            ),
+            (
+                titles(&["lane", "lane"]),
+                Some("lane"),
+                None,
+                "two tabs share the title",
+            ),
+        ];
+        for (titles, selected, expected, note) in cases {
+            let selected = selected.map(str::to_owned);
+            assert_eq!(hosted_focus(&titles, || selected), expected, "{note}");
+        }
+    }
 
     fn process(pid: i32, parent_pid: i32, name: &str) -> ProcessEntry {
         ProcessEntry {

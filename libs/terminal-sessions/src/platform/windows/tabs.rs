@@ -127,6 +127,15 @@ fn in_apartment<T: Send>(work: impl FnOnce() -> Option<T> + Send) -> Option<T> {
     })
 }
 
+pub(super) fn selected_name(window: u32) -> Option<String> {
+    in_apartment(move || {
+        let tab = TabStrip::open(window)?.selected()?;
+        unsafe { tab.CurrentName() }
+            .ok()
+            .map(|name| name.to_string())
+    })
+}
+
 pub(super) fn select_tab(window: u32, title: &str, mark: impl Fn(&str) -> bool + Send) -> bool {
     in_apartment(move || {
         let strip = TabStrip::open(window)?;

@@ -200,9 +200,10 @@ pub fn tick_with_caches(
     let mut notices = Vec::new();
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
+    let focus_read = registry.lock().ok().map(|reg| reg.focus_read());
     let panes = host.discover();
-    if let Ok(mut reg) = registry.lock() {
-        reg.observe_focus(&panes);
+    if let (Some(read), Ok(mut reg)) = (focus_read, registry.lock()) {
+        reg.observe_focus(read, &panes);
     }
     let bridges = live_bridge_sessions(&mut caches.bridges);
     let parked = live_parked_sessions(caches.parked_dir.as_deref());

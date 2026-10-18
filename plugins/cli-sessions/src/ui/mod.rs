@@ -81,9 +81,12 @@ impl SessionsView {
     }
 
     fn read_focus_after_leaving(&self, cx: &mut Context<Self>) {
-        if let Ok(mut registry) = self.registry.lock() {
+        let Ok(read) = self.registry.lock().map(|mut registry| {
             registry.focus_moved();
-        }
+            registry.focus_read()
+        }) else {
+            return;
+        };
         let registry = self.registry.clone();
         let host = self.host.clone();
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -91,7 +94,7 @@ impl SessionsView {
             cx.background_spawn(async move {
                 let panes = host.discover();
                 if let Ok(mut registry) = registry.lock() {
-                    registry.observe_focus(&panes);
+                    registry.observe_focus(read, &panes);
                 }
             })
             .await;
