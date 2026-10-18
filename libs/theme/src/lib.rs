@@ -8,7 +8,8 @@ pub mod toast;
 
 pub use depth::{
     clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
-    OPACITY_DISABLED, OPACITY_REST, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+    OPACITY_DISABLED, OPACITY_FILL, OPACITY_FILL_HELD, OPACITY_REST, SHADE_WELL, SHADOW_FLOAT,
+    SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
 };
 pub use marks::Mark;
 pub use motion::{message_stay, stored_message_stay};
@@ -81,6 +82,7 @@ pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
 pub const RADIUS_THUMB: f32 = 3.0;
 pub const ACTION_CIRCLE_SIZE: f32 = 46.0;
 pub const ACTION_CIRCLE_GAP: f32 = 14.0;
+pub const ACTION_CIRCLE_HOVER_HALO: f32 = 6.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 
@@ -1154,6 +1156,7 @@ const GROUND_FAINT_MIX: u32 = 660;
 const GROUND_SOFT_FLOOR: f64 = 4.5;
 const GROUND_FAINT_FLOOR: f64 = 3.0;
 const GROUND_WELL_ALPHA: u16 = 140;
+const GROUND_WELL_LIFT_ALPHA: u16 = 130;
 const CALM_MARK_MIX: u32 = 300;
 const GROUND_EDGE_ALPHA: u16 = 240;
 
@@ -1257,6 +1260,10 @@ pub const fn calm_mark(tone: u32, soft: u32) -> u32 {
 
 pub const fn lift(bg: u32, ink: u32) -> u32 {
     mix_const(bg, ink, GROUND_LIFT_MIX)
+}
+
+pub const fn well_lift(ink: u32) -> CssRgba {
+    css_rgba_milli(ink, GROUND_WELL_LIFT_ALPHA)
 }
 
 fn mixed_ground(bg: u32, ink: u32) -> Ground {

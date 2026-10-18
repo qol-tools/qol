@@ -2,6 +2,7 @@
 pub enum Alpha {
     Trace,
     Wash,
+    Tint,
     Halo,
     Edge,
     Veil,
@@ -9,9 +10,10 @@ pub enum Alpha {
 }
 
 impl Alpha {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Trace,
         Self::Wash,
+        Self::Tint,
         Self::Halo,
         Self::Edge,
         Self::Veil,
@@ -22,6 +24,7 @@ impl Alpha {
         match self {
             Self::Trace => 5,
             Self::Wash => 9,
+            Self::Tint => 14,
             Self::Halo => 16,
             Self::Edge => 24,
             Self::Veil => 40,
@@ -48,6 +51,8 @@ pub const fn translucent(rgb: u32, alpha: Alpha) -> u32 {
 
 pub const OPACITY_DISABLED: f32 = 0.4;
 pub const OPACITY_REST: f32 = 0.6;
+pub const OPACITY_FILL: f32 = 0.3;
+pub const OPACITY_FILL_HELD: f32 = 0.45;
 
 pub const LINE: f32 = 1.0;
 pub const FOCUS_RING_EDGE: f32 = 1.5;
@@ -89,6 +94,8 @@ pub const SHADOW_RAISED: Shadow = [
         alpha: Alpha::Wash,
     },
 ];
+
+pub const SHADE_WELL: u32 = translucent(0x000000, Alpha::Wash);
 
 pub const fn clear(rgb: u32) -> u32 {
     rgb << 8

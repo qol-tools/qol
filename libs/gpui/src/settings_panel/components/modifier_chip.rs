@@ -1,14 +1,16 @@
 use gpui::prelude::*;
 use gpui::{
-    rgb, rgba, App, ClickEvent, CursorStyle, ElementId, IntoElement, RenderOnce, Rgba,
+    px, rgb, rgba, App, ClickEvent, CursorStyle, ElementId, IntoElement, RenderOnce, Rgba,
     SharedString, Window,
 };
 
 use crate::kit::Chip;
 use crate::kit::Kit;
+use crate::text::TextStyled;
 use crate::theme::Ground;
+use qol_theme::TextStyle;
 
-use super::{ground_bg, ground_border, ground_text, RowGround};
+use super::{RowGround, SETTINGS_ROW_GROUP};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -52,13 +54,23 @@ impl SettingsModifierChip {
     }
 }
 
-fn chip_border(on: bool, cursor: bool, ground: Ground) -> Rgba {
+fn chip_fill(on: bool, ground: Ground) -> Rgba {
+    if on {
+        rgba(qol_theme::translucent(ground.mark, qol_theme::Alpha::Edge))
+    } else {
+        rgba(0)
+    }
+}
+
+fn chip_text(on: bool, ground: Ground) -> Rgba {
+    rgb(if on { ground.ink } else { ground.faint })
+}
+
+fn chip_border(cursor: bool, ground: Ground) -> Rgba {
     if cursor {
-        rgb(ground.ink)
-    } else if on {
         rgb(ground.soft)
     } else {
-        rgba(ground.edge.packed())
+        rgba(0)
     }
 }
 
@@ -75,19 +87,28 @@ impl RenderOnce for SettingsModifierChip {
         } = self;
         let ground = row.rest(kit);
         let hover = row.hover(kit);
-        let text = |ground: Ground| rgb(if on { ground.ink } else { ground.faint });
-        let fill = |ground: Ground| {
-            if on {
-                rgba(ground.well.packed())
-            } else {
-                rgba(0)
-            }
-        };
-        let border = |ground: Ground| chip_border(on, cursor, ground);
-        let chip = kit.chip(Chip::KeyText(label), ground).id(id);
-        let chip = ground_bg(chip, fill(ground), hover.map(fill));
-        let chip = ground_text(chip, text(ground), hover.map(text));
-        let chip = ground_border(chip, border(ground), hover.map(border));
+        let lit = hover.unwrap_or(ground);
+        let chip = kit
+            .chip(Chip::Tag(label), ground)
+            .id(id)
+            .text(TextStyle::Key)
+            .border(px(qol_theme::LINE))
+            .px(px(qol_theme::SPACE_INSET + qol_theme::LINE))
+            .rounded_full()
+            .bg(chip_fill(on, ground))
+            .text_color(chip_text(on, ground))
+            .border_color(chip_border(cursor, ground))
+            .when_some(hover, |chip, hover| {
+                chip.group_hover(SETTINGS_ROW_GROUP, move |style| {
+                    style
+                        .bg(chip_fill(on, hover))
+                        .text_color(chip_text(on, hover))
+                        .border_color(chip_border(cursor, hover))
+                })
+            })
+            .when(!on, |chip| {
+                chip.hover(move |style| style.bg(rgba(lit.well.packed())).text_color(rgb(lit.soft)))
+            });
         match on_click {
             Some(handler) => chip
                 .cursor(CursorStyle::PointingHand)

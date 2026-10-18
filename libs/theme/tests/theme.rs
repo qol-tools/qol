@@ -2414,7 +2414,7 @@ fn every_shadow_alpha_opacity_and_line_comes_from_the_theme() {
 #[test]
 fn the_depth_ladders_hold_their_approved_values() {
     let percents: Vec<u16> = qol_theme::Alpha::ALL.iter().map(|a| a.percent()).collect();
-    assert_eq!(percents, [5, 9, 16, 24, 40, 70]);
+    assert_eq!(percents, [5, 9, 14, 16, 24, 40, 70]);
     assert_eq!(qol_theme::OPACITY_DISABLED, 0.4);
     assert_eq!(qol_theme::OPACITY_REST, 0.6);
     assert_eq!(qol_theme::LINE, 1.0);

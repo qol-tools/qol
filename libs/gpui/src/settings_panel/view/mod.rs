@@ -21,7 +21,7 @@ use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
     rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
     settings_action_spinner, settings_error_line, settings_label_group, settings_page,
-    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, RowGround,
+    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, NumberCue, RowGround,
     SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
     SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
@@ -56,6 +56,7 @@ const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::fro
 const LEVEL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
 const LIST_FIT_MIN_VISIBLE: usize = 3;
+const SCRUB_SLOP: f32 = 3.0;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PanelFocus {
@@ -266,6 +267,7 @@ pub(super) struct SettingsPanelView {
     runtime_poll_generation: u64,
     slider_dispatch_generation: std::collections::HashMap<(usize, String), u64>,
     slider_drag: Option<(usize, String)>,
+    slider_press: Option<SliderPress>,
     slider_pending: std::collections::HashSet<(usize, String)>,
     slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
     frame_paced_samples: Option<SampledQueryResults>,
@@ -456,6 +458,7 @@ impl SettingsPanelView {
             runtime_poll_generation: 0,
             slider_dispatch_generation: std::collections::HashMap::new(),
             slider_drag: None,
+            slider_press: None,
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
             frame_paced_samples: None,
@@ -2465,6 +2468,40 @@ impl SettingsPanelView {
         }
     }
 
+    fn press_number_field(&mut self, fraction: f32) {
+        self.slider_press = Some(SliderPress::Held(fraction));
+    }
+
+    fn scrub_number_field(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
+        let Some(press) = self.slider_press else {
+            return;
+        };
+        let next = pressed_slider(press, fraction, SliderStyle::Compact.track_width());
+        self.slider_press = Some(next);
+        if next != SliderPress::Scrubbing {
+            return;
+        }
+        if press != SliderPress::Scrubbing {
+            self.begin_number_slider_drag(row);
+        }
+        self.set_number_slider(row, fraction, cx);
+    }
+
+    fn release_number_field(&mut self, row: usize, cx: &mut Context<Self>) {
+        match self.slider_press.take() {
+            Some(SliderPress::Scrubbing) => self.finish_number_slider(row, cx),
+            Some(SliderPress::Held(_)) | None => {
+                if row != self.level().selected {
+                    self.commit_edit(cx);
+                }
+                self.level_mut().selected = row;
+                if !matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
+                    self.begin_edit();
+                }
+            }
+        }
+    }
+
     fn set_number_slider(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
         let Some(RowControl::Number {
             value,
@@ -3041,28 +3078,66 @@ impl SettingsPanelView {
             max,
             step,
         } = number;
-        let mut track = None;
-        if let Some(style) = SliderStyle::from_variant(self.level().rows[index].variant.as_deref())
-        {
-            let edit = if index == self.level().selected {
-                match &self.level().active_control {
-                    Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
-            track = Some((fraction, style));
-        }
-        let level = match &self.level().rows[index].control {
-            RowControl::Number {
-                level: Some(level), ..
-            } => level.value,
-            _ => 0.0,
+        let style = SliderStyle::from_variant(self.level().rows[index].variant.as_deref());
+        let edit = match &self.level().active_control {
+            Some(ActiveControl::Edit(edit)) if index == self.level().selected => {
+                Some(edit.as_str())
+            }
+            _ => None,
         };
+        let track = style.map(|style| {
+            let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
+            (fraction, style)
+        });
         let id = self.level().rows[index].id.clone();
+        let dragging = self.slider_drag.as_ref() == Some(&(index, id.clone()))
+            && !matches!(self.slider_press, Some(SliderPress::Held(_)));
+        let cue = NumberCue {
+            level: match &self.level().rows[index].control {
+                RowControl::Number {
+                    level: Some(level), ..
+                } => level.value,
+                _ => 0.0,
+            },
+            editing: style.is_some() && edit.is_some(),
+            dragging,
+            limit: match (style, edit) {
+                (Some(SliderStyle::Compact), Some(edit)) => number_limit(edit, min, max),
+                _ => None,
+            },
+        };
+        let display = match (style, edit) {
+            (Some(_), Some(edit)) => edit.to_string(),
+            _ => self.display_value(index),
+        };
         let interact = move |element: Div| {
+            if style == Some(SliderStyle::Compact) {
+                return element.child(
+                    slider_drag_track(
+                        cx,
+                        index,
+                        id,
+                        |panel: &mut SettingsPanelView,
+                         _row: usize,
+                         fraction: f32,
+                         _cx: &mut Context<SettingsPanelView>| {
+                            panel.press_number_field(fraction);
+                        },
+                        |panel: &mut SettingsPanelView,
+                         row: usize,
+                         fraction: f32,
+                         cx: &mut Context<SettingsPanelView>| {
+                            panel.scrub_number_field(row, fraction, cx);
+                        },
+                        |panel: &mut SettingsPanelView,
+                         row: usize,
+                         cx: &mut Context<SettingsPanelView>| {
+                            panel.release_number_field(row, cx);
+                        },
+                    )
+                    .cursor(CursorStyle::ResizeLeftRight),
+                );
+            }
             element.child(slider_drag_track(
                 cx,
                 index,
@@ -3086,10 +3161,10 @@ impl SettingsPanelView {
             ))
         };
         number_field(
-            self.display_value(index),
+            display,
             number_unit(&self.level().rows[index].id),
             track,
-            level,
+            cue,
             interact,
             row,
             self.kit,
@@ -4314,6 +4389,30 @@ fn stepped_number(
     format_number(next)
 }
 
+fn number_limit(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<String> {
+    let typed = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
+    if let Some(max) = max.filter(|max| typed > *max) {
+        return Some(format!("max {}", format_number(max)));
+    }
+    if let Some(min) = min.filter(|min| typed < *min) {
+        return Some(format!("min {}", format_number(min)));
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SliderPress {
+    Held(f32),
+    Scrubbing,
+}
+
+fn pressed_slider(press: SliderPress, fraction: f32, width: f32) -> SliderPress {
+    match press {
+        SliderPress::Held(origin) if ((fraction - origin) * width).abs() < SCRUB_SLOP => press,
+        SliderPress::Held(_) | SliderPress::Scrubbing => SliderPress::Scrubbing,
+    }
+}
+
 fn number_preview(
     edit: Option<&str>,
     fallback: f64,
@@ -5229,14 +5328,15 @@ mod tests {
         clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
         escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
         intent, list_fit_updates, live_card_level, live_card_sync, live_card_sync_back,
-        live_number_dispatch_plan, number_finish_plan, number_preview, number_unit, parsed_color,
-        parsed_number, pop_level, push_level, query_is_due, rail_group_breaks,
-        release_slider_dispatch, row_body_height, schedule_slider_generation, slider_fraction,
-        slider_generation_current, slider_protected, source_window_height_for, stepped_number,
-        text_or_placeholder, transition_in_flight, transition_policy, AppliedQueryPayloads,
-        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
-        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
-        TransitionTracker,
+        live_number_dispatch_plan, number_finish_plan, number_limit, number_preview, number_unit,
+        parsed_color, parsed_number, pop_level, pressed_slider, push_level, query_is_due,
+        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
+        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
+        stepped_number, text_or_placeholder, transition_in_flight, transition_policy,
+        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        LiveNumberDispatch, NumberFinishPlan, ObjectArrayState, Row, RowControl, RowSection,
+        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
+        SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -6242,6 +6342,45 @@ active_value_from = "active"
         };
         *pending = true;
         assert!(action_shows_spinner(&row));
+    }
+
+    #[test]
+    fn a_press_scrubs_only_once_it_moves_past_the_slop() {
+        let width = SliderStyle::Compact.track_width();
+        let press = SliderPress::Held(0.5);
+        assert_eq!(pressed_slider(press, 0.5, width), press);
+        assert_eq!(
+            pressed_slider(press, 0.5 + (SCRUB_SLOP - 1.0) / width, width),
+            press
+        );
+        assert_eq!(
+            pressed_slider(press, 0.5 - (SCRUB_SLOP + 1.0) / width, width),
+            SliderPress::Scrubbing
+        );
+        assert_eq!(
+            pressed_slider(SliderPress::Scrubbing, 0.5, width),
+            SliderPress::Scrubbing
+        );
+    }
+
+    #[test]
+    fn a_typed_value_past_a_limit_names_the_limit_it_clamps_to() {
+        let cases = [
+            ("900", Some(0.0), Some(128.0), Some("max 128")),
+            ("-5", Some(0.0), Some(128.0), Some("min 0")),
+            (" 0.5 ", Some(1.0), None, Some("min 1")),
+            ("128", Some(0.0), Some(128.0), None),
+            ("60", Some(0.0), Some(128.0), None),
+            ("900", None, None, None),
+            ("abc", Some(0.0), Some(128.0), None),
+        ];
+        for (edit, min, max, expected) in cases {
+            assert_eq!(number_limit(edit, min, max).as_deref(), expected, "{edit}");
+        }
+        assert_eq!(
+            parsed_number("900", Some(0.0), Some(128.0), None),
+            Some(128.0)
+        );
     }
 
     #[test]

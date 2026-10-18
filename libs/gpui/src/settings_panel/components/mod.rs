@@ -32,7 +32,7 @@ pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
-pub(super) use number_field::{number_field, SliderStyle};
+pub(super) use number_field::{number_field, NumberCue, SliderStyle};
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use text_field::SettingsTextField;
@@ -49,6 +49,7 @@ const CHOICE_PICTURE_HEIGHT: f32 = 35.0;
 const CHOICE_CHEVRON_WIDTH: f32 = 8.0;
 const CHOICE_CHEVRON_HEIGHT: f32 = 14.0;
 const CHOICE_CHEVRON_REST_OPACITY: f32 = qol_theme::OPACITY_REST;
+const CHOICE_CHEVRON_HOVER_STEP: f32 = qol_theme::SPACE_STACK;
 const TEXT_FIELD_MIN_WIDTH: f32 = 220.0;
 const FIELD_MAX_WIDTH: f32 = 320.0;
 const TILE_SPINNER_SIZE: f32 = 44.0;
@@ -99,16 +100,6 @@ fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Opti
     let element = element.bg(rest);
     match hover {
         Some(color) => element.group_hover(SETTINGS_ROW_GROUP, move |style| style.bg(color)),
-        None => element,
-    }
-}
-
-fn ground_border<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
-    let element = element.border_color(rest);
-    match hover {
-        Some(color) => {
-            element.group_hover(SETTINGS_ROW_GROUP, move |style| style.border_color(color))
-        }
         None => element,
     }
 }

@@ -1,6 +1,6 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, AnyElement, App, RenderOnce, SharedString, Window};
+use gpui::{div, px, rgb, rgba, AnyElement, App, Hsla, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use crate::kit::Kit;
@@ -14,9 +14,18 @@ fn editable_element(
     advance: f32,
     row: RowGround,
     kit: Kit,
+    hint: Option<SharedString>,
 ) -> AnyElement {
     let ground = row.rest(kit);
-    TextFieldElement::new(field, visible, advance)
+    let element = TextFieldElement::new(field, visible, advance);
+    let element = match hint {
+        Some(hint) => element.placeholder(
+            hint,
+            Hsla::from(rgb(ground.faint)).opacity(qol_theme::OPACITY_REST),
+        ),
+        None => element,
+    };
+    element
         .selection(
             rgb(kit.grounds.band.bg).into(),
             Some(rgb(kit.grounds.pane.ink).into()),
@@ -80,7 +89,7 @@ impl SettingsTextField {
             focused,
             row,
             kit,
-            editable: Some(editable_element(field, visible, advance, row, kit)),
+            editable: Some(editable_element(field, visible, advance, row, kit, None)),
             live: None,
             placeholder: None,
             width: None,
@@ -138,7 +147,8 @@ impl RenderOnce for SettingsTextField {
                     width - 2.0 * qol_theme::SPACE_CELL - 4.0,
                     advance,
                 );
-                let element = editable_element(&field, visible, advance, row, kit);
+                let hint = placeholder.clone().filter(|_| field.is_empty());
+                let element = editable_element(&field, visible, advance, row, kit, hint);
                 (Some(element), Some(width))
             }
             None => (editable, width),
@@ -172,9 +182,7 @@ impl RenderOnce for SettingsTextField {
             .px(px(qol_theme::SPACE_CELL))
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .when(band, |field| {
-                field
-                    .border(px(qol_theme::LINE))
-                    .border_color(rgba(ground.edge.packed()))
+                field.border(px(qol_theme::LINE)).border_color(rgba(0))
             })
             .when(focused, |field| field.shadow(kit.focus_ring(ground)))
             .text(TextStyle::Code)
@@ -182,7 +190,9 @@ impl RenderOnce for SettingsTextField {
         let field = ground_bg(
             field,
             rgba(ground.well.packed()),
-            hover.map(|hover| rgba(hover.well.packed())),
+            Some(rgba(
+                qol_theme::well_lift(hover.unwrap_or(ground).ink).packed(),
+            )),
         );
         field.child(
             ground_text(

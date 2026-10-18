@@ -1451,7 +1451,7 @@ impl NativeToolsView {
         let kit = qol_gpui::kit::kit();
         let row = RowGround::of(selected, self.body_focused);
         let field = if selected {
-            SettingsTextField::live(self.editor_text.clone(), row, kit)
+            SettingsTextField::live(self.editor_text.clone(), row, kit).placeholder(placeholder)
         } else {
             SettingsTextField::new(value.to_owned(), value.is_empty(), false, row, kit)
                 .placeholder(placeholder)
