@@ -89,6 +89,7 @@ fn a_finished_park_notice_falls_back_to_the_project_and_caps_the_report() {
         detail: None,
         report: Some("\u{00E9}".repeat(500)),
         notified: false,
+        closed_at: None,
     };
     let notice = Notice::finished_park(&record);
     assert_eq!(notice.title, "qol-monorepo");
@@ -123,6 +124,7 @@ fn a_park_that_could_not_resume_says_why_and_retries_on_click() {
         detail: Some("secret `claude-personal` cannot be read".to_owned()),
         report: None,
         notified: false,
+        closed_at: None,
     };
     let notice = Notice::for_park(&record);
     assert_eq!(notice.title, "Mac bugs");

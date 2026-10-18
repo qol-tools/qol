@@ -692,7 +692,7 @@ impl McpSessionServer {
                     .ok_or_else(|| "session_fork `park` must be a boolean".to_owned())
             })
             .transpose()?
-            .unwrap_or(from_switchboard);
+            .unwrap_or(false);
         let report = arguments
             .get("report")
             .map(|value| {
@@ -5682,7 +5682,7 @@ mod tests {
     }
 
     #[test]
-    fn e2e_a_switchboard_fork_parks_reports_and_is_watched_unless_told_otherwise() {
+    fn e2e_a_switchboard_fork_reports_and_parks_only_when_told_to() {
         let root = tempfile::TempDir::new().unwrap();
         let cwd = spawn_cwd(&root);
         let backend = Arc::new(
@@ -5699,7 +5699,7 @@ mod tests {
         let outcome = tool_json(&tool_call(
             &server,
             "session_fork",
-            json!({"tool": "claude", "cwd": cwd, "key": "fork-check-pr", "model": "opus", "brief": "check the PR", "copy_chat": false}),
+            json!({"tool": "claude", "cwd": cwd, "key": "fork-kept-open", "model": "opus", "brief": "check the PR", "copy_chat": false}),
         ));
         let brief = std::fs::read_to_string(outcome["brief"].as_str().unwrap()).unwrap();
         assert!(brief.ends_with(super::super::fork::REPORT_LINE), "{brief}");
@@ -5707,10 +5707,21 @@ mod tests {
         assert!(
             launch
                 .env
-                .contains(&qol_terminal_sessions::parking::launch_env(true)),
+                .contains(&qol_terminal_sessions::parking::launch_env(false)),
             "{:?}",
             launch.env
         );
+        assert!(watchers().is_empty(), "an unparked fork is not watched");
+
+        let outcome = tool_json(&tool_call(
+            &server,
+            "session_fork",
+            json!({"tool": "claude", "cwd": cwd, "key": "fork-check-pr", "model": "opus", "brief": "check the PR", "copy_chat": false, "park": true}),
+        ));
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert!(launch
+            .env
+            .contains(&qol_terminal_sessions::parking::launch_env(true)));
         let started = watchers();
         assert_eq!(started.len(), 1, "{started:?}");
         assert_eq!(
@@ -5731,22 +5742,11 @@ mod tests {
             .unwrap()
             .contains("Its tab closes when its turn ends"));
 
-        tool_json(&tool_call(
-            &server,
-            "session_fork",
-            json!({"tool": "claude", "cwd": cwd, "key": "fork-kept-open", "model": "opus", "brief": "check the PR", "copy_chat": false, "park": false, "report": false}),
-        ));
-        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
-        assert!(launch
-            .env
-            .contains(&qol_terminal_sessions::parking::launch_env(false)));
-        assert_eq!(watchers().len(), 1, "an unparked fork is not watched");
-
         super::super::park::WATCHERS_START.with(|start| start.set(false));
         let unconfirmed = tool_json(&tool_call(
             &server,
             "session_fork",
-            json!({"tool": "claude", "cwd": cwd, "key": "fork-unwatched", "model": "opus", "brief": "check the PR", "copy_chat": false}),
+            json!({"tool": "claude", "cwd": cwd, "key": "fork-unwatched", "model": "opus", "brief": "check the PR", "copy_chat": false, "park": true}),
         ));
         super::super::park::WATCHERS_START.with(|start| start.set(true));
         let instruction = unconfirmed["instruction"].as_str().unwrap();

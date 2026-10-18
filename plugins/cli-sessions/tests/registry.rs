@@ -53,6 +53,7 @@ fn state(window_id: u64, status: Status, last: u64) -> SessionState {
         runtime_status: None,
         unread: 0,
         open_asks: 0,
+        park: None,
     }
 }
 

@@ -38,6 +38,8 @@ pub struct SessionState {
     pub unread: usize,
     #[serde(default, skip)]
     pub open_asks: usize,
+    #[serde(default, skip)]
+    pub park: Option<String>,
 }
 
 impl SessionState {
@@ -114,7 +116,8 @@ impl Registry {
     }
 
     pub fn prune(&mut self, is_alive: impl Fn(i32) -> bool) {
-        self.sessions.retain(|_, s| is_alive(s.root_pid));
+        self.sessions
+            .retain(|_, s| s.park.is_some() || is_alive(s.root_pid));
     }
 
     pub fn get(&self, id: &SessionId) -> Option<&SessionState> {
@@ -185,6 +188,7 @@ mod tests {
             runtime_status: None,
             unread: 0,
             open_asks: 0,
+            park: None,
         }
     }
 

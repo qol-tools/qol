@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,8 @@ pub struct ParkRecord {
     pub report: Option<String>,
     #[serde(default)]
     pub notified: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<u64>,
 }
 
 pub fn parked_dir() -> Option<PathBuf> {
@@ -145,6 +148,16 @@ pub fn watching(dir: &Path) -> Vec<ParkRecord> {
         .collect()
 }
 
+pub fn closed(dir: &Path) -> Vec<ParkRecord> {
+    let mut conversations = HashSet::new();
+    records(dir)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| conversations.insert(record.external_id.clone()))
+        .filter(|record| record.state == ParkState::Finished && record.closed_at.is_some())
+        .collect()
+}
+
 /// Finished or unresumable parks whose outcome has not been shown to the user yet.
 pub fn unnotified(dir: &Path) -> Vec<ParkRecord> {
     records(dir)
@@ -206,6 +219,7 @@ mod tests {
             detail: None,
             report: None,
             notified: false,
+            closed_at: None,
         }
     }
 
@@ -336,6 +350,46 @@ mod tests {
             .map(|record| record.id)
             .collect();
         assert_eq!(ids, ["watched"]);
+    }
+
+    #[test]
+    fn closed_keeps_the_newest_park_of_a_conversation_while_it_closed_its_tab() {
+        let root = tempfile::tempdir().unwrap();
+        let closed_park = |id: &str, created_at: u64, external_id: &str| ParkRecord {
+            external_id: external_id.to_owned(),
+            closed_at: Some(created_at + 1),
+            ..record(id, created_at, ParkState::Finished)
+        };
+        write(root.path(), &closed_park("parked", 2, "abc"));
+        write(root.path(), &closed_park("older", 1, "abc"));
+        write(root.path(), &closed_park("superseded", 1, "later"));
+        write(
+            root.path(),
+            &ParkRecord {
+                external_id: "later".to_owned(),
+                ..record("waiting", 3, ParkState::Waiting)
+            },
+        );
+        write(
+            root.path(),
+            &ParkRecord {
+                external_id: "kept".to_owned(),
+                ..record("kept-open", 1, ParkState::Finished)
+            },
+        );
+        write(
+            root.path(),
+            &ParkRecord {
+                external_id: "reopened".to_owned(),
+                closed_at: Some(2),
+                ..record("reopened", 1, ParkState::Resumed)
+            },
+        );
+        let ids: Vec<String> = closed(root.path())
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+        assert_eq!(ids, ["parked"]);
     }
 
     #[test]

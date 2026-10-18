@@ -210,10 +210,12 @@ pub fn tick_with_caches(
         "phase=tick mono_now={mono_now} panes={}",
         panes.len()
     );
-    prune_missing(registry, caches, &panes, &parked);
+    prune_missing(registry, caches, &panes);
+    let mut open_conversations = HashSet::new();
 
     for pane in &panes {
         let cli_session = cli_interpreter.describe(pane);
+        open_conversations.extend(cli_session.external_id.clone());
         #[cfg(debug_assertions)]
         let cli_tool = cli_session.tool.id.to_string();
         let tool = from_cli_session(&cli_session);
@@ -338,7 +340,15 @@ pub fn tick_with_caches(
         }
     }
 
-    show_detached_parks(registry, cli_interpreter, caches, &panes, &parked, wall_now);
+    show_detached_parks(
+        registry,
+        cli_interpreter,
+        caches,
+        &panes,
+        &parked,
+        &open_conversations,
+        wall_now,
+    );
     notices.extend(finished_park_notices(caches.parked_dir.as_deref()));
     if let Some(messaging) = caches.messaging.as_mut() {
         messaging.tick(registry, cli_interpreter, &panes, wall_now);
@@ -530,22 +540,16 @@ fn cached_screen(
     None
 }
 
-fn prune_missing(
-    registry: &Arc<Mutex<Registry>>,
-    caches: &mut ReconcileCaches,
-    panes: &[Pane],
-    parked: &[LivePark],
-) {
-    let mut live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
+fn prune_missing(registry: &Arc<Mutex<Registry>>, caches: &mut ReconcileCaches, panes: &[Pane]) {
+    let live: HashSet<SessionId> = panes.iter().map(|pane| pane.id.clone()).collect();
     caches.screens.retain(|id, _| live.contains(id));
-    live.extend(parked.iter().map(|park| park.id.clone()));
     let Ok(mut reg) = registry.lock() else { return };
     reg.prune(pid_alive);
     let stale: Vec<SessionId> = reg
         .sorted()
         .into_iter()
+        .filter(|s| s.park.is_none() && !live.contains(&s.id))
         .map(|s| s.id)
-        .filter(|id| !live.contains(id))
         .collect();
     #[cfg(debug_assertions)]
     if !stale.is_empty() {
@@ -802,6 +806,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         runtime_status: Some(input.reduction.attention.status),
         unread: 0,
         open_asks: 0,
+        park: None,
     });
     (notice, status)
 }
@@ -894,59 +899,124 @@ fn show_detached_parks(
     caches: &mut ReconcileCaches,
     panes: &[Pane],
     parked: &[LivePark],
+    open_conversations: &HashSet<String>,
     wall_now: u64,
 ) {
-    for park in parked {
-        if panes.iter().any(|pane| pane.id == park.id) {
+    let closed = caches
+        .parked_dir
+        .as_deref()
+        .map(qol_terminal_sessions::park::closed)
+        .unwrap_or_default();
+    let store = caches
+        .parked_dir
+        .clone()
+        .map(crate::park::store::ParkStore::with_dir);
+    if let Some(store) = store.as_ref() {
+        for record in closed
+            .iter()
+            .filter(|record| open_conversations.contains(&record.external_id))
+        {
+            if let Err(error) = store.mark_reopened(record) {
+                log::warn!(
+                    "[cli-sessions] park {} not marked reopened: {error:#}",
+                    record.id
+                );
+            }
+        }
+    }
+    let mut detached: Vec<(SessionId, i32, &ParkRecord, u64)> = Vec::new();
+    let waiting = parked.iter().map(|park| {
+        (
+            park.id.clone(),
+            park.runner_pid,
+            &park.record,
+            park.record.created_at,
+        )
+    });
+    let closed = closed.iter().filter_map(|record| {
+        let binding = record
+            .resumed_session
+            .as_deref()
+            .unwrap_or(&record.session)
+            .parse::<SessionBinding>()
+            .ok()?;
+        Some((
+            binding.session_id().clone(),
+            binding.root_pid(),
+            record,
+            record.closed_at?,
+        ))
+    });
+    for (id, root_pid, record, since) in waiting.chain(closed) {
+        if panes.iter().any(|pane| pane.id == id)
+            || open_conversations.contains(&record.external_id)
+            || detached.iter().any(|(kept, ..)| *kept == id)
+        {
             continue;
         }
-        let record = &park.record;
-        let tool = CliToolId::new(record.tool.as_str())
-            .ok()
-            .and_then(|id| cli_interpreter.tool_for(&id))
-            .unwrap_or_else(generic_tool);
-        let branch = caches.branch.branch(&record.cwd, wall_now);
-        let key = caches
-            .parked_dir
-            .clone()
-            .and_then(|dir| crate::park::store::ParkStore::with_dir(dir).spawn_key(&record.id))
-            .map(|key| key.as_str().to_owned());
-        let Ok(mut reg) = registry.lock() else { return };
+        detached.push((id, root_pid, record, since));
+    }
+    let rows = detached
+        .into_iter()
+        .map(|(id, root_pid, record, since)| {
+            let tool = CliToolId::new(record.tool.as_str())
+                .ok()
+                .and_then(|id| cli_interpreter.tool_for(&id))
+                .unwrap_or_else(generic_tool);
+            let key = store
+                .as_ref()
+                .and_then(|store| store.spawn_key(&record.id))
+                .map(|key| key.as_str().to_owned());
+            SessionState {
+                id,
+                root_pid,
+                project: project_of(&record.cwd),
+                name: meaningful_name(record.title.as_deref()).map(str::to_owned),
+                cwd: record.cwd.clone(),
+                branch: caches.branch.branch(&record.cwd, wall_now),
+                tool,
+                status: Status::Parked,
+                summary: Status::Parked.definition().label.into(),
+                last_activity: since,
+                screen_hash: None,
+                master: is_master_key(key.as_deref()),
+                key,
+                working_since: None,
+                settled_since: None,
+                bridged: false,
+                driving: Vec::new(),
+                runtime_status: None,
+                unread: 0,
+                open_asks: 0,
+                park: Some(record.id.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+    let Ok(mut reg) = registry.lock() else { return };
+    let gone: Vec<SessionId> = reg
+        .sorted()
+        .into_iter()
+        .filter(|state| state.park.is_some() && !rows.iter().any(|row| row.id == state.id))
+        .map(|state| state.id)
+        .collect();
+    for id in gone {
+        reg.remove(&id);
+    }
+    for row in rows {
         if reg
-            .get(&park.id)
-            .is_some_and(|state| state.root_pid == park.runner_pid)
+            .get(&row.id)
+            .is_some_and(|state| state.root_pid == row.root_pid && state.park == row.park)
         {
             continue;
         }
         qol_runtime::probe!(
             "CLI_SESSIONS_RECON",
-            "phase=park id={} park={} runner_pid={}",
-            park.id,
-            record.id,
-            park.runner_pid
+            "phase=park id={} park={} root_pid={}",
+            row.id,
+            row.park.as_deref().unwrap_or_default(),
+            row.root_pid
         );
-        reg.upsert(SessionState {
-            id: park.id.clone(),
-            root_pid: park.runner_pid,
-            project: project_of(&record.cwd),
-            name: meaningful_name(record.title.as_deref()).map(str::to_owned),
-            cwd: record.cwd.clone(),
-            branch,
-            tool,
-            status: Status::Parked,
-            summary: Status::Parked.definition().label.into(),
-            last_activity: record.created_at,
-            screen_hash: None,
-            master: is_master_key(key.as_deref()),
-            key,
-            working_since: None,
-            settled_since: None,
-            bridged: false,
-            driving: Vec::new(),
-            runtime_status: None,
-            unread: 0,
-            open_asks: 0,
-        });
+        reg.upsert(row);
     }
 }
 

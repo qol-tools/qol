@@ -167,6 +167,7 @@ fn park(
         detail: None,
         report: None,
         notified: false,
+        closed_at: None,
     };
     if let Some(identity) = facts.spawn_identity.as_ref() {
         store.record_spawn_key(&id, &identity.key)?;
@@ -242,6 +243,7 @@ fn watch_launch(
         detail: None,
         report: None,
         notified: false,
+        closed_at: None,
     };
     if let Some(identity) = facts.spawn_identity.as_ref() {
         store.record_spawn_key(&record.id, &identity.key)?;
@@ -286,7 +288,7 @@ pub fn unpark(id: &str) -> Result<String> {
     };
     let record = store.load(id)?;
     if record.state == ParkState::Finished {
-        return reopen(&store, record);
+        return reopen(&store, record, "reopened from its notification");
     }
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
@@ -341,7 +343,36 @@ pub fn unpark(id: &str) -> Result<String> {
     Ok(format!("resumed {id} in {session}"))
 }
 
-fn reopen(store: &ParkStore, record: ParkRecord) -> Result<String> {
+pub fn open(id: &str) -> Result<String> {
+    let store = ParkStore::system()?;
+    let Some(_lock) = store.lock_unpark(id)? else {
+        bail!("`{id}` is already being resumed or reopened");
+    };
+    let record = store.load(id)?;
+    if record.state == ParkState::Finished {
+        return reopen(&store, record, "reopened from CLI Sessions");
+    }
+    let terminals = TerminalSessionService::system();
+    let interpreter = CliSessionInterpreter::system();
+    let caller = record
+        .session
+        .parse::<SessionBinding>()
+        .map_err(|error| anyhow!("invalid parked session token: {error}"))?;
+    let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
+        bail!("`{id}` is already being resumed");
+    };
+    let record = store.load(id)?;
+    if record.state != ParkState::Waiting {
+        bail!("`{id}` is no longer parked ({:?})", record.state);
+    }
+    ensure_not_open(&store, &terminals, &interpreter, &record, &caller)?;
+    let session = resume(&terminals, &interpreter, &store, &record, "")?;
+    Ok(format!(
+        "reopened {id} in {session}; it still waits on its command"
+    ))
+}
+
+fn reopen(store: &ParkStore, record: ParkRecord, detail: &str) -> Result<String> {
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
     let caller = record
@@ -359,7 +390,8 @@ fn reopen(store: &ParkStore, record: ParkRecord) -> Result<String> {
     let session = resume(&terminals, &interpreter, store, &record, "")?;
     record.state = ParkState::Resumed;
     record.resumed_session = Some(session.clone());
-    record.detail = Some("reopened from its notification".to_owned());
+    record.closed_at = None;
+    record.detail = Some(detail.to_owned());
     store.record(&record)?;
     Ok(format!("reopened {} in {session}", record.id))
 }
@@ -441,6 +473,7 @@ pub(crate) mod tests {
             detail: None,
             report: None,
             notified: false,
+            closed_at: None,
         }
     }
 }

@@ -148,6 +148,10 @@ impl SessionsView {
         let binding = match rows.iter().enumerate().find(|(_, row)| row.id == id) {
             Some((index, row)) => {
                 trace::jump_target(reason, index, rows.len(), row);
+                if let Some(park) = row.park.clone() {
+                    open_park_async(park, cx);
+                    return;
+                }
                 let Some(binding) = row.binding() else {
                     trace::jump_missing(reason, index, rows.len());
                     return;
@@ -345,6 +349,23 @@ fn clamp_to_monitor(bounds: Bounds<Pixels>, cx: &mut Context<SessionsView>) -> B
         ),
         None => bounds,
     }
+}
+
+fn open_park_async(park: String, cx: &mut Context<SessionsView>) {
+    qol_runtime::probe!("CLI_SESSIONS_CMD", "cmd=open park={park}");
+    cx.background_spawn(async move {
+        match crate::park::open(&park) {
+            Ok(outcome) => log::info!("[cli-sessions] {outcome}"),
+            Err(error) => {
+                log::warn!("[cli-sessions] opening park {park} failed: {error:#}");
+                qol_plugin_daemon::notification::send_notification(
+                    "CLI Sessions",
+                    &format!("{error:#}"),
+                );
+            }
+        }
+    })
+    .detach();
 }
 
 use std::collections::HashSet;
