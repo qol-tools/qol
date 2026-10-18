@@ -32,6 +32,7 @@ pub(super) struct ClaudeMetadataResolver {
     environment: Arc<dyn ClaudeEnvironment>,
     pub(super) projects_root: Option<PathBuf>,
     cache: Mutex<ClaudeCache>,
+    runtime_tail: tail::RuntimeTail,
 }
 
 #[derive(Default)]
@@ -64,6 +65,7 @@ impl ClaudeMetadataResolver {
             environment,
             projects_root: None,
             cache: Mutex::new(ClaudeCache::default()),
+            runtime_tail: tail::RuntimeTail::default(),
         }
     }
 
@@ -87,7 +89,10 @@ impl ClaudeMetadataResolver {
             .unwrap_or_default();
         let runtime = location
             .as_ref()
-            .map(|location| tail_runtime(&location.transcript_path))
+            .map(|location| {
+                self.runtime_tail
+                    .latest(&location.transcript_path, tail_runtime)
+            })
             .unwrap_or(CliRuntimeState::Unknown);
         ClaudeMetadata {
             custom_title: facts.as_ref().and_then(|facts| facts.title.clone()),

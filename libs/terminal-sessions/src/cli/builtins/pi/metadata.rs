@@ -29,6 +29,7 @@ pub(super) struct PiMetadata {
 pub(super) struct PiMetadataResolver {
     environment: Arc<dyn PiEnvironment>,
     cache: Mutex<PiCache>,
+    runtime_tail: tail::RuntimeTail,
 }
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ impl PiMetadataResolver {
         Self {
             environment,
             cache: Mutex::new(PiCache::default()),
+            runtime_tail: tail::RuntimeTail::default(),
         }
     }
 
@@ -92,7 +94,7 @@ impl PiMetadataResolver {
             has_activity: activity.combined(),
             runtime: path
                 .as_deref()
-                .map(tail_runtime)
+                .map(|path| self.runtime_tail.latest(path, tail_runtime))
                 .unwrap_or(CliRuntimeState::Unknown),
             activity,
         }

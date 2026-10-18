@@ -34,6 +34,7 @@ const WAIT_SUPERSEDED_MESSAGE: &str =
     "bridge wait superseded by a newer session_bridge for this session; the round stays open";
 const TASK_MAX_BYTES: usize = 64 * 1024;
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
+const CLOSED_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 const GATE_LOCK_MESSAGE: &str = "Blocking waiting for file lock";
 const GATE_STEP_TIMEOUT: Duration = Duration::from_secs(600);
 const GATE_LOCK_RETRY_BUDGET: Duration = Duration::from_secs(1800);
@@ -779,15 +780,14 @@ impl PendingBridgeStore {
                     let dead_session = live_sessions
                         .map(|live| !live.contains(&checkpoint.session))
                         .unwrap_or(false);
-                    if checkpoint.session.is_empty() || (dead_session && !checkpoint.closed) {
+                    if checkpoint.closed && older_than(&path, CLOSED_RETENTION) {
+                        self.expire_closed(&path, &checkpoint.session, dead_session);
+                    } else if checkpoint.session.is_empty() || (dead_session && !checkpoint.closed)
+                    {
                         let _ = fs::remove_file(&path);
                         if dead_session {
                             if let Ok(binding) = checkpoint.session.parse::<SessionBinding>() {
-                                let _ = fs::remove_file(self.role_file_for(&binding));
-                                let _ = fs::remove_file(self.role_lock_for(&binding));
-                                let _ = fs::remove_file(self.lock_for(&binding));
-                                let _ = fs::remove_file(self.owner_for(&binding));
-                                let _ = fs::remove_file(self.owner_pid_for(&binding));
+                                self.remove_session_records(&binding);
                             }
                         }
                     }
@@ -796,6 +796,37 @@ impl PendingBridgeStore {
             }
         }
         Ok(())
+    }
+
+    fn expire_closed(&self, path: &Path, session: &str, dead_session: bool) {
+        let Ok(binding) = session.parse::<SessionBinding>() else {
+            let _ = fs::remove_file(path);
+            return;
+        };
+        let Some(lock) = self.try_lock(&binding) else {
+            return;
+        };
+        let still_expired = fs::read_to_string(path)
+            .ok()
+            .and_then(|encoded| serde_json::from_str::<StoredCheckpoint>(&encoded).ok())
+            .is_some_and(|current| current.closed)
+            && older_than(path, CLOSED_RETENTION);
+        if !still_expired {
+            return;
+        }
+        let _ = fs::remove_file(path);
+        drop(lock);
+        if dead_session {
+            self.remove_session_records(&binding);
+        }
+    }
+
+    fn remove_session_records(&self, binding: &SessionBinding) {
+        let _ = fs::remove_file(self.role_file_for(binding));
+        let _ = fs::remove_file(self.role_lock_for(binding));
+        let _ = fs::remove_file(self.lock_for(binding));
+        let _ = fs::remove_file(self.owner_for(binding));
+        let _ = fs::remove_file(self.owner_pid_for(binding));
     }
 
     pub(super) fn acquire_owner(
@@ -907,17 +938,27 @@ impl PendingBridgeStore {
     }
 
     fn lock(&self, binding: &SessionBinding) -> Result<PendingBridgeLock> {
+        let file = self.open_lock(binding)?;
+        file.lock()
+            .context("failed to lock pending bridge checkpoint")?;
+        Ok(PendingBridgeLock { file })
+    }
+
+    fn try_lock(&self, binding: &SessionBinding) -> Option<PendingBridgeLock> {
+        let file = self.open_lock(binding).ok()?;
+        file.try_lock().ok()?;
+        Some(PendingBridgeLock { file })
+    }
+
+    fn open_lock(&self, binding: &SessionBinding) -> Result<std::fs::File> {
         fs::create_dir_all(&self.dir).context("failed to create pending bridge directory")?;
-        let file = OpenOptions::new()
+        OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(self.lock_for(binding))
-            .context("failed to open pending bridge lock")?;
-        file.lock()
-            .context("failed to lock pending bridge checkpoint")?;
-        Ok(PendingBridgeLock { file })
+            .context("failed to open pending bridge lock")
     }
 
     fn file_for(&self, binding: &SessionBinding) -> PathBuf {
@@ -3993,6 +4034,98 @@ mod tests {
             store.pending_round(&dead).unwrap().is_none(),
             "a closed checkpoint is not a pending round"
         );
+    }
+
+    fn closed_round(store: &PendingBridgeStore, token: &str) -> SessionBinding {
+        let binding = SessionBinding::from_str(token).unwrap();
+        store
+            .start(
+                &binding,
+                "QOL_BRIDGE_DONE_old",
+                "v1:fake:8:800",
+                false,
+                None,
+            )
+            .unwrap();
+        store
+            .observe(&binding, "QOL_BRIDGE_DONE_old", true)
+            .unwrap();
+        store
+            .close_checkpoints_for_session(&binding.token())
+            .unwrap();
+        binding
+    }
+
+    #[test]
+    fn a_round_closed_past_the_retention_window_is_dropped_by_every_sweep() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let expired = closed_round(&store, "v1:fake:1:100");
+        let recent = closed_round(&store, "v1:fake:2:200");
+        let open = SessionBinding::from_str("v1:fake:3:300").unwrap();
+        store
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:8:800", false, None)
+            .unwrap();
+        store.set_role(&expired, Role::Lane).unwrap();
+        age_file(&store.file_for(&expired), CLOSED_RETENTION);
+        age_file(&store.file_for(&open), CLOSED_RETENTION * 2);
+
+        assert_eq!(store.pending_rounds().unwrap().len(), 1);
+
+        assert!(!store.file_for(&expired).exists());
+        assert!(
+            store.role_file_for(&expired).exists(),
+            "without a live list the session may still run, so its role record stays"
+        );
+        assert!(store.file_for(&recent).exists());
+        assert!(
+            store.file_for(&open).exists(),
+            "retention only drops closed rounds, never an open one however old"
+        );
+    }
+
+    #[test]
+    fn retain_live_drops_an_expired_dead_round_with_its_session_records() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let dead = closed_round(&store, "v1:fake:1:100");
+        let live = closed_round(&store, "v1:fake:2:200");
+        for binding in [&dead, &live] {
+            store.set_role(binding, Role::Lane).unwrap();
+            age_file(&store.file_for(binding), CLOSED_RETENTION);
+        }
+
+        store
+            .retain_live(&std::collections::HashSet::from([live.token()]))
+            .unwrap();
+
+        assert!(!store.file_for(&dead).exists());
+        assert!(!store.role_file_for(&dead).exists());
+        assert!(!store.lock_for(&dead).exists());
+        assert!(!store.file_for(&live).exists());
+        assert!(
+            store.role_file_for(&live).exists(),
+            "a live session keeps its role record after its old round expires"
+        );
+    }
+
+    #[test]
+    fn an_expired_round_whose_lock_is_held_waits_for_the_next_sweep() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = PendingBridgeStore::with_dir(root.path().to_path_buf());
+        let binding = closed_round(&store, "v1:fake:1:100");
+        age_file(&store.file_for(&binding), CLOSED_RETENTION);
+
+        let held = store.lock(&binding).unwrap();
+        store.pending_rounds().unwrap();
+        assert!(
+            store.file_for(&binding).exists(),
+            "a writer holding the lock may be reopening the round"
+        );
+
+        drop(held);
+        store.pending_rounds().unwrap();
+        assert!(!store.file_for(&binding).exists());
     }
 
     #[test]
