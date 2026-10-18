@@ -61,6 +61,26 @@ class CancelSupersededTests(unittest.TestCase):
         self.assertEqual([call.args for call in cancel.call_args_list], [("o/r", 10)])
         self.assertEqual(message, "cancelled 1 superseded run(s) for #185: [10]")
 
+    def test_a_failed_cancel_still_cancels_the_rest(self):
+        runs = {
+            "workflow_runs": [
+                run(10, f"gh-readonly-queue/main/pr-185-{OLD_BASE}"),
+                run(11, f"gh-readonly-queue/main/pr-185-{OLD_BASE}"),
+            ]
+        }
+
+        def cancel(repo, run_id):
+            if run_id == 10:
+                raise RuntimeError("run 10 already finished")
+
+        with (
+            mock.patch.object(csq, "gh_json", return_value=runs),
+            mock.patch.object(csq, "cancel", side_effect=cancel) as cancelled,
+        ):
+            message = csq.cancel_superseded("o/r", "5", f"gh-readonly-queue/main/pr-185-{NEW_BASE}", 20)
+        self.assertEqual([call.args[1] for call in cancelled.call_args_list], [10, 11])
+        self.assertEqual(message, "cancelled 1 superseded run(s) for #185: [11]; could not cancel [10]")
+
     def test_a_non_queue_ref_queries_nothing(self):
         with mock.patch.object(csq, "gh_json") as gh_json:
             self.assertEqual(csq.cancel_superseded("o/r", "5", "refs/heads/main", 20), "refs/heads/main is not a merge queue ref")

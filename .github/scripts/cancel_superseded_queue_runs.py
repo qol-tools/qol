@@ -39,10 +39,15 @@ def cancel_superseded(repo: str, workflow_id: str, ref: str, run_id: int) -> str
     runs = gh_json([f"repos/{repo}/actions/workflows/{workflow_id}/runs?event=merge_group&per_page=50"])[
         "workflow_runs"
     ]
-    doomed = superseded(runs, pr, run_id)
-    for old in doomed:
-        cancel(repo, old)
-    return f"cancelled {len(doomed)} superseded run(s) for #{pr}: {doomed}"
+    cancelled, failed = [], []
+    for old in superseded(runs, pr, run_id):
+        try:
+            cancel(repo, old)
+            cancelled.append(old)
+        except RuntimeError:
+            failed.append(old)
+    message = f"cancelled {len(cancelled)} superseded run(s) for #{pr}: {cancelled}"
+    return f"{message}; could not cancel {failed}" if failed else message
 
 
 def main() -> int:
