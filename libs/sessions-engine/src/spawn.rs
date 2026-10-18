@@ -1991,6 +1991,7 @@ pub(super) fn spawn_detached(
         assignment,
         resume,
         park,
+        &[],
     )
 }
 
@@ -2015,6 +2016,7 @@ pub(super) fn launch_detached(
     assignment: Option<&AgentAssignment>,
     resume: Option<&[String]>,
     park: bool,
+    env: &[(String, String)],
 ) -> Result<DetachedLaunch> {
     if resume.is_none() {
         require_model_for_launch(model)?;
@@ -2050,6 +2052,7 @@ pub(super) fn launch_detached(
     launch
         .env
         .push(qol_terminal_sessions::parking::launch_env(park));
+    launch.env.extend(env.iter().cloned());
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
