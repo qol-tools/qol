@@ -78,15 +78,23 @@ pub fn unreached(
     pending
         .iter()
         .filter(|knock| {
-            let live = panes.iter().any(|pane| {
-                pane.spawn_identity
-                    .as_ref()
-                    .is_some_and(|identity| identity.key.as_str() == knock.recipient_key)
-            });
-            !live && tried.get(&knock.recipient_key) != Some(&knock.text)
+            !has_terminal(panes, &knock.recipient_key)
+                && tried.get(&knock.recipient_key) != Some(&knock.text)
         })
         .cloned()
         .collect()
+}
+
+fn forget_reached(tried: &mut HashMap<String, String>, panes: &[Pane]) {
+    tried.retain(|key, _| !has_terminal(panes, key));
+}
+
+fn has_terminal(panes: &[Pane], key: &str) -> bool {
+    panes.iter().any(|pane| {
+        pane.spawn_identity
+            .as_ref()
+            .is_some_and(|identity| identity.key.as_str() == key)
+    })
 }
 
 pub struct Courier {
@@ -152,8 +160,7 @@ impl Courier {
 
 impl Courier {
     fn wake_unreached(&mut self, pending: &[PendingKnock], panes: &[Pane]) {
-        self.tried
-            .retain(|key, _| pending.iter().any(|knock| &knock.recipient_key == key));
+        forget_reached(&mut self.tried, panes);
         let unreached = unreached(pending, panes, &self.tried);
         if unreached.is_empty() {
             return;
@@ -166,11 +173,11 @@ impl Courier {
             }
         };
         for knock in unreached {
-            self.tried
-                .insert(knock.recipient_key.clone(), knock.text.clone());
             if crate::park::wakeable(&store, &knock.recipient_key).is_none() {
                 continue;
             }
+            self.tried
+                .insert(knock.recipient_key.clone(), knock.text.clone());
             spawn_wake(&knock.recipient_key);
         }
     }
@@ -355,6 +362,16 @@ mod tests {
         assert_eq!(keys(&tried), ["closed"]);
         tried.insert("closed".to_owned(), "an older knock".to_owned());
         assert_eq!(keys(&tried), ["closed"]);
+    }
+
+    #[test]
+    fn a_wake_mark_outlives_its_claimed_knock_until_a_terminal_opens() {
+        let pending = [knock("closed", 1)];
+        let mut tried = HashMap::from([("closed".to_owned(), pending[0].text.clone())]);
+        forget_reached(&mut tried, &[pane(1, Some("other"))]);
+        assert!(unreached(&pending, &[], &tried).is_empty());
+        forget_reached(&mut tried, &[pane(2, Some("closed"))]);
+        assert!(tried.is_empty());
     }
 
     #[test]
