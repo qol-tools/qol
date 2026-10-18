@@ -208,8 +208,9 @@ fn neutral_cwd() -> Result<PathBuf> {
 }
 
 // The tray starts the switchboard with its own login-session PATH, which lacks what the
-// user's shell rc adds (node from nvm, for one). Sessions forked from the switchboard
-// inherit the PATH of its sessions server, so that server gets the user's shell PATH.
+// user's shell rc adds (node from nvm, for one). The switchboard's hooks run node, and
+// sessions forked from it inherit the PATH of its sessions server, so both claude and
+// that server get the user's shell PATH.
 fn login_shell_path() -> Option<String> {
     let shell = std::env::var_os(SHELL_ENV)?;
     let mut command = Command::new(shell);
@@ -220,6 +221,13 @@ fn login_shell_path() -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn claude_env(plan: &LaunchPlan) -> Vec<(String, String)> {
+    plan.path
+        .iter()
+        .map(|path| ("PATH".to_owned(), path.clone()))
+        .collect()
 }
 
 fn path_from_env(env: &str) -> Option<String> {
@@ -449,6 +457,7 @@ pub(super) fn launch(
         assignment.as_ref(),
         None,
         false,
+        &claude_env(plan),
     )?;
     Ok(SwitchboardOutcome {
         session: launched.session,
@@ -538,6 +547,7 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
             drop(guard);
             let ran = Command::new(SWITCHBOARD_TOOL)
                 .args(&argv)
+                .envs(claude_env(&plan))
                 .current_dir(&plan.cwd)
                 .status()
                 .with_context(|| format!("failed to run {SWITCHBOARD_TOOL}"));
@@ -690,6 +700,19 @@ mod tests {
             config["mcpServers"]["sessions"]["env"],
             serde_json::json!({"PATH": "/home/u/.nvm/bin:/usr/bin"})
         );
+    }
+
+    #[test]
+    fn claude_gets_the_login_shell_path_so_its_hooks_find_node() {
+        let with_path = LaunchPlan {
+            path: Some("/home/u/.nvm/bin:/usr/bin".to_owned()),
+            ..plan(&[])
+        };
+        assert_eq!(
+            claude_env(&with_path),
+            [("PATH".to_owned(), "/home/u/.nvm/bin:/usr/bin".to_owned())]
+        );
+        assert!(claude_env(&plan(&[])).is_empty());
     }
 
     #[test]
