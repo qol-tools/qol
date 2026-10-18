@@ -666,3 +666,46 @@ fn clips_saved_under_unsalted_ids_still_refresh() {
     }
     assert_eq!(history.live(NOW + 1, retention()).unwrap().len(), 1);
 }
+
+#[test]
+fn a_copied_file_never_refreshes_a_text_clip_of_its_path() {
+    let temp = TempStore::new("file-vs-text");
+    let history = temp.history();
+    history
+        .store()
+        .save(&[clip("/home/me/notes", NOW, false)])
+        .unwrap();
+    let file = Capture {
+        content: Content::Files(vec!["/home/me/notes".to_string()]),
+        app: None,
+        sensitive: false,
+    };
+    let stored = added(history.record(file, NOW + 1, retention(), KEEP).unwrap());
+    assert_eq!(stored.kind, ClipKind::File);
+    assert_eq!(history.live(NOW + 1, retention()).unwrap().len(), 2);
+}
+
+#[test]
+fn held_secrets_are_capped_by_count_and_bytes_oldest_first() {
+    let temp = TempStore::new("secret-cap");
+    let history = temp.history();
+    for at in 0..MAX_HELD_SECRETS as u64 + 5 {
+        history
+            .record(secret(&format!("hunter{at}")), NOW + at, retention(), KEEP)
+            .unwrap();
+    }
+    let live = history.live(NOW + 100, retention()).unwrap();
+    assert_eq!(live.len(), MAX_HELD_SECRETS);
+    assert!(live.iter().all(|clip| clip.copied_at_ms >= NOW + 5));
+
+    let big = "x".repeat(MAX_TEXT_BYTES);
+    for at in 0..5 {
+        history
+            .record(secret(&big), NOW + 200 + at, retention(), KEEP)
+            .unwrap();
+    }
+    let live = history.live(NOW + 300, retention()).unwrap();
+    let bytes: u64 = live.iter().map(|clip| clip.bytes).sum();
+    assert!(bytes <= MAX_HELD_SECRET_BYTES as u64, "{bytes}");
+    assert!(live.iter().any(|clip| clip.copied_at_ms == NOW + 204));
+}

@@ -27,7 +27,7 @@ mod tests {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         assert!(manifest.capabilities.doctor);
-        for action in ["open", "copy", "pin", "forget", "settings"] {
+        for action in ["open", "copy", "pin", "forget", "clear", "settings"] {
             assert_eq!(
                 manifest.catalog_runtime_args(action),
                 Some(vec![action.to_string()]),

@@ -19,6 +19,7 @@ pub fn handle(state: &mut Daemon, request: &DaemonRequest) -> ReadResult<()> {
         "copy" => copy(state, &request.input),
         "pin" => pin(state, &request.input),
         "forget" => forget(state, &request.input),
+        "clear" => clear(state, &request.input),
         "open" => crate::app::host::open_in_launcher().map(|()| json!({ "opened": true })),
         "settings" => crate::app::host::open_settings().map(|()| json!({ "opened": true })),
         _ => return ReadResult::Fallback,
@@ -100,6 +101,15 @@ fn forget(state: &Daemon, input: &Value) -> Result<Value> {
     let id = id_field(input)?;
     state.history().forget(id)?;
     Ok(json!({ "forgot": id }))
+}
+
+fn clear(state: &Daemon, input: &Value) -> Result<Value> {
+    let all = input
+        .get("all")
+        .and_then(Value::as_bool)
+        .unwrap_or_default();
+    let cleared = state.history().clear(all)?;
+    Ok(json!({ "cleared": cleared }))
 }
 
 fn live_clip(state: &Daemon, input: &Value) -> Result<Clip> {

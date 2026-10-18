@@ -32,6 +32,10 @@ args = ["pin"]
 label = "Forget"
 args = ["forget"]
 
+[action.clear]
+label = "Clear"
+args = ["clear"]
+
 [action.settings]
 label = "Settings"
 kind = "settings"

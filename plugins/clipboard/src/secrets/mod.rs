@@ -18,7 +18,8 @@ pub fn flagged_by_source<S: AsRef<str>>(formats: &[S]) -> bool {
 
 // Browser password managers copy through navigator.clipboard and set no source marker, so a
 // single token shaped like a generated password counts as a secret too: mixed case plus a digit
-// or symbol, with both or at least 12 characters, and not a path, address or file name.
+// or symbol, with both or at least 12 characters, and not a path, address, file name or
+// identifier.
 pub fn looks_like_password(text: &str) -> bool {
     let text = text.trim();
     let chars = text.chars().count();
@@ -28,6 +29,7 @@ pub fn looks_like_password(text: &str) -> bool {
         || text.starts_with(['/', '~', '.'])
         || looks_like_email(text)
         || has_file_extension(text)
+        || looks_like_identifier(text)
     {
         return false;
     }
@@ -49,6 +51,15 @@ fn looks_like_email(text: &str) -> bool {
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "@._%+-".contains(c))
+}
+
+// Names such as `Release-2024`, `Foo_Bar_2` or `MyClass_v2`: words joined by separators, each
+// letters then digits. Generated passwords interleave them or use other symbols.
+fn looks_like_identifier(text: &str) -> bool {
+    text.split(['-', '_', '.']).all(|word| {
+        let letters = word.trim_end_matches(|c: char| c.is_ascii_digit());
+        letters.chars().all(|c| c.is_ascii_alphabetic())
+    })
 }
 
 fn has_file_extension(text: &str) -> bool {
@@ -110,6 +121,11 @@ mod tests {
             ("ghp_A1b2C3d4E5f6G7h8I9j0", true),
             ("  vT9#qL2!mZx8\n", true),
             ("Windows11", false),
+            ("Release-2024", false),
+            ("Foo_Bar_2", false),
+            ("MyClass_v2", false),
+            ("HelloWorld2024", false),
+            ("feature-Clipboard-Secrets", false),
             ("hunter2", false),
             ("getElementById", false),
             ("3f2a9c1e7b4d", false),

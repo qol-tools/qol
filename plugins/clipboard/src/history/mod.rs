@@ -17,6 +17,8 @@ pub use store::{Store, Unread};
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_UNPINNED_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 8192 * 8192;
+const MAX_HELD_SECRETS: usize = 32;
+const MAX_HELD_SECRET_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clip {
@@ -121,7 +123,7 @@ impl History {
         };
         if clip.is_secret() {
             self.held_secrets(now, retention);
-            self.secrets().push(clip.clone());
+            self.hold_secret(clip.clone());
             return Ok(Recorded::Added(clip));
         }
         let mut clips = self.store.load()?;
@@ -246,6 +248,15 @@ impl History {
         self.secrets.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn hold_secret(&self, clip: Clip) {
+        let mut held = self.secrets();
+        held.push(clip);
+        let bytes = |held: &[Clip]| held.iter().map(|clip| clip.bytes as usize).sum::<usize>();
+        while held.len() > MAX_HELD_SECRETS || bytes(&held) > MAX_HELD_SECRET_BYTES {
+            held.remove(0);
+        }
+    }
+
     fn held_secrets(&self, now: u64, retention: Retention) -> (Vec<Clip>, usize) {
         let mut held = self.secrets();
         let before = held.len();
@@ -326,9 +337,11 @@ fn unread_retained(unread: &Unread, now: u64, retention: Retention) -> bool {
     unread.pinned || within_age(unread.copied_at_ms, now, retention)
 }
 
-// Ids hashed before the salt existed still refresh the clip of the same text.
+// Ids hashed before the salt existed still refresh the clip of the same text, and a copied
+// file never refreshes a text clip that spells its path.
 fn same_text(existing: &Clip, clip: &Clip) -> bool {
     !existing.is_secret()
+        && (existing.kind == ClipKind::File) == (clip.kind == ClipKind::File)
         && existing.image.is_none()
         && clip.image.is_none()
         && existing.text == clip.text
