@@ -54,12 +54,19 @@ fn looks_like_email(text: &str) -> bool {
 }
 
 // Names such as `Release-2024`, `Foo_Bar_2` or `MyClass_v2`: words joined by separators, each
-// letters then digits. Generated passwords interleave them or use other symbols.
+// letters then digits. Generated passwords interleave them or use other symbols, and
+// passphrases such as `Correct-Horse-Battery-Staple` capitalise three or more words.
 fn looks_like_identifier(text: &str) -> bool {
-    text.split(['-', '_', '.']).all(|word| {
-        let letters = word.trim_end_matches(|c: char| c.is_ascii_digit());
-        letters.chars().all(|c| c.is_ascii_alphabetic())
-    })
+    let words: Vec<&str> = text.split(['-', '_', '.']).collect();
+    let capitalised = words
+        .iter()
+        .filter(|word| word.starts_with(|c: char| c.is_uppercase()))
+        .count();
+    capitalised < 3
+        && words.iter().all(|word| {
+            let letters = word.trim_end_matches(|c: char| c.is_ascii_digit());
+            letters.chars().all(|c| c.is_ascii_alphabetic())
+        })
 }
 
 fn has_file_extension(text: &str) -> bool {
@@ -120,6 +127,7 @@ mod tests {
             ("Xy7@kq.Lm!", true),
             ("ghp_A1b2C3d4E5f6G7h8I9j0", true),
             ("  vT9#qL2!mZx8\n", true),
+            ("Correct-Horse-Battery-Staple", true),
             ("Windows11", false),
             ("Release-2024", false),
             ("Foo_Bar_2", false),
