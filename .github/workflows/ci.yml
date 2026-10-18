@@ -165,7 +165,8 @@ jobs:
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
-    # A run that reuses a verdict has nothing left to lint or test. A run
+    # A run that reuses a verdict has nothing left to lint or test. Release
+    # binaries build in the release build job below, beside this one. A run
     # outside a pull request skips the review wait, and a skipped ancestor
     # skips every job below it unless the job tests plan's result itself.
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' }}
@@ -261,14 +262,11 @@ jobs:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
-      # Neither a pull request nor a queue run builds release binaries, so
-      # this check is their proof that the release profile compiles. A queue
-      # release build never failed where this check passed, and Versioning
-      # builds and links every release binary after merge anyway. Only the
-      # build cache workflow saves the cache, and it runs the same check, so
-      # this one starts warm.
+      # A pull request run builds no release binaries, so this check is its
+      # proof that the release profile compiles. Only the build cache workflow
+      # saves the cache, and it runs the same check, so this one starts warm.
       - name: Release profile check
-        if: matrix.skip != 'true' && github.event_name != 'push'
+        if: matrix.skip != 'true' && github.event_name == 'pull_request'
         env:
           BUILD_ARGS: ${{ matrix.build_args }}
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
@@ -380,6 +378,50 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
+  # Pull requests only check the release profile. Every queue entry builds it
+  # here in parallel with lint + test, so the build no longer waits behind
+  # clippy and the tests. A push to main never runs it: the build cache
+  # workflow already compiles the release build there, and a second job saving
+  # the same cache key would drop one job's artifacts.
+  release-build:
+    name: release build (${{ matrix.os }})
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}
+    env:
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            build_args: ${{ needs.plan.outputs.ubuntu_build }}
+            skip: ${{ needs.plan.outputs.ubuntu_skip }}
+          - os: macos-latest
+            build_args: ${{ needs.plan.outputs.macos_build }}
+            skip: ${{ needs.plan.outputs.macos_skip }}
+          - os: windows-latest
+            build_args: ${{ needs.plan.outputs.windows_build }}
+            skip: ${{ needs.plan.outputs.windows_skip }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: matrix.skip != 'true'
+
+      - uses: ./.github/actions/rust-setup
+        if: matrix.skip != 'true'
+        with:
+          cache-key: ci-${{ matrix.os }}
+
+      - name: Release profile build
+        if: matrix.skip != 'true'
+        env:
+          BUILD_ARGS: ${{ matrix.build_args }}
+        run: cargo build --release --locked $BUILD_ARGS
+
   # Every publish job builds the registry tool after merge, on a runner without
   # the Linux system libraries the jobs above install. Building it the same way
   # here fails a change that pulls a system library into the tool before it can
@@ -411,7 +453,7 @@ jobs:
   # skipped run stays skipped for Versioning.
   gate:
     name: merge gate
-    needs: [plan, repository-lint, check, process-windows, registry-tool]
+    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -422,14 +464,16 @@ jobs:
           LINT: ${{ needs.repository-lint.result }}
           REUSED: ${{ needs.plan.outputs.reused }}
           CHECK: ${{ needs.check.result }}
+          BUILD: ${{ needs.release-build.result }}
           RESULTS: ${{ join(needs.*.result, ' ') }}
-        # A queue run that skipped its tests would land an
+        # A queue run that skipped its tests or release builds would land an
         # untested commit that Versioning then refuses to release.
         run: |
           echo "plan: $PLAN, all: $RESULTS"
           [ "$PLAN" = success ] || exit 1
           [ "$LINT" = success ] || exit 1
           if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
+            [ "$BUILD" = success ] || exit 1
             [ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1
           fi
           case " $RESULTS " in
@@ -463,7 +507,7 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, repository-lint, check, process-windows, registry-tool]
+    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

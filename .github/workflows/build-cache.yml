@@ -5,8 +5,8 @@ name: build cache
 # Without this workflow a dependency, toolchain or profile change, or an
 # evicted entry, leaves every later run compiling each third-party crate
 # (17 minutes for the macOS queue build). It runs the compilations lint + test
-# restores, once per cache key, and stays out of the tests workflow so
-# Versioning never waits for it.
+# and the release build restore, once per cache key, and stays out of the tests
+# workflow so Versioning never waits for it.
 
 on:
   push:
@@ -83,7 +83,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9.143
 
-      - name: Compile what lint + test restores
+      - name: Compile what lint + test and the release build restore
         if: steps.rust_setup.outputs.build-cache-hit != 'true'
         env:
           CLIPPY_ARGS: ${{ steps.workspace.outputs[format('{0}_clippy', matrix.plan)] }}
@@ -92,4 +92,5 @@ jobs:
         run: |
           cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
           cargo check --release --locked $BUILD_ARGS
+          cargo build --release --locked $BUILD_ARGS
           cargo nextest run --locked $TEST_ARGS --no-run
