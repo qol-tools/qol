@@ -322,9 +322,43 @@ fn runtime_entry(value: &Value) -> Option<CliRuntimeState> {
                 _ => CliRuntimeState::Working,
             })
         }
+        Some("user") if is_local_command(value) => None,
+        Some("attachment") if is_hook_output(value) => None,
         Some("user" | "attachment") => Some(CliRuntimeState::Working),
         _ => None,
     }
+}
+
+const LOCAL_COMMAND_TAGS: [&str; 3] = [
+    "<local-command-caveat>",
+    "<command-name>",
+    "<local-command-stdout>",
+];
+
+fn is_local_command(value: &Value) -> bool {
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"));
+    let text = match content {
+        Some(Value::String(text)) => Some(text.as_str()),
+        Some(Value::Array(blocks)) => blocks
+            .first()
+            .and_then(|block| block.get("text"))
+            .and_then(Value::as_str),
+        _ => None,
+    };
+    text.is_some_and(|text| {
+        let text = text.trim_start();
+        LOCAL_COMMAND_TAGS.iter().any(|tag| text.starts_with(tag))
+    })
+}
+
+fn is_hook_output(value: &Value) -> bool {
+    value
+        .get("attachment")
+        .and_then(|attachment| attachment.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind.starts_with("hook_"))
 }
 
 fn is_interrupt_note(value: &Value) -> bool {
@@ -502,6 +536,74 @@ mod runtime_regressions {
         for text in ["", "{partial", "invalid\n", "\n\n"] {
             std::fs::write(&path, text).unwrap();
             assert_eq!(tail_runtime(&path), CliRuntimeState::Unknown, "{text}");
+        }
+    }
+
+    #[test]
+    fn hook_output_and_local_commands_leave_the_turn_state_as_it_was() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let ready = r#"{"type":"system","subtype":"turn_duration"}"#;
+        let working = r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#;
+        let session_start_hooks = [
+            r#"{"type":"attachment","attachment":{"type":"hook_success"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"hook_system_message"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"hook_additional_context"}}"#,
+        ]
+        .join("\n");
+        let local_command = [
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: run directly</local-command-caveat>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/reload-plugins</command-name>\n<command-message>reload-plugins</command-message>"}}"#,
+            r#"{"type":"system","subtype":"local_command","content":"<local-command-stdout>Reloaded</local-command-stdout>"}"#,
+        ]
+        .join("\n");
+        let older_local_command = [
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<command-name>/model</command-name>"}]}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model</local-command-stdout>"}}"#,
+        ]
+        .join("\n");
+        for (events, expected) in [
+            (session_start_hooks.clone(), CliRuntimeState::Unknown),
+            (
+                format!("{session_start_hooks}\n{local_command}"),
+                CliRuntimeState::Unknown,
+            ),
+            (format!("{ready}\n{local_command}"), CliRuntimeState::Ready),
+            (
+                format!("{ready}\n{older_local_command}"),
+                CliRuntimeState::Ready,
+            ),
+            (
+                format!("{ready}\n{session_start_hooks}"),
+                CliRuntimeState::Ready,
+            ),
+            (
+                format!("{working}\n{local_command}"),
+                CliRuntimeState::Working,
+            ),
+            (
+                format!("{working}\n{session_start_hooks}"),
+                CliRuntimeState::Working,
+            ),
+        ] {
+            std::fs::write(&path, format!("{events}\n{{\"type\":\"cost-state\"}}\n")).unwrap();
+            assert_eq!(tail_runtime(&path), expected, "{events}");
+        }
+    }
+
+    #[test]
+    fn prompts_skill_commands_and_other_attachments_still_start_a_turn() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let ready = r#"{"type":"system","subtype":"turn_duration"}"#;
+        for entry in [
+            r#"{"type":"user","message":{"role":"user","content":"fix the bug"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<command-message>qol-memory</command-message>\n<command-name>/qol-memory</command-name>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"queued_command"}}"#,
+        ] {
+            std::fs::write(&path, format!("{ready}\n{entry}\n")).unwrap();
+            assert_eq!(tail_runtime(&path), CliRuntimeState::Working, "{entry}");
         }
     }
 }
