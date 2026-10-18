@@ -487,6 +487,7 @@ fn session() -> SessionFacts {
         cwd: "/work/proj".to_owned(),
         title: "proj".to_owned(),
         at_prompt: false,
+        focused: false,
         reported_cmd: Some("kimi".to_owned()),
         foreground_basenames: vec!["zsh".to_owned(), "kimi-code".to_owned()],
         foreground_pids: vec![22],

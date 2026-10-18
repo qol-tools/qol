@@ -100,6 +100,7 @@ mod tests {
             cwd: "/work/project".to_owned(),
             title: "Terminal".to_owned(),
             at_prompt,
+            focused: false,
             reported_cmd: None,
             foreground_basenames: vec!["bash".to_owned()],
             foreground_pids: Vec::new(),

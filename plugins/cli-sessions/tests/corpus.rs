@@ -40,6 +40,7 @@ fn classify_frame(meta: &Meta, screen: &str) -> Status {
         cwd: String::new(),
         title: meta.title.clone(),
         at_prompt: meta.at_prompt,
+        focused: false,
         reported_cmd: None,
         foreground_basenames: meta.foreground_basenames.clone(),
         foreground_pids: vec![],

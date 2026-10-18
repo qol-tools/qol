@@ -14,6 +14,7 @@ fn pi_pane() -> Pane {
         cwd: "/a/proj".into(),
         title: "\u{03C0} - proj".into(),
         at_prompt: false,
+        focused: false,
         reported_cmd: Some("pi".into()),
         foreground_basenames: vec!["pi".into()],
         foreground_pids: vec![],

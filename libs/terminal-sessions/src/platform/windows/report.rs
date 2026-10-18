@@ -296,6 +296,7 @@ pub(super) fn session_facts(
         cwd,
         title: report.title.trim().to_string(),
         at_prompt,
+        focused: false,
         reported_cmd,
         foreground_basenames: basenames,
         foreground_pids: foreground,

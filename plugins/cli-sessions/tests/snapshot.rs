@@ -30,6 +30,7 @@ fn pane(window_id: u64, title: &str, fg: &[&str]) -> Pane {
         cwd: "/a/proj".into(),
         title: title.into(),
         at_prompt: false,
+        focused: false,
         reported_cmd: None,
         foreground_basenames: fg.iter().map(|s| s.to_string()).collect(),
         foreground_pids: vec![],

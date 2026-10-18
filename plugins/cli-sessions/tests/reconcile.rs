@@ -264,6 +264,7 @@ fn pane(window_id: u64, title: &str, at_prompt: bool, fg: &[&str], cmd: &str) ->
         cwd: "/a/proj".into(),
         title: title.into(),
         at_prompt,
+        focused: false,
         reported_cmd: Some(cmd.into()),
         foreground_basenames: fg.iter().map(|s| s.to_string()).collect(),
         foreground_pids: vec![],

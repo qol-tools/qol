@@ -644,6 +644,7 @@ mod tests {
             cwd: "/work".to_owned(),
             title: "Terminal".to_owned(),
             at_prompt: true,
+            focused: false,
             reported_cmd: None,
             foreground_basenames: vec![foreground.to_owned()],
             foreground_pids: Vec::new(),

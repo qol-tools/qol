@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 use serde::{Deserialize, Serialize};
 
+use crate::host::Pane;
 use crate::session::status::Status;
 use crate::session::tool::{is_generic, Tool};
 
@@ -92,6 +93,20 @@ pub fn summary_for(status: Status, tool: &Tool) -> String {
 #[derive(Default)]
 pub struct Registry {
     sessions: HashMap<SessionId, SessionState>,
+    focus: Focus,
+    focus_moves: u64,
+}
+
+/// Where keyboard focus stood when a discovery started; a newer move outdates it.
+#[derive(Clone, Copy)]
+pub struct FocusRead(u64);
+
+#[derive(Default)]
+enum Focus {
+    #[default]
+    Elsewhere,
+    Unread,
+    On(SessionId),
 }
 
 impl Registry {
@@ -139,6 +154,39 @@ impl Registry {
                 .as_ref()
                 .and_then(|key| counts.get(key).copied())
                 .unwrap_or_default();
+        }
+    }
+
+    /// Taken before a discovery starts, so its focus reading can be dated.
+    pub fn focus_read(&self) -> FocusRead {
+        FocusRead(self.focus_moves)
+    }
+
+    /// Records which terminal holds keyboard focus, unless focus moved after the
+    /// discovery that read `panes` had started.
+    pub fn observe_focus(&mut self, read: FocusRead, panes: &[Pane]) {
+        if read.0 != self.focus_moves {
+            return;
+        }
+        self.focus = panes
+            .iter()
+            .find(|pane| pane.focused)
+            .map_or(Focus::Elsewhere, |pane| Focus::On(pane.id.clone()));
+    }
+
+    /// Keyboard focus moved and no discovery has read where to yet.
+    pub fn focus_moved(&mut self) {
+        self.focus = Focus::Unread;
+        self.focus_moves += 1;
+    }
+
+    /// Whether a listed session holds keyboard focus. Unread focus counts as one, so the
+    /// panel keeps its colours until a discovery says focus went elsewhere.
+    pub fn session_holds_focus(&self) -> bool {
+        match &self.focus {
+            Focus::Elsewhere => false,
+            Focus::Unread => true,
+            Focus::On(id) => self.sessions.contains_key(id),
         }
     }
 
@@ -204,6 +252,52 @@ mod tests {
                 [9, 1, 3, 2].map(crate::host::kitty_session_id).to_vec(),
                 "{status:?}"
             );
+        }
+    }
+
+    #[test]
+    fn only_a_listed_session_or_unread_focus_holds_focus() {
+        let pane = |id: u64, focused: bool| Pane {
+            id: crate::host::kitty_session_id(id),
+            root_pid: id as i32,
+            cwd: String::new(),
+            title: String::new(),
+            at_prompt: false,
+            focused,
+            reported_cmd: None,
+            foreground_basenames: Vec::new(),
+            foreground_pids: Vec::new(),
+            capabilities: qol_terminal_sessions::SessionCapabilities::ALL,
+            spawn_identity: None,
+        };
+        let cases = [
+            (
+                vec![pane(1, true), pane(2, false)],
+                true,
+                "a listed session",
+            ),
+            (
+                vec![pane(1, false), pane(7, true)],
+                false,
+                "an unlisted terminal",
+            ),
+            (vec![pane(1, false)], false, "focus left the terminal"),
+        ];
+        for (panes, expected, note) in cases {
+            let mut registry = Registry::default();
+            assert!(!registry.session_holds_focus(), "{note}: starts elsewhere");
+            registry.upsert(state(1, Status::Working, false));
+            let started_before = registry.focus_read();
+            registry.focus_moved();
+            assert!(registry.session_holds_focus(), "{note}: unread");
+            registry.observe_focus(started_before, &panes);
+            assert!(
+                registry.session_holds_focus(),
+                "{note}: a discovery older than the move stays unread"
+            );
+            let read = registry.focus_read();
+            registry.observe_focus(read, &panes);
+            assert_eq!(registry.session_holds_focus(), expected, "{note}");
         }
     }
 

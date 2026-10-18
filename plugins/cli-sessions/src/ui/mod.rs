@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, WeakEntity, Window,
+    App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, Subscription,
+    WeakEntity, Window,
 };
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
@@ -25,6 +26,9 @@ use crate::ui::selection::Selection;
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
 
 static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// How long a terminal takes to report the focus the panel just gave up.
+const FOCUS_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
 
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
@@ -40,6 +44,7 @@ pub struct SessionsView {
     list_scroll: qol_gpui::scroll_list::SelectionScroll,
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
+    _activation: Subscription,
 }
 
 impl SessionsView {
@@ -48,9 +53,15 @@ impl SessionsView {
         host: Arc<dyn TerminalHost + Send + Sync>,
         corner: Corner,
         dismisser: SurfaceDismisser,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let title = dismisser.current_title();
+        let activation = cx.observe_window_activation(window, |view: &mut Self, window, cx| {
+            if !window.is_window_active() {
+                view.read_focus_after_leaving(cx);
+            }
+        });
         Self {
             registry,
             host,
@@ -65,7 +76,31 @@ impl SessionsView {
             nav_guard: qol_gpui::phantom_nav::PhantomNavGuard::new(),
             last_jumped: None,
             focus_handle: cx.focus_handle(),
+            _activation: activation,
         }
+    }
+
+    fn read_focus_after_leaving(&self, cx: &mut Context<Self>) {
+        let Ok(read) = self.registry.lock().map(|mut registry| {
+            registry.focus_moved();
+            registry.focus_read()
+        }) else {
+            return;
+        };
+        let registry = self.registry.clone();
+        let host = self.host.clone();
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.background_executor().timer(FOCUS_SETTLE).await;
+            cx.background_spawn(async move {
+                let panes = host.discover();
+                if let Ok(mut registry) = registry.lock() {
+                    registry.observe_focus(read, &panes);
+                }
+            })
+            .await;
+            let _ = view.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     pub fn rows(&self) -> Vec<crate::session::registry::SessionState> {

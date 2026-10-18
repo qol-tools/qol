@@ -199,6 +199,7 @@ mod tests {
             cwd: "/tmp".into(),
             title: "test".into(),
             at_prompt: false,
+            focused: false,
             reported_cmd: Some(command.into()),
             foreground_basenames: vec![command.into()],
             foreground_pids,

@@ -13,6 +13,7 @@ fn pane() -> Pane {
         cwd: "/a/proj".into(),
         title: "proj".into(),
         at_prompt: false,
+        focused: false,
         reported_cmd: Some("claude".into()),
         foreground_basenames: vec!["claude".into()],
         foreground_pids: vec![],
