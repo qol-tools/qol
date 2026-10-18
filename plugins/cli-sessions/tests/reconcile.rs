@@ -1668,6 +1668,42 @@ fn a_parked_pane_shows_parked_instead_of_your_turn_and_never_notifies() {
 }
 
 #[test]
+fn a_parked_pane_woken_in_its_kept_terminal_shows_working_until_its_turn_ends() {
+    let parked = tempfile::tempdir().unwrap();
+    write_park(parked.path(), 18, std::process::id());
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(18, "qol-monorepo", false, &["zsh", "codex"], "codex")],
+        screen: CODEX_WORKING_LINE.into(),
+    };
+    let mut seen = Vec::new();
+    for now in 100..=108 {
+        if now == 104 {
+            host.screen = CODEX_ANSWER_LIST.to_owned();
+        }
+        if now == 108 {
+            host.panes[0].title = "project | Ready | finished".into();
+        }
+        tick_with_caches(
+            &reg,
+            &host,
+            &interpreter(),
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+        seen.push(reg.lock().unwrap().sorted()[0].status);
+    }
+    assert!(
+        seen[..4].contains(&Status::Working),
+        "a woken parked turn reads working: {seen:?}"
+    );
+    assert_eq!(seen.last(), Some(&Status::Parked), "{seen:?}");
+}
+
+#[test]
 fn a_parked_session_without_a_pane_stays_listed_while_its_runner_lives() {
     let parked = tempfile::tempdir().unwrap();
     write_park(parked.path(), 17, std::process::id());

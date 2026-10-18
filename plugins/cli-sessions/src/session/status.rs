@@ -115,7 +115,7 @@ pub fn bridge_status(status: Status, bridged: bool, driving: bool) -> Status {
 }
 
 pub fn park_status(status: Status, parked: bool) -> Status {
-    if parked && status != Status::NeedsYou {
+    if parked && !matches!(status, Status::NeedsYou | Status::Working | Status::Service) {
         return Status::Parked;
     }
     status
