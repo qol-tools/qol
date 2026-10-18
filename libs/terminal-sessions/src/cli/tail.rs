@@ -1,8 +1,57 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
+
+use super::CliRuntimeState;
 
 const REVERSE_READ_CHUNK: u64 = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileStamp {
+    modified: Option<SystemTime>,
+    length: u64,
+}
+
+impl FileStamp {
+    pub(crate) fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            modified: metadata.modified().ok(),
+            length: metadata.len(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RuntimeTail {
+    known: Mutex<HashMap<PathBuf, (FileStamp, CliRuntimeState)>>,
+}
+
+impl RuntimeTail {
+    pub(super) fn latest(
+        &self,
+        path: &Path,
+        read: impl FnOnce(&Path) -> CliRuntimeState,
+    ) -> CliRuntimeState {
+        let Some(stamp) = fs::metadata(path)
+            .ok()
+            .map(|metadata| FileStamp::of(&metadata))
+        else {
+            return read(path);
+        };
+        let mut known = self.known.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some((known_stamp, runtime)) = known.get(path) {
+            if *known_stamp == stamp {
+                return *runtime;
+            }
+        }
+        let runtime = read(path);
+        known.insert(path.to_path_buf(), (stamp, runtime));
+        runtime
+    }
+}
 
 pub(super) fn complete_length(path: &Path) -> Option<u64> {
     let mut file = fs::File::open(path).ok()?;
@@ -12,15 +61,15 @@ pub(super) fn complete_length(path: &Path) -> Option<u64> {
 
 pub(super) fn latest_runtime(
     path: &Path,
-    classify: impl Fn(&serde_json::Value) -> Option<super::CliRuntimeState>,
-) -> super::CliRuntimeState {
+    classify: impl Fn(&serde_json::Value) -> Option<CliRuntimeState>,
+) -> CliRuntimeState {
     runtime_from_complete_lines(path, classify).unwrap_or_default()
 }
 
 fn runtime_from_complete_lines(
     path: &Path,
-    classify: impl Fn(&serde_json::Value) -> Option<super::CliRuntimeState>,
-) -> Option<super::CliRuntimeState> {
+    classify: impl Fn(&serde_json::Value) -> Option<CliRuntimeState>,
+) -> Option<CliRuntimeState> {
     let mut file = fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
     let mut cursor = last_byte_position(&mut file, length, b'\n')?;
@@ -141,5 +190,49 @@ mod tests {
             });
             assert_eq!(actual, CliRuntimeState::Ready, "padding={size}");
         }
+    }
+
+    #[test]
+    fn the_runtime_tail_rereads_a_transcript_only_after_it_changes() {
+        use crate::cli::CliRuntimeState;
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("turns.jsonl");
+        std::fs::write(&path, "{}\n").unwrap();
+        let tail = super::RuntimeTail::default();
+        let reads = std::cell::Cell::new(0);
+        let read = |state: CliRuntimeState| {
+            let reads = &reads;
+            move |_: &std::path::Path| {
+                reads.set(reads.get() + 1);
+                state
+            }
+        };
+        assert_eq!(
+            tail.latest(&path, read(CliRuntimeState::Working)),
+            CliRuntimeState::Working
+        );
+        assert_eq!(
+            tail.latest(&path, read(CliRuntimeState::Ready)),
+            CliRuntimeState::Working
+        );
+        assert_eq!(reads.get(), 1, "an unchanged transcript is not read again");
+
+        std::fs::write(&path, "{}\n{}\n").unwrap();
+        assert_eq!(
+            tail.latest(&path, read(CliRuntimeState::Ready)),
+            CliRuntimeState::Ready
+        );
+        assert_eq!(reads.get(), 2);
+
+        let missing = root.path().join("missing.jsonl");
+        assert_eq!(
+            tail.latest(&missing, read(CliRuntimeState::Unknown)),
+            CliRuntimeState::Unknown
+        );
+        assert_eq!(
+            tail.latest(&missing, read(CliRuntimeState::Unknown)),
+            CliRuntimeState::Unknown
+        );
+        assert_eq!(reads.get(), 4, "a missing transcript is never cached");
     }
 }

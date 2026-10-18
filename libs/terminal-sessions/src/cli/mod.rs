@@ -7,7 +7,7 @@ pub mod launch_flags;
 mod model;
 mod screen;
 mod subscription;
-mod tail;
+pub(crate) mod tail;
 
 use std::sync::Arc;
 

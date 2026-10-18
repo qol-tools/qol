@@ -29,6 +29,7 @@ pub(super) struct CodexMetadata {
 pub(super) struct CodexMetadataResolver {
     environment: Arc<dyn CodexEnvironment>,
     cache: Mutex<CodexCache>,
+    runtime_tail: tail::RuntimeTail,
 }
 
 #[derive(Default)]
@@ -59,6 +60,7 @@ impl CodexMetadataResolver {
         Self {
             environment,
             cache: Mutex::new(CodexCache::default()),
+            runtime_tail: tail::RuntimeTail::default(),
         }
     }
 
@@ -91,7 +93,7 @@ impl CodexMetadataResolver {
             has_activity: title_activity(&session.title).or_else(|| activity.combined()),
             runtime: rollout
                 .as_deref()
-                .map(tail_runtime)
+                .map(|path| self.runtime_tail.latest(path, tail_runtime))
                 .unwrap_or_else(|| title_runtime(&session.title).unwrap_or_default()),
             activity,
         }

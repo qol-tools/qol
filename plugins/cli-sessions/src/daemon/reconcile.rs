@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use qol_sessions_engine::attention::{AttentionRow, AttentionSnapshot, AttentionState};
+use qol_terminal_sessions::bridge::LiveBridgeReader;
 use qol_terminal_sessions::cli::generic_tool;
 use qol_terminal_sessions::cli::{
     CliRuntimeState, CliSessionDescriptor, CliSessionInterpreter, CliSessionSubscription,
@@ -34,6 +35,7 @@ pub struct ReconcileCaches {
     branch: git::BranchCache,
     persisted: Option<(std::path::PathBuf, Vec<SessionState>)>,
     screens: HashMap<SessionId, ScreenCache>,
+    bridges: LiveBridgeReader,
     parked_dir: Option<std::path::PathBuf>,
     messaging: Option<Messaging>,
 }
@@ -188,7 +190,7 @@ pub fn tick_with_caches(
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
     let panes = host.discover();
-    let bridges = live_bridge_sessions();
+    let bridges = live_bridge_sessions(&mut caches.bridges);
     let parked = live_parked_sessions(caches.parked_dir.as_deref());
     let closing = closing_sessions(caches.parked_dir.as_deref());
     #[cfg(debug_assertions)]
@@ -933,9 +935,11 @@ fn show_detached_parks(
     }
 }
 
-fn live_bridge_sessions() -> qol_terminal_sessions::bridge::LiveBridges {
+fn live_bridge_sessions(
+    reader: &mut LiveBridgeReader,
+) -> qol_terminal_sessions::bridge::LiveBridges {
     qol_terminal_sessions::bridge::checkpoint_dir()
-        .map(|dir| qol_terminal_sessions::bridge::live_sessions(&dir))
+        .map(|dir| reader.read(&dir))
         .unwrap_or_default()
 }
 
