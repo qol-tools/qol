@@ -519,6 +519,7 @@ pub fn watch_woken(
                         let _ = terminals.close(&woken);
                         record.state = ParkState::Finished;
                         record.report = Some(report);
+                        record.closed_at = Some(super::now_seconds());
                         break "closed";
                     }
                 }

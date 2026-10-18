@@ -721,6 +721,7 @@ mod tests {
             runtime_status: None,
             unread: 0,
             open_asks: 0,
+            park: None,
         }
     }
 

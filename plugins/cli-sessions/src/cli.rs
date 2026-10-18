@@ -209,7 +209,7 @@ where
                 ))
                 .detail("Parks the calling harness session on a long wait such as a pull request watcher.")
                 .detail("A detached CLI Sessions process runs the command, closes the calling terminal once its turn ends unless its harness reports it must stay open, resumes the conversation in a new tab when the command exits, and closes that tab once its turn ends.")
-                .detail("A fork launched with `qol sessions fork --park` and a brief, as the switchboard launches them, is watched from launch the same way when its tool can resume conversations: its tab closes once its first turn ends unless the user writes in it or it parks, and its final message is shown in a notification that reopens it.")
+                .detail("A fork launched with `qol sessions fork --park` and a brief is watched from launch the same way when its tool can resume conversations: its tab closes once its first turn ends unless the user writes in it or it parks, and its final message is shown in a notification that reopens it.")
                 .detail("Everything after `--` is the command, passed through verbatim.")
                 .output("Park JSON on stdout; diagnostics on stderr.")
                 .exit_behavior("Exits non-zero when the calling session cannot be resolved or resumed, or the runner cannot start.")

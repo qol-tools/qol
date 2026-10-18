@@ -295,6 +295,7 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         runtime_status: None,
         unread: 0,
         open_asks: 0,
+        park: None,
     }
 }
 
@@ -1218,6 +1219,7 @@ fn tick_refreshes_restored_identity_fields() {
         runtime_status: None,
         unread: 0,
         open_asks: 0,
+        park: None,
     }]);
     let host = FakeHost {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
@@ -1437,6 +1439,7 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         runtime_status: None,
         unread: 0,
         open_asks: 0,
+        park: None,
     }]);
     let mut caches = ReconcileCaches::default();
 
@@ -1555,6 +1558,7 @@ fn park_record(window_id: u64, runner_pid: u32) -> ParkRecord {
         detail: None,
         report: None,
         notified: false,
+        closed_at: None,
     }
 }
 
@@ -1758,6 +1762,136 @@ fn a_parked_session_without_a_pane_stays_listed_while_its_runner_lives() {
 }
 
 #[test]
+fn a_park_that_closed_its_tab_stays_listed_until_its_conversation_opens_again() {
+    let parked = tempfile::tempdir().unwrap();
+    let closed_tab = SessionBinding::new(kitty_session_id(21), i32::MAX)
+        .unwrap()
+        .token();
+    write_record(
+        parked.path(),
+        &ParkRecord {
+            external_id: "test-session".to_owned(),
+            session: closed_tab.clone(),
+            resumed_session: Some(closed_tab),
+            state: ParkState::Finished,
+            runner_pid: None,
+            report: Some("Waiting on my lane.".to_owned()),
+            notified: true,
+            closed_at: Some(70),
+            ..park_record(21, std::process::id())
+        },
+    );
+    write_record(
+        parked.path(),
+        &ParkRecord {
+            id: "park-kept-open".to_owned(),
+            external_id: "kept-open".to_owned(),
+            state: ParkState::Finished,
+            runner_pid: None,
+            notified: true,
+            ..park_record(22, std::process::id())
+        },
+    );
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![],
+        screen: String::new(),
+    };
+    let interpreter = fake_codex("reopened", true);
+    let mut tick_at = |host: &FakeHost, now: u64| {
+        tick_with_caches(
+            &reg,
+            host,
+            &interpreter,
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        )
+    };
+    host.panes = vec![pane(21, "reopened", false, &["zsh", "codex"], "codex")];
+    tick_at(&host, 99);
+    let stored: ParkRecord =
+        serde_json::from_str(&std::fs::read_to_string(parked.path().join("park-21.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        stored.closed_at,
+        Some(70),
+        "its closing tab is not a reopen"
+    );
+
+    host.panes.clear();
+    for now in 100..=101 {
+        assert!(tick_at(&host, now).is_empty());
+    }
+    let rows = reg.lock().unwrap().sorted();
+    assert_eq!(rows.len(), 1, "a park that kept its tab open is not parked");
+    assert_eq!(rows[0].id, kitty_session_id(21));
+    assert_eq!(rows[0].status, Status::Parked);
+    assert_eq!(rows[0].park.as_deref(), Some("park-21"));
+    assert_eq!(rows[0].last_activity, 70);
+    assert_eq!(rows[0].name.as_deref(), Some("watch pr"));
+
+    host.panes = vec![pane(23, "reopened", false, &["zsh", "codex"], "codex")];
+    tick_at(&host, 102);
+    let ids: Vec<_> = reg
+        .lock()
+        .unwrap()
+        .sorted()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(ids, [kitty_session_id(23)], "the reopened tab replaces it");
+    let stored: ParkRecord =
+        serde_json::from_str(&std::fs::read_to_string(parked.path().join("park-21.json")).unwrap())
+            .unwrap();
+    assert_eq!(stored.closed_at, None);
+
+    host.panes.clear();
+    tick_at(&host, 103);
+    assert!(
+        reg.lock().unwrap().sorted().is_empty(),
+        "closing the reopened tab does not park it again"
+    );
+}
+
+#[test]
+fn a_waiting_park_whose_conversation_is_open_elsewhere_is_not_listed_twice() {
+    let parked = tempfile::tempdir().unwrap();
+    write_record(
+        parked.path(),
+        &ParkRecord {
+            external_id: "test-session".to_owned(),
+            ..park_record(24, std::process::id())
+        },
+    );
+    let mut caches = ReconcileCaches::with_parked_dir(Some(parked.path().to_path_buf()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let host = FakeHost {
+        panes: vec![pane(25, "woken", false, &["zsh", "codex"], "codex")],
+        screen: String::new(),
+    };
+    tick_with_caches(
+        &reg,
+        &host,
+        &fake_codex("woken", true),
+        &NoServiceProbe,
+        100,
+        100,
+        &mut caches,
+    );
+    let ids: Vec<_> = reg
+        .lock()
+        .unwrap()
+        .sorted()
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    assert_eq!(ids, [kitty_session_id(25)]);
+}
+
+#[test]
 fn live_parks_drop_dead_runners_and_unparseable_sessions() {
     let record = |session: &str, runner_pid: Option<u32>| ParkRecord {
         id: "p".to_owned(),
@@ -1783,6 +1917,7 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
         detail: None,
         report: None,
         notified: false,
+        closed_at: None,
     };
     let token = SessionBinding::new(kitty_session_id(5), 1).unwrap().token();
     let parks = live_parks(

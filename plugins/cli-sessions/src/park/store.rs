@@ -144,6 +144,17 @@ impl ParkStore {
             .context("failed to read the parked directory")
     }
 
+    pub fn mark_reopened(&self, record: &ParkRecord) -> Result<()> {
+        let Some(_turn) = self.try_lock_conversation(&record.external_id)? else {
+            return Ok(());
+        };
+        let mut stored = self.load(&record.id)?;
+        if stored.closed_at.take().is_some() {
+            self.record(&stored)?;
+        }
+        Ok(())
+    }
+
     pub fn exited(&self, external_id: &str) -> Vec<ParkRecord> {
         qol_terminal_sessions::park::exited(&self.dir, external_id)
     }
@@ -245,6 +256,23 @@ mod tests {
         assert_eq!(store.spawn_key("park-9-9"), None);
         store.record(&record(ParkState::Waiting)).unwrap();
         assert_eq!(store.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_reopened_conversation_forgets_its_closed_tab_unless_a_resume_holds_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let store = ParkStore::with_dir(root.path().join("parked"));
+        let closed = ParkRecord {
+            closed_at: Some(5),
+            ..record(ParkState::Finished)
+        };
+        store.record(&closed).unwrap();
+        let held = store.lock_conversation(&closed.external_id).unwrap();
+        store.mark_reopened(&closed).unwrap();
+        assert_eq!(store.load(&closed.id).unwrap().closed_at, Some(5));
+        drop(held);
+        store.mark_reopened(&closed).unwrap();
+        assert_eq!(store.load(&closed.id).unwrap().closed_at, None);
     }
 
     #[test]
