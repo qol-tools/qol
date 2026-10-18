@@ -419,10 +419,15 @@ impl WindowTextSystem {
 
         let mut lines = SmallVec::new();
         let mut line_start = 0;
-        let mut max_wrap_lines = line_clamp.unwrap_or(usize::MAX);
-        let mut wrapped_lines = 0;
+        let max_lines = line_clamp.unwrap_or(usize::MAX);
+        let mut shown_lines = 0;
 
         let mut process_line = |line_text: SharedString| {
+            // A hard line break starts a line too, so the clamp counts every
+            // line shown, not only the wrapped ones.
+            if shown_lines >= max_lines {
+                return;
+            }
             font_runs.clear();
             let line_end = line_start + line_text.len();
 
@@ -481,9 +486,9 @@ impl WindowTextSystem {
                 font_size,
                 &font_runs,
                 wrap_width,
-                Some(max_wrap_lines - wrapped_lines),
+                Some(max_lines - shown_lines),
             );
-            wrapped_lines += layout.wrap_boundaries.len();
+            shown_lines += layout.wrap_boundaries.len() + 1;
 
             lines.push(WrappedLine {
                 layout,
@@ -914,5 +919,38 @@ pub(crate) fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'
         ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
         ".ZedMono" | "Zed Plex Mono" => "Lilex",
         _ => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{NoopTextSystem, font};
+
+    fn shaped_lines(text: &str, line_clamp: Option<usize>) -> Vec<String> {
+        let text_system =
+            WindowTextSystem::new(Arc::new(TextSystem::new(Arc::new(NoopTextSystem))));
+        let run = TextRun {
+            len: text.len(),
+            font: font("Helvetica"),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        text_system
+            .shape_text(text.to_string().into(), px(16.), &[run], None, line_clamp)
+            .unwrap()
+            .iter()
+            .map(|line| line.text.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn line_clamp_counts_hard_line_breaks() {
+        let text = "one\n\ntwo\nthree";
+        assert_eq!(shaped_lines(text, Some(2)), ["one", ""]);
+        assert_eq!(shaped_lines(text, Some(1)), ["one"]);
+        assert_eq!(shaped_lines(text, None), ["one", "", "two", "three"]);
     }
 }

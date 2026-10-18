@@ -114,6 +114,20 @@ fn words_height(toast: &Toast, detail_lines: usize) -> f32 {
         + detail
 }
 
+/// The detail as one paragraph: its two lines carry words, not the blank
+/// lines between a report's paragraphs.
+fn detail_words(message: &SharedString) -> SharedString {
+    if message.contains(['\n', '\r']) {
+        message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .into()
+    } else {
+        message.clone()
+    }
+}
+
 /// The card's height for its words: the source line, the title, the detail
 /// lines, the window's border and the button bar, never less than the
 /// resting card.
@@ -135,7 +149,7 @@ pub(super) fn measured_height(toast: &Toast, window: &mut Window) -> f32 {
         let spec = TextStyle::Detail.spec();
         crate::text::wrapped_line_count(
             window,
-            &toast.message,
+            &detail_words(&toast.message),
             font(spec.face.family()),
             spec.size,
             detail_width(toast),
@@ -499,7 +513,7 @@ fn text_column(row: &SlabSnapshotRow, parts: &CardParts, ground: Ground, kit: Ki
                 .text_scaled(TextStyle::Detail, scale)
                 .clamps(DETAIL_LINES)
                 .text_color(rgb(ink))
-                .child(row.toast.message.clone())
+                .child(detail_words(&row.toast.message))
         }
     };
     if !opens {
@@ -674,7 +688,7 @@ pub(super) fn card_id(id: RowId) -> (&'static str, u64) {
 mod tests {
     use std::time::Duration;
 
-    use super::{age_label, fit_height, tone_ground, words_height};
+    use super::{age_label, detail_words, fit_height, tone_ground, words_height};
     use crate::toast::{Toast, ToastLayout, ToastTone};
 
     #[test]
@@ -702,6 +716,17 @@ mod tests {
         );
         let asking = plain.action("Open", |_| Ok(()));
         assert_eq!(fit_height(&asking, 1), short + qol_theme::toast::ACTION_BAR);
+    }
+
+    #[test]
+    fn a_report_detail_reads_as_one_paragraph() {
+        let report = "Now the run data.\n\nAuditing CI timings,\r\nre-reading.".into();
+        assert_eq!(
+            detail_words(&report).as_ref(),
+            "Now the run data. Auditing CI timings, re-reading."
+        );
+        let line = "Saved  to disk".into();
+        assert_eq!(detail_words(&line), line, "one line keeps its spacing");
     }
 
     #[test]
