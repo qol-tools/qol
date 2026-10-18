@@ -95,7 +95,7 @@ impl Messaging {
                 Err(error) => log::warn!("[cli-sessions] attention snapshot not written: {error}"),
             }
         }
-        self.courier.deliver(cli_interpreter, &recipients);
+        self.courier.deliver(cli_interpreter, &recipients, panes);
     }
 }
 
