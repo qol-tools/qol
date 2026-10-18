@@ -1,0 +1,361 @@
+use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use super::read::run;
+use super::*;
+
+fn touch(folder: &Path, name: &str) {
+    fs::write(folder.join(name), name).unwrap();
+}
+
+fn make_folder(folder: &Path, name: &str) {
+    fs::create_dir(folder.join(name)).unwrap();
+}
+
+fn collect(folder: &Path, batch_size: usize, cancel: &CancelToken) -> Vec<ListingEvent> {
+    let mut events = Vec::new();
+    run(folder, batch_size, cancel, |event| {
+        events.push(event);
+        true
+    });
+    events
+}
+
+fn listing_of(folder: &Path) -> Listing {
+    let mut listing = Listing::new(folder.to_path_buf());
+    for event in collect(folder, 2, &CancelToken::new()) {
+        listing.apply(event);
+    }
+    listing
+}
+
+fn names(listing: &Listing) -> Vec<&str> {
+    listing
+        .entries()
+        .iter()
+        .map(|entry| entry.display.as_str())
+        .collect()
+}
+
+#[test]
+fn sort_keys_put_folders_first_and_compare_digit_runs_by_value() {
+    let mut names = vec![
+        ("file10", false),
+        ("File1", false),
+        ("file2", false),
+        ("file02", false),
+        ("zeta", true),
+        ("Alpha", true),
+        ("alpha", false),
+        ("file2a", false),
+        ("file", false),
+        ("10", false),
+        ("9", false),
+    ];
+    names.sort_by_key(|(name, folder)| SortKey::new(OsStr::new(name), *folder));
+    let sorted: Vec<&str> = names.iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        sorted,
+        [
+            "Alpha", "zeta", "9", "10", "alpha", "file", "File1", "file02", "file2", "file2a",
+            "file10"
+        ]
+    );
+}
+
+#[test]
+fn sort_keys_ignore_case_and_break_ties_by_the_raw_name() {
+    let upper = SortKey::new(OsStr::new("README"), false);
+    let lower = SortKey::new(OsStr::new("readme"), false);
+    let other = SortKey::new(OsStr::new("Readme2"), false);
+    assert!(upper < lower);
+    assert!(lower < other);
+    assert_ne!(upper, lower);
+}
+
+#[test]
+fn a_read_folder_lists_folders_first_in_natural_order() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["file10", "file2", "Zeta", "alpha.txt"] {
+        touch(temp.path(), name);
+    }
+    for name in ["b_dir", "A_dir"] {
+        make_folder(temp.path(), name);
+    }
+
+    let listing = listing_of(temp.path());
+
+    assert_eq!(listing.state(), &ListingState::Done);
+    assert_eq!(
+        names(&listing),
+        ["A_dir", "b_dir", "alpha.txt", "file2", "file10", "Zeta"]
+    );
+    let file = &listing.entries()[3];
+    assert_eq!(file.kind, EntryKind::File);
+    assert_eq!(file.size, "file2".len() as u64);
+    assert_eq!(file.path, temp.path().join("file2"));
+    assert_eq!(listing.entries()[0].kind, EntryKind::Folder);
+}
+
+#[test]
+fn folder_item_counts_arrive_after_the_listing_is_done() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "three");
+    make_folder(temp.path(), "empty");
+    for name in ["a", "b", "c"] {
+        touch(&temp.path().join("three"), name);
+    }
+
+    let events = collect(temp.path(), 8, &CancelToken::new());
+    let done = events
+        .iter()
+        .position(|event| *event == ListingEvent::Done)
+        .expect("done");
+    let first_count = events
+        .iter()
+        .position(|event| matches!(event, ListingEvent::Counts(_)))
+        .expect("counts");
+    assert!(done < first_count);
+
+    let mut listing = Listing::new(temp.path().to_path_buf());
+    for event in events {
+        listing.apply(event);
+    }
+    assert_eq!(
+        listing.item_count(&temp.path().join("three")),
+        Some(ItemCount::Items(3))
+    );
+    assert_eq!(
+        listing.item_count(&temp.path().join("empty")),
+        Some(ItemCount::Items(0))
+    );
+}
+
+#[test]
+fn cancelling_stops_the_read_between_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..10 {
+        touch(temp.path(), &format!("file{index}"));
+    }
+    let cancel = CancelToken::new();
+    let mut events = Vec::new();
+    run(temp.path(), 2, &cancel, |event| {
+        events.push(event);
+        cancel.cancel();
+        true
+    });
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0], ListingEvent::Entries(batch) if batch.len() == 2));
+}
+
+#[test]
+fn a_cancelled_token_reads_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    touch(temp.path(), "file");
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    assert!(collect(temp.path(), 2, &cancel).is_empty());
+}
+
+#[test]
+fn cancelling_after_done_stops_the_count_pass() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c"] {
+        make_folder(temp.path(), name);
+    }
+    let cancel = CancelToken::new();
+    let mut events = Vec::new();
+    run(temp.path(), 1, &cancel, |event| {
+        if event == ListingEvent::Done {
+            cancel.cancel();
+        }
+        events.push(event);
+        true
+    });
+
+    assert_eq!(events.last(), Some(&ListingEvent::Done));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, ListingEvent::Counts(_))));
+}
+
+#[test]
+fn a_closed_receiver_stops_the_read() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..10 {
+        touch(temp.path(), &format!("file{index}"));
+    }
+    let mut calls = 0;
+    run(temp.path(), 2, &CancelToken::new(), |_| {
+        calls += 1;
+        false
+    });
+
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn read_errors_are_typed_and_name_the_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    touch(temp.path(), "plain");
+    let missing = temp.path().join("missing");
+    let plain = temp.path().join("plain");
+    let cases = [
+        (missing.clone(), FailureReason::Missing),
+        (plain.clone(), FailureReason::NotAFolder),
+    ];
+    for (folder, reason) in cases {
+        let events = collect(&folder, 2, &CancelToken::new());
+        assert_eq!(
+            events,
+            [ListingEvent::Failed(ListingError {
+                folder: folder.clone(),
+                reason
+            })],
+            "folder: {}",
+            folder.display()
+        );
+    }
+}
+
+#[test]
+fn io_errors_map_to_failure_reasons() {
+    let folder = PathBuf::from("/data/ai/ollama/blobs");
+    let cases = [
+        (io::ErrorKind::PermissionDenied, FailureReason::Permission),
+        (io::ErrorKind::NotFound, FailureReason::Missing),
+        (io::ErrorKind::NotADirectory, FailureReason::NotAFolder),
+    ];
+    for (kind, reason) in cases {
+        let error = ListingError::from_io(folder.clone(), &io::Error::from(kind));
+        assert_eq!(error.reason, reason, "kind: {kind:?}");
+    }
+    let other = ListingError::from_io(folder.clone(), &io::Error::other("disk on fire"));
+    assert_eq!(other.reason, FailureReason::Other("disk on fire".into()));
+}
+
+#[test]
+fn errors_say_why_the_folder_cannot_be_read() {
+    let folder = PathBuf::from("/data/ai/ollama/blobs");
+    let cases = [
+        (
+            FailureReason::Permission,
+            "No permission to read /data/ai/ollama/blobs",
+        ),
+        (
+            FailureReason::Missing,
+            "/data/ai/ollama/blobs does not exist",
+        ),
+        (
+            FailureReason::NotAFolder,
+            "/data/ai/ollama/blobs is not a folder",
+        ),
+        (
+            FailureReason::Other("busy".into()),
+            "Could not read /data/ai/ollama/blobs: busy",
+        ),
+    ];
+    for (reason, message) in cases {
+        let error = ListingError {
+            folder: folder.clone(),
+            reason,
+        };
+        assert_eq!(error.to_string(), message);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_fails_with_permission() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let locked = temp.path().join("locked");
+    make_folder(temp.path(), "locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable_anyway = fs::read_dir(&locked).is_ok();
+    let events = collect(&locked, 2, &CancelToken::new());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable_anyway {
+        return;
+    }
+
+    assert_eq!(
+        events,
+        [ListingEvent::Failed(ListingError {
+            folder: locked,
+            reason: FailureReason::Permission
+        })]
+    );
+}
+
+#[test]
+fn a_listing_never_reports_empty_while_loading() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut listing = Listing::new(temp.path().to_path_buf());
+
+    assert_eq!(listing.state(), &ListingState::Loading);
+    assert!(!listing.shows_empty(true));
+
+    listing.apply(ListingEvent::Done);
+    assert!(listing.shows_empty(true));
+}
+
+#[test]
+fn a_failed_listing_is_not_empty() {
+    let mut listing = Listing::new(PathBuf::from("/missing"));
+    listing.apply(ListingEvent::Failed(ListingError {
+        folder: PathBuf::from("/missing"),
+        reason: FailureReason::Missing,
+    }));
+
+    assert!(matches!(listing.state(), ListingState::Failed(_)));
+    assert!(!listing.shows_empty(true));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn dot_names_are_hidden_and_filtered_on_request() {
+    let temp = tempfile::tempdir().unwrap();
+    touch(temp.path(), ".secret");
+    touch(temp.path(), "shown");
+
+    let listing = listing_of(temp.path());
+
+    assert_eq!(names(&listing), [".secret", "shown"]);
+    assert!(listing.entries()[0].hidden);
+    assert!(!listing.entries()[1].hidden);
+    let visible: Vec<&str> = listing
+        .visible(false)
+        .iter()
+        .map(|entry| entry.display.as_str())
+        .collect();
+    assert_eq!(visible, ["shown"]);
+    assert!(!listing.shows_empty(false));
+}
+
+#[test]
+fn start_streams_the_listing_from_a_background_thread() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "sub");
+    touch(&temp.path().join("sub"), "inner");
+    touch(temp.path(), "file");
+
+    let read = start(temp.path().to_path_buf());
+    assert_eq!(read.folder(), temp.path());
+    let mut listing = Listing::new(temp.path().to_path_buf());
+    while let Ok(event) = read.events().recv() {
+        listing.apply(event);
+    }
+
+    assert_eq!(listing.state(), &ListingState::Done);
+    assert_eq!(names(&listing), ["sub", "file"]);
+    assert_eq!(
+        listing.item_count(&temp.path().join("sub")),
+        Some(ItemCount::Items(1))
+    );
+}

@@ -1,0 +1,218 @@
+use std::fs;
+use std::mem;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
+use std::thread;
+
+use super::{Entry, EntryKind, ListingError};
+
+const BATCH_SIZE: usize = 128;
+const BATCH_GROWTH_LIMIT: usize = 8192;
+
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemCount {
+    Items(u64),
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderCount {
+    pub path: PathBuf,
+    pub count: ItemCount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListingEvent {
+    Entries(Vec<Entry>),
+    Done,
+    Failed(ListingError),
+    Counts(Vec<FolderCount>),
+}
+
+#[derive(Debug)]
+pub struct ListingRead {
+    folder: PathBuf,
+    events: Receiver<ListingEvent>,
+    cancel: CancelToken,
+}
+
+impl ListingRead {
+    pub fn folder(&self) -> &Path {
+        &self.folder
+    }
+
+    pub fn events(&self) -> &Receiver<ListingEvent> {
+        &self.events
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+}
+
+impl Drop for ListingRead {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+pub fn start(folder: PathBuf) -> ListingRead {
+    let cancel = CancelToken::new();
+    let (sender, events) = mpsc::channel();
+    let failure = sender.clone();
+    let worker_folder = folder.clone();
+    let worker_cancel = cancel.clone();
+    let spawned = thread::Builder::new()
+        .name("qol-explorer-listing".into())
+        .spawn(move || {
+            run(&worker_folder, BATCH_SIZE, &worker_cancel, |event| {
+                sender.send(event).is_ok()
+            })
+        });
+    if let Err(error) = spawned {
+        log::error!("could not start reading {}: {error}", folder.display());
+        let _ = failure.send(ListingEvent::Failed(ListingError::from_io(
+            folder.clone(),
+            &error,
+        )));
+    }
+    ListingRead {
+        folder,
+        events,
+        cancel,
+    }
+}
+
+pub(super) fn run(
+    folder: &Path,
+    batch_size: usize,
+    cancel: &CancelToken,
+    mut emit: impl FnMut(ListingEvent) -> bool,
+) {
+    let Some(folders) = read_entries(folder, batch_size, cancel, &mut emit) else {
+        return;
+    };
+    if !emit(ListingEvent::Done) {
+        return;
+    }
+    count_folders(&folders, batch_size, cancel, &mut emit);
+}
+
+fn open(folder: &Path) -> Result<fs::ReadDir, ListingError> {
+    let error = |error: &std::io::Error| ListingError::from_io(folder.to_path_buf(), error);
+    let metadata = fs::metadata(folder).map_err(|e| error(&e))?;
+    if !metadata.is_dir() {
+        return Err(error(&std::io::Error::from(
+            std::io::ErrorKind::NotADirectory,
+        )));
+    }
+    fs::read_dir(folder).map_err(|e| error(&e))
+}
+
+fn read_entries(
+    folder: &Path,
+    batch_size: usize,
+    cancel: &CancelToken,
+    emit: &mut impl FnMut(ListingEvent) -> bool,
+) -> Option<Vec<PathBuf>> {
+    let items = match open(folder) {
+        Ok(items) => items,
+        Err(error) => {
+            emit(ListingEvent::Failed(error));
+            return None;
+        }
+    };
+    let mut limit = batch_size;
+    let mut batch = Vec::with_capacity(limit);
+    let mut folders = Vec::new();
+    for item in items {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        let entry = match item.and_then(|item| Entry::read(&item)) {
+            Ok(entry) => entry,
+            Err(error) => {
+                log::warn!("skipped an entry in {}: {error}", folder.display());
+                continue;
+            }
+        };
+        if entry.kind == EntryKind::Folder {
+            folders.push(entry.path.clone());
+        }
+        batch.push(entry);
+        if batch.len() < limit {
+            continue;
+        }
+        if !emit(ListingEvent::Entries(mem::take(&mut batch))) {
+            return None;
+        }
+        limit = (limit * 2).min(BATCH_GROWTH_LIMIT);
+    }
+    if cancel.is_cancelled() {
+        return None;
+    }
+    if !batch.is_empty() && !emit(ListingEvent::Entries(batch)) {
+        return None;
+    }
+    Some(folders)
+}
+
+fn count_folders(
+    folders: &[PathBuf],
+    batch_size: usize,
+    cancel: &CancelToken,
+    emit: &mut impl FnMut(ListingEvent) -> bool,
+) {
+    let mut batch = Vec::with_capacity(batch_size.min(folders.len()));
+    for folder in folders {
+        if cancel.is_cancelled() {
+            return;
+        }
+        let Some(count) = count_items(folder, cancel) else {
+            return;
+        };
+        batch.push(FolderCount {
+            path: folder.clone(),
+            count,
+        });
+        if batch.len() >= batch_size && !emit(ListingEvent::Counts(mem::take(&mut batch))) {
+            return;
+        }
+    }
+    if !batch.is_empty() {
+        emit(ListingEvent::Counts(batch));
+    }
+}
+
+fn count_items(folder: &Path, cancel: &CancelToken) -> Option<ItemCount> {
+    let Ok(items) = fs::read_dir(folder) else {
+        return Some(ItemCount::Unreadable);
+    };
+    let mut count = 0;
+    for _ in items {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        count += 1;
+    }
+    Some(ItemCount::Items(count))
+}

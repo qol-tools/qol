@@ -133,6 +133,15 @@ impl Kit {
             .child(self.heading_title(TextStyle::Heading, title, colophon, true))
     }
 
+    pub fn crumb_row(&self) -> Div {
+        div()
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .items_center()
+            .text(TextStyle::Heading)
+    }
+
     pub fn heading_title(
         &self,
         style: TextStyle,

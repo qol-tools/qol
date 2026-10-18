@@ -1,0 +1,368 @@
+use std::fs;
+use std::path::{Path, PathBuf, MAIN_SEPARATOR_STR};
+use std::time::{Duration, Instant};
+
+use super::path::{self, PathInput};
+use super::*;
+use crate::listing::{self, Listing};
+
+fn folders(names: &[&str]) -> Vec<PathBuf> {
+    names
+        .iter()
+        .map(|name| Path::new("/root").join(name))
+        .collect()
+}
+
+#[test]
+fn history_restores_cursor_and_scroll_on_back_and_forward() {
+    let mut history = History::new(PathBuf::from("/home"));
+    history.remember(4, 120.0);
+    history.go(PathBuf::from("/home/git"));
+    history.remember(2, 36.0);
+
+    let back = history.back().unwrap().clone();
+    assert_eq!(
+        back,
+        Spot {
+            folder: PathBuf::from("/home"),
+            cursor: 4,
+            scroll: 120.0
+        }
+    );
+    let forward = history.forward().unwrap().clone();
+    assert_eq!(
+        forward,
+        Spot {
+            folder: PathBuf::from("/home/git"),
+            cursor: 2,
+            scroll: 36.0
+        }
+    );
+    assert!(history.forward().is_none());
+}
+
+#[test]
+fn going_somewhere_new_drops_the_forward_spots() {
+    let mut history = History::new(PathBuf::from("/a"));
+    history.go(PathBuf::from("/a/b"));
+    history.back();
+    assert!(history.can_go_forward());
+
+    history.go(PathBuf::from("/a/c"));
+
+    assert!(!history.can_go_forward());
+    assert_eq!(history.back().unwrap().folder, PathBuf::from("/a"));
+    assert!(history.back().is_none());
+    assert!(!history.can_go_back());
+}
+
+#[test]
+fn going_up_returns_to_the_remembered_cursor_of_the_parent() {
+    let mut history = History::new(PathBuf::from("/home"));
+    history.remember(7, 252.0);
+    history.go(PathBuf::from("/home/git"));
+
+    let up = history.up().unwrap();
+    assert_eq!(up.folder, PathBuf::from("/home"));
+    assert_eq!(up.cursor, 7);
+    assert_eq!(up.scroll, 252.0);
+    assert!(history.can_go_back());
+}
+
+#[test]
+fn a_new_folder_starts_at_the_top_and_the_root_has_no_parent() {
+    let mut history = History::new(PathBuf::from("/"));
+    assert!(history.up().is_none());
+
+    let spot = history.go(PathBuf::from("/srv")).clone();
+    assert_eq!(spot, Spot::at(PathBuf::from("/srv")));
+}
+
+#[test]
+fn going_to_the_current_folder_adds_no_spot() {
+    let mut history = History::new(PathBuf::from("/a"));
+    history.go(PathBuf::from("/a"));
+    assert!(!history.can_go_back());
+}
+
+#[test]
+fn picks_survive_navigation() {
+    let mut history = History::new(PathBuf::from("/root"));
+    let mut picks = Picks::new();
+    picks.toggle(Path::new("/root/a"));
+    history.go(PathBuf::from("/root/sub"));
+    picks.add(Path::new("/root/sub/b"));
+    history.back();
+
+    assert!(picks.is_picked(Path::new("/root/a")));
+    assert!(picks.is_picked(Path::new("/root/sub/b")));
+    assert_eq!(picks.len(), 2);
+}
+
+#[test]
+fn toggle_add_all_and_clear() {
+    let rows = folders(&["a", "b", "c"]);
+    let mut picks = Picks::new();
+
+    picks.toggle(&rows[0]);
+    assert!(picks.is_picked(&rows[0]));
+    picks.toggle(&rows[0]);
+    assert!(picks.is_empty());
+
+    picks.add(&rows[1]);
+    picks.add(&rows[1]);
+    assert_eq!(picks.len(), 1);
+
+    picks.all(&rows);
+    assert_eq!(picks.len(), 3);
+    assert!(picks.paths().all(|path| rows.iter().any(|row| row == path)));
+
+    picks.clear();
+    assert!(picks.is_empty());
+}
+
+#[test]
+fn range_picks_grow_and_shrink_from_the_anchor() {
+    let rows = folders(&["a", "b", "c", "d", "e"]);
+    let mut picks = Picks::new();
+    picks.add(&rows[4]);
+
+    picks.extend_range(&rows, 1, 2);
+    picks.extend_range(&rows, 2, 3);
+    assert_eq!(picked(&picks, &rows), [false, true, true, true, true]);
+
+    picks.extend_range(&rows, 3, 2);
+    assert_eq!(picked(&picks, &rows), [false, true, true, false, true]);
+
+    picks.extend_range(&rows, 2, 0);
+    assert_eq!(picked(&picks, &rows), [true, true, false, false, true]);
+}
+
+#[test]
+fn a_new_range_starts_from_the_current_picks() {
+    let rows = folders(&["a", "b", "c", "d"]);
+    let mut picks = Picks::new();
+    picks.extend_range(&rows, 0, 1);
+    picks.end_range();
+
+    picks.extend_range(&rows, 3, 2);
+    assert_eq!(picked(&picks, &rows), [true, true, true, true]);
+}
+
+fn picked(picks: &Picks, rows: &[PathBuf]) -> Vec<bool> {
+    rows.iter().map(|row| picks.is_picked(row)).collect()
+}
+
+const NAMES: [&str; 6] = ["apple", "Avocado", "banana", "Berry", "blue", "cherry"];
+
+fn type_run(jump: &mut Jump, typed: &str, start: Instant, cursor: &mut usize) -> Vec<usize> {
+    typed
+        .chars()
+        .enumerate()
+        .map(|(index, typed)| {
+            let now = start + Duration::from_millis(100 * index as u64);
+            if let Some(next) = jump.type_char(typed, now, &NAMES, *cursor, |name| *name) {
+                *cursor = next;
+            }
+            *cursor
+        })
+        .collect()
+}
+
+#[test]
+fn jump_goes_to_the_first_name_starting_with_the_run_ignoring_case() {
+    let cases = [
+        ("a", 0, vec![0]),
+        ("av", 0, vec![0, 1]),
+        ("BL", 0, vec![2, 4]),
+        ("ch", 3, vec![5, 5]),
+        ("z", 3, vec![3]),
+    ];
+    for (typed, start_cursor, expected) in cases {
+        let mut jump = Jump::new();
+        let mut cursor = start_cursor;
+        let cursors = type_run(&mut jump, typed, Instant::now(), &mut cursor);
+        assert_eq!(cursors, expected, "typed: {typed}");
+    }
+}
+
+#[test]
+fn a_repeated_letter_cycles_through_names_with_that_letter_and_wraps() {
+    let mut jump = Jump::new();
+    let mut cursor = 5;
+    let cursors = type_run(&mut jump, "bbbb", Instant::now(), &mut cursor);
+    assert_eq!(cursors, [2, 3, 4, 2]);
+}
+
+#[test]
+fn a_repeated_letter_prefers_a_name_matching_the_whole_run() {
+    let names = ["aardvark", "apple", "avocado"];
+    let mut jump = Jump::new();
+    let start = Instant::now();
+    assert_eq!(jump.type_char('a', start, &names, 2, |name| *name), Some(0));
+    assert_eq!(
+        jump.type_char('a', start + Duration::from_millis(50), &names, 0, |name| {
+            *name
+        }),
+        Some(0)
+    );
+    assert_eq!(
+        jump.type_char('a', start + Duration::from_millis(90), &names, 0, |name| {
+            *name
+        }),
+        Some(1)
+    );
+}
+
+#[test]
+fn the_run_resets_after_one_second_without_typing() {
+    let mut jump = Jump::new();
+    let start = Instant::now();
+    assert_eq!(jump.type_char('b', start, &NAMES, 0, |name| *name), Some(2));
+
+    let just_in_time = start + RUN_RESET - Duration::from_millis(1);
+    assert_eq!(
+        jump.type_char('e', just_in_time, &NAMES, 2, |name| *name),
+        Some(3)
+    );
+    assert_eq!(jump.run(just_in_time), "be");
+
+    let idle = just_in_time + RUN_RESET;
+    assert_eq!(jump.run(idle), "");
+    assert_eq!(jump.type_char('c', idle, &NAMES, 3, |name| *name), Some(5));
+    assert_eq!(jump.run(idle), "c");
+}
+
+#[test]
+fn a_mixed_run_without_a_match_keeps_the_cursor() {
+    let mut jump = Jump::new();
+    let start = Instant::now();
+    assert_eq!(jump.type_char('b', start, &NAMES, 0, |name| *name), Some(2));
+    assert_eq!(jump.type_char('x', start, &NAMES, 2, |name| *name), None);
+    assert_eq!(jump.run(start), "bx");
+}
+
+#[test]
+fn jump_in_an_empty_list_finds_nothing() {
+    let mut jump = Jump::new();
+    let empty: [&str; 0] = [];
+    let start = Instant::now();
+    assert_eq!(jump.type_char('a', start, &empty, 0, |name| *name), None);
+    assert_eq!(jump.type_char('a', start, &empty, 0, |name| *name), None);
+}
+
+#[test]
+fn reset_clears_the_run() {
+    let mut jump = Jump::new();
+    let start = Instant::now();
+    jump.type_char('a', start, &NAMES, 0, |name| *name);
+    jump.reset();
+    assert_eq!(jump.run(start), "");
+}
+
+fn sep(text: &str) -> String {
+    text.replace('/', MAIN_SEPARATOR_STR)
+}
+
+#[test]
+fn tilde_expands_to_home() {
+    let home = Path::new("/home/me");
+    let cases = [
+        ("~", home.to_path_buf()),
+        ("~/", home.to_path_buf()),
+        ("~/Git", home.join("Git")),
+        ("~/Git/qol", home.join("Git").join("qol")),
+        ("~other", PathBuf::from("~other")),
+        ("/srv", PathBuf::from("/srv")),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            path::expand_home(&sep(input), home),
+            expected,
+            "input: {input}"
+        );
+    }
+}
+
+#[test]
+fn relative_paths_resolve_against_the_current_folder() {
+    let home = Path::new("/home/me");
+    let cwd = Path::new("/work");
+    assert_eq!(path::resolve("docs", home, cwd), cwd.join("docs"));
+    assert_eq!(path::resolve("~", home, cwd), home.to_path_buf());
+}
+
+#[test]
+fn home_is_shown_as_tilde() {
+    let home = Path::new("/home/me");
+    assert_eq!(path::display_with_home(home, home), "~");
+    assert_eq!(
+        path::display_with_home(&home.join("Git"), home),
+        sep("~/Git")
+    );
+    assert_eq!(path::display_with_home(Path::new("/srv"), home), "/srv");
+}
+
+#[test]
+fn path_input_splits_into_parent_and_last_segment() {
+    let home = Path::new("/home/me");
+    let cases = [
+        ("~/Git/qo", Some(home.join("Git")), "qo"),
+        ("~/Git/", Some(home.join("Git")), ""),
+        ("~/", Some(home.to_path_buf()), ""),
+        ("~", None, "~"),
+        ("/srv/da", Some(PathBuf::from("/srv/")), "da"),
+        ("loose", None, "loose"),
+    ];
+    for (input, parent, segment) in cases {
+        assert_eq!(
+            PathInput::parse(&sep(input), home),
+            PathInput {
+                parent,
+                segment: segment.to_string()
+            },
+            "input: {input}"
+        );
+    }
+}
+
+fn read_listing(folder: &Path) -> Listing {
+    let read = listing::start(folder.to_path_buf());
+    let mut listing = Listing::new(folder.to_path_buf());
+    while let Ok(event) = read.events().recv() {
+        listing.apply(event);
+    }
+    listing
+}
+
+#[test]
+fn suggestions_are_folders_starting_with_the_segment() {
+    let temp = tempfile::tempdir().unwrap();
+    for folder in ["Documents", "Downloads", "desk", "Music"] {
+        fs::create_dir(temp.path().join(folder)).unwrap();
+    }
+    fs::write(temp.path().join("Docs.txt"), "").unwrap();
+    let listing = read_listing(temp.path());
+
+    assert_eq!(
+        path::suggestions(&listing, "do", false),
+        ["Documents", "Downloads"]
+    );
+    assert_eq!(path::suggestions(&listing, "DE", false), ["desk"]);
+    assert_eq!(
+        path::suggestions(&listing, "", false),
+        ["desk", "Documents", "Downloads", "Music"]
+    );
+    assert!(path::suggestions(&listing, "x", true).is_empty());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn hidden_folders_are_suggested_only_when_shown() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".config")).unwrap();
+    let listing = read_listing(temp.path());
+
+    assert!(path::suggestions(&listing, ".c", false).is_empty());
+    assert_eq!(path::suggestions(&listing, ".c", true), [".config"]);
+}
