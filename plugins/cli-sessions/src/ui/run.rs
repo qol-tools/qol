@@ -92,6 +92,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
         );
     }
 
+    crate::prs::spawn_refresh(registry.clone());
     let reg_for_app = registry.clone();
     let host_for_app = host.clone();
     Application::new().run(move |cx| {

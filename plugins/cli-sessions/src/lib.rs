@@ -9,6 +9,7 @@ mod doctor;
 pub mod host;
 pub mod park;
 mod parking;
+pub mod prs;
 pub mod session;
 pub mod signal;
 pub mod storage;

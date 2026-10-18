@@ -28,6 +28,9 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
         if command == crate::park::PARK {
             return park(rest).emit();
         }
+        if command == crate::prs::PRS {
+            return prs(rest).emit();
+        }
         if command == crate::park::LANE_EXEC {
             return lane_exec(rest).emit();
         }
@@ -86,6 +89,13 @@ fn lane_exec(args: &[String]) -> CommandResult {
     match qol_agent_launch::lane_exec::run(&args) {
         Ok(()) => CommandResult::success(""),
         Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} lane-exec: {error:#}")),
+    }
+}
+
+fn prs(args: &[String]) -> CommandResult {
+    match crate::prs::run(args) {
+        Ok(found) => CommandResult::success(found),
+        Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} prs: {error:#}")),
     }
 }
 

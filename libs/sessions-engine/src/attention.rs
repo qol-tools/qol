@@ -16,6 +16,34 @@ pub struct AttentionRow {
     pub title: String,
     pub state: AttentionState,
     pub master: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prs: Vec<LanePr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LanePr {
+    pub url: String,
+    pub number: u64,
+    pub state: PrState,
+    pub draft: bool,
+    pub checks: PrChecks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrState {
+    Open,
+    Merged,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrChecks {
+    Pending,
+    Passing,
+    Failing,
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,12 +101,14 @@ mod tests {
                     title: "switchboard".to_owned(),
                     state: AttentionState::Ready,
                     master: true,
+                    prs: Vec::new(),
                 },
                 AttentionRow {
                     key: None,
                     title: "qol-monorepo".to_owned(),
                     state: AttentionState::NeedsYou,
                     master: false,
+                    prs: Vec::new(),
                 },
             ],
         }
