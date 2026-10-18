@@ -37,7 +37,7 @@ const PROFILE_TOOLS: [&str; 6] = [
     "session_inbox",
     "session_board",
 ];
-const SETTINGS: &str = r#"{"disableAllHooks":true,"alwaysThinkingEnabled":false}"#;
+const SETTINGS: &str = r#"{"alwaysThinkingEnabled":false}"#;
 const PROJECTS_SHOWN: usize = 12;
 const SHELL_ENV: &str = "SHELL";
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -575,7 +575,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for terminal sessions. It is a claude session keyed and titled `{SWITCHBOARD_KEY}` whose only tools are the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}` and loaded through ToolSearch. It starts blank in its own folder under the sessions data directory, so you type its first message, and it starts, lists, closes and messages other sessions for you without doing their work.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, and with no kitty running a new kitty is started for it. It is never resumed, and the session tools never park, close or submit to it.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to os-window.", PROFILE_TOOLS.join(", "))
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for terminal sessions. It is a claude session keyed and titled `{SWITCHBOARD_KEY}` whose only tools are the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}` and loaded through ToolSearch. Your hooks, status line and plugins run as in any other claude session, so `qols` commands work in it; no other MCP server is loaded. It starts blank in its own folder under the sessions data directory, so you type its first message, and it starts, lists, closes and messages other sessions for you without doing their work.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, and with no kitty running a new kitty is started for it. It is never resumed, and the session tools never park, close or submit to it.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to os-window.", PROFILE_TOOLS.join(", "))
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {
@@ -673,7 +673,7 @@ mod tests {
         assert!(servers["sessions"].get("env").is_none(), "{config}");
         assert_eq!(args.len(), 8, "nothing follows the profile: {args:?}");
         let settings: serde_json::Value = serde_json::from_str(SETTINGS).unwrap();
-        assert_eq!(settings["disableAllHooks"], true);
+        assert!(settings.get("disableAllHooks").is_none(), "{settings}");
         assert_eq!(settings["alwaysThinkingEnabled"], false);
     }
 
