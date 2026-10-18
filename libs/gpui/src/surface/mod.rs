@@ -136,7 +136,10 @@ pub struct Surface {
     size: Size<Pixels>,
     retain_on_dismiss: bool,
     memory: Option<WindowMemory>,
+    live_while: Option<LiveWhile>,
 }
+
+type LiveWhile = Rc<dyn Fn() -> bool>;
 
 pub struct OpenedSurface<V> {
     pub(crate) handle: WindowHandle<SurfaceRoot<V>>,
@@ -276,6 +279,7 @@ impl Surface {
             size: size(px(320.0), px(72.0)),
             retain_on_dismiss: false,
             memory: None,
+            live_while: None,
         }
     }
 
@@ -301,6 +305,12 @@ impl Surface {
 
     pub(crate) fn remembered_monitor(&self, cx: &mut App) -> Option<ActiveMonitor> {
         Remembered::new(self.memory.clone()?, self.placement, cx)?.monitor(cx)
+    }
+
+    /// Keeps the live look while `held` returns true, even after the window lost focus.
+    pub fn stays_live_while(mut self, held: impl Fn() -> bool + 'static) -> Self {
+        self.live_while = Some(Rc::new(held));
+        self
     }
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
@@ -435,6 +445,7 @@ impl Surface {
         let window_title = title.clone();
         let follows_focus = self.takes_focus();
         let root_visible = visible.clone();
+        let live_while = self.live_while.clone();
         let bounds_visible = visible.clone();
         let bounds_memory = remembered.clone();
         if self.takes_focus() {
@@ -470,6 +481,7 @@ impl Surface {
                 SurfaceRoot {
                     inner,
                     look: WindowLook::Live,
+                    live_while,
                     _bounds_subscription: bounds_subscription,
                     _activation_subscription: activation_subscription,
                 }
@@ -617,6 +629,7 @@ impl Surface {
 pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
     look: WindowLook,
+    live_while: Option<LiveWhile>,
     _bounds_subscription: Subscription,
     _activation_subscription: Subscription,
 }
@@ -629,9 +642,19 @@ fn surface_look(follows_focus: bool, visible: bool, active: bool) -> WindowLook 
     }
 }
 
+fn held_look(look: WindowLook, held: impl FnOnce() -> bool) -> WindowLook {
+    if look == WindowLook::Quiet && held() {
+        WindowLook::Live
+    } else {
+        look
+    }
+}
+
 impl<V: Render + 'static> Render for SurfaceRoot<V> {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        enter_window(self.look);
+        enter_window(held_look(self.look, || {
+            self.live_while.as_ref().is_some_and(|held| held())
+        }));
         div()
             .size_full()
             .text(TextStyle::Value)
@@ -1372,7 +1395,7 @@ fn dismiss_on_close_request(window: &Window, dismisser: SurfaceDismisser, cx: &A
 mod tests {
     use super::platform::SurfacePlatform;
     use super::{
-        cancel_focus_reassert, panel_bounds, resolved_app_id, reveal_cancelled,
+        cancel_focus_reassert, held_look, panel_bounds, resolved_app_id, reveal_cancelled,
         state_restore_needs_retry, surface_look, DragGestureState, RevealReadiness, Surface,
         SurfaceDismisser, SurfaceKind, PANEL_FOCUS_GENERATION,
     };
@@ -1432,6 +1455,34 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn a_hold_keeps_a_quiet_panel_live() {
+        let cases = [
+            (
+                WindowLook::Quiet,
+                true,
+                WindowLook::Live,
+                "held while you are elsewhere",
+            ),
+            (
+                WindowLook::Quiet,
+                false,
+                WindowLook::Quiet,
+                "nothing holds it",
+            ),
+            (WindowLook::Live, true, WindowLook::Live, "already live"),
+            (
+                WindowLook::Live,
+                false,
+                WindowLook::Live,
+                "a panel you are in",
+            ),
+        ];
+        for (look, held, expected, note) in cases {
+            assert_eq!(held_look(look, || held), expected, "{note}");
+        }
+    }
+
     #[test]
     fn drag_gesture_plain_click_never_starts_a_move() {
         let mut g = DragGestureState::new(4.0);

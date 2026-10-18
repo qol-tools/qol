@@ -35,6 +35,7 @@ fn main() {
         cwd: frame.cwd,
         title: frame.title,
         at_prompt: frame.at_prompt,
+        focused: false,
         reported_cmd: None,
         foreground_basenames: frame.foreground_basenames,
         foreground_pids: vec![],

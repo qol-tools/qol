@@ -201,6 +201,9 @@ pub fn tick_with_caches(
     #[cfg(debug_assertions)]
     let tick_start = std::time::Instant::now();
     let panes = host.discover();
+    if let Ok(mut reg) = registry.lock() {
+        reg.observe_focus(&panes);
+    }
     let bridges = live_bridge_sessions(&mut caches.bridges);
     let parked = live_parked_sessions(caches.parked_dir.as_deref());
     let closing = closing_sessions(caches.parked_dir.as_deref());
@@ -975,6 +978,7 @@ mod bridge_tests {
             cwd: "/project".into(),
             title: "architect".into(),
             at_prompt: false,
+            focused: false,
             reported_cmd: Some("claude".into()),
             foreground_basenames: vec!["claude".into()],
             foreground_pids: Vec::new(),

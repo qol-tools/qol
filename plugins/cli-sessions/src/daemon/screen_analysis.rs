@@ -48,6 +48,7 @@ mod tests {
             cwd: "/project".into(),
             title: "agent".into(),
             at_prompt: false,
+            focused: false,
             reported_cmd: Some("pi".into()),
             foreground_basenames: vec!["pi".into()],
             foreground_pids: Vec::new(),

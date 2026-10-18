@@ -822,6 +822,7 @@ fn session() -> SessionFacts {
         cwd: "/work/proj".to_owned(),
         title: "\u{03C0} - proj".to_owned(),
         at_prompt: false,
+        focused: false,
         reported_cmd: Some("pi".to_owned()),
         foreground_basenames: vec!["zsh".to_owned(), "pi".to_owned()],
         foreground_pids: vec![22],

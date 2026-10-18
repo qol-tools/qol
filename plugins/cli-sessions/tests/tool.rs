@@ -34,6 +34,7 @@ fn classify_picks_agent_from_process_group() {
             cwd: "/work/project".to_owned(),
             title: "Terminal".to_owned(),
             at_prompt: false,
+            focused: false,
             reported_cmd: None,
             foreground_basenames: names.clone(),
             foreground_pids: Vec::new(),

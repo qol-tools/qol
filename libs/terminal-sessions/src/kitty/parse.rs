@@ -18,6 +18,8 @@ pub struct OsWindow {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Tab {
+    #[serde(default)]
+    pub is_focused: bool,
     pub windows: Vec<KittyWindow>,
 }
 
@@ -28,6 +30,8 @@ pub struct KittyWindow {
     #[serde(default)]
     pub cwd: Option<PathBuf>,
     pub pid: i32,
+    #[serde(default)]
+    pub is_focused: bool,
     #[serde(default)]
     pub at_prompt: bool,
     #[serde(default)]
@@ -63,7 +67,12 @@ fn usable_cwd(path: &Path) -> Option<String> {
 }
 
 impl KittyWindow {
-    fn into_session(self, backend_id: &BackendId, instance: Option<&str>) -> SessionFacts {
+    fn into_session(
+        self,
+        backend_id: &BackendId,
+        instance: Option<&str>,
+        tab_focused: bool,
+    ) -> SessionFacts {
         let cwd = self
             .foreground_processes
             .iter()
@@ -99,6 +108,7 @@ impl KittyWindow {
             cwd,
             title: self.title,
             at_prompt: self.at_prompt,
+            focused: tab_focused && self.is_focused,
             reported_cmd,
             foreground_basenames,
             foreground_pids,
@@ -120,9 +130,17 @@ impl KittyLs {
     ) -> Vec<SessionFacts> {
         self.0
             .into_iter()
-            .flat_map(|window| window.tabs)
-            .flat_map(|tab| tab.windows)
-            .map(|window| window.into_session(backend_id, instance))
+            .flat_map(|os_window| {
+                os_window
+                    .tabs
+                    .into_iter()
+                    .map(move |tab| (os_window.is_focused && tab.is_focused, tab))
+            })
+            .flat_map(|(tab_focused, tab)| {
+                tab.windows
+                    .into_iter()
+                    .map(move |window| window.into_session(backend_id, instance, tab_focused))
+            })
             .collect()
     }
 }
@@ -165,6 +183,38 @@ mod tests {
         assert_eq!(sessions[0].foreground_pids, [100, 101]);
         assert!(sessions[1].at_prompt);
         assert_eq!(sessions[1].reported_cmd, None);
+    }
+
+    #[test]
+    fn only_the_active_window_of_the_active_tab_of_a_focused_os_window_is_focused() {
+        let cases = [
+            (true, true, true, true, "the window holding keyboard focus"),
+            (false, true, true, false, "kitty itself is not focused"),
+            (
+                true,
+                false,
+                true,
+                false,
+                "the window sits in a background tab",
+            ),
+            (
+                true,
+                true,
+                false,
+                false,
+                "another split of the tab is active",
+            ),
+        ];
+        for (os_window, tab, window, expected, note) in cases {
+            let body = format!(
+                r#"[{{"is_focused":{os_window},"tabs":[{{"is_focused":{tab},"windows":[
+{{"id":10,"title":"Agent","pid":100,"is_focused":{window}}}]}}]}}]"#
+            );
+            let sessions = parse_ls(&body, backend_id())
+                .unwrap()
+                .sessions(backend_id());
+            assert_eq!(sessions[0].focused, expected, "{note}");
+        }
     }
 
     #[test]

@@ -2470,6 +2470,7 @@ mod tests {
             cwd: "/work/demo".to_owned(),
             title: "Demo REPL".to_owned(),
             at_prompt: true,
+            focused: false,
             reported_cmd: Some("agent".to_owned()),
             foreground_basenames: Vec::new(),
             foreground_pids: Vec::new(),

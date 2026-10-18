@@ -699,6 +699,7 @@ mod tests {
             cwd: "/work/project".to_owned(),
             title: "Terminal".to_owned(),
             at_prompt: false,
+            focused: false,
             reported_cmd: None,
             foreground_basenames: processes
                 .iter()

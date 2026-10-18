@@ -181,8 +181,12 @@ fn open_panel(
             CORNER_MARGIN,
         ))
         .remember(WindowMemory::reopened_by_action(APP_ID, APP_ID, "open"))
-        .show_focused(tracker, cx, move |dismisser, _window, cx| {
-            SessionsView::new(registry, host, corner, dismisser, cx)
+        .stays_live_while({
+            let registry = registry.clone();
+            move || registry.lock().is_ok_and(|reg| reg.session_holds_focus())
+        })
+        .show_focused(tracker, cx, move |dismisser, window, cx| {
+            SessionsView::new(registry, host, corner, dismisser, window, cx)
         });
     let opened = match result {
         Ok(opened) => opened,

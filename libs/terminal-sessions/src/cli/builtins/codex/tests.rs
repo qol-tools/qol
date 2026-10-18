@@ -657,6 +657,7 @@ fn session() -> SessionFacts {
         cwd: "/work/qol-tts".to_owned(),
         title: "qol-tts".to_owned(),
         at_prompt: false,
+        focused: false,
         reported_cmd: Some("codex".to_owned()),
         foreground_basenames: vec!["zsh".to_owned(), "codex".to_owned()],
         foreground_pids: vec![22],

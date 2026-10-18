@@ -164,6 +164,8 @@ pub struct SessionFacts {
     pub cwd: String,
     pub title: String,
     pub at_prompt: bool,
+    /// The terminal window showing this session holds keyboard focus.
+    pub focused: bool,
     pub reported_cmd: Option<String>,
     pub foreground_basenames: Vec<String>,
     pub foreground_pids: Vec<i32>,
