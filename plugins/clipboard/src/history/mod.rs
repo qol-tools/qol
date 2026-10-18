@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
@@ -11,7 +12,11 @@ mod kind;
 mod store;
 
 pub use kind::{classify_text, png_size, swatch, ClipKind};
-pub use store::Store;
+pub use store::{Store, Unread};
+
+const MAX_TEXT_BYTES: usize = 1024 * 1024;
+const MAX_UNPINNED_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMAGE_PIXELS: u64 = 8192 * 8192;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clip {
@@ -82,14 +87,19 @@ impl Clip {
     }
 }
 
+// Secrets live only in this handle's memory, shared by its clones, and never reach the store.
 #[derive(Clone, Debug)]
 pub struct History {
     store: Store,
+    secrets: Arc<Mutex<Vec<Clip>>>,
 }
 
 impl History {
     pub fn new(store: Store) -> Self {
-        Self { store }
+        Self {
+            store,
+            secrets: Arc::default(),
+        }
     }
 
     pub fn store(&self) -> &Store {
@@ -103,13 +113,22 @@ impl History {
         retention: Retention,
         secrets: SecretPolicy,
     ) -> Result<Recorded> {
-        let (clip, blob) = match clip_from_capture(capture, now, secrets) {
+        let _writer = self.write_lock()?;
+        let salt = self.store.id_salt()?;
+        let (clip, blob) = match clip_from_capture(capture, now, secrets, &salt) {
             Ok(built) => built,
             Err(reason) => return Ok(Recorded::Dropped(reason)),
         };
-        let _writer = self.write_lock()?;
+        if clip.is_secret() {
+            self.held_secrets(now, retention);
+            self.secrets().push(clip.clone());
+            return Ok(Recorded::Added(clip));
+        }
         let mut clips = self.store.load()?;
-        let outcome = match clips.iter_mut().find(|existing| existing.id == clip.id) {
+        let outcome = match clips
+            .iter_mut()
+            .find(|existing| existing.id == clip.id || same_text(existing, &clip))
+        {
             Some(existing) => {
                 existing.copied_at_ms = clip.copied_at_ms;
                 existing.app = clip.app.clone();
@@ -138,12 +157,16 @@ impl History {
         then: impl FnOnce(&[Clip]) -> T,
     ) -> Result<T> {
         let _writer = self.write_lock()?;
-        Ok(then(&self.load_retained(now, retention)?.0))
+        let (mut live, _) = self.load_retained(now, retention)?;
+        live.extend(self.held_secrets(now, retention).0);
+        live.sort_by_key(|clip| std::cmp::Reverse(clip.copied_at_ms));
+        Ok(then(&live))
     }
 
     pub fn prune(&self, now: u64, retention: Retention) -> Result<usize> {
         let _writer = self.write_lock()?;
-        Ok(self.load_retained(now, retention)?.1)
+        let expired = self.held_secrets(now, retention).1;
+        Ok(self.load_retained(now, retention)?.1 + expired)
     }
 
     pub fn search(
@@ -165,6 +188,9 @@ impl History {
 
     pub fn toggle_pin(&self, id: &str, now: u64, retention: Retention) -> Result<bool> {
         let _writer = self.write_lock()?;
+        if self.secrets().iter().any(|clip| clip.id == id) {
+            bail!("secrets clear on their own and cannot be pinned");
+        }
         let (mut clips, _) = self.load_retained(now, retention)?;
         let Some(clip) = clips.iter_mut().find(|clip| clip.id == id) else {
             bail!("no clip with id {id}");
@@ -174,12 +200,20 @@ impl History {
         }
         clip.pinned = !clip.pinned;
         let pinned = clip.pinned;
-        self.store.save(&clips)?;
+        self.store
+            .save_keeping(&clips, |unread| unread_retained(unread, now, retention))?;
         Ok(pinned)
     }
 
     pub fn forget(&self, id: &str) -> Result<()> {
         let _writer = self.write_lock()?;
+        {
+            let mut held = self.secrets();
+            if let Some(index) = held.iter().position(|clip| clip.id == id) {
+                held.remove(index);
+                return Ok(());
+            }
+        }
         let mut clips = self.store.load()?;
         let Some(index) = clips.iter().position(|clip| clip.id == id) else {
             bail!("no clip with id {id}");
@@ -197,19 +231,33 @@ impl History {
             .load()?
             .into_iter()
             .partition(|clip| include_pinned || !clip.pinned);
-        self.store.save(&kept)?;
+        self.store
+            .save_keeping(&kept, |unread| !include_pinned && unread.pinned)?;
         self.remove_blobs(&removed);
-        Ok(removed.len())
+        let secrets = std::mem::take(&mut *self.secrets()).len();
+        Ok(removed.len() + secrets)
     }
 
     fn write_lock(&self) -> Result<File> {
         self.store.lock()
     }
 
+    fn secrets(&self) -> MutexGuard<'_, Vec<Clip>> {
+        self.secrets.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn held_secrets(&self, now: u64, retention: Retention) -> (Vec<Clip>, usize) {
+        let mut held = self.secrets();
+        let before = held.len();
+        held.retain(|clip| !crate::secrets::expired(clip.copied_at_ms, now, retention.secret_ttl));
+        (held.clone(), before - held.len())
+    }
+
     fn load_retained(&self, now: u64, retention: Retention) -> Result<(Vec<Clip>, usize)> {
         let (kept, dropped) = retain(self.store.load()?, now, retention);
         if !dropped.is_empty() {
-            self.store.save(&kept)?;
+            self.store
+                .save_keeping(&kept, |unread| unread_retained(unread, now, retention))?;
             self.remove_blobs(&dropped);
         }
         Ok((kept, dropped.len()))
@@ -217,7 +265,8 @@ impl History {
 
     fn save_retained(&self, clips: Vec<Clip>, now: u64, retention: Retention) -> Result<()> {
         let (kept, dropped) = retain(clips, now, retention);
-        self.store.save(&kept)?;
+        self.store
+            .save_keeping(&kept, |unread| unread_retained(unread, now, retention))?;
         self.remove_blobs(&dropped);
         Ok(())
     }
@@ -240,8 +289,8 @@ pub fn matching(clips: Vec<Clip>, query: &str, limit: usize) -> Vec<Clip> {
 
 pub fn retain(mut clips: Vec<Clip>, now: u64, retention: Retention) -> (Vec<Clip>, Vec<Clip>) {
     clips.sort_by_key(|clip| std::cmp::Reverse(clip.copied_at_ms));
-    let max_age = retention.max_age.as_millis() as u64;
     let mut unpinned = 0usize;
+    let mut unpinned_text = 0usize;
     let mut kept = Vec::with_capacity(clips.len());
     let mut dropped = Vec::new();
     for clip in clips {
@@ -251,7 +300,14 @@ pub fn retain(mut clips: Vec<Clip>, now: u64, retention: Retention) -> (Vec<Clip
             true
         } else {
             unpinned += 1;
-            now.saturating_sub(clip.copied_at_ms) <= max_age && unpinned <= retention.max_unpinned
+            let text = clip.text.as_ref().map_or(0, String::len);
+            let keep = within_age(clip.copied_at_ms, now, retention)
+                && unpinned <= retention.max_unpinned
+                && unpinned_text + text <= MAX_UNPINNED_TEXT_BYTES;
+            if keep {
+                unpinned_text += text;
+            }
+            keep
         };
         if keep {
             kept.push(clip);
@@ -262,12 +318,32 @@ pub fn retain(mut clips: Vec<Clip>, now: u64, retention: Retention) -> (Vec<Clip
     (kept, dropped)
 }
 
+fn within_age(copied_at_ms: u64, now: u64, retention: Retention) -> bool {
+    now.saturating_sub(copied_at_ms) <= retention.max_age.as_millis() as u64
+}
+
+fn unread_retained(unread: &Unread, now: u64, retention: Retention) -> bool {
+    unread.pinned || within_age(unread.copied_at_ms, now, retention)
+}
+
+// Ids hashed before the salt existed still refresh the clip of the same text.
+fn same_text(existing: &Clip, clip: &Clip) -> bool {
+    !existing.is_secret()
+        && existing.image.is_none()
+        && clip.image.is_none()
+        && existing.text == clip.text
+}
+
 fn clip_from_capture(
     capture: Capture,
     now: u64,
     secrets: SecretPolicy,
+    salt: &[u8],
 ) -> Result<(Clip, Option<Vec<u8>>), &'static str> {
-    if capture.sensitive && !secrets.keep {
+    let sensitive = capture.sensitive
+        || matches!(&capture.content, Content::Text(text)
+            if classify_text(text) == ClipKind::Text && crate::secrets::looks_like_password(text));
+    if sensitive && !secrets.keep {
         return Err("secret dropped by keep_secrets = false");
     }
     let mut clip = Clip {
@@ -285,7 +361,7 @@ fn clip_from_capture(
             if text.trim().is_empty() {
                 return Err("empty text");
             }
-            clip.kind = if capture.sensitive {
+            clip.kind = if sensitive {
                 ClipKind::Secret
             } else {
                 classify_text(&text)
@@ -297,7 +373,7 @@ fn clip_from_capture(
             if paths.is_empty() {
                 return Err("empty file list");
             }
-            clip.kind = if capture.sensitive {
+            clip.kind = if sensitive {
                 ClipKind::Secret
             } else {
                 ClipKind::File
@@ -306,10 +382,13 @@ fn clip_from_capture(
             None
         }
         Content::Png(png) => {
-            if capture.sensitive {
+            if sensitive {
                 return Err("secret images are never stored");
             }
             let (width, height) = png_size(&png).ok_or("unreadable PNG")?;
+            if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+                return Err("image larger than the pixel limit");
+            }
             clip.kind = ClipKind::Image;
             clip.image = Some(Image {
                 blob: String::new(),
@@ -328,21 +407,25 @@ fn clip_from_capture(
     if content.len() > MAX_CLIP_BYTES {
         return Err("clip larger than the capture limit");
     }
+    if clip.image.is_none() && content.len() > MAX_TEXT_BYTES {
+        return Err("text larger than the history limit");
+    }
     clip.bytes = content.len() as u64;
-    clip.id = clip_id(clip.kind, content, now);
+    clip.id = clip_id(clip.kind, content, now, salt);
     if let Some(image) = clip.image.as_mut() {
         image.blob = format!("{}.png", clip.id);
     }
     Ok((clip, blob))
 }
 
-fn clip_id(kind: ClipKind, content: &[u8], now: u64) -> String {
+fn clip_id(kind: ClipKind, content: &[u8], now: u64, salt: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(kind.id().as_bytes());
     if kind == ClipKind::Secret {
         hasher.update(now.to_le_bytes());
         hasher.update(std::process::id().to_le_bytes());
     } else {
+        hasher.update(salt);
         hasher.update(content);
     }
     let digest = hasher.finalize();

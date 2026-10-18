@@ -413,3 +413,256 @@ fn lines_this_version_cannot_read_survive_the_next_write() {
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].id, "kept");
 }
+
+#[test]
+fn password_shaped_copies_are_secrets_without_a_source_marker() {
+    let temp = TempStore::new("heuristic");
+    let history = temp.history();
+    let stored = added(
+        history
+            .record(text("vT9#qL2!mZx8", "Firefox"), NOW, retention(), KEEP)
+            .unwrap(),
+    );
+    assert_eq!(stored.kind, ClipKind::Secret);
+    assert!(history
+        .search("vT9", 10, NOW, retention())
+        .unwrap()
+        .is_empty());
+    assert!(history.toggle_pin(&stored.id, NOW, retention()).is_err());
+    let dropped = history
+        .record(
+            text("Kq7mWp2xRt9vLs", "Firefox"),
+            NOW,
+            retention(),
+            SecretPolicy { keep: false },
+        )
+        .unwrap();
+    assert!(matches!(dropped, Recorded::Dropped(_)), "{dropped:?}");
+}
+
+#[test]
+fn secrets_never_reach_the_history_file() {
+    let temp = TempStore::new("secret-memory");
+    let history = temp.history();
+    history
+        .record(text("plain words", "kitty"), NOW, retention(), KEEP)
+        .unwrap();
+    let held = added(
+        history
+            .record(secret("hunter2"), NOW + 1, retention(), KEEP)
+            .unwrap(),
+    );
+    history
+        .record(text("more words", "kitty"), NOW + 2, retention(), KEEP)
+        .unwrap();
+
+    let written = std::fs::read_to_string(history.store().history_path()).unwrap();
+    assert!(!written.contains("hunter2"), "{written}");
+    assert!(!written.contains(&held.id), "{written}");
+    assert_eq!(
+        ids(&history.live(NOW + 3, retention()).unwrap())[1],
+        held.id.as_str()
+    );
+    assert_eq!(temp.history().live(NOW + 3, retention()).unwrap().len(), 2);
+
+    history.forget(&held.id).unwrap();
+    assert_eq!(history.live(NOW + 3, retention()).unwrap().len(), 2);
+    history
+        .record(secret("hunter3"), NOW + 4, retention(), KEEP)
+        .unwrap();
+    assert_eq!(history.clear(true).unwrap(), 3);
+    assert!(history.live(NOW + 5, retention()).unwrap().is_empty());
+}
+
+#[test]
+fn secrets_already_on_disk_are_dropped_by_the_next_write() {
+    let temp = TempStore::new("secret-legacy");
+    let history = temp.history();
+    let legacy = Clip {
+        kind: ClipKind::Secret,
+        text: Some("hunter2".to_string()),
+        ..clip("c_legacy", NOW, false)
+    };
+    std::fs::create_dir_all(&temp.0).unwrap();
+    std::fs::write(
+        history.store().history_path(),
+        format!("{}\n", serde_json::to_string(&legacy).unwrap()),
+    )
+    .unwrap();
+    history
+        .record(text("new", "kitty"), NOW + 1, retention(), KEEP)
+        .unwrap();
+    let written = std::fs::read_to_string(history.store().history_path()).unwrap();
+    assert!(!written.contains("hunter2"), "{written}");
+}
+
+#[test]
+fn text_past_the_history_limit_is_not_stored() {
+    let temp = TempStore::new("big-text");
+    let history = temp.history();
+    let cases = [(MAX_TEXT_BYTES, true), (MAX_TEXT_BYTES + 1, false)];
+    for (size, stored) in cases {
+        let recorded = history
+            .record(text(&"a".repeat(size), "Firefox"), NOW, retention(), KEEP)
+            .unwrap();
+        assert_eq!(
+            matches!(recorded, Recorded::Added(_)),
+            stored,
+            "size: {size}"
+        );
+    }
+}
+
+#[test]
+fn retention_caps_the_unpinned_text_kept_on_disk() {
+    let big = |id: &str, copied_at_ms: u64, pinned: bool| Clip {
+        text: Some("a".repeat(MAX_UNPINNED_TEXT_BYTES / 2)),
+        ..clip(id, copied_at_ms, pinned)
+    };
+    let clips = vec![
+        big("u1", NOW, false),
+        big("u2", NOW - 1, false),
+        big("u3", NOW - 2, false),
+        big("p1", NOW - 3, true),
+        clip("small", NOW - 4, false),
+    ];
+    let (kept, dropped) = retain(clips, NOW, retention());
+    assert_eq!(ids(&kept), vec!["u1", "u2", "p1"]);
+    assert_eq!(ids(&dropped), vec!["u3", "small"]);
+}
+
+#[test]
+fn images_past_the_pixel_limit_are_dropped() {
+    let temp = TempStore::new("pixels");
+    let history = temp.history();
+    let cases = [
+        ((8192, 8192), true),
+        ((100_000, 100_000), false),
+        ((u32::MAX, 2), false),
+    ];
+    for ((width, height), stored) in cases {
+        let capture = Capture {
+            content: Content::Png(kind::png_header(width, height)),
+            app: None,
+            sensitive: false,
+        };
+        let recorded = history.record(capture, NOW, retention(), KEEP).unwrap();
+        assert_eq!(
+            matches!(recorded, Recorded::Added(_)),
+            stored,
+            "{width}x{height}"
+        );
+    }
+}
+
+#[test]
+fn unread_lines_age_out_and_clear_all_drops_them() {
+    let temp = TempStore::new("unread-retention");
+    let history = temp.history();
+    let store = history.store();
+    let stale = r#"{"id":"c_stale","kind":"hologram","copied_at_ms":1}"#;
+    let fresh = format!(r#"{{"id":"c_fresh","kind":"hologram","copied_at_ms":{NOW}}}"#);
+    let pinned = r#"{"id":"c_pinned","kind":"hologram","copied_at_ms":1,"pinned":true}"#;
+    let undated = r#"{"id":"c_undated","kind":"hologram"}"#;
+    std::fs::create_dir_all(&temp.0).unwrap();
+    std::fs::write(
+        store.history_path(),
+        format!("{stale}\n{fresh}\n{pinned}\n{undated}\n{{ not json\n"),
+    )
+    .unwrap();
+
+    history
+        .record(text("new", "Firefox"), NOW + 1, retention(), KEEP)
+        .unwrap();
+    let written = std::fs::read_to_string(store.history_path()).unwrap();
+    let lines: Vec<&str> = written.lines().collect();
+    assert!(lines.contains(&fresh.as_str()), "{written}");
+    assert!(lines.contains(&pinned), "{written}");
+    assert!(!lines.contains(&stale), "{written}");
+    assert!(!lines.contains(&undated), "{written}");
+    assert!(!written.contains("not json"), "{written}");
+
+    history.clear(false).unwrap();
+    let written = std::fs::read_to_string(store.history_path()).unwrap();
+    assert_eq!(
+        written.lines().collect::<Vec<_>>(),
+        vec![pinned],
+        "{written}"
+    );
+    history.clear(true).unwrap();
+    assert!(std::fs::read_to_string(store.history_path())
+        .unwrap()
+        .trim()
+        .is_empty());
+}
+
+#[test]
+fn clips_with_unsafe_blob_names_are_never_loaded() {
+    let temp = TempStore::new("blob-name");
+    let history = temp.history();
+    let victim = temp.0.join("victim.txt");
+    std::fs::create_dir_all(temp.0.join("blobs")).unwrap();
+    std::fs::write(&victim, "keep").unwrap();
+    let cases = [
+        "../victim.txt",
+        "c_0123456789abcdef.png/../../victim.txt",
+        "c_0123.png",
+    ];
+    for blob in cases {
+        let tampered = Clip {
+            kind: ClipKind::Image,
+            text: None,
+            image: Some(Image {
+                blob: blob.to_string(),
+                width: 1,
+                height: 1,
+            }),
+            ..clip("c_tampered", NOW, false)
+        };
+        std::fs::write(
+            history.store().history_path(),
+            format!("{}\n", serde_json::to_string(&tampered).unwrap()),
+        )
+        .unwrap();
+        assert!(history.store().load().unwrap().is_empty(), "blob: {blob}");
+        assert!(history.forget("c_tampered").is_err(), "blob: {blob}");
+        history.clear(true).unwrap();
+        assert!(victim.exists(), "blob: {blob}");
+    }
+}
+
+#[test]
+fn content_ids_are_salted_per_install() {
+    let first = TempStore::new("salt-a");
+    let second = TempStore::new("salt-b");
+    let id = |temp: &TempStore| {
+        added(
+            temp.history()
+                .record(text("hunter2", "kitty"), NOW, retention(), KEEP)
+                .unwrap(),
+        )
+        .id
+    };
+    assert_ne!(id(&first), id(&second));
+    let salt = std::fs::read(first.0.join("id-salt")).unwrap();
+    assert_eq!(salt.len(), 32);
+    assert_eq!(first.history().store().id_salt().unwrap(), salt);
+}
+
+#[test]
+fn clips_saved_under_unsalted_ids_still_refresh() {
+    let temp = TempStore::new("salt-legacy");
+    let history = temp.history();
+    history
+        .store()
+        .save(&[clip("git status", NOW, true)])
+        .unwrap();
+    let recorded = history
+        .record(text("git status", "kitty"), NOW + 1, retention(), KEEP)
+        .unwrap();
+    match recorded {
+        Recorded::Refreshed(clip) => assert_eq!(clip.id, "git status"),
+        other => panic!("expected Refreshed, got {other:?}"),
+    }
+    assert_eq!(history.live(NOW + 1, retention()).unwrap().len(), 1);
+}
