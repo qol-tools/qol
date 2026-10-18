@@ -378,15 +378,53 @@ jobs:
         if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
         run: cargo test --locked -p qol-process --all-targets
 
-  # Pull requests only check the release profile. Every queue entry builds it
+  # Only the tail of the merge queue, the last entry GitHub is building, runs
+  # the release build. Its queue commit holds every entry ahead of it, so the
+  # build plans against main rather than the entry ahead, whose commit is this
+  # run's merge_group base. queue_batch.py explains the rest of the batch.
+  batch:
+    name: batch role
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      role: ${{ steps.role.outputs.role }}
+      ubuntu_build: ${{ steps.affected.outputs.ubuntu_build }}
+      ubuntu_skip: ${{ steps.affected.outputs.ubuntu_skip }}
+      macos_build: ${{ steps.affected.outputs.macos_build }}
+      macos_skip: ${{ steps.affected.outputs.macos_skip }}
+      windows_build: ${{ steps.affected.outputs.windows_build }}
+      windows_skip: ${{ steps.affected.outputs.windows_skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Find this entry in the merge queue
+        id: role
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/queue_batch.py role
+
+      - name: Plan the batch release build against main
+        id: affected
+        if: steps.role.outputs.role == 'tail'
+        run: |
+          BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$GITHUB_SHA" python3 .github/scripts/affected_crates.py
+
+  # Pull requests only check the release profile. The queue's tail builds it
   # here in parallel with lint + test, so the build no longer waits behind
   # clippy and the tests. A push to main never runs it: the build cache
   # workflow already compiles the release build there, and a second job saving
   # the same cache key would drop one job's artifacts.
   release-build:
     name: release build (${{ matrix.os }})
-    needs: plan
-    if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}
+    needs: batch
+    if: ${{ !cancelled() && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
@@ -398,14 +436,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            build_args: ${{ needs.plan.outputs.ubuntu_build }}
-            skip: ${{ needs.plan.outputs.ubuntu_skip }}
+            build_args: ${{ needs.batch.outputs.ubuntu_build }}
+            skip: ${{ needs.batch.outputs.ubuntu_skip }}
           - os: macos-latest
-            build_args: ${{ needs.plan.outputs.macos_build }}
-            skip: ${{ needs.plan.outputs.macos_skip }}
+            build_args: ${{ needs.batch.outputs.macos_build }}
+            skip: ${{ needs.batch.outputs.macos_skip }}
           - os: windows-latest
-            build_args: ${{ needs.plan.outputs.windows_build }}
-            skip: ${{ needs.plan.outputs.windows_skip }}
+            build_args: ${{ needs.batch.outputs.windows_build }}
+            skip: ${{ needs.batch.outputs.windows_skip }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -447,23 +485,66 @@ jobs:
       - name: Build registry tool
         run: cargo build --locked -p qol-plugin-registry
 
+  # A failed batch release build sends the whole batch back as one pull
+  # request on a queue-batch/ branch and closes the originals. A batch of one,
+  # or a batch whose tail already combines one, goes back as usual.
+  batch-failure:
+    name: Combine the failed batch
+    needs: [batch, release-build]
+    if: ${{ always() && github.event_name == 'merge_group' && needs.batch.outputs.role == 'tail' && needs.release-build.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      checks: read
+    outputs:
+      combined: ${{ steps.combine.outputs.combined }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Open one pull request for the batch
+        id: combine
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/queue_batch.py combine
+
   # The one check the merge queue ruleset requires. A skipped job reports no
   # status under its matrix name, so requiring the jobs themselves would leave
   # a pull request waiting on a check that never arrives. A push is exempt so a
-  # skipped run stays skipped for Versioning.
+  # skipped run stays skipped for Versioning. In the queue this job only judges
+  # the entry's own jobs, and queue_batch.py posts the required merge gate
+  # check once a batch release build covers the entry, so the job takes
+  # another name there. It runs after the failure report, which needs the
+  # entry still queued.
   gate:
-    name: merge gate
-    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
+    name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}
+    needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'merge_group'
+        with:
+          sparse-checkout: .github/scripts
+
       - name: Every job passed or was skipped
+        id: verdict
         env:
           PLAN: ${{ needs.plan.result }}
           LINT: ${{ needs.repository-lint.result }}
           REUSED: ${{ needs.plan.outputs.reused }}
           CHECK: ${{ needs.check.result }}
+          BATCH: ${{ needs.batch.result }}
+          ROLE: ${{ needs.batch.outputs.role }}
           BUILD: ${{ needs.release-build.result }}
           RESULTS: ${{ join(needs.*.result, ' ') }}
         # A queue run that skipped its tests or release builds would land an
@@ -473,23 +554,35 @@ jobs:
           [ "$PLAN" = success ] || exit 1
           [ "$LINT" = success ] || exit 1
           if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
-            [ "$BUILD" = success ] || exit 1
+            [ "$BATCH" = success ] || exit 1
+            [ "$ROLE" != tail ] || [ "$BUILD" = success ] || exit 1
             [ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1
           fi
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
 
+      - name: Report the verdict to the merge queue
+        if: ${{ always() && github.event_name == 'merge_group' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERDICT: ${{ steps.verdict.outcome }}
+          ROLE: ${{ needs.batch.outputs.role }}
+        run: python3 .github/scripts/queue_batch.py gate
+
   # Any failure on a pull request means a fix and a new push that runs every
-  # job again, so the first failed job cancels this run. The queue keeps running
-  # to the end: its failure report and the review that diagnoses it need a
-  # failed run, not a cancelled one.
+  # job again, and any failure in the queue sends the entry back, so the first
+  # failed job cancels this run and frees its runners for the entries behind.
+  # The gate, the batch combine and the queue failure report run anyway: they
+  # run always(), and the failed job keeps its failure result. A watcher that
+  # outlives its timeout only stops watching, so it never fails a green run.
   stop-on-failure:
     name: Stop on first failure
     needs: review
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'pull_request' && needs.review.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    continue-on-error: true
     permissions:
       contents: read
       actions: write
@@ -529,8 +622,8 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]
-    if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') }}
+    needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure]
+    if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

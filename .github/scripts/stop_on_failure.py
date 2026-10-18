@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Stop a pull request run at its first failed job.
+"""Stop a pull request or merge queue run at its first failed job.
 
-Any failure means a fix and a new push, which runs every job again, so the jobs
-still running only spend runners. This watches the run's jobs and, at the first
-failure, cancels this run. The merge gate runs even in a cancelled run, so the
-pull request still shows the failure.
+Any failure means a fix and a new push, or a queue entry sent back, so the jobs
+still running only spend runners the queue entries behind it need. This watches
+the run's jobs and, at the first failure, cancels this run. The gate and the
+queue failure report run even in a cancelled run, so the pull request still
+shows the failure.
 """
 
 import json
@@ -16,17 +17,17 @@ from collections.abc import Callable
 
 from queue_verdict import gh_json
 
-GATE = "merge gate"
+GATES = ("merge gate", "queue gate")
 FAILED = ("failure", "timed_out")
 POLL_SECONDS = 15
 
 
 def first_failure(jobs: list[dict]) -> dict | None:
-    return next((job for job in jobs if job["name"] != GATE and job.get("conclusion") in FAILED), None)
+    return next((job for job in jobs if job["name"] not in GATES and job.get("conclusion") in FAILED), None)
 
 
 def gate_finished(jobs: list[dict]) -> bool:
-    return any(job["name"] == GATE and job.get("status") == "completed" for job in jobs)
+    return any(job["name"] in GATES and job.get("status") == "completed" for job in jobs)
 
 
 def cancel(repo: str, run_id: int | str) -> None:

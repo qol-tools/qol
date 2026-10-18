@@ -44,6 +44,8 @@ QUEUE_BUILD_CI_JOBS = {
     "release build (macos-latest)",
     "release build (windows-latest)",
 }
+BATCH_CI_JOB = "batch role"
+BATCH_BUILD_CHECK = "batch release build"
 
 
 @dataclass(frozen=True)
@@ -518,8 +520,38 @@ def queue_ci_evidence(repo: str, sha: str, landed_run: dict) -> dict:
         ) from error
     jobs = ci_run_jobs(repo, run["id"])
     reused = reused_queue_verdict(jobs)
-    required = QUEUE_BUILD_CI_JOBS if reused else REQUIRED_CI_JOBS
-    return require_source_ci(sha, runs, jobs, required)
+    batched = any(job.get("name") == BATCH_CI_JOB for job in jobs)
+    if not reused:
+        required = REQUIRED_CI_JOBS
+    elif batched:
+        required = {PLAN_CI_JOB, BATCH_CI_JOB}
+    else:
+        required = QUEUE_BUILD_CI_JOBS
+    evidence = require_source_ci(sha, runs, jobs, required)
+    if batched and not batch_release_built(repo, sha):
+        raise RuntimeError(
+            f"merge queue run {run.get('id')} passed, but no batch release "
+            f"build covered {sha}"
+        )
+    return evidence
+
+
+def batch_release_built(repo: str, sha: str) -> bool:
+    payload = gh_json(
+        [
+            "--method",
+            "GET",
+            f"/repos/{repo}/commits/{sha}/check-runs",
+            "-f",
+            f"check_name={BATCH_BUILD_CHECK}",
+            "-f",
+            "filter=latest",
+        ]
+    )
+    return any(
+        check.get("conclusion") == "success"
+        for check in payload.get("check_runs", [])
+    )
 
 
 def settled_ci(repo: str, sha: str, runs: list[dict], jobs: list[dict]) -> dict:

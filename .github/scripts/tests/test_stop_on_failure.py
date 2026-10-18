@@ -22,7 +22,8 @@ class FirstFailureTests(unittest.TestCase):
             ([job("ubuntu", "completed", "failure"), job("macos")], "ubuntu"),
             ([job("windows", "completed", "timed_out")], "windows"),
             ([job("plan", "completed", "skipped"), job("macos", "completed", "cancelled")], None),
-            ([job(sof.GATE, "completed", "failure")], None),
+            ([job("merge gate", "completed", "failure")], None),
+            ([job("queue gate", "completed", "failure")], None),
         ]
         for jobs, expected in cases:
             with self.subTest(jobs=jobs):
@@ -33,8 +34,9 @@ class FirstFailureTests(unittest.TestCase):
 class GateFinishedTests(unittest.TestCase):
     def test_only_a_completed_gate_ends_the_watch(self):
         self.assertFalse(sof.gate_finished([job("plan", "completed", "success")]))
-        self.assertFalse(sof.gate_finished([job(sof.GATE, "queued")]))
-        self.assertTrue(sof.gate_finished([job(sof.GATE, "completed", "success")]))
+        self.assertFalse(sof.gate_finished([job("merge gate", "queued")]))
+        self.assertTrue(sof.gate_finished([job("merge gate", "completed", "success")]))
+        self.assertTrue(sof.gate_finished([job("queue gate", "completed", "failure")]))
 
 
 class WatchTests(unittest.TestCase):
@@ -60,7 +62,7 @@ class WatchTests(unittest.TestCase):
 
     def test_a_green_run_ends_at_the_gate_without_cancelling(self):
         message, cancelled, _ = self.watch(
-            [[job("ubuntu", "completed", "success"), job(sof.GATE, "completed", "success")]]
+            [[job("ubuntu", "completed", "success"), job("merge gate", "completed", "success")]]
         )
         self.assertEqual(cancelled, [])
         self.assertEqual(message, "every job finished")

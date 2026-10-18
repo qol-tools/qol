@@ -59,7 +59,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}",
+            "needs: batch",
+            "if: ${{ !cancelled() && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -100,12 +101,67 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("workflows: [tests]", versioning)
         self.assertNotIn("linker=rust-lld", versioning)
 
+    def test_only_the_queue_tail_plans_a_release_build_against_main(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        batch = workflow.split("  batch:\n", 1)[1].split("  release-build:\n", 1)[0]
+        for contract in [
+            "name: batch role",
+            "needs: plan",
+            "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}",
+            "fetch-depth: 0",
+            "run: python3 .github/scripts/queue_batch.py role",
+            "if: steps.role.outputs.role == 'tail'",
+            'BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$GITHUB_SHA" python3 .github/scripts/affected_crates.py',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, batch)
+        for os_name in ["ubuntu", "macos", "windows"]:
+            for output in ["build", "skip"]:
+                with self.subTest(os=os_name, output=output):
+                    self.assertIn(f"{os_name}_{output}: ${{{{ steps.affected.outputs.{os_name}_{output} }}}}", batch)
+        self.assertNotIn("rust-setup", batch)
+        self.assertNotIn("write", batch)
+
+    def test_a_failed_batch_release_build_combines_the_batch(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        failure = workflow.split("  batch-failure:\n", 1)[1].split("\n\n  #", 1)[0]
+        for contract in [
+            "needs: [batch, release-build]",
+            "github.event_name == 'merge_group' && needs.batch.outputs.role == 'tail' && needs.release-build.result == 'failure'",
+            "contents: write",
+            "pull-requests: write",
+            "combined: ${{ steps.combine.outputs.combined }}",
+            "run: python3 .github/scripts/queue_batch.py combine",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, failure)
+        self.assertNotIn("cargo", failure)
+
+    def test_the_queue_reconciler_runs_from_main_after_every_queue_run(self):
+        workflow = (ROOT / ".github/workflows/queue-batch.yml").read_text()
+        for contract in [
+            "workflow_run:\n    workflows: [tests]\n    types: [completed]",
+            "permissions:\n  contents: read",
+            "cancel-in-progress: false",
+            "if: github.event.workflow_run.event == 'merge_group'",
+            "actions: write",
+            "checks: write",
+            "run: python3 .github/scripts/queue_batch.py reconcile",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, workflow)
+        self.assertNotIn("ref:", workflow)
+        self.assertNotIn("cargo", workflow)
+
     def test_one_gate_job_carries_the_merge_verdict(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
         for contract in [
-            "name: merge gate",
-            "needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]",
+            "name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}",
+            "needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]",
+            "checks: write",
+            "VERDICT: ${{ steps.verdict.outcome }}",
+            "run: python3 .github/scripts/queue_batch.py gate",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
             "LINT: ${{ needs.repository-lint.result }}",
@@ -117,8 +173,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, gate)
         report = workflow.split("  queue-report:\n", 1)[1]
-        self.assertIn("needs: [plan, repository-lint, check, release-build, process-windows, registry-tool]", report)
-        self.assertIn("contains(needs.*.result, 'failure')", report)
+        self.assertIn("needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure]", report)
+        self.assertIn("contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == ''", report)
 
     def test_repository_lint_runs_beside_planning_after_review(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -139,7 +195,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, lint)
-        for job in ["check", "process-windows", "release-build", "registry-tool"]:
+        for job in ["check", "process-windows", "batch", "registry-tool"]:
             with self.subTest(job=job):
                 dependencies = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("needs: plan", dependencies)
@@ -164,11 +220,48 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                             "LINT": lint,
                             "REUSED": "false",
                             "CHECK": "success",
+                            "BATCH": "success",
+                            "ROLE": "tail",
                             "BUILD": "success",
                             "RESULTS": f"success {lint} success success skipped skipped",
                         },
                     )
                     self.assertEqual(result.returncode == 0, lint == "success", result.stdout + result.stderr)
+
+    def test_queue_gate_needs_a_release_build_only_from_the_tail(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        gate = workflow.split("  gate:\n", 1)[1].split("  stop-on-failure:\n", 1)[0]
+        step = named_step(gate, "Every job passed or was skipped", "      ")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n", 1)[0])
+        cases = [
+            ("success", "tail", "success", True),
+            ("success", "tail", "failure", False),
+            ("success", "tail", "skipped", False),
+            ("success", "ahead", "skipped", True),
+            ("success", "gone", "skipped", True),
+            ("failure", "", "skipped", False),
+            ("skipped", "", "skipped", False),
+        ]
+        for batch, role, build, passes in cases:
+            with self.subTest(batch=batch, role=role, build=build):
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "GITHUB_EVENT_NAME": "merge_group",
+                        "PLAN": "success",
+                        "LINT": "success",
+                        "REUSED": "false",
+                        "CHECK": "success",
+                        "BATCH": batch,
+                        "ROLE": role,
+                        "BUILD": build,
+                        "RESULTS": f"success success success {batch} {build} skipped success skipped skipped",
+                    },
+                )
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
     def test_pull_request_runs_start_only_after_the_review_passes(self):
         for name, first in [("ci.yml", "  plan:\n"), ("codeql.yml", "  analyze:\n")]:
@@ -183,10 +276,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         stop = workflow.split("  stop-on-failure:\n", 1)[1].split("    runs-on:", 1)[0]
         self.assertIn("needs: review", stop)
-        for job in ["check", "process-windows", "release-build", "registry-tool"]:
+        self.assertIn("github.event_name == 'pull_request' && needs.review.result == 'success'", stop)
+        for job in ["check", "process-windows", "batch", "registry-tool"]:
             with self.subTest(job=job):
                 gated = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("!cancelled() && needs.plan.result == 'success' && ", gated)
+
+    def test_a_queue_run_stops_at_its_first_failure_and_still_reports_it(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        stop = workflow.split("  stop-on-failure:\n", 1)[1].split("\n\n  #", 1)[0]
+        for contract in [
+            "github.event_name == 'merge_group' ||",
+            "continue-on-error: true",
+            "actions: write",
+            "run: python3 .github/scripts/stop_on_failure.py",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, stop)
+        for job in ["gate", "queue-report", "batch-failure"]:
+            with self.subTest(job=job):
+                condition = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("if: ${{ always() && ", condition)
+        self.assertIn("contains(needs.*.result, 'failure')", workflow.split("  queue-report:\n", 1)[1])
 
     def test_only_a_queue_run_cancels_superseded_runs_and_compiles_nothing(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -448,8 +559,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         )
         for contract in [
             "          - os: windows-latest\n"
-            "            build_args: ${{ needs.plan.outputs.windows_build }}\n"
-            "            skip: ${{ needs.plan.outputs.windows_skip }}\n",
+            "            build_args: ${{ needs.batch.outputs.windows_build }}\n"
+            "            skip: ${{ needs.batch.outputs.windows_skip }}\n",
             "timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}",
             "    defaults:\n      run:\n        shell: bash\n",
         ]:

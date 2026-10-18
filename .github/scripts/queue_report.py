@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Callable
 
 from queue_verdict import gh_json, queued_pull
 
@@ -58,10 +59,12 @@ def comment(failed: list[tuple[dict, list[str]]], run_url: str) -> str:
     return "\n\n".join(parts)
 
 
-def report(repo: str, head_ref: str, run_id: str, run_url: str) -> str:
+def report(repo: str, head_ref: str, run_id: str, run_url: str, live: Callable[[], bool] = lambda: True) -> str:
     number = queued_pull(head_ref)
     if number is None:
         return f"no pull request in {head_ref}"
+    if not live():
+        return f"#{number} has a newer queue commit: this run reports nothing"
     jobs = failed_jobs(gh_json([f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"])["jobs"])
     failed = [(job, errors(gh_json([f"repos/{repo}/check-runs/{job['id']}/annotations"]))) for job in jobs]
     head = gh_json([f"repos/{repo}/pulls/{number}"])["head"]["sha"]
@@ -89,8 +92,11 @@ def main() -> int:
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
     run_url = f"{os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{run_id}"
+    from queue_batch import live_entry
+
     try:
-        print(report(repo, os.environ["HEAD_REF"], run_id, run_url))
+        sha = os.environ["GITHUB_SHA"]
+        print(report(repo, os.environ["HEAD_REF"], run_id, run_url, lambda: live_entry(repo, sha) is not None))
     except (RuntimeError, KeyError, json.JSONDecodeError) as error:
         print(f"::warning::no merge queue comment: {error}", file=sys.stderr)
     return 0

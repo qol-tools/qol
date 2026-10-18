@@ -473,6 +473,68 @@ class SourceCiTests(unittest.TestCase):
                         "qol-tools/qol", sha, Path("/repo"), run_id=42
                     )
 
+    @patch.object(rc, "gh_json")
+    def test_batched_queue_run_needs_the_batch_release_build_check(self, gh_json):
+        sha = "a" * 40
+        landed = {
+            "id": 42,
+            "path": ".github/workflows/ci.yml",
+            "event": "push",
+            "status": "completed",
+            "head_sha": sha,
+            "conclusion": "success",
+        }
+        landed_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        queued = {"id": 41, "head_sha": sha, "conclusion": "success"}
+        queue_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (ubuntu-latest)", "conclusion": "success"},
+            {"name": "lint + test (macos-latest)", "conclusion": "success"},
+            {"name": "lint + test (windows-latest)", "conclusion": "success"},
+            {"name": "batch role", "conclusion": "success"},
+            {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        reused_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
+            {"name": "batch role", "conclusion": "success"},
+            {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        cases = [
+            (queue_jobs, [{"conclusion": "success"}], None),
+            (reused_jobs, [{"conclusion": "success"}], None),
+            (queue_jobs, [{"conclusion": "failure"}], "no batch release build covered"),
+            (queue_jobs, [], "no batch release build covered"),
+            (reused_jobs, [], "no batch release build covered"),
+        ]
+        for jobs, checks, message in cases:
+            with self.subTest(jobs=len(jobs), checks=checks):
+                gh_json.reset_mock()
+                gh_json.side_effect = [
+                    landed,
+                    {"jobs": landed_jobs},
+                    {"workflow_runs": [queued]},
+                    {"jobs": jobs},
+                    {"check_runs": checks},
+                ]
+                if message is None:
+                    evidence = rc.source_ci_evidence(
+                        "qol-tools/qol", sha, Path("/repo"), run_id=42
+                    )
+                    self.assertEqual(evidence["id"], 41)
+                    self.assertIn(
+                        "check_name=batch release build",
+                        gh_json.call_args_list[4].args[0],
+                    )
+                    continue
+                with self.assertRaisesRegex(RuntimeError, message):
+                    rc.source_ci_evidence(
+                        "qol-tools/qol", sha, Path("/repo"), run_id=42
+                    )
+
     def test_skipped_checks_count_as_reuse_only_beside_a_passed_plan(self):
         plan = {"name": "Plan affected crates", "conclusion": "success"}
         skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}

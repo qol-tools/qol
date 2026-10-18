@@ -99,6 +99,14 @@ class ReportTests(unittest.TestCase):
         with mock.patch.object(qr, "gh_json", side_effect=AssertionError("no api call")):
             self.assertEqual(qr.report("o/r", "refs/heads/main", "9", RUN_URL), "no pull request in refs/heads/main")
 
+    def test_a_run_github_rebuilt_posts_nothing(self):
+        ref = f"refs/heads/gh-readonly-queue/main/pr-40-{SHA}"
+        with mock.patch.object(qr, "gh_json", side_effect=AssertionError("no api call")):
+            self.assertEqual(
+                qr.report("o/r", ref, "9", RUN_URL, live=lambda: False),
+                "#40 has a newer queue commit: this run reports nothing",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
