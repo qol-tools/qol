@@ -65,11 +65,7 @@ fn app() -> HeadlessApp {
                 .usage(format!("{PLUGIN_ID} forget <id>"))
                 .output("Confirms the removed id.")
                 .exit_behavior("Exits non-zero if no clip has that id.")
-                .run_plain_text(|context| {
-                    let id = one_id(context)?;
-                    open_history()?.forget(id)?;
-                    Ok(PlainTextOutput::text(format!("Forgot {id}")))
-                }),
+                .run_plain_text(|context| forget_text(one_id(context)?)),
         )
         .command(
             Command::new("clear")
@@ -255,8 +251,13 @@ fn get_json(id: &str) -> Result<Value> {
     Ok(value)
 }
 
+// Secrets live only in the daemon's memory, so pin, forget and clear go through it whenever
+// qol-tray runs, and act on the store directly only when it does not.
 fn pin_text(id: &str) -> Result<PlainTextOutput> {
-    let pinned = open_history()?.toggle_pin(id, now_ms(), retention())?;
+    let pinned = match daemon_action("pin", json!({ "id": id }))? {
+        Some(data) => data["pinned"].as_bool().unwrap_or_default(),
+        None => open_history()?.toggle_pin(id, now_ms(), retention())?,
+    };
     let verb = if pinned { "Pinned" } else { "Unpinned" };
     Ok(PlainTextOutput::text(format!("{verb} {id}")))
 }
@@ -267,20 +268,40 @@ fn clear_text(args: &[String]) -> Result<PlainTextOutput> {
         [flag] if flag == "--all" => true,
         _ => bail!("clear takes only --all"),
     };
-    let removed = open_history()?.clear(include_pinned)?;
+    let removed = match daemon_action("clear", json!({ "all": include_pinned }))? {
+        Some(data) => data["cleared"].as_u64().unwrap_or_default() as usize,
+        None => open_history()?.clear(include_pinned)?,
+    };
     let noun = if removed == 1 { "clip" } else { "clips" };
     Ok(PlainTextOutput::text(format!("Cleared {removed} {noun}")))
 }
 
+fn forget_text(id: &str) -> Result<PlainTextOutput> {
+    if daemon_action("forget", json!({ "id": id }))?.is_none() {
+        open_history()?.forget(id)?;
+    }
+    Ok(PlainTextOutput::text(format!("Forgot {id}")))
+}
+
 fn copy_via_tray(id: &str) -> Result<()> {
-    let route = qol_conventions::api_routes::plugin_action(PLUGIN_ID, "copy");
-    let body = json!({ "id": id }).to_string();
-    let (status, response) = qol_plugin_api::host_exec::post_to_daemon(&route, &body)
+    daemon_action("copy", json!({ "id": id }))?
         .context("qol-tray is not running; copy needs the clipboard daemon")?;
+    Ok(())
+}
+
+// None when qol-tray is not running; the daemon's answer data otherwise.
+fn daemon_action(action: &str, input: Value) -> Result<Option<Value>> {
+    let route = qol_conventions::api_routes::plugin_action(PLUGIN_ID, action);
+    let Ok((status, response)) =
+        qol_plugin_api::host_exec::post_to_daemon(&route, &input.to_string())
+    else {
+        return Ok(None);
+    };
     if !(200..300).contains(&status) {
         bail!("qol-tray answered {status}: {response}");
     }
-    Ok(())
+    let answer: Value = serde_json::from_str(&response).unwrap_or_default();
+    Ok(Some(answer.get("data").cloned().unwrap_or_default()))
 }
 
 #[cfg(test)]

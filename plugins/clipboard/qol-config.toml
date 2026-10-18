@@ -30,7 +30,7 @@ step = 1
 
 [section.secrets]
 label = "Secrets"
-description = "Copies that a password manager marks as sensitive."
+description = "Copies that a password manager marks as sensitive, and single words shaped like a generated password. Secrets are kept in memory only, never on disk."
 
 [field.keep_secrets]
 type = "boolean"
