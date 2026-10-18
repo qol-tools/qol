@@ -1809,6 +1809,18 @@ fn a_park_that_closed_its_tab_stays_listed_until_its_conversation_opens_again() 
             &mut caches,
         )
     };
+    host.panes = vec![pane(21, "reopened", false, &["zsh", "codex"], "codex")];
+    tick_at(&host, 99);
+    let stored: ParkRecord =
+        serde_json::from_str(&std::fs::read_to_string(parked.path().join("park-21.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        stored.closed_at,
+        Some(70),
+        "its closing tab is not a reopen"
+    );
+
+    host.panes.clear();
     for now in 100..=101 {
         assert!(tick_at(&host, now).is_empty());
     }

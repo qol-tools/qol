@@ -349,15 +349,18 @@ pub fn open(id: &str) -> Result<String> {
         bail!("`{id}` is already being resumed or reopened");
     };
     let record = store.load(id)?;
-    if record.state == ParkState::Finished {
-        return reopen(&store, record, "reopened from CLI Sessions");
-    }
     let terminals = TerminalSessionService::system();
     let interpreter = CliSessionInterpreter::system();
     let caller = record
         .session
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid parked session token: {error}"))?;
+    if let Holder::Live(binding) = holder(&terminals, &interpreter, &store, &record, &caller) {
+        return Ok(format!("{id} is already open in {binding}"));
+    }
+    if record.state == ParkState::Finished {
+        return reopen(&store, record, "reopened from CLI Sessions");
+    }
     let Some(_turn) = store.try_lock_conversation(&record.external_id)? else {
         bail!("`{id}` is already being resumed");
     };

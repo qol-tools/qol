@@ -911,11 +911,20 @@ fn show_detached_parks(
         .parked_dir
         .clone()
         .map(crate::park::store::ParkStore::with_dir);
+    let closed_tab = |record: &ParkRecord| {
+        record
+            .resumed_session
+            .as_deref()
+            .unwrap_or(&record.session)
+            .parse::<SessionBinding>()
+            .ok()
+    };
     if let Some(store) = store.as_ref() {
-        for record in closed
-            .iter()
-            .filter(|record| open_conversations.contains(&record.external_id))
-        {
+        for record in closed.iter().filter(|record| {
+            open_conversations.contains(&record.external_id)
+                && !closed_tab(record)
+                    .is_some_and(|tab| panes.iter().any(|pane| pane.id == *tab.session_id()))
+        }) {
             if let Err(error) = store.mark_reopened(record) {
                 log::warn!(
                     "[cli-sessions] park {} not marked reopened: {error:#}",
@@ -934,12 +943,7 @@ fn show_detached_parks(
         )
     });
     let closed = closed.iter().filter_map(|record| {
-        let binding = record
-            .resumed_session
-            .as_deref()
-            .unwrap_or(&record.session)
-            .parse::<SessionBinding>()
-            .ok()?;
+        let binding = closed_tab(record)?;
         Some((
             binding.session_id().clone(),
             binding.root_pid(),
