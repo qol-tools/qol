@@ -5,6 +5,7 @@ mod rail;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use futures::StreamExt;
 use gpui::{
     div, point, px, AsyncApp, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
     IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent, ParentElement, Render,
@@ -35,7 +36,6 @@ pub struct ExplorerView {
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
-    pumping: bool,
 }
 
 impl ExplorerView {
@@ -48,9 +48,8 @@ impl ExplorerView {
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
-            pumping: false,
         };
-        view.pump(cx);
+        view.listen(cx);
         view
     }
 
@@ -72,24 +71,23 @@ impl ExplorerView {
             .scroll_to_item(self.browser.cursor(), ScrollStrategy::Top);
     }
 
-    fn pump(&mut self, cx: &mut Context<Self>) {
-        if self.pumping || !self.browser.reading() {
+    fn listen(&mut self, cx: &mut Context<Self>) {
+        let Some(mut wakes) = self.browser.take_wakes() else {
             return;
-        }
-        self.pumping = true;
-        cx.spawn(
-            async move |view: WeakEntity<Self>, cx: &mut AsyncApp| loop {
+        };
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            while wakes.next().await.is_some() {
                 cx.background_executor().timer(PUMP).await;
-                let reading = view.update(cx, |view, cx| view.drain(cx)).unwrap_or(false);
-                if !reading {
+                while wakes.try_recv().is_ok() {}
+                if view.update(cx, |view, cx| view.drain(cx)).is_err() {
                     return;
                 }
-            },
-        )
+            }
+        })
         .detach();
     }
 
-    fn drain(&mut self, cx: &mut Context<Self>) -> bool {
+    fn drain(&mut self, cx: &mut Context<Self>) {
         let drained = self.browser.drain();
         if let Some(scroll) = drained.scroll {
             self.set_scroll(scroll);
@@ -98,8 +96,6 @@ impl ExplorerView {
         if drained.changed {
             cx.notify();
         }
-        self.pumping = self.browser.reading();
-        self.pumping
     }
 
     fn expire_run(&self, cx: &mut Context<Self>) {
@@ -120,7 +116,6 @@ impl ExplorerView {
         }
         cx.stop_propagation();
         cx.notify();
-        self.pump(cx);
     }
 
     fn on_modifiers(
@@ -219,14 +214,12 @@ impl ExplorerView {
         let scroll = self.scroll_offset();
         if self.arrived(|browser| browser.go(folder, scroll)) {
             cx.notify();
-            self.pump(cx);
         }
     }
 
     fn edit_path(&mut self, cx: &mut Context<Self>) {
         if self.browser.edit_path() {
             cx.notify();
-            self.pump(cx);
         }
     }
 
@@ -242,7 +235,6 @@ impl ExplorerView {
         };
         if changed {
             cx.notify();
-            self.pump(cx);
         }
     }
 }

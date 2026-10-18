@@ -293,6 +293,27 @@ fn relative_paths_resolve_against_the_current_folder() {
 }
 
 #[test]
+fn dots_collapse_when_a_path_resolves() {
+    let home = Path::new("/home/me");
+    let cwd = Path::new("/work/a");
+    let cases = [
+        ("..", PathBuf::from("/work")),
+        ("../b", PathBuf::from("/work/b")),
+        (".", PathBuf::from("/work/a")),
+        ("./c/../d", PathBuf::from("/work/a/d")),
+        ("~/..", PathBuf::from("/home")),
+        ("/..", PathBuf::from("/")),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            path::resolve(&sep(input), home, cwd),
+            expected,
+            "input: {input}"
+        );
+    }
+}
+
+#[test]
 fn home_is_shown_as_tilde() {
     let home = Path::new("/home/me");
     assert_eq!(path::display_with_home(home, home), "~");
@@ -327,7 +348,7 @@ fn path_input_splits_into_parent_and_last_segment() {
 }
 
 fn read_listing(folder: &Path) -> Listing {
-    let read = listing::start(folder.to_path_buf());
+    let read = listing::start(folder.to_path_buf(), listing::Pass::NamesOnly, || {});
     let mut listing = Listing::new(folder.to_path_buf());
     while let Ok(event) = read.events().recv() {
         listing.apply(event);
@@ -363,6 +384,30 @@ fn hidden_folders_are_suggested_only_when_shown() {
     fs::create_dir(temp.path().join(".config")).unwrap();
     let listing = read_listing(temp.path());
 
-    assert!(path::suggestions(&listing, ".c", false).is_empty());
-    assert_eq!(path::suggestions(&listing, ".c", true), [".config"]);
+    assert!(path::suggestions(&listing, "", false).is_empty());
+    assert_eq!(path::suggestions(&listing, "", true), [".config"]);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_dot_segment_suggests_hidden_folders() {
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(".config")).unwrap();
+    let listing = read_listing(temp.path());
+
+    assert_eq!(path::suggestions(&listing, ".c", false), [".config"]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn folders_whose_names_are_not_text_are_not_suggested() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    fs::create_dir(temp.path().join(OsStr::from_bytes(b"caf\xe9"))).unwrap();
+    fs::create_dir(temp.path().join("cafe")).unwrap();
+    let listing = read_listing(temp.path());
+
+    assert_eq!(path::suggestions(&listing, "caf", false), ["cafe"]);
 }

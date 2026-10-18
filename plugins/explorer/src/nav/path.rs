@@ -1,4 +1,4 @@
-use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
+use std::path::{is_separator, Component, Path, PathBuf, MAIN_SEPARATOR};
 
 use super::prefix::starts_with_ignoring_case;
 use crate::listing::Listing;
@@ -46,9 +46,23 @@ pub fn expand_home(input: &str, home: &Path) -> PathBuf {
 pub fn resolve(input: &str, home: &Path, cwd: &Path) -> PathBuf {
     let path = expand_home(input, home);
     if path.is_absolute() {
-        return path;
+        return collapse(&path);
     }
-    cwd.join(path)
+    collapse(&cwd.join(path))
+}
+
+fn collapse(path: &Path) -> PathBuf {
+    let mut collapsed = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                collapsed.pop();
+            }
+            Component::CurDir => {}
+            other => collapsed.push(other),
+        }
+    }
+    collapsed
 }
 
 pub fn display_with_home(path: &Path, home: &Path) -> String {
@@ -63,10 +77,10 @@ pub fn display_with_home(path: &Path, home: &Path) -> String {
 
 pub fn suggestions<'a>(parent: &'a Listing, segment: &str, show_hidden: bool) -> Vec<&'a str> {
     parent
-        .visible(show_hidden)
+        .visible(show_hidden || segment.starts_with('.'))
         .into_iter()
         .filter(|entry| entry.opens_as_folder)
-        .map(|entry| entry.display.as_str())
+        .filter_map(|entry| entry.name.to_str())
         .filter(|name| starts_with_ignoring_case(name, segment))
         .collect()
 }

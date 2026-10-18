@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::Instant;
 
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
 
 use super::keys::Step;
-use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState};
+use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
 use crate::nav::{History, Jump, Picks, Spot};
 use path_field::PathField;
 
@@ -53,10 +54,13 @@ pub struct Browser {
     arriving: Option<Spot>,
     failure: Option<String>,
     path: Option<PathField>,
+    wake: UnboundedSender<()>,
+    wakes: Option<UnboundedReceiver<()>>,
 }
 
 impl Browser {
     pub fn new(start: PathBuf, home: PathBuf) -> Self {
+        let (wake, wakes) = mpsc::unbounded();
         let mut browser = Self {
             home,
             history: History::new(start.clone()),
@@ -70,9 +74,15 @@ impl Browser {
             arriving: None,
             failure: None,
             path: None,
+            wake,
+            wakes: Some(wakes),
         };
         browser.arrive(Spot::at(start));
         browser
+    }
+
+    pub fn take_wakes(&mut self) -> Option<UnboundedReceiver<()>> {
+        self.wakes.take()
     }
 
     pub fn home(&self) -> &Path {
@@ -121,6 +131,7 @@ impl Browser {
         self.path.is_some()
     }
 
+    #[cfg(test)]
     pub fn reading(&self) -> bool {
         self.read.is_some() || self.path.as_ref().is_some_and(PathField::reading)
     }
@@ -165,14 +176,14 @@ impl Browser {
         if folder == self.folder() {
             return false;
         }
-        self.history.remember(self.cursor, scroll);
+        self.remember(scroll);
         let spot = self.history.go(folder).clone();
         self.arrive(spot);
         true
     }
 
     pub fn up(&mut self, scroll: f32) -> bool {
-        self.history.remember(self.cursor, scroll);
+        self.remember(scroll);
         let Some(spot) = self.history.up().cloned() else {
             return false;
         };
@@ -181,7 +192,7 @@ impl Browser {
     }
 
     pub fn back(&mut self, scroll: f32) -> bool {
-        self.history.remember(self.cursor, scroll);
+        self.remember(scroll);
         let Some(spot) = self.history.back().cloned() else {
             return false;
         };
@@ -190,7 +201,7 @@ impl Browser {
     }
 
     pub fn forward(&mut self, scroll: f32) -> bool {
-        self.history.remember(self.cursor, scroll);
+        self.remember(scroll);
         let Some(spot) = self.history.forward().cloned() else {
             return false;
         };
@@ -199,6 +210,9 @@ impl Browser {
     }
 
     pub fn open(&mut self, scroll: f32) -> Opening {
+        if self.loading() {
+            return Opening::Nothing;
+        }
         let Some(entry) = self.entry(self.cursor) else {
             return Opening::Nothing;
         };
@@ -223,7 +237,7 @@ impl Browser {
     }
 
     pub fn extend_range(&mut self, step: Step) -> bool {
-        if self.rows.is_empty() {
+        if self.loading() || self.rows.is_empty() {
             return false;
         }
         let to = self.stepped(step);
@@ -267,6 +281,7 @@ impl Browser {
 
     pub fn toggle_hidden(&mut self) -> bool {
         let at = self.entry(self.cursor).map(|entry| entry.path.clone());
+        self.picks.end_range();
         self.show_hidden = !self.show_hidden;
         self.refresh_rows();
         if let Some(row) = at.and_then(|path| self.row_of(&path)) {
@@ -296,7 +311,7 @@ impl Browser {
             return false;
         }
         let text = crate::nav::path::display_with_home(self.folder(), &self.home);
-        let mut field = PathField::new(PathEdit::new(text));
+        let mut field = PathField::new(PathEdit::new(text), self.wake.clone());
         field.refresh(
             &self.home,
             self.history.current().folder.as_path(),
@@ -347,19 +362,34 @@ impl Browser {
         PathStep::Closed
     }
 
+    fn remember(&mut self, scroll: f32) {
+        if self.arriving.is_none() {
+            self.history.remember(self.cursor, scroll);
+        }
+    }
+
+    fn loading(&self) -> bool {
+        *self.listing.state() == ListingState::Loading
+    }
+
     fn arrive(&mut self, spot: Spot) {
-        self.read = Some(listing::start(spot.folder.clone()));
+        self.read = Some(listing::start(
+            spot.folder.clone(),
+            Pass::WithCounts,
+            waker(&self.wake),
+        ));
         self.listing = Listing::new(spot.folder.clone());
         self.rows.clear();
         self.cursor = 0;
         self.jump.reset();
         self.picks.end_range();
         self.failure = None;
+        self.path = None;
         self.arriving = Some(spot);
     }
 
     fn settle_arrival(&mut self) -> Option<f32> {
-        if *self.listing.state() == ListingState::Loading {
+        if self.loading() {
             return None;
         }
         let spot = self.arriving.take()?;
@@ -386,6 +416,13 @@ impl Browser {
             Step::Up => self.cursor.saturating_sub(1),
             Step::Down => (self.cursor + 1).min(self.rows.len().saturating_sub(1)),
         }
+    }
+}
+
+fn waker(wake: &UnboundedSender<()>) -> impl Fn() + Send + Clone + 'static {
+    let wake = wake.clone();
+    move || {
+        let _ = wake.unbounded_send(());
     }
 }
 

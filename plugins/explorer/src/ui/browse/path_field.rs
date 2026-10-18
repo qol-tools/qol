@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use futures::channel::mpsc::UnboundedSender;
 use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
 
-use crate::listing::{self, FailureReason, Listing, ListingError, ListingRead};
+use crate::listing::{self, FailureReason, Listing, ListingError, ListingRead, Pass};
 use crate::nav::path::{self, PathInput};
 
 pub(super) struct PathField {
@@ -13,16 +14,18 @@ pub(super) struct PathField {
     segment: String,
     listing: Listing,
     read: Option<ListingRead>,
+    wake: UnboundedSender<()>,
 }
 
 impl PathField {
-    pub(super) fn new(edit: PathEdit) -> Self {
+    pub(super) fn new(edit: PathEdit, wake: UnboundedSender<()>) -> Self {
         Self {
             edit,
             parent: PathBuf::new(),
             segment: String::new(),
             listing: Listing::new(PathBuf::new()),
             read: None,
+            wake,
         }
     }
 
@@ -30,6 +33,7 @@ impl PathField {
         &self.edit
     }
 
+    #[cfg(test)]
     pub(super) fn reading(&self) -> bool {
         self.read.is_some()
     }
@@ -49,7 +53,11 @@ impl PathField {
             .map_or_else(|| folder.to_path_buf(), |parent| folder.join(parent));
         self.segment = input.segment;
         if parent != self.parent {
-            self.read = Some(listing::start(parent.clone()));
+            self.read = Some(listing::start(
+                parent.clone(),
+                Pass::NamesOnly,
+                super::waker(&self.wake),
+            ));
             self.listing = Listing::new(parent.clone());
             self.parent = parent;
         }

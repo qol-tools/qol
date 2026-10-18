@@ -163,6 +163,36 @@ fn leaving_and_coming_back_restores_the_cursor_and_the_scroll() {
 }
 
 #[test]
+fn leaving_a_folder_before_it_loads_keeps_its_saved_spot() {
+    let temp = abc_folder();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.set_cursor(3);
+    browser.go(inner, 36.0);
+    settle(&mut browser);
+
+    assert!(browser.back(0.0));
+    assert!(browser.forward(0.0));
+    settle(&mut browser);
+    assert!(browser.back(0.0));
+    let back = settle(&mut browser);
+
+    assert_eq!(browser.cursor(), 3);
+    assert_eq!(back.scroll, Some(36.0));
+}
+
+#[test]
+fn going_somewhere_closes_the_path_field() {
+    let temp = abc_folder();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    assert!(browser.edit_path());
+
+    assert!(browser.go(inner, 0.0));
+    assert!(!browser.path_open());
+}
+
+#[test]
 fn going_to_the_current_folder_does_nothing() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());

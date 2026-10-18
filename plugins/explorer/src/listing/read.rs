@@ -40,6 +40,12 @@ pub struct FolderCount {
     pub count: ItemCount,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pass {
+    WithCounts,
+    NamesOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListingEvent {
     Entries(Vec<Entry>),
@@ -75,18 +81,21 @@ impl Drop for ListingRead {
     }
 }
 
-pub fn start(folder: PathBuf) -> ListingRead {
+pub fn start(folder: PathBuf, pass: Pass, wake: impl Fn() + Send + Clone + 'static) -> ListingRead {
     let cancel = CancelToken::new();
     let (sender, events) = mpsc::channel();
     let failure = sender.clone();
     let worker_folder = folder.clone();
     let worker_cancel = cancel.clone();
+    let worker_wake = wake.clone();
     let spawned = thread::Builder::new()
         .name("qol-explorer-listing".into())
         .spawn(move || {
-            run(&worker_folder, BATCH_SIZE, &worker_cancel, |event| {
-                sender.send(event).is_ok()
-            })
+            run(&worker_folder, pass, BATCH_SIZE, &worker_cancel, |event| {
+                let sent = sender.send(event).is_ok();
+                worker_wake();
+                sent
+            });
         });
     if let Err(error) = spawned {
         log::error!("could not start reading {}: {error}", folder.display());
@@ -94,6 +103,7 @@ pub fn start(folder: PathBuf) -> ListingRead {
             folder.clone(),
             &error,
         )));
+        wake();
     }
     ListingRead {
         folder,
@@ -104,6 +114,7 @@ pub fn start(folder: PathBuf) -> ListingRead {
 
 pub(super) fn run(
     folder: &Path,
+    pass: Pass,
     batch_size: usize,
     cancel: &CancelToken,
     mut emit: impl FnMut(ListingEvent) -> bool,
@@ -111,7 +122,7 @@ pub(super) fn run(
     let Some(folders) = read_entries(folder, batch_size, cancel, &mut emit) else {
         return;
     };
-    if !emit(ListingEvent::Done) {
+    if !emit(ListingEvent::Done) || pass == Pass::NamesOnly {
         return;
     }
     count_folders(&folders, batch_size, cancel, &mut emit);

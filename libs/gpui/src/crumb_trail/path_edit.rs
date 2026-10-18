@@ -55,8 +55,12 @@ impl PathEdit {
     }
 
     pub fn set_suggestions(&mut self, names: Vec<String>) {
+        let kept = self
+            .suggestions
+            .get(self.selected)
+            .and_then(|selected| names.iter().position(|name| name == selected));
         self.suggestions = names;
-        self.selected = 0;
+        self.selected = kept.unwrap_or(0);
     }
 
     pub fn select_next(&mut self) -> bool {
@@ -169,6 +173,14 @@ mod tests {
     fn the_top_suggestion_is_selected_first() {
         assert_eq!(edit("~/G", &["Git", "Games"]).selected(), Some(0));
         assert_eq!(edit("~/G", &[]).selected(), None);
+    }
+
+    #[test]
+    fn new_suggestions_keep_the_selected_name_when_it_is_still_there() {
+        let mut edit = edit("~/G", &["Git", "Games"]);
+        edit.select_next();
+        edit.set_suggestions(names(&["Gadgets", "Games", "Git"]));
+        assert_eq!(edit.selected(), Some(1));
     }
 
     #[test]

@@ -2,6 +2,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use super::read::run;
 use super::*;
@@ -16,7 +18,7 @@ fn make_folder(folder: &Path, name: &str) {
 
 fn collect(folder: &Path, batch_size: usize, cancel: &CancelToken) -> Vec<ListingEvent> {
     let mut events = Vec::new();
-    run(folder, batch_size, cancel, |event| {
+    run(folder, Pass::WithCounts, batch_size, cancel, |event| {
         events.push(event);
         true
     });
@@ -141,7 +143,7 @@ fn cancelling_stops_the_read_between_entries() {
     }
     let cancel = CancelToken::new();
     let mut events = Vec::new();
-    run(temp.path(), 2, &cancel, |event| {
+    run(temp.path(), Pass::WithCounts, 2, &cancel, |event| {
         events.push(event);
         cancel.cancel();
         true
@@ -169,7 +171,7 @@ fn cancelling_after_done_stops_the_count_pass() {
     }
     let cancel = CancelToken::new();
     let mut events = Vec::new();
-    run(temp.path(), 1, &cancel, |event| {
+    run(temp.path(), Pass::WithCounts, 1, &cancel, |event| {
         if event == ListingEvent::Done {
             cancel.cancel();
         }
@@ -184,16 +186,45 @@ fn cancelling_after_done_stops_the_count_pass() {
 }
 
 #[test]
+fn a_names_only_pass_counts_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "a");
+    touch(&temp.path().join("a"), "file");
+    let mut events = Vec::new();
+    run(
+        temp.path(),
+        Pass::NamesOnly,
+        2,
+        &CancelToken::new(),
+        |event| {
+            events.push(event);
+            true
+        },
+    );
+
+    assert_eq!(events.last(), Some(&ListingEvent::Done));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, ListingEvent::Counts(_))));
+}
+
+#[test]
 fn a_closed_receiver_stops_the_read() {
     let temp = tempfile::tempdir().unwrap();
     for index in 0..10 {
         touch(temp.path(), &format!("file{index}"));
     }
     let mut calls = 0;
-    run(temp.path(), 2, &CancelToken::new(), |_| {
-        calls += 1;
-        false
-    });
+    run(
+        temp.path(),
+        Pass::WithCounts,
+        2,
+        &CancelToken::new(),
+        |_| {
+            calls += 1;
+            false
+        },
+    );
 
     assert_eq!(calls, 1);
 }
@@ -345,13 +376,20 @@ fn start_streams_the_listing_from_a_background_thread() {
     touch(&temp.path().join("sub"), "inner");
     touch(temp.path(), "file");
 
-    let read = start(temp.path().to_path_buf());
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let woken = Arc::clone(&wakes);
+    let read = start(temp.path().to_path_buf(), Pass::WithCounts, move || {
+        woken.fetch_add(1, Ordering::Relaxed);
+    });
     assert_eq!(read.folder(), temp.path());
     let mut listing = Listing::new(temp.path().to_path_buf());
+    let mut events = 0;
     while let Ok(event) = read.events().recv() {
         listing.apply(event);
+        events += 1;
     }
 
+    assert!(wakes.load(Ordering::Relaxed) >= events);
     assert_eq!(listing.state(), &ListingState::Done);
     assert_eq!(names(&listing), ["sub", "file"]);
     assert_eq!(
