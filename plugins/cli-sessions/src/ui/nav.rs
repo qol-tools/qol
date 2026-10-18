@@ -51,6 +51,8 @@ mod tests {
             bridged: false,
             driving: Vec::new(),
             runtime_status: None,
+            unread: 0,
+            open_asks: 0,
         }
     }
 

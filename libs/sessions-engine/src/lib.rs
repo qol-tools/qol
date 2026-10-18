@@ -41,6 +41,13 @@ pub use contract::tool_names;
 pub use fork::FORK_HEADER;
 pub use switchboard::SWITCHBOARD_KEY;
 
+/// Unread messages and unanswered asks in the mailbox of `key`, zero when it cannot be read.
+pub fn mail_counts(key: &str) -> (usize, usize) {
+    mailbox::MailboxStore::system()
+        .and_then(|mail| mail.counts(key))
+        .unwrap_or_default()
+}
+
 pub struct SessionSubcommand {
     pub name: &'static str,
     run: fn(&[OsString], OutputFormat) -> Result<()>,

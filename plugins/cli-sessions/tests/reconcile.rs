@@ -292,6 +292,8 @@ fn restored(window_id: u64, status: Status) -> SessionState {
         bridged: false,
         driving: Vec::new(),
         runtime_status: None,
+        unread: 0,
+        open_asks: 0,
     }
 }
 
@@ -1213,6 +1215,8 @@ fn tick_refreshes_restored_identity_fields() {
         bridged: false,
         driving: Vec::new(),
         runtime_status: None,
+        unread: 0,
+        open_asks: 0,
     }]);
     let host = FakeHost {
         panes: vec![pane(21, "qol dev", false, &["zsh", "qol"], "qol dev")],
@@ -1430,6 +1434,8 @@ fn restored_working_with_same_screen_hash_starts_a_fresh_grace() {
         bridged: false,
         driving: Vec::new(),
         runtime_status: None,
+        unread: 0,
+        open_asks: 0,
     }]);
     let mut caches = ReconcileCaches::default();
 

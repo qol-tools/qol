@@ -34,6 +34,10 @@ pub struct SessionState {
     pub driving: Vec<SessionId>,
     #[serde(default, skip)]
     pub runtime_status: Option<Status>,
+    #[serde(default, skip)]
+    pub unread: usize,
+    #[serde(default, skip)]
+    pub open_asks: usize,
 }
 
 impl SessionState {
@@ -121,6 +125,23 @@ impl Registry {
         self.sessions.get_mut(id)
     }
 
+    pub fn keys(&self) -> Vec<String> {
+        self.sessions
+            .values()
+            .filter_map(|state| state.key.clone())
+            .collect()
+    }
+
+    pub fn set_mail(&mut self, counts: &HashMap<String, (usize, usize)>) {
+        for state in self.sessions.values_mut() {
+            (state.unread, state.open_asks) = state
+                .key
+                .as_ref()
+                .and_then(|key| counts.get(key).copied())
+                .unwrap_or_default();
+        }
+    }
+
     pub fn sorted(&self) -> Vec<SessionState> {
         let mut out: Vec<SessionState> = self.sessions.values().cloned().collect();
         out.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.id.cmp(&b.id)));
@@ -162,6 +183,8 @@ mod tests {
             bridged: false,
             driving: Vec::new(),
             runtime_status: None,
+            unread: 0,
+            open_asks: 0,
         }
     }
 
@@ -182,6 +205,24 @@ mod tests {
                 "{status:?}"
             );
         }
+    }
+
+    #[test]
+    fn mail_counts_follow_the_spawn_key() {
+        let mut registry = Registry::default();
+        registry.upsert(state(9, Status::YourTurn, true));
+        registry.upsert(state(1, Status::Working, false));
+        assert_eq!(registry.keys(), [qol_sessions_engine::SWITCHBOARD_KEY]);
+        registry.set_mail(&HashMap::from([
+            (qol_sessions_engine::SWITCHBOARD_KEY.to_owned(), (2, 1)),
+            ("elsewhere".to_owned(), (5, 5)),
+        ]));
+        let counts: Vec<_> = registry
+            .sorted()
+            .into_iter()
+            .map(|row| (row.unread, row.open_asks))
+            .collect();
+        assert_eq!(counts, [(2, 1), (0, 0)]);
     }
 
     #[test]

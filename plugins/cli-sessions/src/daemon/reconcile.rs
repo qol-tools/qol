@@ -68,7 +68,18 @@ impl Messaging {
         panes: &[Pane],
         wall_now: u64,
     ) {
-        let Ok(reg) = registry.lock() else { return };
+        let Ok(keys) = registry.lock().map(|reg| reg.keys()) else {
+            return;
+        };
+        let counts = keys
+            .into_iter()
+            .map(|key| {
+                let counts = qol_sessions_engine::mail_counts(&key);
+                (key, counts)
+            })
+            .collect();
+        let Ok(mut reg) = registry.lock() else { return };
+        reg.set_mail(&counts);
         let rows = attention_rows(&reg);
         let recipients = knocks::recipients(panes, &reg);
         drop(reg);
@@ -787,6 +798,8 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         bridged: input.bridged,
         driving: input.driving,
         runtime_status: Some(input.reduction.attention.status),
+        unread: 0,
+        open_asks: 0,
     });
     (notice, status)
 }
@@ -929,6 +942,8 @@ fn show_detached_parks(
             bridged: false,
             driving: Vec::new(),
             runtime_status: None,
+            unread: 0,
+            open_asks: 0,
         });
     }
 }

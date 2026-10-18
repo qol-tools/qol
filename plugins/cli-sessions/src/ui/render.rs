@@ -294,6 +294,21 @@ fn agent_chip(
     }))
 }
 
+fn mail_chip(kit: &qol_gpui::kit::Kit, s: &SessionState) -> Option<gpui::Div> {
+    let chip = if s.open_asks > 0 {
+        Chip::Status {
+            tone: kit.palette.warning,
+            halo: kit.washes.halo_attention.packed(),
+            text: format!("{} ask", s.open_asks).into(),
+        }
+    } else if s.unread > 0 {
+        Chip::Count(s.unread, "new".into())
+    } else {
+        return None;
+    };
+    Some(kit.chip(chip, kit.grounds.pane))
+}
+
 fn session_row(
     s: &SessionState,
     selected: bool,
@@ -349,7 +364,11 @@ fn session_row(
         .child(
             div()
                 .flex_none()
-                .w(px(qol_gpui::theme::HEIGHT_INLINE))
+                .min_w(px(qol_gpui::theme::HEIGHT_INLINE))
+                .flex()
+                .justify_end()
+                .gap(px(qol_gpui::theme::SPACE_STACK))
+                .children(mail_chip(&kit, s))
                 .when(!s.driving.is_empty(), |slot| {
                     slot.child(agent_chip(s, index, cx))
                 }),
@@ -700,6 +719,8 @@ mod tests {
             bridged: false,
             driving: Vec::new(),
             runtime_status: None,
+            unread: 0,
+            open_asks: 0,
         }
     }
 
