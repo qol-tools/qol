@@ -188,6 +188,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 gated = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("!cancelled() && needs.plan.result == 'success' && ", gated)
 
+    def test_only_a_queue_run_cancels_superseded_runs_and_compiles_nothing(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        supersede = workflow.split("  supersede:\n", 1)[1].split("\n\n  #", 1)[0]
+        self.assertIn("if: github.event_name == 'merge_group'", supersede)
+        self.assertIn("run: python3 .github/scripts/cancel_superseded_queue_runs.py", supersede)
+        self.assertNotIn("rust-setup", supersede)
+        self.assertNotIn("cargo", supersede)
+
     def test_only_a_pass_verdict_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         self.assertIn("  merge_group:\n", workflow.split("jobs:\n", 1)[0])

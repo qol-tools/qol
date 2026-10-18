@@ -503,6 +503,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/stop_on_failure.py
 
+  # A push to main rebuilds every waiting queue group on a new ref, and the
+  # concurrency group, keyed on the run id, never cancels the run on the old ref.
+  # The run that replaces it cancels it, so its runners go to the run that counts.
+  supersede:
+    name: Cancel superseded queue runs
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Cancel older runs for this pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: python3 .github/scripts/cancel_superseded_queue_runs.py
+
   # GitHub only marks a queue removal on the pull request timeline, so a failed
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
