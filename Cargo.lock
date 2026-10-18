@@ -6711,9 +6711,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "gpui",
  "libc",
  "log",
+ "qol-apps",
  "qol-conventions",
+ "qol-gpui",
  "qol-headless",
  "qol-log",
  "qol-platform",

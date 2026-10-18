@@ -12,7 +12,10 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1"
 dirs = "6"
+gpui.workspace = true
 log.workspace = true
+qol-apps.workspace = true
+qol-gpui.workspace = true
 qol-headless.workspace = true
 qol-log.workspace = true
 qol-platform.workspace = true

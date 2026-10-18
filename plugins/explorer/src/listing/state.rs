@@ -41,9 +41,18 @@ impl Listing {
     }
 
     pub fn visible(&self, show_hidden: bool) -> Vec<&Entry> {
+        self.visible_indices(show_hidden)
+            .into_iter()
+            .map(|index| &self.entries[index])
+            .collect()
+    }
+
+    pub fn visible_indices(&self, show_hidden: bool) -> Vec<usize> {
         self.entries
             .iter()
-            .filter(|entry| show_hidden || !entry.hidden)
+            .enumerate()
+            .filter(|(_, entry)| show_hidden || !entry.hidden)
+            .map(|(index, _)| index)
             .collect()
     }
 

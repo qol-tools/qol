@@ -7,7 +7,7 @@ use qol_platform::Os;
 
 use crate::nav::path;
 
-const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
+pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPEN_COMMAND: &str = "open";
 const SUPPORTED: [Os; 1] = [Os::Linux];
 

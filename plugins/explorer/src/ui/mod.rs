@@ -1,8 +1,10 @@
-use std::path::PathBuf;
+mod browse;
+mod columns;
+mod keys;
+mod run;
+mod trail;
+mod view;
 
-pub fn open(start: PathBuf) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "the Explorer window is not built yet, so {} cannot be opened",
-        start.display()
-    )
-}
+pub use run::open;
+
+use crate::cli::PLUGIN_ID;
