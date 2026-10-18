@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use qol_sessions_engine::attention::LanePr;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +39,8 @@ pub struct SessionState {
     pub unread: usize,
     #[serde(default, skip)]
     pub open_asks: usize,
+    #[serde(default, skip)]
+    pub prs: Vec<LanePr>,
 }
 
 impl SessionState {
@@ -89,14 +92,32 @@ pub fn summary_for(status: Status, tool: &Tool) -> String {
     status.definition().label.into()
 }
 
+fn prs_of(prs: &HashMap<String, Vec<LanePr>>, state: &SessionState) -> Vec<LanePr> {
+    state
+        .key
+        .as_ref()
+        .and_then(|key| prs.get(key))
+        .cloned()
+        .unwrap_or_default()
+}
+
 #[derive(Default)]
 pub struct Registry {
     sessions: HashMap<SessionId, SessionState>,
+    prs: HashMap<String, Vec<LanePr>>,
 }
 
 impl Registry {
-    pub fn upsert(&mut self, state: SessionState) {
+    pub fn upsert(&mut self, mut state: SessionState) {
+        state.prs = prs_of(&self.prs, &state);
         self.sessions.insert(state.id.clone(), state);
+    }
+
+    pub fn set_prs(&mut self, prs: &HashMap<String, Vec<LanePr>>) {
+        self.prs.clone_from(prs);
+        for state in self.sessions.values_mut() {
+            state.prs = prs_of(&self.prs, state);
+        }
     }
 
     pub fn restore(&mut self, states: Vec<SessionState>) {
@@ -185,6 +206,7 @@ mod tests {
             runtime_status: None,
             unread: 0,
             open_asks: 0,
+            prs: Vec::new(),
         }
     }
 
@@ -223,6 +245,27 @@ mod tests {
             .map(|row| (row.unread, row.open_asks))
             .collect();
         assert_eq!(counts, [(2, 1), (0, 0)]);
+    }
+
+    #[test]
+    fn pull_requests_follow_the_spawn_key_across_rescans() {
+        let pr = LanePr {
+            url: "https://github.com/qol-tools/qol/pull/192".to_owned(),
+            number: 192,
+            state: qol_sessions_engine::attention::PrState::Open,
+            draft: false,
+            checks: qol_sessions_engine::attention::PrChecks::Passing,
+        };
+        let mut registry = Registry::default();
+        registry.upsert(state(9, Status::YourTurn, true));
+        registry.upsert(state(1, Status::Working, false));
+        registry.set_prs(&HashMap::from([(
+            qol_sessions_engine::SWITCHBOARD_KEY.to_owned(),
+            vec![pr.clone()],
+        )]));
+        registry.upsert(state(9, Status::Working, true));
+        let prs: Vec<_> = registry.sorted().into_iter().map(|row| row.prs).collect();
+        assert_eq!(prs, [vec![pr], Vec::new()]);
     }
 
     #[test]

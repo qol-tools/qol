@@ -115,6 +115,7 @@ fn attention_rows(reg: &Registry) -> Vec<AttentionRow> {
             state: attention_state(state.status, state.master),
             key: state.key,
             master: state.master,
+            prs: state.prs,
         })
         .collect()
 }
@@ -800,6 +801,7 @@ fn apply(reg: &mut Registry, input: ApplyInput) -> (Option<Notice>, Status) {
         runtime_status: Some(input.reduction.attention.status),
         unread: 0,
         open_asks: 0,
+        prs: Vec::new(),
     });
     (notice, status)
 }
@@ -944,6 +946,7 @@ fn show_detached_parks(
             runtime_status: None,
             unread: 0,
             open_asks: 0,
+            prs: Vec::new(),
         });
     }
 }
@@ -1184,6 +1187,7 @@ mod attention_snapshot_tests {
             title: "lane".into(),
             state,
             master: false,
+            prs: Vec::new(),
         };
         let written = (vec![row(AttentionState::Working)], 100);
         let cases = [

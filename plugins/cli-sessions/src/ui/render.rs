@@ -8,6 +8,7 @@ use qol_gpui::surface::{DragGestureState, PanelDragArea};
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
 use qol_gpui::Key;
+use qol_sessions_engine::attention::{LanePr, PrChecks, PrState};
 use qol_terminal_sessions::SessionId;
 
 use crate::session::registry::{meaningful_name, SessionState};
@@ -309,6 +310,41 @@ fn mail_chip(kit: &qol_gpui::kit::Kit, s: &SessionState) -> Option<gpui::Div> {
     Some(kit.chip(chip, kit.grounds.pane))
 }
 
+fn pr_chip(kit: &qol_gpui::kit::Kit, pr: &LanePr, cx: &mut Context<SessionsView>) -> AnyElement {
+    let tone = match (pr.state, pr.checks) {
+        (PrState::Merged, _) => kit.palette.accent,
+        (PrState::Closed, _) | (_, PrChecks::None) => kit.palette.text_muted,
+        (_, PrChecks::Failing) => kit.palette.danger,
+        (_, PrChecks::Pending) => kit.palette.warning,
+        (_, PrChecks::Passing) => kit.palette.success,
+    };
+    let state = match pr.state {
+        PrState::Open if pr.draft => " draft",
+        PrState::Open => "",
+        PrState::Merged => " merged",
+        PrState::Closed => " closed",
+    };
+    let url = pr.url.clone();
+    kit.pointable(
+        kit.chip(
+            Chip::Status {
+                tone,
+                halo: qol_gpui::theme::translucent(tone, qol_gpui::theme::Alpha::Halo),
+                text: format!("#{}{state}", pr.number).into(),
+            },
+            kit.grounds.pane,
+        )
+        .id(SharedString::from(format!("session-pr-{}", pr.url)))
+        .cursor(CursorStyle::PointingHand),
+        rgb(kit.grounds.pane.lift),
+    )
+    .on_click(cx.listener(move |_, _, _, cx| {
+        cx.open_url(&url);
+        cx.stop_propagation();
+    }))
+    .into_any_element()
+}
+
 fn session_row(
     s: &SessionState,
     selected: bool,
@@ -369,6 +405,7 @@ fn session_row(
                 .justify_end()
                 .gap(px(qol_gpui::theme::SPACE_STACK))
                 .children(mail_chip(&kit, s))
+                .children(s.prs.iter().map(|pr| pr_chip(&kit, pr, cx)))
                 .when(!s.driving.is_empty(), |slot| {
                     slot.child(agent_chip(s, index, cx))
                 }),
@@ -721,6 +758,7 @@ mod tests {
             runtime_status: None,
             unread: 0,
             open_asks: 0,
+            prs: Vec::new(),
         }
     }
 

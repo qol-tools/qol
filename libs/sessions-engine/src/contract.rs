@@ -4,7 +4,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use super::agent_policy::{AgentAssignment, AgentStatus};
-use super::attention::{AttentionSnapshot, AttentionState};
+use super::attention::{AttentionSnapshot, AttentionState, LanePr};
 use super::spawn::surface_token;
 use super::switchboard::SWITCHBOARD_KEY;
 
@@ -91,6 +91,8 @@ pub(crate) struct SessionRow {
     pub(crate) attention: Option<AttentionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) attention_stale: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) prs: Vec<LanePr>,
 }
 
 impl SessionRow {
@@ -111,6 +113,7 @@ impl SessionRow {
             });
             if let Some(row) = row {
                 self.attention = Some(row.state);
+                self.prs.clone_from(&row.prs);
                 self.attention_stale =
                     Some(now_ms.saturating_sub(snapshot.written_at_ms) > ATTENTION_STALE_AFTER_MS);
             }
@@ -160,6 +163,7 @@ pub(crate) fn session_row(
         open_asks: None,
         attention: None,
         attention_stale: None,
+        prs: Vec::new(),
     }
 }
 
@@ -197,7 +201,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_list",
             label: "List terminal sessions",
-            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds.",
+            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds, and prs: the pull requests the session opened, each with its url, number, state (open, merged or closed), draft and checks (pending, passing, failing or none).",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
@@ -1119,12 +1123,20 @@ mod tests {
                     title: "Switchboard".to_owned(),
                     state: AttentionState::Ready,
                     master: true,
+                    prs: vec![super::super::attention::LanePr {
+                        url: "https://github.com/qol-tools/qol/pull/192".to_owned(),
+                        number: 192,
+                        state: super::super::attention::PrState::Open,
+                        draft: false,
+                        checks: super::super::attention::PrChecks::Pending,
+                    }],
                 },
                 super::super::attention::AttentionRow {
                     key: None,
                     title: "Loose chat".to_owned(),
                     state: AttentionState::NeedsYou,
                     master: false,
+                    prs: Vec::new(),
                 },
             ],
         };
@@ -1140,6 +1152,8 @@ mod tests {
         assert_eq!(master["open_asks"], 1);
         assert_eq!(master["attention"], "ready");
         assert_eq!(master["attention_stale"], false);
+        assert_eq!(master["prs"][0]["number"], 192);
+        assert_eq!(master["prs"][0]["checks"], "pending");
 
         let loose = row_value(
             &keyed_facts("11", None, "Loose chat"),
