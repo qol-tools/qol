@@ -44,6 +44,8 @@ impl SliderStyle {
 const WIDE_THUMB: f32 = 14.0;
 const LEVEL_SEGMENTS: usize = 16;
 const LEVEL_SEGMENT_HEIGHT: f32 = 10.0;
+const LEVEL_LOUD_FROM: f32 = 0.7;
+const LEVEL_PEAK_FROM: f32 = 0.9;
 
 fn thumb_left(centre: f32) -> f32 {
     centre - WIDE_THUMB / 2.0
@@ -51,7 +53,9 @@ fn thumb_left(centre: f32) -> f32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LevelSegment {
-    Lit,
+    Quiet,
+    Loud,
+    Peak,
     Unlit,
 }
 
@@ -65,11 +69,23 @@ fn segments_lit(level: f32, fraction: f32) -> usize {
 }
 
 fn level_segment(index: usize, level: f32, fraction: f32) -> LevelSegment {
-    if index < segments_lit(level, fraction) {
-        LevelSegment::Lit
-    } else {
-        LevelSegment::Unlit
+    if index >= segments_lit(level, fraction) {
+        return LevelSegment::Unlit;
     }
+    let reach = (index + 1) as f32 / LEVEL_SEGMENTS as f32;
+    if reach > LEVEL_PEAK_FROM {
+        LevelSegment::Peak
+    } else if reach > LEVEL_LOUD_FROM {
+        LevelSegment::Loud
+    } else {
+        LevelSegment::Quiet
+    }
+}
+
+fn level_tone(color: u32) -> gpui::Rgba {
+    let mut tone = rgb(color);
+    tone.a = qol_theme::OPACITY_REST;
+    tone
 }
 
 fn level_segment_width(track: f32) -> f32 {
@@ -96,6 +112,7 @@ fn level_segments(
     width: f32,
     ground: Ground,
     hover: Option<Ground>,
+    kit: Kit,
 ) -> gpui::Div {
     let segment_width = level_segment_width(width);
     div()
@@ -111,11 +128,9 @@ fn level_segments(
                 .h(px(LEVEL_SEGMENT_HEIGHT))
                 .rounded(px(qol_theme::RADIUS_THUMB));
             match level_segment(index, level, fraction) {
-                LevelSegment::Lit => ground_bg(
-                    segment,
-                    rgb(ground.mark),
-                    hover.map(|hover| rgb(hover.mark)),
-                ),
+                LevelSegment::Quiet => segment.bg(level_tone(kit.palette.success)),
+                LevelSegment::Loud => segment.bg(level_tone(kit.palette.warning)),
+                LevelSegment::Peak => segment.bg(level_tone(kit.palette.danger)),
                 LevelSegment::Unlit => ground_bg(
                     segment,
                     rgba(ground.well.packed()),
@@ -185,7 +200,9 @@ pub(in crate::settings_panel) fn number_field(
         cell = cell.child(interact(match style {
             SliderStyle::Compact => slider_bar(style, fill, ground, hover),
             SliderStyle::Wide => with_thumb(slider_bar(style, fill, ground, hover)),
-            SliderStyle::Level => with_thumb(level_segments(fraction, level, width, ground, hover)),
+            SliderStyle::Level => {
+                with_thumb(level_segments(fraction, level, width, ground, hover, kit))
+            }
         }));
     }
     let chip = div()
@@ -270,7 +287,7 @@ mod tests {
                     "fraction {fraction} level {level}: {lit} lit"
                 );
                 for index in 0..LEVEL_SEGMENTS {
-                    let lit_here = level_segment(index, level, fraction) == LevelSegment::Lit;
+                    let lit_here = level_segment(index, level, fraction) != LevelSegment::Unlit;
                     assert_eq!(lit_here, index < lit, "fraction {fraction} level {level}");
                 }
             }
@@ -278,6 +295,16 @@ mod tests {
         assert_eq!(segments_lit(1.0, 1.0), LEVEL_SEGMENTS);
         assert_eq!(segments_lit(0.42, 0.7), 5);
         assert_eq!(segments_lit(0.0, 1.0), 0);
+    }
+
+    #[test]
+    fn the_lit_part_turns_loud_past_seventy_and_peaks_past_ninety_percent() {
+        let tones: Vec<LevelSegment> = (0..LEVEL_SEGMENTS)
+            .map(|index| level_segment(index, 1.0, 1.0))
+            .collect();
+        assert!(tones[..11].iter().all(|tone| *tone == LevelSegment::Quiet));
+        assert!(tones[11..14].iter().all(|tone| *tone == LevelSegment::Loud));
+        assert!(tones[14..].iter().all(|tone| *tone == LevelSegment::Peak));
     }
 
     #[test]

@@ -32,7 +32,7 @@ default = "speaker-default"
 [field.volume]
 type = "number"
 label = "Volume"
-description = "Drag the knob to set the volume. The lit part shows what is playing now."
+description = "Drag the knob to set the volume. The lit part shows what is playing now and turns yellow, then red, as it gets loud."
 section = "output"
 default = 0
 min = 0
@@ -79,7 +79,7 @@ default = "mic-default"
 [field.input_volume]
 type = "number"
 label = "Volume"
-description = "Drag the knob to set the microphone volume. The lit part shows what it hears now."
+description = "Drag the knob to set the microphone volume. The lit part shows what it hears now and turns yellow, then red, as it gets loud."
 section = "input"
 default = 0
 min = 0
