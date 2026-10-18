@@ -520,9 +520,14 @@ def queue_ci_evidence(repo: str, sha: str, landed_run: dict) -> dict:
         ) from error
     jobs = ci_run_jobs(repo, run["id"])
     reused = reused_queue_verdict(jobs)
-    required = QUEUE_BUILD_CI_JOBS if reused else REQUIRED_CI_JOBS
-    evidence = require_source_ci(sha, runs, jobs, required)
     batched = any(job.get("name") == BATCH_CI_JOB for job in jobs)
+    if not reused:
+        required = REQUIRED_CI_JOBS
+    elif batched:
+        required = {PLAN_CI_JOB, BATCH_CI_JOB}
+    else:
+        required = QUEUE_BUILD_CI_JOBS
+    evidence = require_source_ci(sha, runs, jobs, required)
     if batched and not batch_release_built(repo, sha):
         raise RuntimeError(
             f"merge queue run {run.get('id')} passed, but no batch release "

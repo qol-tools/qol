@@ -497,19 +497,27 @@ class SourceCiTests(unittest.TestCase):
             {"name": "batch role", "conclusion": "success"},
             {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
         ]
-        cases = [
-            ([{"conclusion": "success"}], None),
-            ([{"conclusion": "failure"}], "no batch release build covered"),
-            ([], "no batch release build covered"),
+        reused_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
+            {"name": "batch role", "conclusion": "success"},
+            {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
         ]
-        for checks, message in cases:
-            with self.subTest(checks=checks):
+        cases = [
+            (queue_jobs, [{"conclusion": "success"}], None),
+            (reused_jobs, [{"conclusion": "success"}], None),
+            (queue_jobs, [{"conclusion": "failure"}], "no batch release build covered"),
+            (queue_jobs, [], "no batch release build covered"),
+            (reused_jobs, [], "no batch release build covered"),
+        ]
+        for jobs, checks, message in cases:
+            with self.subTest(jobs=len(jobs), checks=checks):
                 gh_json.reset_mock()
                 gh_json.side_effect = [
                     landed,
                     {"jobs": landed_jobs},
                     {"workflow_runs": [queued]},
-                    {"jobs": queue_jobs},
+                    {"jobs": jobs},
                     {"check_runs": checks},
                 ]
                 if message is None:

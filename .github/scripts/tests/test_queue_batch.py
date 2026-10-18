@@ -56,9 +56,12 @@ class FakeGitHub:
         self.runs: dict[str, dict] = {}
         self.jobs: list[dict] = []
         self.compare = "diverged"
+        self.refused: set[str] = set()
 
     def __call__(self, args: list[str]) -> object:
         self.calls.append(args)
+        if any(arg in self.refused for arg in args):
+            raise RuntimeError("HTTP 422: pull request already merged")
         fields = dict(arg.split("=", 1) for arg in args if "=" in arg and not arg.startswith("repos/"))
         path = next(arg for arg in args if arg.startswith("repos/") or arg == "graphql")
         method = args[args.index("--method") + 1] if "--method" in args else "GET"
@@ -283,6 +286,29 @@ class CombineTests(unittest.TestCase):
         self.assertIn("Batched into #900", notes[0][-1])
         self.assertLess(fake.calls.index(fake.writes("/git/refs")[0]), fake.calls.index(closes[0]))
 
+    def test_an_entry_already_gated_by_an_earlier_build_stays_open_and_out_of_the_batch(self):
+        fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS", "AWAITING_CHECKS"))
+        fake.checks[(sha(1), qb.GATE)] = "success"
+        self.assertEqual(self.combine(fake, 3), 900)
+        self.assertEqual(fake.pulls[0]["title"], "fix: land #102 and #103 together")
+        self.assertEqual([call[2] for call in fake.writes("state=closed")], ["repos/o/r/pulls/103", "repos/o/r/pulls/102"])
+
+    def test_the_tail_goes_back_alone_when_every_entry_ahead_is_gated(self):
+        fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS"))
+        fake.checks[(sha(1), qb.GATE)] = "success"
+        self.assertIsNone(self.combine(fake, 2))
+        self.assertEqual(fake.writes("POST"), [])
+
+    def test_a_refused_close_leaves_the_other_originals_closing(self):
+        fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS", "AWAITING_CHECKS"))
+        fake.refused.add("repos/o/r/pulls/102")
+        with mock.patch("sys.stderr"):
+            self.assertEqual(self.combine(fake, 3), 900)
+        self.assertEqual(
+            [call[2] for call in fake.writes("state=closed")],
+            ["repos/o/r/pulls/103", "repos/o/r/pulls/102", "repos/o/r/pulls/101"],
+        )
+
     def test_a_rerun_reuses_the_branch_and_the_pull_request(self):
         fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS"))
         branch = f"queue-batch/{sha(2)[:7]}"
@@ -327,6 +353,11 @@ class ReconcileTests(unittest.TestCase):
         fake = self.unbuilt_tail()
         self.assertIn("#102 is the tail now: reran its batch role", self.reconcile(fake))
         self.assertEqual(fake.writes("/rerun")[0][2], "repos/o/r/actions/jobs/7/rerun")
+
+    def test_a_cancelled_release_build_counts_as_never_built(self):
+        fake = self.unbuilt_tail()
+        fake.jobs[1]["conclusion"] = "cancelled"
+        self.assertIn("reran its batch role", self.reconcile(fake))
 
     def test_leaves_a_tail_that_needs_nothing(self):
         cases = [

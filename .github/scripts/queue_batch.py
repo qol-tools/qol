@@ -267,7 +267,7 @@ def combine(repo: str, sha: str, run_id: str, run_url: str) -> int | None:
     if own is None:
         print("stale: GitHub rebuilt or removed this entry, so this run combines nothing")
         return None
-    held = batch(entries, own)
+    held = [entry for entry in batch(entries, own) if entry is own or not passed(repo, entry["oid"], GATE)]
     if len(held) < 2:
         print(f"#{own['number']} was alone: it goes back on its own")
         return None
@@ -285,8 +285,11 @@ def combine(repo: str, sha: str, run_id: str, run_url: str) -> int | None:
         ]
     )
     for entry in reversed(held):
-        api(["--method", "POST", f"repos/{repo}/issues/{entry['number']}/comments", "-f", f"body={note}"])
-        api(["--method", "PATCH", f"repos/{repo}/pulls/{entry['number']}", "-f", "state=closed"])
+        try:
+            api(["--method", "POST", f"repos/{repo}/issues/{entry['number']}/comments", "-f", f"body={note}"])
+            api(["--method", "PATCH", f"repos/{repo}/pulls/{entry['number']}", "-f", "state=closed"])
+        except RuntimeError as error:
+            print(f"::warning::could not close #{entry['number']}: {error}", file=sys.stderr)
     print(f"combined {numbers(held)} into #{number}")
     return number
 
@@ -331,7 +334,7 @@ def retail(repo: str, tail: dict) -> str:
     if run.get("run_attempt", 1) >= MAX_ATTEMPTS:
         return f"ran {run['run_attempt']} times: left to the check timeout"
     jobs = api([f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100"])["jobs"]
-    if any(job["name"].startswith(RELEASE_JOB_PREFIX) and job.get("conclusion") not in (None, "skipped") for job in jobs):
+    if any(job["name"].startswith(RELEASE_JOB_PREFIX) and job.get("conclusion") in ("success", "failure") for job in jobs):
         return "already ran its release build"
     if not passed(repo, tail["oid"], CHECKED):
         return "did not pass its own jobs"
