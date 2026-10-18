@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use qol_process::BoundedCommandOutput;
 use qol_sessions_engine::attention::{AttentionState, LanePr, PrChecks, PrState};
 use qol_terminal_sessions::park::ParkRecord;
 use serde::Deserialize;
@@ -13,6 +14,8 @@ use crate::session::registry::Registry;
 
 pub const PRS: &str = "prs";
 const REFRESH: Duration = Duration::from_secs(60);
+const GH_TIMEOUT: Duration = Duration::from_secs(20);
+const GH_OUTPUT_LIMIT: usize = 1 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Opened {
@@ -167,14 +170,23 @@ fn fetch(url: &str, number: u64) -> Option<LanePr> {
         "state,isDraft,statusCheckRollup",
     ]);
     qol_process::hide_console_window(&mut command);
-    match command.output() {
-        Ok(output) if output.status.success() => {
-            parse_view(url, number, &String::from_utf8_lossy(&output.stdout))
-        }
-        Ok(output) => {
+    match qol_process::run_owned_with_output_timeout(command, GH_TIMEOUT, GH_OUTPUT_LIMIT) {
+        Ok(BoundedCommandOutput::Completed(output)) if output.status.success() => parse_view(
+            url,
+            number,
+            &String::from_utf8_lossy(output.stdout.as_bytes()),
+        ),
+        Ok(BoundedCommandOutput::Completed(output)) => {
             log::warn!(
                 "[cli-sessions] gh pr view {url} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                String::from_utf8_lossy(output.stderr.as_bytes()).trim()
+            );
+            None
+        }
+        Ok(BoundedCommandOutput::TimedOut { .. }) => {
+            log::warn!(
+                "[cli-sessions] gh pr view {url} gave no answer in {}s",
+                GH_TIMEOUT.as_secs()
             );
             None
         }
@@ -189,9 +201,9 @@ pub fn spawn_refresh(registry: Arc<Mutex<Registry>>) {
     let spawned = std::thread::Builder::new()
         .name("cli-sessions-prs".to_owned())
         .spawn(move || {
-            let mut settled = HashMap::new();
+            let mut known = HashMap::new();
             loop {
-                refresh(&registry, &mut settled);
+                refresh(&registry, &mut known);
                 std::thread::sleep(REFRESH);
             }
         });
@@ -200,7 +212,7 @@ pub fn spawn_refresh(registry: Arc<Mutex<Registry>>) {
     }
 }
 
-fn refresh(registry: &Arc<Mutex<Registry>>, settled: &mut HashMap<String, LanePr>) {
+fn refresh(registry: &Arc<Mutex<Registry>>, known: &mut HashMap<String, LanePr>) {
     let Ok(keys) = registry.lock().map(|reg| reg.keys()) else {
         return;
     };
@@ -211,29 +223,40 @@ fn refresh(registry: &Arc<Mutex<Registry>>, settled: &mut HashMap<String, LanePr
             return;
         }
     };
+    let by_key = statuses(opened, &keys, known, fetch);
+    if let Ok(mut reg) = registry.lock() {
+        reg.set_prs(&by_key);
+    }
+}
+
+pub fn statuses(
+    opened: Vec<Opened>,
+    keys: &[String],
+    known: &mut HashMap<String, LanePr>,
+    mut fetch: impl FnMut(&str, u64) -> Option<LanePr>,
+) -> HashMap<String, Vec<LanePr>> {
+    known.retain(|url, _| opened.iter().any(|pr| &pr.url == url));
     let mut by_key: HashMap<String, Vec<LanePr>> = HashMap::new();
     for pr in opened {
         let Some(key) = pr.key.filter(|key| keys.contains(key)) else {
             continue;
         };
-        let Some(status) = settled
+        let merged = known
             .get(&pr.url)
-            .cloned()
-            .or_else(|| fetch(&pr.url, pr.number))
-        else {
-            continue;
-        };
-        if status.state != PrState::Open {
-            settled.insert(pr.url, status.clone());
+            .is_some_and(|status| status.state == PrState::Merged);
+        if !merged {
+            if let Some(status) = fetch(&pr.url, pr.number) {
+                known.insert(pr.url.clone(), status);
+            }
         }
-        by_key.entry(key).or_default().push(status);
+        if let Some(status) = known.get(&pr.url) {
+            by_key.entry(key).or_default().push(status.clone());
+        }
     }
     for prs in by_key.values_mut() {
         prs.sort_by_key(|pr| std::cmp::Reverse(pr.number));
     }
-    if let Ok(mut reg) = registry.lock() {
-        reg.set_prs(&by_key);
-    }
+    by_key
 }
 
 pub fn run(args: &[String]) -> Result<String> {
@@ -407,6 +430,63 @@ mod tests {
         );
         assert_eq!(matching(&opened, url)[0].number, 187);
         assert!(matching(&opened, "999").is_empty());
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_last_status_and_only_a_merge_is_final() {
+        let pr = |number: u64, key: &str| Opened {
+            url: format!("https://github.com/qol-tools/qol/pull/{number}"),
+            number,
+            key: Some(key.to_owned()),
+            title: None,
+            park: format!("park-{number}"),
+            watchers: Vec::new(),
+        };
+        let status = |number: u64, state| LanePr {
+            url: format!("https://github.com/qol-tools/qol/pull/{number}"),
+            number,
+            state,
+            draft: false,
+            checks: PrChecks::Passing,
+        };
+        let keys = ["lane".to_owned()];
+        let opened = || vec![pr(1, "lane"), pr(2, "lane"), pr(3, "lane"), pr(4, "gone")];
+        let mut known = HashMap::new();
+        let mut asked = Vec::new();
+        let first = statuses(opened(), &keys, &mut known, |_, number| {
+            asked.push(number);
+            Some(status(
+                number,
+                [PrState::Open, PrState::Merged, PrState::Closed][number as usize - 1],
+            ))
+        });
+        assert_eq!(asked, [1, 2, 3], "a lane that is not live is never fetched");
+        assert_eq!(first["lane"].len(), 3);
+
+        let mut asked = Vec::new();
+        let second = statuses(opened(), &keys, &mut known, |_, number| {
+            asked.push(number);
+            (number == 3).then(|| status(3, PrState::Open))
+        });
+        assert_eq!(asked, [1, 3], "a merged pull request is not fetched again");
+        assert_eq!(
+            second,
+            first
+                .clone()
+                .into_iter()
+                .map(|(key, mut prs)| {
+                    prs[0] = status(3, PrState::Open);
+                    (key, prs)
+                })
+                .collect(),
+            "a failed fetch keeps the last status and a reopened one updates"
+        );
+
+        statuses(vec![pr(1, "lane")], &keys, &mut known, |_, _| None);
+        assert_eq!(
+            known.keys().collect::<Vec<_>>(),
+            ["https://github.com/qol-tools/qol/pull/1"]
+        );
     }
 
     #[test]
