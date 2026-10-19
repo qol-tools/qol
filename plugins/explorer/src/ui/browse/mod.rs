@@ -600,7 +600,7 @@ impl Browser {
                 gone.entry(id).or_default().push(entry.path.as_path());
             }
         }
-        gone.retain(|_, paths| paths.iter().all(|path| self.picks.is_picked(path)));
+        gone.retain(|_, paths| paths.iter().any(|path| self.picks.is_picked(path)));
         if gone.is_empty() {
             return;
         }

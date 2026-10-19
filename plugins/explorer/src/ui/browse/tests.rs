@@ -893,6 +893,22 @@ fn two_picked_hard_links_renamed_together_both_stay_picked() {
 
 #[cfg(unix)]
 #[test]
+fn a_picked_hard_link_renamed_with_its_unpicked_twin_stays_picked() {
+    let temp = abc_folder();
+    fs::hard_link(temp.path().join("a.txt"), temp.path().join("e.txt")).unwrap();
+    let mut browser = opened(temp.path());
+    browser.toggle_pick();
+
+    fs::rename(temp.path().join("a.txt"), temp.path().join("x.txt")).unwrap();
+    fs::rename(temp.path().join("e.txt"), temp.path().join("y.txt")).unwrap();
+    wait_until(&mut browser, "both renames", |browser| {
+        names(browser) == ["b.txt", "c.txt", "d.txt", "x.txt", "y.txt"]
+    });
+    assert_eq!(picked(&browser), ["x.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_renamed_entry_keeps_the_cursor_and_its_pick() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
