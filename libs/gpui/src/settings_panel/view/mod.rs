@@ -3117,9 +3117,12 @@ impl SettingsPanelView {
             ))
         };
         number_field(
-            NumberText {
-                shown: self.display_value(index),
-                widest: widest_number(&number),
+            {
+                let shown = self.display_value(index);
+                NumberText {
+                    widest: widest_number(&number, &shown),
+                    shown,
+                }
             },
             number_unit(&self.level().rows[index].id),
             track,
@@ -4367,29 +4370,49 @@ struct NumberSpec {
     step: Option<f64>,
 }
 
-fn widest_number(number: &NumberSpec) -> String {
-    let decimals = number
-        .step
-        .map(format_number)
-        .and_then(|step| step.split_once('.').map(|(_, fraction)| fraction.len()))
-        .unwrap_or(0);
-    [number.min, number.max, Some(number.value)]
+fn widest_number(number: &NumberSpec, shown: &str) -> String {
+    let fraction_digits = |text: &str| text.split_once('.').map_or(0, |(_, part)| part.len());
+    let whole_digits = |text: &str| {
+        text.trim_start_matches('-')
+            .split('.')
+            .next()
+            .map_or(0, str::len)
+    };
+    let decimals = [number.min, number.max, Some(number.value), number.step]
         .into_iter()
         .flatten()
-        .map(|bound| {
-            let whole = format_number(bound.trunc());
-            match decimals {
-                0 => whole,
-                _ => format!("{whole}.{}", "0".repeat(decimals)),
-            }
-        })
-        .max_by_key(|text| text.chars().count())
-        .map(|text| {
-            text.chars()
-                .map(|glyph| if glyph.is_ascii_digit() { '0' } else { glyph })
-                .collect()
-        })
-        .unwrap_or_default()
+        .map(|candidate| fraction_digits(&format_number(candidate)))
+        .max()
+        .unwrap_or(0);
+    let bounds = [number.min, number.max, Some(number.value)]
+        .into_iter()
+        .flatten()
+        .map(format_number)
+        .collect::<Vec<_>>();
+    let digits = bounds
+        .iter()
+        .map(|text| whole_digits(text))
+        .max()
+        .unwrap_or(1);
+    let signed = bounds
+        .iter()
+        .any(|text| text.starts_with('-') && whole_digits(text) == digits);
+    let mut widest = String::new();
+    if signed {
+        widest.push('-');
+    }
+    widest.push_str(&"0".repeat(digits.max(1)));
+    if decimals > 0 {
+        widest.push('.');
+        widest.push_str(&"0".repeat(decimals));
+    }
+    if shown.chars().count() > widest.chars().count() {
+        return shown
+            .chars()
+            .map(|glyph| if glyph.is_ascii_digit() { '0' } else { glyph })
+            .collect();
+    }
+    widest
 }
 
 fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
@@ -5463,32 +5486,66 @@ mod tests {
             (
                 "percent",
                 number(44.0, Some(0.0), Some(100.0), Some(1.0)),
+                "44",
                 "000",
             ),
             (
                 "single digit now",
                 number(5.0, Some(0.0), Some(100.0), None),
+                "5",
                 "000",
             ),
             (
                 "brightness",
                 number(128.0, Some(0.0), Some(255.0), Some(1.0)),
+                "128",
                 "000",
             ),
             (
                 "fractional step",
                 number(1.5, Some(0.5), Some(4.0), Some(0.25)),
+                "1.5",
                 "0.00",
             ),
             (
                 "negative bound",
                 number(0.0, Some(-12.0), Some(6.0), Some(1.0)),
+                "0",
                 "-00",
             ),
-            ("unbounded", number(1234.0, None, None, None), "0000"),
+            (
+                "shorter negative",
+                number(-45.0, Some(-50.0), Some(100.0), Some(1.0)),
+                "-45",
+                "000",
+            ),
+            (
+                "negative as long",
+                number(0.0, Some(-100.0), Some(50.0), Some(1.0)),
+                "0",
+                "-000",
+            ),
+            (
+                "fraction without step",
+                number(1.2345, Some(0.0), Some(10.0), None),
+                "1.2345",
+                "00.0000",
+            ),
+            (
+                "unbounded",
+                number(1234.0, None, None, None),
+                "1234",
+                "0000",
+            ),
+            (
+                "typing past the box",
+                number(44.0, Some(0.0), Some(100.0), Some(1.0)),
+                "100_",
+                "000_",
+            ),
         ];
-        for (label, number, widest) in cases {
-            assert_eq!(widest_number(&number), widest, "{label}");
+        for (label, number, shown, widest) in cases {
+            assert_eq!(widest_number(&number, shown), widest, "{label}");
         }
     }
 
