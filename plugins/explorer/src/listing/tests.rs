@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use super::read::{run, CountClaim};
 use super::*;
@@ -31,6 +32,13 @@ fn listing_of(folder: &Path) -> Listing {
         listing.apply(event);
     }
     listing
+}
+
+fn items(count: u64) -> Option<ItemCount> {
+    Some(ItemCount::Items {
+        all: count,
+        shown: count,
+    })
 }
 
 fn names(listing: &Listing) -> Vec<&str> {
@@ -132,14 +140,89 @@ fn folder_item_counts_arrive_after_the_listing_is_done() {
     for event in events {
         listing.apply(event);
     }
+    assert_eq!(listing.item_count(&temp.path().join("three")), items(3));
+    assert_eq!(listing.item_count(&temp.path().join("empty")), items(0));
+}
+
+#[test]
+fn folder_counts_say_how_many_items_are_hidden() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "mixed");
+    for name in [".dot", "plain", "other"] {
+        touch(&temp.path().join("mixed"), name);
+    }
+
+    let listing = listing_of(temp.path());
+
     assert_eq!(
-        listing.item_count(&temp.path().join("three")),
-        Some(ItemCount::Items(3))
+        listing.item_count(&temp.path().join("mixed")),
+        Some(ItemCount::Items { all: 3, shown: 2 })
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_folder_is_counted_like_the_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "real");
+    touch(&temp.path().join("real"), "one");
+    touch(&temp.path().join("real"), "two");
+    std::os::unix::fs::symlink(temp.path().join("real"), temp.path().join("link")).unwrap();
+
+    let listing = listing_of(temp.path());
+
+    assert_eq!(listing.item_count(&temp.path().join("link")), items(2));
+}
+
+#[test]
+fn a_recount_reads_only_the_named_folders() {
+    let temp = tempfile::tempdir().unwrap();
+    let named = temp.path().join("named");
+    let other = temp.path().join("other");
+    make_folder(temp.path(), "named");
+    make_folder(temp.path(), "other");
+    touch(&named, "one");
+
+    let read = recount(temp.path().to_path_buf(), vec![named.clone()], || {});
+    let mut listing = Listing::new(temp.path().to_path_buf());
+    while let Ok(event) = read.events().recv() {
+        listing.apply(event);
+    }
+
+    assert_eq!(listing.item_count(&named), items(1));
+    assert_eq!(listing.item_count(&other), None);
+}
+
+#[test]
+fn a_count_read_earlier_never_replaces_one_read_later() {
+    let temp = tempfile::tempdir().unwrap();
+    let folder = temp.path().join("sub");
+    let earlier = Instant::now();
+    let later = earlier + Duration::from_millis(5);
+    let count = |all, read_at| {
+        ListingEvent::Counts(vec![FolderCount {
+            path: folder.clone(),
+            count: ItemCount::Items { all, shown: all },
+            read_at,
+        }])
+    };
+    let mut listing = Listing::new(temp.path().to_path_buf());
+
+    listing.apply(count(2, later));
+    listing.apply(count(1, earlier));
+    assert_eq!(listing.item_count(&folder), items(2));
+
+    listing.apply(count(3, later + Duration::from_millis(5)));
+    assert_eq!(listing.item_count(&folder), items(3));
+}
+
+#[test]
+fn names_with_control_characters_show_a_replacement_mark() {
     assert_eq!(
-        listing.item_count(&temp.path().join("empty")),
-        Some(ItemCount::Items(0))
+        display_name(OsStr::new("new\nline\t.txt")),
+        "new\u{FFFD}line\u{FFFD}.txt"
     );
+    assert_eq!(display_name(OsStr::new("éclair.txt")), "éclair.txt");
 }
 
 #[test]
@@ -317,14 +400,11 @@ fn a_subfolder_whose_count_never_returned_is_skipped_until_it_does() {
 
     let listing = listing_of(temp.path());
     assert_eq!(listing.item_count(&stuck), None);
-    assert_eq!(
-        listing.item_count(&temp.path().join("quick")),
-        Some(ItemCount::Items(0))
-    );
+    assert_eq!(listing.item_count(&temp.path().join("quick")), items(0));
 
     drop(claim);
     let listing = listing_of(temp.path());
-    assert_eq!(listing.item_count(&stuck), Some(ItemCount::Items(0)));
+    assert_eq!(listing.item_count(&stuck), items(0));
 }
 
 #[cfg(unix)]
@@ -420,8 +500,5 @@ fn start_streams_the_listing_from_a_background_thread() {
     assert!(wakes.load(Ordering::Relaxed) >= events);
     assert_eq!(listing.state(), &ListingState::Done);
     assert_eq!(names(&listing), ["sub", "file"]);
-    assert_eq!(
-        listing.item_count(&temp.path().join("sub")),
-        Some(ItemCount::Items(1))
-    );
+    assert_eq!(listing.item_count(&temp.path().join("sub")), items(1));
 }

@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
+use std::time::Instant;
 
-use super::{Entry, EntryKind, ListingError};
+use super::{Entry, ListingError};
 
 const BATCH_SIZE: usize = 128;
 const BATCH_GROWTH_LIMIT: usize = 8192;
@@ -32,7 +33,7 @@ impl CancelToken {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemCount {
-    Items(u64),
+    Items { all: u64, shown: u64 },
     Unreadable,
 }
 
@@ -40,6 +41,7 @@ pub enum ItemCount {
 pub struct FolderCount {
     pub path: PathBuf,
     pub count: ItemCount,
+    pub read_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,16 +86,35 @@ impl Drop for ListingRead {
 }
 
 pub fn start(folder: PathBuf, pass: Pass, wake: impl Fn() + Send + Clone + 'static) -> ListingRead {
+    let worker_folder = folder.clone();
+    spawn(folder, wake, move |cancel, emit| {
+        run(&worker_folder, pass, BATCH_SIZE, cancel, emit);
+    })
+}
+
+pub fn recount(
+    folder: PathBuf,
+    folders: Vec<PathBuf>,
+    wake: impl Fn() + Send + Clone + 'static,
+) -> ListingRead {
+    spawn(folder, wake, move |cancel, mut emit| {
+        count_folders(&folders, BATCH_SIZE, cancel, &mut emit);
+    })
+}
+
+fn spawn<Work>(folder: PathBuf, wake: impl Fn() + Send + Clone + 'static, work: Work) -> ListingRead
+where
+    Work: FnOnce(&CancelToken, &mut dyn FnMut(ListingEvent) -> bool) + Send + 'static,
+{
     let cancel = CancelToken::new();
     let (sender, events) = mpsc::channel();
     let failure = sender.clone();
-    let worker_folder = folder.clone();
     let worker_cancel = cancel.clone();
     let worker_wake = wake.clone();
     let spawned = thread::Builder::new()
         .name("qol-explorer-listing".into())
         .spawn(move || {
-            run(&worker_folder, pass, BATCH_SIZE, &worker_cancel, |event| {
+            work(&worker_cancel, &mut |event| {
                 let sent = sender.send(event).is_ok();
                 worker_wake();
                 sent
@@ -168,7 +189,7 @@ fn read_entries(
                 continue;
             }
         };
-        if entry.kind == EntryKind::Folder {
+        if entry.opens_as_folder {
             folders.push(entry.path.clone());
         }
         batch.push(entry);
@@ -203,12 +224,14 @@ fn count_folders(
         let Some(_claim) = CountClaim::take(folder) else {
             continue;
         };
+        let read_at = Instant::now();
         let Some(count) = count_items(folder, cancel) else {
             return;
         };
         batch.push(FolderCount {
             path: folder.clone(),
             count,
+            read_at,
         });
         if batch.len() >= batch_size && !emit(ListingEvent::Counts(mem::take(&mut batch))) {
             return;
@@ -245,12 +268,19 @@ fn count_items(folder: &Path, cancel: &CancelToken) -> Option<ItemCount> {
     let Ok(items) = fs::read_dir(folder) else {
         return Some(ItemCount::Unreadable);
     };
-    let mut count = 0;
-    for _ in items {
+    let mut all = 0;
+    let mut shown = 0;
+    for item in items {
         if cancel.is_cancelled() {
             return None;
         }
-        count += 1;
+        let Ok(item) = item else {
+            continue;
+        };
+        all += 1;
+        if !crate::places::is_hidden_item(&item) {
+            shown += 1;
+        }
     }
-    Some(ItemCount::Items(count))
+    Some(ItemCount::Items { all, shown })
 }

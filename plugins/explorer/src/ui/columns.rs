@@ -10,13 +10,13 @@ pub fn kind_label(kind: EntryKind) -> &'static str {
     }
 }
 
-pub fn size_label(entry: &Entry, count: Option<ItemCount>) -> String {
+pub fn size_label(entry: &Entry, count: Option<ItemCount>, show_hidden: bool) -> String {
     if !entry.opens_as_folder {
         return qol_gpui::format_bytes(entry.size);
     }
     match count {
-        Some(ItemCount::Items(items)) => qol_gpui::plural(
-            usize::try_from(items).unwrap_or(usize::MAX),
+        Some(ItemCount::Items { all, shown }) => qol_gpui::plural(
+            usize::try_from(if show_hidden { all } else { shown }).unwrap_or(usize::MAX),
             "item",
             "items",
         ),
@@ -55,6 +55,7 @@ mod tests {
             sort_key: SortKey::new(&name, opens_as_folder),
             name,
             path: PathBuf::from("/thing"),
+            id: None,
             kind,
             size,
             hidden: false,
@@ -74,21 +75,35 @@ mod tests {
         let file = entry(EntryKind::File, 2048, false);
         let folder = entry(EntryKind::Folder, 0, true);
         let linked_folder = entry(EntryKind::Link, 0, true);
+        let items = |all, shown| Some(ItemCount::Items { all, shown });
         let cases = [
             (&file, None, qol_gpui::format_bytes(2048)),
             (&folder, None, String::new()),
-            (&folder, Some(ItemCount::Items(1)), "1 item".to_string()),
-            (&folder, Some(ItemCount::Items(12)), "12 items".to_string()),
+            (&folder, items(1, 1), "1 item".to_string()),
+            (&folder, items(12, 12), "12 items".to_string()),
             (
                 &folder,
                 Some(ItemCount::Unreadable),
                 "unreadable".to_string(),
             ),
             (&linked_folder, None, String::new()),
+            (&linked_folder, items(2, 2), "2 items".to_string()),
         ];
         for (entry, count, expected) in cases {
-            assert_eq!(size_label(entry, count), expected, "{entry:?} {count:?}");
+            assert_eq!(
+                size_label(entry, count, false),
+                expected,
+                "{entry:?} {count:?}"
+            );
         }
+    }
+
+    #[test]
+    fn folder_counts_leave_out_hidden_items_while_they_are_hidden() {
+        let folder = entry(EntryKind::Folder, 0, true);
+        let count = Some(ItemCount::Items { all: 5, shown: 3 });
+        assert_eq!(size_label(&folder, count, false), "3 items");
+        assert_eq!(size_label(&folder, count, true), "5 items");
     }
 
     #[test]

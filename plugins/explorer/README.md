@@ -27,7 +27,7 @@ Install from the [QoL Tray](../../apps/tray) plugin store.
 | Alt+Left, Alt+Right | Back and forward |
 | Space | Pick or unpick the row under the cursor |
 | Ctrl+A | Pick every row |
-| Esc | Drop the picks |
+| Esc | Drop the picks and the red note |
 | Ctrl+H | Show or hide hidden entries |
 | Ctrl+G | Edit the path; Up and Down highlight a suggested folder, Tab completes it, Enter or a click goes there |
 | Letters | Jump to the first name that starts with what you typed |

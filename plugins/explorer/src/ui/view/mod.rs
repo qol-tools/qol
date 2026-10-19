@@ -3,9 +3,12 @@ mod list;
 mod rail;
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::{Duration, Instant};
 
+use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
@@ -41,7 +44,7 @@ pub struct ExplorerView {
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     body_height: f32,
-    waiting: VecDeque<(Action, Keystroke)>,
+    waiting: VecDeque<Keystroke>,
 }
 
 impl ExplorerView {
@@ -101,6 +104,9 @@ impl ExplorerView {
         let seen = was + ROW > scroll && was < scroll + self.list_height();
         let shift = if seen { cursor_shift as f32 * ROW } else { 0.0 };
         self.set_scroll((scroll + shift).clamp(0.0, self.max_scroll()));
+        if seen {
+            self.reveal_cursor();
+        }
     }
 
     fn at_end(&self) -> bool {
@@ -168,7 +174,7 @@ impl ExplorerView {
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let action = keys::action(&event.keystroke, self.browser.path_open());
         if keys::waits(action, self.browser.arriving(), !self.waiting.is_empty()) {
-            self.waiting.push_back((action, event.keystroke.clone()));
+            self.waiting.push_back(event.keystroke.clone());
             cx.stop_propagation();
             return;
         }
@@ -180,8 +186,12 @@ impl ExplorerView {
     }
 
     fn replay(&mut self, cx: &mut Context<Self>) {
-        while !self.browser.arriving() {
-            let Some((action, keystroke)) = self.waiting.pop_front() else {
+        while let Some(keystroke) = self.waiting.front() {
+            let action = keys::action(keystroke, self.browser.path_open());
+            if keys::waits(action, self.browser.arriving(), false) {
+                return;
+            }
+            let Some(keystroke) = self.waiting.pop_front() else {
                 return;
             };
             self.dispatch(action, &keystroke, cx);
@@ -212,7 +222,7 @@ impl ExplorerView {
         match action {
             Action::Cursor(step) => self.revealed(|browser| browser.move_cursor(step, page)),
             Action::Range(step) => self.revealed(|browser| browser.extend_range(step, page)),
-            Action::Open => self.open(),
+            Action::Open => self.open(cx),
             Action::Up => self.arrived(|browser| browser.up(scroll)),
             Action::Back => self.arrived(|browser| browser.back(scroll)),
             Action::Forward => self.arrived(|browser| browser.forward(scroll)),
@@ -223,7 +233,7 @@ impl ExplorerView {
             }
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
-            Action::Unpick => self.browser.clear_picks(),
+            Action::Unpick => self.browser.dismiss(),
             Action::ToggleHidden => self.revealed(Browser::toggle_hidden),
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
@@ -273,7 +283,7 @@ impl ExplorerView {
         }
     }
 
-    fn open(&mut self) -> bool {
+    fn open(&mut self, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
         match self.browser.open(scroll) {
             Opening::Nothing => false,
@@ -282,23 +292,46 @@ impl ExplorerView {
                 true
             }
             Opening::File(path) => {
-                self.open_file(path);
+                self.open_file(path, cx);
                 true
             }
         }
     }
 
-    fn open_file(&mut self, path: PathBuf) {
-        let opened = std::fs::metadata(&path)
-            .and_then(|_| qol_apps::desktop_integration::open_with_default_app(&path));
-        let Err(error) = opened else {
+    fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Err(error) = std::fs::metadata(&path) {
+            self.could_not_open(&path, &error);
             return;
-        };
+        }
+        let (sent, outcome) = oneshot::channel();
+        let target = path.clone();
+        let spawned = thread::Builder::new()
+            .name("qol-explorer-open".into())
+            .spawn(move || {
+                let opened = qol_apps::desktop_integration::open_with_default_app_checked(&target);
+                let _ = sent.send(opened);
+            });
+        if let Err(error) = spawned {
+            self.could_not_open(&path, &error);
+            return;
+        }
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Err(error)) = outcome.await else {
+                return;
+            };
+            let _ = view.update(cx, |view, cx| {
+                view.could_not_open(&path, &error);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn could_not_open(&mut self, path: &Path, error: &io::Error) {
         log::warn!("[{PLUGIN_ID}] could not open {}: {error}", path.display());
-        let name = path.file_name().map_or_else(
-            || path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        );
+        let name = path
+            .file_name()
+            .map_or_else(|| path.display().to_string(), crate::listing::display_name);
         self.browser.fail(format!("Could not open {name}"));
     }
 
@@ -324,7 +357,7 @@ impl ExplorerView {
             Click::AddPick => self.browser.add_pick(row),
             Click::Open => {
                 self.browser.set_cursor(row);
-                self.open()
+                self.open(cx)
             }
         };
         if changed {

@@ -128,7 +128,11 @@ fn render_row(
     let typed = cursor
         .then(|| typed_split(&entry.display, browser.jump_run(now)))
         .flatten();
-    let size = size_label(entry, browser.listing().item_count(&entry.path));
+    let size = size_label(
+        entry,
+        browser.listing().item_count(&entry.path),
+        browser.shows_hidden(),
+    );
     let element = div()
         .id(("explorer-row", row))
         .relative()
@@ -208,7 +212,7 @@ fn reading_line(view: &ExplorerView, kit: Kit) -> impl IntoElement {
     let folder = view.browser.folder();
     let name = folder.file_name().map_or_else(
         || folder.display().to_string(),
-        |name| name.to_string_lossy().into_owned(),
+        crate::listing::display_name,
     );
     div()
         .flex_none()

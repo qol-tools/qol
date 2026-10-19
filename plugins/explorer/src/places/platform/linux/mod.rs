@@ -4,7 +4,8 @@ mod tests;
 mod user_dirs;
 
 use std::ffi::OsStr;
-use std::fs::{self, Metadata};
+use std::fs::{self, DirEntry, Metadata};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use crate::places::{Mount, PlaceKind};
@@ -39,4 +40,12 @@ pub(crate) fn mounts() -> Vec<Mount> {
 
 pub(crate) fn is_hidden(name: &OsStr, _metadata: &Metadata) -> bool {
     name.as_encoded_bytes().starts_with(b".")
+}
+
+pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
+    item.file_name().as_encoded_bytes().starts_with(b".")
+}
+
+pub(crate) fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
+    Some((metadata.dev(), metadata.ino()))
 }

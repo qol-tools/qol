@@ -37,7 +37,7 @@ pub fn crumbs<'a>(
     {
         path.push(part);
         trail.push(Crumb {
-            label: part.to_string_lossy().into_owned(),
+            label: crate::listing::display_name(part),
             path: path.clone(),
         });
     }

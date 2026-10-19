@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::Metadata;
+use std::fs::{DirEntry, Metadata};
 use std::path::{Path, PathBuf};
 
 use crate::places::{Mount, PlaceKind};
@@ -19,4 +19,12 @@ pub(crate) fn mounts() -> Vec<Mount> {
 
 pub(crate) fn is_hidden(name: &OsStr, _metadata: &Metadata) -> bool {
     name.as_encoded_bytes().starts_with(b".")
+}
+
+pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
+    item.file_name().as_encoded_bytes().starts_with(b".")
+}
+
+pub(crate) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
+    None
 }

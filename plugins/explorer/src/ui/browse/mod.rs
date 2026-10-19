@@ -1,8 +1,10 @@
+mod counts;
 mod path_field;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
@@ -17,6 +19,7 @@ use qol_watch::{Watch, WatchNotice, WatchRoot};
 use super::keys::Step;
 use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
 use crate::nav::{History, Jump, Picks, Spot};
+use counts::{LiveCounts, FOLLOWED_FOLDERS};
 use path_field::PathField;
 
 const REFRESH_QUIET: Duration = Duration::from_millis(150);
@@ -64,6 +67,7 @@ pub struct Browser {
     failure: Option<String>,
     path: Option<PathField>,
     incoming: Option<Listing>,
+    counts: LiveCounts,
     changed: Arc<AtomicBool>,
     root_gone: Arc<AtomicBool>,
     changed_at: Option<Instant>,
@@ -91,6 +95,7 @@ impl Browser {
             failure: None,
             path: None,
             incoming: None,
+            counts: LiveCounts::default(),
             changed: Arc::default(),
             root_gone: Arc::default(),
             changed_at: None,
@@ -166,6 +171,11 @@ impl Browser {
         self.read.is_some() || self.path.as_ref().is_some_and(PathField::reading)
     }
 
+    #[cfg(test)]
+    pub fn follows_counts(&self) -> bool {
+        self.counts.following()
+    }
+
     pub fn note(&self) -> Note {
         let count = if !self.picks.is_empty() {
             format!("{} picked", self.picks.len())
@@ -205,11 +215,18 @@ impl Browser {
                 drained.cursor_shift = cursor_shift;
             }
         }
+        drained.changed |= self.apply_recounts();
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
         }
-        drained.wake_in = self.refresh_when_due(now);
+        let recount_in =
+            self.counts
+                .recount_when_due(now, &self.history.current().folder, waker(&self.wake));
+        drained.wake_in = [self.refresh_when_due(now), recount_in]
+            .into_iter()
+            .flatten()
+            .min();
         drained
     }
 
@@ -258,7 +275,9 @@ impl Browser {
             return Opening::Nothing;
         };
         if !entry.opens_as_folder {
-            return Opening::File(entry.path.clone());
+            let file = entry.path.clone();
+            self.failure = None;
+            return Opening::File(file);
         }
         let folder = entry.path.clone();
         self.go(folder, scroll);
@@ -316,10 +335,11 @@ impl Browser {
         true
     }
 
-    pub fn clear_picks(&mut self) -> bool {
-        let had_picks = !self.picks.is_empty();
+    pub fn dismiss(&mut self) -> bool {
+        let changed = !self.picks.is_empty() || self.failure.is_some();
         self.picks.clear();
-        had_picks
+        self.failure = None;
+        changed
     }
 
     pub fn toggle_hidden(&mut self) -> bool {
@@ -432,6 +452,7 @@ impl Browser {
 
     fn arrive(&mut self, spot: Spot) {
         self.incoming = None;
+        self.counts = LiveCounts::default();
         self.changed_at = None;
         self.changed.store(false, Ordering::Relaxed);
         self.root_gone.store(false, Ordering::Relaxed);
@@ -461,6 +482,7 @@ impl Browser {
         if matches!(self.listing.state(), ListingState::Failed(_)) {
             return Some((0.0, 0));
         }
+        self.follow_counts();
         self.forget_vanished_picks();
         self.cursor = spot.cursor.min(self.rows.len().saturating_sub(1));
         if let Some(row) = landing.and_then(|child| self.row_of(&child)) {
@@ -528,22 +550,63 @@ impl Browser {
         let Some(fresh) = self.incoming.take() else {
             return false;
         };
-        let at = self.entry(self.cursor).map(|entry| entry.path.clone());
-        self.listing = fresh;
+        let at = self
+            .entry(self.cursor)
+            .map(|entry| (entry.path.clone(), entry.id));
+        let before = mem::replace(&mut self.listing, fresh);
         self.refresh_rows();
-        if let Some(row) = at.and_then(|path| self.row_of(&path)) {
+        if let Some(row) = at.and_then(|(path, id)| self.row_following(&path, id)) {
             self.cursor = row;
         }
         let failed = matches!(self.listing.state(), ListingState::Failed(_));
         if !failed {
+            self.follow_renamed_picks(&before);
             self.forget_vanished_picks();
         }
+        self.follow_counts();
         let folder = self.folder().to_path_buf();
         let elsewhere = self.watched.as_deref() != Some(folder.as_path());
         if failed || elsewhere || self.root_gone.swap(false, Ordering::Relaxed) {
             self.watch_folder(&folder);
         }
         true
+    }
+
+    fn apply_recounts(&mut self) -> bool {
+        let counts = self.counts.drain();
+        if counts.is_empty() {
+            return false;
+        }
+        if let Some(incoming) = self.incoming.as_mut() {
+            incoming.apply(ListingEvent::Counts(counts.clone()));
+        }
+        self.listing.apply(ListingEvent::Counts(counts));
+        true
+    }
+
+    fn follow_counts(&mut self) {
+        let folders = self.listing.folder_paths(FOLLOWED_FOLDERS);
+        self.counts.follow(folders, waker(&self.wake));
+    }
+
+    fn follow_renamed_picks(&mut self, before: &Listing) {
+        if self.picks.is_empty() {
+            return;
+        }
+        let mut picked: HashMap<(u64, u64), &Path> = before
+            .entries()
+            .iter()
+            .filter(|entry| self.picks.is_picked(&entry.path))
+            .filter_map(|entry| Some((entry.id?, entry.path.as_path())))
+            .collect();
+        for entry in self.listing.entries() {
+            let Some(from) = entry.id.and_then(|id| picked.remove(&id)) else {
+                continue;
+            };
+            if from != entry.path {
+                self.picks.rename(from, entry.path.clone());
+            }
+        }
     }
 
     fn watch_folder(&mut self, folder: &Path) {
@@ -592,6 +655,15 @@ impl Browser {
         self.rows
             .iter()
             .position(|&index| self.listing.entries()[index].path == path)
+    }
+
+    fn row_following(&self, path: &Path, id: Option<(u64, u64)>) -> Option<usize> {
+        self.row_of(path).or_else(|| {
+            let id = id?;
+            self.rows
+                .iter()
+                .position(|&index| self.listing.entries()[index].id == Some(id))
+        })
     }
 
     fn stepped(&self, step: Step, page: usize) -> usize {

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use super::{Entry, ItemCount, ListingError, ListingEvent};
 
@@ -15,7 +16,7 @@ pub struct Listing {
     folder: PathBuf,
     state: ListingState,
     entries: Vec<Entry>,
-    counts: HashMap<PathBuf, ItemCount>,
+    counts: HashMap<PathBuf, (ItemCount, Instant)>,
 }
 
 impl Listing {
@@ -65,7 +66,7 @@ impl Listing {
     }
 
     pub fn item_count(&self, path: &Path) -> Option<ItemCount> {
-        self.counts.get(path).copied()
+        self.counts.get(path).map(|(count, _)| *count)
     }
 
     pub fn carry_counts(&mut self, from: &Listing) {
@@ -74,6 +75,15 @@ impl Listing {
                 .iter()
                 .map(|(path, count)| (path.clone(), *count)),
         );
+    }
+
+    pub fn folder_paths(&self, limit: usize) -> Vec<PathBuf> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.opens_as_folder)
+            .take(limit)
+            .map(|entry| entry.path.clone())
+            .collect()
     }
 
     pub fn apply(&mut self, event: ListingEvent) {
@@ -87,9 +97,17 @@ impl Listing {
                 self.entries.clear();
                 self.state = ListingState::Failed(error);
             }
-            ListingEvent::Counts(counts) => self
-                .counts
-                .extend(counts.into_iter().map(|count| (count.path, count.count))),
+            ListingEvent::Counts(counts) => {
+                for count in counts {
+                    let newer = self
+                        .counts
+                        .get(&count.path)
+                        .is_none_or(|(_, read_at)| *read_at <= count.read_at);
+                    if newer {
+                        self.counts.insert(count.path, (count.count, count.read_at));
+                    }
+                }
+            }
         }
     }
 }

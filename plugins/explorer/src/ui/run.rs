@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{px, size, App, Application};
+use gpui::{px, size, App, Application, AsyncApp};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Surface, SurfaceKind};
 
@@ -27,7 +27,8 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
             });
         if let Err(error) = opened {
             reported_failure.borrow_mut().replace(error);
-            cx.quit();
+            cx.spawn(async |cx: &mut AsyncApp| cx.update(|cx| cx.quit()))
+                .detach();
         }
     });
     let failure = failure.borrow_mut().take();

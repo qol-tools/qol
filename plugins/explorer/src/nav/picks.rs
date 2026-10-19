@@ -64,6 +64,21 @@ impl Picks {
         }
     }
 
+    pub fn rename(&mut self, from: &Path, to: PathBuf) {
+        if self.picked.remove(from) {
+            self.picked.insert(to.clone());
+        }
+        let Some(range) = self.range.as_mut() else {
+            return;
+        };
+        if range.base.remove(from) {
+            range.base.insert(to.clone());
+        }
+        if range.anchor == from {
+            range.anchor = to;
+        }
+    }
+
     pub fn extend_range<T: AsRef<Path>>(&mut self, rows: &[T], from: usize, to: usize) {
         let Some(start) = rows.get(from) else {
             return;

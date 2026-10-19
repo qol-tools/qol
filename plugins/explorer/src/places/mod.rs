@@ -3,7 +3,7 @@ mod platform;
 mod tests;
 
 use std::ffi::OsStr;
-use std::fs::Metadata;
+use std::fs::{DirEntry, Metadata};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +112,14 @@ pub fn devices() -> Vec<Device> {
 
 pub fn is_hidden(name: &OsStr, metadata: &Metadata) -> bool {
     platform::is_hidden(name, metadata)
+}
+
+pub fn is_hidden_item(item: &DirEntry) -> bool {
+    platform::is_hidden_item(item)
+}
+
+pub fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
+    platform::file_id(metadata)
 }
 
 fn user_folder(kind: PlaceKind, known: &[(PlaceKind, PathBuf)], home: &Path) -> PathBuf {

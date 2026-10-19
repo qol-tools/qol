@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use gpui::{Keystroke, Modifiers};
 
 use super::{Browser, Drained, Opening, PathStep};
-use crate::listing::ListingState;
+use crate::listing::{ItemCount, ListingState};
 use crate::ui::keys::Step;
 
 fn touch(folder: &Path, name: &str) {
@@ -322,9 +322,25 @@ fn space_toggles_ctrl_click_adds_ctrl_a_picks_all_and_esc_clears() {
     assert_eq!(picked(&browser).len(), 4);
     assert_eq!(browser.note().count, "4 picked");
 
-    assert!(browser.clear_picks());
-    assert!(!browser.clear_picks());
+    assert!(browser.dismiss());
+    assert!(!browser.dismiss());
     assert_eq!(browser.note().count, "4 items");
+}
+
+#[test]
+fn escape_and_the_next_file_opened_drop_the_red_note() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+
+    browser.fail("Could not open a.txt".into());
+    assert!(browser.dismiss());
+    assert_eq!(browser.note().failure, None);
+    assert!(!browser.dismiss());
+
+    browser.fail("Could not open a.txt".into());
+    browser.set_cursor(1);
+    assert_eq!(browser.open(0.0), Opening::File(temp.path().join("b.txt")));
+    assert_eq!(browser.note().failure, None);
 }
 
 #[test]
@@ -648,4 +664,68 @@ fn picking_a_suggestion_goes_there() {
     assert_eq!(browser.pick_suggestion(1, 0.0), PathStep::Arrived);
     assert_eq!(browser.folder(), git);
     assert!(!browser.path_open());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_folder_count_follows_files_added_inside_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let real = make_folder(temp.path(), "real");
+    let link = temp.path().join("link");
+    symlink(&real, &link).unwrap();
+    let mut browser = opened(temp.path());
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+
+    touch(&real, "one");
+    let one = Some(ItemCount::Items { all: 1, shown: 1 });
+    wait_until(&mut browser, "both counts", |browser| {
+        browser.listing().item_count(&real) == one && browser.listing().item_count(&link) == one
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_renamed_entry_keeps_the_cursor_and_its_pick() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    browser.toggle_pick();
+    browser.set_cursor(2);
+
+    fs::rename(temp.path().join("c.txt"), temp.path().join("0.txt")).unwrap();
+    fs::rename(temp.path().join("b.txt"), temp.path().join("z.txt")).unwrap();
+    wait_until(&mut browser, "both renames", |browser| {
+        names(browser) == ["0.txt", "a.txt", "d.txt", "z.txt"]
+    });
+    assert_eq!(browser.cursor(), 0);
+    assert_eq!(picked(&browser), ["z.txt"]);
+
+    fs::rename(temp.path().join("0.txt"), temp.path().join("c.txt")).unwrap();
+    wait_until(&mut browser, "the rename back", |browser| {
+        names(browser) == ["a.txt", "c.txt", "d.txt", "z.txt"]
+    });
+    assert_eq!(browser.cursor(), 1);
+}
+
+#[test]
+fn a_subfolder_count_follows_files_added_and_removed_inside_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let sub = make_folder(temp.path(), "sub");
+    touch(&sub, "one");
+    let mut browser = opened(temp.path());
+    let count = |all, shown| Some(ItemCount::Items { all, shown });
+    assert_eq!(browser.listing().item_count(&sub), count(1, 1));
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+
+    touch(&sub, "two");
+    touch(&sub, ".three");
+    wait_until(&mut browser, "the count after files appeared", |browser| {
+        browser.listing().item_count(&sub) == count(3, 2)
+    });
+    fs::remove_file(sub.join("one")).unwrap();
+    wait_until(&mut browser, "the count after a file vanished", |browser| {
+        browser.listing().item_count(&sub) == count(2, 1)
+    });
 }

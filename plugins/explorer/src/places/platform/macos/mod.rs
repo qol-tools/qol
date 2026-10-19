@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{self, Metadata};
+use std::fs::{self, DirEntry, Metadata};
 use std::os::macos::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -40,4 +40,15 @@ pub(crate) fn mounts() -> Vec<Mount> {
 
 pub(crate) fn is_hidden(name: &OsStr, metadata: &Metadata) -> bool {
     name.as_encoded_bytes().starts_with(b".") || metadata.st_flags() & libc::UF_HIDDEN != 0
+}
+
+pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
+    item.file_name().as_encoded_bytes().starts_with(b".")
+        || item
+            .metadata()
+            .is_ok_and(|metadata| metadata.st_flags() & libc::UF_HIDDEN != 0)
+}
+
+pub(crate) fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
+    Some((metadata.st_dev(), metadata.st_ino()))
 }

@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ pub struct Entry {
     pub name: OsString,
     pub display: String,
     pub path: PathBuf,
+    pub id: Option<(u64, u64)>,
     pub kind: EntryKind,
     pub size: u64,
     pub hidden: bool,
@@ -32,8 +33,9 @@ impl Entry {
         let hidden = crate::places::is_hidden(&name, &metadata);
         let (kind, size, opens_as_folder) = classify(&path, &metadata);
         Ok(Self {
-            display: name.to_string_lossy().into_owned(),
+            display: display_name(&name),
             sort_key: SortKey::new(&name, opens_as_folder),
+            id: crate::places::file_id(&metadata),
             name,
             path,
             kind,
@@ -42,6 +44,19 @@ impl Entry {
             opens_as_folder,
         })
     }
+}
+
+pub fn display_name(name: &OsStr) -> String {
+    name.to_string_lossy()
+        .chars()
+        .map(|letter| {
+            if letter.is_control() {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                letter
+            }
+        })
+        .collect()
 }
 
 impl AsRef<Path> for Entry {
