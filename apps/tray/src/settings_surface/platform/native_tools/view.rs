@@ -40,6 +40,11 @@ const EDITOR_DEPTH: usize = 1;
 const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
 const HOTKEY_FIELDS: usize = 5;
 const OS_ONLY_LABEL: &str = "Only on this kind of computer";
+const SHORTCUT_ENABLED: (&str, &str) = ("Enabled", "The shortcut does nothing while this is off.");
+const SHOW_IN_LAUNCHER: (&str, &str) = (
+    "Show in launcher",
+    "List this shortcut when you search the launcher.",
+);
 const EDITOR_ANIMATION: &str = "native-tools-editor-slide";
 const CHOOSE_ANIMATION: &str = "native-tools-choose-slide";
 
@@ -77,7 +82,7 @@ enum SelectField {
 
 struct TextFieldSpec<'a> {
     index: usize,
-    label: &'static str,
+    label: (&'static str, &'static str),
     value: &'a str,
     placeholder: &'static str,
     selected: bool,
@@ -1206,23 +1211,37 @@ impl NativeToolsView {
         let mut body = self.editor_body(crumb, draft.sub_header());
         if let Some(managed) = &draft.managed {
             return body
-                .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
+                .child(self.boolean_field(
+                    0,
+                    SHORTCUT_ENABLED,
+                    draft.enabled,
+                    draft.selected == 0,
+                    cx,
+                ))
                 .child(self.boolean_field(
                     1,
-                    "Show in launcher",
+                    SHOW_IN_LAUNCHER,
                     draft.export_to_launcher,
                     draft.selected == 1,
                     cx,
                 ))
-                .child(self.read_only_field(0, "Runs", &managed.action))
-                .child(self.read_only_field(1, "Owned by", &managed.plugin_id))
+                .child(self.read_only_field(
+                    0,
+                    ("Runs", "What the shortcut does."),
+                    &managed.action,
+                ))
+                .child(self.read_only_field(
+                    1,
+                    ("Owned by", "The plugin that made this shortcut."),
+                    &managed.plugin_id,
+                ))
                 .into_any_element();
         }
         body = body
-            .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
+            .child(self.boolean_field(0, SHORTCUT_ENABLED, draft.enabled, draft.selected == 0, cx))
             .child(self.boolean_field(
                 1,
-                "Show in launcher",
+                SHOW_IN_LAUNCHER,
                 draft.export_to_launcher,
                 draft.selected == 1,
                 cx,
@@ -1230,7 +1249,7 @@ impl NativeToolsView {
             .child(self.text_field(
                 TextFieldSpec {
                     index: 2,
-                    label: "Name",
+                    label: ("Name", "The name the launcher shows."),
                     value: &draft.name,
                     placeholder: "My Shortcut",
                     selected: draft.selected == 2,
@@ -1239,7 +1258,7 @@ impl NativeToolsView {
             ))
             .child(self.select_field(
                 3,
-                "Action",
+                SelectField::ActionKind,
                 draft.action_kind.label(),
                 draft.selected == 3,
                 cx,
@@ -1249,7 +1268,7 @@ impl NativeToolsView {
                 body = body
                     .child(self.select_field(
                         4,
-                        "Find app by",
+                        SelectField::TargetKind,
                         draft.target_kind.label(),
                         draft.selected == 4,
                         cx,
@@ -1257,7 +1276,7 @@ impl NativeToolsView {
                     .child(self.text_field(
                         TextFieldSpec {
                             index: 5,
-                            label: "App",
+                            label: ("App", "The app to open."),
                             value: &draft.target,
                             placeholder: app_placeholder(draft.target_kind),
                             selected: draft.selected == 5,
@@ -1270,7 +1289,7 @@ impl NativeToolsView {
                     .child(self.text_field(
                         TextFieldSpec {
                             index: 4,
-                            label: "URL",
+                            label: ("URL", "The web page to open."),
                             value: &draft.target,
                             placeholder: "https://example.com",
                             selected: draft.selected == 4,
@@ -1279,7 +1298,10 @@ impl NativeToolsView {
                     ))
                     .child(self.boolean_field(
                         5,
-                        "Open in a specific browser",
+                        (
+                            "Open in a specific browser",
+                            "Open the page in a browser you pick.",
+                        ),
                         draft.browser_override,
                         draft.selected == 5,
                         cx,
@@ -1288,7 +1310,7 @@ impl NativeToolsView {
                     body = body
                         .child(self.select_field(
                             6,
-                            "Find browser by",
+                            SelectField::BrowserKind,
                             draft.browser_kind.label(),
                             draft.selected == 6,
                             cx,
@@ -1296,7 +1318,7 @@ impl NativeToolsView {
                         .child(self.text_field(
                             TextFieldSpec {
                                 index: 7,
-                                label: "Browser",
+                                label: ("Browser", "The browser that opens the page."),
                                 value: &draft.browser,
                                 placeholder: app_placeholder(draft.browser_kind),
                                 selected: draft.selected == 7,
@@ -1330,11 +1352,38 @@ impl NativeToolsView {
                 }
             });
         self.editor_body(crumb, draft.sub_header())
-            .child(self.boolean_field(0, "Enabled", draft.enabled, draft.selected == 0, cx))
-            .child(self.select_field(1, "Plugin", plugin_label, draft.selected == 1, cx))
-            .child(self.select_field(2, "Action", action_label, draft.selected == 2, cx))
+            .child(self.boolean_field(
+                0,
+                ("Enabled", "The hotkey does nothing while this is off."),
+                draft.enabled,
+                draft.selected == 0,
+                cx,
+            ))
+            .child(self.select_field(
+                1,
+                SelectField::Plugin,
+                plugin_label,
+                draft.selected == 1,
+                cx,
+            ))
+            .child(self.select_field(
+                2,
+                SelectField::Action,
+                action_label,
+                draft.selected == 2,
+                cx,
+            ))
             .child(self.capture_field(draft, cx))
-            .child(self.boolean_field(4, OS_ONLY_LABEL, draft.os_only, draft.selected == 4, cx))
+            .child(self.boolean_field(
+                4,
+                (
+                    OS_ONLY_LABEL,
+                    "Your other kinds of computer skip this hotkey.",
+                ),
+                draft.os_only,
+                draft.selected == 4,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1363,10 +1412,19 @@ impl NativeToolsView {
             )
     }
 
-    fn read_only_field(&self, index: usize, label: &'static str, value: &str) -> AnyElement {
+    fn read_only_field(
+        &self,
+        index: usize,
+        label: (&'static str, &'static str),
+        value: &str,
+    ) -> AnyElement {
         let kit = qol_gpui::kit::kit();
         SettingsRow::rule(("native-tools-readonly", index), kit)
-            .child(settings_label(label, kit))
+            .child(field_label(
+                label,
+                RowGround::of(false, self.body_focused),
+                kit,
+            ))
             .child(settings_description(
                 value.to_string(),
                 RowGround::of(false, self.body_focused),
@@ -1386,7 +1444,7 @@ impl NativeToolsView {
     fn boolean_field(
         &self,
         index: usize,
-        label: &'static str,
+        label: (&'static str, &'static str),
         value: bool,
         selected: bool,
         cx: &mut Context<Self>,
@@ -1400,7 +1458,7 @@ impl NativeToolsView {
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(settings_label(label, kit))
+            .child(field_label(label, row, kit))
             .child(SettingsToggle::new(value, row, kit))
             .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
@@ -1409,7 +1467,7 @@ impl NativeToolsView {
     fn select_field(
         &self,
         index: usize,
-        label: &'static str,
+        select: SelectField,
         value: &str,
         selected: bool,
         cx: &mut Context<Self>,
@@ -1427,7 +1485,11 @@ impl NativeToolsView {
                 this.activate_editor_field(cx);
                 cx.notify();
             }))
-            .child(settings_label(label, kit))
+            .child(field_label(
+                (choose_label(select), choose_sub_header(select)),
+                row,
+                kit,
+            ))
             .child(SettingsChoiceValue::new(
                 value.to_string(),
                 ChoiceArt::Picture(self.select_art(index, value)),
@@ -1461,7 +1523,7 @@ impl NativeToolsView {
                 this.select_editor_field(index);
                 cx.notify();
             }))
-            .child(settings_label(label, kit))
+            .child(field_label(label, row, kit))
             .child(field)
             .child(deck::bounds_recorder(Rc::clone(&self.field_bounds), index))
             .into_any_element()
@@ -1485,7 +1547,11 @@ impl NativeToolsView {
                 this.start_capture(cx);
                 cx.notify();
             }))
-            .child(settings_label("Shortcut", kit))
+            .child(field_label(
+                ("Shortcut", "The keys you press to run it."),
+                row,
+                kit,
+            ))
             .child(SettingsKeyCombination::new(
                 display,
                 selected,
@@ -2007,6 +2073,14 @@ fn hotkey_crumb(draft: &HotkeyDraft, plugins: &[PluginOption]) -> String {
         None if draft.action.is_empty() => "hotkey".to_string(),
         None => draft.action.clone(),
     }
+}
+
+fn field_label(
+    label: (&'static str, &'static str),
+    row: RowGround,
+    kit: qol_gpui::kit::Kit,
+) -> Div {
+    settings_label_group(label.0, Some(label.1.into()), row, kit)
 }
 
 fn choose_label(select: SelectField) -> &'static str {
