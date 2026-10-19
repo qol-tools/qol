@@ -53,6 +53,7 @@ pub fn validate_field_value(
     validate_select_value(path, field, value, &mut errors);
     validate_string_array_value(path, field, value, &mut errors);
     validate_number_value(path, field, value, &mut errors);
+    validate_placement_value(path, field, value, &mut errors);
     errors
 }
 
@@ -670,6 +671,27 @@ fn validate_string_array_value(
     }
 }
 
+fn validate_placement_value(
+    path: &str,
+    field: &FieldSpec,
+    value: &FieldDefault,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::Placement {
+        return;
+    }
+    let FieldDefault::String(text) = value else {
+        return;
+    };
+    if crate::placement::Spot::parse(text).is_some() {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path,
+        "value must name a spot such as top-right, or give its x,y fractions",
+    ));
+}
+
 fn validate_number_value(
     path: &str,
     field: &FieldSpec,
@@ -733,7 +755,7 @@ fn validate_step_value(
 fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
     match kind {
         FieldKind::Boolean => matches!(default, FieldDefault::Boolean(_)),
-        FieldKind::String | FieldKind::Select | FieldKind::Color => {
+        FieldKind::String | FieldKind::Select | FieldKind::Color | FieldKind::Placement => {
             matches!(default, FieldDefault::String(_))
         }
         FieldKind::Number => matches!(default, FieldDefault::Number(_)),

@@ -221,12 +221,14 @@ impl SlabPresenter {
     ) -> Result<()> {
         let monitor = self.state.borrow_mut().follow.land(&self.tracker);
         let host = self.clone();
+        let (across, down) = placement.fractions();
+        let gravity = pile::Gravity::new(across, down);
         let surface = Surface::new(SurfaceKind::Toast)
             .title(&*self.title)
             .placement(placement)
             .size(size(px(pile::WIDTH.ceil()), px(WINDOW_ROOM)))
             .open_on(monitor.as_ref(), cx, move |dismisser, _window, _cx| {
-                SlabToastView::new(host, dismisser, scroll, arriving)
+                SlabToastView::new(host, dismisser, scroll, arriving, gravity)
             })?;
         let replaced = self.state.borrow_mut().surface.replace(surface);
         if let Some(replaced) = replaced {

@@ -1,6 +1,7 @@
 pub(crate) mod mirror;
 
 use anyhow::{Context, Result};
+use qol_config::placement::Spot;
 use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,8 @@ struct NotificationSettings {
     handler: NativeHandler,
     #[serde(skip_serializing_if = "Option::is_none")]
     message_stay_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement: Option<String>,
 }
 
 impl Default for NotificationSettings {
@@ -21,6 +24,7 @@ impl Default for NotificationSettings {
             use_system_notifications: false,
             handler: NativeHandler::Qol,
             message_stay_seconds: None,
+            placement: None,
         }
     }
 }
@@ -40,6 +44,8 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             message_seconds: Option<f64>,
             #[serde(default)]
             message_stay_seconds: Option<f64>,
+            #[serde(default)]
+            placement: Option<serde_json::Value>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let handler = raw.handler.unwrap_or(if raw.use_system_notifications {
@@ -54,6 +60,12 @@ impl<'de> Deserialize<'de> for NotificationSettings {
                 raw.message_stay_seconds,
                 raw.message_seconds,
             ),
+            placement: raw
+                .placement
+                .as_ref()
+                .and_then(serde_json::Value::as_str)
+                .and_then(Spot::parse)
+                .map(Spot::token),
         })
     }
 }
@@ -111,6 +123,21 @@ pub fn set_message_seconds(seconds: f64) -> Result<()> {
         return Ok(());
     }
     update_settings(|settings| settings.message_stay_seconds = Some(seconds))
+}
+
+pub fn placement() -> Spot {
+    settings()
+        .ok()
+        .and_then(|settings| settings.placement)
+        .and_then(|token| Spot::parse(&token))
+        .unwrap_or(Spot::TOP_RIGHT)
+}
+
+pub fn set_placement(spot: Spot) -> Result<()> {
+    if spot == placement() {
+        return Ok(());
+    }
+    update_settings(|settings| settings.placement = Some(spot.token()))
 }
 
 pub fn apply_native_handler(previous: NativeHandler) {
@@ -249,6 +276,43 @@ mod tests {
             5.0,
             "a deliberate older pick carries over"
         );
+    }
+
+    #[test]
+    fn placement_defaults_to_the_top_right_and_survives_other_saves() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(placement(), Spot::TOP_RIGHT);
+        set_placement(Spot::TOP_RIGHT).unwrap();
+        assert_eq!(
+            settings().unwrap().placement,
+            None,
+            "saving the shown default keeps following the default"
+        );
+        let free = Spot::new(0.25, 0.6);
+        set_placement(free).unwrap();
+        set_native_handler(NativeHandler::Both).unwrap();
+        set_message_seconds(4.0).unwrap();
+        assert_eq!(placement(), free);
+        let saved = std::fs::read_to_string(settings_path().unwrap()).unwrap();
+        assert!(saved.contains(r#""placement": "0.25,0.6""#), "{saved}");
+    }
+
+    #[test]
+    fn a_placement_the_toasts_cannot_read_falls_back_to_the_top_right() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        let path = settings_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for stored in [r#""somewhere""#, "7", r#""2,2""#] {
+            std::fs::write(&path, format!(r#"{{"placement": {stored}}}"#)).unwrap();
+            assert_eq!(placement(), Spot::TOP_RIGHT, "{stored}");
+            assert_eq!(settings().unwrap().placement, None, "{stored}");
+        }
+        std::fs::write(&path, r#"{"placement": "bottom-center"}"#).unwrap();
+        assert_eq!(placement(), Spot::new(0.5, 1.0));
     }
 
     #[test]

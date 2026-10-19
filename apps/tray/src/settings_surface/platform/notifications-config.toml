@@ -1,0 +1,50 @@
+schema_version = 1
+title = "Notifications"
+description = "How qol tells you something happened."
+
+[section.notifications]
+label = "Notifications"
+description = "How qol tells you something happened."
+
+[field.handler]
+type = "select"
+label = "Show notifications in"
+section = "notifications"
+default = "qol"
+card_description = "Where qol notifications appear."
+options = ["qol", "os", "both"]
+
+[field.handler.option_labels]
+qol = "qol toasts"
+os = "System notifications"
+both = "Both"
+
+[field.handler.option_pictures]
+qol = "qol-toasts"
+os = "system-bubbles"
+both = "both-notices"
+
+[field.placement]
+type = "placement"
+label = "Position"
+description = "Where qol toasts appear on the screen."
+section = "notifications"
+default = "top-right"
+card_description = "Drag the toast where it should go."
+
+[field.do_not_disturb]
+type = "status"
+label = "Do not disturb"
+section = "notifications"
+query = "os_do_not_disturb"
+value_from = "value"
+
+[field.message_seconds]
+type = "number"
+label = "Message time"
+description = "Seconds a message at the top of the screen stays. Hovering it starts the time again."
+section = "notifications"
+default = 1.2
+min = 0.5
+max = 15
+step = 0.1

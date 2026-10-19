@@ -1278,7 +1278,7 @@ fn field_default_matches_kind(
     use qol_config::contract::{FieldDefault, FieldKind};
     match kind {
         FieldKind::Boolean => matches!(value, FieldDefault::Boolean(_)),
-        FieldKind::String | FieldKind::Select | FieldKind::Color => {
+        FieldKind::String | FieldKind::Select | FieldKind::Color | FieldKind::Placement => {
             matches!(value, FieldDefault::String(_))
         }
         FieldKind::Number => matches!(value, FieldDefault::Number(_)),

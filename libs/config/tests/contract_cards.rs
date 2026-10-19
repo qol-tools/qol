@@ -21,7 +21,10 @@ fn plugin_directories(root: &Path) -> Vec<PathBuf> {
 fn config_files() -> Vec<PathBuf> {
     let root = repository_root();
     let core = root.join("apps/tray");
-    let mut files = vec![core.join("src/settings_surface/platform/core-config.toml")];
+    let mut files = vec![
+        core.join("src/settings_surface/platform/core-config.toml"),
+        core.join("src/settings_surface/platform/notifications-config.toml"),
+    ];
     for directory in plugin_directories(&root) {
         let config = directory.join("qol-config.toml");
         if config.is_file() {
@@ -52,6 +55,7 @@ fn opens_card(field: &FieldSpec) -> bool {
         FieldKind::DisplayLayout,
         FieldKind::Gamepad,
         FieldKind::QrCode,
+        FieldKind::Placement,
     ];
     if card_kinds.contains(&field.kind) {
         return true;

@@ -188,6 +188,7 @@ pub(crate) fn core_tool_for_action(action_id: &str) -> Option<crate::settings_su
         "linked-devices" => Some(CoreTool::LinkedDevices),
         "profiles" => Some(CoreTool::Profiles),
         "plugins" => Some(CoreTool::Plugins),
+        "notifications" => Some(CoreTool::Notifications),
         _ => None,
     }
 }

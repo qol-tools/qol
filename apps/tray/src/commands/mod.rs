@@ -63,6 +63,12 @@ pub const EXPORTED: &[ExportedCommand] = &[
         core_action: "plugins",
         mark: Mark::Plugins,
     },
+    ExportedCommand {
+        id: "notifications-open",
+        label: "Notifications",
+        core_action: "notifications",
+        mark: Mark::Notifications,
+    },
 ];
 
 /// The launcher display label for a command: brand prefix + bare label.
@@ -105,6 +111,19 @@ mod tests {
         assert_eq!(
             crate::plugins::action_executor::core_tool_for_action(linked.core_action),
             Some(crate::settings_surface::CoreTool::LinkedDevices)
+        );
+    }
+
+    #[test]
+    fn notifications_command_opens_the_notifications_page() {
+        let notifications = EXPORTED
+            .iter()
+            .find(|c| c.id == "notifications-open")
+            .expect("notifications command");
+        assert_eq!(command_label(notifications), "QoL › Notifications");
+        assert_eq!(
+            crate::plugins::action_executor::core_tool_for_action(notifications.core_action),
+            Some(crate::settings_surface::CoreTool::Notifications)
         );
     }
 

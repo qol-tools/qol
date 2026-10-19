@@ -20,9 +20,16 @@ pub(super) fn config_path(plugin_id: &str) -> anyhow::Result<PathBuf> {
 pub(super) fn panel_base(plugin_id: &str) -> String {
     if plugin_id == qol_conventions::CORE_PANEL_ID {
         "/api/core".to_string()
+    } else if let Some(page) = plugin_id.strip_prefix(qol_conventions::CORE_PAGE_PREFIX) {
+        format!("/api/core/{page}")
     } else {
         format!("/api/plugins/{plugin_id}")
     }
+}
+
+pub(super) fn keeps_a_config_file(plugin_id: &str) -> bool {
+    plugin_id != qol_conventions::CORE_PANEL_ID
+        && !plugin_id.starts_with(qol_conventions::CORE_PAGE_PREFIX)
 }
 
 fn tray_config_route(base: &str) -> String {
@@ -231,6 +238,13 @@ mod tests {
             super::panel_base(qol_conventions::CORE_PANEL_ID),
             "/api/core"
         );
+        assert_eq!(
+            super::panel_base("__core-notifications"),
+            "/api/core/notifications"
+        );
+        assert!(super::keeps_a_config_file("plugin-foo"));
+        assert!(!super::keeps_a_config_file(qol_conventions::CORE_PANEL_ID));
+        assert!(!super::keeps_a_config_file("__core-notifications"));
     }
 
     #[test]
