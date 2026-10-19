@@ -663,6 +663,7 @@ fn backup_kind(file_name: &str) -> &'static str {
 mod tests {
     use super::super::data::Incident;
     use super::*;
+    use qol_platform::Os;
     use serde_json::json;
 
     fn profile(name: &str, active: bool, plugins: usize) -> Profile {
@@ -868,8 +869,8 @@ mod tests {
             file: "default/core/plugins.lock.json".to_string(),
             plugin: Some("qol-removeapp".to_string()),
             key_path: "plugins.qol-removeapp".to_string(),
-            local: json!({"id": "qol-removeapp", "version": "0.67.1", "platforms": ["linux", "macos"]}),
-            remote: json!({"id": "qol-removeapp", "version": "0.79.2", "platforms": ["linux", "macos", "windows"]}),
+            local: json!({"id": "qol-removeapp", "version": "0.67.1", "platforms": [Os::Linux.name(), Os::Macos.name()]}),
+            remote: json!({"id": "qol-removeapp", "version": "0.79.2", "platforms": [Os::Linux.name(), Os::Macos.name(), Os::Windows.name()]}),
             local_edited: Some("2026-10-07T21:07:24+00:00".to_string()),
             remote_edited: Some("2026-10-18T17:16:47+00:00".to_string()),
         }

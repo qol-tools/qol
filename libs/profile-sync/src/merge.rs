@@ -605,7 +605,7 @@ mod tests {
     fn plugins_lock_keeps_the_newer_version_when_both_sides_upgraded() {
         let base = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.60.0")]);
         let mut newer = lock_entry(Some("uid-rm"), "qol-removeapp", "0.79.2");
-        newer["platforms"] = json!(["linux", "macos", "windows"]);
+        newer["platforms"] = json!([Os::Linux.name(), Os::Macos.name(), Os::Windows.name()]);
         let older = lock_entry(Some("uid-rm"), "qol-removeapp", "0.67.1");
 
         let pulled = merge_profile(
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(lock_version(&pushed), "0.79.2");
         assert_eq!(
             pulled.merged["core/plugins.lock.json"]["plugins"][0]["platforms"],
-            json!(["linux", "macos", "windows"])
+            json!([Os::Linux.name(), Os::Macos.name(), Os::Windows.name()])
         );
     }
 
