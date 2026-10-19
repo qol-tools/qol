@@ -4,7 +4,7 @@ mod linux;
 mod macos;
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod no_bluetooth_audio;
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod no_level_meter;
 #[cfg(not(target_os = "windows"))]
 mod no_loopback_capture;
@@ -28,11 +28,11 @@ pub(crate) use linux::{
 pub(crate) use macos::{
     companion_input, effective_default, identity_for_node, is_muted, list_audio_devices,
     list_devices, resolve_audio_device, set_default_output, set_muted, set_volume_percent,
-    volume_percent,
+    volume_percent, Meter,
 };
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub use no_bluetooth_audio::{bluetooth_endpoints, disconnect_bluetooth, reconnect_bluetooth};
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(crate) use no_level_meter::Meter;
 #[cfg(not(target_os = "windows"))]
 pub(crate) use no_loopback_capture::Capture;

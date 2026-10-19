@@ -142,12 +142,17 @@ fn bluetooth_address(facts: &Facts) -> Option<&str> {
         .map(|(address, _)| address)
 }
 
-fn state_of(id: ObjectId) -> State {
+pub(super) fn state_of(id: ObjectId) -> State {
     match hal::read_u32(id, Property::global(hal::IS_RUNNING_SOMEWHERE)) {
         Ok(0) => State::Idle,
         Ok(_) => State::Running,
         Err(_) => State::Unknown,
     }
+}
+
+pub(super) fn is_bluetooth(id: ObjectId) -> bool {
+    let transport = hal::read_u32(id, Property::global(hal::TRANSPORT)).unwrap_or_default();
+    kind_of(transport) == Kind::Bluetooth
 }
 
 fn kind_of(transport: u32) -> Kind {

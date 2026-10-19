@@ -25,6 +25,8 @@ pub(super) const IS_RUNNING_SOMEWHERE: [u8; 4] = *b"gone";
 pub(super) const RELATED_DEVICES: [u8; 4] = *b"akin";
 pub(super) const VIRTUAL_MAIN_VOLUME: [u8; 4] = *b"vmvc";
 pub(super) const MUTE: [u8; 4] = *b"mute";
+pub(super) const NOMINAL_SAMPLE_RATE: [u8; 4] = *b"nsrt";
+pub(super) const VIRTUAL_FORMAT: [u8; 4] = *b"sfmt";
 
 const GLOBAL_SCOPE: [u8; 4] = *b"glob";
 const INPUT_SCOPE: [u8; 4] = *b"inpt";
@@ -115,7 +117,7 @@ impl Property {
     }
 }
 
-fn status_text(status: i32) -> String {
+pub(super) fn status_text(status: i32) -> String {
     let tag = status.to_be_bytes();
     if tag
         .iter()
@@ -132,7 +134,11 @@ pub(super) fn has(object: ObjectId, property: Property) -> bool {
     unsafe { AudioObjectHasProperty(object, &address) != 0 }
 }
 
-fn read_into<T: Copy>(object: ObjectId, property: Property, value: T) -> Result<T, AudioError> {
+pub(super) fn read_into<T: Copy>(
+    object: ObjectId,
+    property: Property,
+    value: T,
+) -> Result<T, AudioError> {
     let address = property.address();
     let mut value = value;
     let mut size = u32::try_from(std::mem::size_of::<T>()).unwrap_or(u32::MAX);
