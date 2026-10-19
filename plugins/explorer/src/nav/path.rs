@@ -51,7 +51,7 @@ pub fn resolve(input: &str, home: &Path, cwd: &Path) -> PathBuf {
     collapse(&cwd.join(path))
 }
 
-fn collapse(path: &Path) -> PathBuf {
+pub fn collapse(path: &Path) -> PathBuf {
     let mut collapsed = PathBuf::new();
     for component in path.components() {
         match component {

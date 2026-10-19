@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::read::run;
+use super::read::{run, CountClaim};
 use super::*;
 
 fn touch(folder: &Path, name: &str) {
@@ -304,6 +304,27 @@ fn errors_say_why_the_folder_cannot_be_read() {
         };
         assert_eq!(error.to_string(), message);
     }
+}
+
+#[test]
+fn a_subfolder_whose_count_never_returned_is_skipped_until_it_does() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "stuck");
+    make_folder(temp.path(), "quick");
+    let stuck = temp.path().join("stuck");
+    let claim = CountClaim::take(&stuck).unwrap();
+    assert!(CountClaim::take(&stuck).is_none());
+
+    let listing = listing_of(temp.path());
+    assert_eq!(listing.item_count(&stuck), None);
+    assert_eq!(
+        listing.item_count(&temp.path().join("quick")),
+        Some(ItemCount::Items(0))
+    );
+
+    drop(claim);
+    let listing = listing_of(temp.path());
+    assert_eq!(listing.item_count(&stuck), Some(ItemCount::Items(0)));
 }
 
 #[cfg(unix)]

@@ -52,9 +52,10 @@ impl PathField {
 
     pub(super) fn refresh(&mut self, home: &Path, folder: &Path, show_hidden: bool) {
         let input = PathInput::parse(self.edit.text(), home);
-        let parent = input
-            .parent
-            .map_or_else(|| folder.to_path_buf(), |parent| folder.join(parent));
+        let parent = input.parent.map_or_else(
+            || folder.to_path_buf(),
+            |parent| path::collapse(&folder.join(parent)),
+        );
         self.segment = input.segment;
         if parent != self.parent {
             self.read = Some(listing::start(

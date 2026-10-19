@@ -3,13 +3,15 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
 use super::{Entry, EntryKind, ListingError};
 
 const BATCH_SIZE: usize = 128;
 const BATCH_GROWTH_LIMIT: usize = 8192;
+
+static COUNTING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
@@ -198,6 +200,9 @@ fn count_folders(
         if cancel.is_cancelled() {
             return;
         }
+        let Some(_claim) = CountClaim::take(folder) else {
+            continue;
+        };
         let Some(count) = count_items(folder, cancel) else {
             return;
         };
@@ -211,6 +216,28 @@ fn count_folders(
     }
     if !batch.is_empty() {
         emit(ListingEvent::Counts(batch));
+    }
+}
+
+pub(super) struct CountClaim(PathBuf);
+
+impl CountClaim {
+    pub(super) fn take(folder: &Path) -> Option<Self> {
+        let mut counting = COUNTING.lock().unwrap_or_else(PoisonError::into_inner);
+        if counting.iter().any(|busy| busy == folder) {
+            return None;
+        }
+        counting.push(folder.to_path_buf());
+        Some(Self(folder.to_path_buf()))
+    }
+}
+
+impl Drop for CountClaim {
+    fn drop(&mut self) {
+        let mut counting = COUNTING.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = counting.iter().position(|busy| *busy == self.0) {
+            counting.swap_remove(index);
+        }
     }
 }
 

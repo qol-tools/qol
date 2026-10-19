@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
-use qol_watch::{Watch, WatchRoot};
+use qol_watch::{Watch, WatchNotice, WatchRoot};
 
 use super::keys::Step;
 use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
@@ -64,6 +64,7 @@ pub struct Browser {
     path: Option<PathField>,
     incoming: Option<Listing>,
     changed: Arc<AtomicBool>,
+    root_gone: Arc<AtomicBool>,
     changed_at: Option<Instant>,
     watch: Option<Watch>,
     wake: UnboundedSender<()>,
@@ -89,6 +90,7 @@ impl Browser {
             path: None,
             incoming: None,
             changed: Arc::default(),
+            root_gone: Arc::default(),
             changed_at: None,
             watch: None,
             wake,
@@ -419,7 +421,8 @@ impl Browser {
         self.incoming = None;
         self.changed_at = None;
         self.changed.store(false, Ordering::Relaxed);
-        self.watch = watch_folder(&spot.folder, self.changed.clone(), waker(&self.wake));
+        self.root_gone.store(false, Ordering::Relaxed);
+        self.watch = self.watch_folder(&spot.folder);
         self.read = Some(listing::start(
             spot.folder.clone(),
             Pass::WithCounts,
@@ -500,7 +503,34 @@ impl Browser {
         if let Some(row) = at.and_then(|path| self.row_of(&path)) {
             self.cursor = row;
         }
+        let failed = matches!(self.listing.state(), ListingState::Failed(_));
+        if failed || self.root_gone.swap(false, Ordering::Relaxed) {
+            let folder = self.folder().to_path_buf();
+            self.watch = self.watch_folder(&folder);
+        }
         true
+    }
+
+    fn watch_folder(&self, folder: &Path) -> Option<Watch> {
+        let changed = self.changed.clone();
+        let root_gone = self.root_gone.clone();
+        let wake = waker(&self.wake);
+        let root = folder.to_path_buf();
+        let roots = [WatchRoot::shallow(folder)];
+        match qol_watch::watch(&roots, move |notice| {
+            let root_hit = matches!(&notice, WatchNotice::Changed(paths) if paths.contains(&root));
+            if root_hit {
+                root_gone.store(true, Ordering::Relaxed);
+            }
+            changed.store(true, Ordering::Relaxed);
+            wake();
+        }) {
+            Ok(watch) => Some(watch),
+            Err(error) => {
+                log::warn!("changes in {} will not show: {error}", folder.display());
+                None
+            }
+        }
     }
 
     fn refresh_rows(&mut self) {
@@ -531,24 +561,6 @@ fn waker(wake: &UnboundedSender<()>) -> impl Fn() + Send + Clone + 'static {
     let wake = wake.clone();
     move || {
         let _ = wake.unbounded_send(());
-    }
-}
-
-fn watch_folder(
-    folder: &Path,
-    changed: Arc<AtomicBool>,
-    wake: impl Fn() + Send + 'static,
-) -> Option<Watch> {
-    let roots = [WatchRoot::shallow(folder)];
-    match qol_watch::watch(&roots, move |_| {
-        changed.store(true, Ordering::Relaxed);
-        wake();
-    }) {
-        Ok(watch) => Some(watch),
-        Err(error) => {
-            log::warn!("changes in {} will not show: {error}", folder.display());
-            None
-        }
     }
 }
 

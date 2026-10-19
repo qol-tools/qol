@@ -165,6 +165,26 @@ fn a_folder_that_vanishes_while_shown_reports_it() {
 }
 
 #[test]
+fn a_folder_recreated_while_shown_is_followed_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+
+    fs::remove_dir_all(&inner).unwrap();
+    fs::create_dir(&inner).unwrap();
+    touch(&inner, "y.txt");
+    wait_until(&mut browser, "the new folder", |browser| {
+        names(browser) == ["y.txt"]
+    });
+
+    touch(&inner, "z.txt");
+    wait_until(&mut browser, "a file in the new folder", |browser| {
+        browser.row_count() == 2
+    });
+}
+
+#[test]
 fn shift_steps_pick_a_run_from_where_the_run_started() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
@@ -422,6 +442,31 @@ fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
     let step = browser.path_key(&key("enter", None), || None, 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert_eq!(browser.folder(), temp.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn dots_through_a_link_suggest_the_folder_that_enter_opens() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let a = make_folder(temp.path(), "a");
+    make_folder(&a, "b");
+    symlink(a.join("b"), temp.path().join("link")).unwrap();
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(
+        &mut browser,
+        &format!("link{MAIN_SEPARATOR}..{MAIN_SEPARATOR}"),
+    );
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["a", "link"]);
+
+    type_text(&mut browser, "a");
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Arrived);
+    assert_eq!(browser.folder(), a);
 }
 
 #[test]
