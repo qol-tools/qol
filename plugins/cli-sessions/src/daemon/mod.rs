@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod closed;
 pub mod knocks;
 pub mod reconcile;
 

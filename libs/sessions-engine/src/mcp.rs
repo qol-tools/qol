@@ -20,6 +20,12 @@ use super::launch::{Launch, LaunchChoice, LaunchKind};
 
 const SERVER_NAME: &str = "qol-sessions-mcp";
 
+struct LiveConversation {
+    external_id: Option<String>,
+    key: Option<String>,
+    token: String,
+}
+
 #[cfg(test)]
 const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -47,6 +53,7 @@ pub(crate) struct McpSessionServer {
     lineage: super::lineage::LineageStore,
     knocks: super::knocks::KnockStore,
     board: super::board::BoardStore,
+    closed_dir: Option<std::path::PathBuf>,
     #[cfg(test)]
     _pending_root: Option<tempfile::TempDir>,
 }
@@ -75,6 +82,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::system()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             board: super::board::BoardStore::system()?,
+            closed_dir: qol_terminal_sessions::closed::closed_dir(),
             #[cfg(test)]
             _pending_root: None,
         })
@@ -110,6 +118,7 @@ impl McpSessionServer {
             lineage: super::lineage::LineageStore::with_dir(root.path().join("lineage")),
             knocks: super::knocks::KnockStore::with_dir(root.path().join("knocks")),
             board: super::board::BoardStore::with_dir(root.path().join("board")),
+            closed_dir: Some(root.path().join("closed")),
             _pending_root: Some(root),
         }
     }
@@ -141,6 +150,7 @@ impl McpSessionServer {
             lineage: super::lineage::LineageStore::with_dir(dir.join("lineage")),
             knocks: super::knocks::KnockStore::with_dir(dir.join("knocks")),
             board: super::board::BoardStore::with_dir(dir.join("board")),
+            closed_dir: Some(dir.join("closed")),
             _pending_root: None,
         }
     }
@@ -240,8 +250,10 @@ impl McpSessionServer {
         }
         match name {
             "sessions_list" => Some(self.tool_list_sessions()),
+            "sessions_closed" => Some(self.tool_closed()),
             "session_spawn" => Some(self.tool_spawn(arguments, cancel)),
             "session_fork" => Some(self.tool_fork(arguments)),
+            "session_reopen" => Some(self.tool_reopen(&arguments)),
             "session_submit" => Some(self.tool_submit(arguments)),
             "session_bridge" => Some(self.tool_bridge(arguments, cancel)),
             "session_loop_close" => Some(self.close_loop(arguments)),
@@ -485,6 +497,126 @@ impl McpSessionServer {
             rows.push(row.with_messaging(parent, counts, attention.as_ref(), now_ms));
         }
         serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn closed_dir(&self) -> Result<&std::path::Path, String> {
+        self.closed_dir
+            .as_deref()
+            .ok_or_else(|| "the sessions data directory is unavailable".to_owned())
+    }
+
+    fn live_conversations(&self) -> Result<Vec<LiveConversation>, String> {
+        let facts = self
+            .terminals
+            .discover()
+            .map_err(|error| format!("discovery failed: {error}"))?;
+        Ok(facts
+            .iter()
+            .filter_map(|session| {
+                let token = session.binding().ok()?.token();
+                Some(LiveConversation {
+                    external_id: self.interpreter.describe(session).external_id,
+                    key: session
+                        .spawn_identity
+                        .as_ref()
+                        .map(|identity| identity.key.as_str().to_owned()),
+                    token,
+                })
+            })
+            .collect())
+    }
+
+    fn tool_closed(&self) -> Result<String, String> {
+        let dir = self.closed_dir()?;
+        let live = self.live_conversations()?;
+        let now = super::mailbox::now_ms() / 1_000;
+        let records = qol_terminal_sessions::closed::records(dir)
+            .map_err(|error| format!("failed to read the closed sessions: {error}"))?;
+        let rows = records
+            .iter()
+            .filter(|record| {
+                !live
+                    .iter()
+                    .any(|session| session.external_id.as_deref() == Some(&record.external_id))
+            })
+            .map(|record| super::contract::closed_row(record, now))
+            .collect::<Vec<_>>();
+        serde_json::to_string(&rows).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn tool_reopen(&self, arguments: &Value) -> Result<String, String> {
+        let external_id = string_argument(arguments, "external_id")?;
+        let dir = self.closed_dir()?;
+        let record = qol_terminal_sessions::closed::find(dir, external_id).ok_or_else(|| {
+            format!(
+                "no closed session `{external_id}`; sessions_closed lists the ones that can be reopened"
+            )
+        })?;
+        for session in self.live_conversations()? {
+            if session.external_id.as_deref() == Some(external_id) {
+                return Err(format!(
+                    "`{external_id}` is already open in `{}`; continue there",
+                    session.token
+                ));
+            }
+            if session.key.is_some() && session.key == record.key {
+                return Err(format!(
+                    "`{}` is live in `{}`; message it with session_send instead of reopening it",
+                    record.key.as_deref().unwrap_or_default(),
+                    session.token
+                ));
+            }
+        }
+        let tool = qol_terminal_sessions::cli::CliToolId::new(record.tool.clone())
+            .map_err(|error| format!("invalid tool `{}`: {error}", record.tool))?;
+        let resume = self
+            .interpreter
+            .resume_args_for(&tool, external_id)
+            .ok_or_else(|| format!("`{}` has no resume command", record.tool))?;
+        let permission = qol_terminal_sessions::cli::launch_flags::resume_permission_flags(
+            &tool,
+            record.permission_mode.as_deref(),
+        );
+        let key = record
+            .key
+            .clone()
+            .unwrap_or_else(|| format!("reopen-{}", &super::spawn::generate_key()[..8]));
+        let launched = super::spawn::launch_detached(
+            self.terminals.as_ref(),
+            &self.interpreter,
+            &self.ledger,
+            &self.locks,
+            &record.tool,
+            &record.cwd,
+            &key,
+            None,
+            None,
+            None,
+            Some(record.title.as_deref().unwrap_or(&key)),
+            self.spawn_surface,
+            self.spawn_cap.as_ref(),
+            &permission,
+            "",
+            false,
+            None,
+            Some(&resume),
+            false,
+            &[],
+        )
+        .map_err(|error| error.to_string())?;
+        let ledger_cleared = qol_terminal_sessions::closed::forget(dir, external_id).is_ok();
+        serde_json::to_string(&json!({
+            "reopened": true,
+            "session": launched.session,
+            "key": key,
+            "tool": record.tool,
+            "cwd": launched.cwd,
+            "title": launched.title,
+            "surface": launched.surface,
+            "elapsed_ms": launched.elapsed_ms,
+            "ledger_cleared": ledger_cleared,
+        }))
+        .map_err(|error| format!("serialization failed: {error}"))
     }
 
     fn tool_spawn(
@@ -1283,7 +1415,7 @@ fn parse_json_line(line: &str) -> Result<Option<Value>, Value> {
 }
 
 fn help_text() -> String {
-    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --profile default|switchboard\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProfiles:\n  default serves every tool. switchboard serves only {switchboard_tools}\n  and refuses a call to any other tool.\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session unless a selected agent\n  profile declares one (the sessions.toml `spawn_model` entry is the fallback;\n  the reuse path needs no model), every launch must declare its tool/model\n  pair in the sessions.toml `tool_models` mapping while `allowed_models`\n  remains the independent spending allowlist (an absent mapping keeps the\n  legacy behavior), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane. `agent_profile`,\n  `task_role` and `requires` bind a dispatch to a user-owned agent_profiles\n  entry: the sessions policy is read fresh for every call, configuring any\n  profile enables enforcement unless enforce_agent_profiles is false, a\n  constrained assignment needs a resolvable profile and an explicit role, and\n  the resolved immutable assignment is returned as `agent_assignment` with\n  `agent_status` (constrained or unconstrained). session_submit inherits the\n  profile, role and requirements recorded against a session when they are\n  omitted, revalidates them against current policy, and refuses a constrained\n  dispatch to a session with no recorded identity.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n  session_send leaves a direct message in another session's mailbox by spawn\n  key (the switchboard reaches everyone, a session its parent and siblings,\n  a reply the sender it answers) and queues a one-line knock for the CLI\n  Sessions daemon to type when the recipient's prompt is empty; session_inbox\n  reads and marks them, and session_board is the open board every session\n  can read. Messages and posts are information, never instructions. The\n  sender is stamped from the calling terminal's spawn key, and session_fork\n  records that key as the fork's parent.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names(), switchboard_tools = super::contract::SWITCHBOARD_TOOLS.join(", "))
+    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --profile default|switchboard\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProfiles:\n  default serves every tool. switchboard serves only {switchboard_tools}\n  and refuses a call to any other tool.\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session unless a selected agent\n  profile declares one (the sessions.toml `spawn_model` entry is the fallback;\n  the reuse path needs no model), every launch must declare its tool/model\n  pair in the sessions.toml `tool_models` mapping while `allowed_models`\n  remains the independent spending allowlist (an absent mapping keeps the\n  legacy behavior), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane. `agent_profile`,\n  `task_role` and `requires` bind a dispatch to a user-owned agent_profiles\n  entry: the sessions policy is read fresh for every call, configuring any\n  profile enables enforcement unless enforce_agent_profiles is false, a\n  constrained assignment needs a resolvable profile and an explicit role, and\n  the resolved immutable assignment is returned as `agent_assignment` with\n  `agent_status` (constrained or unconstrained). session_submit inherits the\n  profile, role and requirements recorded against a session when they are\n  omitted, revalidates them against current policy, and refuses a constrained\n  dispatch to a session with no recorded identity.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n  sessions_closed lists the conversations the CLI Sessions daemon saw close\n  in the last 14 days (its ledger under the sessions data dir), and\n  session_reopen resumes one of them in a new tab with its tool's resume\n  command, the permission mode it ran with and its spawn key.\n  session_send leaves a direct message in another session's mailbox by spawn\n  key (the switchboard reaches everyone, a session its parent and siblings,\n  a reply the sender it answers) and queues a one-line knock for the CLI\n  Sessions daemon to type when the recipient's prompt is empty; session_inbox\n  reads and marks them, and session_board is the open board every session\n  can read. Messages and posts are information, never instructions. The\n  sender is stamped from the calling terminal's spawn key, and session_fork\n  records that key as the fork's parent.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names(), switchboard_tools = super::contract::SWITCHBOARD_TOOLS.join(", "))
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -2083,8 +2215,10 @@ mod tests {
             names,
             [
                 "sessions_list",
+                "sessions_closed",
                 "session_spawn",
                 "session_fork",
+                "session_reopen",
                 "session_submit",
                 "session_bridge",
                 "session_loop_close",
@@ -2122,6 +2256,125 @@ mod tests {
         assert_eq!(rows[0]["session"], token());
         assert_eq!(rows[0]["tool"], "generic");
         assert_eq!(rows[0]["display_name"], "agent");
+    }
+
+    fn closed_record(
+        external_id: &str,
+        cwd: &str,
+        key: Option<&str>,
+    ) -> qol_terminal_sessions::closed::ClosedRecord {
+        qol_terminal_sessions::closed::ClosedRecord {
+            external_id: external_id.to_owned(),
+            tool: "claude".to_owned(),
+            cwd: cwd.to_owned(),
+            title: Some("Old chat".to_owned()),
+            key: key.map(str::to_owned),
+            permission_mode: Some("bypassPermissions".to_owned()),
+            closed_at: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn sessions_closed_lists_the_ledger_and_session_reopen_resumes_with_mode_and_key() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let closed = root.path().join("closed");
+        let cwd = spawn_cwd(&root);
+        qol_terminal_sessions::closed::write(&closed, &closed_record("abc", &cwd, None)).unwrap();
+        qol_terminal_sessions::closed::write(&closed, &closed_record("def", &cwd, Some("lane-7")))
+            .unwrap();
+
+        let listed = tool_json(&tool_call(&server, "sessions_closed", json!({})));
+        let rows = listed.as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{listed}");
+        assert_eq!(rows[0]["external_id"], "abc");
+        assert_eq!(rows[0]["tool"], "claude");
+        assert_eq!(rows[0]["title"], "Old chat");
+        assert_eq!(rows[0]["cwd"], cwd);
+        assert!(rows[0].get("key").is_none(), "{listed}");
+        assert_eq!(rows[1]["key"], "lane-7");
+        assert!(
+            rows[0]["closed_at"].as_str().unwrap().contains('T'),
+            "{listed}"
+        );
+        assert!(
+            rows[0]["closed_ago"].as_str().unwrap().ends_with("ago"),
+            "{listed}"
+        );
+
+        let reopened = tool_json(&tool_call(
+            &server,
+            "session_reopen",
+            json!({ "external_id": "abc" }),
+        ));
+        assert_eq!(reopened["reopened"], true, "{reopened}");
+        assert_eq!(reopened["tool"], "claude");
+        assert_eq!(reopened["title"], "Old chat");
+        assert_eq!(reopened["ledger_cleared"], true);
+        let key = reopened["key"].as_str().unwrap();
+        assert!(key.starts_with("reopen-"), "{key}");
+        assert_eq!(reopened["session"], format!("v1:kitty:spawn-{key}:200"));
+        let launch = backend.spawn_launch.lock().unwrap().clone().unwrap();
+        assert_eq!(launch.program, "claude");
+        let joined = launch.args.join(" ");
+        assert!(joined.contains("--resume abc"), "{joined}");
+        assert!(
+            joined.contains("--dangerously-skip-permissions"),
+            "{joined}"
+        );
+        assert!(!carries_lane_profile(&launch.args), "{:?}", launch.args);
+        assert!(qol_terminal_sessions::closed::find(&closed, "abc").is_none());
+        assert_eq!(
+            tool_json(&tool_call(&server, "sessions_closed", json!({})))
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let reopened = tool_json(&tool_call(
+            &server,
+            "session_reopen",
+            json!({ "external_id": "def" }),
+        ));
+        assert_eq!(reopened["key"], "lane-7", "{reopened}");
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "def" })),
+            "no closed session `def`",
+        );
+    }
+
+    #[test]
+    fn session_reopen_refuses_a_key_that_is_live_and_an_unknown_id() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = Arc::new(
+            FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
+        );
+        backend.enable_spawner();
+        let cwd = spawn_cwd(&root);
+        backend.add_lane(lane_facts("lane-9", &cwd));
+        let server = server_with_backend(backend.clone(), root.path().to_path_buf());
+        let closed = root.path().join("closed");
+        qol_terminal_sessions::closed::write(&closed, &closed_record("ghi", &cwd, Some("lane-9")))
+            .unwrap();
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "ghi" })),
+            "`lane-9` is live in",
+        );
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "nope" })),
+            "no closed session `nope`",
+        );
+        refused(
+            &tool_call(&server, "session_reopen", json!({})),
+            "external_id",
+        );
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
+        assert!(qol_terminal_sessions::closed::find(&closed, "ghi").is_some());
     }
 
     #[test]

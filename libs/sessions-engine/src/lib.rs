@@ -329,7 +329,9 @@ Details:
   fork --blank launches a fresh session with no brief, no chat copy and no
   launch prompt, so the user types its first message.
   switchboard opens the one control chat per machine, or focuses the live
-  one; qol sessions switchboard help lists its flags.
+  one; qol sessions switchboard help lists its flags. It lists the sessions
+  the CLI Sessions daemon saw close in the last 14 days with sessions_closed
+  and brings one back in a new tab with session_reopen.
   Sessions message each other only through the session_send, session_inbox
   and session_board agent tools, addressed by spawn key. session_send
   reaches a session's parent, its siblings and the switchboard, and the

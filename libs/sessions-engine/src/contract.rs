@@ -1,4 +1,5 @@
 use qol_terminal_sessions::cli::CliSessionDescriptor;
+use qol_terminal_sessions::closed::ClosedRecord;
 use qol_terminal_sessions::{SessionBinding, SessionCapabilities, SessionFacts};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -10,9 +11,11 @@ use super::switchboard::SWITCHBOARD_KEY;
 
 pub(crate) const ATTENTION_STALE_AFTER_MS: u64 = 30_000;
 
-pub(crate) const SWITCHBOARD_TOOLS: [&str; 6] = [
+pub(crate) const SWITCHBOARD_TOOLS: [&str; 8] = [
     "sessions_list",
+    "sessions_closed",
     "session_fork",
+    "session_reopen",
     "session_close",
     "session_send",
     "session_inbox",
@@ -163,6 +166,44 @@ pub(crate) fn session_row(
     }
 }
 
+#[derive(Serialize)]
+pub(crate) struct ClosedRow {
+    pub(crate) external_id: String,
+    pub(crate) tool: String,
+    pub(crate) cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) key: Option<String>,
+    pub(crate) closed_at: String,
+    pub(crate) closed_ago: String,
+}
+
+pub(crate) fn closed_row(record: &ClosedRecord, now: u64) -> ClosedRow {
+    let closed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(record.closed_at);
+    ClosedRow {
+        external_id: record.external_id.clone(),
+        tool: record.tool.clone(),
+        cwd: record.cwd.clone(),
+        title: record.title.clone(),
+        key: record.key.clone(),
+        closed_at: chrono::DateTime::<chrono::Local>::from(closed_at)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        closed_ago: ago(now.saturating_sub(record.closed_at)),
+    }
+}
+
+fn ago(elapsed_secs: u64) -> String {
+    let (count, unit) = match elapsed_secs {
+        0..=59 => return "just now".to_owned(),
+        60..=3_599 => (elapsed_secs / 60, "minute"),
+        3_600..=86_399 => (elapsed_secs / 3_600, "hour"),
+        _ => (elapsed_secs / 86_400, "day"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural} ago")
+}
+
 pub(crate) fn capability_names(capabilities: &SessionCapabilities) -> Vec<String> {
     let mut names = Vec::new();
     if capabilities.contains(SessionCapabilities::SCREEN_READING) {
@@ -198,6 +239,12 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
             name: "sessions_list",
             label: "List terminal sessions",
             description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds.",
+            input_schema: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "sessions_closed",
+            label: "List closed sessions",
+            description: "List the conversations the CLI Sessions daemon saw close in the last 14 days, newest first, so one can be brought back with session_reopen: each row carries external_id, tool, cwd, the title it last showed, its spawn key when it had one, closed_at in local time and closed_ago. A conversation closes when its tool exits or its terminal goes; one a live session holds again is left out, and the switchboard is never listed.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
@@ -382,6 +429,21 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                 },
                 "required": ["cwd", "key"],
+            }),
+        },
+        ToolSpec {
+            name: "session_reopen",
+            label: "Reopen a closed session",
+            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode it ran with. It keeps the spawn key it had, so its mail still reaches it, and a conversation that had none gets a reopen-* key. Refuses a conversation a live session already holds and a key that is live. Returns the new session token with the key, tool, cwd and title.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "external_id": {
+                        "type": "string",
+                        "description": "The external_id of a row from sessions_closed",
+                    },
+                },
+                "required": ["external_id"],
             }),
         },
         ToolSpec {
@@ -626,8 +688,10 @@ mod tests {
             names,
             [
                 "sessions_list",
+                "sessions_closed",
                 "session_spawn",
                 "session_fork",
+                "session_reopen",
                 "session_submit",
                 "session_bridge",
                 "session_loop_close",
@@ -640,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switchboard_profile_lists_only_its_six_tools_in_contract_order() {
+    fn the_switchboard_profile_lists_only_its_eight_tools_in_contract_order() {
         let names = mcp_tool_specs_for(McpProfile::Switchboard)
             .into_iter()
             .map(|spec| spec.name)
@@ -649,7 +713,9 @@ mod tests {
             names,
             [
                 "sessions_list",
+                "sessions_closed",
                 "session_fork",
+                "session_reopen",
                 "session_close",
                 "session_send",
                 "session_inbox",
@@ -668,6 +734,38 @@ mod tests {
         assert_eq!(McpProfile::from_token("lanes"), None);
         for name in SWITCHBOARD_TOOLS {
             assert!(tool_specs().iter().any(|spec| spec.name == name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_closed_row_carries_a_local_timestamp_and_a_plain_age() {
+        let record = ClosedRecord {
+            external_id: "abc".to_owned(),
+            tool: "claude".to_owned(),
+            cwd: "/project".to_owned(),
+            title: Some("Old chat".to_owned()),
+            key: None,
+            permission_mode: Some("bypassPermissions".to_owned()),
+            closed_at: 1_700_000_000,
+        };
+        let row = closed_row(&record, 1_700_000_000 + 2 * 86_400 + 5);
+        assert_eq!(row.external_id, "abc");
+        assert_eq!(row.closed_ago, "2 days ago");
+        assert!(row.closed_at.starts_with("2023-11-1"), "{}", row.closed_at);
+        assert_eq!(
+            serde_json::to_value(&row).unwrap()["key"],
+            serde_json::Value::Null
+        );
+        for (elapsed, expected) in [
+            (0, "just now"),
+            (59, "just now"),
+            (60, "1 minute ago"),
+            (125, "2 minutes ago"),
+            (3_600, "1 hour ago"),
+            (7_250, "2 hours ago"),
+            (86_400, "1 day ago"),
+        ] {
+            assert_eq!(ago(elapsed), expected, "{elapsed}");
         }
     }
 
