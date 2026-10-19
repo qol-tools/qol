@@ -6447,7 +6447,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.65.0"
+version = "0.66.0"
 dependencies = [
  "anyhow",
  "bluer",
@@ -7420,7 +7420,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.92.0"
+version = "1.93.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -7459,7 +7459,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "log",
@@ -7530,7 +7530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.105.0"
+version = "3.106.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7620,7 +7620,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7644,7 +7644,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "anyhow",
  "candle-core",
