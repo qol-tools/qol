@@ -290,12 +290,7 @@ impl Kit {
             .border(px(qol_theme::LINE))
             .border_color(rgba(ground.edge.packed()))
             .bg(rgba(ground.well.packed()))
-            .shadow(vec![BoxShadow {
-                color: rgba(SHADE_WELL).into(),
-                offset: point(px(0.0), px(LINE)),
-                blur_radius: px(0.0),
-                spread_radius: px(0.0),
-            }])
+            .shadow(key_cast())
             .text(TextStyle::Key)
             .text_color(rgb(ground.soft))
     }
@@ -864,6 +859,15 @@ pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
         return 0.0;
     }
     count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
+}
+
+pub fn key_cast() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: rgba(SHADE_WELL).into(),
+        offset: point(px(0.0), px(LINE)),
+        blur_radius: px(0.0),
+        spread_radius: px(0.0),
+    }]
 }
 
 pub fn float_shadow(ink: u32) -> Vec<BoxShadow> {

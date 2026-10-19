@@ -1,8 +1,6 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{
-    div, point, px, rgb, rgba, App, BoxShadow, IntoElement, RenderOnce, SharedString, Window,
-};
+use gpui::{div, px, rgb, rgba, App, IntoElement, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use crate::kit::kit;
@@ -133,12 +131,7 @@ impl RenderOnce for SettingsKeyCombination {
                 .h(px(KEY_CAP_HEIGHT))
                 .px(px(qol_theme::SPACE_INSET))
                 .rounded(px(qol_theme::RADIUS_KEYCAP))
-                .shadow(vec![BoxShadow {
-                    color: rgba(qol_theme::SHADE_WELL).into(),
-                    offset: point(px(0.0), px(qol_theme::LINE)),
-                    blur_radius: px(0.0),
-                    spread_radius: px(0.0),
-                }]);
+                .shadow(crate::kit::key_cast());
             keys.push(
                 ground_bg(key, well, well_hover).child(
                     ground_text(div(), rgb(ground.ink), hover.map(|hover| rgb(hover.ink)))
