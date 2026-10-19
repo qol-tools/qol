@@ -457,7 +457,16 @@ impl SettingsPanelView {
                     }
                 }
                 FormRowClick::Open => this.open_nested_list_card(index, cx),
-                FormRowClick::Select => {}
+                FormRowClick::Select => {
+                    if let Some(field) = this
+                        .level_mut()
+                        .form
+                        .as_mut()
+                        .and_then(|form| form.text_mut(index))
+                    {
+                        field.select_all();
+                    }
+                }
             }
             cx.notify();
         }))
@@ -797,7 +806,16 @@ impl SettingsPanelView {
         if count == 0 {
             return;
         }
-        self.level_mut().selected = index.min(count - 1);
+        let index = index.min(count - 1);
+        self.level_mut().selected = index;
+        if let Some(field) = self
+            .level_mut()
+            .form
+            .as_mut()
+            .and_then(|form| form.text_mut(index))
+        {
+            field.select_all();
+        }
         self.sync_scroll();
     }
 

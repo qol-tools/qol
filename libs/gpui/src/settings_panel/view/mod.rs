@@ -23,9 +23,9 @@ use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
     rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
     settings_action_spinner, settings_error_line, settings_label_group, settings_page,
-    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, NumberText, RowGround,
-    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
-    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_query_spinner, settings_selected_text, settings_swatch, settings_value_text,
+    ChoiceArt, NumberText, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader,
+    SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -50,6 +50,8 @@ use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
+use crate::text_edit::{Span, TextField};
+use qol_config::contract::NumberConstraints;
 
 type QueryResult = Result<serde_json::Value, String>;
 type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
@@ -308,7 +310,7 @@ pub(super) struct SettingsPanelState {
 }
 
 enum ActiveControl {
-    Edit(String),
+    Edit(TextField),
     Wheel(WheelControl),
 }
 
@@ -1722,13 +1724,21 @@ impl SettingsPanelView {
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
                 if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
-                    edit.pop();
+                    edit.backspace(Span::Char);
                     self.stream_edit();
                 }
             }
             Intent::Insert(ch) => {
+                let bounds = self
+                    .level()
+                    .rows
+                    .get(self.level().selected)
+                    .and_then(|row| number_bounds(&row.control));
                 if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
-                    edit.push_str(&ch);
+                    match bounds {
+                        Some(bounds) => type_number(edit, &ch, &bounds),
+                        None => edit.insert_str(&ch),
+                    }
                     self.stream_edit();
                 }
             }
@@ -2142,6 +2152,10 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
+        if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+            edit.select_all();
+            return;
+        }
         let selected = self.level().selected;
         if matches!(
             self.row_query_state(selected),
@@ -2169,6 +2183,8 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         };
+        let mut edit = TextField::with_text(edit);
+        edit.select_all();
         self.level_mut().active_control = Some(ActiveControl::Edit(edit));
         if row_streams(&self.level().rows, self.level().selected)
             && !stream_gated(&self.level().rows)
@@ -2198,7 +2214,8 @@ impl SettingsPanelView {
         let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
             return false;
         };
-        *edit = stepped_number(edit, value, min, max, step.unwrap_or(1.0), direction);
+        let stepped = stepped_number(edit.text(), value, min, max, step.unwrap_or(1.0), direction);
+        edit.set_text(stepped);
         self.stream_edit();
         true
     }
@@ -2207,6 +2224,7 @@ impl SettingsPanelView {
         let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
             return;
         };
+        let edit = edit.into_text();
         let streams = row_streams(&self.level().rows, self.level().selected);
         let action = row_action(&self.level().rows, self.level().selected);
         let selected = self.level().selected;
@@ -2366,7 +2384,7 @@ impl SettingsPanelView {
         else {
             return;
         };
-        let Some(value) = parsed_number(edit, *min, *max, *step) else {
+        let Some(value) = parsed_number(edit.text(), *min, *max, *step) else {
             return;
         };
         let selected = self.level().selected;
@@ -2738,10 +2756,18 @@ impl SettingsPanelView {
         body_header_child_offset(&sections, &headers, row)
     }
 
+    fn edit_selects_all(&self, index: usize) -> bool {
+        index == self.level().selected
+            && matches!(
+                &self.level().active_control,
+                Some(ActiveControl::Edit(edit)) if edit.selected_range().is_some()
+            )
+    }
+
     fn display_value(&self, index: usize) -> String {
         if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
+                Some(ActiveControl::Edit(edit)) => return edit_display(edit),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
                 None => {}
             }
@@ -3010,20 +3036,21 @@ impl SettingsPanelView {
         if let Some(accent) = self.option_accent(index) {
             cell = cell.child(settings_accent_dot(accent));
         }
+        let value = if self.edit_selects_all(index) {
+            settings_selected_text(self.kit.value(self.display_value(index)), self.kit)
+        } else {
+            settings_value_text(
+                self.display_value(index),
+                self.value_tone(index),
+                row,
+                self.kit,
+            )
+        };
         cell.flex_none()
             .min_w(px(value_cell_width(&self.level().rows[index].control)))
             .max_w(relative(VALUE_CELL_MAX_FRACTION))
             .justify_end()
-            .child(one_line(
-                settings_value_text(
-                    self.display_value(index),
-                    self.value_tone(index),
-                    row,
-                    self.kit,
-                )
-                .flex_shrink()
-                .min_w_0(),
-            ))
+            .child(one_line(value.flex_shrink().min_w_0()))
     }
 
     fn unavailable_indicator(&self, index: usize) -> StatusIndicator {
@@ -3081,7 +3108,7 @@ impl SettingsPanelView {
         {
             let edit = if index == self.level().selected {
                 match &self.level().active_control {
-                    Some(ActiveControl::Edit(edit)) => Some(edit.as_str()),
+                    Some(ActiveControl::Edit(edit)) => Some(edit.text()),
                     _ => None,
                 }
             } else {
@@ -3128,6 +3155,7 @@ impl SettingsPanelView {
                 NumberText {
                     widest: widest_number(&number, &shown),
                     shown,
+                    selected: self.edit_selects_all(index),
                 }
             },
             number_unit(&self.level().rows[index].id),
@@ -3160,7 +3188,7 @@ impl SettingsPanelView {
         };
         let text = if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => edit,
+                Some(ActiveControl::Edit(edit)) => edit.text(),
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
                 None => value,
             }
@@ -4299,17 +4327,49 @@ impl SettingsPanelView {
 }
 
 fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Option<f64> {
-    let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
-    if let Some(min) = min {
-        value = value.max(min);
+    let bounds = NumberConstraints { min, max, step };
+    let value = bounds.clamp(edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
+    Some(match step {
+        Some(step) => align_to_step(value, Some(bounds.lowest()), Some(bounds.highest()), step),
+        None => value,
+    })
+}
+
+fn number_bounds(control: &RowControl) -> Option<NumberConstraints> {
+    match control {
+        RowControl::Number { min, max, step, .. } => Some(NumberConstraints {
+            min: *min,
+            max: *max,
+            step: *step,
+        }),
+        _ => None,
     }
-    if let Some(max) = max {
-        value = value.min(max);
+}
+
+fn type_number(edit: &mut TextField, typed: &str, bounds: &NumberConstraints) {
+    let signed = bounds.lowest() < 0.0;
+    if !typed
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ch == '.' || (signed && ch == '-'))
+    {
+        return;
     }
-    if let Some(step) = step {
-        value = align_to_step(value, min, max, step);
+    edit.insert_str(typed);
+    if edit
+        .text()
+        .trim()
+        .parse::<f64>()
+        .is_ok_and(|value| value > bounds.highest())
+    {
+        edit.set_text(format_number(bounds.highest()));
     }
-    Some(value)
+}
+
+fn edit_display(edit: &TextField) -> String {
+    if edit.selected_range().is_some() {
+        return edit.text().to_string();
+    }
+    format!("{}_", edit.text())
 }
 
 fn align_to_step(value: f64, min: Option<f64>, max: Option<f64>, step: f64) -> f64 {
@@ -5331,14 +5391,14 @@ mod tests {
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
         clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
-        escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
-        intent, list_fit_updates, live_card_level, live_card_sync, live_card_sync_back,
-        live_number_dispatch_plan, number_finish_plan, number_preview, number_unit, parsed_color,
-        parsed_number, pop_level, push_level, query_is_due, rail_group_breaks,
-        release_slider_dispatch, row_body_height, schedule_slider_generation, slider_fraction,
-        slider_generation_current, slider_protected, source_window_height_for, stepped_number,
-        text_or_placeholder, transition_in_flight, transition_policy, widest_number,
-        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        edit_display, escape_step, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
+        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_preview,
+        number_unit, parsed_color, parsed_number, pop_level, push_level, query_is_due,
+        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
+        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
+        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, type_number,
+        widest_number, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
         LiveNumberDispatch, NumberFinishPlan, NumberSpec, ObjectArrayState, Row, RowControl,
         RowSection, SettingsDestination, TransitionAction, TransitionTracker,
     };
@@ -5351,6 +5411,8 @@ mod tests {
         SliderHold,
     };
     use crate::settings_panel::PanelSourceGroup;
+    use crate::text_edit::{Span, TextField};
+    use qol_config::contract::NumberConstraints;
 
     #[test]
     fn rail_separator_only_marks_the_core_to_plugin_boundary() {
@@ -6441,6 +6503,73 @@ active_value_from = "active"
                 "edit: {edit:?}"
             );
         }
+    }
+
+    #[test]
+    fn typing_a_number_never_passes_the_max_and_takes_only_number_characters() {
+        let volume = NumberConstraints {
+            min: Some(0.0),
+            max: Some(100.0),
+            step: Some(5.0),
+        };
+        let offset = NumberConstraints {
+            min: Some(-50.0),
+            max: Some(50.0),
+            step: None,
+        };
+        let cases = [
+            ("", &volume, "45", "45"),
+            ("45", &volume, "0", "100"),
+            ("10", &volume, "0", "100"),
+            ("1", &volume, "a", "1"),
+            ("1", &volume, "-", "1"),
+            ("", &offset, "-", "-"),
+            ("-", &offset, "7", "-7"),
+            ("4", &offset, "9", "49"),
+            ("5", &offset, "1", "50"),
+            ("2", &volume, ".", "2."),
+        ];
+        for (start, bounds, typed, expected) in cases {
+            let mut edit = TextField::with_text(start);
+            type_number(&mut edit, typed, bounds);
+            assert_eq!(edit.text(), expected, "{start:?} + {typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_fresh_edit_is_selected_so_the_first_key_replaces_it() {
+        let volume = NumberConstraints {
+            min: Some(0.0),
+            max: Some(100.0),
+            step: Some(5.0),
+        };
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        assert_eq!(edit_display(&edit), "65");
+        type_number(&mut edit, "3", &volume);
+        assert_eq!(edit.text(), "3");
+        assert_eq!(edit_display(&edit), "3_");
+
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        type_number(&mut edit, "x", &volume);
+        assert_eq!(edit.text(), "65");
+        assert!(edit.selected_range().is_some());
+
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        edit.backspace(Span::Char);
+        assert_eq!(edit.text(), "");
+    }
+
+    #[test]
+    fn a_number_without_bounds_stays_between_zero_and_the_largest_i32() {
+        assert_eq!(parsed_number("-4", None, None, None), Some(0.0));
+        assert_eq!(
+            parsed_number("99999999999", None, None, None),
+            Some(f64::from(i32::MAX))
+        );
+        assert_eq!(parsed_number("-4", Some(-10.0), None, None), Some(-4.0));
     }
 
     #[test]

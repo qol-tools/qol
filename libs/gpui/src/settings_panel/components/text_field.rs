@@ -6,7 +6,9 @@ use qol_theme::TextStyle;
 use crate::kit::Kit;
 use crate::text_edit::{CaretStyle, TextField, TextFieldElement};
 
-use super::{ground_bg, ground_text, RowGround, FIELD_MAX_WIDTH, TEXT_FIELD_MIN_WIDTH};
+use super::{
+    ground_bg, ground_text, selection_colors, RowGround, FIELD_MAX_WIDTH, TEXT_FIELD_MIN_WIDTH,
+};
 
 fn editable_element(
     field: &TextField,
@@ -16,11 +18,9 @@ fn editable_element(
     kit: Kit,
 ) -> AnyElement {
     let ground = row.rest(kit);
+    let (selection, selected_ink) = selection_colors(kit);
     TextFieldElement::new(field, visible, advance)
-        .selection(
-            rgb(kit.grounds.band.bg).into(),
-            Some(rgb(kit.grounds.pane.ink).into()),
-        )
+        .selection(rgb(selection).into(), Some(rgb(selected_ink).into()))
         .caret(CaretStyle {
             color: rgb(ground.ink).into(),
             width: 2.0,

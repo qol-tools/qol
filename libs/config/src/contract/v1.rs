@@ -301,6 +301,23 @@ pub struct NumberConstraints {
     pub step: Option<f64>,
 }
 
+impl NumberConstraints {
+    pub const DEFAULT_MIN: f64 = 0.0;
+    pub const DEFAULT_MAX: f64 = i32::MAX as f64;
+
+    pub fn lowest(&self) -> f64 {
+        self.min.unwrap_or(Self::DEFAULT_MIN)
+    }
+
+    pub fn highest(&self) -> f64 {
+        self.max.unwrap_or(Self::DEFAULT_MAX)
+    }
+
+    pub fn clamp(&self, value: f64) -> f64 {
+        value.max(self.lowest()).min(self.highest())
+    }
+}
+
 pub fn parse_spec(path: impl AsRef<Path>) -> Result<ConfigSpec, ParseSpecError> {
     let raw = std::fs::read_to_string(path).map_err(ParseSpecError::Io)?;
     parse_spec_str(&raw).map_err(ParseSpecError::Toml)
@@ -314,6 +331,25 @@ pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
 mod tests {
     use super::*;
     use qol_platform::Os;
+
+    #[test]
+    fn number_bounds_default_to_zero_and_the_largest_i32() {
+        let cases = [
+            (None, None, -5.0, 0.0),
+            (None, None, 3e12, f64::from(i32::MAX)),
+            (Some(-10.0), None, -20.0, -10.0),
+            (None, Some(100.0), 150.0, 100.0),
+            (Some(0.0), Some(100.0), 42.0, 42.0),
+        ];
+        for (min, max, value, expected) in cases {
+            let bounds = NumberConstraints {
+                min,
+                max,
+                step: None,
+            };
+            assert_eq!(bounds.clamp(value), expected, "{min:?}..{max:?} {value}");
+        }
+    }
 
     #[test]
     fn field_order_follows_declaration_not_alphabet() {

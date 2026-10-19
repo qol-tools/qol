@@ -6,7 +6,7 @@ use qol_theme::TextStyle;
 use crate::kit::Kit;
 use crate::theme::Ground;
 
-use super::{ground_bg, ground_text, RowGround};
+use super::{ground_bg, ground_text, settings_selected_text, RowGround};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::settings_panel) enum SliderStyle {
@@ -166,6 +166,7 @@ fn slider_bar(style: SliderStyle, fill: f32, ground: Ground, hover: Option<Groun
 pub(in crate::settings_panel) struct NumberText {
     pub(in crate::settings_panel) shown: String,
     pub(in crate::settings_panel) widest: String,
+    pub(in crate::settings_panel) selected: bool,
 }
 
 pub(in crate::settings_panel) fn number_field(
@@ -219,14 +220,15 @@ pub(in crate::settings_panel) fn number_field(
             div()
                 .relative()
                 .child(ground_text(div().text(TextStyle::Value), rgba(0), None).child(text.widest))
-                .child(
-                    ground_text(
-                        div().absolute().top_0().right_0().text(TextStyle::Value),
-                        rgb(ink),
-                        ink_hover.map(rgb),
-                    )
-                    .child(text.shown),
-                ),
+                .child({
+                    let shown = div().absolute().top_0().right_0().text(TextStyle::Value);
+                    if text.selected {
+                        settings_selected_text(shown, kit)
+                    } else {
+                        ground_text(shown, rgb(ink), ink_hover.map(rgb))
+                    }
+                    .child(text.shown)
+                }),
         )
         .children(unit.map(|unit| {
             ground_text(
