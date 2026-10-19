@@ -6,7 +6,7 @@ use qol_theme::TextStyle;
 use crate::kit::Kit;
 use crate::theme::Ground;
 
-use super::{ground_bg, ground_text, RowGround, SETTINGS_ROW_GROUP};
+use super::{ground_bg, ground_text, settings_selected_text, RowGround, SETTINGS_ROW_GROUP};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::settings_panel) enum SliderStyle {
@@ -29,6 +29,20 @@ impl SliderStyle {
         match self {
             Self::Compact => 128.0,
             Self::Wide | Self::Level => 240.0,
+        }
+    }
+
+    fn value_gap(self) -> f32 {
+        match self {
+            Self::Compact => qol_theme::SPACE_INSET,
+            Self::Wide | Self::Level => qol_theme::SPACE_CELL,
+        }
+    }
+
+    pub(in crate::settings_panel) fn thumb_reach(self) -> f32 {
+        match self {
+            Self::Compact => 0.0,
+            Self::Wide | Self::Level => WIDE_THUMB / 2.0,
         }
     }
 
@@ -242,6 +256,12 @@ fn slider_bar(style: SliderStyle, fill: f32, ground: Ground, hover: Option<Groun
     ))
 }
 
+pub(in crate::settings_panel) struct NumberText {
+    pub(in crate::settings_panel) shown: String,
+    pub(in crate::settings_panel) widest: String,
+    pub(in crate::settings_panel) selected: bool,
+}
+
 fn nudge_chevron(points_right: bool, ink: u32, shown: bool) -> gpui::Div {
     let mark = canvas(
         |_, _, _| (),
@@ -284,26 +304,32 @@ fn nudge_chevron(points_right: bool, ink: u32, shown: bool) -> gpui::Div {
 }
 
 fn number_value(
-    display: String,
+    text: NumberText,
     unit: Option<&'static str>,
     cue: &NumberCue,
     ground: Ground,
     hover: Option<Ground>,
+    kit: Kit,
 ) -> gpui::Div {
+    let shown = div().absolute().top_0().right_0().text(TextStyle::Value);
+    let shown = if text.selected {
+        settings_selected_text(shown, kit)
+    } else {
+        ground_text(shown, rgb(ground.ink), hover.map(|hover| rgb(hover.ink)))
+    };
+    let caret = cue.editing && !text.selected;
     let digits = div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(qol_theme::SPACE_STACK))
         .child(
-            ground_text(
-                div().text(TextStyle::Value),
-                rgb(ground.ink),
-                hover.map(|hover| rgb(hover.ink)),
-            )
-            .child(display),
+            div()
+                .relative()
+                .child(ground_text(div().text(TextStyle::Value), rgba(0), None).child(text.widest))
+                .child(shown.child(text.shown)),
         )
-        .when(cue.editing, |digits| {
+        .when(caret, |digits| {
             digits.child(ground_bg(
                 div().flex_none().w(px(CARET_WIDTH)).h(px(CARET_HEIGHT)),
                 rgb(ground.ink),
@@ -371,7 +397,7 @@ fn scrub_field(
 }
 
 pub(in crate::settings_panel) fn number_field(
-    display: String,
+    text: NumberText,
     unit: Option<&'static str>,
     track: Option<(f32, SliderStyle)>,
     cue: NumberCue,
@@ -381,12 +407,9 @@ pub(in crate::settings_panel) fn number_field(
 ) -> gpui::Div {
     let ground = row.rest(kit);
     let hover = row.hover(kit);
-    let value = number_value(display, unit, &cue, ground, hover);
-    let mut cell = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(qol_theme::SPACE_INSET));
+    let value = number_value(text, unit, &cue, ground, hover, kit);
+    let gap = track.map_or(qol_theme::SPACE_INSET, |(_, style)| style.value_gap());
+    let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
         let width = style.track_width();
         let fill = fraction * width;
@@ -410,7 +433,7 @@ pub(in crate::settings_panel) fn number_field(
                 fraction, cue.level, width, ground, hover, kit,
             )),
         };
-        cell = cell.child(interact(bar));
+        cell = cell.child(div().px(px(style.thumb_reach())).child(interact(bar)));
     }
     let chip = div()
         .flex()
@@ -447,6 +470,21 @@ mod tests {
                     "width {width} fraction {fraction}: fill {fill_edge} thumb {thumb_centre}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_thumbed_slider_reserves_room_for_the_thumb_past_both_track_ends() {
+        assert_eq!(SliderStyle::Compact.thumb_reach(), 0.0);
+        assert_eq!(SliderStyle::Compact.value_gap(), qol_theme::SPACE_INSET);
+        for style in [SliderStyle::Wide, SliderStyle::Level] {
+            let reach = style.thumb_reach();
+            assert_eq!(thumb_left(0.0), -reach);
+            assert_eq!(
+                thumb_left(style.track_width()) + WIDE_THUMB,
+                style.track_width() + reach
+            );
+            assert_eq!(style.value_gap(), qol_theme::SPACE_CELL);
         }
     }
 

@@ -657,12 +657,11 @@ pub(super) fn strip(
         )
 }
 
-pub(super) fn show_all(words: f32, kit: Kit) -> Div {
-    div()
-        .w_full()
-        .h(px(super::pile::WORDS_ROW))
-        .mt(px((1.0 - words) * super::pile::WORDS_RISE))
-        .flex()
+pub(super) fn show_all(words: f32, below: bool, kit: Kit) -> Div {
+    let rise = px((1.0 - words) * super::pile::WORDS_RISE);
+    let row = div().w_full().h(px(super::pile::WORDS_ROW));
+    let row = if below { row.mb(rise) } else { row.mt(rise) };
+    row.flex()
         .items_center()
         .justify_center()
         .opacity(words)

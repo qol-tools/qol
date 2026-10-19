@@ -1,7 +1,14 @@
+use std::collections::BTreeMap;
+
 use qol_gpui::settings_panel::SettingsValueTone;
+use serde_json::Value as Json;
 
 use super::super::updates::model::long_age;
-use super::data::{Backup, GitHubConnect, Health, Profile, Snapshot, SyncStatus};
+use super::data::{
+    Backup, Conflict, GitHubConnect, Health, Profile, Review, Side, Snapshot, SyncStatus,
+};
+
+const MAX_SHOWN_CHARS: usize = 40;
 
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -12,6 +19,7 @@ pub(super) enum Level {
     Main,
     Profiles,
     Backups,
+    Review,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,6 +35,9 @@ pub(super) enum Action {
         push_on_change: bool,
     },
     Disconnect,
+    OpenReview,
+    Pick(usize),
+    Resolve,
     OpenBackups,
     OpenBackup(String),
     Export,
@@ -358,6 +369,19 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
         )
         .dot(Dot::Danger)
         .chip("sync"),
+        Health::Attention if sync.conflict_count > 0 => Row::new(
+            "Sync is waiting on you",
+            match sync.conflict_count {
+                1 => "1 setting changed here and on another computer. Pick which to keep."
+                    .to_string(),
+                count => format!(
+                    "{count} settings changed here and on another computer. Pick which to keep."
+                ),
+            },
+            Some(Action::OpenReview),
+        )
+        .dot(Dot::Warning)
+        .chip("review"),
         Health::Attention => Row::new(
             "Sync needs attention",
             sync.incident
@@ -373,6 +397,158 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
                 .dot(Dot::Success)
                 .chip("sync")
         }
+    }
+}
+
+pub(super) fn default_picks(conflicts: &[Conflict]) -> Vec<Side> {
+    conflicts
+        .iter()
+        .map(|conflict| newer_side(conflict).unwrap_or(Side::Mine))
+        .collect()
+}
+
+pub(super) fn review_rows(review: Option<&Review>, picks: &[Side]) -> Vec<Row> {
+    let Some(review) = review else {
+        return vec![Row::header("review", "reading the changes")];
+    };
+    if review.conflicts.is_empty() {
+        return vec![
+            Row::header("review", "nothing left to pick"),
+            Row::new("All settled", "Sync already sorted these out", None),
+        ];
+    }
+    let mut rows = vec![Row::header(
+        "review",
+        "changed here and on another computer",
+    )];
+    for (index, conflict) in review.conflicts.iter().enumerate() {
+        let (field, mine, theirs) = difference(conflict);
+        let newer = newer_side(conflict);
+        let mark = |side: Side| if newer == Some(side) { " (newer)" } else { "" };
+        let side = picks.get(index).copied().unwrap_or(Side::Mine);
+        rows.push(
+            Row::new(
+                setting_label(conflict, &review.names, field.as_deref()),
+                format!(
+                    "This computer {mine}{} · GitHub {theirs}{}",
+                    mark(Side::Mine),
+                    mark(Side::Remote)
+                ),
+                Some(Action::Pick(index)),
+            )
+            .value(Value::Text(
+                match side {
+                    Side::Mine => "keep this computer's",
+                    Side::Remote => "keep GitHub's",
+                }
+                .to_string(),
+                SettingsValueTone::Normal,
+            ))
+            .verb("switch"),
+        );
+    }
+    rows.push(
+        Row::new(
+            "Use these picks",
+            "Both sides are saved as a backup first",
+            Some(Action::Resolve),
+        )
+        .chip("apply"),
+    );
+    rows
+}
+
+fn newer_side(conflict: &Conflict) -> Option<Side> {
+    let edited = |at: Option<&str>| at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
+    let mine = edited(conflict.local_edited.as_deref())?;
+    let theirs = edited(conflict.remote_edited.as_deref())?;
+    match mine.cmp(&theirs) {
+        std::cmp::Ordering::Greater => Some(Side::Mine),
+        std::cmp::Ordering::Less => Some(Side::Remote),
+        std::cmp::Ordering::Equal => None,
+    }
+}
+
+fn difference(conflict: &Conflict) -> (Option<String>, String, String) {
+    if let (Some(mine), Some(theirs)) = (conflict.local.as_object(), conflict.remote.as_object()) {
+        let differing = mine
+            .keys()
+            .chain(theirs.keys().filter(|key| !mine.contains_key(*key)))
+            .filter(|key| mine.get(*key) != theirs.get(*key))
+            .collect::<Vec<_>>();
+        let key = differing
+            .iter()
+            .find(|key| key.as_str() == "version")
+            .or_else(|| differing.first());
+        if let Some(key) = key {
+            return (
+                Some(key.to_string()),
+                shown(mine.get(*key)),
+                shown(theirs.get(*key)),
+            );
+        }
+    }
+    (
+        None,
+        shown(Some(&conflict.local)),
+        shown(Some(&conflict.remote)),
+    )
+}
+
+fn shown(value: Option<&Json>) -> String {
+    let text = match value {
+        None | Some(Json::Null) => "not set".to_string(),
+        Some(Json::Bool(true)) => "on".to_string(),
+        Some(Json::Bool(false)) => "off".to_string(),
+        Some(Json::String(text)) => text.clone(),
+        Some(Json::Number(number)) => number.to_string(),
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|item| shown(Some(item)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(Json::Object(map)) => format!("{} settings", map.len()),
+    };
+    if text.chars().count() <= MAX_SHOWN_CHARS {
+        return text;
+    }
+    let clipped = text.chars().take(MAX_SHOWN_CHARS - 1).collect::<String>();
+    format!("{}…", clipped.trim_end())
+}
+
+fn setting_label(
+    conflict: &Conflict,
+    names: &BTreeMap<String, String>,
+    field: Option<&str>,
+) -> String {
+    let lock = conflict.file.ends_with("plugins.lock.json");
+    let owner = match conflict.plugin.as_deref() {
+        Some(plugin) => match names.get(plugin) {
+            Some(name) => name.clone(),
+            None if lock => plugin.to_string(),
+            None => "Plugin".to_string(),
+        },
+        None => file_title(&conflict.file),
+    };
+    let what = if lock {
+        field.unwrap_or("plugin").to_string()
+    } else {
+        spaced(&conflict.key_path)
+    };
+    format!("{owner} {what}")
+}
+
+fn spaced(key_path: &str) -> String {
+    key_path.replace(['.', '_', '-'], " ").to_lowercase()
+}
+
+fn file_title(file: &str) -> String {
+    let stem = file.rsplit('/').next().unwrap_or(file);
+    let stem = stem.strip_suffix(".json").unwrap_or(stem).replace('-', " ");
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => stem,
     }
 }
 
@@ -487,6 +663,8 @@ fn backup_kind(file_name: &str) -> &'static str {
 mod tests {
     use super::super::data::Incident;
     use super::*;
+    use qol_platform::Os;
+    use serde_json::json;
 
     fn profile(name: &str, active: bool, plugins: usize) -> Profile {
         Profile {
@@ -509,6 +687,7 @@ mod tests {
             incident: None,
             last_error: None,
             backup_count: 9,
+            conflict_count: 0,
             latest_backup_file: Some("20260811-103430-conflict.json".to_string()),
             github_connect: GitHubConnect::Idle,
         }
@@ -665,6 +844,117 @@ mod tests {
         let rows = main_rows(&page(&snapshot));
         assert_eq!(rows[3].label, "Sync needs attention");
         assert_eq!(rows[3].action, Some(Action::OpenBackups));
+    }
+
+    #[test]
+    fn a_setting_changed_on_both_computers_asks_for_a_pick() {
+        let mut snapshot = snapshot(true);
+        snapshot.sync.health = Health::Attention;
+        snapshot.sync.conflict_count = 1;
+        snapshot.sync.incident = Some(Incident {
+            message: "1 setting(s) differ (local d28527c vs remote e56fa16)".to_string(),
+        });
+        let rows = main_rows(&page(&snapshot));
+        assert_eq!(rows[3].label, "Sync is waiting on you");
+        assert_eq!(
+            rows[3].detail,
+            "1 setting changed here and on another computer. Pick which to keep."
+        );
+        assert_eq!(rows[3].action, Some(Action::OpenReview));
+        assert_eq!(rows[3].verb, Some("review"));
+    }
+
+    fn removeapp_conflict() -> Conflict {
+        Conflict {
+            file: "default/core/plugins.lock.json".to_string(),
+            plugin: Some("qol-removeapp".to_string()),
+            key_path: "plugins.qol-removeapp".to_string(),
+            local: json!({"id": "qol-removeapp", "version": "0.67.1", "platforms": [Os::Linux.name(), Os::Macos.name()]}),
+            remote: json!({"id": "qol-removeapp", "version": "0.79.2", "platforms": [Os::Linux.name(), Os::Macos.name(), Os::Windows.name()]}),
+            local_edited: Some("2026-10-07T21:07:24+00:00".to_string()),
+            remote_edited: Some("2026-10-18T17:16:47+00:00".to_string()),
+        }
+    }
+
+    fn opacity_conflict() -> Conflict {
+        Conflict {
+            file: "default/core/plugin-configs/uid-alt-tab.json".to_string(),
+            plugin: Some("uid-alt-tab".to_string()),
+            key_path: "appearance.window_opacity".to_string(),
+            local: json!(0.9),
+            remote: json!(0.75),
+            local_edited: Some("2026-10-19T08:00:00+00:00".to_string()),
+            remote_edited: Some("2026-10-01T08:00:00+00:00".to_string()),
+        }
+    }
+
+    #[test]
+    fn review_names_each_setting_and_both_values_with_the_newer_picked() {
+        let review = Review {
+            conflicts: vec![removeapp_conflict(), opacity_conflict()],
+            names: BTreeMap::from([
+                ("qol-removeapp".to_string(), "Remove App".to_string()),
+                ("uid-alt-tab".to_string(), "Alt Tab".to_string()),
+            ]),
+        };
+        let picks = default_picks(&review.conflicts);
+        assert_eq!(picks, [Side::Remote, Side::Mine]);
+        let rows = review_rows(Some(&review), &picks);
+        assert_eq!(
+            labels(&rows),
+            [
+                "review",
+                "Remove App version",
+                "Alt Tab appearance window opacity",
+                "Use these picks",
+            ]
+        );
+        assert_eq!(
+            rows[1].detail,
+            "This computer 0.67.1 · GitHub 0.79.2 (newer)"
+        );
+        assert_eq!(
+            rows[1].value,
+            Value::Text("keep GitHub's".to_string(), SettingsValueTone::Normal)
+        );
+        assert_eq!(rows[1].action, Some(Action::Pick(0)));
+        assert_eq!(rows[1].verb, Some("switch"));
+        assert_eq!(rows[2].detail, "This computer 0.9 (newer) · GitHub 0.75");
+        assert_eq!(rows[3].action, Some(Action::Resolve));
+        assert_eq!(rows[3].verb, Some("apply"));
+    }
+
+    #[test]
+    fn review_falls_back_when_names_and_edit_times_are_missing() {
+        let mut conflict = opacity_conflict();
+        conflict.local_edited = None;
+        let mut hotkeys = conflict.clone();
+        hotkeys.file = "default/core/hotkeys.json".to_string();
+        hotkeys.plugin = None;
+        hotkeys.key_path = "toggle".to_string();
+        hotkeys.local = json!("a long value that keeps going far past the forty character mark");
+        let review = Review {
+            conflicts: vec![conflict, hotkeys],
+            names: BTreeMap::new(),
+        };
+        let picks = default_picks(&review.conflicts);
+        assert_eq!(picks, [Side::Mine, Side::Mine]);
+        let rows = review_rows(Some(&review), &picks);
+        assert_eq!(rows[1].label, "Plugin appearance window opacity");
+        assert_eq!(rows[1].detail, "This computer 0.9 · GitHub 0.75");
+        assert_eq!(rows[2].label, "Hotkeys toggle");
+        assert_eq!(
+            rows[2].detail,
+            "This computer a long value that keeps going far past… · GitHub 0.75"
+        );
+    }
+
+    #[test]
+    fn review_reads_loading_and_settled_states() {
+        assert_eq!(labels(&review_rows(None, &[])), ["review"]);
+        let rows = review_rows(Some(&Review::default()), &[]);
+        assert_eq!(labels(&rows), ["review", "All settled"]);
+        assert_eq!(rows[1].action, None);
     }
 
     #[test]

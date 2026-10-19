@@ -1,5 +1,6 @@
 use super::document::{Blob, IndexedRelease, RegistryLocation};
 use super::fetch::{blob_client, get, read_body};
+use crate::features::connection_health::{observe_body, SendObserved};
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
 use qol_plugin_index::{BearerChallenge, INDEX_TAG, SIGNED_INDEX_MEDIA_TYPE};
@@ -76,7 +77,7 @@ pub(super) async fn fetch_blob(
 ) -> Result<Vec<u8>> {
     let url = blob_url(registry, &blob.digest);
     let response = pull(client, registry, &url, None).await?;
-    let bytes = read_body(&url, response.bytes()).await?;
+    let bytes = read_body(&url, observe_body(response).bytes()).await?;
     verify_blob(blob, &bytes, label)?;
     qol_runtime::probe!(
         "PLUGIN_INDEX",
@@ -85,7 +86,7 @@ pub(super) async fn fetch_blob(
         blob.digest,
         bytes.len()
     );
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 pub(super) async fn open_blob(
@@ -164,7 +165,7 @@ pub(super) fn blob_url(registry: &RegistryLocation, digest: &str) -> String {
 
 async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Response> {
     request
-        .send()
+        .send_observed()
         .await
         .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))
 }

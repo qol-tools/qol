@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::features::connection_health::SendObserved;
 use crate::features::profile::registry::{
     clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
 };
@@ -663,7 +664,7 @@ async fn fetch_github_login(http: &reqwest::Client, token: &str) -> Result<Strin
         .bearer_auth(token)
         .header("User-Agent", "qol-tray")
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_observed()
         .await
         .context("fetch GitHub user")?;
     if !response.status().is_success() {
@@ -685,7 +686,7 @@ async fn github_repo_exists(
         .bearer_auth(token)
         .header("User-Agent", "qol-tray")
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_observed()
         .await
         .context("check GitHub repo existence")?;
     Ok(response.status().is_success())
@@ -704,7 +705,7 @@ async fn create_github_private_repo(http: &reqwest::Client, token: &str, name: &
         .header("User-Agent", "qol-tray")
         .header("Accept", "application/vnd.github+json")
         .json(&body)
-        .send()
+        .send_observed()
         .await
         .context("create GitHub repo")?;
     if !response.status().is_success() {
@@ -732,7 +733,7 @@ async fn existing_remote_has_content(
         .bearer_auth(token)
         .header("User-Agent", "qol-tray")
         .header("Accept", "application/vnd.github+json")
-        .send()
+        .send_observed()
         .await
         .context("list GitHub branches")?;
     if !response.status().is_success() {

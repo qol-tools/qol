@@ -9,6 +9,7 @@ use axum::{
 
 use super::dev_services;
 use super::types::{AppState, MockTargetInfo, DEFAULT_UI_SERVER_PORT};
+use crate::features::connection_health::SendObserved;
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -270,7 +271,7 @@ async fn dry_run_self_update() -> impl IntoResponse {
     let dest = std::env::temp_dir().join("qol-tray-test-update.tar.gz");
     let download_result = async {
         let client = reqwest::Client::new();
-        let response = client.get(&fixture_url).send().await?;
+        let response = client.get(&fixture_url).send_observed().await?;
         let status = response.status();
         if !status.is_success() {
             anyhow::bail!("HTTP {status}");

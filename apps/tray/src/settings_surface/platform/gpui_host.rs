@@ -840,6 +840,21 @@ fn load_core_panel() -> (SettingsPanel, SettingsRuntime) {
     (panel, runtime)
 }
 
+fn notifications_source() -> (PanelSource, SettingsRuntime) {
+    let plugin_id = CoreTool::Notifications.wire_id();
+    (
+        PanelSource {
+            plugin_id: plugin_id.to_string(),
+            contract: include_str!("notifications-config.toml").to_string(),
+            heading: "Notifications".to_string(),
+            group: PanelSourceGroup::Core,
+            custom: false,
+            mark: qol_theme::Mark::Notifications,
+        },
+        SettingsRuntime::tray(plugin_id),
+    )
+}
+
 fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
     let (source, runtime) = load_plugin_source(plugin_id)?;
     let mut panel = SettingsPanel::single(
@@ -896,6 +911,9 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         .next()
         .expect("core panel has one source")];
     let mut runtimes = vec![core_runtime];
+    let (notifications_source, notifications_runtime) = notifications_source();
+    sources.push(notifications_source);
+    runtimes.push(notifications_runtime);
     for (tool, heading, mark) in [
         (CoreTool::Shortcuts, "Shortcuts", qol_theme::Mark::Shortcuts),
         (CoreTool::Hotkeys, "Hotkeys", qol_theme::Mark::Hotkeys),
@@ -1199,10 +1217,15 @@ mod tests {
             ("accent", qol_config::contract::FieldKind::Select),
             ("profile", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),
-            ("message_seconds", qol_config::contract::FieldKind::Number),
         ] {
             let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
             assert_eq!(field.kind, kind, "wrong kind for {name}");
+        }
+        for moved in ["handler", "message_seconds", "do_not_disturb"] {
+            assert!(
+                spec.field(moved).is_none(),
+                "{moved} lives on Notifications"
+            );
         }
         assert_eq!(
             spec.field("profile").and_then(|field| field.query.clone()),
@@ -1210,6 +1233,36 @@ mod tests {
         );
         qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
             .expect("core contract must resolve with no stored values");
+    }
+
+    #[test]
+    fn notifications_page_carries_every_notification_field() {
+        let (source, _runtime) = super::notifications_source();
+        assert_eq!(source.plugin_id, "__core-notifications");
+        assert_eq!(source.mark, qol_theme::Mark::Notifications);
+        let spec = qol_config::contract::parse_spec_str(&source.contract)
+            .expect("notifications contract must parse");
+        for (name, kind) in [
+            ("handler", qol_config::contract::FieldKind::Select),
+            ("placement", qol_config::contract::FieldKind::Placement),
+            ("do_not_disturb", qol_config::contract::FieldKind::Status),
+            ("message_seconds", qol_config::contract::FieldKind::Number),
+        ] {
+            let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
+            assert_eq!(field.kind, kind, "wrong kind for {name}");
+        }
+        let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("notifications contract must resolve with no stored values");
+        let placement = resolved
+            .sections
+            .iter()
+            .flat_map(|section| section.fields.iter())
+            .find(|field| field.id == "placement")
+            .expect("placement resolves");
+        assert_eq!(
+            placement.value,
+            qol_config::contract::FieldDefault::String("top-right".into())
+        );
     }
 
     #[test]

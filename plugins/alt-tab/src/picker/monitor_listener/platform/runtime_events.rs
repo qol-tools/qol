@@ -19,6 +19,7 @@ pub(crate) fn data_refresh_listener_loop() {
             | RuntimeEvent::MonitorsChanged { .. }
             | RuntimeEvent::LauncherAppsSynced { .. }
             | RuntimeEvent::WindowListChanged => super::super::request_data_refresh(),
+            RuntimeEvent::ConnectionHealthChanged { .. } => {}
         }
     }
 }

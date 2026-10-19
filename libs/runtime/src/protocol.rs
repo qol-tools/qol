@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use qol_connection_health::ConnectionHealth;
 use serde::{Deserialize, Serialize};
 
 use crate::MonitorBounds;
@@ -180,6 +181,7 @@ pub enum PluginConfigResponse {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeEventKind {
     ActiveMonitorChanged,
+    ConnectionHealthChanged,
     CursorMoved,
     FocusChanged,
     LauncherAppsSynced,
@@ -193,6 +195,10 @@ pub enum RuntimeEvent {
     ActiveMonitorChanged {
         monitor_idx: Option<usize>,
         monitor: Option<MonitorBounds>,
+    },
+    ConnectionHealthChanged {
+        #[serde(default)]
+        health: ConnectionHealth,
     },
     CursorMoved {
         x: f32,
@@ -254,6 +260,42 @@ mod tests {
             panic!("variant mismatch");
         };
         assert_eq!(dir, PathBuf::new());
+    }
+
+    #[test]
+    fn connection_health_changed_round_trips() {
+        let health = qol_connection_health::ConnectionHealth {
+            level: qol_connection_health::Level::Slow,
+            cause: Some(qol_connection_health::Cause::Waiting),
+            latency_ms: Some(240),
+        };
+        let event = RuntimeEvent::ConnectionHealthChanged { health };
+        let wire = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "event": "connection_health_changed",
+                "health": {"level": "slow", "cause": "waiting", "latency_ms": 240}
+            })
+        );
+        let RuntimeEvent::ConnectionHealthChanged { health: parsed } = roundtrip(&event) else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(parsed, health);
+    }
+
+    #[test]
+    fn connection_health_changed_defaults_health_when_missing() {
+        let wire = r#"{"event":"connection_health_changed"}"#;
+        let event: RuntimeEvent = serde_json::from_str(wire).expect("deserialize");
+        let RuntimeEvent::ConnectionHealthChanged { health } = event else {
+            panic!("variant mismatch");
+        };
+        assert_eq!(health, qol_connection_health::ConnectionHealth::default());
+        assert_eq!(
+            serde_json::to_string(&RuntimeEventKind::ConnectionHealthChanged).unwrap(),
+            "\"connection_health_changed\""
+        );
     }
 
     #[test]

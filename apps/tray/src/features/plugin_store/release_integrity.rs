@@ -78,7 +78,9 @@ pub(crate) async fn download_verified(asset: &GitHubAsset, destination: &Path) -
         crate::credentials::github_bearer_token().as_deref(),
     );
     let response = super::github::send_checked(request).await?;
-    let bytes = response.bytes().await?;
+    let bytes = crate::features::connection_health::observe_body(response)
+        .bytes()
+        .await?;
     verify_bytes(asset, &bytes)?;
     qol_fs::atomic_write(destination, &bytes).with_context(|| {
         format!(

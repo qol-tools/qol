@@ -315,6 +315,7 @@ async fn async_init_inner(
     }
     qol_tray::settings_surface::prewarm();
     qol_tray::features::gpu_driver_sync::spawn_watch();
+    qol_tray::features::connection_health::spawn();
     qol_tray::doctor::spawn_target_cache_watch();
     let plugins_dir = qol_tray::plugins::PluginLoader::ensure_plugin_dir()?;
     let sync_service = Arc::new(qol_tray::sync::SyncService::new(plugins_dir)?);

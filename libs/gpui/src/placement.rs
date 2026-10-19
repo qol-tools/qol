@@ -11,11 +11,12 @@ pub enum Corner {
     BottomRight,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Anchor {
     Corner(Corner),
     TopCenter,
     Center,
+    Spot { across: f32, down: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,12 +54,37 @@ impl MonitorPlacement {
         }
     }
 
+    pub fn spot(across: f32, down: f32, margin: f32) -> Self {
+        Self {
+            anchor: Anchor::Spot {
+                across: unit(across),
+                down: unit(down),
+            },
+            margin,
+        }
+    }
+
+    pub fn fractions(self) -> (f32, f32) {
+        match self.anchor {
+            Anchor::Corner(Corner::TopLeft) => (0.0, 0.0),
+            Anchor::Corner(Corner::TopRight) => (1.0, 0.0),
+            Anchor::Corner(Corner::BottomLeft) => (0.0, 1.0),
+            Anchor::Corner(Corner::BottomRight) => (1.0, 1.0),
+            Anchor::TopCenter => (0.5, 0.0),
+            Anchor::Center => (0.5, 1.0 / 3.0),
+            Anchor::Spot { across, down } => (across, down),
+        }
+    }
+
     pub fn bounds(self, monitor: Bounds<Pixels>, content: Size<Pixels>) -> Bounds<Pixels> {
         let content = clamped_to_monitor(content, monitor, self.margin);
         match self.anchor {
             Anchor::Corner(corner) => corner_bounds(monitor, corner, content, self.margin),
             Anchor::TopCenter => top_center_bounds(monitor, content, self.margin),
             Anchor::Center => centered_bounds(monitor, content),
+            Anchor::Spot { across, down } => {
+                spot_bounds(monitor, content, across, down, self.margin)
+            }
         }
     }
 
@@ -67,12 +93,21 @@ impl MonitorPlacement {
     }
 
     pub fn resized(self, current: Bounds<Pixels>, content: Size<Pixels>) -> Bounds<Pixels> {
+        if let Anchor::Spot { across, down } = self.anchor {
+            return Bounds::new(
+                point(
+                    current.origin.x + (current.size.width - content.width) * across,
+                    current.origin.y + (current.size.height - content.height) * down,
+                ),
+                content,
+            );
+        }
         let x = match self.anchor {
             Anchor::Corner(Corner::TopLeft | Corner::BottomLeft) => current.origin.x,
             Anchor::Corner(Corner::TopRight | Corner::BottomRight) => {
                 current.origin.x + current.size.width - content.width
             }
-            Anchor::TopCenter | Anchor::Center => {
+            Anchor::TopCenter | Anchor::Center | Anchor::Spot { .. } => {
                 current.origin.x + (current.size.width - content.width) / 2.0
             }
         };
@@ -83,7 +118,9 @@ impl MonitorPlacement {
             Anchor::Corner(Corner::BottomLeft | Corner::BottomRight) => {
                 current.origin.y + current.size.height - content.height
             }
-            Anchor::Center => current.origin.y + (current.size.height - content.height) / 2.0,
+            Anchor::Center | Anchor::Spot { .. } => {
+                current.origin.y + (current.size.height - content.height) / 2.0
+            }
         };
         Bounds::new(point(x, y), content)
     }
@@ -248,6 +285,34 @@ fn top_center_bounds(
     )
 }
 
+fn unit(fraction: f32) -> f32 {
+    if fraction.is_nan() {
+        0.0
+    } else {
+        fraction.clamp(0.0, 1.0)
+    }
+}
+
+fn spot_bounds(
+    monitor: Bounds<Pixels>,
+    content: Size<Pixels>,
+    across: f32,
+    down: f32,
+    margin: f32,
+) -> Bounds<Pixels> {
+    let margin_x = edge_margin(monitor.size.width, content.width, margin);
+    let margin_y = edge_margin(monitor.size.height, content.height, margin);
+    let travel_x = monitor.size.width - content.width - margin_x * 2.0;
+    let travel_y = monitor.size.height - content.height - margin_y * 2.0;
+    Bounds::new(
+        point(
+            monitor.origin.x + margin_x + travel_x * across,
+            monitor.origin.y + margin_y + travel_y * down,
+        ),
+        content,
+    )
+}
+
 fn centered_bounds(monitor: Bounds<Pixels>, content: Size<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
         point(
@@ -264,7 +329,7 @@ mod tests {
 
     use super::{
         clamp_origin_to_monitor, intersect_bounds, monitor_at_point, project_bounds, Anchor,
-        Corner, MonitorPlacement,
+        Corner, MonitorPlacement, CORNER_MARGIN,
     };
 
     #[test]
@@ -378,6 +443,64 @@ mod tests {
             bounds,
             Bounds::new(point(px(-10.5), px(-5.5)), size(px(1.0), px(1.0)))
         );
+    }
+
+    #[test]
+    fn a_spot_travels_between_the_margins() {
+        let monitor = Bounds::new(point(px(1920.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let content = size(px(400.0), px(100.0));
+        let cases = [
+            ((0.0, 0.0), (1944.0, 24.0)),
+            ((1.0, 1.0), (3416.0, 956.0)),
+            ((0.5, 0.5), (2680.0, 490.0)),
+            ((0.25, 0.75), (2312.0, 723.0)),
+        ];
+        for ((across, down), expected) in cases {
+            let bounds = MonitorPlacement::spot(across, down, 24.0).bounds(monitor, content);
+            assert_eq!(
+                (bounds.origin.x.to_f64(), bounds.origin.y.to_f64()),
+                expected,
+                "{across},{down}"
+            );
+        }
+        assert_eq!(
+            MonitorPlacement::spot(1.0, 1.0, CORNER_MARGIN).bounds(monitor, content),
+            MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN).bounds(monitor, content)
+        );
+        assert_eq!(
+            MonitorPlacement::spot(2.0, f32::NAN, 24.0).fractions(),
+            (1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn every_anchor_names_its_fractions() {
+        let cases = [
+            (MonitorPlacement::corner(Corner::TopLeft, 24.0), (0.0, 0.0)),
+            (MonitorPlacement::corner(Corner::TopRight, 24.0), (1.0, 0.0)),
+            (
+                MonitorPlacement::corner(Corner::BottomLeft, 24.0),
+                (0.0, 1.0),
+            ),
+            (
+                MonitorPlacement::corner(Corner::BottomRight, 24.0),
+                (1.0, 1.0),
+            ),
+            (MonitorPlacement::top_center(48.0), (0.5, 0.0)),
+            (MonitorPlacement::spot(0.3, 0.6, 24.0), (0.3, 0.6)),
+        ];
+        for (placement, fractions) in cases {
+            assert_eq!(placement.fractions(), fractions, "{placement:?}");
+        }
+    }
+
+    #[test]
+    fn a_resized_spot_keeps_its_fraction_of_the_room_fixed() {
+        let current = Bounds::new(point(px(100.0), px(200.0)), size(px(400.0), px(100.0)));
+        let wider = size(px(500.0), px(300.0));
+        let resized = MonitorPlacement::spot(0.25, 1.0, 24.0).resized(current, wider);
+        assert_eq!(resized.origin, point(px(75.0), px(0.0)));
+        assert_eq!(resized.size, wider);
     }
 
     #[test]

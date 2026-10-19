@@ -3,6 +3,7 @@ use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
     Rgba, SharedString,
 };
+use qol_connection_health::Level;
 use qol_hotkeys::chord::Cap;
 use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
@@ -90,6 +91,15 @@ impl Kit {
             palette,
             washes: WashPalette::for_mode(mode, palette),
             grounds: Grounds::from_theme(mode, palette),
+        }
+    }
+
+    pub fn connection_hue(&self, level: Level) -> u32 {
+        match level {
+            Level::Unknown => self.grounds.pane.faint,
+            Level::Good => self.palette.success,
+            Level::Slow => self.palette.warning,
+            Level::Bad => self.palette.danger,
         }
     }
 
@@ -935,6 +945,22 @@ mod tests {
                 expected,
                 "{note}"
             );
+        }
+    }
+
+    #[test]
+    fn unknown_is_neutral_and_measured_levels_take_the_status_hues() {
+        use qol_connection_health::Level;
+        for (mode, palette) in [
+            (ThemeMode::Dark, DARK_SYSTEM),
+            (ThemeMode::Light, LIGHT_SYSTEM),
+        ] {
+            let kit = Kit::new(mode, palette);
+            assert_eq!(kit.connection_hue(Level::Unknown), kit.grounds.pane.faint);
+            assert_ne!(kit.connection_hue(Level::Unknown), palette.success);
+            assert_eq!(kit.connection_hue(Level::Good), palette.success);
+            assert_eq!(kit.connection_hue(Level::Slow), palette.warning);
+            assert_eq!(kit.connection_hue(Level::Bad), palette.danger);
         }
     }
 

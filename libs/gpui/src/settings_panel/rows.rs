@@ -4,6 +4,7 @@ use qol_config::contract::{
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
+use qol_config::placement::Spot;
 
 use super::display_layout::{DisplayLayoutBindings, DisplayLayoutState};
 use super::object_array_row::ObjectArrayState;
@@ -120,6 +121,7 @@ pub(super) enum RowControl {
     Text(String),
     TextList(Vec<String>),
     Color(String),
+    Placement(Spot),
     Action {
         action: String,
         active_action: Option<String>,
@@ -466,6 +468,17 @@ fn control_for(field: &ResolvedField) -> RowControl {
         },
         FieldKind::Color => match &field.value {
             FieldDefault::String(value) => RowControl::Color(value.clone()),
+            _ => unsupported_mismatch(field),
+        },
+        FieldKind::Placement => match &field.value {
+            FieldDefault::String(value) => RowControl::Placement(
+                Spot::parse(value)
+                    .or_else(|| match &field.default {
+                        FieldDefault::String(default) => Spot::parse(default),
+                        _ => None,
+                    })
+                    .unwrap_or(Spot::TOP_RIGHT),
+            ),
             _ => unsupported_mismatch(field),
         },
         FieldKind::Action => match field.action.as_deref() {
@@ -843,6 +856,7 @@ fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
         RowControl::Text(value) => Some(serde_json::json!(value)),
         RowControl::TextList(values) => Some(serde_json::json!(values)),
         RowControl::Color(value) => Some(serde_json::json!(value)),
+        RowControl::Placement(spot) => Some(serde_json::json!(spot.token())),
         RowControl::ObjectArray(state) => Some(qol_config::field_default_to_json(
             &object_array_value(state),
         )),
@@ -884,6 +898,7 @@ fn row_value(control: &RowControl) -> Option<FieldDefault> {
         RowControl::Text(value) | RowControl::Color(value) => {
             Some(FieldDefault::String(value.clone()))
         }
+        RowControl::Placement(spot) => Some(FieldDefault::String(spot.token())),
         RowControl::TextList(values) => Some(FieldDefault::StringArray(values.clone())),
         RowControl::ObjectArray(state) => Some(object_array_value(state)),
         RowControl::Action { .. }

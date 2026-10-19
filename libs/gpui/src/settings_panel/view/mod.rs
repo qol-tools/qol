@@ -1,11 +1,14 @@
 mod choose_card;
 mod display_layout_card;
 mod list_card;
+mod placement_card;
+mod slider_flights;
 mod structured_list_editor;
 
 use crate::key::Key;
 use crate::kit::Chip;
-use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
+use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
+use slider_flights::SliderFlights;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -21,9 +24,10 @@ use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
     rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
     settings_action_spinner, settings_error_line, settings_label_group, settings_page,
-    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, NumberCue, RowGround,
-    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
-    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_query_spinner, settings_selected_text, settings_swatch, settings_value_text,
+    ChoiceArt, NumberCue, NumberText, RowGround, SettingsChoiceValue, SettingsFeedback,
+    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
+    SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -48,6 +52,8 @@ use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
+use crate::text_edit::{Span, TextField};
+use qol_config::contract::NumberConstraints;
 
 type QueryResult = Result<serde_json::Value, String>;
 type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
@@ -258,6 +264,7 @@ pub(super) struct SettingsPanelView {
     card_marks: Vec<Option<f32>>,
     render_level: std::cell::Cell<usize>,
     height_cap: f32,
+    screen_aspect: f32,
     height_revision: u64,
     height_cache: HeightCache,
     save_error: Option<String>,
@@ -270,6 +277,7 @@ pub(super) struct SettingsPanelView {
     slider_press: Option<SliderPress>,
     slider_pending: std::collections::HashSet<(usize, String)>,
     slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
+    slider_flights: SliderFlights<(usize, String), SliderDispatch>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: AppliedQueryPayloads,
     /// Per-source query freshness, so a row backed by a wedged daemon can say
@@ -290,6 +298,9 @@ pub(super) struct SettingsPanelView {
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
+    placement_stage: Rc<Cell<Option<Bounds<Pixels>>>>,
+    placement_drag: Option<placement_card::PlacementDrag>,
+    placement_presses: u64,
     display_layout_motion: display_layout_card::DisplayLayoutMotion,
     attention: std::collections::HashSet<String>,
     attention_error_logged: bool,
@@ -304,10 +315,11 @@ pub(super) struct SettingsPanelState {
     /// row whose value came back null is unavailable from the first frame.
     pub(super) opening_answers: Vec<(String, QueryResult)>,
     pub(super) height_cap: f32,
+    pub(super) screen_aspect: f32,
 }
 
 enum ActiveControl {
-    Edit(String),
+    Edit(TextField),
     Wheel(WheelControl),
 }
 
@@ -448,6 +460,7 @@ impl SettingsPanelView {
             render_level: std::cell::Cell::new(usize::MAX),
             deck_motion: None,
             height_cap: state.height_cap,
+            screen_aspect: state.screen_aspect,
             height_revision: 0,
             height_cache: HeightCache::default(),
             save_error: None,
@@ -461,6 +474,7 @@ impl SettingsPanelView {
             slider_press: None,
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
+            slider_flights: SliderFlights::default(),
             frame_paced_samples: None,
             applied_query_payloads: AppliedQueryPayloads::seeded(
                 focused_source,
@@ -480,6 +494,9 @@ impl SettingsPanelView {
             body_bounds: Rc::new(Cell::new(None)),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
+            placement_stage: Rc::new(Cell::new(None)),
+            placement_drag: None,
+            placement_presses: 0,
             display_layout_motion: Default::default(),
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
@@ -1721,13 +1738,21 @@ impl SettingsPanelView {
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
                 if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
-                    edit.pop();
+                    edit.backspace(Span::Char);
                     self.stream_edit();
                 }
             }
             Intent::Insert(ch) => {
+                let bounds = self
+                    .level()
+                    .rows
+                    .get(self.level().selected)
+                    .and_then(|row| number_bounds(&row.control));
                 if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
-                    edit.push_str(&ch);
+                    match bounds {
+                        Some(bounds) => type_number(edit, &ch, &bounds),
+                        None => edit.insert_str(&ch),
+                    }
                     self.stream_edit();
                 }
             }
@@ -1900,6 +1925,9 @@ impl SettingsPanelView {
         _key_char: Option<&str>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.on_placement_card_key(key, cx) {
+            return true;
+        }
         match key {
             "escape" => {
                 self.pop_card(cx);
@@ -1993,7 +2021,7 @@ impl SettingsPanelView {
                 self.open_display_layout_card(selected, cx);
                 cx.notify();
             }
-            RowControl::Gamepad { .. } | RowControl::QrCode { .. } => {
+            RowControl::Gamepad { .. } | RowControl::QrCode { .. } | RowControl::Placement(_) => {
                 self.open_live_card(selected, cx);
                 cx.notify();
             }
@@ -2141,6 +2169,10 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
+        if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+            edit.select_all();
+            return;
+        }
         let selected = self.level().selected;
         if matches!(
             self.row_query_state(selected),
@@ -2166,8 +2198,11 @@ impl SettingsPanelView {
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. }
+            | RowControl::Placement(_)
             | RowControl::Unsupported { .. } => return,
         };
+        let mut edit = TextField::with_text(edit);
+        edit.select_all();
         self.level_mut().active_control = Some(ActiveControl::Edit(edit));
         if row_streams(&self.level().rows, self.level().selected)
             && !stream_gated(&self.level().rows)
@@ -2197,7 +2232,8 @@ impl SettingsPanelView {
         let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
             return false;
         };
-        *edit = stepped_number(edit, value, min, max, step.unwrap_or(1.0), direction);
+        let stepped = stepped_number(edit.text(), value, min, max, step.unwrap_or(1.0), direction);
+        edit.set_text(stepped);
         self.stream_edit();
         true
     }
@@ -2206,6 +2242,7 @@ impl SettingsPanelView {
         let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
             return;
         };
+        let edit = edit.into_text();
         let streams = row_streams(&self.level().rows, self.level().selected);
         let action = row_action(&self.level().rows, self.level().selected);
         let selected = self.level().selected;
@@ -2213,7 +2250,7 @@ impl SettingsPanelView {
         let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
-        let mut live_number = None;
+        let mut live_number = false;
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
             RowControl::Number {
@@ -2228,9 +2265,7 @@ impl SettingsPanelView {
                     return;
                 };
                 *value = parsed;
-                if live.is_some() {
-                    live_number = Some(parsed);
-                }
+                live_number = live.is_some();
                 if streams {
                     if let Some(stream) = self.stream_for(self.level().selected) {
                         stream.close();
@@ -2249,11 +2284,12 @@ impl SettingsPanelView {
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. }
+            | RowControl::Placement(_)
             | RowControl::Unsupported { .. } => return,
         }
-        if let Some(number) = live_number {
-            if let (Some(action), Some(id)) = (action, row_id) {
-                self.dispatch_live_number(selected, &id, &action, number, cx);
+        if live_number {
+            if let (Some(_), Some(id)) = (action, row_id) {
+                self.schedule_live_number(selected, id, cx);
             }
             cx.notify();
             return;
@@ -2326,6 +2362,7 @@ impl SettingsPanelView {
                 modules: modules.clone(),
                 error: error.clone(),
             },
+            RowControl::Placement(spot) => RowControl::Placement(*spot),
             _ => return,
         };
         let label = row.label.clone();
@@ -2367,7 +2404,7 @@ impl SettingsPanelView {
         else {
             return;
         };
-        let Some(value) = parsed_number(edit, *min, *max, *step) else {
+        let Some(value) = parsed_number(edit.text(), *min, *max, *step) else {
             return;
         };
         let selected = self.level().selected;
@@ -2407,6 +2444,7 @@ impl SettingsPanelView {
             })
     }
 
+    #[must_use]
     fn dispatch_live_number(
         &mut self,
         row: usize,
@@ -2414,12 +2452,12 @@ impl SettingsPanelView {
         action: &str,
         value: f64,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<Task<()>> {
         let key = (row, id.to_string());
         self.slider_pending.remove(&key);
         let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
             self.slider_holds.remove(&key);
-            return;
+            return None;
         };
         let generation = self.slider_dispatch_generation.get(&key).copied();
         self.slider_holds.insert(
@@ -2431,7 +2469,7 @@ impl SettingsPanelView {
             },
         );
         let action = action.to_string();
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        Some(cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
@@ -2441,7 +2479,13 @@ impl SettingsPanelView {
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if let Err(error) = result {
-                        if this.slider_dispatch_generation.get(&key).copied() == generation {
+                        if generation.is_some_and(|generation| {
+                            slider_generation_current(
+                                &this.slider_dispatch_generation,
+                                &key,
+                                generation,
+                            )
+                        }) {
                             this.slider_holds.remove(&key);
                         }
                         this.save_error = Some(error);
@@ -2449,8 +2493,7 @@ impl SettingsPanelView {
                     cx.notify();
                 });
             }
-        })
-        .detach();
+        }))
     }
 
     fn begin_number_slider_drag(&mut self, row: usize) {
@@ -2518,30 +2561,38 @@ impl SettingsPanelView {
         else {
             return;
         };
-        *value = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let dragged = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let moved = *value != dragged;
+        *value = dragged;
         let live = live.is_some();
-        let dragged = *value;
         self.level_mut().selected = row;
-        self.stream_level(row, dragged);
-        if live {
-            if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
-                self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
-                    match live_number_dispatch_plan(&this.level().rows, row) {
-                        LiveNumberDispatch::Fire { action, value } => {
-                            this.dispatch_live_number(row, &id, &action, value, cx);
-                        }
-                        LiveNumberDispatch::Release => {
-                            release_slider_dispatch(
-                                &mut this.slider_pending,
-                                &mut this.slider_holds,
-                                &(row, id),
-                            );
-                        }
-                    }
-                });
+        if moved {
+            self.stream_level(row, dragged);
+            if live {
+                if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                    self.schedule_live_number(row, id, cx);
+                }
             }
         }
         cx.notify();
+    }
+
+    fn schedule_live_number(&mut self, row: usize, id: String, cx: &mut Context<Self>) {
+        self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
+            match live_number_dispatch_plan(&this.level().rows, row) {
+                LiveNumberDispatch::Fire { action, value } => {
+                    this.dispatch_live_number(row, &id, &action, value, cx)
+                }
+                LiveNumberDispatch::Release => {
+                    release_slider_dispatch(
+                        &mut this.slider_pending,
+                        &mut this.slider_holds,
+                        &(row, id),
+                    );
+                    None
+                }
+            }
+        });
     }
 
     fn schedule_slider_dispatch<D>(
@@ -2551,27 +2602,46 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
         dispatch: D,
     ) where
-        D: FnOnce(&mut SettingsPanelView, usize, String, &mut Context<SettingsPanelView>) + 'static,
+        D: FnOnce(
+                &mut SettingsPanelView,
+                usize,
+                String,
+                &mut Context<SettingsPanelView>,
+            ) -> Option<Task<()>>
+            + 'static,
     {
         let key = (row, id);
-        let generation = schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
+        schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
         self.slider_pending.insert(key.clone());
+        if let Some(dispatch) = self.slider_flights.offer(key.clone(), Box::new(dispatch)) {
+            self.fly_slider(key, dispatch, cx);
+        }
+    }
+
+    fn fly_slider(
+        &mut self,
+        key: (usize, String),
+        dispatch: SliderDispatch,
+        cx: &mut Context<Self>,
+    ) {
+        let started = std::time::Instant::now();
+        let Some(flight) = dispatch(self, key.0, key.1.clone(), cx) else {
+            if let Some(next) = self.slider_flights.land(&key) {
+                self.fly_slider(key, next, cx);
+            }
+            return;
+        };
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
-                async_cx
-                    .background_executor()
-                    .timer(SLIDER_DISPATCH_DEBOUNCE)
-                    .await;
+                flight.await;
+                if let Some(rest) = SLIDER_DISPATCH_INTERVAL.checked_sub(started.elapsed()) {
+                    async_cx.background_executor().timer(rest).await;
+                }
                 let _ = this.update(&mut async_cx, |this, cx| {
-                    if !slider_generation_current(
-                        &this.slider_dispatch_generation,
-                        &key,
-                        generation,
-                    ) {
-                        return;
+                    if let Some(next) = this.slider_flights.land(&key) {
+                        this.fly_slider(key, next, cx);
                     }
-                    dispatch(this, row, key.1.clone(), cx);
                 });
             }
         })
@@ -2740,10 +2810,18 @@ impl SettingsPanelView {
         body_header_child_offset(&sections, &headers, row)
     }
 
+    fn edit_selects_all(&self, index: usize) -> bool {
+        index == self.level().selected
+            && matches!(
+                &self.level().active_control,
+                Some(ActiveControl::Edit(edit)) if edit.selected_range().is_some()
+            )
+    }
+
     fn display_value(&self, index: usize) -> String {
         if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => return format!("{edit}_"),
+                Some(ActiveControl::Edit(edit)) => return edit_display(edit),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
                 None => {}
             }
@@ -2815,6 +2893,7 @@ impl SettingsPanelView {
                 .map(|controller| controller.name.clone())
                 .unwrap_or_else(|| "Waiting".into()),
             RowControl::QrCode { url, .. } => url.clone().unwrap_or_default(),
+            RowControl::Placement(spot) => placement_card::spot_label(*spot),
             RowControl::Unsupported { reason, .. } => reason.clone(),
         }
     }
@@ -2850,7 +2929,7 @@ impl SettingsPanelView {
             RowControl::Status { .. } => SettingsValueTone::Normal,
             RowControl::List { .. } | RowControl::Gamepad { .. } => SettingsValueTone::Normal,
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
-            RowControl::QrCode { .. } => SettingsValueTone::Normal,
+            RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
             RowControl::Unsupported { .. } => SettingsValueTone::Muted,
         }
     }
@@ -2981,7 +3060,8 @@ impl SettingsPanelView {
             | RowControl::ObjectArray(_)
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
-            | RowControl::QrCode { .. } => {}
+            | RowControl::QrCode { .. }
+            | RowControl::Placement(_) => {}
         }
         let mut cell = div()
             .flex()
@@ -3012,20 +3092,21 @@ impl SettingsPanelView {
         if let Some(accent) = self.option_accent(index) {
             cell = cell.child(settings_accent_dot(accent));
         }
+        let value = if self.edit_selects_all(index) {
+            settings_selected_text(self.kit.value(self.display_value(index)), self.kit)
+        } else {
+            settings_value_text(
+                self.display_value(index),
+                self.value_tone(index),
+                row,
+                self.kit,
+            )
+        };
         cell.flex_none()
             .min_w(px(value_cell_width(&self.level().rows[index].control)))
             .max_w(relative(VALUE_CELL_MAX_FRACTION))
             .justify_end()
-            .child(one_line(
-                settings_value_text(
-                    self.display_value(index),
-                    self.value_tone(index),
-                    row,
-                    self.kit,
-                )
-                .flex_shrink()
-                .min_w_0(),
-            ))
+            .child(one_line(value.flex_shrink().min_w_0()))
     }
 
     fn unavailable_indicator(&self, index: usize) -> StatusIndicator {
@@ -3080,9 +3161,7 @@ impl SettingsPanelView {
         } = number;
         let style = SliderStyle::from_variant(self.level().rows[index].variant.as_deref());
         let edit = match &self.level().active_control {
-            Some(ActiveControl::Edit(edit)) if index == self.level().selected => {
-                Some(edit.as_str())
-            }
+            Some(ActiveControl::Edit(edit)) if index == self.level().selected => Some(edit.text()),
             _ => None,
         };
         let track = style.map(|style| {
@@ -3106,10 +3185,11 @@ impl SettingsPanelView {
                 _ => None,
             },
         };
-        let display = match (style, edit) {
+        let shown = match (style, edit) {
             (Some(_), Some(edit)) => edit.to_string(),
             _ => self.display_value(index),
         };
+        let reach = track.map_or(0.0, |(_, style)| style.thumb_reach());
         let interact = move |element: Div| {
             if style == Some(SliderStyle::Compact) {
                 return element.child(
@@ -3117,6 +3197,7 @@ impl SettingsPanelView {
                         cx,
                         index,
                         id,
+                        reach,
                         |panel: &mut SettingsPanelView,
                          _row: usize,
                          fraction: f32,
@@ -3142,6 +3223,7 @@ impl SettingsPanelView {
                 cx,
                 index,
                 id,
+                reach,
                 |panel: &mut SettingsPanelView,
                  row: usize,
                  fraction: f32,
@@ -3161,7 +3243,11 @@ impl SettingsPanelView {
             ))
         };
         number_field(
-            display,
+            NumberText {
+                widest: widest_number(&number, &shown),
+                shown,
+                selected: self.edit_selects_all(index),
+            },
             number_unit(&self.level().rows[index].id),
             track,
             cue,
@@ -3192,7 +3278,7 @@ impl SettingsPanelView {
         };
         let text = if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => edit,
+                Some(ActiveControl::Edit(edit)) => edit.text(),
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
                 None => value,
             }
@@ -3241,6 +3327,9 @@ impl SettingsPanelView {
         }
         if matches!(row.control, RowControl::QrCode { .. }) && self.level().live_card {
             return container.child(self.render_qr_code(index));
+        }
+        if matches!(row.control, RowControl::Placement(_)) && self.level().live_card {
+            return container.child(self.render_placement(index, cx));
         }
         if matches!(row.control, RowControl::Gamepad { .. })
             && (self.level().live_card || self.level().list_item.is_some())
@@ -4205,7 +4294,7 @@ impl SettingsPanelView {
             RowControl::Color(_) => Some("pick"),
             RowControl::List { items, .. } if !items.is_empty() => Some("open"),
             RowControl::ObjectArray(_) => Some("edit"),
-            RowControl::DisplayLayout(_) => Some("open"),
+            RowControl::DisplayLayout(_) | RowControl::Placement(_) => Some("open"),
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 Some("edit")
             }
@@ -4251,6 +4340,15 @@ impl SettingsPanelView {
         }
         if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
             return self.card_hint_bar(bar);
+        }
+        if self.stack.len() > 1
+            && self.level().live_card
+            && self.placement_spot().is_some()
+            && !self.filter_open
+        {
+            return bar
+                .left(placement_card::placement_hints())
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
@@ -4331,17 +4429,49 @@ impl SettingsPanelView {
 }
 
 fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Option<f64> {
-    let mut value = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
-    if let Some(min) = min {
-        value = value.max(min);
+    let bounds = NumberConstraints { min, max, step };
+    let value = bounds.clamp(edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
+    Some(match step {
+        Some(step) => align_to_step(value, Some(bounds.lowest()), Some(bounds.highest()), step),
+        None => value,
+    })
+}
+
+fn number_bounds(control: &RowControl) -> Option<NumberConstraints> {
+    match control {
+        RowControl::Number { min, max, step, .. } => Some(NumberConstraints {
+            min: *min,
+            max: *max,
+            step: *step,
+        }),
+        _ => None,
     }
-    if let Some(max) = max {
-        value = value.min(max);
+}
+
+fn type_number(edit: &mut TextField, typed: &str, bounds: &NumberConstraints) {
+    let signed = bounds.lowest() < 0.0;
+    if !typed
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ch == '.' || (signed && ch == '-'))
+    {
+        return;
     }
-    if let Some(step) = step {
-        value = align_to_step(value, min, max, step);
+    edit.insert_str(typed);
+    if edit
+        .text()
+        .trim()
+        .parse::<f64>()
+        .is_ok_and(|value| value > bounds.highest())
+    {
+        edit.set_text(format_number(bounds.highest()));
     }
-    Some(value)
+}
+
+fn edit_display(edit: &TextField) -> String {
+    if edit.selected_range().is_some() {
+        return edit.text().to_string();
+    }
+    format!("{}_", edit.text())
 }
 
 fn align_to_step(value: f64, min: Option<f64>, max: Option<f64>, step: f64) -> f64 {
@@ -4432,9 +4562,63 @@ struct NumberSpec {
     step: Option<f64>,
 }
 
+fn widest_number(number: &NumberSpec, shown: &str) -> String {
+    let fraction_digits = |text: &str| text.split_once('.').map_or(0, |(_, part)| part.len());
+    let whole_digits = |text: &str| {
+        text.trim_start_matches('-')
+            .split('.')
+            .next()
+            .map_or(0, str::len)
+    };
+    let decimals = [number.min, number.max, Some(number.value), number.step]
+        .into_iter()
+        .flatten()
+        .map(|candidate| fraction_digits(&format_number(candidate)))
+        .max()
+        .unwrap_or(0);
+    let bounds = [number.min, number.max, Some(number.value)]
+        .into_iter()
+        .flatten()
+        .map(format_number)
+        .collect::<Vec<_>>();
+    let digits = bounds
+        .iter()
+        .map(|text| whole_digits(text))
+        .max()
+        .unwrap_or(1);
+    let signed = bounds
+        .iter()
+        .any(|text| text.starts_with('-') && whole_digits(text) == digits);
+    let mut widest = String::new();
+    if signed {
+        widest.push('-');
+    }
+    widest.push_str(&"0".repeat(digits.max(1)));
+    if decimals > 0 {
+        widest.push('.');
+        widest.push_str(&"0".repeat(decimals));
+    }
+    if shown.chars().count() > widest.chars().count() {
+        return shown
+            .chars()
+            .map(|glyph| if glyph.is_ascii_digit() { '0' } else { glyph })
+            .collect();
+    }
+    widest
+}
+
 fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
     (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
 }
+
+type SliderDispatch = Box<
+    dyn FnOnce(
+        &mut SettingsPanelView,
+        usize,
+        String,
+        &mut Context<SettingsPanelView>,
+    ) -> Option<Task<()>>,
+>;
 
 fn schedule_slider_generation(
     generations: &mut std::collections::HashMap<(usize, String), u64>,
@@ -4521,6 +4705,7 @@ fn slider_drag_track<O, M, R>(
     cx: &mut Context<SettingsPanelView>,
     row: usize,
     id: String,
+    reach: f32,
     on_down: O,
     move_to: M,
     release: R,
@@ -4536,7 +4721,10 @@ where
     let view = cx.weak_entity();
     div()
         .absolute()
-        .inset_0()
+        .top_0()
+        .bottom_0()
+        .left(px(-reach))
+        .right(px(-reach))
         .cursor(CursorStyle::PointingHand)
         .child(
             canvas(
@@ -4546,7 +4734,10 @@ where
                 },
             )
             .absolute()
-            .inset_0(),
+            .top_0()
+            .bottom_0()
+            .left(px(reach))
+            .right(px(reach)),
         )
         .on_mouse_down(
             MouseButton::Left,
@@ -5113,18 +5304,21 @@ fn live_card_sync_back(root_rows: &mut [Row], level: &Level) {
     let Some(row) = level.rows.first() else {
         return;
     };
-    if let (
-        RowControl::Gamepad {
-            monitor: root_monitor,
-            ..
-        },
-        RowControl::Gamepad {
-            monitor: card_monitor,
-            ..
-        },
-    ) = (&mut parent.control, &row.control)
-    {
-        *root_monitor = card_monitor.clone();
+    match (&mut parent.control, &row.control) {
+        (
+            RowControl::Gamepad {
+                monitor: root_monitor,
+                ..
+            },
+            RowControl::Gamepad {
+                monitor: card_monitor,
+                ..
+            },
+        ) => *root_monitor = card_monitor.clone(),
+        (RowControl::Placement(root_spot), RowControl::Placement(card_spot)) => {
+            *root_spot = *card_spot;
+        }
+        _ => {}
     }
 }
 
@@ -5234,6 +5428,7 @@ fn opens_a_card(control: &RowControl) -> bool {
         | RowControl::DisplayLayout(_)
         | RowControl::Gamepad { .. }
         | RowControl::QrCode { .. }
+        | RowControl::Placement(_)
         | RowControl::TextList(_) => true,
         RowControl::Toggle(_)
         | RowControl::Number { .. }
@@ -5303,7 +5498,7 @@ fn value_cell_width(control: &RowControl) -> f32 {
         RowControl::Action { .. } => 90.0,
         RowControl::Status { .. } => 130.0,
         RowControl::ObjectArray(_) => 60.0,
-        RowControl::DisplayLayout(_) => 120.0,
+        RowControl::DisplayLayout(_) | RowControl::Placement(_) => 120.0,
         RowControl::List { .. } => 120.0,
         RowControl::QrCode { .. } => 260.0,
         RowControl::Unsupported { .. } => 200.0,
@@ -5326,17 +5521,17 @@ mod tests {
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
         clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
-        escape_step, focus_level, format_number, header_is_redundant, horizontal_step_direction,
-        intent, list_fit_updates, live_card_level, live_card_sync, live_card_sync_back,
-        live_number_dispatch_plan, number_finish_plan, number_limit, number_preview, number_unit,
-        parsed_color, parsed_number, pop_level, pressed_slider, push_level, query_is_due,
-        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
-        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
-        stepped_number, text_or_placeholder, transition_in_flight, transition_policy,
-        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
-        LiveNumberDispatch, NumberFinishPlan, ObjectArrayState, Row, RowControl, RowSection,
-        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
-        SCRUB_SLOP,
+        edit_display, escape_step, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
+        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_limit,
+        number_preview, number_unit, parsed_color, parsed_number, pop_level, pressed_slider,
+        push_level, query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
+        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
+        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
+        transition_policy, type_number, widest_number, AppliedQueryPayloads, EscapeStep,
+        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan, NumberSpec,
+        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, SliderPress,
+        SliderStyle, TransitionAction, TransitionTracker, SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -5347,6 +5542,8 @@ mod tests {
         SliderHold,
     };
     use crate::settings_panel::PanelSourceGroup;
+    use crate::text_edit::{Span, TextField};
+    use qol_config::contract::NumberConstraints;
 
     #[test]
     fn rail_separator_only_marks_the_core_to_plugin_boundary() {
@@ -5473,6 +5670,81 @@ mod tests {
         ];
         for (value, expected) in cases {
             assert_eq!(color_display(value), expected, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn the_number_box_is_sized_for_the_widest_value_the_field_allows() {
+        let number = |value, min, max, step| NumberSpec {
+            value,
+            min,
+            max,
+            step,
+        };
+        let cases = [
+            (
+                "percent",
+                number(44.0, Some(0.0), Some(100.0), Some(1.0)),
+                "44",
+                "000",
+            ),
+            (
+                "single digit now",
+                number(5.0, Some(0.0), Some(100.0), None),
+                "5",
+                "000",
+            ),
+            (
+                "brightness",
+                number(128.0, Some(0.0), Some(255.0), Some(1.0)),
+                "128",
+                "000",
+            ),
+            (
+                "fractional step",
+                number(1.5, Some(0.5), Some(4.0), Some(0.25)),
+                "1.5",
+                "0.00",
+            ),
+            (
+                "negative bound",
+                number(0.0, Some(-12.0), Some(6.0), Some(1.0)),
+                "0",
+                "-00",
+            ),
+            (
+                "shorter negative",
+                number(-45.0, Some(-50.0), Some(100.0), Some(1.0)),
+                "-45",
+                "000",
+            ),
+            (
+                "negative as long",
+                number(0.0, Some(-100.0), Some(50.0), Some(1.0)),
+                "0",
+                "-000",
+            ),
+            (
+                "fraction without step",
+                number(1.2345, Some(0.0), Some(10.0), None),
+                "1.2345",
+                "00.0000",
+            ),
+            (
+                "unbounded",
+                number(1234.0, None, None, None),
+                "1234",
+                "0000",
+            ),
+            (
+                "typing past the box",
+                number(44.0, Some(0.0), Some(100.0), Some(1.0)),
+                "100_",
+                "000_",
+            ),
+        ];
+        for (label, number, shown, widest) in cases {
+            assert_eq!(widest_number(&number, shown), widest, "{label}");
         }
     }
 
@@ -6404,6 +6676,73 @@ active_value_from = "active"
     }
 
     #[test]
+    fn typing_a_number_never_passes_the_max_and_takes_only_number_characters() {
+        let volume = NumberConstraints {
+            min: Some(0.0),
+            max: Some(100.0),
+            step: Some(5.0),
+        };
+        let offset = NumberConstraints {
+            min: Some(-50.0),
+            max: Some(50.0),
+            step: None,
+        };
+        let cases = [
+            ("", &volume, "45", "45"),
+            ("45", &volume, "0", "100"),
+            ("10", &volume, "0", "100"),
+            ("1", &volume, "a", "1"),
+            ("1", &volume, "-", "1"),
+            ("", &offset, "-", "-"),
+            ("-", &offset, "7", "-7"),
+            ("4", &offset, "9", "49"),
+            ("5", &offset, "1", "50"),
+            ("2", &volume, ".", "2."),
+        ];
+        for (start, bounds, typed, expected) in cases {
+            let mut edit = TextField::with_text(start);
+            type_number(&mut edit, typed, bounds);
+            assert_eq!(edit.text(), expected, "{start:?} + {typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_fresh_edit_is_selected_so_the_first_key_replaces_it() {
+        let volume = NumberConstraints {
+            min: Some(0.0),
+            max: Some(100.0),
+            step: Some(5.0),
+        };
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        assert_eq!(edit_display(&edit), "65");
+        type_number(&mut edit, "3", &volume);
+        assert_eq!(edit.text(), "3");
+        assert_eq!(edit_display(&edit), "3_");
+
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        type_number(&mut edit, "x", &volume);
+        assert_eq!(edit.text(), "65");
+        assert!(edit.selected_range().is_some());
+
+        let mut edit = TextField::with_text("65");
+        edit.select_all();
+        edit.backspace(Span::Char);
+        assert_eq!(edit.text(), "");
+    }
+
+    #[test]
+    fn a_number_without_bounds_stays_between_zero_and_the_largest_i32() {
+        assert_eq!(parsed_number("-4", None, None, None), Some(0.0));
+        assert_eq!(
+            parsed_number("99999999999", None, None, None),
+            Some(f64::from(i32::MAX))
+        );
+        assert_eq!(parsed_number("-4", Some(-10.0), None, None), Some(-4.0));
+    }
+
+    #[test]
     fn typed_numbers_align_to_the_contract_step() {
         let cases = [
             ("0.649", Some(0.1), Some(1.0), Some(0.01), Some(0.65)),
@@ -6558,7 +6897,7 @@ active_value_from = "active"
     }
 
     #[test]
-    fn two_live_numbers_scheduled_inside_one_debounce_both_stay_current() {
+    fn two_live_numbers_scheduled_together_both_stay_current() {
         let mut generations = std::collections::HashMap::new();
         let volume = (0usize, "volume".to_string());
         let brightness = (1usize, "brightness".to_string());
@@ -7216,6 +7555,33 @@ active_value_from = "active"
                 .map(|controller| controller.name.as_str()),
             Some("beta")
         );
+    }
+
+    #[test]
+    fn live_card_sync_back_returns_the_placed_spot_to_the_root() {
+        let placed = qol_config::placement::Spot::new(0.25, 0.6);
+        let mut root = vec![Row {
+            id: "placement".into(),
+            label: "Position".into(),
+            config_key: "placement".into(),
+            control: RowControl::Placement(qol_config::placement::Spot::TOP_RIGHT),
+            ..gamepad_row()
+        }];
+        let mut card = live_card_level(
+            "Position",
+            None,
+            "placement",
+            0,
+            RowControl::Placement(qol_config::placement::Spot::TOP_RIGHT),
+            0,
+            SettingsDestination::from_static("Position"),
+        );
+        card.rows[0].control = RowControl::Placement(placed);
+        live_card_sync_back(&mut root, &card);
+        let RowControl::Placement(spot) = root[0].control else {
+            panic!("expected root placement");
+        };
+        assert_eq!(spot, placed);
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub fn validate_field_value(
     validate_select_value(path, field, value, &mut errors);
     validate_string_array_value(path, field, value, &mut errors);
     validate_number_value(path, field, value, &mut errors);
+    validate_placement_value(path, field, value, &mut errors);
     errors
 }
 
@@ -462,13 +463,11 @@ fn validate_number_constraints(id: &str, field: &FieldSpec, errors: &mut Vec<Val
         validate_non_number_constraints(id, field, errors);
         return;
     }
-    if let (Some(min), Some(max)) = (field.number.min, field.number.max) {
-        if min > max {
-            errors.push(ValidationError::new(
-                format!("field.{id}"),
-                "min cannot be greater than max",
-            ));
-        }
+    if field.number.lowest() > field.number.highest() {
+        errors.push(ValidationError::new(
+            format!("field.{id}"),
+            "min cannot be greater than max",
+        ));
     }
     validate_number_step(id, field.number.step, errors);
 }
@@ -672,6 +671,27 @@ fn validate_string_array_value(
     }
 }
 
+fn validate_placement_value(
+    path: &str,
+    field: &FieldSpec,
+    value: &FieldDefault,
+    errors: &mut Vec<ValidationError>,
+) {
+    if field.kind != FieldKind::Placement {
+        return;
+    }
+    let FieldDefault::String(text) = value else {
+        return;
+    };
+    if crate::placement::Spot::parse(text).is_some() {
+        return;
+    }
+    errors.push(ValidationError::new(
+        path,
+        "value must name a spot such as top-right, or give its x,y fractions",
+    ));
+}
+
 fn validate_number_value(
     path: &str,
     field: &FieldSpec,
@@ -685,16 +705,12 @@ fn validate_number_value(
         FieldDefault::Number(number) => *number,
         _ => return,
     };
-    validate_min(path, field.number.min, number, errors);
-    validate_max(path, field.number.max, number, errors);
+    validate_min(path, field.number.lowest(), number, errors);
+    validate_max(path, field.number.highest(), number, errors);
     validate_step_value(path, field, number, errors);
 }
 
-fn validate_min(path: &str, min: Option<f64>, value: f64, errors: &mut Vec<ValidationError>) {
-    let min = match min {
-        Some(min) => min,
-        None => return,
-    };
+fn validate_min(path: &str, min: f64, value: f64, errors: &mut Vec<ValidationError>) {
     if value >= min {
         return;
     }
@@ -704,11 +720,7 @@ fn validate_min(path: &str, min: Option<f64>, value: f64, errors: &mut Vec<Valid
     ));
 }
 
-fn validate_max(path: &str, max: Option<f64>, value: f64, errors: &mut Vec<ValidationError>) {
-    let max = match max {
-        Some(max) => max,
-        None => return,
-    };
+fn validate_max(path: &str, max: f64, value: f64, errors: &mut Vec<ValidationError>) {
     if value <= max {
         return;
     }
@@ -728,7 +740,7 @@ fn validate_step_value(
         Some(step) => step,
         None => return,
     };
-    let origin = field.number.min.unwrap_or(0.0);
+    let origin = field.number.lowest();
     let steps = (value - origin) / step;
     let rounded = steps.round();
     if (steps - rounded).abs() <= 1e-9 {
@@ -743,7 +755,7 @@ fn validate_step_value(
 fn default_matches_kind(default: &FieldDefault, kind: FieldKind) -> bool {
     match kind {
         FieldKind::Boolean => matches!(default, FieldDefault::Boolean(_)),
-        FieldKind::String | FieldKind::Select | FieldKind::Color => {
+        FieldKind::String | FieldKind::Select | FieldKind::Color | FieldKind::Placement => {
             matches!(default, FieldDefault::String(_))
         }
         FieldKind::Number => matches!(default, FieldDefault::Number(_)),

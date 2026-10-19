@@ -1,3 +1,4 @@
+use crate::features::connection_health::SendObserved;
 use crate::features::plugin_store::release_integrity::{self, IndexedHostRelease};
 use anyhow::Result;
 use serde::Deserialize;
@@ -279,7 +280,7 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
         request = request.header(reqwest::header::IF_NONE_MATCH, etag);
     }
     let response = request
-        .send()
+        .send_observed()
         .await
         .map_err(|_| NO_CONNECTION.to_string())?;
     let status = response.status();
@@ -361,7 +362,7 @@ async fn workspace_build_precedes_release(release: &str) -> bool {
         &url,
         token.as_deref(),
     );
-    let Ok(response) = request.send().await else {
+    let Ok(response) = request.send_observed().await else {
         return false;
     };
     if !response.status().is_success() {
@@ -411,7 +412,7 @@ fn has_connection_failure(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
-            .is_some_and(|error| error.is_timeout() || error.is_connect())
+            .is_some_and(crate::features::connection_health::is_unreachable)
     })
 }
 
@@ -450,10 +451,12 @@ fn lock_update_state() -> Option<MutexGuard<'static, UpdateState>> {
     }
 }
 
-fn http_client() -> &'static reqwest::Client {
+pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(CHECK_TIMEOUT)
             .connect_timeout(Duration::from_secs(2))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())

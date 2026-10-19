@@ -48,6 +48,7 @@ pub(super) struct SlabToastView {
     escape: Option<EscapeGrab>,
     escape_armed: bool,
     age: Tick,
+    gravity: pile::Gravity,
 }
 
 impl SlabToastView {
@@ -56,6 +57,7 @@ impl SlabToastView {
         dismisser: SurfaceDismisser,
         scroll: f32,
         arriving: bool,
+        gravity: pile::Gravity,
     ) -> Self {
         let open = if host.state.borrow().expanded {
             1.0
@@ -85,6 +87,7 @@ impl SlabToastView {
             escape: None,
             escape_armed: false,
             age: Tick::default(),
+            gravity,
         }
     }
 
@@ -126,6 +129,7 @@ impl SlabToastView {
 
     fn scroll_by(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let delta = f32::from(event.delta.pixel_delta(px(pile::CARD_HEIGHT / 2.0)).y);
+        let delta = if self.gravity.hangs() { -delta } else { delta };
         self.scroll_step(delta, cx);
     }
 
@@ -253,8 +257,11 @@ impl Render for SlabToastView {
         let shown = window.bounds().size;
         let width = f32::from(shown.width);
         let height = f32::from(shown.height);
+        let gravity = self.gravity;
+        let hangs = gravity.hangs();
+        let room = gravity.room(height);
         self.scroll_max = if open {
-            pile::overflow(&heights, height)
+            pile::overflow(&heights, room)
         } else {
             0.0
         };
@@ -363,10 +370,10 @@ impl Render for SlabToastView {
         } else {
             (settled.width, settled.height)
         };
-        let reach_height = reach_height.min(height);
+        let reach_height = reach_height.min(room);
         self.touch = [
-            width - reach_width,
-            height - reach_height,
+            gravity.left(width, reach_width),
+            gravity.pile_top(height, reach_height),
             reach_width,
             reach_height,
         ];
@@ -374,17 +381,33 @@ impl Render for SlabToastView {
         if moving {
             window.request_animation_frame();
         }
-        let frame = window.bounds().size;
-        let dx = f32::from(frame.width) - current.width;
-        let dy = f32::from(frame.height) - current.height;
-        let place = |element: Stateful<Div>, at: pile::Frame| {
+        let dx = gravity.left(width, current.width);
+        let top_of = |at: pile::Frame| gravity.top(height, current.height, at);
+        let clipped = self.scroll_max > 0.0 || scroll > 0.0;
+        let strip_room = if clipped {
+            current.strip.map_or(0.0, |strip| strip.frame.height)
+        } else {
+            0.0
+        };
+        let (deck_top, deck_height) = if !clipped {
+            (0.0, height)
+        } else if hangs {
+            let top = gravity.base(height) + strip_room;
+            (top, (height - top).max(0.0))
+        } else {
+            (0.0, (gravity.base(height) - strip_room).max(0.0))
+        };
+        let placed_from = |element: Stateful<Div>, at: pile::Frame, origin: f32| {
             element
                 .absolute()
                 .left(px(at.left + dx))
-                .top(px(at.top + dy))
+                .top(px(top_of(at) - origin))
                 .w(px(at.width))
                 .h(px(at.height))
         };
+        let place = |element: Stateful<Div>, at: pile::Frame| placed_from(element, at, deck_top);
+        let place_on_window =
+            |element: Stateful<Div>, at: pile::Frame| placed_from(element, at, 0.0);
 
         let folded = 1.0 - self.open.value(now);
         let timer_shown = |row: &SlabSnapshotRow, index: usize, content: f32| {
@@ -400,19 +423,23 @@ impl Render for SlabToastView {
             *counting |= left.is_some();
             left.unwrap_or(1.0)
         };
-        let clipped = self.scroll_max > 0.0 || scroll > 0.0;
-        let deck_height = if clipped {
-            f32::from(frame.height) - current.strip.map_or(0.0, |strip| strip.frame.height)
-        } else {
-            f32::from(frame.height)
-        };
-        let (above, below) = if clipped {
+        let (older, newer) = if clipped {
             (self.scroll_max - scroll, scroll)
         } else {
             (0.0, 0.0)
         };
+        let (above, below) = if hangs {
+            (newer, older)
+        } else {
+            (older, newer)
+        };
         let edge_fade = |at: pile::Frame| {
-            pile::edge_fade(at.top + dy + at.height / 2.0, deck_height, above, below)
+            pile::edge_fade(
+                top_of(at) - deck_top + at.height / 2.0,
+                deck_height,
+                above,
+                below,
+            )
         };
         let ghost_view = |ghost: &Shown, view: &Self| -> AnyElement {
             let frame = ghost.pose.card(current.width, current.height);
@@ -530,7 +557,7 @@ impl Render for SlabToastView {
         if let Some((pose, shown_count)) = strip_ghost {
             let strip = pose.card(current.width, current.height);
             strips.push(
-                place(div().id("toast-strip-leaving"), strip.frame)
+                place_on_window(div().id("toast-strip-leaving"), strip.frame)
                     .opacity(strip.opacity)
                     .child(strip_of(shown_count, strip.scale, self))
                     .into_any_element(),
@@ -539,7 +566,7 @@ impl Render for SlabToastView {
         if let Some(strip) = current.strip {
             let newest = rows[0].id;
             strips.push(
-                place(div().id("toast-strip"), strip.frame)
+                place_on_window(div().id("toast-strip"), strip.frame)
                     .occlude()
                     .on_mouse_move(cx.listener(move |view, _: &MouseMoveEvent, _, cx| {
                         view.point(Some(newest), false, cx)
@@ -566,7 +593,7 @@ impl Render for SlabToastView {
         layers.push(
             div()
                 .absolute()
-                .top_0()
+                .top(px(deck_top))
                 .left_0()
                 .w_full()
                 .h(px(deck_height))
@@ -581,7 +608,8 @@ impl Render for SlabToastView {
                                step: f32| {
                         let up = matches!(edge, crate::scrollbar::OverflowEdge::Top);
                         let count = (hidden / pile::LIST_STEP).ceil();
-                        let words = if up { "older" } else { "newer" };
+                        let words = if up == hangs { "newer" } else { "older" };
+                        let step = if hangs { -step } else { step };
                         div()
                             .id(id)
                             .absolute()
@@ -631,7 +659,7 @@ impl Render for SlabToastView {
                         div()
                             .absolute()
                             .top_0()
-                            .right_0()
+                            .left(px(dx + current.width - pile::CARD_WIDTH))
                             .w(px(pile::CARD_WIDTH))
                             .h_full()
                             .when(above >= 1.0, |cue| {
@@ -658,14 +686,15 @@ impl Render for SlabToastView {
         if let Some(band) = current.band.filter(|_| current.words > 0.01) {
             let host = self.host.clone();
             layers.push(
-                place(div().id("toast-show-all"), band)
+                place_on_window(div().id("toast-show-all"), band)
+                    .when(hangs, |band| band.flex().flex_col().justify_end())
                     .occlude()
                     .cursor_pointer()
                     .on_mouse_move(
                         cx.listener(|view, _: &MouseMoveEvent, _, cx| view.point(None, true, cx)),
                     )
                     .on_click(move |_, _, cx| host.set_expanded(true, cx))
-                    .child(card::show_all(current.words, kit))
+                    .child(card::show_all(current.words, hangs, kit))
                     .into_any_element(),
             );
         }
@@ -705,7 +734,9 @@ impl Render for SlabToastView {
             .id("toast-pile")
             .size_full()
             .relative()
-            .top(px((1.0 - arrival) * qol_theme::SPACE_INSET))
+            .top(px((1.0 - arrival)
+                * qol_theme::SPACE_INSET
+                * if hangs { -1.0 } else { 1.0 }))
             .opacity(arrival)
             .on_mouse_move(
                 cx.listener(|view, event: &MouseMoveEvent, _, cx| view.sweep(event.position, cx)),

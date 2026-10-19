@@ -1,6 +1,6 @@
 [package]
 name = "qol-tray"
-version = "3.104.2"
+version = "3.108.0"
 edition = "2021"
 description = "Quality of Life Tray - Pluggable system tray daemon for utility scripts"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -120,6 +120,7 @@ qol-host-fixes.workspace = true
 qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true
+qol-connection-health.workspace = true
 qol-gpui.workspace = true
 gpui.workspace = true
 qol-mcp.workspace = true

@@ -12,8 +12,8 @@ mod view;
 pub mod components;
 pub use components::{
     settings_action_affordance, settings_action_spinner, settings_busy_message,
-    settings_description, settings_list, settings_query_spinner, settings_value_text,
-    SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    settings_connection_spinner, settings_description, settings_list, settings_query_spinner,
+    settings_value_text, SettingsGroupHeader, SettingsRow, SettingsValueTone,
 };
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
@@ -69,6 +69,7 @@ fn chrome_height(_sections: &[RowSection]) -> f32 {
 }
 const PANEL_GAMEPAD_HEIGHT: f32 = 650.0;
 const PANEL_DISPLAY_LAYOUT_HEIGHT: f32 = 368.0;
+const PANEL_PLACEMENT_HEIGHT: f32 = 280.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelSourceGroup {
@@ -909,10 +910,10 @@ fn prepare_source(
         return Ok(bare_source(source, runtime, Some(pages)));
     }
     let base = persistence::panel_base(&source.plugin_id);
-    let path = if source.plugin_id == qol_conventions::CORE_PANEL_ID {
-        None
-    } else {
+    let path = if persistence::keeps_a_config_file(&source.plugin_id) {
         Some(persistence::config_path(&source.plugin_id)?)
+    } else {
+        None
     };
     let values = persistence::load_values(&base, path.as_deref());
     let resolved = qol_config::normalized::resolve_config(&spec, &values)
@@ -1005,6 +1006,7 @@ fn size_prepared_panel(
     let available = (monitor.logical_work_area().size.height.to_f64() as f32
         - 2.0 * crate::placement::CORNER_MARGIN)
         .min(PANEL_MAX_HEIGHT);
+    let (screen_width, screen_height) = monitor.size();
     let has_custom_source = prepared.panel.sources.iter().any(|source| source.custom);
     let body_width = panel_width(&prepared.rows).max(if has_custom_source {
         PANEL_CUSTOM_WIDTH
@@ -1028,6 +1030,7 @@ fn size_prepared_panel(
             query_states: prepared.query_states,
             opening_answers: prepared.opening_answers,
             height_cap: available,
+            screen_aspect: screen_width / screen_height.max(1.0),
         },
         size: size(px(width), px(height)),
     })
@@ -1129,6 +1132,7 @@ fn row_wants_a_wide_panel(row: &Row) -> bool {
             | RowControl::List { .. }
             | RowControl::QrCode { .. }
             | RowControl::DisplayLayout(_)
+            | RowControl::Placement(_)
     ) {
         return true;
     }

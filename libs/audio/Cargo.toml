@@ -3,7 +3,7 @@ name = "qol-audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native audio control client for qol-tools: PulseAudio on Linux, Core Audio on Windows"
+description = "Native audio control client for qol-tools: PulseAudio on Linux, Core Audio on macOS and Windows"
 
 [dependencies]
 workspace-hack.workspace = true
@@ -11,6 +11,10 @@ workspace-hack.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 mio = { version = "1", features = ["net", "os-poll"] }
 pulseaudio = "=0.3.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 qol-platform.workspace = true

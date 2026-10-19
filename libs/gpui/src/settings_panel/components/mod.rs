@@ -16,6 +16,7 @@ mod hint_bar;
 mod key_combination;
 mod modifier_chip;
 mod number_field;
+mod placement_preview;
 mod qr_code;
 mod row;
 mod text_field;
@@ -32,7 +33,10 @@ pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
-pub(super) use number_field::{number_field, NumberCue, SliderStyle};
+pub(super) use number_field::{number_field, NumberCue, NumberText, SliderStyle};
+pub use placement_preview::{
+    placement_caption, placement_hold_progress, placement_toast, PlacementHold,
+};
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use text_field::SettingsTextField;
@@ -94,6 +98,15 @@ fn ground_text<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Op
         }
         None => element,
     }
+}
+
+fn selection_colors(kit: Kit) -> (u32, u32) {
+    (kit.grounds.band.bg, kit.grounds.pane.ink)
+}
+
+pub fn settings_selected_text(text: gpui::Div, kit: Kit) -> gpui::Div {
+    let (bg, ink) = selection_colors(kit);
+    text.bg(rgb(bg)).text_color(rgb(ink))
 }
 
 fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
@@ -593,6 +606,14 @@ pub fn settings_tile_spinner(id: impl Into<ElementId>, kit: Kit) -> Busy {
 /// Busy recipe for a pending action inside a settings surface.
 pub fn settings_action_spinner(id: impl Into<ElementId>, kit: Kit) -> Busy {
     Busy::ring(id, rgb(kit.palette.success))
+}
+
+pub fn settings_connection_spinner(
+    id: impl Into<ElementId>,
+    level: qol_connection_health::Level,
+    kit: Kit,
+) -> Busy {
+    Busy::ring(id, rgb(kit.connection_hue(level)))
 }
 
 /// Busy recipe sharing the settings_message frame for in-progress work.

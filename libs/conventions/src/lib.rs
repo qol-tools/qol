@@ -23,6 +23,7 @@ pub const HTTP_AUTH_PROOF_FILE: &str = ".http-token-proof";
 pub const NOTIFICATIONS_SETTINGS_FILE: &str = "notifications.json";
 pub const MESSAGE_STAY_KEY: &str = "message_stay_seconds";
 pub const LEGACY_MESSAGE_SECONDS_KEY: &str = "message_seconds";
+pub const NOTIFICATION_PLACEMENT_KEY: &str = "placement";
 pub const CODESIGN_IDENTITY_FILE: &str = "codesign-identity";
 pub const CODESIGN_IDENTITY_ENV: &str = "QOL_CODESIGN_IDENTITY";
 pub const HOST_WORKSPACE_BUILD_FILE: &str = "host-workspace-build";
@@ -326,6 +327,7 @@ pub fn local_base_url() -> String {
 }
 
 pub const CORE_PANEL_ID: &str = "core";
+pub const CORE_PAGE_PREFIX: &str = "__core-";
 
 const RESERVED_PLUGIN_IDS: &[&str] = &["qol-template", CORE_PANEL_ID];
 

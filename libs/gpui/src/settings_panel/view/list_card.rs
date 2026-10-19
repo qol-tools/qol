@@ -22,8 +22,8 @@ use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
 
-pub(super) const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration =
-    std::time::Duration::from_millis(200);
+pub(super) const SLIDER_DISPATCH_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(30);
 pub(super) const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SettingsPanelView {
@@ -298,11 +298,12 @@ impl SettingsPanelView {
         let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return false;
         };
-        step_list_slider(slider, item, direction);
-        let item_id = item.id.clone();
-        self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
-            this.dispatch_list_slider(row, &id, cx);
-        });
+        if step_list_slider(slider, item, direction) {
+            let item_id = item.id.clone();
+            self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
+                this.dispatch_list_slider(row, &id, cx)
+            });
+        }
         true
     }
 
@@ -323,15 +324,18 @@ impl SettingsPanelView {
         let Some(slider) = slider else {
             return;
         };
-        if !items.iter().any(|item| item.id == item_id) {
+        let Some(item) = items.iter().find(|item| item.id == item_id) else {
             return;
-        }
+        };
         let value = slider_value_from_fraction(
             slider.spec.min,
             slider.spec.max,
             slider.spec.step,
             fraction,
         );
+        if list_slider_value(&slider.spec, &slider.values, item) == value {
+            return;
+        }
         slider.values.insert(
             item_id.to_string(),
             SliderHold {
@@ -341,25 +345,25 @@ impl SettingsPanelView {
             },
         );
         self.schedule_slider_dispatch(row_index, item_id.to_string(), cx, |this, row, id, cx| {
-            this.dispatch_list_slider(row, &id, cx);
+            this.dispatch_list_slider(row, &id, cx)
         });
     }
 
-    fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
-        let Some(runtime) = self
+    #[must_use]
+    fn dispatch_list_slider(
+        &mut self,
+        row_index: usize,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<()>> {
+        let runtime = self
             .root_source_for(row_index)
-            .map(|source| source.runtime.clone())
-        else {
-            return;
-        };
+            .map(|source| source.runtime.clone())?;
         self.slider_pending
             .remove(&(row_index, item_id.to_string()));
-        let Some((action, item_id)) =
-            resolve_list_slider_dispatch(self.slider_rows(), row_index, item_id)
-        else {
-            return;
-        };
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        let (action, item_id) =
+            resolve_list_slider_dispatch(self.slider_rows(), row_index, item_id)?;
+        Some(cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
@@ -379,8 +383,7 @@ impl SettingsPanelView {
                     cx.notify();
                 });
             }
-        })
-        .detach();
+        }))
     }
 
     pub(super) fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
@@ -598,7 +601,7 @@ pub(super) fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
     format!("{:.0}%", fraction * 100.0)
 }
 
-fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
+fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) -> bool {
     let current = list_slider_value(&slider.spec, &slider.values, item);
     let next = stepped_slider_value(
         current,
@@ -607,6 +610,9 @@ fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
         slider.spec.max,
         slider.spec.step,
     );
+    if next == current {
+        return false;
+    }
     slider.values.insert(
         item.id.clone(),
         SliderHold {
@@ -615,6 +621,7 @@ fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
             until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
         },
     );
+    true
 }
 
 pub(super) struct SliderTrackStyle {
@@ -650,10 +657,9 @@ where
         .items_center()
         .gap(px(qol_theme::SPACE_INSET))
         .cursor(CursorStyle::PointingHand)
-        .child(
-            settings_slider_track(fill, ground)
-                .child(slider_drag_track(cx, row, id, on_down, move_to, release)),
-        )
+        .child(settings_slider_track(fill, ground).child(slider_drag_track(
+            cx, row, id, 0.0, on_down, move_to, release,
+        )))
         .child(settings_slider_percent(percent, kit))
 }
 
@@ -1722,7 +1728,7 @@ mod tests {
         assert_eq!(card_item.id, "b");
         assert_eq!(well_item.id, card_item.id);
         let slider = slider.as_mut().unwrap();
-        step_list_slider(slider, card_item, 1.0);
+        assert!(step_list_slider(slider, card_item, 1.0));
         let hold = slider
             .values
             .get(&well_item.id)

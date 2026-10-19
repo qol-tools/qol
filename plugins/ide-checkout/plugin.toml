@@ -4,7 +4,7 @@ uid = "b61195c4-a0a8-4be5-a507-9aeb45edb060"
 name = "IDE Checkout"
 icon = "ide-checkout"
 description = "Check out a git branch from your browser and open it in your editor."
-version = "1.62.0"
+version = "1.65.0"
 author = "KMRH47"
 platforms = ["macos", "linux", "windows"]
 

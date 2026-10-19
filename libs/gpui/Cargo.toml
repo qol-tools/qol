@@ -18,6 +18,7 @@ ttf-parser = "0.25"
 tungstenite = "0.26"
 qol-apps.workspace = true
 qol-config.workspace = true
+qol-connection-health.workspace = true
 qol-color.workspace = true
 qol-conventions.workspace = true
 qol-hotkeys.workspace = true
