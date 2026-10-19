@@ -461,23 +461,30 @@ fn a_subfolder_whose_count_is_held_elsewhere_is_counted_once_it_frees() {
 }
 
 #[test]
-fn a_recount_hands_back_a_subfolder_whose_count_is_held_elsewhere() {
+fn a_recount_counts_a_subfolder_held_elsewhere_once_it_frees() {
     let temp = tempfile::tempdir().unwrap();
     make_folder(temp.path(), "held");
     make_folder(temp.path(), "free");
     let held = temp.path().join("held");
     let free = temp.path().join("free");
-    let _claim = CountClaim::take(&held).unwrap();
+    let claim = CountClaim::take(&held).unwrap();
 
     let read = recount(
         temp.path().to_path_buf(),
         vec![held.clone(), free.clone()],
         || {},
     );
-    let events: Vec<ListingEvent> = read.events().iter().collect();
-    assert_eq!(events.len(), 2);
-    assert!(matches!(&events[0], ListingEvent::Counts(counts) if counts[0].path == free));
-    assert_eq!(events[1], ListingEvent::Held(vec![held]));
+    let counted = || match read.events().recv_timeout(Duration::from_secs(10)) {
+        Ok(ListingEvent::Counts(counts)) => counts
+            .into_iter()
+            .map(|count| count.path)
+            .collect::<Vec<_>>(),
+        other => panic!("expected counts, got {other:?}"),
+    };
+    assert_eq!(counted(), [free]);
+    drop(claim);
+    assert_eq!(counted(), [held]);
+    assert!(read.events().recv_timeout(Duration::from_secs(10)).is_err());
 }
 
 #[test]

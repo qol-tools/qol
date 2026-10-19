@@ -814,6 +814,48 @@ fn a_subfolder_changed_before_its_watch_is_up_is_counted_again() {
     }
 }
 
+#[test]
+fn a_subfolder_is_recounted_again_only_after_its_last_recount_reports() {
+    let temp = tempfile::tempdir().unwrap();
+    let sub = make_folder(temp.path(), "sub");
+    let counted_from = SystemTime::now();
+    touch(&sub, "late");
+    let mut counts = LiveCounts::default();
+    counts.follow(vec![sub.clone()], counted_from, || {});
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut now = Instant::now();
+    let mut due = |counts: &mut LiveCounts| {
+        now += REFRESH_QUIET;
+        counts.recount_when_due(now, temp.path(), || {});
+        assert!(Instant::now() < deadline, "the recounts did not settle");
+        thread::sleep(Duration::from_millis(10));
+    };
+    while counts.recounting() == 0 {
+        due(&mut counts);
+    }
+
+    touch(&sub, "later");
+    while !counts.is_stale(&sub) {
+        due(&mut counts);
+    }
+    due(&mut counts);
+    due(&mut counts);
+    assert_eq!(counts.recounting(), 1);
+    assert!(counts.is_stale(&sub));
+
+    while !counts.drain().iter().any(|count| count.path == sub) {
+        due(&mut counts);
+    }
+    let two = ItemCount::Items { all: 2, shown: 2 };
+    while !counts
+        .drain()
+        .iter()
+        .any(|count| count.path == sub && count.count == two)
+    {
+        due(&mut counts);
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_renamed_hard_link_keeps_the_cursor_and_its_pick_off_its_twin() {

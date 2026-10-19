@@ -103,7 +103,6 @@ impl Listing {
                 self.entries.clear();
                 self.state = ListingState::Failed(error);
             }
-            ListingEvent::Held(_) => {}
             ListingEvent::Counts(counts) => {
                 for count in counts {
                     let newer = self

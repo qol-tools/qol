@@ -57,7 +57,6 @@ pub enum ListingEvent {
     Done,
     Failed(ListingError),
     Counts(Vec<FolderCount>),
-    Held(Vec<PathBuf>),
 }
 
 #[derive(Debug)]
@@ -100,13 +99,7 @@ pub fn recount(
     wake: impl Fn() + Send + Clone + 'static,
 ) -> ListingRead {
     spawn(folder, wake, move |cancel, mut emit| {
-        let pending: Vec<&PathBuf> = folders.iter().collect();
-        let Some(held) = count_folders(&pending, BATCH_SIZE, cancel, &mut emit) else {
-            return;
-        };
-        if !held.is_empty() {
-            emit(ListingEvent::Held(held.into_iter().cloned().collect()));
-        }
+        count_until_free(folders.iter().collect(), BATCH_SIZE, cancel, &mut emit);
     })
 }
 
@@ -156,8 +149,16 @@ pub(super) fn run(
     if !emit(ListingEvent::Done) || pass == Pass::NamesOnly {
         return;
     }
-    let mut pending: Vec<&PathBuf> = folders.iter().collect();
-    while let Some(held) = count_folders(&pending, batch_size, cancel, &mut emit) {
+    count_until_free(folders.iter().collect(), batch_size, cancel, &mut emit);
+}
+
+fn count_until_free(
+    mut pending: Vec<&PathBuf>,
+    batch_size: usize,
+    cancel: &CancelToken,
+    emit: &mut impl FnMut(ListingEvent) -> bool,
+) {
+    while let Some(held) = count_folders(&pending, batch_size, cancel, emit) {
         if held.is_empty() {
             return;
         }

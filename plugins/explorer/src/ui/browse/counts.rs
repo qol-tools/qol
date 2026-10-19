@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::mem;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -18,13 +17,18 @@ const CLOCK_SLACK: Duration = Duration::from_secs(2);
 
 type Stale = Arc<Mutex<HashSet<PathBuf>>>;
 
+struct Recount {
+    read: ListingRead,
+    pending: HashSet<PathBuf>,
+}
+
 #[derive(Default)]
 pub(super) struct LiveCounts {
     folders: HashSet<PathBuf>,
     watch: Arc<Mutex<Option<Watch>>>,
     stale: Stale,
     stale_at: Option<Instant>,
-    reads: Vec<ListingRead>,
+    recounts: Vec<Recount>,
 }
 
 impl LiveCounts {
@@ -59,12 +63,26 @@ impl LiveCounts {
         lock(&self.watch).is_some()
     }
 
+    #[cfg(test)]
+    pub(super) fn recounting(&self) -> usize {
+        self.recounts.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_stale(&self, folder: &Path) -> bool {
+        lock(&self.stale).contains(folder)
+    }
+
     pub(super) fn drain(&mut self) -> Vec<FolderCount> {
         let mut counts = Vec::new();
-        self.reads.retain(|read| loop {
-            match read.events().try_recv() {
-                Ok(ListingEvent::Counts(batch)) => counts.extend(batch),
-                Ok(ListingEvent::Held(folders)) => lock(&self.stale).extend(folders),
+        self.recounts.retain_mut(|recount| loop {
+            match recount.read.events().try_recv() {
+                Ok(ListingEvent::Counts(batch)) => {
+                    for count in &batch {
+                        recount.pending.remove(&count.path);
+                    }
+                    counts.extend(batch);
+                }
                 Ok(_) => {}
                 Err(TryRecvError::Empty) => break true,
                 Err(TryRecvError::Disconnected) => break false,
@@ -79,7 +97,7 @@ impl LiveCounts {
         folder: &Path,
         wake: impl Fn() + Send + Clone + 'static,
     ) -> Option<Duration> {
-        if self.stale_at.is_none() && !lock(&self.stale).is_empty() {
+        if self.stale_at.is_none() && !self.ready().is_empty() {
             self.stale_at = Some(now);
         }
         let due = self.stale_at? + REFRESH_QUIET;
@@ -87,16 +105,35 @@ impl LiveCounts {
             return Some(due - now);
         }
         self.stale_at = None;
-        let stale = mem::take(&mut *lock(&self.stale));
-        let folders: Vec<PathBuf> = stale
+        let ready = self.ready();
+        let mut stale = lock(&self.stale);
+        for path in &ready {
+            stale.remove(path);
+        }
+        drop(stale);
+        let folders: Vec<PathBuf> = ready
             .into_iter()
             .filter(|path| self.folders.contains(path))
             .collect();
         if !folders.is_empty() {
-            self.reads
-                .push(listing::recount(folder.to_path_buf(), folders, wake));
+            let pending = folders.iter().cloned().collect();
+            let read = listing::recount(folder.to_path_buf(), folders, wake);
+            self.recounts.push(Recount { read, pending });
         }
         None
+    }
+
+    fn ready(&self) -> Vec<PathBuf> {
+        let counting: HashSet<&PathBuf> = self
+            .recounts
+            .iter()
+            .flat_map(|recount| &recount.pending)
+            .collect();
+        lock(&self.stale)
+            .iter()
+            .filter(|path| !counting.contains(path))
+            .cloned()
+            .collect()
     }
 }
 
