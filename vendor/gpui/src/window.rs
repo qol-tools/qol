@@ -3628,6 +3628,7 @@ impl Window {
                 PlatformInput::MouseUp(mouse_up)
             }
             PlatformInput::MouseExited(mouse_exited) => {
+                self.mouse_position = mouse_exited.position;
                 self.modifiers = mouse_exited.modifiers;
                 PlatformInput::MouseExited(mouse_exited)
             }

@@ -233,7 +233,7 @@ fn leaving_and_coming_back_restores_the_cursor_and_the_scroll() {
     assert!(browser.up(0.0));
     let up = settle(&mut browser);
     assert_eq!(browser.folder(), temp.path());
-    assert_eq!(browser.cursor(), 3);
+    assert_eq!(names(&browser)[browser.cursor()], "inner");
     assert_eq!(up.scroll, Some(36.0));
 }
 
@@ -336,6 +336,7 @@ fn a_folder_that_cannot_be_read_settles_at_the_top() {
     let settled = settle(&mut browser);
     assert_eq!(settled.scroll, Some(0.0));
     assert_eq!(browser.row_count(), 0);
+    assert_eq!(browser.note().count, "");
 }
 
 #[test]
@@ -349,9 +350,17 @@ fn the_path_field_suggests_the_folders_of_the_typed_parent() {
 
     assert!(browser.edit_path());
     assert!(!browser.edit_path());
-    assert_eq!(browser.path_edit().unwrap().text(), "~");
-    type_text(&mut browser, &format!("{MAIN_SEPARATOR}G"));
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        format!("~{MAIN_SEPARATOR}")
+    );
     settle(&mut browser);
+    assert_eq!(
+        browser.path_edit().unwrap().suggestions(),
+        ["Games", "Git", "Music"]
+    );
+    assert_eq!(browser.path_edit().unwrap().selected(), None);
+    type_text(&mut browser, "G");
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["Games", "Git"]);
 
     type_text(&mut browser, "i");
@@ -366,7 +375,7 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
     let mut browser = opened(temp.path());
 
     browser.edit_path();
-    type_text(&mut browser, &format!("{MAIN_SEPARATOR}file.txt"));
+    type_text(&mut browser, "file.txt");
     let step = browser.path_key(&key("enter", None), || None, 0.0);
     assert_eq!(step, PathStep::Stay { changed: true });
     assert!(browser.path_open());
@@ -399,13 +408,13 @@ fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
     browser.edit_path();
     assert_eq!(
         browser.path_edit().unwrap().text(),
-        format!("~{MAIN_SEPARATOR}inner")
+        format!("~{MAIN_SEPARATOR}inner{MAIN_SEPARATOR}")
     );
     browser.path_key(&key("backspace", None), || None, 0.0);
     settle(&mut browser);
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
     assert_eq!(browser.path_edit().unwrap().selected(), Some(0));
-    for _ in 0.."inne".len() {
+    for _ in 0.."inner".len() {
         browser.path_key(&key("backspace", None), || None, 0.0);
     }
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
@@ -421,8 +430,77 @@ fn escape_in_the_path_field_puts_the_trail_back() {
     let mut browser = opened(temp.path());
     browser.edit_path();
     type_text(&mut browser, "zzz");
+    browser.path_key(&key("enter", None), || None, 0.0);
+    assert!(browser.note().failure.is_some());
     let step = browser.path_key(&key("escape", None), || None, 0.0);
     assert_eq!(step, PathStep::Closed);
     assert!(!browser.path_open());
+    assert_eq!(browser.note().failure, None);
     assert_eq!(browser.folder(), temp.path());
+}
+
+#[test]
+fn going_up_or_to_an_ancestor_lands_on_the_folder_left() {
+    let temp = abc_folder();
+    make_folder(temp.path(), "early");
+    let inner = make_folder(temp.path(), "inner");
+    make_folder(&inner, "before");
+    let deeper = make_folder(&inner, "deeper");
+    let mut browser = Browser::new(deeper, temp.path().to_path_buf());
+    settle(&mut browser);
+
+    assert!(browser.up(0.0));
+    settle(&mut browser);
+    assert_eq!(browser.folder(), inner);
+    assert_eq!(names(&browser)[browser.cursor()], "deeper");
+
+    assert!(browser.go(temp.path().to_path_buf(), 0.0));
+    settle(&mut browser);
+    assert_eq!(names(&browser)[browser.cursor()], "inner");
+}
+
+#[test]
+fn a_refresh_reports_how_far_the_cursor_row_moved() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(3);
+    make_folder(temp.path(), "x");
+    make_folder(temp.path(), "y");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut shift = 0;
+    while browser.row_count() != 6 {
+        let drained = browser.drain(Instant::now());
+        shift += drained.cursor_shift;
+        assert!(Instant::now() < deadline, "the folders never showed");
+        thread::sleep(drained.wake_in.unwrap_or(Duration::from_millis(2)));
+    }
+    assert_eq!(names(&browser)[browser.cursor()], "d.txt");
+    assert_eq!(shift, 2);
+}
+
+#[test]
+fn the_count_waits_for_the_listing() {
+    let temp = abc_folder();
+    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf());
+    assert_eq!(browser.note().count, "");
+    settle(&mut browser);
+    assert_eq!(browser.note().count, "4 items");
+}
+
+#[test]
+fn picking_a_suggestion_goes_there() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "Games");
+    let git = make_folder(temp.path(), "Git");
+    let mut browser = opened(temp.path());
+    browser.edit_path();
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["Games", "Git"]);
+    assert_eq!(
+        browser.pick_suggestion(5, 0.0),
+        PathStep::Stay { changed: false }
+    );
+    assert_eq!(browser.pick_suggestion(1, 0.0), PathStep::Arrived);
+    assert_eq!(browser.folder(), git);
+    assert!(!browser.path_open());
 }

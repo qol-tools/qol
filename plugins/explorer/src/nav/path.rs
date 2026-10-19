@@ -75,6 +75,11 @@ pub fn display_with_home(path: &Path, home: &Path) -> String {
     format!("{HOME}{MAIN_SEPARATOR}{}", rest.display())
 }
 
+pub fn child_toward(ancestor: &Path, folder: &Path) -> Option<PathBuf> {
+    let first = folder.strip_prefix(ancestor).ok()?.components().next()?;
+    Some(ancestor.join(first))
+}
+
 pub fn suggestions<'a>(parent: &'a Listing, segment: &str, show_hidden: bool) -> Vec<&'a str> {
     parent
         .visible(show_hidden || segment.starts_with('.'))

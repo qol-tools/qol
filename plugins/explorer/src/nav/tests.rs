@@ -57,23 +57,21 @@ fn going_somewhere_new_drops_the_forward_spots() {
 }
 
 #[test]
-fn going_up_returns_to_the_remembered_cursor_of_the_parent() {
+fn going_back_to_a_known_folder_recalls_its_cursor_and_scroll() {
     let mut history = History::new(PathBuf::from("/home"));
     history.remember(7, 252.0);
     history.go(PathBuf::from("/home/git"));
 
-    let up = history.up().unwrap();
-    assert_eq!(up.folder, PathBuf::from("/home"));
-    assert_eq!(up.cursor, 7);
-    assert_eq!(up.scroll, 252.0);
+    let recalled = history.go(PathBuf::from("/home")).clone();
+    assert_eq!(recalled.folder, PathBuf::from("/home"));
+    assert_eq!(recalled.cursor, 7);
+    assert_eq!(recalled.scroll, 252.0);
     assert!(history.can_go_back());
 }
 
 #[test]
-fn a_new_folder_starts_at_the_top_and_the_root_has_no_parent() {
+fn a_new_folder_starts_at_the_top() {
     let mut history = History::new(PathBuf::from("/"));
-    assert!(history.up().is_none());
-
     let spot = history.go(PathBuf::from("/srv")).clone();
     assert_eq!(spot, Spot::at(PathBuf::from("/srv")));
 }
@@ -322,6 +320,17 @@ fn home_is_shown_as_tilde() {
         sep("~/Git")
     );
     assert_eq!(path::display_with_home(Path::new("/srv"), home), "/srv");
+}
+
+#[test]
+fn the_child_toward_a_folder_is_the_next_step_down() {
+    let home = Path::new("/home/me");
+    assert_eq!(
+        path::child_toward(home, &home.join("Git").join("qol")),
+        Some(home.join("Git"))
+    );
+    assert_eq!(path::child_toward(home, home), None);
+    assert_eq!(path::child_toward(home, Path::new("/srv")), None);
 }
 
 #[test]

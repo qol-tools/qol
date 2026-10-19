@@ -46,6 +46,10 @@ impl PathField {
         self.edit.key(keystroke, paste)
     }
 
+    pub(super) fn pick(&mut self, index: usize) -> bool {
+        self.edit.pick(index)
+    }
+
     pub(super) fn refresh(&mut self, home: &Path, folder: &Path, show_hidden: bool) {
         let input = PathInput::parse(self.edit.text(), home);
         let parent = input

@@ -34,6 +34,7 @@ pub(super) fn render(
     let paths: Vec<PathBuf> = crumbs.iter().map(|crumb| crumb.path.clone()).collect();
     let on_crumb = cx.entity().downgrade();
     let on_edit = on_crumb.clone();
+    let on_suggestion = on_crumb.clone();
     let mut crumb_trail = CrumbTrail::new(
         "explorer-trail",
         crumbs.into_iter().map(|crumb| crumb.label),
@@ -47,6 +48,9 @@ pub(super) fn render(
     })
     .on_edit(move |_window, cx| {
         let _ = on_edit.update(cx, |view, cx| view.edit_path(cx));
+    })
+    .on_suggestion(move |index, _window, cx| {
+        let _ = on_suggestion.update(cx, |view, cx| view.pick_suggestion(index, cx));
     });
     if let Some(edit) = editing {
         let note_room = if shows_note {

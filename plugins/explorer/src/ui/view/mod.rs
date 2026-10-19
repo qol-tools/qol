@@ -8,15 +8,16 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use gpui::{
     div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ItemSize, KeyDownEvent, Keystroke, ModifiersChangedEvent,
-    ParentElement, Point, Render, ScrollHandle, Styled, UniformListScrollHandle, WeakEntity,
-    Window,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent, ParentElement,
+    Point, Render, ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
+use qol_gpui::theme::HEIGHT_INLINE;
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click};
+use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::PLUGIN_ID;
 
@@ -38,6 +39,7 @@ pub struct ExplorerView {
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
+    body_height: f32,
 }
 
 impl ExplorerView {
@@ -50,6 +52,7 @@ impl ExplorerView {
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
+            body_height: 0.0,
         };
         view.listen(cx);
         view
@@ -68,38 +71,45 @@ impl ExplorerView {
             .set_offset(point(px(0.0), px(-scroll)));
     }
 
-    fn reveal_cursor(&self) {
-        let Some(list) = self.scroll.0.borrow().last_item_size else {
-            return;
+    pub(super) fn list_height(&self) -> f32 {
+        let reading = if *self.browser.listing().state() == ListingState::Loading {
+            HEIGHT_INLINE
+        } else {
+            0.0
         };
-        let viewport = Bounds::new(Point::default(), list.item);
+        self.body_height - reading
+    }
+
+    fn reveal_cursor(&self) {
+        let height = self.list_height();
+        if height <= 0.0 {
+            return;
+        }
+        let viewport = Bounds::new(Point::default(), size(px(0.0), px(height)));
         let top = px(self.browser.cursor() as f32 * ROW);
-        let row = Bounds::new(point(px(0.0), top), size(list.item.width, px(ROW)));
+        let row = Bounds::new(point(px(0.0), top), size(px(0.0), px(ROW)));
         let followed = follow_offset_y(viewport, row, px(-self.scroll_offset()), px(ROW));
-        self.set_scroll((-f32::from(followed)).clamp(0.0, self.max_scroll(list)));
+        self.set_scroll((-f32::from(followed)).clamp(0.0, self.max_scroll()));
+    }
+
+    fn follow_rows(&self, cursor_shift: isize) {
+        let scroll = self.scroll_offset();
+        let was = (self.browser.cursor() as isize - cursor_shift) as f32 * ROW;
+        let seen = was + ROW > scroll && was < scroll + self.list_height();
+        let shift = if seen { cursor_shift as f32 * ROW } else { 0.0 };
+        self.set_scroll((scroll + shift).clamp(0.0, self.max_scroll()));
     }
 
     fn at_end(&self) -> bool {
-        self.scroll
-            .0
-            .borrow()
-            .last_item_size
-            .is_some_and(|list| self.scroll_offset() + 0.5 >= self.max_scroll(list))
+        self.scroll_offset() + 0.5 >= self.max_scroll()
     }
 
-    fn max_scroll(&self, list: ItemSize) -> f32 {
-        let height: f32 = list.item.height.into();
-        (self.browser.row_count() as f32 * ROW - height).max(0.0)
+    fn max_scroll(&self) -> f32 {
+        (self.browser.row_count() as f32 * ROW - self.list_height()).max(0.0)
     }
 
     fn page_rows(&self) -> usize {
-        let height: f32 = self
-            .scroll
-            .0
-            .borrow()
-            .last_item_size
-            .map_or(0.0, |list| list.item.height.into());
-        ((height / ROW) as usize).max(1)
+        ((self.list_height() / ROW) as usize).max(1)
     }
 
     fn wake_in(&self, delay: Duration, cx: &mut Context<Self>) {
@@ -132,6 +142,8 @@ impl ExplorerView {
         if let Some(scroll) = drained.scroll {
             self.set_scroll(scroll);
             self.reveal_cursor();
+        } else if drained.changed {
+            self.follow_rows(drained.cursor_shift);
         }
         if drained.changed {
             cx.notify();
@@ -216,7 +228,20 @@ impl ExplorerView {
     fn path_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
         let paste = || cx.read_from_clipboard().and_then(|item| item.text());
-        match self.browser.path_key(keystroke, paste, scroll) {
+        let step = self.browser.path_key(keystroke, paste, scroll);
+        self.stepped(step)
+    }
+
+    fn pick_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
+        let scroll = self.scroll_offset();
+        let step = self.browser.pick_suggestion(index, scroll);
+        if self.stepped(step) {
+            cx.notify();
+        }
+    }
+
+    fn stepped(&self, step: PathStep) -> bool {
+        match step {
             PathStep::Stay { changed } => changed,
             PathStep::Arrived => {
                 self.set_scroll(0.0);
@@ -242,7 +267,9 @@ impl ExplorerView {
     }
 
     fn open_file(&mut self, path: PathBuf) {
-        let Err(error) = qol_apps::desktop_integration::open_with_default_app(&path) else {
+        let opened = std::fs::metadata(&path)
+            .and_then(|_| qol_apps::desktop_integration::open_with_default_app(&path));
+        let Err(error) = opened else {
             return;
         };
         log::warn!("[{PLUGIN_ID}] could not open {}: {error}", path.display());
@@ -291,6 +318,7 @@ impl Focusable for ExplorerView {
 
 impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.body_height = f32::from(window.viewport_size().height) - BAND - HEAD;
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)
@@ -306,7 +334,7 @@ impl Render for ExplorerView {
                     .flex()
                     .flex_row()
                     .child(rail::render(self, cx))
-                    .child(list::render(self, window, cx)),
+                    .child(list::render(self, cx)),
             )
     }
 }

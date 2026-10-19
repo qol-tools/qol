@@ -4,7 +4,7 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, InteractiveElement,
-    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Window,
+    IntoElement, ParentElement, StatefulInteractiveElement, Styled,
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
@@ -13,18 +13,14 @@ use qol_gpui::text::{cased, TextStyled};
 use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET};
 use qol_gpui::Icon;
 
-use super::{ExplorerView, BAND, HEAD, ICON, ROW};
+use super::{ExplorerView, HEAD, ICON, ROW};
 use crate::listing::ListingState;
 use crate::ui::columns::{kind_label, size_label, typed_split};
 
 const KIND_WIDTH: f32 = 100.0;
 const SIZE_WIDTH: f32 = 100.0;
 
-pub(super) fn render(
-    view: &ExplorerView,
-    window: &Window,
-    cx: &mut Context<ExplorerView>,
-) -> impl IntoElement {
+pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> impl IntoElement {
     let kit = kit();
     let listing = view.browser.listing();
     let loading = *listing.state() == ListingState::Loading;
@@ -33,7 +29,7 @@ pub(super) fn render(
         ListingState::Done if listing.shows_empty(view.browser.shows_hidden()) => {
             kit.empty("This folder is empty", None).into_any_element()
         }
-        ListingState::Done | ListingState::Loading => rows(view, window, loading, kit, cx),
+        ListingState::Done | ListingState::Loading => rows(view, kit, cx),
     };
     div()
         .flex_1()
@@ -78,17 +74,9 @@ fn header(kit: Kit) -> impl IntoElement {
         )
 }
 
-fn rows(
-    view: &ExplorerView,
-    window: &Window,
-    loading: bool,
-    kit: Kit,
-    cx: &mut Context<ExplorerView>,
-) -> AnyElement {
+fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
     let total = view.browser.row_count();
-    let reading = if loading { HEIGHT_INLINE } else { 0.0 };
-    let room = f32::from(window.viewport_size().height) - BAND - HEAD - reading;
-    let shown = (room / ROW).floor().max(0.0) as usize;
+    let shown = (view.list_height() / ROW).floor().max(0.0) as usize;
     let first = (view.scroll_offset() / ROW).floor().max(0.0) as usize;
     let left = total.saturating_sub(first);
     let shown = if view.at_end() { left } else { shown.min(left) };

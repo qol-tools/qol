@@ -35,6 +35,7 @@ pub struct CrumbTrail {
     editing: Option<Editing>,
     on_crumb: Option<CrumbClick>,
     on_edit: Option<EditRequest>,
+    on_suggestion: Option<CrumbClick>,
     kit: Kit,
 }
 
@@ -50,6 +51,7 @@ impl CrumbTrail {
             editing: None,
             on_crumb: None,
             on_edit: None,
+            on_suggestion: None,
             kit,
         }
     }
@@ -61,6 +63,14 @@ impl CrumbTrail {
 
     pub fn on_edit(mut self, on_edit: impl Fn(&mut Window, &mut App) + 'static) -> Self {
         self.on_edit = Some(Rc::new(on_edit));
+        self
+    }
+
+    pub fn on_suggestion(
+        mut self,
+        on_suggestion: impl Fn(usize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_suggestion = Some(Rc::new(on_suggestion));
         self
     }
 
@@ -81,10 +91,11 @@ impl RenderOnce for CrumbTrail {
             editing,
             on_crumb,
             on_edit,
+            on_suggestion,
             kit,
         } = self;
         match editing {
-            Some(Editing { edit, width }) => path_field(&edit, width, kit, window),
+            Some(Editing { edit, width }) => path_field(&edit, width, on_suggestion, kit, window),
             None => read_only(id, crumbs, on_crumb, on_edit, kit),
         }
     }
@@ -150,7 +161,13 @@ fn clickable_crumb(crumb: Div, index: usize, on_crumb: CrumbClick) -> AnyElement
         .into_any_element()
 }
 
-fn path_field(edit: &PathEdit, width: f32, kit: Kit, window: &mut Window) -> AnyElement {
+fn path_field(
+    edit: &PathEdit,
+    width: f32,
+    on_suggestion: Option<CrumbClick>,
+    kit: Kit,
+    window: &mut Window,
+) -> AnyElement {
     let pane = kit.grounds.pane;
     let advance = shaped_width(
         window,
@@ -187,19 +204,27 @@ fn path_field(edit: &PathEdit, width: f32, kit: Kit, window: &mut Window) -> Any
         .flex_none()
         .w(px(width))
         .child(field)
-        .when_some(suggestion_menu(edit, width, kit), |slot, menu| {
-            slot.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top(px(qol_theme::HEIGHT_CONTROL + qol_theme::SPACE_TIGHT))
-                    .child(deferred(anchored().child(menu))),
-            )
-        })
+        .when_some(
+            suggestion_menu(edit, width, on_suggestion, kit),
+            |slot, menu| {
+                slot.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top(px(qol_theme::HEIGHT_CONTROL + qol_theme::SPACE_TIGHT))
+                        .child(deferred(anchored().child(menu))),
+                )
+            },
+        )
         .into_any_element()
 }
 
-fn suggestion_menu(edit: &PathEdit, width: f32, kit: Kit) -> Option<Div> {
+fn suggestion_menu(
+    edit: &PathEdit,
+    width: f32,
+    on_suggestion: Option<CrumbClick>,
+    kit: Kit,
+) -> Option<Div> {
     if edit.suggestions().is_empty() {
         return None;
     }
@@ -210,9 +235,19 @@ fn suggestion_menu(edit: &PathEdit, width: f32, kit: Kit) -> Option<Div> {
     let rows = edit.suggestions()[shown]
         .iter()
         .enumerate()
-        .map(|(offset, name)| suggestion_row(name, selected == Some(first + offset), kit));
+        .map(|(offset, name)| {
+            let index = first + offset;
+            suggestion_row(
+                name,
+                index,
+                selected == Some(index),
+                on_suggestion.clone(),
+                kit,
+            )
+        });
     Some(
         div()
+            .occlude()
             .relative()
             .w(px(width))
             .p(px(qol_theme::SPACE_TIGHT))
@@ -234,8 +269,15 @@ fn suggestion_menu(edit: &PathEdit, width: f32, kit: Kit) -> Option<Div> {
     )
 }
 
-fn suggestion_row(name: &str, selected: bool, kit: Kit) -> Div {
+fn suggestion_row(
+    name: &str,
+    index: usize,
+    selected: bool,
+    on_click: Option<CrumbClick>,
+    kit: Kit,
+) -> AnyElement {
     let row = div()
+        .id(("suggestion", index))
         .h(px(qol_theme::HEIGHT_INLINE))
         .px(px(qol_theme::SPACE_INSET))
         .flex()
@@ -243,5 +285,14 @@ fn suggestion_row(name: &str, selected: bool, kit: Kit) -> Div {
         .text(TextStyle::ListName)
         .text_color(rgb(kit.highlight_ground(selected).ink))
         .child(div().flex_1().min_w_0().child(name.to_owned()));
-    kit.highlight(row, selected)
+    let row = kit.highlight(row, selected);
+    match on_click {
+        Some(on_click) => row
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                on_click(index, window, cx);
+            })
+            .into_any_element(),
+        None => row.into_any_element(),
+    }
 }

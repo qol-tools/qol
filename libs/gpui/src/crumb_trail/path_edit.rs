@@ -103,6 +103,14 @@ impl PathEdit {
         true
     }
 
+    pub fn pick(&mut self, index: usize) -> bool {
+        if index >= self.suggestions.len() {
+            return false;
+        }
+        self.selected = Some(index);
+        self.complete()
+    }
+
     pub fn shown(&self, rows: usize) -> Range<usize> {
         let total = self.suggestions.len();
         let first = (self.selected().unwrap_or(0) + 2)
@@ -256,6 +264,14 @@ mod tests {
         assert_eq!(edit.key(&key("tab", None), || None), PathKey::Changed);
         assert_eq!(edit.text(), format!("~/Git/qol-skills{MAIN_SEPARATOR}"));
         assert_eq!(edit.field().cursor(), edit.text().chars().count());
+    }
+
+    #[test]
+    fn picking_a_suggestion_completes_it() {
+        let mut edit = edit("~/G", &["Git", "Games"]);
+        assert!(edit.pick(1));
+        assert_eq!(edit.text(), format!("~/Games{MAIN_SEPARATOR}"));
+        assert!(!edit.pick(7));
     }
 
     #[test]

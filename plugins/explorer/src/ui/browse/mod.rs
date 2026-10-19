@@ -2,7 +2,7 @@ mod path_field;
 #[cfg(test)]
 mod tests;
 
-use std::path::{Path, PathBuf};
+use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
@@ -38,6 +38,7 @@ pub enum PathStep {
 pub struct Drained {
     pub changed: bool,
     pub scroll: Option<f32>,
+    pub cursor_shift: isize,
     pub wake_in: Option<Duration>,
 }
 
@@ -58,6 +59,7 @@ pub struct Browser {
     jump: Jump,
     show_hidden: bool,
     arriving: Option<Spot>,
+    landing: Option<PathBuf>,
     failure: Option<String>,
     path: Option<PathField>,
     incoming: Option<Listing>,
@@ -82,6 +84,7 @@ impl Browser {
             jump: Jump::new(),
             show_hidden: false,
             arriving: None,
+            landing: None,
             failure: None,
             path: None,
             incoming: None,
@@ -155,10 +158,12 @@ impl Browser {
     }
 
     pub fn note(&self) -> Note {
-        let count = if self.picks.is_empty() {
+        let count = if !self.picks.is_empty() {
+            format!("{} picked", self.picks.len())
+        } else if *self.listing.state() == ListingState::Done {
             qol_gpui::plural(self.rows.len(), "item", "items")
         } else {
-            format!("{} picked", self.picks.len())
+            String::new()
         };
         Note {
             count,
@@ -174,7 +179,9 @@ impl Browser {
         let events = drain_events(&mut self.read);
         let mut drained = Drained::default();
         if self.incoming.is_some() {
+            let before = self.cursor as isize;
             drained.changed = self.apply_incoming(events);
+            drained.cursor_shift = self.cursor as isize - before;
             if self.read.is_none() {
                 self.incoming = None;
             }
@@ -198,19 +205,19 @@ impl Browser {
         if folder == self.folder() {
             return false;
         }
+        let landing = crate::nav::path::child_toward(&folder, self.folder());
         self.remember(scroll);
         let spot = self.history.go(folder).clone();
         self.arrive(spot);
+        self.landing = landing;
         true
     }
 
     pub fn up(&mut self, scroll: f32) -> bool {
-        self.remember(scroll);
-        let Some(spot) = self.history.up().cloned() else {
+        let Some(parent) = self.folder().parent().map(Path::to_path_buf) else {
             return false;
         };
-        self.arrive(spot);
-        true
+        self.go(parent, scroll)
     }
 
     pub fn back(&mut self, scroll: f32) -> bool {
@@ -332,7 +339,10 @@ impl Browser {
         if self.path.is_some() {
             return false;
         }
-        let text = crate::nav::path::display_with_home(self.folder(), &self.home);
+        let mut text = crate::nav::path::display_with_home(self.folder(), &self.home);
+        if !text.ends_with(is_separator) {
+            text.push(MAIN_SEPARATOR);
+        }
         let mut field = PathField::new(PathEdit::new(text), self.wake.clone());
         field.refresh(
             &self.home,
@@ -362,10 +372,21 @@ impl Browser {
             PathKey::Ignored => PathStep::Stay { changed: false },
             PathKey::Cancel => {
                 self.path = None;
+                self.failure = None;
                 PathStep::Closed
             }
             PathKey::Submit => self.submit_path(scroll),
         }
+    }
+
+    pub fn pick_suggestion(&mut self, index: usize, scroll: f32) -> PathStep {
+        let Some(field) = self.path.as_mut() else {
+            return PathStep::Closed;
+        };
+        if !field.pick(index) {
+            return PathStep::Stay { changed: false };
+        }
+        self.submit_path(scroll)
     }
 
     fn submit_path(&mut self, scroll: f32) -> PathStep {
@@ -411,6 +432,7 @@ impl Browser {
         self.picks.end_range();
         self.failure = None;
         self.path = None;
+        self.landing = None;
         self.arriving = Some(spot);
     }
 
@@ -419,10 +441,14 @@ impl Browser {
             return None;
         }
         let spot = self.arriving.take()?;
+        let landing = self.landing.take();
         if matches!(self.listing.state(), ListingState::Failed(_)) {
             return Some(0.0);
         }
         self.cursor = spot.cursor.min(self.rows.len().saturating_sub(1));
+        if let Some(row) = landing.and_then(|child| self.row_of(&child)) {
+            self.cursor = row;
+        }
         Some(spot.scroll)
     }
 

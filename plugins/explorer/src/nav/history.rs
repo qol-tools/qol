@@ -52,11 +52,6 @@ impl History {
         self.current()
     }
 
-    pub fn up(&mut self) -> Option<&Spot> {
-        let parent = self.current().folder.parent()?.to_path_buf();
-        Some(self.go(parent))
-    }
-
     pub fn back(&mut self) -> Option<&Spot> {
         self.index = self.index.checked_sub(1)?;
         Some(self.current())
