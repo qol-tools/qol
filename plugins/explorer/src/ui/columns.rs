@@ -1,3 +1,5 @@
+use unicode_normalization::char::is_combining_mark;
+
 use crate::listing::{Entry, EntryKind, ItemCount};
 
 pub fn kind_label(kind: EntryKind) -> &'static str {
@@ -27,13 +29,13 @@ pub fn typed_split(name: &str, run: &str) -> Option<usize> {
     if run.is_empty() || !crate::nav::starts_with_ignoring_case(name, run) {
         return None;
     }
-    let wanted = run.chars().flat_map(char::to_lowercase).count();
+    let wanted = crate::nav::folded(run).count();
     let mut seen = 0;
     for (index, letter) in name.char_indices() {
-        if seen >= wanted {
+        if seen >= wanted && !is_combining_mark(letter) {
             return Some(index);
         }
-        seen += letter.to_lowercase().count();
+        seen += crate::nav::folded(letter.encode_utf8(&mut [0; 4])).count();
     }
     Some(name.len())
 }
@@ -98,6 +100,9 @@ mod tests {
             ("Documents", "dox", None),
             ("Ärger.txt", "är", Some("Är".len())),
             ("notes", "notes.md", None),
+            ("éclair.txt", "ec", Some("éc".len())),
+            ("E\u{301}mile", "em", Some("E\u{301}m".len())),
+            ("E\u{301}mile", "e", Some("E\u{301}".len())),
         ];
         for (name, run, expected) in cases {
             assert_eq!(typed_split(name, run), expected, "{name} {run}");

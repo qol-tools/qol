@@ -16,9 +16,9 @@ fn folders(names: &[&str]) -> Vec<PathBuf> {
 #[test]
 fn history_restores_cursor_and_scroll_on_back_and_forward() {
     let mut history = History::new(PathBuf::from("/home"));
-    history.remember(4, 120.0);
+    history.remember(4, None, 120.0);
     history.go(PathBuf::from("/home/git"));
-    history.remember(2, 36.0);
+    history.remember(2, None, 36.0);
 
     let back = history.back().unwrap().clone();
     assert_eq!(
@@ -26,6 +26,7 @@ fn history_restores_cursor_and_scroll_on_back_and_forward() {
         Spot {
             folder: PathBuf::from("/home"),
             cursor: 4,
+            entry: None,
             scroll: 120.0
         }
     );
@@ -35,6 +36,7 @@ fn history_restores_cursor_and_scroll_on_back_and_forward() {
         Spot {
             folder: PathBuf::from("/home/git"),
             cursor: 2,
+            entry: None,
             scroll: 36.0
         }
     );
@@ -59,7 +61,7 @@ fn going_somewhere_new_drops_the_forward_spots() {
 #[test]
 fn going_back_to_a_known_folder_recalls_its_cursor_and_scroll() {
     let mut history = History::new(PathBuf::from("/home"));
-    history.remember(7, 252.0);
+    history.remember(7, None, 252.0);
     history.go(PathBuf::from("/home/git"));
 
     let recalled = history.go(PathBuf::from("/home")).clone();
@@ -181,6 +183,20 @@ fn jump_goes_to_the_first_name_starting_with_the_run_ignoring_case() {
         let mut cursor = start_cursor;
         let cursors = type_run(&mut jump, typed, Instant::now(), &mut cursor);
         assert_eq!(cursors, expected, "typed: {typed}");
+    }
+}
+
+#[test]
+fn jump_matches_accented_names_by_their_plain_letters() {
+    let names = ["eagle", "\u{e9}clair", "E\u{301}mile", "empty"];
+    for (typed, expected) in [("ec", 1), ("\u{e9}c", 1), ("em", 2), ("emp", 3)] {
+        let mut jump = Jump::new();
+        let now = Instant::now();
+        let mut found = None;
+        for letter in typed.chars() {
+            found = jump.type_char(letter, now, &names, 0, |name| *name);
+        }
+        assert_eq!(found, Some(expected), "typed: {typed}");
     }
 }
 

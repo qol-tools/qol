@@ -9,7 +9,7 @@ pub struct Picks {
 
 #[derive(Debug, Clone)]
 struct Range {
-    anchor: usize,
+    anchor: PathBuf,
     base: HashSet<PathBuf>,
 }
 
@@ -57,13 +57,27 @@ impl Picks {
         self.picked.clear();
     }
 
+    pub fn retain(&mut self, keep: impl Fn(&Path) -> bool) {
+        self.picked.retain(|path| keep(path));
+        if let Some(range) = self.range.as_mut() {
+            range.base.retain(|path| keep(path));
+        }
+    }
+
     pub fn extend_range<T: AsRef<Path>>(&mut self, rows: &[T], from: usize, to: usize) {
+        let Some(start) = rows.get(from) else {
+            return;
+        };
         let range = self.range.get_or_insert_with(|| Range {
-            anchor: from,
+            anchor: start.as_ref().to_path_buf(),
             base: self.picked.clone(),
         });
-        let low = range.anchor.min(to);
-        let high = range.anchor.max(to);
+        let anchor = rows
+            .iter()
+            .position(|row| row.as_ref() == range.anchor)
+            .unwrap_or(from);
+        let low = anchor.min(to);
+        let high = anchor.max(to);
         let mut picked = range.base.clone();
         picked.extend(
             rows.iter()

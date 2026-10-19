@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub struct Spot {
     pub folder: PathBuf,
     pub cursor: usize,
+    pub entry: Option<PathBuf>,
     pub scroll: f32,
 }
 
@@ -12,6 +13,7 @@ impl Spot {
         Self {
             folder,
             cursor: 0,
+            entry: None,
             scroll: 0.0,
         }
     }
@@ -35,9 +37,10 @@ impl History {
         &self.spots[self.index]
     }
 
-    pub fn remember(&mut self, cursor: usize, scroll: f32) {
+    pub fn remember(&mut self, cursor: usize, entry: Option<PathBuf>, scroll: f32) {
         let spot = &mut self.spots[self.index];
         spot.cursor = cursor;
+        spot.entry = entry;
         spot.scroll = scroll;
     }
 

@@ -25,7 +25,10 @@ fn settle(browser: &mut Browser) -> Drained {
     while browser.reading() {
         let drained = browser.drain(Instant::now());
         settled.changed |= drained.changed;
-        settled.scroll = drained.scroll.or(settled.scroll);
+        if drained.scroll.is_some() {
+            settled.scroll = drained.scroll;
+            settled.cursor_shift = drained.cursor_shift;
+        }
         assert!(Instant::now() < deadline, "the read never finished");
         thread::sleep(Duration::from_millis(2));
     }
@@ -182,6 +185,103 @@ fn a_folder_recreated_while_shown_is_followed_again() {
     wait_until(&mut browser, "a file in the new folder", |browser| {
         browser.row_count() == 2
     });
+}
+
+#[test]
+fn a_folder_recreated_long_after_it_vanished_is_followed_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+
+    fs::remove_dir_all(&inner).unwrap();
+    wait_until(&mut browser, "the failure", |browser| {
+        matches!(browser.listing().state(), ListingState::Failed(_))
+    });
+    fs::create_dir(&inner).unwrap();
+    touch(&inner, "y.txt");
+    wait_until(&mut browser, "the new folder", |browser| {
+        names(browser) == ["y.txt"]
+    });
+
+    touch(&inner, "z.txt");
+    wait_until(&mut browser, "a file in the new folder", |browser| {
+        browser.row_count() == 2
+    });
+}
+
+#[test]
+fn picks_of_entries_that_vanish_are_dropped_and_picks_elsewhere_stay() {
+    let temp = abc_folder();
+    let inner = make_folder(temp.path(), "inner");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+    browser.toggle_pick();
+    browser.up(0.0);
+    settle(&mut browser);
+    browser.set_cursor(1);
+    browser.toggle_pick();
+    browser.set_cursor(2);
+    browser.toggle_pick();
+    assert_eq!(browser.note().count, "3 picked");
+
+    fs::remove_file(temp.path().join("a.txt")).unwrap();
+    wait_until(&mut browser, "the removal", |browser| {
+        browser.row_count() == 4
+    });
+    assert_eq!(picked(&browser), ["b.txt"]);
+    assert_eq!(browser.note().count, "2 picked");
+
+    fs::remove_file(inner.join("x.txt")).unwrap();
+    assert!(browser.go(inner.clone(), 0.0));
+    settle(&mut browser);
+    assert_eq!(browser.note().count, "1 picked");
+}
+
+#[test]
+fn a_shift_run_keeps_its_start_when_rows_appear_above_it() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    browser.extend_range(Step::Down, 1);
+    assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
+
+    touch(temp.path(), "0.txt");
+    wait_until(&mut browser, "the new file", |browser| {
+        browser.row_count() == 5
+    });
+    browser.extend_range(Step::Down, 1);
+    assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
+}
+
+#[test]
+fn coming_back_after_rows_above_the_cursor_vanished_lands_on_the_same_entry() {
+    let temp = abc_folder();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.set_cursor(3);
+    assert_eq!(browser.entry(3).unwrap().display, "c.txt");
+
+    browser.go(inner, 108.0);
+    settle(&mut browser);
+    fs::remove_file(temp.path().join("a.txt")).unwrap();
+    fs::remove_file(temp.path().join("b.txt")).unwrap();
+    browser.back(0.0);
+    let back = settle(&mut browser);
+    assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
+    assert_eq!(back.scroll, Some(108.0));
+    assert_eq!(back.cursor_shift, -2);
+}
+
+#[test]
+fn a_cursor_step_ends_the_typed_run() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    let now = Instant::now();
+    browser.jump('b', now);
+    assert_eq!(browser.jump_run(now), "b");
+    browser.move_cursor(Step::Down, 1);
+    assert_eq!(browser.jump_run(now), "");
 }
 
 #[test]

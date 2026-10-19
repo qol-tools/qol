@@ -2,6 +2,7 @@ mod path_field;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashSet;
 use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
@@ -67,6 +68,7 @@ pub struct Browser {
     root_gone: Arc<AtomicBool>,
     changed_at: Option<Instant>,
     watch: Option<Watch>,
+    watched: Option<PathBuf>,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
 }
@@ -93,6 +95,7 @@ impl Browser {
             root_gone: Arc::default(),
             changed_at: None,
             watch: None,
+            watched: None,
             wake,
             wakes: Some(wakes),
         };
@@ -154,6 +157,10 @@ impl Browser {
         self.path.is_some()
     }
 
+    pub fn arriving(&self) -> bool {
+        self.arriving.is_some()
+    }
+
     #[cfg(test)]
     pub fn reading(&self) -> bool {
         self.read.is_some() || self.path.as_ref().is_some_and(PathField::reading)
@@ -193,7 +200,10 @@ impl Browser {
             }
             self.refresh_rows();
             drained.changed = true;
-            drained.scroll = self.settle_arrival();
+            if let Some((scroll, cursor_shift)) = self.settle_arrival() {
+                drained.scroll = Some(scroll);
+                drained.cursor_shift = cursor_shift;
+            }
         }
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
@@ -264,6 +274,7 @@ impl Browser {
     }
 
     pub fn move_cursor(&mut self, step: Step, page: usize) -> bool {
+        self.jump.reset();
         self.set_cursor(self.stepped(step, page))
     }
 
@@ -271,6 +282,7 @@ impl Browser {
         if self.loading() || self.rows.is_empty() {
             return false;
         }
+        self.jump.reset();
         let to = self.stepped(step, page);
         let rows = self.listing.visible(self.show_hidden);
         self.picks.extend_range(&rows, self.cursor, to);
@@ -409,7 +421,8 @@ impl Browser {
 
     fn remember(&mut self, scroll: f32) {
         if self.arriving.is_none() {
-            self.history.remember(self.cursor, scroll);
+            let entry = self.entry(self.cursor).map(|entry| entry.path.clone());
+            self.history.remember(self.cursor, entry, scroll);
         }
     }
 
@@ -422,7 +435,7 @@ impl Browser {
         self.changed_at = None;
         self.changed.store(false, Ordering::Relaxed);
         self.root_gone.store(false, Ordering::Relaxed);
-        self.watch = self.watch_folder(&spot.folder);
+        self.watch_folder(&spot.folder);
         self.read = Some(listing::start(
             spot.folder.clone(),
             Pass::WithCounts,
@@ -439,20 +452,38 @@ impl Browser {
         self.arriving = Some(spot);
     }
 
-    fn settle_arrival(&mut self) -> Option<f32> {
+    fn settle_arrival(&mut self) -> Option<(f32, isize)> {
         if self.loading() {
             return None;
         }
         let spot = self.arriving.take()?;
         let landing = self.landing.take();
         if matches!(self.listing.state(), ListingState::Failed(_)) {
-            return Some(0.0);
+            return Some((0.0, 0));
         }
+        self.forget_vanished_picks();
         self.cursor = spot.cursor.min(self.rows.len().saturating_sub(1));
         if let Some(row) = landing.and_then(|child| self.row_of(&child)) {
             self.cursor = row;
+            return Some((spot.scroll, 0));
         }
-        Some(spot.scroll)
+        let Some(row) = spot.entry.and_then(|entry| self.row_of(&entry)) else {
+            return Some((spot.scroll, 0));
+        };
+        self.cursor = row;
+        Some((spot.scroll, row as isize - spot.cursor as isize))
+    }
+
+    fn forget_vanished_picks(&mut self) {
+        let folder = &self.history.current().folder;
+        let present: HashSet<&Path> = self
+            .listing
+            .entries()
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect();
+        self.picks
+            .retain(|path| path.parent() != Some(folder.as_path()) || present.contains(path));
     }
 
     fn refresh_when_due(&mut self, now: Instant) -> Option<Duration> {
@@ -504,33 +535,52 @@ impl Browser {
             self.cursor = row;
         }
         let failed = matches!(self.listing.state(), ListingState::Failed(_));
-        if failed || self.root_gone.swap(false, Ordering::Relaxed) {
-            let folder = self.folder().to_path_buf();
-            self.watch = self.watch_folder(&folder);
+        if !failed {
+            self.forget_vanished_picks();
+        }
+        let folder = self.folder().to_path_buf();
+        let elsewhere = self.watched.as_deref() != Some(folder.as_path());
+        if failed || elsewhere || self.root_gone.swap(false, Ordering::Relaxed) {
+            self.watch_folder(&folder);
         }
         true
     }
 
-    fn watch_folder(&self, folder: &Path) -> Option<Watch> {
+    fn watch_folder(&mut self, folder: &Path) {
+        self.watch = None;
+        self.watched = None;
+        for root in folder.ancestors() {
+            match self.watch_root(root) {
+                Ok(watch) => {
+                    self.watch = Some(watch);
+                    self.watched = Some(root.to_path_buf());
+                    return;
+                }
+                Err(error) if root == folder => {
+                    log::warn!(
+                        "{} cannot be watched, watching its nearest parent instead: {error}",
+                        folder.display()
+                    );
+                }
+                Err(_) => {}
+            }
+        }
+    }
+
+    fn watch_root(&self, root: &Path) -> Result<Watch, qol_watch::WatchError> {
         let changed = self.changed.clone();
         let root_gone = self.root_gone.clone();
         let wake = waker(&self.wake);
-        let root = folder.to_path_buf();
-        let roots = [WatchRoot::shallow(folder)];
-        match qol_watch::watch(&roots, move |notice| {
-            let root_hit = matches!(&notice, WatchNotice::Changed(paths) if paths.contains(&root));
+        let watched = root.to_path_buf();
+        qol_watch::watch(&[WatchRoot::shallow(root)], move |notice| {
+            let root_hit =
+                matches!(&notice, WatchNotice::Changed(paths) if paths.contains(&watched));
             if root_hit {
                 root_gone.store(true, Ordering::Relaxed);
             }
             changed.store(true, Ordering::Relaxed);
             wake();
-        }) {
-            Ok(watch) => Some(watch),
-            Err(error) => {
-                log::warn!("changes in {} will not show: {error}", folder.display());
-                None
-            }
-        }
+        })
     }
 
     fn refresh_rows(&mut self) {

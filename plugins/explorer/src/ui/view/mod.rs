@@ -2,6 +2,7 @@ mod band;
 mod list;
 mod rail;
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -40,6 +41,7 @@ pub struct ExplorerView {
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     body_height: f32,
+    waiting: VecDeque<(Action, Keystroke)>,
 }
 
 impl ExplorerView {
@@ -53,6 +55,7 @@ impl ExplorerView {
             rail_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             body_height: 0.0,
+            waiting: VecDeque::new(),
         };
         view.listen(cx);
         view
@@ -140,8 +143,9 @@ impl ExplorerView {
     fn drain(&mut self, cx: &mut Context<Self>) {
         let drained = self.browser.drain(Instant::now());
         if let Some(scroll) = drained.scroll {
-            self.set_scroll(scroll);
+            self.set_scroll((scroll + drained.cursor_shift as f32 * ROW).max(0.0));
             self.reveal_cursor();
+            self.replay(cx);
         } else if drained.changed {
             self.follow_rows(drained.cursor_shift);
         }
@@ -163,14 +167,32 @@ impl ExplorerView {
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let action = keys::action(&event.keystroke, self.browser.path_open());
-        if !matches!(action, Action::Range(_)) {
-            self.browser.end_range();
+        if keys::waits(action, self.browser.arriving(), !self.waiting.is_empty()) {
+            self.waiting.push_back((action, event.keystroke.clone()));
+            cx.stop_propagation();
+            return;
         }
-        if !self.apply(action, &event.keystroke, cx) {
+        if !self.dispatch(action, &event.keystroke, cx) {
             return;
         }
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn replay(&mut self, cx: &mut Context<Self>) {
+        while !self.browser.arriving() {
+            let Some((action, keystroke)) = self.waiting.pop_front() else {
+                return;
+            };
+            self.dispatch(action, &keystroke, cx);
+        }
+    }
+
+    fn dispatch(&mut self, action: Action, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
+        if !matches!(action, Action::Range(_)) {
+            self.browser.end_range();
+        }
+        self.apply(action, keystroke, cx)
     }
 
     fn on_modifiers(
