@@ -4,7 +4,7 @@ uid = "a7f48ac7-3cd5-4402-a1fe-d517fbce0fd6"
 name = "Alt Tab"
 icon = "alt-tab"
 description = "Switch between open windows with previews."
-version = "0.106.1"
+version = "0.106.2"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
