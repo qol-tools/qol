@@ -23,6 +23,7 @@ pub struct Ticket(u64);
 
 #[derive(Debug, Clone, Copy)]
 struct Sample {
+    started: Instant,
     at: Instant,
     outcome: Outcome,
 }
@@ -55,21 +56,26 @@ impl Tracker {
     }
 
     pub fn finish(&mut self, ticket: Ticket, outcome: Outcome, now: Instant) {
-        if let Some(started) = self.take(ticket) {
-            self.record(outcome, now.saturating_duration_since(started), now);
+        let Some(started) = self.take(ticket) else {
+            return;
+        };
+        if self.superseded(started) {
+            return;
         }
+        if outcome == Outcome::Answered {
+            let latency = now.saturating_duration_since(started);
+            let previous = self.smoothed.filter(|_| self.remembers_last(now));
+            self.smoothed = Some(previous.map_or(latency, |previous| (previous + latency) / 2));
+        }
+        self.last = Some(Sample {
+            started,
+            at: now,
+            outcome,
+        });
     }
 
     pub fn abandon(&mut self, ticket: Ticket) {
         self.take(ticket);
-    }
-
-    pub fn record(&mut self, outcome: Outcome, latency: Duration, now: Instant) {
-        if outcome == Outcome::Answered {
-            let previous = self.smoothed.filter(|_| self.remembers_last(now));
-            self.smoothed = Some(previous.map_or(latency, |previous| (previous + latency) / 2));
-        }
-        self.last = Some(Sample { at: now, outcome });
     }
 
     pub fn health(&self, now: Instant) -> ConnectionHealth {
@@ -84,7 +90,7 @@ impl Tracker {
     }
 
     pub fn next_change(&self, now: Instant) -> Option<Instant> {
-        let waiting = self.oldest_in_flight().into_iter().flat_map(|started| {
+        let waiting = self.waiting_since().into_iter().flat_map(|started| {
             [
                 started + self.thresholds.slow,
                 started + self.thresholds.bad,
@@ -101,8 +107,16 @@ impl Tracker {
         self.last.map(|sample| sample.at)
     }
 
-    pub fn is_waiting(&self) -> bool {
-        !self.in_flight.is_empty()
+    pub fn waiting_since(&self) -> Option<Instant> {
+        self.in_flight
+            .iter()
+            .map(|(_, started)| *started)
+            .filter(|started| !self.superseded(*started))
+            .min()
+    }
+
+    fn superseded(&self, started: Instant) -> bool {
+        self.last.is_some_and(|sample| started < sample.started)
     }
 
     fn take(&mut self, ticket: Ticket) -> Option<Instant> {
@@ -141,17 +155,13 @@ impl Tracker {
     }
 
     fn waiting(&self, now: Instant) -> Option<ConnectionHealth> {
-        let waited = now.saturating_duration_since(self.oldest_in_flight()?);
+        let waited = now.saturating_duration_since(self.waiting_since()?);
         let level = self.grade(waited);
         (level != Level::Good).then_some(ConnectionHealth {
             level,
             cause: Some(Cause::Waiting),
             latency_ms: None,
         })
-    }
-
-    fn oldest_in_flight(&self) -> Option<Instant> {
-        self.in_flight.iter().map(|(_, started)| *started).min()
     }
 
     fn grade(&self, elapsed: Duration) -> Level {

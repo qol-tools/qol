@@ -29,7 +29,7 @@ fn nothing_observed_is_unknown() {
     let (tracker, now) = tracker();
     assert_eq!(tracker.health(now), ConnectionHealth::default());
     assert_eq!(tracker.next_change(now), None);
-    assert!(!tracker.is_waiting());
+    assert_eq!(tracker.waiting_since(), None);
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn a_request_left_waiting_turns_slow_then_bad() {
     );
     let bad = tracker.health(start + ms(4000));
     assert_eq!((bad.level, bad.cause), (Level::Bad, Some(Cause::Waiting)));
-    assert!(tracker.is_waiting());
+    assert_eq!(tracker.waiting_since(), Some(start));
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn an_abandoned_request_leaves_no_sample() {
     let (mut tracker, start) = tracker();
     let ticket = tracker.begin(start);
     tracker.abandon(ticket);
-    assert!(!tracker.is_waiting());
+    assert_eq!(tracker.waiting_since(), None);
     assert_eq!(tracker.last_observed(), None);
     assert_eq!(
         tracker.health(start + ms(9000)),
@@ -191,12 +191,60 @@ fn health_is_forgotten_after_the_memory_window() {
 }
 
 #[test]
-fn a_recorded_probe_counts_like_a_finished_request() {
+fn a_newer_answer_clears_a_request_that_stalled() {
     let (mut tracker, start) = tracker();
-    tracker.record(Outcome::Answered, ms(2000), start);
-    assert_eq!(tracker.health(start).level, Level::Slow);
-    tracker.record(Outcome::Unreachable, ms(5000), start + ms(10));
-    assert_eq!(tracker.health(start + ms(10)).level, Level::Bad);
+    let stalled = tracker.begin(start);
+    assert_eq!(tracker.health(start + ms(4000)).level, Level::Bad);
+    let probe = tracker.begin(start + ms(4000));
+    tracker.finish(probe, Outcome::Answered, start + ms(4100));
+    assert_eq!(
+        tracker.health(start + ms(60_000)),
+        ConnectionHealth {
+            level: Level::Good,
+            cause: None,
+            latency_ms: Some(100),
+        }
+    );
+    assert_eq!(tracker.waiting_since(), None);
+    assert_eq!(
+        tracker.next_change(start + ms(4100)),
+        Some(start + ms(4100) + THRESHOLDS.memory)
+    );
+    tracker.finish(stalled, Outcome::Answered, start + ms(90_000));
+    assert_eq!(tracker.health(start + ms(90_000)).latency_ms, Some(100));
+}
+
+#[test]
+fn an_older_request_failing_late_does_not_override_a_newer_answer() {
+    let (mut tracker, start) = tracker();
+    let older = tracker.begin(start);
+    let end = answered_after(&mut tracker, start + ms(500), ms(200));
+    tracker.finish(older, Outcome::Unreachable, end + ms(5000));
+    assert_eq!(tracker.health(end + ms(5000)).level, Level::Good);
+}
+
+#[test]
+fn a_request_started_after_the_last_answer_still_counts_as_waiting() {
+    let (mut tracker, start) = tracker();
+    let end = answered_after(&mut tracker, start, ms(200));
+    let _newer = tracker.begin(end);
+    assert_eq!(tracker.waiting_since(), Some(end));
+    assert_eq!(tracker.health(end + ms(4000)).level, Level::Bad);
+}
+
+#[test]
+fn concurrent_requests_answer_with_the_newest_start() {
+    let (mut tracker, start) = tracker();
+    let first = tracker.begin(start);
+    let second = tracker.begin(start + ms(100));
+    tracker.finish(second, Outcome::Answered, start + ms(2100));
+    let health = tracker.health(start + ms(4500));
+    assert_eq!(
+        (health.level, health.cause),
+        (Level::Slow, Some(Cause::SlowAnswers))
+    );
+    tracker.finish(first, Outcome::Answered, start + ms(9000));
+    assert_eq!(tracker.health(start + ms(9000)).latency_ms, Some(2000));
 }
 
 #[test]

@@ -8,17 +8,14 @@ const UNSETTLED_PROBE: Duration = Duration::from_secs(10);
 
 pub(super) async fn run() {
     let mut published = ConnectionHealth::default();
+    let mut last_probe: Option<Instant> = None;
     loop {
         let now = Instant::now();
         let (health, next_change, probe_at) = {
             let tracker = super::tracker();
             let health = tracker.health(now);
-            let probe_at = next_probe(
-                now,
-                health.level,
-                tracker.last_observed(),
-                tracker.is_waiting(),
-            );
+            let latest = tracker.last_observed().max(last_probe);
+            let probe_at = next_probe(now, health.level, latest, tracker.waiting_since());
             (health, tracker.next_change(now), probe_at)
         };
         if !health.same_signal(&published) {
@@ -27,6 +24,7 @@ pub(super) async fn run() {
         }
         let probe_at = probe_at.filter(|_| super::interested(now));
         if probe_at.is_some_and(|at| at <= now) {
+            last_probe = Some(now);
             tokio::spawn(super::probe::run(super::Watch::begin()));
             continue;
         }
@@ -46,13 +44,13 @@ pub(super) async fn run() {
 pub(super) fn next_probe(
     now: Instant,
     level: Level,
-    last_observed: Option<Instant>,
-    waiting: bool,
+    latest: Option<Instant>,
+    waiting_since: Option<Instant>,
 ) -> Option<Instant> {
-    if waiting {
+    if waiting_since.is_some_and(|since| now < since + super::THRESHOLDS.bad) {
         return None;
     }
-    let Some(last) = last_observed else {
+    let Some(last) = latest else {
         return Some(now);
     };
     let every = match level {

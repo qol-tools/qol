@@ -32,8 +32,13 @@ or `settings_connection_spinner` inside settings pages.
 
 qol-tray owns the only `Tracker`. Every tray HTTP request goes through
 `SendObserved::send_observed`, which times the request until the server
-answers. While a page or a subscriber is watching, the tray also opens a TCP
-connection to `api.github.com:443` when nothing else has measured recently.
+answers. While a page or a subscriber is watching, the tray also requests
+`https://api.github.com/rate_limit`, which does not count against the GitHub
+rate limit and goes through the same proxy settings as every other request. It
+probes when nothing else has measured recently, or when a request has waited
+past the bad threshold. An answer to a request started later supersedes an
+older request still in flight, so one stalled request cannot hold the signal
+at `bad`.
 
 | Level | Meaning |
 |---|---|
