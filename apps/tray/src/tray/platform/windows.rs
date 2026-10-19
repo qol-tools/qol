@@ -21,6 +21,7 @@ static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static PUMP_THREAD: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) const ICON_SIZE: u32 = 32;
+pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 
 pub enum PlatformTray {
     Windows { _tray_icon: TrayIcon },
