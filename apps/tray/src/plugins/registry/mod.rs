@@ -10,20 +10,6 @@ pub use qol_dev_build::registry::{
 
 use std::path::{Path, PathBuf};
 
-pub fn lookup_active_path(config_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
-    let registry = load_registry(config_dir).ok()?;
-    registry
-        .entries
-        .into_iter()
-        .find(|e| e.id == plugin_id)
-        .map(|e| e.active.path)
-}
-
-pub fn current_active_path(plugin_id: &str) -> Option<PathBuf> {
-    let config_dir = crate::paths::shared_config_dir().ok()?;
-    lookup_active_path(&config_dir, plugin_id)
-}
-
 pub fn record_release_install(
     config_dir: &Path,
     plugin_id: &str,
