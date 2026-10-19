@@ -181,6 +181,50 @@ fn a_folder_that_vanishes_while_shown_reports_it() {
     assert_eq!(browser.row_count(), 0);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_folder_shown_through_a_link_reports_the_link_removed() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let real = make_folder(temp.path(), "real");
+    touch(&real, "x.txt");
+    let link = temp.path().join("link");
+    symlink(&real, &link).unwrap();
+    let mut browser = opened(&link);
+
+    fs::remove_file(&link).unwrap();
+    wait_until(&mut browser, "the failure", |browser| {
+        matches!(browser.listing().state(), ListingState::Failed(_))
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_shown_through_a_link_follows_the_link_to_a_new_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let real = make_folder(temp.path(), "real");
+    touch(&real, "x.txt");
+    let other = make_folder(temp.path(), "other");
+    touch(&other, "y.txt");
+    let link = temp.path().join("link");
+    symlink(&real, &link).unwrap();
+    let mut browser = opened(&link);
+
+    fs::remove_file(&link).unwrap();
+    symlink(&other, &link).unwrap();
+    wait_until(&mut browser, "the new target", |browser| {
+        names(browser) == ["y.txt"]
+    });
+
+    touch(&other, "z.txt");
+    wait_until(&mut browser, "a file in the new target", |browser| {
+        browser.row_count() == 2
+    });
+}
+
 #[test]
 fn a_folder_recreated_while_shown_is_followed_again() {
     let temp = tempfile::tempdir().unwrap();
