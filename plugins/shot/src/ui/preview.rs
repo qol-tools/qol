@@ -14,7 +14,9 @@ use gpui::*;
 
 use qol_gpui::format::format_bytes;
 use qol_gpui::ghost::{ghost_window_title, show_ghost_window_topmost, sync_window_layout};
-use qol_gpui::kit::{action_row_width, kit, row_circle_state, wrap_index, ActionCircleSize};
+use qol_gpui::kit::{
+    action_row_width, kit, row_circle_state, wrap_index, ActionCircleGround, ActionCircleSize,
+};
 use qol_gpui::monitor::{ActiveMonitor, CursorAnchorError, MonitorTracker};
 use qol_gpui::popup_window::{hide_invisible, reason_scope};
 use qol_gpui::theme::{runtime_theme, ACTION_CIRCLE_GAP, RADIUS_THUMB};
@@ -1512,7 +1514,7 @@ impl Render for PreviewView {
             let selected = index == self.selected;
             let state = row_circle_state(true, selected);
             root = root.child(
-                kit.action_circle(ActionCircleSize::Full, state)
+                kit.action_circle(ActionCircleSize::Full, state, ActionCircleGround::Picture)
                     .id(("shot-action", index))
                     .absolute()
                     .left(px(left))

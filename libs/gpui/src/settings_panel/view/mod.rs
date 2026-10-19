@@ -319,7 +319,7 @@ pub(super) struct SettingsPanelState {
 }
 
 enum ActiveControl {
-    Edit(TextField),
+    Edit(TextField, bool),
     Wheel(WheelControl),
 }
 
@@ -794,6 +794,7 @@ impl SettingsPanelView {
     }
 
     fn pop_card(&mut self, cx: &mut Context<Self>) {
+        self.drop_slider_press();
         if self.closing {
             self.closing = false;
             self.finish_pop(cx);
@@ -820,6 +821,7 @@ impl SettingsPanelView {
     }
 
     fn finish_pop(&mut self, cx: &mut Context<Self>) {
+        self.drop_slider_press();
         if self.stack.len() > 1 && self.level().live_card {
             self.sync_live_card_to_root();
         }
@@ -887,10 +889,10 @@ impl SettingsPanelView {
         let Some(first) = self.section_visible_rows(target).into_iter().next() else {
             return;
         };
+        self.drop_edit();
         self.level_mut().active_section = Some(target);
         self.level_mut().selected = first;
         self.sync_scroll();
-        self.level_mut().active_control = None;
     }
 
     pub(super) fn retarget_focus(
@@ -989,11 +991,12 @@ impl SettingsPanelView {
     }
 
     fn forget_last_visit(&mut self) {
+        self.drop_slider_press();
         self.stack.truncate(1);
         self.card_marks.clear();
         self.filter.clear();
         self.filter_open = false;
-        self.level_mut().active_control = None;
+        self.drop_edit();
     }
 
     fn rail_source_level(&self) -> bool {
@@ -1058,7 +1061,8 @@ impl SettingsPanelView {
             .unwrap_or_else(SettingsRuntime::empty);
         self.runtime_queries =
             runtime_query_names(self.level().rows.iter().filter(|row| row.source == next));
-        self.level_mut().active_control = None;
+        self.drop_slider_press();
+        self.drop_edit();
         let selected_section = (0..self.level().sections.len())
             .find(|index| {
                 self.level().sections[*index].source == next
@@ -1112,6 +1116,7 @@ impl SettingsPanelView {
     }
 
     fn descend_source_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_slider_press();
         self.materialize_source(cx);
         self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
         self.resume_runtime_poll(cx);
@@ -1127,12 +1132,39 @@ impl SettingsPanelView {
             .state_changed(changed, std::time::Instant::now());
     }
 
+    fn press_body(&mut self, cx: &mut Context<Self>) {
+        if self.closing {
+            self.closing = false;
+            self.finish_pop(cx);
+        }
+        self.take_pointer_keys();
+        cx.notify();
+    }
+
+    fn take_pointer_keys(&mut self) {
+        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
+        let (focus, filter_open) = pointer_keys(self.filter_open, editing);
+        if self.focus_level() != focus {
+            self.set_source_menu(focus == PanelFocus::Sources);
+        }
+        if self.filter_open != filter_open {
+            self.filter_open = filter_open;
+            self.resync_scroll();
+        }
+    }
+
+    fn drop_slider_press(&mut self) {
+        self.slider_press = None;
+        self.slider_drag = None;
+    }
+
     fn on_rail_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
         match key {
             "up" => self.step_selected_source(-1, cx),
             "down" => self.step_selected_source(1, cx),
             "enter" | "return" => self.descend_source_menu(window, cx),
             "escape" => {
+                self.drop_slider_press();
                 self.pause_runtime_poll();
                 self.dismisser.dismiss(cx);
                 return;
@@ -1645,7 +1677,7 @@ impl SettingsPanelView {
             }
         }
         if !event.keystroke.modifiers.modified() && !self.filter_open {
-            let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
+            let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
             if !editing && self.level().active_control.is_none() {
                 if key == "/" || key_char == Some("/") {
                     self.open_filter(None);
@@ -1698,7 +1730,7 @@ impl SettingsPanelView {
         {
             return;
         }
-        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(_)));
+        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
         if self.filter_open && self.handle_panel_filter_key(key, key_char) {
             cx.notify();
             return;
@@ -1737,8 +1769,10 @@ impl SettingsPanelView {
             Intent::Tab => return,
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
-                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
-                    edit.backspace(Span::Char);
+                if let Some(ActiveControl::Edit(edit, capped)) =
+                    self.level_mut().active_control.as_mut()
+                {
+                    erase_typed(edit, capped);
                     self.stream_edit();
                 }
             }
@@ -1748,22 +1782,17 @@ impl SettingsPanelView {
                     .rows
                     .get(self.level().selected)
                     .and_then(|row| number_bounds(&row.control));
-                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+                if let Some(ActiveControl::Edit(edit, capped)) =
+                    self.level_mut().active_control.as_mut()
+                {
                     match bounds {
-                        Some(bounds) => type_number(edit, &ch, &bounds),
+                        Some(bounds) => type_number(edit, capped, &ch, &bounds),
                         None => edit.insert_str(&ch),
                     }
                     self.stream_edit();
                 }
             }
-            Intent::CancelEdit => {
-                if row_streams(&self.level().rows, self.level().selected) {
-                    if let Some(stream) = self.stream_for(self.level().selected) {
-                        stream.close();
-                    }
-                }
-                self.level_mut().active_control = None;
-            }
+            Intent::CancelEdit => self.drop_edit(),
             Intent::Close => {
                 match escape_step(self.stack.len() - 1, self.filter_open, self.can_ascend()) {
                     EscapeStep::CloseFilter => {
@@ -1777,6 +1806,7 @@ impl SettingsPanelView {
                         }
                     }
                     EscapeStep::Dismiss => {
+                        self.drop_slider_press();
                         self.pause_runtime_poll();
                         self.dismisser.dismiss(cx);
                         return;
@@ -1973,6 +2003,7 @@ impl SettingsPanelView {
         }
         self.level_mut().selected = index;
         self.activate(window, cx);
+        self.take_pointer_keys();
         cx.notify();
     }
 
@@ -2169,7 +2200,7 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
-        if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+        if let Some(ActiveControl::Edit(edit, _)) = self.level_mut().active_control.as_mut() {
             edit.select_all();
             return;
         }
@@ -2203,7 +2234,7 @@ impl SettingsPanelView {
         };
         let mut edit = TextField::with_text(edit);
         edit.select_all();
-        self.level_mut().active_control = Some(ActiveControl::Edit(edit));
+        self.level_mut().active_control = Some(ActiveControl::Edit(edit, false));
         if row_streams(&self.level().rows, self.level().selected)
             && !stream_gated(&self.level().rows)
         {
@@ -2211,6 +2242,18 @@ impl SettingsPanelView {
                 stream.open();
             }
         }
+    }
+
+    fn drop_edit(&mut self) {
+        let selected = self.level().selected;
+        if matches!(self.level().active_control, Some(ActiveControl::Edit(..)))
+            && row_streams(&self.level().rows, selected)
+        {
+            if let Some(stream) = self.stream_for(selected) {
+                stream.close();
+            }
+        }
+        self.level_mut().active_control = None;
     }
 
     fn step_number_edit(&mut self, direction: f64) -> bool {
@@ -2229,17 +2272,19 @@ impl SettingsPanelView {
             return false;
         };
         let (value, min, max, step) = (*value, *min, *max, *step);
-        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
+        let Some(ActiveControl::Edit(edit, capped)) = self.level_mut().active_control.as_mut()
+        else {
             return false;
         };
         let stepped = stepped_number(edit.text(), value, min, max, step.unwrap_or(1.0), direction);
         edit.set_text(stepped);
+        *capped = false;
         self.stream_edit();
         true
     }
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
+        let Some(ActiveControl::Edit(edit, _)) = self.level_mut().active_control.take() else {
             return;
         };
         let edit = edit.into_text();
@@ -2302,6 +2347,7 @@ impl SettingsPanelView {
     }
 
     fn push_card(&mut self, destination: SettingsDestination, mut child: Level) {
+        self.drop_slider_press();
         child.header = LevelHeader::Card(destination);
         let mark = self
             .level()
@@ -2393,7 +2439,7 @@ impl SettingsPanelView {
     }
 
     fn stream_edit(&mut self) {
-        let Some(ActiveControl::Edit(edit)) = self.level().active_control.as_ref() else {
+        let Some(ActiveControl::Edit(edit, _)) = self.level().active_control.as_ref() else {
             return;
         };
         let Some(RowControl::Number { min, max, step, .. }) = self
@@ -2496,13 +2542,12 @@ impl SettingsPanelView {
         }))
     }
 
-    fn begin_number_slider_drag(&mut self, row: usize) {
-        if matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
-            let editing = self.level().selected;
-            if let Some(stream) = self.stream_for(editing) {
-                stream.close();
+    fn begin_number_slider_drag(&mut self, row: usize, cx: &mut Context<Self>) {
+        if matches!(self.level().active_control, Some(ActiveControl::Edit(..))) {
+            match pending_edit_on_scrub(row, self.level().selected) {
+                PendingEdit::Commit => self.commit_edit(cx),
+                PendingEdit::Drop => self.drop_edit(),
             }
-            self.level_mut().active_control = None;
         }
         if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
             if let Some(stream) = self.stream_for(row) {
@@ -2525,22 +2570,29 @@ impl SettingsPanelView {
             return;
         }
         if press != SliderPress::Scrubbing {
-            self.begin_number_slider_drag(row);
+            self.begin_number_slider_drag(row, cx);
         }
         self.set_number_slider(row, fraction, cx);
     }
 
     fn release_number_field(&mut self, row: usize, cx: &mut Context<Self>) {
-        match self.slider_press.take() {
-            Some(SliderPress::Scrubbing) => self.finish_number_slider(row, cx),
-            Some(SliderPress::Held(_)) | None => {
-                if row != self.level().selected {
+        let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
+        match number_release(
+            self.slider_press.take(),
+            row,
+            self.level().selected,
+            editing,
+        ) {
+            NumberRelease::Finish => self.finish_number_slider(row, cx),
+            NumberRelease::Edit { commit, begin } => {
+                if commit {
                     self.commit_edit(cx);
                 }
                 self.level_mut().selected = row;
-                if !matches!(self.level().active_control, Some(ActiveControl::Edit(_))) {
+                if begin {
                     self.begin_edit();
                 }
+                self.take_pointer_keys();
             }
         }
     }
@@ -2814,14 +2866,14 @@ impl SettingsPanelView {
         index == self.level().selected
             && matches!(
                 &self.level().active_control,
-                Some(ActiveControl::Edit(edit)) if edit.selected_range().is_some()
+                Some(ActiveControl::Edit(edit, _)) if edit.selected_range().is_some()
             )
     }
 
     fn display_value(&self, index: usize) -> String {
         if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => return edit_display(edit),
+                Some(ActiveControl::Edit(edit, _)) => return edit_display(edit),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
                 None => {}
             }
@@ -2900,7 +2952,7 @@ impl SettingsPanelView {
 
     fn value_tone(&self, index: usize) -> SettingsValueTone {
         if index == self.level().selected
-            && matches!(self.level().active_control, Some(ActiveControl::Edit(_)))
+            && matches!(self.level().active_control, Some(ActiveControl::Edit(..)))
         {
             return SettingsValueTone::Normal;
         }
@@ -3160,31 +3212,31 @@ impl SettingsPanelView {
             step,
         } = number;
         let style = SliderStyle::from_variant(self.level().rows[index].variant.as_deref());
-        let edit = match &self.level().active_control {
-            Some(ActiveControl::Edit(edit)) if index == self.level().selected => Some(edit.text()),
-            _ => None,
+        let (edit, capped) = match &self.level().active_control {
+            Some(ActiveControl::Edit(edit, capped)) if index == self.level().selected => {
+                (Some(edit.text()), *capped)
+            }
+            _ => (None, false),
         };
         let track = style.map(|style| {
             let fraction = slider_fraction(number_preview(edit, value, min, max, step), min, max);
             (fraction, style)
         });
         let id = self.level().rows[index].id.clone();
-        let dragging = self.slider_drag.as_ref() == Some(&(index, id.clone()))
-            && !matches!(self.slider_press, Some(SliderPress::Held(_)));
-        let cue = NumberCue {
-            level: match &self.level().rows[index].control {
+        let cue = number_cue(
+            style,
+            edit.map(|edit| (edit, capped)),
+            self.slider_drag.as_ref() == Some(&(index, id.clone())),
+            self.slider_press,
+            match &self.level().rows[index].control {
                 RowControl::Number {
                     level: Some(level), ..
                 } => level.value,
                 _ => 0.0,
             },
-            editing: style.is_some() && edit.is_some(),
-            dragging,
-            limit: match (style, edit) {
-                (Some(SliderStyle::Compact), Some(edit)) => number_limit(edit, min, max),
-                _ => None,
-            },
-        };
+            min,
+            max,
+        );
         let shown = match (style, edit) {
             (Some(_), Some(edit)) => edit.to_string(),
             _ => self.display_value(index),
@@ -3228,7 +3280,7 @@ impl SettingsPanelView {
                  row: usize,
                  fraction: f32,
                  cx: &mut Context<SettingsPanelView>| {
-                    panel.begin_number_slider_drag(row);
+                    panel.begin_number_slider_drag(row, cx);
                     panel.set_number_slider(row, fraction, cx);
                 },
                 |panel: &mut SettingsPanelView,
@@ -3278,7 +3330,7 @@ impl SettingsPanelView {
         };
         let text = if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit)) => edit.text(),
+                Some(ActiveControl::Edit(edit, _)) => edit.text(),
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
                 None => value,
             }
@@ -3910,18 +3962,7 @@ impl SettingsPanelView {
         custom_view: Option<AnyView>,
     ) -> Div {
         let mut depth = self.stack.len() - 1;
-        let mut card = self
-            .render_card(self.stack.len() - 1, items, custom_view)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    if this.rail_has_key_focus() {
-                        this.set_source_menu(false);
-                        this.reconcile_focus(window, cx);
-                        cx.notify();
-                    }
-                }),
-            );
+        let mut card = self.render_card(self.stack.len() - 1, items, custom_view);
         let drawer = revealed.map(|items| {
             let slide = deck::exit(self.deck_transition.step, depth, width);
             let leaving = std::mem::replace(
@@ -3931,6 +3972,12 @@ impl SettingsPanelView {
             depth -= 1;
             (leaving, slide)
         });
+        let card =
+            card.capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if event.button == MouseButton::Left {
+                    this.press_body(cx);
+                }
+            }));
         let base = div().flex_1().min_h(px(0.)).flex().flex_row().items_start();
         let settled = self.deck_transition.snapped
             || !transition_in_flight(self.deck_transition.started, std::time::Instant::now());
@@ -4448,7 +4495,7 @@ fn number_bounds(control: &RowControl) -> Option<NumberConstraints> {
     }
 }
 
-fn type_number(edit: &mut TextField, typed: &str, bounds: &NumberConstraints) {
+fn type_number(edit: &mut TextField, capped: &mut bool, typed: &str, bounds: &NumberConstraints) {
     let signed = bounds.lowest() < 0.0;
     if !typed
         .chars()
@@ -4457,14 +4504,19 @@ fn type_number(edit: &mut TextField, typed: &str, bounds: &NumberConstraints) {
         return;
     }
     edit.insert_str(typed);
-    if edit
+    *capped = edit
         .text()
         .trim()
         .parse::<f64>()
-        .is_ok_and(|value| value > bounds.highest())
-    {
+        .is_ok_and(|value| value > bounds.highest() && value.is_sign_positive());
+    if *capped {
         edit.set_text(format_number(bounds.highest()));
     }
+}
+
+fn erase_typed(edit: &mut TextField, capped: &mut bool) {
+    edit.backspace(Span::Char);
+    *capped = false;
 }
 
 fn edit_display(edit: &TextField) -> String {
@@ -4519,21 +4571,81 @@ fn stepped_number(
     format_number(next)
 }
 
-fn number_limit(edit: &str, min: Option<f64>, max: Option<f64>) -> Option<String> {
-    let typed = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
-    if let Some(max) = max.filter(|max| typed > *max) {
+fn number_limit(edit: &str, capped: bool, min: Option<f64>, max: Option<f64>) -> Option<String> {
+    if let Some(max) = max.filter(|_| capped) {
         return Some(format!("max {}", format_number(max)));
     }
+    let typed = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
     if let Some(min) = min.filter(|min| typed < *min) {
         return Some(format!("min {}", format_number(min)));
     }
     None
 }
 
+fn number_cue(
+    style: Option<SliderStyle>,
+    edit: Option<(&str, bool)>,
+    on_drag: bool,
+    press: Option<SliderPress>,
+    level: f32,
+    min: Option<f64>,
+    max: Option<f64>,
+) -> NumberCue {
+    NumberCue {
+        level,
+        editing: style.is_some() && edit.is_some(),
+        dragging: on_drag && !matches!(press, Some(SliderPress::Held(_))),
+        limit: match (style, edit) {
+            (Some(SliderStyle::Compact), Some((edit, capped))) => {
+                number_limit(edit, capped, min, max)
+            }
+            _ => None,
+        },
+    }
+}
+
+fn pointer_keys(filter_open: bool, editing: bool) -> (PanelFocus, bool) {
+    (PanelFocus::Body, filter_open && !editing)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SliderPress {
     Held(f32),
     Scrubbing,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NumberRelease {
+    Finish,
+    Edit { commit: bool, begin: bool },
+}
+
+fn number_release(
+    press: Option<SliderPress>,
+    row: usize,
+    selected: usize,
+    editing: bool,
+) -> NumberRelease {
+    match press {
+        Some(SliderPress::Scrubbing) => NumberRelease::Finish,
+        Some(SliderPress::Held(_)) | None => NumberRelease::Edit {
+            commit: row != selected,
+            begin: row != selected || !editing,
+        },
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PendingEdit {
+    Commit,
+    Drop,
+}
+
+fn pending_edit_on_scrub(row: usize, selected: usize) -> PendingEdit {
+    match row == selected {
+        true => PendingEdit::Drop,
+        false => PendingEdit::Commit,
+    }
 }
 
 fn pressed_slider(press: SliderPress, fraction: f32, width: f32) -> SliderPress {
@@ -5521,17 +5633,18 @@ mod tests {
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
         clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
-        edit_display, escape_step, focus_level, format_number, header_is_redundant,
+        edit_display, erase_typed, escape_step, focus_level, format_number, header_is_redundant,
         horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
-        live_card_sync_back, live_number_dispatch_plan, number_finish_plan, number_limit,
-        number_preview, number_unit, parsed_color, parsed_number, pop_level, pressed_slider,
-        push_level, query_is_due, rail_group_breaks, release_slider_dispatch, row_body_height,
-        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
-        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
-        transition_policy, type_number, widest_number, AppliedQueryPayloads, EscapeStep,
-        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan, NumberSpec,
-        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, SliderPress,
-        SliderStyle, TransitionAction, TransitionTracker, SCRUB_SLOP,
+        live_card_sync_back, live_number_dispatch_plan, number_cue, number_finish_plan,
+        number_limit, number_preview, number_release, number_unit, parsed_color, parsed_number,
+        pending_edit_on_scrub, pointer_keys, pop_level, pressed_slider, push_level, query_is_due,
+        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
+        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
+        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, type_number,
+        widest_number, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        LiveNumberDispatch, NumberCue, NumberFinishPlan, NumberRelease, NumberSpec,
+        ObjectArrayState, PendingEdit, Row, RowControl, RowSection, SettingsDestination,
+        SliderPress, SliderStyle, TransitionAction, TransitionTracker, SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -6636,23 +6749,166 @@ active_value_from = "active"
     }
 
     #[test]
-    fn a_typed_value_past_a_limit_names_the_limit_it_clamps_to() {
+    fn a_typed_value_capped_at_the_max_names_the_max_until_the_text_changes() {
+        let bounds = NumberConstraints {
+            min: Some(0.0),
+            max: Some(90.0),
+            step: None,
+        };
+        let mut edit = TextField::with_text("45");
+        edit.select_all();
+        let mut capped = false;
+        for typed in ["9", "0", "0"] {
+            type_number(&mut edit, &mut capped, typed, &bounds);
+        }
+        assert_eq!(edit.text(), "90");
+        assert_eq!(
+            number_limit(edit.text(), capped, bounds.min, bounds.max).as_deref(),
+            Some("max 90")
+        );
+        type_number(&mut edit, &mut capped, "x", &bounds);
+        assert_eq!(
+            number_limit(edit.text(), capped, bounds.min, bounds.max).as_deref(),
+            Some("max 90")
+        );
+        erase_typed(&mut edit, &mut capped);
+        assert_eq!(edit.text(), "9");
+        assert_eq!(
+            number_limit(edit.text(), capped, bounds.min, bounds.max),
+            None
+        );
+    }
+
+    #[test]
+    fn a_typed_value_under_the_min_names_the_min() {
         let cases = [
-            ("900", Some(0.0), Some(128.0), Some("max 128")),
             ("-5", Some(0.0), Some(128.0), Some("min 0")),
             (" 0.5 ", Some(1.0), None, Some("min 1")),
             ("128", Some(0.0), Some(128.0), None),
             ("60", Some(0.0), Some(128.0), None),
+            ("900", Some(0.0), Some(128.0), None),
             ("900", None, None, None),
             ("abc", Some(0.0), Some(128.0), None),
         ];
         for (edit, min, max, expected) in cases {
-            assert_eq!(number_limit(edit, min, max).as_deref(), expected, "{edit}");
+            assert_eq!(
+                number_limit(edit, false, min, max).as_deref(),
+                expected,
+                "{edit}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_number_cue_follows_the_edit_the_cap_and_the_drag() {
+        let held = Some(SliderPress::Held(0.5));
+        let scrub = Some(SliderPress::Scrubbing);
+        let compact = Some(SliderStyle::Compact);
+        let wide = Some(SliderStyle::Wide);
+        let cue = |editing, dragging, limit: Option<&str>| NumberCue {
+            level: 0.0,
+            editing,
+            dragging,
+            limit: limit.map(str::to_string),
+        };
+        let cases = [
+            (
+                compact,
+                Some(("90", true)),
+                false,
+                None,
+                cue(true, false, Some("max 90")),
+            ),
+            (
+                compact,
+                Some(("90", false)),
+                false,
+                None,
+                cue(true, false, None),
+            ),
+            (
+                compact,
+                Some(("5", false)),
+                false,
+                None,
+                cue(true, false, Some("min 10")),
+            ),
+            (
+                wide,
+                Some(("90", true)),
+                false,
+                None,
+                cue(true, false, None),
+            ),
+            (
+                None,
+                Some(("90", true)),
+                false,
+                None,
+                cue(false, false, None),
+            ),
+            (compact, None, true, held, cue(false, false, None)),
+            (compact, None, true, scrub, cue(false, true, None)),
+            (wide, None, true, None, cue(false, true, None)),
+            (wide, None, false, None, cue(false, false, None)),
+        ];
+        for (style, edit, on_drag, press, expected) in cases {
+            assert_eq!(
+                number_cue(style, edit, on_drag, press, 0.0, Some(10.0), Some(90.0)),
+                expected,
+                "{style:?} {edit:?} on_drag={on_drag} {press:?}"
+            );
         }
         assert_eq!(
-            parsed_number("900", Some(0.0), Some(128.0), None),
-            Some(128.0)
+            number_cue(Some(SliderStyle::Level), None, false, None, 0.4, None, None).level,
+            0.4
         );
+    }
+
+    #[test]
+    fn a_release_finishes_a_scrub_and_starts_an_edit_after_a_press() {
+        let held = Some(SliderPress::Held(0.5));
+        let scrub = Some(SliderPress::Scrubbing);
+        let edit = |commit, begin| NumberRelease::Edit { commit, begin };
+        let cases = [
+            (scrub, 2, 2, false, NumberRelease::Finish),
+            (scrub, 2, 1, true, NumberRelease::Finish),
+            (held, 2, 2, false, edit(false, true)),
+            (held, 2, 2, true, edit(false, false)),
+            (held, 2, 1, true, edit(true, true)),
+            (None, 2, 2, false, edit(false, true)),
+        ];
+        for (press, row, selected, editing, expected) in cases {
+            assert_eq!(
+                number_release(press, row, selected, editing),
+                expected,
+                "{press:?} row={row} selected={selected} editing={editing}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scrub_commits_another_rows_edit_and_drops_its_own() {
+        assert_eq!(pending_edit_on_scrub(2, 1), PendingEdit::Commit);
+        assert_eq!(pending_edit_on_scrub(2, 2), PendingEdit::Drop);
+    }
+
+    #[test]
+    fn a_pointer_takes_the_keys_and_an_edit_it_starts_closes_the_search() {
+        use super::PanelFocus::Body;
+        let cases = [
+            (false, false, (Body, false)),
+            (true, false, (Body, true)),
+            (false, true, (Body, false)),
+            (true, true, (Body, false)),
+        ];
+        for (filter_open, editing, expected) in cases {
+            assert_eq!(
+                pointer_keys(filter_open, editing),
+                expected,
+                "filter_open={filter_open} editing={editing}"
+            );
+        }
     }
 
     #[test]
@@ -6687,6 +6943,11 @@ active_value_from = "active"
             max: Some(50.0),
             step: None,
         };
+        let below = NumberConstraints {
+            min: Some(-100.0),
+            max: Some(-10.0),
+            step: None,
+        };
         let cases = [
             ("", &volume, "45", "45"),
             ("45", &volume, "0", "100"),
@@ -6698,10 +6959,13 @@ active_value_from = "active"
             ("4", &offset, "9", "49"),
             ("5", &offset, "1", "50"),
             ("2", &volume, ".", "2."),
+            ("-", &below, "5", "-5"),
+            ("-5", &below, "0", "-50"),
+            ("", &below, "5", "-10"),
         ];
         for (start, bounds, typed, expected) in cases {
             let mut edit = TextField::with_text(start);
-            type_number(&mut edit, typed, bounds);
+            type_number(&mut edit, &mut false, typed, bounds);
             assert_eq!(edit.text(), expected, "{start:?} + {typed:?}");
         }
     }
@@ -6716,13 +6980,13 @@ active_value_from = "active"
         let mut edit = TextField::with_text("65");
         edit.select_all();
         assert_eq!(edit_display(&edit), "65");
-        type_number(&mut edit, "3", &volume);
+        type_number(&mut edit, &mut false, "3", &volume);
         assert_eq!(edit.text(), "3");
         assert_eq!(edit_display(&edit), "3_");
 
         let mut edit = TextField::with_text("65");
         edit.select_all();
-        type_number(&mut edit, "x", &volume);
+        type_number(&mut edit, &mut false, "x", &volume);
         assert_eq!(edit.text(), "65");
         assert!(edit.selected_range().is_some());
 

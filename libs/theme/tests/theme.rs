@@ -2417,6 +2417,20 @@ fn the_depth_ladders_hold_their_approved_values() {
     assert_eq!(percents, [5, 9, 14, 16, 24, 40, 70]);
     assert_eq!(qol_theme::OPACITY_DISABLED, 0.4);
     assert_eq!(qol_theme::OPACITY_REST, 0.6);
+    assert_eq!(qol_theme::OPACITY_FILL, 0.3);
+    assert_eq!(qol_theme::OPACITY_FILL_HELD, 0.45);
+    assert_eq!(qol_theme::LEVEL_LIT_MILLI, 550);
+    assert_eq!(qol_theme::SHADE_WELL, 0x0000_0017);
+    assert_eq!(qol_theme::ACTION_CIRCLE_HOVER_HALO, 6.0);
+    for (theme, system) in [
+        (ThemeMode::Light, LIGHT_SYSTEM),
+        (ThemeMode::Dark, DARK_SYSTEM),
+    ] {
+        let grounds = Grounds::from_theme(theme, system);
+        for ground in [grounds.pane, grounds.band, grounds.band_hover] {
+            assert_eq!(ground.well_lift, css_rgba_milli(ground.ink, 130));
+        }
+    }
     assert_eq!(qol_theme::LINE, 1.0);
     assert_eq!(qol_theme::FOCUS_RING_EDGE, 1.5);
     assert_eq!(qol_theme::STATUS_DOT, 7.0);
@@ -2428,6 +2442,125 @@ fn the_depth_ladders_hold_their_approved_values() {
     };
     assert_eq!(layers(qol_theme::SHADOW_FLOAT), [(1, 2, 5), (8, 20, 9)]);
     assert_eq!(layers(qol_theme::SHADOW_RAISED), [(1, 2, 9), (6, 16, 9)]);
+}
+
+const LEVEL_LIT_FLOOR: f64 = 3.0;
+
+fn composite(bg: u32, wash: qol_theme::CssRgba) -> u32 {
+    let alpha = u32::from(wash.alpha_milli);
+    let channel = |shift: u32| {
+        let from = (bg >> shift) & 0xff;
+        let to = (wash.rgb >> shift) & 0xff;
+        ((from * (1000 - alpha) + to * alpha + 500) / 1000) << shift
+    };
+    channel(16) | channel(8) | channel(0)
+}
+
+#[test]
+fn every_lit_level_segment_clears_the_unlit_well_on_every_ground() {
+    let modes = [
+        (
+            "light",
+            ThemeMode::Light,
+            LIGHT_SYSTEM,
+            LIGHT_ACCENT_PRESETS,
+        ),
+        ("dark", ThemeMode::Dark, DARK_SYSTEM, DARK_ACCENT_PRESETS),
+    ];
+    for (mode, theme, base, presets) in modes {
+        let systems = std::iter::once(("default", base)).chain(
+            presets
+                .iter()
+                .map(|preset| (preset.key, base.with_accent_pair(preset.rgb, preset.ink))),
+        );
+        for (accent, system) in systems {
+            let grounds = Grounds::from_theme(theme, system);
+            for (name, ground) in [
+                ("pane", grounds.pane),
+                ("rail", grounds.rail),
+                ("band", grounds.band),
+                ("band hover", grounds.band_hover),
+                ("menu", grounds.menu),
+                ("attention", grounds.attention),
+                ("invalid", grounds.invalid),
+            ] {
+                let unlit = ground.well.over(ground.bg);
+                for (zone, lit) in [
+                    ("quiet", ground.level.quiet),
+                    ("loud", ground.level.loud),
+                    ("peak", ground.level.peak),
+                ] {
+                    let ratio = contrast_ratio(lit, unlit);
+                    assert!(
+                        ratio >= LEVEL_LIT_FLOOR,
+                        "{mode} {accent} {name} {zone} lit against unlit = {ratio:.2}, floor {LEVEL_LIT_FLOOR}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_lit_level_segment_starts_at_the_approved_strength() {
+    let pane = Grounds::from_theme(ThemeMode::Dark, DARK_SYSTEM).pane;
+    for (zone, hue, lit) in [
+        ("quiet", DARK_SYSTEM.success, pane.level.quiet),
+        ("loud", DARK_SYSTEM.warning, pane.level.loud),
+    ] {
+        assert_eq!(
+            lit,
+            composite(pane.bg, css_rgba_milli(hue, qol_theme::LEVEL_LIT_MILLI)),
+            "dark pane {zone}"
+        );
+    }
+}
+
+const ALPHA_OWNER: &str = "libs/gpui/src/deck.rs";
+
+fn hand_alpha_writes(body: &str) -> usize {
+    let compact = compact_line(body);
+    compact
+        .match_indices(".a")
+        .filter(|(at, _)| {
+            let rest = &compact[at + 2..];
+            let rest = rest.strip_prefix(['+', '-', '*', '/']).unwrap_or(rest);
+            rest.starts_with('=') && !rest.starts_with("==")
+        })
+        .count()
+}
+
+#[test]
+fn every_hand_alpha_is_the_one_alpha_owner() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if !relative.starts_with("libs/gpui/src/") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let allowed = usize::from(relative == ALPHA_OWNER);
+        let writes = hand_alpha_writes(body);
+        if writes > allowed {
+            problems.push(format!(
+                "{relative} sets a colour alpha by hand {writes} times"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A see-through gpui colour goes through deck::with_alpha; nothing else writes .a by hand.\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn the_hand_alpha_scanner_catches_every_write() {
+    assert_eq!(hand_alpha_writes("color.a = opacity;"), 1);
+    assert_eq!(hand_alpha_writes("tone.a *= 0.5;"), 1);
+    assert_eq!(hand_alpha_writes("assert!(color.a == 1.0);"), 0);
+    assert_eq!(hand_alpha_writes("let alpha = 1.0;"), 0);
 }
 
 #[test]

@@ -53,6 +53,7 @@ pub const OPACITY_DISABLED: f32 = 0.4;
 pub const OPACITY_REST: f32 = 0.6;
 pub const OPACITY_FILL: f32 = 0.3;
 pub const OPACITY_FILL_HELD: f32 = 0.45;
+pub const LEVEL_LIT_MILLI: u16 = 550;
 
 pub const LINE: f32 = 1.0;
 pub const FOCUS_RING_EDGE: f32 = 1.5;

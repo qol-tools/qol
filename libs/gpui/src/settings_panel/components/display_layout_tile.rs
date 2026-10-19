@@ -1,7 +1,7 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, SharedString};
-use qol_theme::TextStyle;
+use qol_theme::{StatusTone, TextStyle};
 
 use crate::kit::Kit;
 use crate::kit::{kit, Chip};
@@ -101,7 +101,7 @@ pub fn display_layout_tile(
                 )
                 .children(
                     tile.selected
-                        .then(|| status_chip("selected", kit.palette.accent_ink)),
+                        .then(|| status_chip("selected", StatusTone::Accent)),
                 ),
         )
         .child(
@@ -115,18 +115,17 @@ pub fn display_layout_tile(
         cell = cell.child(
             div()
                 .px(px(qol_theme::SPACE_STACK))
-                .child(status_chip("primary", kit.palette.success)),
+                .child(status_chip("primary", StatusTone::Success)),
         );
     }
     cell
 }
 
-fn status_chip(text: &'static str, tone: u32) -> gpui::Div {
+fn status_chip(text: &'static str, tone: StatusTone) -> gpui::Div {
     let kit = kit();
     kit.chip(
         Chip::Status {
             tone,
-            halo: qol_theme::translucent(tone, qol_theme::Alpha::Halo),
             text: text.into(),
         },
         kit.grounds.pane,

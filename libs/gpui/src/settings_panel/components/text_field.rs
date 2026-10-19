@@ -190,9 +190,7 @@ impl RenderOnce for SettingsTextField {
         let field = ground_bg(
             field,
             rgba(ground.well.packed()),
-            Some(rgba(
-                qol_theme::well_lift(hover.unwrap_or(ground).ink).packed(),
-            )),
+            Some(rgba(hover.unwrap_or(ground).well_lift.packed())),
         );
         field.child(
             ground_text(

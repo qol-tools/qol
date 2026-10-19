@@ -3,6 +3,7 @@ use gpui::prelude::*;
 use gpui::{canvas, div, point, px, rgb, rgba, PathBuilder};
 use qol_theme::TextStyle;
 
+use crate::deck::with_alpha;
 use crate::kit::Kit;
 use crate::theme::Ground;
 
@@ -32,13 +33,6 @@ impl SliderStyle {
         }
     }
 
-    fn value_gap(self) -> f32 {
-        match self {
-            Self::Compact => qol_theme::SPACE_INSET,
-            Self::Wide | Self::Level => qol_theme::SPACE_CELL,
-        }
-    }
-
     pub(in crate::settings_panel) fn thumb_reach(self) -> f32 {
         match self {
             Self::Compact => 0.0,
@@ -55,7 +49,7 @@ impl SliderStyle {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(in crate::settings_panel) struct NumberCue {
     pub(in crate::settings_panel) level: f32,
     pub(in crate::settings_panel) editing: bool,
@@ -113,14 +107,17 @@ fn level_segment(index: usize, level: f32, fraction: f32) -> LevelSegment {
     }
 }
 
-fn tone(color: u32, alpha: f32) -> gpui::Rgba {
-    let mut tone = rgb(color);
-    tone.a = alpha;
-    tone
+fn segment_fill(segment: LevelSegment, ground: Ground) -> gpui::Rgba {
+    match segment {
+        LevelSegment::Quiet => rgb(ground.level.quiet),
+        LevelSegment::Loud => rgb(ground.level.loud),
+        LevelSegment::Peak => rgb(ground.level.peak),
+        LevelSegment::Unlit => rgba(ground.well.packed()),
+    }
 }
 
-fn level_tone(color: u32) -> gpui::Rgba {
-    tone(color, qol_theme::OPACITY_REST)
+fn tick_left(at: f32, width: f32) -> f32 {
+    at * (width - qol_theme::LINE)
 }
 
 fn level_segment_width(track: f32) -> f32 {
@@ -189,7 +186,7 @@ fn quarter_ticks(
             div()
                 .absolute()
                 .top(px(WIDE_THUMB))
-                .left(px(at * width))
+                .left(px(tick_left(at, width)))
                 .w(px(qol_theme::LINE))
                 .h(px(TICK_HEIGHT)),
             rgb(ground.faint),
@@ -204,7 +201,6 @@ fn level_segments(
     width: f32,
     ground: Ground,
     hover: Option<Ground>,
-    kit: Kit,
 ) -> gpui::Div {
     let segment_width = level_segment_width(width);
     div()
@@ -214,21 +210,16 @@ fn level_segments(
         .gap(px(qol_theme::SPACE_TIGHT))
         .w(px(width))
         .children((0..LEVEL_SEGMENTS).map(|index| {
-            let segment = div()
-                .flex_none()
-                .w(px(segment_width))
-                .h(px(LEVEL_SEGMENT_HEIGHT))
-                .rounded(px(qol_theme::RADIUS_THUMB));
-            match level_segment(index, level, fraction) {
-                LevelSegment::Quiet => segment.bg(level_tone(kit.palette.success)),
-                LevelSegment::Loud => segment.bg(level_tone(kit.palette.warning)),
-                LevelSegment::Peak => segment.bg(level_tone(kit.palette.danger)),
-                LevelSegment::Unlit => ground_bg(
-                    segment,
-                    rgba(ground.well.packed()),
-                    hover.map(|hover| rgba(hover.well.packed())),
-                ),
-            }
+            let segment = level_segment(index, level, fraction);
+            ground_bg(
+                div()
+                    .flex_none()
+                    .w(px(segment_width))
+                    .h(px(LEVEL_SEGMENT_HEIGHT))
+                    .rounded(px(qol_theme::RADIUS_THUMB)),
+                segment_fill(segment, ground),
+                hover.map(|hover| segment_fill(segment, hover)),
+            )
         }))
 }
 
@@ -387,8 +378,8 @@ fn scrub_field(
     )
     .child(ground_bg(
         div().absolute().left_0().top_0().h_full().w(px(fill)),
-        tone(ground.mark, strength),
-        hover.map(|hover| tone(hover.mark, strength)),
+        with_alpha(ground.mark, strength),
+        hover.map(|hover| with_alpha(hover.mark, strength)),
     ))
     .child(nudge_chevron(false, chevron, cue.dragging))
     .child(nudge_chevron(true, chevron, cue.dragging))
@@ -408,7 +399,7 @@ pub(in crate::settings_panel) fn number_field(
     let ground = row.rest(kit);
     let hover = row.hover(kit);
     let value = number_value(text, unit, &cue, ground, hover, kit);
-    let gap = track.map_or(qol_theme::SPACE_INSET, |(_, style)| style.value_gap());
+    let gap = track.map_or(qol_theme::SPACE_INSET, |_| qol_theme::SPACE_CELL);
     let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
         let width = style.track_width();
@@ -429,9 +420,9 @@ pub(in crate::settings_panel) fn number_field(
             }
             SliderStyle::Wide => with_thumb(slider_bar(style, fill, ground, hover))
                 .children(quarter_ticks(width, ground, hover)),
-            SliderStyle::Level => with_thumb(level_segments(
-                fraction, cue.level, width, ground, hover, kit,
-            )),
+            SliderStyle::Level => {
+                with_thumb(level_segments(fraction, cue.level, width, ground, hover))
+            }
         };
         cell = cell.child(div().px(px(style.thumb_reach())).child(interact(bar)));
     }
@@ -476,7 +467,6 @@ mod tests {
     #[test]
     fn a_thumbed_slider_reserves_room_for_the_thumb_past_both_track_ends() {
         assert_eq!(SliderStyle::Compact.thumb_reach(), 0.0);
-        assert_eq!(SliderStyle::Compact.value_gap(), qol_theme::SPACE_INSET);
         for style in [SliderStyle::Wide, SliderStyle::Level] {
             let reach = style.thumb_reach();
             assert_eq!(thumb_left(0.0), -reach);
@@ -484,8 +474,21 @@ mod tests {
                 thumb_left(style.track_width()) + WIDE_THUMB,
                 style.track_width() + reach
             );
-            assert_eq!(style.value_gap(), qol_theme::SPACE_CELL);
         }
+    }
+
+    #[test]
+    fn every_quarter_tick_sits_inside_the_track() {
+        let width = SliderStyle::Wide.track_width();
+        for at in TICKS {
+            let left = tick_left(at, width);
+            assert!(
+                left >= 0.0 && left + qol_theme::LINE <= width,
+                "tick {at}: left {left} in a {width} track"
+            );
+        }
+        assert_eq!(tick_left(0.0, width), 0.0);
+        assert_eq!(tick_left(1.0, width) + qol_theme::LINE, width);
     }
 
     #[test]

@@ -1159,7 +1159,7 @@ impl NativeToolsView {
             ))
             .child(
                 settings_value_group()
-                    .children(self.registration_chip(&hotkey.key))
+                    .children(self.registration_chip(&hotkey.key, row))
                     .child(SettingsKeyCombination::new(
                         hotkey.key.clone(),
                         false,
@@ -1175,7 +1175,7 @@ impl NativeToolsView {
             .into_any_element()
     }
 
-    fn registration_chip(&self, key: &str) -> Option<Div> {
+    fn registration_chip(&self, key: &str, row: RowGround) -> Option<Div> {
         let failure = self
             .registration_errors
             .iter()
@@ -1183,11 +1183,10 @@ impl NativeToolsView {
         let kit = qol_gpui::kit::kit();
         Some(kit.chip(
             Chip::Status {
-                tone: qol_gpui::kit::kit().palette.warning,
-                halo: kit.washes.halo_attention.packed(),
+                tone: qol_gpui::theme::StatusTone::Warning,
                 text: failure.error.clone().into(),
             },
-            kit.grounds.pane,
+            row.rest(kit),
         ))
     }
 

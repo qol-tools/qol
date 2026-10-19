@@ -10,19 +10,25 @@ use super::{ground_bg, ground_text, RowGround};
 
 const KEY_CAP_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - 2.0 * qol_theme::SPACE_STACK;
 
-fn key_caps(combo: &str) -> Vec<&str> {
+fn key_caps(combo: &str) -> Option<Vec<&str>> {
     let mut caps = Vec::new();
     let mut rest = combo;
     while !rest.is_empty() {
-        let first = rest.chars().next().map_or(0, char::len_utf8);
-        let end = rest[first..].find('+').map_or(rest.len(), |at| at + first);
-        let cap = rest[..end].trim();
+        let start = rest.trim_start();
+        let first = start.chars().next().map_or(0, char::len_utf8);
+        let end = start[first..]
+            .find('+')
+            .map_or(start.len(), |at| at + first);
+        let cap = start[..end].trim();
+        if cap.contains(char::is_whitespace) {
+            return None;
+        }
         if !cap.is_empty() {
             caps.push(cap);
         }
-        rest = rest.get(end + 1..).unwrap_or("");
+        rest = start.get(end + 1..).unwrap_or("");
     }
-    caps
+    (!caps.is_empty()).then_some(caps)
 }
 
 #[derive(IntoElement)]
@@ -75,7 +81,7 @@ impl RenderOnce for SettingsKeyCombination {
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .when(editing, |combo| combo.shadow(kit().focus_ring(ground)))
             .text(TextStyle::Key);
-        if self.recording {
+        let Some(caps) = key_caps(&self.text).filter(|_| !self.recording) else {
             return ground_bg(
                 combo.px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_STACK)),
                 well,
@@ -87,11 +93,11 @@ impl RenderOnce for SettingsKeyCombination {
                     rgb(ground.faint),
                     hover.map(|hover| rgb(hover.faint)),
                 )
-                .child(self.text),
+                .child(self.text.clone()),
             );
-        }
+        };
         let mut keys = Vec::new();
-        for (index, cap) in key_caps(&self.text).into_iter().enumerate() {
+        for (index, cap) in caps.into_iter().enumerate() {
             if index > 0 {
                 keys.push(faint("+"));
             }
@@ -120,18 +126,29 @@ mod tests {
 
     #[test]
     fn key_caps_split_a_combination_into_one_cap_per_key() {
-        let cases: [(&str, &[&str]); 8] = [
-            ("", &[]),
+        let cases: [(&str, &[&str]); 7] = [
             ("s", &["s"]),
             ("super+shift+s", &["super", "shift", "s"]),
             ("Ctrl + Alt + Del", &["Ctrl", "Alt", "Del"]),
             ("ctrl++", &["ctrl", "+"]),
+            ("Ctrl + +", &["Ctrl", "+"]),
             ("+", &["+"]),
             ("⌘+K", &["⌘", "K"]),
-            ("Press Enter to record", &["Press Enter to record"]),
         ];
         for (combo, caps) in cases {
-            assert_eq!(key_caps(combo), caps, "{combo}");
+            assert_eq!(key_caps(combo).as_deref(), Some(caps), "{combo}");
+        }
+    }
+
+    #[test]
+    fn text_that_is_not_a_chord_has_no_caps() {
+        for text in [
+            "",
+            "   ",
+            "Press Enter to record",
+            "Press a shortcut…  Esc cancels",
+        ] {
+            assert_eq!(key_caps(text), None, "{text}");
         }
     }
 }

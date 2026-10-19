@@ -94,7 +94,6 @@ impl RenderOnce for SettingsModifierChip {
             .text(TextStyle::Key)
             .border(px(qol_theme::LINE))
             .px(px(qol_theme::SPACE_INSET + qol_theme::LINE))
-            .rounded_full()
             .bg(chip_fill(on, ground))
             .text_color(chip_text(on, ground))
             .border_color(chip_border(cursor, ground))
