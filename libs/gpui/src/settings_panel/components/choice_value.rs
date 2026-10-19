@@ -4,9 +4,9 @@ use gpui::{div, img, px, rgb, App, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use super::{
-    ground_text, RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_REST_OPACITY,
-    CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH, CHOICE_WORD_MAX_WIDTH,
-    SETTINGS_ROW_GROUP,
+    ground_text, RowGround, CHOICE_CHEVRON_HEIGHT, CHOICE_CHEVRON_HOVER_STEP,
+    CHOICE_CHEVRON_REST_OPACITY, CHOICE_CHEVRON_WIDTH, CHOICE_PICTURE_HEIGHT, CHOICE_PICTURE_WIDTH,
+    CHOICE_WORD_MAX_WIDTH, SETTINGS_ROW_GROUP,
 };
 use crate::kit::Kit;
 use crate::pictures::{self, PictureContext, Tone};
@@ -31,7 +31,7 @@ fn choice_tones(row: RowGround, kit: Kit) -> ChoiceTones {
     match row {
         RowGround::Pane => ChoiceTones {
             word: kit.grounds.pane.faint,
-            word_hover: kit.grounds.pane.soft,
+            word_hover: kit.grounds.pane.ink,
             line: kit.grounds.pane.soft,
             chevron: kit.grounds.pane.faint,
             chevron_opacity: CHOICE_CHEVRON_REST_OPACITY,
@@ -215,18 +215,17 @@ impl RenderOnce for SettingsChevron {
                 .w(px(CHOICE_CHEVRON_WIDTH))
                 .h(px(CHOICE_CHEVRON_HEIGHT))
         });
-        let arrow = div()
+        div()
+            .relative()
+            .left_0()
             .flex_none()
             .w(px(CHOICE_CHEVRON_WIDTH))
             .h(px(CHOICE_CHEVRON_HEIGHT))
-            .children(chevron);
-        if tones.wakes_on_hover {
-            arrow
-                .opacity(tones.chevron_opacity)
-                .group_hover(SETTINGS_ROW_GROUP, |style| style.opacity(1.0))
-        } else {
-            arrow
-        }
+            .opacity(tones.chevron_opacity)
+            .group_hover(SETTINGS_ROW_GROUP, |style| {
+                style.opacity(1.0).left(px(CHOICE_CHEVRON_HOVER_STEP))
+            })
+            .children(chevron)
     }
 }
 
@@ -247,7 +246,7 @@ mod tests {
             choice_tones(RowGround::Pane, kit),
             ChoiceTones {
                 word: 0x8b8880,
-                word_hover: 0xb3b1ac,
+                word_hover: 0xf3f2f0,
                 line: 0xb3b1ac,
                 chevron: 0x8b8880,
                 chevron_opacity: CHOICE_CHEVRON_REST_OPACITY,

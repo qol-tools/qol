@@ -106,6 +106,7 @@ description = "Which engine turns speech into text."
 type = "boolean"
 config_key = "recognition.enabled"
 label = "Enable speech recognition"
+description = "Turn what you say into text."
 section = "recognition"
 default = true
 

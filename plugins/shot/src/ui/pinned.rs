@@ -22,7 +22,9 @@ use crate::ui::controls::{
 use crate::ui::preview::{
     live_topology, MonitorTopology, WarmWindowKey, WarmWindowPool, PREVIEW_APP_ID,
 };
-use qol_gpui::kit::{action_row_width, kit, ActionCircleSize, ActionCircleState};
+use qol_gpui::kit::{
+    action_row_width, kit, ActionCircleGround, ActionCircleSize, ActionCircleState,
+};
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
 use qol_gpui::window::{
     display_id_for_monitor, sync_cursor_window_layout, ResolvedCursorPlacement,
@@ -1209,20 +1211,30 @@ impl PinnedView {
                     .into_iter()
                     .enumerate()
                     .map(|(index, control)| {
-                        kit.action_circle(ActionCircleSize::Control, ActionCircleState::Resting)
-                            .id(("pin-action", index))
-                            .child(kit.action_icon(control.icon(), ActionCircleState::Resting))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        kit.action_circle(
+                            ActionCircleSize::Control,
+                            ActionCircleState::Resting,
+                            ActionCircleGround::Picture,
+                        )
+                        .id(("pin-action", index))
+                        .child(kit.action_icon(control.icon(), ActionCircleState::Resting))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, window, cx| {
                                 this.activate(control, window, cx)
-                            }))
+                            },
+                        ))
                     }),
             )
     }
 
     fn close_circle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         kit()
-            .action_circle(ActionCircleSize::Inline, ActionCircleState::Resting)
+            .action_circle(
+                ActionCircleSize::Inline,
+                ActionCircleState::Resting,
+                ActionCircleGround::Picture,
+            )
             .id("pin-close")
             .absolute()
             .top(px(EDGE))

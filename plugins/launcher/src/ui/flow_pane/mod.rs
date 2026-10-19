@@ -12,8 +12,8 @@ use qol_gpui::kit::Chip;
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{
-    translucent, Ground, TextStyle, LINE, RADIUS_CARD, SPACE_CELL, SPACE_INSET, SPACE_PAD,
-    SPACE_STACK, SPACE_TIGHT,
+    translucent, Ground, StatusTone, TextStyle, LINE, RADIUS_CARD, SPACE_CELL, SPACE_INSET,
+    SPACE_PAD, SPACE_STACK, SPACE_TIGHT,
 };
 use qol_gpui::Key;
 use qol_plugin_api::launcher_flows::{Badge, FlowEnter, Tone};
@@ -465,15 +465,15 @@ fn tone_ink(tone: Option<Tone>, ground: Ground) -> u32 {
 }
 
 fn status_chip(status: &Badge) -> Chip {
-    let kit = qol_gpui::kit::kit();
-    let halo = match status.tone {
-        Some(Tone::Warning) => kit.washes.halo_attention,
-        Some(Tone::Error) => kit.washes.halo_invalid,
-        _ => kit.washes.accent_halo,
+    let tone = match status.tone {
+        None => StatusTone::Neutral,
+        Some(Tone::Info) => StatusTone::Info,
+        Some(Tone::Kind) => StatusTone::Accent,
+        Some(Tone::Warning) => StatusTone::Warning,
+        Some(Tone::Error) => StatusTone::Danger,
     };
     Chip::Status {
-        tone: tone_ink(status.tone, kit.grounds.pane),
-        halo: halo.packed(),
+        tone,
         text: status.text.clone().into(),
     }
 }

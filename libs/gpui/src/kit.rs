@@ -7,12 +7,13 @@ use qol_connection_health::Level;
 use qol_hotkeys::chord::Cap;
 use qol_theme::{Ground, Grounds, SystemPalette, ThemeMode, WashPalette};
 
-use crate::icon::{icon, Icon, IconView};
+use crate::icon::{icon, Icon};
 use crate::key::Key;
 use crate::text::{cased, TextStyled};
 use qol_theme::{
-    clear, translucent, Alpha, Shadow, TextStyle, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
-    OPACITY_DISABLED, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+    clear, count_disc, status_look, translucent, Alpha, Shadow, StatusTone, TextStyle,
+    FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE, OPACITY_DISABLED, SHADE_WELL, SHADOW_FLOAT,
+    SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
 };
 
 pub const HEADER_HEIGHT: f32 = qol_theme::HEIGHT_BAND;
@@ -52,6 +53,14 @@ pub enum ActionCircleState {
     Disabled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActionCircleGround {
+    Pane,
+    Picture,
+}
+
+const ACTION_CIRCLE_GROUP: &str = "action-circle";
+
 pub const SECTION_MARK_WIDTH: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,14 +73,14 @@ pub enum NoticeTone {
 
 pub const CHIP_HEIGHT: f32 = 22.0;
 pub const KEY_CHIP_HEIGHT: f32 = 20.0;
+pub const CHIP_COUNT_HEIGHT: f32 = 16.0;
 
 pub enum Chip {
     Key(Key),
     KeyText(SharedString),
     Count(usize, SharedString),
     Status {
-        tone: u32,
-        halo: u32,
+        tone: StatusTone,
         text: SharedString,
     },
     Tag(SharedString),
@@ -198,8 +207,14 @@ impl Kit {
             .child(
                 div()
                     .text(TextStyle::Label)
-                    .text_color(rgb(self.palette.text_muted))
+                    .text_color(rgb(self.palette.text_secondary))
                     .child(label),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .h(px(LINE))
+                    .bg(rgba(self.washes.hairline.packed())),
             )
     }
 
@@ -273,9 +288,11 @@ impl Kit {
             .px(px(qol_theme::SPACE_SNUG))
             .rounded(px(qol_theme::RADIUS_KEYCAP))
             .border(px(qol_theme::LINE))
-            .border_color(rgba(translucent(ground.ink, Alpha::Edge)))
+            .border_color(rgba(ground.edge.packed()))
+            .bg(rgba(ground.well.packed()))
+            .shadow(key_cast())
             .text(TextStyle::Key)
-            .text_color(rgb(ground.faint))
+            .text_color(rgb(ground.soft))
     }
 
     fn chip_frame(&self, ground: Ground) -> Div {
@@ -296,16 +313,39 @@ impl Kit {
         match chip {
             Chip::Key(key) => self
                 .key_frame(ground)
-                .child(self.key_name(&[key], ground.faint)),
+                .child(self.key_name(&[key], ground.soft)),
             Chip::KeyText(text) => self.key_frame(ground).child(text),
-            Chip::Count(count, label) => self
-                .chip_frame(ground)
-                .child(div().text_color(rgb(ground.ink)).child(count.to_string()))
-                .child(label),
-            Chip::Status { tone, halo, text } => self
-                .chip_frame(ground)
-                .child(self.status_dot(tone, halo))
-                .child(text),
+            Chip::Count(count, label) => {
+                let inset = px((CHIP_HEIGHT - CHIP_COUNT_HEIGHT) / 2.0);
+                let chip = self.chip_frame(ground).pl(inset).child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .min_w(px(CHIP_COUNT_HEIGHT))
+                        .h(px(CHIP_COUNT_HEIGHT))
+                        .px(px(qol_theme::SPACE_TIGHT))
+                        .rounded_full()
+                        .bg(rgb(count_disc(ground)))
+                        .text(TextStyle::Label)
+                        .text_color(rgb(ground.on_mark))
+                        .child(count.to_string()),
+                );
+                if label.is_empty() {
+                    chip.pr(inset)
+                } else {
+                    chip.child(label)
+                }
+            }
+            Chip::Status { tone, text } => {
+                let look = status_look(tone, ground, self.palette);
+                self.chip_frame(ground)
+                    .bg(rgba(look.wash.packed()))
+                    .text_color(rgb(look.ink))
+                    .child(self.status_dot(look.dot, clear(look.dot)))
+                    .child(text)
+            }
             Chip::Tag(text) => self.chip_frame(ground).child(text),
         }
     }
@@ -338,6 +378,10 @@ impl Kit {
                 self.washes.fill_resting,
             ),
         };
+        let title_ink = match tone {
+            NoticeTone::Attention | NoticeTone::Invalid => ground.mark,
+            NoticeTone::Done | NoticeTone::Quiet => ground.ink,
+        };
         div()
             .flex_none()
             .flex()
@@ -358,7 +402,7 @@ impl Kit {
                     .child(
                         div()
                             .text(TextStyle::ListName)
-                            .text_color(rgb(ground.ink))
+                            .text_color(rgb(title_ink))
                             .child(title.into()),
                     )
                     .when_some(detail, |block, detail| {
@@ -386,7 +430,7 @@ impl Kit {
             .px(px(qol_theme::SPACE_GUTTER))
             .child(
                 div()
-                    .text(TextStyle::ListName)
+                    .text(TextStyle::Name)
                     .text_color(rgb(pane.ink))
                     .child(title.into()),
             )
@@ -468,9 +512,8 @@ impl Kit {
             .px(px(qol_theme::SPACE_PAD))
             .border_t(px(qol_theme::LINE))
             .border_color(rgba(self.washes.hairline.packed()))
-            .bg(rgba(self.washes.fill_hover.packed()))
             .text(TextStyle::Hint)
-            .text_color(rgb(self.palette.text_secondary))
+            .text_color(rgb(self.grounds.pane.faint))
     }
 
     pub fn hint(&self, key: Key, label: impl Into<SharedString>) -> Div {
@@ -568,10 +611,15 @@ impl Kit {
     }
 
     pub fn button_ghost(&self, text: impl Into<SharedString>) -> Div {
-        self.button_base(text)
-            .bg(rgb(self.palette.surface_raised))
-            .text_color(rgb(self.palette.text_secondary))
-            .shadow(raised_shadow(self.palette.text_primary))
+        self.lifted_well(self.button_base(text))
+            .text_color(rgb(self.palette.text_primary))
+    }
+
+    fn lifted_well(&self, control: Div) -> Div {
+        let hover = rgba(translucent(self.palette.text_primary, Alpha::Tint));
+        control
+            .bg(rgba(self.grounds.pane.well.packed()))
+            .hover(move |style| style.bg(hover))
     }
 
     pub fn window_control(&self, icon: WindowControlIcon) -> Div {
@@ -646,43 +694,84 @@ impl Kit {
 
     pub fn action_ink(&self, state: ActionCircleState) -> u32 {
         match state {
-            ActionCircleState::Resting | ActionCircleState::Disabled => self.palette.text_primary,
+            ActionCircleState::Resting | ActionCircleState::Disabled => self.palette.text_secondary,
             ActionCircleState::Primary => self.palette.solid_ink,
             ActionCircleState::Armed => self.palette.accent_ink,
         }
     }
 
-    pub fn action_icon(&self, glyph: Icon, state: ActionCircleState) -> IconView {
-        icon(glyph, qol_theme::TEXT_BODY, self.action_ink(state))
+    pub fn action_icon(&self, glyph: Icon, state: ActionCircleState) -> Div {
+        let size = qol_theme::TEXT_BODY;
+        let resting = div().child(icon(glyph, size, self.action_ink(state)));
+        let frame = div().flex_none().relative().size(px(size));
+        if state != ActionCircleState::Resting {
+            return frame.child(resting);
+        }
+        let hovered =
+            div()
+                .absolute()
+                .inset_0()
+                .child(icon(glyph, size, self.palette.text_primary));
+        frame
+            .child(resting.group_hover(ACTION_CIRCLE_GROUP, |style| style.opacity(0.0)))
+            .child(self.revealed_by(hovered, ACTION_CIRCLE_GROUP))
     }
 
-    pub fn action_circle(&self, size: ActionCircleSize, state: ActionCircleState) -> Div {
+    pub fn action_circle(
+        &self,
+        size: ActionCircleSize,
+        state: ActionCircleState,
+        ground: ActionCircleGround,
+    ) -> Div {
         let circle = div()
+            .group(ACTION_CIRCLE_GROUP)
             .flex_none()
             .w(px(size.px()))
             .h(px(size.px()))
             .rounded_full()
             .flex()
             .items_center()
-            .justify_center()
-            .border(px(qol_theme::LINE))
-            .shadow(float_shadow(self.palette.text_primary))
-            .text_color(rgb(self.action_ink(state)));
-        match state {
-            ActionCircleState::Resting => circle
-                .bg(rgb(self.palette.surface_raised))
-                .border_color(rgb(self.palette.border_subtle)),
-            ActionCircleState::Primary => circle
-                .bg(rgb(self.palette.accent))
-                .border_color(rgb(self.palette.border_subtle)),
-            ActionCircleState::Armed => circle
+            .justify_center();
+        match (state, ground) {
+            (ActionCircleState::Resting, ActionCircleGround::Pane) => self.lifted_well(circle),
+            (ActionCircleState::Resting, ActionCircleGround::Picture) => {
+                self.pointable(self.picture_disc(circle), rgb(self.grounds.menu.lift))
+            }
+            (ActionCircleState::Primary, _) => {
+                let mut hovered = vec![BoxShadow {
+                    color: rgba(self.grounds.pane.halo.packed()).into(),
+                    offset: point(px(0.0), px(0.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(qol_theme::ACTION_CIRCLE_HOVER_HALO),
+                }];
+                hovered.extend(float_shadow(self.palette.text_primary));
+                circle
+                    .bg(rgb(self.palette.accent))
+                    .border(px(qol_theme::LINE))
+                    .border_color(rgb(self.palette.border_subtle))
+                    .shadow(float_shadow(self.palette.text_primary))
+                    .hover(move |style| style.shadow(hovered))
+            }
+            (ActionCircleState::Armed, _) => circle
                 .bg(rgb(self.palette.accent_fill))
-                .border_color(rgb(self.palette.accent)),
-            ActionCircleState::Disabled => circle
-                .bg(rgb(self.palette.surface_raised))
-                .border_color(rgb(self.palette.border_subtle))
+                .border(px(qol_theme::LINE))
+                .border_color(rgb(self.palette.accent))
+                .shadow(float_shadow(self.palette.text_primary)),
+            (ActionCircleState::Disabled, ActionCircleGround::Pane) => circle
+                .bg(rgba(self.grounds.pane.well.packed()))
                 .opacity(OPACITY_DISABLED),
+            (ActionCircleState::Disabled, ActionCircleGround::Picture) => {
+                self.picture_disc(circle).opacity(OPACITY_DISABLED)
+            }
         }
+    }
+
+    fn picture_disc(&self, circle: Div) -> Div {
+        circle
+            .bg(rgb(self.grounds.menu.bg))
+            .border(px(qol_theme::LINE))
+            .border_color(rgb(self.palette.border_subtle))
+            .shadow(float_shadow(self.palette.text_primary))
     }
 
     pub fn action_row(&self) -> Div {
@@ -701,11 +790,14 @@ impl Kit {
             .child(label.into());
         if active {
             segment
-                .bg(rgb(self.palette.accent))
-                .text_color(rgb(self.palette.surface_raised))
-                .shadow(raised_shadow(self.palette.text_primary))
+                .bg(rgb(self.grounds.band.bg))
+                .text_color(rgb(self.palette.text_primary))
         } else {
-            segment.text_color(rgb(self.palette.text_secondary))
+            let hover = rgba(self.washes.fill_hover.packed());
+            let ink = rgb(self.palette.text_primary);
+            segment
+                .text_color(rgb(self.grounds.pane.faint))
+                .hover(move |style| style.bg(hover).text_color(ink))
         }
     }
 
@@ -717,7 +809,7 @@ impl Kit {
             .gap(px(qol_theme::SPACE_STACK))
             .p(px(qol_theme::SPACE_STACK))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .bg(rgb(self.palette.surface_hovered))
+            .bg(rgba(self.grounds.pane.well.packed()))
     }
 }
 
@@ -769,6 +861,15 @@ pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
     count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
 }
 
+pub fn key_cast() -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: rgba(SHADE_WELL).into(),
+        offset: point(px(0.0), px(LINE)),
+        blur_radius: px(0.0),
+        spread_radius: px(0.0),
+    }]
+}
+
 pub fn float_shadow(ink: u32) -> Vec<BoxShadow> {
     shadow(SHADOW_FLOAT, ink)
 }
@@ -801,7 +902,7 @@ pub fn rail_scrim(surface: u32) -> Background {
     )
 }
 
-const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x2f3238, 0x7a4a8a];
+const TILE_TONES: [u32; 6] = [0x2f7350, 0x3a639b, 0x8a6208, 0x5c626d, 0x41444c, 0x7a4a8a];
 
 fn tile_tone(name: &str) -> u32 {
     let hash = name.bytes().fold(0u32, |acc, byte| {
@@ -854,10 +955,93 @@ mod tests {
     use super::Kit;
     use super::{
         action_row_width, next_selectable, path_label, rail_scrim, row_circle_state,
-        ActionCircleSize, ActionCircleState, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA,
-        RAIL_SCRIM_END, RAIL_SCRIM_START,
+        ActionCircleGround, ActionCircleSize, ActionCircleState, Chip, CHIP_COUNT_HEIGHT,
+        CHIP_HEIGHT, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA, RAIL_SCRIM_END,
+        RAIL_SCRIM_START,
     };
-    use qol_theme::{ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
+    use gpui::{px, rgb, rgba, Fill, Hsla, SharedString, Styled};
+    use qol_theme::{status_look, StatusTone, ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
+
+    #[test]
+    fn a_circle_over_a_picture_keeps_an_opaque_edged_disc() {
+        for (mode, palette) in [
+            (ThemeMode::Light, LIGHT_SYSTEM),
+            (ThemeMode::Dark, DARK_SYSTEM),
+        ] {
+            let kit = Kit::new(mode, palette);
+            for state in [ActionCircleState::Resting, ActionCircleState::Disabled] {
+                let mut picture = kit.action_circle(
+                    ActionCircleSize::Control,
+                    state,
+                    ActionCircleGround::Picture,
+                );
+                let style = picture.style();
+                assert_eq!(
+                    style.background,
+                    Some(Fill::from(rgb(kit.grounds.menu.bg))),
+                    "{state:?}"
+                );
+                assert_eq!(
+                    style.border_color,
+                    Some(Hsla::from(rgb(palette.border_subtle))),
+                    "{state:?}"
+                );
+                assert!(
+                    style
+                        .box_shadow
+                        .as_ref()
+                        .is_some_and(|shadow| !shadow.is_empty()),
+                    "{state:?}"
+                );
+                let mut pane =
+                    kit.action_circle(ActionCircleSize::Control, state, ActionCircleGround::Pane);
+                assert_eq!(
+                    pane.style().background,
+                    Some(Fill::from(rgba(kit.grounds.pane.well.packed()))),
+                    "{state:?}"
+                );
+                assert_eq!(pane.style().border_color, None, "{state:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_danger_status_chip_sits_on_its_own_wash() {
+        for (mode, palette) in [
+            (ThemeMode::Light, LIGHT_SYSTEM),
+            (ThemeMode::Dark, DARK_SYSTEM),
+        ] {
+            let kit = Kit::new(mode, palette);
+            let ground = kit.grounds.pane;
+            let mut chip = kit.chip(
+                Chip::Status {
+                    tone: StatusTone::Danger,
+                    text: "offline".into(),
+                },
+                ground,
+            );
+            let wash = status_look(StatusTone::Danger, ground, palette).wash;
+            assert_eq!(wash.rgb, palette.danger);
+            assert_eq!(
+                chip.style().background,
+                Some(Fill::from(rgba(wash.packed())))
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_without_a_label_closes_the_pill_round_the_disc() {
+        let kit = Kit::new(ThemeMode::Dark, DARK_SYSTEM);
+        let inset = px((CHIP_HEIGHT - CHIP_COUNT_HEIGHT) / 2.0);
+        let mut bare = kit.chip(Chip::Count(2, SharedString::default()), kit.grounds.pane);
+        assert_eq!(bare.style().padding.left, Some(inset.into()));
+        assert_eq!(bare.style().padding.right, Some(inset.into()));
+        let mut labelled = kit.chip(Chip::Count(2, "live".into()), kit.grounds.pane);
+        assert_eq!(
+            labelled.style().padding.right,
+            Some(px(qol_theme::SPACE_INSET).into())
+        );
+    }
 
     #[test]
     fn the_selection_steps_over_disabled_entries() {

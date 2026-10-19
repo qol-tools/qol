@@ -125,7 +125,7 @@ fn step_between(start: f32, end: f32, delta: f32) -> f32 {
     start + (end - start) * delta
 }
 
-fn with_alpha(color: u32, opacity: f32) -> Rgba {
+pub(crate) fn with_alpha(color: u32, opacity: f32) -> Rgba {
     let mut color = rgb(color);
     color.a = opacity;
     color

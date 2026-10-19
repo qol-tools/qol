@@ -1,7 +1,7 @@
 use crate::kit::{kit, Chip, Kit};
 use crate::text::TextStyled;
 use gpui::*;
-use qol_theme::{translucent, Alpha, TextStyle};
+use qol_theme::{translucent, Alpha, StatusTone, TextStyle};
 
 use super::diagram::controller_diagram;
 use super::model::{ConnectionBadge, GamepadButton, MonitorStatus, SignalTone};
@@ -166,10 +166,15 @@ fn connection_badge(connection: ConnectionBadge, kit: Kit) -> Div {
                     })
             }))
     });
+    let status = match connection.tone {
+        SignalTone::Success => StatusTone::Success,
+        SignalTone::Warning => StatusTone::Warning,
+        SignalTone::Danger => StatusTone::Danger,
+        SignalTone::Muted => StatusTone::Neutral,
+    };
     kit.chip(
         Chip::Status {
-            tone,
-            halo: translucent(tone, Alpha::Halo),
+            tone: status,
             text: connection.transport.into(),
         },
         kit.grounds.pane,
@@ -363,14 +368,13 @@ fn waiting_content(monitor: &GamepadMonitor, kit: Kit) -> Div {
 
 fn status_badge(status: MonitorStatus, kit: Kit) -> Div {
     let (label, tone) = match status {
-        MonitorStatus::Ready => ("live", kit.palette.success),
-        MonitorStatus::Waiting => ("waiting", kit.palette.warning),
-        MonitorStatus::Unavailable => ("offline", kit.palette.danger),
+        MonitorStatus::Ready => ("live", StatusTone::Success),
+        MonitorStatus::Waiting => ("waiting", StatusTone::Warning),
+        MonitorStatus::Unavailable => ("offline", StatusTone::Danger),
     };
     kit.chip(
         Chip::Status {
             tone,
-            halo: translucent(tone, Alpha::Halo),
             text: label.into(),
         },
         kit.grounds.pane,

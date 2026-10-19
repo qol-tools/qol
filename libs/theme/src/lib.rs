@@ -3,12 +3,14 @@ pub mod depth;
 pub mod marks;
 pub mod motion;
 pub mod quiet;
+pub mod status;
 pub mod text;
 pub mod toast;
 
 pub use depth::{
-    clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO, LINE,
-    OPACITY_DISABLED, OPACITY_REST, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
+    clear, solid, translucent, Alpha, Shadow, ShadowLayer, FOCUS_RING_EDGE, FOCUS_RING_HALO,
+    LEVEL_LIT_MILLI, LINE, OPACITY_DISABLED, OPACITY_FILL, OPACITY_FILL_HELD, OPACITY_REST,
+    SHADE_WELL, SHADOW_FLOAT, SHADOW_RAISED, STATUS_DOT, STATUS_DOT_HALO,
 };
 pub use marks::Mark;
 pub use motion::{message_stay, stored_message_stay};
@@ -17,11 +19,13 @@ pub use motion::{
     STAY_MESSAGE_LEAST, STAY_MESSAGE_MOST, WAIT_BEFORE_BUSY,
 };
 pub use quiet::{set_window_quiet, window_is_quiet};
+pub use status::{count_disc, status_look, StatusLook, StatusTone};
 pub use text::{Face, TextSpec, TextStyle};
 
 use qol_color::{
     clamp_unit, mix_rgb, parse_hex_color, rgb24, rgba_from_rgb, scale_rgb, with_alpha,
 };
+use std::{cell::RefCell, collections::HashMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AccentPreset {
@@ -81,6 +85,7 @@ pub const RADIUS_KEYCAP: f32 = RADIUS_TIGHT;
 pub const RADIUS_THUMB: f32 = 3.0;
 pub const ACTION_CIRCLE_SIZE: f32 = 46.0;
 pub const ACTION_CIRCLE_GAP: f32 = 14.0;
+pub const ACTION_CIRCLE_HOVER_HALO: f32 = 6.0;
 
 pub const TEXT_KEYCAP: f32 = TEXT_MICRO;
 
@@ -904,6 +909,10 @@ impl CssRgba {
         let alpha = (self.alpha_milli as u32 * 255 + 500) / 1000;
         (self.rgb << 8) | alpha
     }
+
+    pub fn over(self, bg: u32) -> u32 {
+        mix_rgb(bg, self.rgb, (self.packed() & 0xff) as f32 / 255.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1061,11 +1070,20 @@ pub struct Ground {
     pub soft: u32,
     pub faint: u32,
     pub well: CssRgba,
+    pub well_lift: CssRgba,
     pub edge: CssRgba,
     pub mark: u32,
     pub on_mark: u32,
     pub lift: u32,
     pub halo: CssRgba,
+    pub level: LevelTones,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelTones {
+    pub quiet: u32,
+    pub loud: u32,
+    pub peak: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1082,7 +1100,7 @@ pub struct Grounds {
 impl Grounds {
     pub fn from_theme(mode: ThemeMode, system: SystemPalette) -> Self {
         let washes = WashPalette::for_mode(mode, system);
-        let band = mixed_ground(band_fill(system), system.text_primary);
+        let band = mixed_ground(band_fill(system), system.text_primary, system);
         Self {
             pane: surface_ground(
                 system.surface_elevated,
@@ -1101,7 +1119,7 @@ impl Grounds {
                 washes,
             ),
             band,
-            band_hover: mixed_ground(band.lift, system.text_primary),
+            band_hover: mixed_ground(band.lift, system.text_primary, system),
             menu: surface_ground(
                 system.surface_raised,
                 system.text_primary,
@@ -1154,6 +1172,8 @@ const GROUND_FAINT_MIX: u32 = 660;
 const GROUND_SOFT_FLOOR: f64 = 4.5;
 const GROUND_FAINT_FLOOR: f64 = 3.0;
 const GROUND_WELL_ALPHA: u16 = 140;
+const GROUND_WELL_LIFT_ALPHA: u16 = 130;
+const LEVEL_LIT_FLOOR: f64 = 3.0;
 const CALM_MARK_MIX: u32 = 300;
 const GROUND_EDGE_ALPHA: u16 = 240;
 
@@ -1230,11 +1250,13 @@ fn surface_ground(
         soft,
         faint: system.text_muted,
         well: washes.fill_resting,
+        well_lift: css_rgba_milli(ink, GROUND_WELL_LIFT_ALPHA),
         edge: washes.hairline,
         mark,
         on_mark: bg,
         lift: lift(bg, ink),
         halo: css_rgba_milli(mark, Alpha::Edge.milli()),
+        level: level_tones(bg, ink, washes.fill_resting, system),
     }
 }
 
@@ -1259,31 +1281,83 @@ pub const fn lift(bg: u32, ink: u32) -> u32 {
     mix_const(bg, ink, GROUND_LIFT_MIX)
 }
 
-fn mixed_ground(bg: u32, ink: u32) -> Ground {
+fn mixed_ground(bg: u32, ink: u32, system: SystemPalette) -> Ground {
+    let well = css_rgba_milli(ink, GROUND_WELL_ALPHA);
     Ground {
         bg,
         ink,
         soft: floored_mix(bg, ink, GROUND_SOFT_MIX, GROUND_SOFT_FLOOR),
         faint: floored_mix(bg, ink, GROUND_FAINT_MIX, GROUND_FAINT_FLOOR),
-        well: css_rgba_milli(ink, GROUND_WELL_ALPHA),
+        well,
+        well_lift: css_rgba_milli(ink, GROUND_WELL_LIFT_ALPHA),
         edge: css_rgba_milli(ink, GROUND_EDGE_ALPHA),
         mark: ink,
         on_mark: bg,
         lift: mix_const(bg, ink, GROUND_HOVER_LIFT_MIX),
         halo: css_rgba_milli(ink, Alpha::Halo.milli()),
+        level: level_tones(bg, ink, well, system),
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct LevelKey {
+    bg: u32,
+    ink: u32,
+    well: u32,
+    well_alpha: u16,
+    quiet: u32,
+    loud: u32,
+    peak: u32,
+}
+
+thread_local! {
+    static LEVEL_TONES: RefCell<HashMap<LevelKey, LevelTones>> = RefCell::new(HashMap::new());
+}
+
+fn level_tones(bg: u32, ink: u32, well: CssRgba, system: SystemPalette) -> LevelTones {
+    let key = LevelKey {
+        bg,
+        ink,
+        well: well.rgb,
+        well_alpha: well.alpha_milli,
+        quiet: system.success,
+        loud: system.warning,
+        peak: system.danger,
+    };
+    if let Some(tones) = LEVEL_TONES.with_borrow(|cache| cache.get(&key).copied()) {
+        return tones;
+    }
+    let unlit = well.over(bg);
+    let lit = |hue: u32| {
+        floored_step(bg, hue, LEVEL_LIT_MILLI as u32, unlit, LEVEL_LIT_FLOOR)
+            .or_else(|| floored_step(hue, ink, 0, unlit, LEVEL_LIT_FLOOR))
+            .unwrap_or(ink)
+    };
+    let tones = LevelTones {
+        quiet: lit(key.quiet),
+        loud: lit(key.loud),
+        peak: lit(key.peak),
+    };
+    LEVEL_TONES.with_borrow_mut(|cache| {
+        cache.insert(key, tones);
+    });
+    tones
+}
+
 fn floored_mix(bg: u32, ink: u32, permille: u32, floor: f64) -> u32 {
+    floored_step(bg, ink, permille, bg, floor).unwrap_or(ink)
+}
+
+fn floored_step(from: u32, to: u32, permille: u32, against: u32, floor: f64) -> Option<u32> {
     let mut p = permille;
     while p <= 1000 {
-        let candidate = mix_const(bg, ink, p);
-        if contrast_ratio(candidate, bg) >= floor {
-            return candidate;
+        let candidate = mix_const(from, to, p);
+        if contrast_ratio(candidate, against) >= floor {
+            return Some(candidate);
         }
         p += 10;
     }
-    ink
+    None
 }
 
 pub fn relative_luminance(rgb: u32) -> f64 {

@@ -9,6 +9,7 @@ description = "How qol tells you something happened."
 [field.handler]
 type = "select"
 label = "Show notifications in"
+description = "Pick where qol messages pop up."
 section = "notifications"
 default = "qol"
 card_description = "Where qol notifications appear."

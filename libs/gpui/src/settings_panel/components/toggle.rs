@@ -36,7 +36,7 @@ impl RenderOnce for SettingsToggle {
         let (knob, knob_hover) = if self.active {
             (rgb(ground.on_mark), hover.map(|hover| rgb(hover.on_mark)))
         } else {
-            (rgb(ground.soft), hover.map(|hover| rgb(hover.soft)))
+            (rgb(ground.faint), Some(rgb(hover.unwrap_or(ground).soft)))
         };
         div().flex().flex_row().items_center().child(
             ground_bg(

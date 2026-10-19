@@ -227,8 +227,7 @@ fn session_summary(s: &SessionState, cx: &mut Context<SessionsView>) -> AnyEleme
                 kit.pointable(
                     kit.chip(
                         Chip::Status {
-                            tone,
-                            halo: qol_gpui::theme::translucent(tone, qol_gpui::theme::Alpha::Halo),
+                            tone: qol_gpui::theme::StatusTone::Warning,
                             text: "your turn".into(),
                         },
                         kit.grounds.pane,
@@ -297,8 +296,7 @@ fn agent_chip(
 fn mail_chip(kit: &qol_gpui::kit::Kit, s: &SessionState) -> Option<gpui::Div> {
     let chip = if s.open_asks > 0 {
         Chip::Status {
-            tone: kit.palette.warning,
-            halo: kit.washes.halo_attention.packed(),
+            tone: qol_gpui::theme::StatusTone::Warning,
             text: format!("{} ask", s.open_asks).into(),
         }
     } else if s.unread > 0 {

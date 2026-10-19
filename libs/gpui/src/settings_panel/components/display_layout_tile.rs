@@ -1,7 +1,7 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, SharedString};
-use qol_theme::TextStyle;
+use qol_theme::{Ground, StatusTone, TextStyle};
 
 use crate::kit::Kit;
 use crate::kit::{kit, Chip};
@@ -34,11 +34,15 @@ pub fn display_layout_tile_style(tile: &DisplayLayoutTile, kit: Kit) -> DisplayL
     };
     DisplayLayoutTileStyle {
         border_color,
-        background: if tile.selected {
-            kit.grounds.band.bg
-        } else {
-            kit.grounds.menu.bg
-        },
+        background: tile_ground(tile, kit).bg,
+    }
+}
+
+fn tile_ground(tile: &DisplayLayoutTile, kit: Kit) -> Ground {
+    if tile.selected {
+        kit.grounds.band
+    } else {
+        kit.grounds.menu
     }
 }
 
@@ -72,6 +76,7 @@ pub fn display_layout_tile(
     kit: Kit,
 ) -> gpui::Stateful<gpui::Div> {
     let style = display_layout_tile_style(tile, kit);
+    let ground = tile_ground(tile, kit);
     let mut cell = div()
         .id(("settings-display-layout-tile", index))
         .absolute()
@@ -101,7 +106,7 @@ pub fn display_layout_tile(
                 )
                 .children(
                     tile.selected
-                        .then(|| status_chip("selected", kit.palette.accent_ink)),
+                        .then(|| status_chip("selected", StatusTone::Accent, ground)),
                 ),
         )
         .child(
@@ -112,24 +117,23 @@ pub fn display_layout_tile(
                 .child(SharedString::from(tile.resolution.clone())),
         );
     if tile.primary {
-        cell = cell.child(
-            div()
-                .px(px(qol_theme::SPACE_STACK))
-                .child(status_chip("primary", kit.palette.success)),
-        );
+        cell = cell.child(div().px(px(qol_theme::SPACE_STACK)).child(status_chip(
+            "primary",
+            StatusTone::Success,
+            ground,
+        )));
     }
     cell
 }
 
-fn status_chip(text: &'static str, tone: u32) -> gpui::Div {
+fn status_chip(text: &'static str, tone: StatusTone, ground: Ground) -> gpui::Div {
     let kit = kit();
     kit.chip(
         Chip::Status {
             tone,
-            halo: qol_theme::translucent(tone, qol_theme::Alpha::Halo),
             text: text.into(),
         },
-        kit.grounds.pane,
+        ground,
     )
 }
 
@@ -193,6 +197,14 @@ mod tests {
         let unselected = display_layout_tile_style(&tile(false, false), kit);
         assert_eq!(selected.background, kit.grounds.band.bg);
         assert_eq!(unselected.background, kit.grounds.menu.bg);
+    }
+
+    #[test]
+    fn chips_take_the_ground_the_tile_is_painted_on() {
+        let kit = kit();
+        assert_eq!(tile_ground(&tile(true, false), kit), kit.grounds.band);
+        assert_eq!(tile_ground(&tile(false, false), kit), kit.grounds.menu);
+        assert_eq!(tile_ground(&tile(false, true), kit), kit.grounds.menu);
     }
 
     #[test]

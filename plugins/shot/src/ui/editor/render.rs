@@ -1,6 +1,6 @@
 use super::*;
 use qol_gpui::hint_bar::{fit_hints, BarItem, HintDescriptor};
-use qol_gpui::kit::{action_row_width, row_circle_state, ActionCircleSize};
+use qol_gpui::kit::{action_row_width, row_circle_state, ActionCircleGround, ActionCircleSize};
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::TextStyle;
@@ -76,7 +76,7 @@ impl EditorView {
         let state = row_circle_state(enabled, index == self.selected);
         let color_bounds = self.color_bounds.clone();
         let mut circle = kit
-            .action_circle(ActionCircleSize::Full, state)
+            .action_circle(ActionCircleSize::Full, state, ActionCircleGround::Pane)
             .id(("shot-editor-control", index))
             .relative();
         if enabled {
