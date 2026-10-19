@@ -35,11 +35,18 @@ pub(super) fn render(
     let on_crumb = cx.entity().downgrade();
     let on_edit = on_crumb.clone();
     let on_suggestion = on_crumb.clone();
+    let note_room = if shows_note {
+        NOTE_WIDTH + SPACE_GUTTER
+    } else {
+        0.0
+    };
+    let width = f32::from(window.viewport_size().width) - 2.0 * SPACE_GUTTER - note_room;
     let mut crumb_trail = CrumbTrail::new(
         "explorer-trail",
         crumbs.into_iter().map(|crumb| crumb.label),
         kit,
     )
+    .fit(width)
     .on_crumb(move |index, _window, cx| {
         let Some(folder) = paths.get(index).cloned() else {
             return;
@@ -53,12 +60,6 @@ pub(super) fn render(
         let _ = on_suggestion.update(cx, |view, cx| view.pick_suggestion(index, cx));
     });
     if let Some(edit) = editing {
-        let note_room = if shows_note {
-            NOTE_WIDTH + SPACE_GUTTER
-        } else {
-            0.0
-        };
-        let width = f32::from(window.viewport_size().width) - 2.0 * SPACE_GUTTER - note_room;
         crumb_trail = crumb_trail.editing(edit, width);
     }
     settings_band_bar(BAND, kit)

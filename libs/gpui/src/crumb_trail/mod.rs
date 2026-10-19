@@ -1,9 +1,10 @@
+use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    anchored, deferred, div, font, px, rgb, rgba, AnyElement, App, Div, ElementId, SharedString,
-    Window,
+    anchored, deferred, div, font, px, rgb, rgba, AnyElement, App, Div, ElementId, FontWeight,
+    Rgba, SharedString, Window,
 };
 use qol_theme::{translucent, Alpha, TextStyle};
 
@@ -33,6 +34,7 @@ pub struct CrumbTrail {
     id: ElementId,
     crumbs: Vec<SharedString>,
     editing: Option<Editing>,
+    fit: Option<f32>,
     on_crumb: Option<CrumbClick>,
     on_edit: Option<EditRequest>,
     on_suggestion: Option<CrumbClick>,
@@ -49,6 +51,7 @@ impl CrumbTrail {
             id: id.into(),
             crumbs: crumbs.into_iter().map(Into::into).collect(),
             editing: None,
+            fit: None,
             on_crumb: None,
             on_edit: None,
             on_suggestion: None,
@@ -74,6 +77,11 @@ impl CrumbTrail {
         self
     }
 
+    pub fn fit(mut self, width: f32) -> Self {
+        self.fit = Some(width);
+        self
+    }
+
     pub fn editing(mut self, edit: &PathEdit, width: f32) -> Self {
         self.editing = Some(Editing {
             edit: edit.clone(),
@@ -89,6 +97,7 @@ impl RenderOnce for CrumbTrail {
             id,
             crumbs,
             editing,
+            fit,
             on_crumb,
             on_edit,
             on_suggestion,
@@ -96,38 +105,94 @@ impl RenderOnce for CrumbTrail {
         } = self;
         match editing {
             Some(Editing { edit, width }) => path_field(&edit, width, on_suggestion, kit, window),
-            None => read_only(id, crumbs, on_crumb, on_edit, kit),
+            None => {
+                let folded = fit.map_or(0..0, |width| folded_run(&crumbs, width, window));
+                read_only(id, crumbs, folded, on_crumb, on_edit, kit)
+            }
         }
     }
+}
+
+fn folded_run(crumbs: &[SharedString], width: f32, window: &mut Window) -> Range<usize> {
+    let spec = TextStyle::Heading.spec();
+    let mut face = font(spec.face.family());
+    face.weight = FontWeight(f32::from(spec.weight));
+    let mut measure = |text: &str| shaped_width(window, text, face.clone(), spec.size);
+    let separator = measure("/") + 2.0 * qol_theme::SPACE_TIGHT;
+    let last = crumbs.len().saturating_sub(1);
+    let widths: Vec<f32> = crumbs
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let label = measure(label);
+            if index == last {
+                label
+            } else {
+                label.min(CRUMB_MAX_WIDTH)
+            }
+        })
+        .collect();
+    let ellipsis = measure("…");
+    fold(&widths, separator, ellipsis, width)
+}
+
+fn fold(widths: &[f32], separator: f32, ellipsis: f32, width: f32) -> Range<usize> {
+    let last = widths.len().saturating_sub(1);
+    let mut shown = widths.iter().sum::<f32>() + separator * last as f32;
+    if shown <= width || widths.len() < 3 {
+        return 0..0;
+    }
+    shown += ellipsis + separator;
+    let mut end = 1;
+    while end < last && shown > width {
+        shown -= widths[end] + separator;
+        end += 1;
+    }
+    1..end
+}
+
+fn separator(color: Rgba) -> AnyElement {
+    div()
+        .flex_none()
+        .px(px(qol_theme::SPACE_TIGHT))
+        .text_color(color)
+        .child("/")
+        .into_any_element()
 }
 
 fn read_only(
     id: ElementId,
     crumbs: Vec<SharedString>,
+    folded: Range<usize>,
     on_crumb: Option<CrumbClick>,
     on_edit: Option<EditRequest>,
     kit: Kit,
 ) -> AnyElement {
     let last = crumbs.len().saturating_sub(1);
-    let separator = rgba(translucent(kit.grounds.pane.faint, Alpha::Veil));
+    let divider = rgba(translucent(kit.grounds.pane.faint, Alpha::Veil));
     let mut children = Vec::with_capacity(crumbs.len() * 2);
+    let faint = rgb(kit.grounds.pane.faint);
     for (index, label) in crumbs.into_iter().enumerate() {
+        if folded.contains(&index) {
+            if index == folded.start {
+                children.push(separator(divider));
+                children.push(
+                    div()
+                        .flex_none()
+                        .text_color(faint)
+                        .child("…")
+                        .into_any_element(),
+                );
+            }
+            continue;
+        }
         if index > 0 {
-            children.push(
-                div()
-                    .flex_none()
-                    .px(px(qol_theme::SPACE_TIGHT))
-                    .text_color(separator)
-                    .child("/")
-                    .into_any_element(),
-            );
+            children.push(separator(divider));
         }
         let crumb = if index == last {
-            div().text_color(rgb(kit.grounds.pane.ink))
+            div().min_w_0().text_color(rgb(kit.grounds.pane.ink))
         } else {
-            div()
-                .max_w(px(CRUMB_MAX_WIDTH))
-                .text_color(rgb(kit.grounds.pane.faint))
+            div().max_w(px(CRUMB_MAX_WIDTH)).text_color(faint)
         };
         let crumb = crumb.child(label);
         children.push(match &on_crumb {
@@ -294,5 +359,23 @@ fn suggestion_row(
             })
             .into_any_element(),
         None => row.into_any_element(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fold;
+
+    #[test]
+    fn a_trail_that_fits_folds_nothing() {
+        assert_eq!(fold(&[50.0, 50.0, 50.0], 10.0, 10.0, 170.0), 0..0);
+        assert_eq!(fold(&[500.0, 500.0], 10.0, 10.0, 100.0), 0..0);
+    }
+
+    #[test]
+    fn an_overflowing_trail_folds_the_crumbs_after_the_first_until_the_rest_fit() {
+        let widths = [40.0; 10];
+        assert_eq!(fold(&widths, 10.0, 10.0, 200.0), 1..8);
+        assert_eq!(fold(&widths, 10.0, 10.0, 0.0), 1..9);
     }
 }

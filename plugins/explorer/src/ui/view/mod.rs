@@ -303,6 +303,7 @@ impl ExplorerView {
     }
 
     fn navigate(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
+        self.waiting.clear();
         self.browser.end_range();
         let scroll = self.scroll_offset();
         if self.arrived(|browser| browser.go(folder, scroll)) {
