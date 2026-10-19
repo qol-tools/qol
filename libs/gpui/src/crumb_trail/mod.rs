@@ -234,14 +234,12 @@ fn path_field(
     window: &mut Window,
 ) -> AnyElement {
     let pane = kit.grounds.pane;
-    let advance = shaped_width(
-        window,
-        "0",
-        font(qol_theme::font_mono()),
-        TextStyle::Code.spec().size,
-    );
+    let size = TextStyle::Code.spec().size;
+    let advance = shaped_width(window, "0", font(qol_theme::font_mono()), size);
     let visible = visible_char_count(width - 2.0 * qol_theme::SPACE_CELL - CARET_WIDTH, advance);
     let text = TextFieldElement::new(edit.field(), visible, advance)
+        .with_marks()
+        .measure_caret(|before| shaped_width(window, before, font(qol_theme::font_mono()), size))
         .selection(rgb(kit.grounds.band.bg).into(), Some(rgb(pane.ink).into()))
         .caret(CaretStyle {
             color: rgb(pane.ink).into(),

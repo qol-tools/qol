@@ -1,30 +1,48 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::Keystroke;
+use qol_gpui::text_edit::marked;
 use qol_gpui::{PathEdit, PathKey};
+use qol_watch::{Watch, WatchRoot};
 
-use crate::listing::{self, FailureReason, Listing, ListingError, ListingRead, Pass};
+use crate::listing::{self, FailureReason, Listing, ListingError, ListingRead, ListingState, Pass};
 use crate::nav::path::{self, PathInput};
 
 pub(super) struct PathField {
     edit: PathEdit,
+    prefill: String,
+    folder: PathBuf,
     parent: PathBuf,
     segment: String,
     listing: Listing,
+    incoming: Option<Listing>,
     read: Option<ListingRead>,
+    watch: Option<Watch>,
+    stale: Arc<AtomicBool>,
     wake: UnboundedSender<()>,
 }
 
 impl PathField {
-    pub(super) fn new(edit: PathEdit, wake: UnboundedSender<()>) -> Self {
+    pub(super) fn open(folder: &Path, home: &Path, wake: UnboundedSender<()>) -> Self {
+        let mut prefill = marked(&path::display_with_home(folder, home));
+        if !prefill.ends_with(is_separator) {
+            prefill.push(MAIN_SEPARATOR);
+        }
         Self {
-            edit,
+            edit: PathEdit::new(prefill.clone()),
+            prefill,
+            folder: folder.to_path_buf(),
             parent: PathBuf::new(),
             segment: String::new(),
             listing: Listing::new(PathBuf::new()),
+            incoming: None,
             read: None,
+            watch: None,
+            stale: Arc::default(),
             wake,
         }
     }
@@ -50,20 +68,23 @@ impl PathField {
         self.edit.pick(index)
     }
 
-    pub(super) fn refresh(&mut self, home: &Path, folder: &Path, show_hidden: bool) {
-        let input = PathInput::parse(self.edit.text(), home);
-        let parent = input.parent.map_or_else(
-            || folder.to_path_buf(),
-            |parent| path::collapse(&folder.join(parent)),
-        );
-        self.segment = input.segment;
+    pub(super) fn target(&self, home: &Path) -> PathBuf {
+        let text = self.edit.text();
+        match text.strip_prefix(self.prefill.as_str()) {
+            Some(rest) => path::collapse(&self.folder.join(rest.trim_start_matches(is_separator))),
+            None => path::resolve(text, home, &self.folder),
+        }
+    }
+
+    pub(super) fn refresh(&mut self, home: &Path, show_hidden: bool) {
+        let (parent, segment) = self.typed_parent(home);
+        self.segment = segment;
         if parent != self.parent {
-            self.read = Some(listing::start(
-                parent.clone(),
-                Pass::NamesOnly,
-                super::waker(&self.wake),
-            ));
+            self.stale.store(false, Ordering::Relaxed);
+            self.watch = self.watch_parent(&parent);
+            self.read = Some(self.read_parent(&parent));
             self.listing = Listing::new(parent.clone());
+            self.incoming = None;
             self.parent = parent;
         }
         self.refresh_suggestions(show_hidden);
@@ -71,13 +92,60 @@ impl PathField {
 
     pub(super) fn drain(&mut self, show_hidden: bool) -> bool {
         let events = super::drain_events(&mut self.read);
-        if events.is_empty() {
-            return false;
-        }
+        let applied = !events.is_empty();
+        let listing = self.incoming.as_mut().unwrap_or(&mut self.listing);
         for event in events {
-            self.listing.apply(event);
+            listing.apply(event);
         }
-        self.refresh_suggestions(show_hidden)
+        if let Some(fresh) = self
+            .incoming
+            .take_if(|incoming| *incoming.state() != ListingState::Loading)
+        {
+            self.listing = fresh;
+        }
+        if self.read.is_none() && self.stale.swap(false, Ordering::Relaxed) {
+            self.read = Some(self.read_parent(&self.parent));
+            self.incoming = Some(Listing::new(self.parent.clone()));
+        }
+        applied && self.refresh_suggestions(show_hidden)
+    }
+
+    fn typed_parent(&self, home: &Path) -> (PathBuf, String) {
+        let text = self.edit.text();
+        if let Some(rest) = text.strip_prefix(self.prefill.as_str()) {
+            let rest = rest.trim_start_matches(is_separator);
+            return match rest.rfind(is_separator) {
+                Some(index) => (
+                    path::collapse(&self.folder.join(&rest[..=index])),
+                    rest[index + 1..].to_string(),
+                ),
+                None => (self.folder.clone(), rest.to_string()),
+            };
+        }
+        let input = PathInput::parse(text, home);
+        let parent = input.parent.map_or_else(
+            || self.folder.clone(),
+            |parent| path::collapse(&self.folder.join(parent)),
+        );
+        (parent, input.segment)
+    }
+
+    fn read_parent(&self, parent: &Path) -> ListingRead {
+        listing::start(
+            parent.to_path_buf(),
+            Pass::NamesOnly,
+            super::waker(&self.wake),
+        )
+    }
+
+    fn watch_parent(&self, parent: &Path) -> Option<Watch> {
+        let stale = Arc::clone(&self.stale);
+        let wake = super::waker(&self.wake);
+        qol_watch::watch(&[WatchRoot::shallow(parent)], move |_| {
+            stale.store(true, Ordering::Relaxed);
+            wake();
+        })
+        .ok()
     }
 
     pub(super) fn refresh_suggestions(&mut self, show_hidden: bool) -> bool {

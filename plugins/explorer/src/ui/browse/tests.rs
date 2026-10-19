@@ -587,6 +587,54 @@ fn dots_through_a_link_suggest_the_folder_that_enter_opens() {
 }
 
 #[test]
+fn a_folder_made_while_the_path_field_is_open_is_suggested() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    make_folder(&inner, "dirt");
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(&mut browser, &format!("inner{MAIN_SEPARATOR}d"));
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["dirt"]);
+
+    make_folder(&inner, "dirq");
+    wait_until(&mut browser, "the new folder to be suggested", |browser| {
+        browser.path_edit().unwrap().suggestions() == ["dirq", "dirt"]
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_path_field_reaches_a_folder_whose_name_shows_a_mark() {
+    let temp = tempfile::tempdir().unwrap();
+    let odd = make_folder(temp.path(), "dir\nnl");
+    let sub = make_folder(&odd, "sub");
+    let mut browser = opened(temp.path());
+    browser.go(odd.clone(), 0.0);
+    settle(&mut browser);
+
+    browser.edit_path();
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        format!("~{MAIN_SEPARATOR}dir\u{FFFD}nl{MAIN_SEPARATOR}")
+    );
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["sub"]);
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Closed);
+    assert_eq!(browser.note().failure, None);
+    assert_eq!(browser.folder(), odd);
+
+    browser.edit_path();
+    settle(&mut browser);
+    type_text(&mut browser, "s");
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Arrived);
+    assert_eq!(browser.folder(), sub);
+}
+
+#[test]
 fn escape_in_the_path_field_puts_the_trail_back() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());

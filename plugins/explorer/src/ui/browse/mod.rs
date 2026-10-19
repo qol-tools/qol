@@ -5,7 +5,7 @@ mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::mem;
-use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
@@ -373,16 +373,8 @@ impl Browser {
         if self.path.is_some() {
             return false;
         }
-        let mut text = crate::nav::path::display_with_home(self.folder(), &self.home);
-        if !text.ends_with(is_separator) {
-            text.push(MAIN_SEPARATOR);
-        }
-        let mut field = PathField::new(PathEdit::new(text), self.wake.clone());
-        field.refresh(
-            &self.home,
-            self.history.current().folder.as_path(),
-            self.show_hidden,
-        );
+        let mut field = PathField::open(self.folder(), &self.home, self.wake.clone());
+        field.refresh(&self.home, self.show_hidden);
         self.path = Some(field);
         true
     }
@@ -399,7 +391,7 @@ impl Browser {
         match field.key(keystroke, paste) {
             PathKey::Changed => {
                 self.failure = None;
-                field.refresh(&self.home, &self.history.current().folder, self.show_hidden);
+                field.refresh(&self.home, self.show_hidden);
                 PathStep::Stay { changed: true }
             }
             PathKey::Handled => PathStep::Stay { changed: true },
@@ -424,10 +416,9 @@ impl Browser {
     }
 
     fn submit_path(&mut self, scroll: f32) -> PathStep {
-        let Some(text) = self.path_edit().map(|edit| edit.text().to_string()) else {
+        let Some(target) = self.path.as_ref().map(|field| field.target(&self.home)) else {
             return PathStep::Closed;
         };
-        let target = crate::nav::path::resolve(&text, &self.home, self.folder());
         if let Err(error) = path_field::folder_at(&target) {
             self.failure = Some(error.to_string());
             return PathStep::Stay { changed: true };

@@ -1,7 +1,9 @@
 use std::path::{is_separator, Component, Path, PathBuf, MAIN_SEPARATOR};
 
+use qol_gpui::text_edit::needs_mark;
+
 use super::prefix::starts_with_ignoring_case;
-use crate::listing::{needs_mark, Listing};
+use crate::listing::Listing;
 
 const HOME: &str = "~";
 
