@@ -62,11 +62,14 @@ impl Tracker {
         if self.superseded(started) {
             return;
         }
-        if outcome == Outcome::Answered {
-            let latency = now.saturating_duration_since(started);
-            let previous = self.smoothed.filter(|_| self.remembers_last(now));
-            self.smoothed = Some(previous.map_or(latency, |previous| (previous + latency) / 2));
-        }
+        self.smoothed = match outcome {
+            Outcome::Answered => {
+                let latency = now.saturating_duration_since(started);
+                let previous = self.smoothed.filter(|_| self.remembers_last(now));
+                Some(previous.map_or(latency, |previous| (previous + latency) / 2))
+            }
+            Outcome::Unreachable => None,
+        };
         self.last = Some(Sample {
             started,
             at: now,

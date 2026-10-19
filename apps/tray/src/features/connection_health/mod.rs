@@ -2,7 +2,10 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use qol_connection_health::{ConnectionHealth, Outcome, Thresholds, Ticket, Tracker};
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use tokio::sync::Notify;
+
+use service::Probes;
 
 mod body;
 mod probe;
@@ -22,6 +25,8 @@ const INTEREST_WINDOW: Duration = Duration::from_secs(10);
 struct Shared {
     tracker: Mutex<Tracker>,
     interest_until: Mutex<Option<Instant>>,
+    published: Mutex<ConnectionHealth>,
+    probes: Mutex<Probes>,
     wake: Notify,
 }
 
@@ -30,8 +35,43 @@ impl Shared {
         Self {
             tracker: Mutex::new(Tracker::new(THRESHOLDS)),
             interest_until: Mutex::new(None),
+            published: Mutex::new(ConnectionHealth::default()),
+            probes: Mutex::new(Probes::default()),
             wake: Notify::new(),
         }
+    }
+
+    fn published(&self) -> ConnectionHealth {
+        *lock(&self.published)
+    }
+
+    fn announce(&self, health: ConnectionHealth, publish: impl FnOnce(ConnectionHealth)) {
+        let mut published = lock(&self.published);
+        *published = health;
+        publish(health);
+    }
+
+    fn probes(&self) -> Probes {
+        *lock(&self.probes)
+    }
+
+    fn probe_started(&self, now: Instant) {
+        let mut probes = lock(&self.probes);
+        probes.last = Some(now);
+        probes.running = true;
+    }
+
+    fn probe_finished(&self, outcome: Option<Outcome>) {
+        {
+            let mut probes = lock(&self.probes);
+            probes.running = false;
+            match outcome {
+                Some(Outcome::Answered) => probes.failures = 0,
+                Some(Outcome::Unreachable) => probes.failures = probes.failures.saturating_add(1),
+                None => {}
+            }
+        }
+        self.wake.notify_one();
     }
 
     fn tracker(&self) -> MutexGuard<'_, Tracker> {
@@ -51,7 +91,15 @@ impl Shared {
 static SHARED: OnceLock<Shared> = OnceLock::new();
 
 pub fn spawn() {
+    crate::runtime::replay_on_subscribe(RuntimeEventKind::ConnectionHealthChanged, replay);
     tokio::spawn(service::run());
+}
+
+fn replay() -> RuntimeEvent {
+    note_interest();
+    RuntimeEvent::ConnectionHealthChanged {
+        health: shared().published(),
+    }
 }
 
 pub fn current() -> ConnectionHealth {
@@ -99,6 +147,7 @@ async fn observe(
     request: reqwest::RequestBuilder,
 ) -> reqwest::Result<reqwest::Response> {
     let mut watch = Watch::begin(shared);
+    #[allow(clippy::disallowed_methods)]
     let result = request.send().await;
     watch.end(outcome(&result));
     result
@@ -159,13 +208,6 @@ impl Drop for Watch {
 
 fn shared() -> &'static Shared {
     SHARED.get_or_init(Shared::new)
-}
-
-fn interested(now: Instant) -> bool {
-    shared().watching(now)
-        || crate::runtime::is_subscribed(
-            qol_runtime::protocol::RuntimeEventKind::ConnectionHealthChanged,
-        )
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

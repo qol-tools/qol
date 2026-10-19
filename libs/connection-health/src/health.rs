@@ -35,10 +35,6 @@ pub struct ConnectionHealth {
 }
 
 impl ConnectionHealth {
-    pub fn is_degraded(&self) -> bool {
-        matches!(self.level, Level::Slow | Level::Bad)
-    }
-
     pub fn same_signal(&self, other: &Self) -> bool {
         self.level == other.level && self.cause == other.cause
     }
@@ -146,18 +142,6 @@ mod tests {
             serde_json::to_string(&ConnectionHealth::default()).unwrap(),
             r#"{"level":"unknown"}"#
         );
-    }
-
-    #[test]
-    fn only_slow_and_bad_are_degraded() {
-        let at = |level| ConnectionHealth {
-            level,
-            ..ConnectionHealth::default()
-        };
-        assert!(!at(Level::Unknown).is_degraded());
-        assert!(!at(Level::Good).is_degraded());
-        assert!(at(Level::Slow).is_degraded());
-        assert!(at(Level::Bad).is_degraded());
     }
 
     #[test]

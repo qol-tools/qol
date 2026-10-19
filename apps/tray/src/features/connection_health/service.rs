@@ -13,21 +13,27 @@ pub(super) struct Step {
     pub(super) deadline: Option<Instant>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Probes {
+    pub(super) last: Option<Instant>,
+    pub(super) running: bool,
+    pub(super) failures: u32,
+}
+
 pub(super) async fn run() {
     let shared = super::shared();
-    let mut published = ConnectionHealth::default();
-    let mut last_probe: Option<Instant> = None;
     loop {
         let now = Instant::now();
-        let interested = super::interested(now);
-        let step = step(&shared.tracker(), now, published, last_probe, interested);
+        let published = shared.published();
+        let probes = shared.probes();
+        let interested = shared.watching(now);
+        let step = step(&shared.tracker(), now, published, probes, interested);
         if let Some(health) = step.publish {
-            publish(health);
-            published = health;
+            shared.announce(health, publish);
         }
         if step.probe {
-            last_probe = Some(now);
-            tokio::spawn(super::probe::run(super::Watch::begin(shared)));
+            shared.probe_started(now);
+            tokio::spawn(super::probe::run(shared));
             continue;
         }
         let wake = shared.wake.notified();
@@ -47,13 +53,18 @@ pub(super) fn step(
     tracker: &Tracker,
     now: Instant,
     published: ConnectionHealth,
-    last_probe: Option<Instant>,
+    probes: Probes,
     interested: bool,
 ) -> Step {
     let health = tracker.health(now);
-    let latest = tracker.last_observed().max(last_probe);
-    let probe_at =
-        next_probe(now, health.level, latest, tracker.waiting_since()).filter(|_| interested);
+    let probe_at = next_probe(
+        now,
+        health.level,
+        tracker.last_observed(),
+        probes,
+        tracker.waiting_since(),
+    )
+    .filter(|_| interested);
     Step {
         publish: (!health.same_signal(&published)).then_some(health),
         probe: probe_at.is_some_and(|at| at <= now),
@@ -64,20 +75,34 @@ pub(super) fn step(
 pub(super) fn next_probe(
     now: Instant,
     level: Level,
-    latest: Option<Instant>,
+    observed: Option<Instant>,
+    probes: Probes,
     waiting_since: Option<Instant>,
 ) -> Option<Instant> {
-    if waiting_since.is_some_and(|since| now < since + super::THRESHOLDS.bad) {
+    if probes.running {
         return None;
     }
-    let Some(last) = latest else {
+    if let Some(since) = waiting_since {
+        let stalled = since + super::THRESHOLDS.bad;
+        return Some(
+            probes
+                .last
+                .map_or(stalled, |last| stalled.max(last + UNSETTLED_PROBE)),
+        );
+    }
+    let Some(latest) = observed.max(probes.last) else {
         return Some(now);
     };
-    let every = match level {
+    Some(latest + interval(level, probes.failures))
+}
+
+fn interval(level: Level, failures: u32) -> Duration {
+    match level {
         Level::Good => STEADY_PROBE,
-        Level::Unknown | Level::Slow | Level::Bad => UNSETTLED_PROBE,
-    };
-    Some(last + every)
+        Level::Unknown | Level::Slow | Level::Bad => UNSETTLED_PROBE
+            .saturating_mul(1 << failures.min(3))
+            .min(STEADY_PROBE),
+    }
 }
 
 fn publish(health: ConnectionHealth) {

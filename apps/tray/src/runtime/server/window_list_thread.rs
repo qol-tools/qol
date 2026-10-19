@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use qol_runtime::protocol::RuntimeEvent;
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 
 use super::super::channels::window_list::WindowListChannel;
 use super::super::Channel;
@@ -12,7 +12,7 @@ pub(super) fn run(shared: Arc<SharedState>, platform: SharedPlatform) {
     let interval = channel.min_interval();
     loop {
         shared.wait_for_window_list_subscriber();
-        if !shared.has_window_list_subscribers() {
+        if !shared.has_event_subscribers(RuntimeEventKind::WindowListChanged) {
             continue;
         }
         if !channel.poll() {

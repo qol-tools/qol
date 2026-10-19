@@ -12,6 +12,7 @@ pub(crate) use publisher::events;
 pub use publisher::install_events;
 pub use publisher::is_subscribed;
 pub use publisher::publish;
+pub use publisher::replay_on_subscribe;
 pub(crate) use server::push_status::PluginStatusRegistry;
 #[cfg(test)]
 pub(crate) use server::state_store::SharedState;

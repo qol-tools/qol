@@ -451,10 +451,12 @@ fn lock_update_state() -> Option<MutexGuard<'static, UpdateState>> {
     }
 }
 
-fn http_client() -> &'static reqwest::Client {
+pub(crate) const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(CHECK_TIMEOUT)
             .connect_timeout(Duration::from_secs(2))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())

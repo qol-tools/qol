@@ -270,8 +270,14 @@ mod tests {
             latency_ms: Some(240),
         };
         let event = RuntimeEvent::ConnectionHealthChanged { health };
-        let wire = serde_json::to_string(&event).expect("serialize");
-        assert!(wire.contains(r#""event":"connection_health_changed""#));
+        let wire = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "event": "connection_health_changed",
+                "health": {"level": "slow", "cause": "waiting", "latency_ms": 240}
+            })
+        );
         let RuntimeEvent::ConnectionHealthChanged { health: parsed } = roundtrip(&event) else {
             panic!("variant mismatch");
         };

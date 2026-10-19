@@ -1,22 +1,13 @@
-use std::sync::OnceLock;
-use std::time::Duration;
+use super::Shared;
 
 const TARGET: &str = "https://api.github.com/rate_limit";
-pub(super) const TIMEOUT: Duration = Duration::from_secs(6);
 
-static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-pub(super) async fn run(mut watch: super::Watch) {
-    let result = client().get(TARGET).send().await;
-    watch.end(super::outcome(&result));
-}
-
-fn client() -> &'static reqwest::Client {
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(TIMEOUT)
-            .user_agent("qol-tray")
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
+pub(super) async fn run(shared: &'static Shared) {
+    let request = crate::features::plugin_store::github::build_github_request(
+        crate::updates::http_client(),
+        TARGET,
+        None,
+    );
+    let result = super::observe(shared, request).await;
+    shared.probe_finished(super::outcome(&result));
 }

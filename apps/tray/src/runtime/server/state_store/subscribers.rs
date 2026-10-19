@@ -51,10 +51,6 @@ pub(super) fn has_poll_subscribers_in(subscribers: &[SubscriberEntry]) -> bool {
         .any(|entry| entry.interests.iter().any(is_poll_event_kind))
 }
 
-pub(super) fn has_window_list_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
-    has_event_subscribers(subscribers, RuntimeEventKind::WindowListChanged)
-}
-
 pub(super) fn has_event_subscribers(
     subscribers: &Mutex<Vec<SubscriberEntry>>,
     kind: RuntimeEventKind,

@@ -223,10 +223,6 @@ impl SharedState {
         subscribers::has_poll_subscribers(&self.subscribers)
     }
 
-    pub(super) fn has_window_list_subscribers(&self) -> bool {
-        subscribers::has_window_list_subscribers(&self.subscribers)
-    }
-
     pub(crate) fn has_event_subscribers(&self, kind: RuntimeEventKind) -> bool {
         subscribers::has_event_subscribers(&self.subscribers, kind)
     }
@@ -378,16 +374,16 @@ mod tests {
         );
 
         assert!(shared.has_poll_subscribers());
-        assert!(shared.has_window_list_subscribers());
+        assert!(shared.has_event_subscribers(RuntimeEventKind::WindowListChanged));
 
         shared.remove_subscriber(poll_id);
 
         assert!(!shared.has_poll_subscribers());
-        assert!(shared.has_window_list_subscribers());
+        assert!(shared.has_event_subscribers(RuntimeEventKind::WindowListChanged));
 
         shared.remove_subscriber(window_id);
 
-        assert!(!shared.has_window_list_subscribers());
+        assert!(!shared.has_event_subscribers(RuntimeEventKind::WindowListChanged));
     }
 
     #[test]

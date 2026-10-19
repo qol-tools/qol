@@ -4,7 +4,7 @@ use qol_connection_health::{Cause, ConnectionHealth, Level, Outcome, Tracker};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::body::ObservedBody;
-use super::service::{next_probe, step, Step};
+use super::service::{next_probe, step, Probes, Step};
 use super::{observe, Shared, INTEREST_WINDOW, THRESHOLDS};
 
 fn isolated() -> &'static Shared {
@@ -37,57 +37,107 @@ fn health(shared: &Shared) -> ConnectionHealth {
     shared.tracker().health(Instant::now())
 }
 
+fn idle() -> Probes {
+    Probes::default()
+}
+
+fn last_probe(at: Instant) -> Probes {
+    Probes {
+        last: Some(at),
+        ..Probes::default()
+    }
+}
+
 #[test]
 fn a_first_look_probes_at_once() {
     let now = Instant::now();
-    assert_eq!(next_probe(now, Level::Unknown, None, None), Some(now));
+    assert_eq!(
+        next_probe(now, Level::Unknown, None, idle(), None),
+        Some(now)
+    );
 }
 
 #[test]
 fn no_probe_while_a_request_is_still_measuring() {
     let now = Instant::now() + THRESHOLDS.bad;
     let just_started = Some(now);
-    assert_eq!(next_probe(now, Level::Unknown, None, just_started), None);
-    let almost_stalled = Some(now - THRESHOLDS.bad + Duration::from_millis(1));
+    let at = next_probe(now, Level::Unknown, None, idle(), just_started).unwrap();
+    assert_eq!(at, now + THRESHOLDS.bad);
+    let almost_stalled = now - THRESHOLDS.bad + Duration::from_millis(1);
+    let at = next_probe(now, Level::Slow, Some(now), idle(), Some(almost_stalled)).unwrap();
+    assert!(at > now);
+}
+
+#[test]
+fn a_stalled_request_is_probed_the_moment_it_stalls() {
+    let now = Instant::now() + THRESHOLDS.bad;
+    let stalled = Some(now - THRESHOLDS.bad);
     assert_eq!(
-        next_probe(now, Level::Slow, Some(now), almost_stalled),
-        None
+        next_probe(now, Level::Bad, None, idle(), stalled),
+        Some(now)
+    );
+    let answered_just_before = Some(now - THRESHOLDS.bad);
+    assert_eq!(
+        next_probe(now, Level::Bad, answered_just_before, idle(), stalled),
+        Some(now)
     );
 }
 
 #[test]
-fn a_stalled_request_lets_a_probe_check_the_connection() {
+fn a_stall_right_after_a_probe_waits_one_probe_gap() {
     let now = Instant::now() + THRESHOLDS.bad;
     let stalled = Some(now - THRESHOLDS.bad);
-    assert_eq!(next_probe(now, Level::Bad, None, stalled), Some(now));
-    let earlier = now - Duration::from_secs(30);
-    let probe_at = next_probe(now, Level::Bad, Some(earlier), stalled).unwrap();
-    assert!(probe_at <= now);
+    let probed = now - Duration::from_secs(2);
+    let at = next_probe(now, Level::Bad, None, last_probe(probed), stalled).unwrap();
+    assert!(at > now);
+    assert!(at - now < Duration::from_secs(10));
 }
 
 #[test]
-fn a_probe_already_running_waits_for_its_turn() {
+fn nothing_is_probed_while_a_probe_runs() {
     let now = Instant::now() + THRESHOLDS.bad;
+    let running = Probes {
+        running: true,
+        ..last_probe(now)
+    };
+    assert_eq!(next_probe(now, Level::Unknown, None, running, None), None);
     let stalled = Some(now - THRESHOLDS.bad);
-    let probe_at = next_probe(now, Level::Bad, Some(now), stalled).unwrap();
-    assert!(probe_at - now > super::probe::TIMEOUT);
+    assert_eq!(next_probe(now, Level::Bad, None, running, stalled), None);
 }
 
 #[test]
 fn a_good_connection_is_probed_rarely_and_a_doubtful_one_often() {
     let now = Instant::now();
-    let good = next_probe(now, Level::Good, Some(now), None).unwrap();
+    let good = next_probe(now, Level::Good, Some(now), idle(), None).unwrap();
     for level in [Level::Unknown, Level::Slow, Level::Bad] {
-        let doubtful = next_probe(now, level, Some(now), None).unwrap();
+        let doubtful = next_probe(now, level, Some(now), idle(), None).unwrap();
         assert!(doubtful > now, "{level:?}");
         assert!(doubtful < good, "{level:?}");
     }
 }
 
 #[test]
+fn probes_back_off_while_they_keep_failing() {
+    let now = Instant::now();
+    let after = |failures| {
+        let probes = Probes {
+            failures,
+            ..last_probe(now)
+        };
+        next_probe(now, Level::Bad, Some(now), probes, None).unwrap() - now
+    };
+    let steady = next_probe(now, Level::Good, Some(now), idle(), None).unwrap() - now;
+    assert!(after(0) < after(1));
+    assert!(after(1) < after(2));
+    assert!(after(2) < after(3));
+    assert_eq!(after(4), steady);
+    assert_eq!(after(u32::MAX), steady);
+}
+
+#[test]
 fn probes_keep_a_watched_connection_remembered() {
     let now = Instant::now();
-    let good = next_probe(now, Level::Good, Some(now), None).unwrap();
+    let good = next_probe(now, Level::Good, Some(now), idle(), None).unwrap();
     assert!(good - now < THRESHOLDS.memory);
 }
 
@@ -95,7 +145,45 @@ fn probes_keep_a_watched_connection_remembered() {
 fn thresholds_rise_from_slow_to_bad() {
     assert!(THRESHOLDS.slow < THRESHOLDS.bad);
     assert!(THRESHOLDS.bad < THRESHOLDS.memory);
-    assert!(THRESHOLDS.bad < super::probe::TIMEOUT);
+    assert!(THRESHOLDS.bad < crate::updates::CHECK_TIMEOUT);
+}
+
+#[test]
+fn probe_results_count_failures_until_an_answer() {
+    let shared = isolated();
+    let now = Instant::now();
+    shared.probe_started(now);
+    assert!(shared.probes().running);
+    shared.probe_finished(Some(Outcome::Unreachable));
+    shared.probe_started(now);
+    shared.probe_finished(Some(Outcome::Unreachable));
+    assert_eq!(shared.probes().failures, 2);
+    assert!(!shared.probes().running);
+    shared.probe_started(now);
+    shared.probe_finished(None);
+    assert_eq!(shared.probes().failures, 2);
+    shared.probe_started(now);
+    shared.probe_finished(Some(Outcome::Answered));
+    assert_eq!(shared.probes(), last_probe(now));
+}
+
+#[test]
+fn a_replay_reads_what_was_last_published_not_the_live_tracker() {
+    let shared = isolated();
+    let good = ConnectionHealth {
+        level: Level::Good,
+        cause: None,
+        latency_ms: Some(80),
+    };
+    let mut sent = Vec::new();
+    shared.announce(good, |health| sent.push(health));
+    assert_eq!(sent, [good]);
+    let ticket = shared.tracker().begin(Instant::now());
+    shared
+        .tracker()
+        .finish(ticket, Outcome::Unreachable, Instant::now());
+    assert_eq!(health(shared).level, Level::Bad);
+    assert_eq!(shared.published(), good);
 }
 
 #[test]
@@ -105,10 +193,10 @@ fn a_changed_signal_is_published_once() {
     let ticket = tracker.begin(now);
     tracker.finish(ticket, Outcome::Answered, now + Duration::from_millis(100));
     let later = now + Duration::from_millis(100);
-    let first = step(&tracker, later, ConnectionHealth::default(), None, false);
+    let first = step(&tracker, later, ConnectionHealth::default(), idle(), false);
     let health = first.publish.expect("good differs from unknown");
     assert_eq!(health.level, Level::Good);
-    let again = step(&tracker, later, health, None, false);
+    let again = step(&tracker, later, health, idle(), false);
     assert_eq!(again.publish, None);
 }
 
@@ -116,7 +204,7 @@ fn a_changed_signal_is_published_once() {
 fn nothing_is_probed_unless_someone_is_interested() {
     let now = Instant::now();
     let tracker = Tracker::new(THRESHOLDS);
-    let unwatched = step(&tracker, now, ConnectionHealth::default(), None, false);
+    let unwatched = step(&tracker, now, ConnectionHealth::default(), idle(), false);
     assert_eq!(
         unwatched,
         Step {
@@ -125,7 +213,7 @@ fn nothing_is_probed_unless_someone_is_interested() {
             deadline: None,
         }
     );
-    let watched = step(&tracker, now, ConnectionHealth::default(), None, true);
+    let watched = step(&tracker, now, ConnectionHealth::default(), idle(), true);
     assert!(watched.probe);
     assert_eq!(watched.deadline, Some(now));
 }
@@ -135,17 +223,25 @@ fn the_loop_sleeps_until_the_next_change_or_probe() {
     let now = Instant::now();
     let mut tracker = Tracker::new(THRESHOLDS);
     let _waiting = tracker.begin(now);
-    let measuring = step(&tracker, now, ConnectionHealth::default(), None, true);
+    let measuring = step(&tracker, now, ConnectionHealth::default(), idle(), true);
     assert!(!measuring.probe);
     assert_eq!(measuring.deadline, Some(now + THRESHOLDS.slow));
+    let stalled = step(
+        &tracker,
+        now + THRESHOLDS.bad,
+        ConnectionHealth::default(),
+        idle(),
+        true,
+    );
+    assert!(stalled.probe);
 
     let mut tracker = Tracker::new(THRESHOLDS);
     let ticket = tracker.begin(now);
     tracker.finish(ticket, Outcome::Answered, now);
     let good = tracker.health(now);
-    let settled = step(&tracker, now, good, None, true);
+    let settled = step(&tracker, now, good, idle(), true);
     assert!(!settled.probe);
-    let probe_at = next_probe(now, Level::Good, Some(now), None).unwrap();
+    let probe_at = next_probe(now, Level::Good, Some(now), idle(), None).unwrap();
     assert!(probe_at < now + THRESHOLDS.memory);
     assert_eq!(settled.deadline, Some(probe_at));
 }

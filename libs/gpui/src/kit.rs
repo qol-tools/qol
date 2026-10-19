@@ -95,7 +95,8 @@ impl Kit {
 
     pub fn connection_hue(&self, level: Level) -> u32 {
         match level {
-            Level::Unknown | Level::Good => self.palette.success,
+            Level::Unknown => self.grounds.pane.faint,
+            Level::Good => self.palette.success,
             Level::Slow => self.palette.warning,
             Level::Bad => self.palette.danger,
         }
@@ -878,14 +879,15 @@ mod tests {
     }
 
     #[test]
-    fn connection_levels_take_the_status_hues_in_every_theme() {
+    fn unknown_is_neutral_and_measured_levels_take_the_status_hues() {
         use qol_connection_health::Level;
         for (mode, palette) in [
             (ThemeMode::Dark, DARK_SYSTEM),
             (ThemeMode::Light, LIGHT_SYSTEM),
         ] {
             let kit = Kit::new(mode, palette);
-            assert_eq!(kit.connection_hue(Level::Unknown), palette.success);
+            assert_eq!(kit.connection_hue(Level::Unknown), kit.grounds.pane.faint);
+            assert_ne!(kit.connection_hue(Level::Unknown), palette.success);
             assert_eq!(kit.connection_hue(Level::Good), palette.success);
             assert_eq!(kit.connection_hue(Level::Slow), palette.warning);
             assert_eq!(kit.connection_hue(Level::Bad), palette.danger);
