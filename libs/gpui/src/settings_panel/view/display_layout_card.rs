@@ -204,9 +204,7 @@ impl SettingsPanelView {
             origin_row,
             display_id.to_string(),
             cx,
-            |this, row, id, cx| {
-                this.dispatch_display_layout_brightness(row, &id, cx);
-            },
+            |this, row, id, cx| this.dispatch_display_layout_brightness(row, &id, cx),
         );
         cx.notify();
     }
@@ -234,7 +232,7 @@ impl SettingsPanelView {
             state.set_brightness(&id, next);
         }
         self.schedule_slider_dispatch(origin_row, id, cx, |this, row, id, cx| {
-            this.dispatch_display_layout_brightness(row, &id, cx);
+            this.dispatch_display_layout_brightness(row, &id, cx)
         });
     }
 
@@ -243,34 +241,24 @@ impl SettingsPanelView {
         row: usize,
         display_id: &str,
         cx: &mut Context<Self>,
-    ) {
-        let Some(runtime) = self
+    ) -> Option<Task<()>> {
+        let runtime = self
             .root_source_for(row)
-            .map(|source| source.runtime.clone())
-        else {
-            return;
-        };
+            .map(|source| source.runtime.clone())?;
         self.slider_pending.remove(&(row, display_id.to_string()));
-        let Some(state) = self.level().display_layout.as_ref() else {
-            return;
-        };
-        let Some(slider) = state.bindings().slider.clone() else {
-            return;
-        };
-        let Some(value) = state
+        let state = self.level().display_layout.as_ref()?;
+        let slider = state.bindings().slider.clone()?;
+        let value = state
             .displays()
             .iter()
             .find(|display| display.id == display_id)
-            .and_then(|display| display.brightness)
-        else {
-            return;
-        };
+            .and_then(|display| display.brightness)?;
         let resolved = resolve_slider_action(
             &slider,
             &serde_json::json!({ "id": display_id }),
             f64::from(value),
         );
-        cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        Some(cx.spawn(move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let async_cx = cx.clone();
             async move {
                 let _ = async_cx
@@ -279,8 +267,7 @@ impl SettingsPanelView {
                     })
                     .await;
             }
-        })
-        .detach();
+        }))
     }
 
     fn stage_display_layout_nudge(&mut self, dx: i32, dy: i32) {

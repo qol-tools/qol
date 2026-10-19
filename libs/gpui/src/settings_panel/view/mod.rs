@@ -1,11 +1,13 @@
 mod choose_card;
 mod display_layout_card;
 mod list_card;
+mod slider_flights;
 mod structured_list_editor;
 
 use crate::key::Key;
 use crate::kit::Chip;
-use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_DEBOUNCE, SLIDER_HOLD_DURATION};
+use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
+use slider_flights::SliderFlights;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -268,6 +270,7 @@ pub(super) struct SettingsPanelView {
     slider_drag: Option<(usize, String)>,
     slider_pending: std::collections::HashSet<(usize, String)>,
     slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
+    slider_flights: SliderFlights<(usize, String), SliderDispatch>,
     frame_paced_samples: Option<SampledQueryResults>,
     applied_query_payloads: AppliedQueryPayloads,
     /// Per-source query freshness, so a row backed by a wedged daemon can say
@@ -458,6 +461,7 @@ impl SettingsPanelView {
             slider_drag: None,
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
+            slider_flights: SliderFlights::default(),
             frame_paced_samples: None,
             applied_query_payloads: AppliedQueryPayloads::seeded(
                 focused_source,
@@ -2411,12 +2415,12 @@ impl SettingsPanelView {
         action: &str,
         value: f64,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<Task<()>> {
         let key = (row, id.to_string());
         self.slider_pending.remove(&key);
         let Some(runtime) = self.source_for(row).map(|source| source.runtime.clone()) else {
             self.slider_holds.remove(&key);
-            return;
+            return None;
         };
         let generation = self.slider_dispatch_generation.get(&key).copied();
         self.slider_holds.insert(
@@ -2428,7 +2432,7 @@ impl SettingsPanelView {
             },
         );
         let action = action.to_string();
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        Some(cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
@@ -2438,7 +2442,13 @@ impl SettingsPanelView {
                     .await;
                 let _ = this.update(&mut async_cx, |this, cx| {
                     if let Err(error) = result {
-                        if this.slider_dispatch_generation.get(&key).copied() == generation {
+                        if generation.is_some_and(|generation| {
+                            slider_generation_current(
+                                &this.slider_dispatch_generation,
+                                &key,
+                                generation,
+                            )
+                        }) {
                             this.slider_holds.remove(&key);
                         }
                         this.save_error = Some(error);
@@ -2446,8 +2456,7 @@ impl SettingsPanelView {
                     cx.notify();
                 });
             }
-        })
-        .detach();
+        }))
     }
 
     fn begin_number_slider_drag(&mut self, row: usize) {
@@ -2491,7 +2500,7 @@ impl SettingsPanelView {
                 self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
                     match live_number_dispatch_plan(&this.level().rows, row) {
                         LiveNumberDispatch::Fire { action, value } => {
-                            this.dispatch_live_number(row, &id, &action, value, cx);
+                            this.dispatch_live_number(row, &id, &action, value, cx)
                         }
                         LiveNumberDispatch::Release => {
                             release_slider_dispatch(
@@ -2499,6 +2508,7 @@ impl SettingsPanelView {
                                 &mut this.slider_holds,
                                 &(row, id),
                             );
+                            None
                         }
                     }
                 });
@@ -2514,27 +2524,46 @@ impl SettingsPanelView {
         cx: &mut Context<Self>,
         dispatch: D,
     ) where
-        D: FnOnce(&mut SettingsPanelView, usize, String, &mut Context<SettingsPanelView>) + 'static,
+        D: FnOnce(
+                &mut SettingsPanelView,
+                usize,
+                String,
+                &mut Context<SettingsPanelView>,
+            ) -> Option<Task<()>>
+            + 'static,
     {
         let key = (row, id);
-        let generation = schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
+        schedule_slider_generation(&mut self.slider_dispatch_generation, &key);
         self.slider_pending.insert(key.clone());
+        if let Some(dispatch) = self.slider_flights.offer(key.clone(), Box::new(dispatch)) {
+            self.fly_slider(key, dispatch, cx);
+        }
+    }
+
+    fn fly_slider(
+        &mut self,
+        key: (usize, String),
+        dispatch: SliderDispatch,
+        cx: &mut Context<Self>,
+    ) {
+        let started = std::time::Instant::now();
+        let Some(flight) = dispatch(self, key.0, key.1.clone(), cx) else {
+            if let Some(next) = self.slider_flights.land(&key) {
+                self.fly_slider(key, next, cx);
+            }
+            return;
+        };
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
-                async_cx
-                    .background_executor()
-                    .timer(SLIDER_DISPATCH_DEBOUNCE)
-                    .await;
+                flight.await;
+                if let Some(rest) = SLIDER_DISPATCH_INTERVAL.checked_sub(started.elapsed()) {
+                    async_cx.background_executor().timer(rest).await;
+                }
                 let _ = this.update(&mut async_cx, |this, cx| {
-                    if !slider_generation_current(
-                        &this.slider_dispatch_generation,
-                        &key,
-                        generation,
-                    ) {
-                        return;
+                    if let Some(next) = this.slider_flights.land(&key) {
+                        this.fly_slider(key, next, cx);
                     }
-                    dispatch(this, row, key.1.clone(), cx);
                 });
             }
         })
@@ -4336,6 +4365,15 @@ struct NumberSpec {
 fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
     (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
 }
+
+type SliderDispatch = Box<
+    dyn FnOnce(
+        &mut SettingsPanelView,
+        usize,
+        String,
+        &mut Context<SettingsPanelView>,
+    ) -> Option<Task<()>>,
+>;
 
 fn schedule_slider_generation(
     generations: &mut std::collections::HashMap<(usize, String), u64>,
@@ -6419,7 +6457,7 @@ active_value_from = "active"
     }
 
     #[test]
-    fn two_live_numbers_scheduled_inside_one_debounce_both_stay_current() {
+    fn two_live_numbers_scheduled_together_both_stay_current() {
         let mut generations = std::collections::HashMap::new();
         let volume = (0usize, "volume".to_string());
         let brightness = (1usize, "brightness".to_string());

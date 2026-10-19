@@ -22,8 +22,8 @@ use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
 
-pub(super) const SLIDER_DISPATCH_DEBOUNCE: std::time::Duration =
-    std::time::Duration::from_millis(200);
+pub(super) const SLIDER_DISPATCH_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(30);
 pub(super) const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SettingsPanelView {
@@ -301,7 +301,7 @@ impl SettingsPanelView {
         step_list_slider(slider, item, direction);
         let item_id = item.id.clone();
         self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
-            this.dispatch_list_slider(row, &id, cx);
+            this.dispatch_list_slider(row, &id, cx)
         });
         true
     }
@@ -341,25 +341,24 @@ impl SettingsPanelView {
             },
         );
         self.schedule_slider_dispatch(row_index, item_id.to_string(), cx, |this, row, id, cx| {
-            this.dispatch_list_slider(row, &id, cx);
+            this.dispatch_list_slider(row, &id, cx)
         });
     }
 
-    fn dispatch_list_slider(&mut self, row_index: usize, item_id: &str, cx: &mut Context<Self>) {
-        let Some(runtime) = self
+    fn dispatch_list_slider(
+        &mut self,
+        row_index: usize,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<()>> {
+        let runtime = self
             .root_source_for(row_index)
-            .map(|source| source.runtime.clone())
-        else {
-            return;
-        };
+            .map(|source| source.runtime.clone())?;
         self.slider_pending
             .remove(&(row_index, item_id.to_string()));
-        let Some((action, item_id)) =
-            resolve_list_slider_dispatch(self.slider_rows(), row_index, item_id)
-        else {
-            return;
-        };
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+        let (action, item_id) =
+            resolve_list_slider_dispatch(self.slider_rows(), row_index, item_id)?;
+        Some(cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             let mut async_cx = cx.clone();
             async move {
                 let result = async_cx
@@ -379,8 +378,7 @@ impl SettingsPanelView {
                     cx.notify();
                 });
             }
-        })
-        .detach();
+        }))
     }
 
     pub(super) fn open_list_card(&mut self, row_index: usize, cx: &mut Context<Self>) {
