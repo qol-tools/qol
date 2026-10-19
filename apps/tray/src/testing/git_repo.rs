@@ -9,7 +9,7 @@ pub(crate) struct GitRepo {
 impl GitRepo {
     pub(crate) fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("repo");
+        let root = temp.path().canonicalize().unwrap().join("repo");
         std::fs::create_dir_all(&root).unwrap();
         git(&root, &["init", "-q"]);
         git(&root, &["config", "user.email", "t@example.com"]);

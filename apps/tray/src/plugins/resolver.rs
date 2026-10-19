@@ -52,6 +52,14 @@ pub struct PluginUnavailable {
 pub struct ResolutionReport {
     pub plugins: Vec<ResolvedPlugin>,
     pub unavailable: Vec<PluginUnavailable>,
+    pub worktree: WorktreeOverride,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorktreeOverride {
+    pub overridden: Vec<String>,
+    pub promoted: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 pub(crate) fn resolve_effective_registry(
@@ -59,8 +67,11 @@ pub(crate) fn resolve_effective_registry(
     config_dir: &Path,
 ) -> ResolutionReport {
     let mut effective = registry.clone();
-    apply_worktree_override(&mut effective, config_dir);
-    resolve_from_registry(&effective)
+    let worktree = apply_worktree_override(&mut effective, config_dir);
+    ResolutionReport {
+        worktree,
+        ..resolve_from_registry(&effective)
+    }
 }
 
 pub(crate) fn resolve_plugin_path(config_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
@@ -143,16 +154,10 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
             Err(active_reason) => {
                 let active_fail = SlotFailure {
                     path: active.path.clone(),
-                    reason: active_reason.clone(),
+                    reason: active_reason,
                 };
                 match fallback.map(|s| (s, validate_slot(&entry.id, s))) {
                     Some((slot, Ok(()))) => {
-                        log::warn!(
-                            "Plugin {} active slot invalid ({}); falling back to {}",
-                            entry.id,
-                            active_reason,
-                            slot.path.display()
-                        );
                         report.plugins.push(resolved_from_slot(
                             &entry.id,
                             slot,
@@ -189,9 +194,10 @@ pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
 }
 
 #[cfg(feature = "dev")]
-fn apply_worktree_override(registry: &mut Registry, config_dir: &Path) {
+fn apply_worktree_override(registry: &mut Registry, config_dir: &Path) -> WorktreeOverride {
+    let mut changes = WorktreeOverride::default();
     let Some(branch) = crate::dev::get_active_worktree_branch(config_dir) else {
-        return;
+        return changes;
     };
     let base_links: HashMap<String, PathBuf> = registry
         .entries
@@ -205,44 +211,37 @@ fn apply_worktree_override(registry: &mut Registry, config_dir: &Path) {
         .map(|entry| (entry.id.clone(), entry.active.path.clone()))
         .collect();
     if base_links.is_empty() {
-        return;
+        return changes;
     }
     let resolved = crate::dev::resolve_worktree_paths(&base_links, Some(&branch));
     let mut detached = Vec::new();
     for entry in &mut registry.entries {
         if let Some(new_path) = resolved.get(&entry.id) {
-            override_entry_to_worktree(entry, new_path);
+            if override_entry_to_worktree(entry, new_path) {
+                changes.overridden.push(entry.id.clone());
+            }
         } else if base_links.contains_key(&entry.id) {
             detached.push(entry.id.clone());
         }
     }
     if detached.is_empty() {
-        return;
+        return changes;
     }
-    let mut removed = Vec::new();
     for entry in &mut registry.entries {
         if !detached.contains(&entry.id) {
             continue;
         }
         if let Some(fallback) = entry.fallback.take() {
-            log::info!(
-                "[worktree] detaching dev link for {}: promoting installed fallback",
-                entry.id
-            );
+            changes.promoted.push(entry.id.clone());
             entry.active = fallback;
         } else {
-            removed.push(entry.id.clone());
+            changes.removed.push(entry.id.clone());
         }
     }
-    if !removed.is_empty() {
-        log::info!(
-            "[worktree] detaching dev links outside the active selection: {}",
-            removed.join(", ")
-        );
-        registry
-            .entries
-            .retain(|entry| !removed.contains(&entry.id));
-    }
+    registry
+        .entries
+        .retain(|entry| !changes.removed.contains(&entry.id));
+    changes
 }
 
 /// Repoint an entry's active slot at the worktree, making the pre-override slot
@@ -252,20 +251,19 @@ fn apply_worktree_override(registry: &mut Registry, config_dir: &Path) {
 /// installed-release fallback (which would be protocol-incompatible with a
 /// freshly built host).
 #[cfg(feature = "dev")]
-fn override_entry_to_worktree(entry: &mut Entry, new_path: &Path) {
+fn override_entry_to_worktree(entry: &mut Entry, new_path: &Path) -> bool {
     if *new_path == entry.active.path {
-        return;
+        return false;
     }
-    log::info!(
-        "[worktree] overriding plugin={} with active worktree slot",
-        entry.id
-    );
     entry.fallback = Some(entry.active.clone());
     entry.active.path = new_path.to_path_buf();
+    true
 }
 
 #[cfg(not(feature = "dev"))]
-fn apply_worktree_override(_registry: &mut Registry, _config_dir: &Path) {}
+fn apply_worktree_override(_registry: &mut Registry, _config_dir: &Path) -> WorktreeOverride {
+    WorktreeOverride::default()
+}
 
 fn visible_slots(entry: &Entry) -> (Option<&Slot>, Option<&Slot>) {
     let active = is_visible_slot(&entry.active).then_some(&entry.active);
@@ -964,6 +962,7 @@ mod tests {
                 "/wt",
                 "/wt",
                 Some("/main"),
+                true,
             ),
             (
                 "stale installed fallback is replaced by main clone",
@@ -971,12 +970,24 @@ mod tests {
                 "/wt",
                 "/wt",
                 Some("/main"),
+                true,
             ),
-            ("no-op when path is unchanged", None, "/main", "/main", None),
+            (
+                "no-op when path is unchanged",
+                None,
+                "/main",
+                "/main",
+                None,
+                false,
+            ),
         ];
-        for (label, initial_fallback, new_path, want_active, want_fallback) in cases {
+        for (label, initial_fallback, new_path, want_active, want_fallback, want_changed) in cases {
             let mut entry = dev_linked_entry("/main", initial_fallback);
-            override_entry_to_worktree(&mut entry, &PathBuf::from(new_path));
+            assert_eq!(
+                override_entry_to_worktree(&mut entry, &PathBuf::from(new_path)),
+                want_changed,
+                "changed: {label}"
+            );
             assert_eq!(
                 entry.active.path,
                 PathBuf::from(want_active),
@@ -1045,8 +1056,9 @@ mod tests {
         qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("feat")).unwrap();
 
         let mut effective = registry.clone();
-        apply_worktree_override(&mut effective, config_dir.path());
+        let changes = apply_worktree_override(&mut effective, config_dir.path());
 
+        assert_eq!(changes, WorktreeOverride::default());
         let installed = effective
             .entries
             .iter()
@@ -1078,8 +1090,9 @@ mod tests {
         let config_dir = TempDir::new().unwrap();
 
         let mut effective = registry.clone();
-        apply_worktree_override(&mut effective, config_dir.path());
+        let changes = apply_worktree_override(&mut effective, config_dir.path());
 
+        assert_eq!(changes, WorktreeOverride::default());
         assert_eq!(
             effective.entries.len(),
             1,
@@ -1102,8 +1115,9 @@ mod tests {
         qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("feat")).unwrap();
 
         let mut effective = registry.clone();
-        apply_worktree_override(&mut effective, config_dir.path());
+        let changes = apply_worktree_override(&mut effective, config_dir.path());
 
+        assert_eq!(changes, WorktreeOverride::default());
         assert_eq!(effective.entries.len(), 1);
         assert_eq!(effective.entries[0].active.path, link);
     }
@@ -1123,8 +1137,15 @@ mod tests {
         qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("other")).unwrap();
 
         let mut effective = registry.clone();
-        apply_worktree_override(&mut effective, config_dir.path());
+        let changes = apply_worktree_override(&mut effective, config_dir.path());
 
+        assert_eq!(
+            changes,
+            WorktreeOverride {
+                removed: vec!["plugin-foo".to_string()],
+                ..WorktreeOverride::default()
+            }
+        );
         assert_eq!(
             effective.entries.len(),
             0,
@@ -1151,8 +1172,15 @@ mod tests {
         qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("other")).unwrap();
 
         let mut effective = registry.clone();
-        apply_worktree_override(&mut effective, config_dir.path());
+        let changes = apply_worktree_override(&mut effective, config_dir.path());
 
+        assert_eq!(
+            changes,
+            WorktreeOverride {
+                promoted: vec!["plugin-foo".to_string()],
+                ..WorktreeOverride::default()
+            }
+        );
         assert_eq!(
             effective.entries.len(),
             1,
@@ -1162,6 +1190,67 @@ mod tests {
         assert!(
             matches!(effective.entries[0].active.source, SlotSource::ReleaseAsset),
             "promoted active must be the release slot"
+        );
+    }
+
+    #[cfg(feature = "dev")]
+    #[test]
+    fn apply_worktree_override_reports_the_override_without_logging_it() {
+        let repo = crate::test_support::GitRepo::new();
+        let main_clone = repo.plugin(&repo.root, "plugin-foo");
+        let feat = repo.add_worktree("feat");
+        let worktree_copy = repo.plugin(&feat, "plugin-foo");
+        let registry = Registry {
+            version: 1,
+            entries: vec![dev_linked_entry(main_clone.to_str().unwrap(), None)],
+        };
+        let config_dir = TempDir::new().unwrap();
+        qol_dev_build::tray::set_active_worktree_marker(config_dir.path(), Some("feat")).unwrap();
+
+        let mut effective = registry.clone();
+        let (changes, logs) = crate::test_support::capture_logs(log::Level::Info, || {
+            apply_worktree_override(&mut effective, config_dir.path())
+        });
+
+        assert_eq!(
+            changes,
+            WorktreeOverride {
+                overridden: vec!["plugin-foo".to_string()],
+                ..WorktreeOverride::default()
+            }
+        );
+        assert_eq!(effective.entries[0].active.path, worktree_copy);
+        assert!(
+            logs.is_empty(),
+            "the loader logs worktree changes: {logs:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_path_falls_back_without_logging() {
+        let tmp = TempDir::new().unwrap();
+        let installed_dir = tmp.path().join("plugin-foo");
+        fs::create_dir(&installed_dir).unwrap();
+        write_valid_manifest(&installed_dir, "plugin-foo");
+        let mut entry = installed_entry("plugin-foo", &tmp.path().join("removed-release"));
+        entry.fallback = Some(Slot {
+            path: installed_dir.clone(),
+            source: SlotSource::ReleaseAsset,
+        });
+        let registry = Registry {
+            version: 1,
+            entries: vec![entry],
+        };
+        crate::plugins::registry::save_registry(tmp.path(), &registry).unwrap();
+
+        let (path, logs) = crate::test_support::capture_logs(log::Level::Info, || {
+            resolve_plugin_path(tmp.path(), "plugin-foo")
+        });
+
+        assert_eq!(path, Some(installed_dir));
+        assert!(
+            logs.is_empty(),
+            "settings poll this lookup, so only the loader logs the fallback: {logs:?}"
         );
     }
 
