@@ -32,6 +32,13 @@ impl SliderStyle {
         }
     }
 
+    fn value_gap(self) -> f32 {
+        match self {
+            Self::Compact => qol_theme::SPACE_INSET,
+            Self::Wide | Self::Level => qol_theme::SPACE_CELL,
+        }
+    }
+
     pub(in crate::settings_panel) fn thumb_reach(self) -> f32 {
         match self {
             Self::Compact => 0.0,
@@ -176,11 +183,8 @@ pub(in crate::settings_panel) fn number_field(
         RowGround::Pane => (ground.soft, None),
         RowGround::Band => (ground.ink, hover.map(|hover| hover.ink)),
     };
-    let mut cell = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(qol_theme::SPACE_INSET));
+    let gap = track.map_or(qol_theme::SPACE_INSET, |(_, style)| style.value_gap());
+    let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
         let width = style.track_width();
         let fill = fraction * width;
@@ -264,6 +268,7 @@ mod tests {
     #[test]
     fn a_thumbed_slider_reserves_room_for_the_thumb_past_both_track_ends() {
         assert_eq!(SliderStyle::Compact.thumb_reach(), 0.0);
+        assert_eq!(SliderStyle::Compact.value_gap(), qol_theme::SPACE_INSET);
         for style in [SliderStyle::Wide, SliderStyle::Level] {
             let reach = style.thumb_reach();
             assert_eq!(thumb_left(0.0), -reach);
@@ -271,6 +276,7 @@ mod tests {
                 thumb_left(style.track_width()) + WIDE_THUMB,
                 style.track_width() + reach
             );
+            assert_eq!(style.value_gap(), qol_theme::SPACE_CELL);
         }
     }
 
