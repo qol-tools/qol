@@ -32,7 +32,7 @@ pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
-pub(super) use number_field::{number_field, SliderStyle};
+pub(super) use number_field::{number_field, NumberText, SliderStyle};
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use text_field::SettingsTextField;
@@ -93,6 +93,15 @@ fn ground_text<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Op
         }
         None => element,
     }
+}
+
+fn selection_colors(kit: Kit) -> (u32, u32) {
+    (kit.grounds.band.bg, kit.grounds.pane.ink)
+}
+
+pub fn settings_selected_text(text: gpui::Div, kit: Kit) -> gpui::Div {
+    let (bg, ink) = selection_colors(kit);
+    text.bg(rgb(bg)).text_color(rgb(ink))
 }
 
 fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {

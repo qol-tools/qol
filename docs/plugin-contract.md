@@ -223,7 +223,8 @@ Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
 
 Per-kind rules (validated, not ignored):
 
-- `number`: `min`/`max`/`step` (`step>0`, `min<=max`); rejected on other kinds.
+- `number`: `min`/`max`/`step` (`step>0`, `min<=max`); rejected on other kinds. `min`
+  defaults to 0 and `max` to 2147483647.
 - `select`: `options` (non-empty) + optional `option_labels`; default/override must
   be a declared option. Static select overrides are canonicalized before validation
   only when trimming surrounding whitespace, collapsing internal whitespace runs,
