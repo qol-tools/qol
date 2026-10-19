@@ -25,6 +25,10 @@ impl<K: Clone + Eq + Hash, D> SliderFlights<K, D> {
         Some(dispatch)
     }
 
+    pub(super) fn is_flying(&self, key: &K) -> bool {
+        self.flying.contains(key)
+    }
+
     pub(super) fn land(&mut self, key: &K) -> Option<D> {
         let next = self.waiting.remove(key);
         if next.is_none() {
@@ -55,6 +59,19 @@ mod tests {
         assert_eq!(flights.land(&"volume"), Some(40));
         assert_eq!(flights.land(&"volume"), None);
         assert_eq!(flights.offer("volume", 50), Some(50));
+    }
+
+    #[test]
+    fn a_slider_flies_from_its_first_offer_until_nothing_waits() {
+        let mut flights = SliderFlights::default();
+        assert!(!flights.is_flying(&"volume"));
+        assert_eq!(flights.offer("volume", 10), Some(10));
+        assert!(flights.is_flying(&"volume"));
+        assert_eq!(flights.offer("volume", 20), None);
+        assert_eq!(flights.land(&"volume"), Some(20));
+        assert!(flights.is_flying(&"volume"));
+        assert_eq!(flights.land(&"volume"), None);
+        assert!(!flights.is_flying(&"volume"));
     }
 
     #[test]

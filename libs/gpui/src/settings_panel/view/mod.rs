@@ -2214,7 +2214,7 @@ impl SettingsPanelView {
         let Some(row) = self.level_mut().rows.get_mut(selected) else {
             return;
         };
-        let mut live_number = None;
+        let mut live_number = false;
         match &mut row.control {
             RowControl::Text(value) => *value = edit,
             RowControl::Number {
@@ -2229,9 +2229,7 @@ impl SettingsPanelView {
                     return;
                 };
                 *value = parsed;
-                if live.is_some() {
-                    live_number = Some(parsed);
-                }
+                live_number = live.is_some();
                 if streams {
                     if let Some(stream) = self.stream_for(self.level().selected) {
                         stream.close();
@@ -2252,9 +2250,9 @@ impl SettingsPanelView {
             | RowControl::QrCode { .. }
             | RowControl::Unsupported { .. } => return,
         }
-        if let Some(number) = live_number {
-            if let (Some(action), Some(id)) = (action, row_id) {
-                self.dispatch_live_number(selected, &id, &action, number, cx);
+        if live_number {
+            if let (Some(_), Some(id)) = (action, row_id) {
+                self.schedule_live_number(selected, id, cx);
             }
             cx.notify();
             return;
@@ -2408,6 +2406,7 @@ impl SettingsPanelView {
             })
     }
 
+    #[must_use]
     fn dispatch_live_number(
         &mut self,
         row: usize,
@@ -2490,31 +2489,38 @@ impl SettingsPanelView {
         else {
             return;
         };
-        *value = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let dragged = slider_value_from_fraction(*min, *max, step.unwrap_or(1.0), fraction);
+        let moved = *value != dragged;
+        *value = dragged;
         let live = live.is_some();
-        let dragged = *value;
         self.level_mut().selected = row;
-        self.stream_level(row, dragged);
-        if live {
-            if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
-                self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
-                    match live_number_dispatch_plan(&this.level().rows, row) {
-                        LiveNumberDispatch::Fire { action, value } => {
-                            this.dispatch_live_number(row, &id, &action, value, cx)
-                        }
-                        LiveNumberDispatch::Release => {
-                            release_slider_dispatch(
-                                &mut this.slider_pending,
-                                &mut this.slider_holds,
-                                &(row, id),
-                            );
-                            None
-                        }
-                    }
-                });
+        if moved {
+            self.stream_level(row, dragged);
+            if live {
+                if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                    self.schedule_live_number(row, id, cx);
+                }
             }
         }
         cx.notify();
+    }
+
+    fn schedule_live_number(&mut self, row: usize, id: String, cx: &mut Context<Self>) {
+        self.schedule_slider_dispatch(row, id, cx, |this, row, id, cx| {
+            match live_number_dispatch_plan(&this.level().rows, row) {
+                LiveNumberDispatch::Fire { action, value } => {
+                    this.dispatch_live_number(row, &id, &action, value, cx)
+                }
+                LiveNumberDispatch::Release => {
+                    release_slider_dispatch(
+                        &mut this.slider_pending,
+                        &mut this.slider_holds,
+                        &(row, id),
+                    );
+                    None
+                }
+            }
+        });
     }
 
     fn schedule_slider_dispatch<D>(

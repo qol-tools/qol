@@ -298,11 +298,12 @@ impl SettingsPanelView {
         let Some(item) = selected_list_item(actions, items, filter, slot) else {
             return false;
         };
-        step_list_slider(slider, item, direction);
-        let item_id = item.id.clone();
-        self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
-            this.dispatch_list_slider(row, &id, cx)
-        });
+        if step_list_slider(slider, item, direction) {
+            let item_id = item.id.clone();
+            self.schedule_slider_dispatch(origin_row, item_id, cx, |this, row, id, cx| {
+                this.dispatch_list_slider(row, &id, cx)
+            });
+        }
         true
     }
 
@@ -323,15 +324,18 @@ impl SettingsPanelView {
         let Some(slider) = slider else {
             return;
         };
-        if !items.iter().any(|item| item.id == item_id) {
+        let Some(item) = items.iter().find(|item| item.id == item_id) else {
             return;
-        }
+        };
         let value = slider_value_from_fraction(
             slider.spec.min,
             slider.spec.max,
             slider.spec.step,
             fraction,
         );
+        if list_slider_value(&slider.spec, &slider.values, item) == value {
+            return;
+        }
         slider.values.insert(
             item_id.to_string(),
             SliderHold {
@@ -345,6 +349,7 @@ impl SettingsPanelView {
         });
     }
 
+    #[must_use]
     fn dispatch_list_slider(
         &mut self,
         row_index: usize,
@@ -596,7 +601,7 @@ pub(super) fn slider_percent_label(min: f64, max: f64, value: f64) -> String {
     format!("{:.0}%", fraction * 100.0)
 }
 
-fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
+fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) -> bool {
     let current = list_slider_value(&slider.spec, &slider.values, item);
     let next = stepped_slider_value(
         current,
@@ -605,6 +610,9 @@ fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
         slider.spec.max,
         slider.spec.step,
     );
+    if next == current {
+        return false;
+    }
     slider.values.insert(
         item.id.clone(),
         SliderHold {
@@ -613,6 +621,7 @@ fn step_list_slider(slider: &mut ListSlider, item: &ListItem, direction: f64) {
             until: std::time::Instant::now() + SLIDER_HOLD_DURATION,
         },
     );
+    true
 }
 
 pub(super) struct SliderTrackStyle {
@@ -1719,7 +1728,7 @@ mod tests {
         assert_eq!(card_item.id, "b");
         assert_eq!(well_item.id, card_item.id);
         let slider = slider.as_mut().unwrap();
-        step_list_slider(slider, card_item, 1.0);
+        assert!(step_list_slider(slider, card_item, 1.0));
         let hold = slider
             .values
             .get(&well_item.id)

@@ -197,8 +197,11 @@ impl SettingsPanelView {
         };
         let value = slider_value_from_fraction(slider.min, slider.max, slider.step, fraction);
         let value = value.round().clamp(0.0, 255.0) as u8;
-        if let Some(state) = self.level_mut().display_layout.as_mut() {
-            state.set_brightness(display_id, value);
+        let Some(state) = self.level_mut().display_layout.as_mut() else {
+            return;
+        };
+        if !state.set_brightness(display_id, value) {
+            return;
         }
         self.schedule_slider_dispatch(
             origin_row,
@@ -228,14 +231,18 @@ impl SettingsPanelView {
             slider.step,
         );
         let next = next.round().clamp(0.0, 255.0) as u8;
-        if let Some(state) = self.level_mut().display_layout.as_mut() {
-            state.set_brightness(&id, next);
+        let Some(state) = self.level_mut().display_layout.as_mut() else {
+            return;
+        };
+        if !state.set_brightness(&id, next) {
+            return;
         }
         self.schedule_slider_dispatch(origin_row, id, cx, |this, row, id, cx| {
             this.dispatch_display_layout_brightness(row, &id, cx)
         });
     }
 
+    #[must_use]
     fn dispatch_display_layout_brightness(
         &mut self,
         row: usize,
@@ -459,8 +466,21 @@ impl SettingsPanelView {
         if !matches {
             return;
         }
+        let Some(origin_row) = self.level().origin_row else {
+            return;
+        };
         let (root, front) = self.stack.split_at_mut(1);
-        display_layout_card_sync(&mut root[0].rows, front.last_mut().expect("front level"));
+        let dragged = self.slider_drag.as_ref();
+        let pending = &self.slider_pending;
+        let flights = &self.slider_flights;
+        display_layout_card_sync(
+            &mut root[0].rows,
+            front.last_mut().expect("front level"),
+            &|display_id| {
+                let key = (origin_row, display_id.to_string());
+                dragged == Some(&key) || pending.contains(&key) || flights.is_flying(&key)
+            },
+        );
         self.height_revision += 1;
     }
 
@@ -1083,7 +1103,11 @@ fn display_layout_card_level(
     }
 }
 
-fn display_layout_card_sync(root_rows: &mut [Row], level: &mut Level) {
+fn display_layout_card_sync(
+    root_rows: &mut [Row],
+    level: &mut Level,
+    sliding: &dyn Fn(&str) -> bool,
+) {
     let Some(origin_row) = level.origin_row else {
         return;
     };
@@ -1094,7 +1118,16 @@ fn display_layout_card_sync(root_rows: &mut [Row], level: &mut Level) {
     let Some(card) = level.display_layout.as_mut() else {
         return;
     };
+    let held: Vec<(String, u8)> = card
+        .displays()
+        .iter()
+        .filter(|display| sliding(&display.id))
+        .filter_map(|display| Some((display.id.clone(), display.brightness?)))
+        .collect();
     card.adopt_fresh(fresh);
+    for (display_id, brightness) in held {
+        card.set_brightness(&display_id, brightness);
+    }
 }
 
 fn display_layout_card_commit(root_rows: &mut [Row], level: &Level) {
@@ -1918,7 +1951,7 @@ mod tests {
                 "brightness": 55,
             }
         ]));
-        super::display_layout_card_sync(&mut root, &mut card);
+        super::display_layout_card_sync(&mut root, &mut card, &|_| false);
         let state = card.display_layout.as_ref().expect("card state");
         let beta = state
             .displays()
@@ -1928,6 +1961,73 @@ mod tests {
         assert_eq!(beta.x, 2000, "fresh geometry lands");
         assert_eq!(state.rect_of(beta).y, 21, "the staged edit survives");
         assert_eq!(beta.brightness, Some(55), "brightness follows the poll");
+    }
+
+    #[test]
+    fn a_layout_poll_leaves_the_brightness_being_slid() {
+        let mut root = vec![display_layout_row()];
+        let mut card_state = display_layout_state();
+        assert!(card_state.set_brightness("beta", 90));
+        let mut card = super::display_layout_card_level(
+            "Arrangement",
+            0,
+            card_state,
+            0,
+            SettingsDestination::from_static("Arrangement"),
+            None,
+        );
+        let RowControl::DisplayLayout(fresh) = &mut root[0].control else {
+            panic!("expected the root display layout row");
+        };
+        fresh.load_layout(&serde_json::json!([
+            {
+                "id": "alpha",
+                "connector": "card0-DP-1",
+                "x": 0,
+                "y": 0,
+                "width": 3840,
+                "height": 2160,
+                "refresh_hz": 60,
+                "primary": true,
+                "brightness": 20,
+            },
+            {
+                "id": "beta",
+                "connector": "card0-DP-2",
+                "x": 2000,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+                "refresh_hz": 60,
+                "primary": false,
+                "brightness": 40,
+            }
+        ]));
+        super::display_layout_card_sync(&mut root, &mut card, &|id| id == "beta");
+        let state = card.display_layout.as_ref().expect("card state");
+        let brightness = |id: &str| {
+            state
+                .displays()
+                .iter()
+                .find(|display| display.id == id)
+                .and_then(|display| display.brightness)
+        };
+        let beta_x = state
+            .displays()
+            .iter()
+            .find(|display| display.id == "beta")
+            .map(|display| display.x);
+        assert_eq!(beta_x, Some(2000), "fresh geometry still lands");
+        assert_eq!(
+            brightness("beta"),
+            Some(90),
+            "the slid value survives the poll"
+        );
+        assert_eq!(
+            brightness("alpha"),
+            Some(20),
+            "other displays follow the poll"
+        );
     }
 
     #[test]

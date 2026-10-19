@@ -667,10 +667,13 @@ impl DisplayLayoutState {
         true
     }
 
-    pub fn set_brightness(&mut self, id: &str, value: u8) {
-        if let Some(display) = self.displays.iter_mut().find(|display| display.id == id) {
-            display.brightness = Some(value);
-        }
+    pub fn set_brightness(&mut self, id: &str, value: u8) -> bool {
+        let Some(display) = self.displays.iter_mut().find(|display| display.id == id) else {
+            return false;
+        };
+        let changed = display.brightness != Some(value);
+        display.brightness = Some(value);
+        changed
     }
 
     pub fn cycle(&mut self, step: i32) -> bool {
@@ -1445,9 +1448,13 @@ mod tests {
                 .map(|slider| slider.action.as_str()),
             Some("set_brightness")
         );
-        layout.set_brightness("beta", 70);
+        assert!(layout.set_brightness("beta", 70));
         assert_eq!(layout.displays()[1].brightness, Some(70));
-        layout.set_brightness("ghost", 10);
+        assert!(
+            !layout.set_brightness("beta", 70),
+            "the same value is no change"
+        );
+        assert!(!layout.set_brightness("ghost", 10));
         assert_eq!(layout.displays()[0].brightness, Some(40));
         assert_eq!(layout.displays()[1].brightness, Some(70));
     }
