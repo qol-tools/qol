@@ -308,7 +308,7 @@ impl Kit {
             .gap(px(qol_theme::SPACE_SNUG))
             .h(px(CHIP_HEIGHT))
             .px(px(qol_theme::SPACE_INSET))
-            .rounded_full()
+            .rounded(px(qol_theme::RADIUS_TIGHT))
             .bg(rgba(ground.well.packed()))
             .text(TextStyle::Detail)
             .text_color(rgb(ground.soft))

@@ -1,6 +1,8 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb, rgba, App, IntoElement, RenderOnce, SharedString, Window};
+use gpui::{
+    div, point, px, rgb, rgba, App, BoxShadow, IntoElement, RenderOnce, SharedString, Window,
+};
 use qol_theme::TextStyle;
 
 use crate::kit::kit;
@@ -9,6 +11,7 @@ use crate::kit::Kit;
 use super::{ground_bg, ground_text, RowGround};
 
 const KEY_CAP_HEIGHT: f32 = qol_theme::HEIGHT_INLINE - 2.0 * qol_theme::SPACE_STACK;
+const PLUS_ARM: f32 = 7.0;
 
 fn key_caps(combo: &str) -> Option<Vec<&str>> {
     let mut caps = Vec::new();
@@ -65,13 +68,33 @@ impl RenderOnce for SettingsKeyCombination {
         let editing = self.focused || self.recording;
         let well = rgba(ground.well.packed());
         let well_hover = hover.map(|hover| rgba(hover.well.packed()));
-        let faint = |child: &'static str| {
-            ground_text(
-                div(),
+        let plus_bar = |bar: gpui::Div| {
+            ground_bg(
+                bar.absolute(),
                 rgb(ground.faint),
                 hover.map(|hover| rgb(hover.faint)),
             )
-            .child(child)
+        };
+        let plus = || {
+            let middle = ((PLUS_ARM - qol_theme::LINE) / 2.0).floor();
+            div()
+                .flex_none()
+                .relative()
+                .size(px(PLUS_ARM))
+                .child(plus_bar(
+                    div()
+                        .left_0()
+                        .top(px(middle))
+                        .w(px(PLUS_ARM))
+                        .h(px(qol_theme::LINE)),
+                ))
+                .child(plus_bar(
+                    div()
+                        .top_0()
+                        .left(px(middle))
+                        .w(px(qol_theme::LINE))
+                        .h(px(PLUS_ARM)),
+                ))
         };
         let combo = div()
             .flex_none()
@@ -99,16 +122,23 @@ impl RenderOnce for SettingsKeyCombination {
         let mut keys = Vec::new();
         for (index, cap) in caps.into_iter().enumerate() {
             if index > 0 {
-                keys.push(faint("+"));
+                keys.push(plus());
             }
             let key = div()
+                .flex_none()
                 .flex()
                 .items_center()
+                .justify_center()
+                .min_w(px(KEY_CAP_HEIGHT))
                 .h(px(KEY_CAP_HEIGHT))
                 .px(px(qol_theme::SPACE_INSET))
                 .rounded(px(qol_theme::RADIUS_KEYCAP))
-                .border_b(px(qol_theme::LINE))
-                .border_color(rgba(qol_theme::SHADE_WELL));
+                .shadow(vec![BoxShadow {
+                    color: rgba(qol_theme::SHADE_WELL).into(),
+                    offset: point(px(0.0), px(qol_theme::LINE)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(0.0),
+                }]);
             keys.push(
                 ground_bg(key, well, well_hover).child(
                     ground_text(div(), rgb(ground.ink), hover.map(|hover| rgb(hover.ink)))
@@ -116,7 +146,7 @@ impl RenderOnce for SettingsKeyCombination {
                 ),
             );
         }
-        combo.gap(px(qol_theme::SPACE_TIGHT)).children(keys)
+        combo.gap(px(qol_theme::SPACE_SNUG)).children(keys)
     }
 }
 
