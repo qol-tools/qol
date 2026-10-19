@@ -6,7 +6,7 @@ icon = "sound"
 description = "Choose where sound plays, which microphone every app hears, and how loud each is"
 version = "0.24.0"
 author = "KMRH47"
-platforms = ["linux", "windows"]
+platforms = ["linux", "macos", "windows"]
 
 [runtime]
 command = "qol-sound"

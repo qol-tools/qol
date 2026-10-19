@@ -6434,7 +6434,9 @@ dependencies = [
 name = "qol-audio"
 version = "1.0.0"
 dependencies = [
+ "core-foundation 0.10.0",
  "mio",
+ "objc2",
  "pulseaudio",
  "qol-platform",
  "socket2",

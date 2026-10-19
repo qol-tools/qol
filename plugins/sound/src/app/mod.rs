@@ -403,10 +403,9 @@ fn read_levels(now: Instant) -> Levels {
 }
 
 fn current_meter(meter: Option<Meter>, role: Role) -> Option<Meter> {
-    match meter {
-        Some(meter) if crate::levels::is_current(&meter, role) => Some(meter),
-        Some(_) | None => crate::levels::open(role),
-    }
+    meter
+        .filter(|meter| crate::levels::is_current(meter, role))
+        .or_else(|| crate::levels::open(role))
 }
 
 fn spawn_idle_close() {

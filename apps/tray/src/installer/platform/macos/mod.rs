@@ -125,6 +125,11 @@ fn bootstrap_allowed_for_bundle_root(bundle_root: &Path, home: Option<&Path>) ->
 const BLUETOOTH_USAGE: &str =
     "QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.";
 
+const MICROPHONE_USAGE: &str = "QoL Tray shows how loud your microphone is in the Sound settings.";
+
+const AUDIO_CAPTURE_USAGE: &str =
+    "QoL Tray shows how loud the sound playing on your Mac is in the Sound settings.";
+
 fn write_info_plist(bundle_root: &Path) -> Result<()> {
     let plist_path = bundle_root.join("Contents").join("Info.plist");
     write_text_file(&plist_path, &info_plist_xml(env!("CARGO_PKG_VERSION")))
@@ -156,6 +161,10 @@ fn info_plist_xml(version: &str) -> String {
          <string>11.0</string>\n\
          <key>NSBluetoothAlwaysUsageDescription</key>\n\
          <string>{BLUETOOTH_USAGE}</string>\n\
+         <key>NSMicrophoneUsageDescription</key>\n\
+         <string>{MICROPHONE_USAGE}</string>\n\
+         <key>NSAudioCaptureUsageDescription</key>\n\
+         <string>{AUDIO_CAPTURE_USAGE}</string>\n\
          </dict>\n\
          </plist>\n"
     )
@@ -215,6 +224,22 @@ mod tests {
         let xml = info_plist_xml("9.9.9");
         assert!(xml.contains(&format!(
             "<key>NSBluetoothAlwaysUsageDescription</key>\n<string>{BLUETOOTH_USAGE}</string>"
+        )));
+    }
+
+    #[test]
+    fn info_plist_declares_microphone_usage_so_the_sound_meter_can_ask() {
+        let xml = info_plist_xml("9.9.9");
+        assert!(xml.contains(&format!(
+            "<key>NSMicrophoneUsageDescription</key>\n<string>{MICROPHONE_USAGE}</string>"
+        )));
+    }
+
+    #[test]
+    fn info_plist_declares_audio_capture_usage_so_the_output_meter_can_ask() {
+        let xml = info_plist_xml("9.9.9");
+        assert!(xml.contains(&format!(
+            "<key>NSAudioCaptureUsageDescription</key>\n<string>{AUDIO_CAPTURE_USAGE}</string>"
         )));
     }
 

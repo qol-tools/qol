@@ -401,6 +401,10 @@ jobs:
           <string>11.0</string>
           <key>NSBluetoothAlwaysUsageDescription</key>
           <string>QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.</string>
+          <key>NSMicrophoneUsageDescription</key>
+          <string>QoL Tray shows how loud your microphone is in the Sound settings.</string>
+          <key>NSAudioCaptureUsageDescription</key>
+          <string>QoL Tray shows how loud the sound playing on your Mac is in the Sound settings.</string>
           </dict>
           </plist>
           EOF
