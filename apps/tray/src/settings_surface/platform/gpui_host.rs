@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::{mpsc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
@@ -856,7 +857,8 @@ fn notifications_source() -> (PanelSource, SettingsRuntime) {
 }
 
 fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
-    let (source, runtime) = load_plugin_source(plugin_id)?;
+    let plugin_root = crate::plugins::paths::resolve_plugin_root(plugin_id)?;
+    let (source, runtime) = load_plugin_source_from_root(plugin_id, &plugin_root)?;
     let mut panel = SettingsPanel::single(
         plugin_id.to_string(),
         source.contract,
@@ -873,19 +875,21 @@ struct PluginSettingsSource {
     mark: qol_theme::Mark,
 }
 
-fn load_plugin_source(plugin_id: &str) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
-    let plugin_root = crate::plugins::paths::resolve_plugin_root(plugin_id)?;
-    let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(&plugin_root)?;
+fn load_plugin_source_from_root(
+    plugin_id: &str,
+    plugin_root: &Path,
+) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
+    let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(plugin_root)?;
     if !manifest.capabilities.gpui {
         bail!("plugin does not opt into GPUI settings");
     }
     let Some((_, runtime_contract)) =
-        crate::plugins::config::load_combined_contracts_from_root(&plugin_root)?
+        crate::plugins::config::load_combined_contracts_from_root(plugin_root)?
     else {
         bail!("plugin has no settings contract");
     };
     let contract =
-        std::fs::read_to_string(crate::plugins::paths::config_contract_path(&plugin_root))
+        std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
             .context("failed to read the plugin settings contract")?;
     let mut runtime = SettingsRuntime::tray(plugin_id);
     if let Some(runtime_contract) = runtime_contract.as_ref() {
@@ -951,11 +955,12 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
         if !manifest.capabilities.gpui || !crate::plugins::paths::has_config(&resolved.path) {
             continue;
         }
-        eligible.push((manifest.plugin.name.clone(), resolved.id.to_string()));
+        eligible.push((manifest.plugin.name.clone(), resolved));
     }
     eligible.sort_by(|left, right| left.0.cmp(&right.0));
-    for (_, plugin_id) in eligible {
-        match load_plugin_source(&plugin_id) {
+    for (_, resolved) in eligible {
+        let plugin_id = resolved.id.to_string();
+        match load_plugin_source_from_root(&plugin_id, &resolved.path) {
             Ok((source, runtime)) => {
                 sources.push(PanelSource {
                     plugin_id,
@@ -1233,6 +1238,59 @@ mod tests {
         );
         qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
             .expect("core contract must resolve with no stored values");
+    }
+
+    #[test]
+    fn settings_read_a_plugin_from_its_installed_copy_when_its_dev_link_is_gone() {
+        use crate::plugins::registry::{Entry, Registry, Slot, SlotSource};
+
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        let installed = root.path().join("installed").join("plugin-foo");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(
+            installed.join("plugin.toml"),
+            "[plugin]\nid = \"plugin-foo\"\nname = \"Foo\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[capabilities]\ngpui = true\n\n[menu]\nlabel = \"Foo\"\nitems = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            installed.join("qol-config.toml"),
+            "schema_version = 1\ntitle = \"Foo\"\ndescription = \"Foo settings.\"\n\n[field.enabled]\ntype = \"boolean\"\nconfig_key = \"general.enabled\"\nlabel = \"Enabled\"\ndefault = true\n",
+        )
+        .unwrap();
+        let deleted_worktree = root.path().join("deleted-worktree").join("plugin-foo");
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        crate::plugins::registry::save_registry(
+            &config_dir,
+            &Registry {
+                version: 1,
+                entries: vec![Entry {
+                    id: "plugin-foo".to_string(),
+                    active: Slot {
+                        path: deleted_worktree.clone(),
+                        source: SlotSource::DevLink {
+                            origin_path: deleted_worktree,
+                        },
+                    },
+                    fallback: Some(Slot {
+                        path: installed,
+                        source: SlotSource::ReleaseAsset,
+                    }),
+                }],
+            },
+        )
+        .unwrap();
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-foo")
+            .expect("the unified settings list plugin-foo");
+        assert_eq!(listed.heading, "Foo");
+        let (single, _) = super::load_plugin_panel("plugin-foo").unwrap();
+        assert_eq!(single.sources[0].heading, "Foo");
     }
 
     #[test]

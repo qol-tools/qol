@@ -2,6 +2,7 @@ use super::{runtime, PluginManager};
 use crate::plugins::registry::ensure_registry_initialized;
 use crate::plugins::resolver::{
     resolve_effective_registry, PluginUnavailable, ResolutionReport, ResolvedPlugin,
+    WorktreeOverride,
 };
 use crate::plugins::{Plugin, PluginLoader};
 use anyhow::{Context, Result};
@@ -50,7 +51,7 @@ pub(super) fn load_plugin(plugin_id: &str) -> Result<LoadedPlugin> {
 fn resolution_report() -> Result<ResolutionReport> {
     let plugins_dir = PluginLoader::ensure_plugin_dir()?;
     let report = resolve_plugins(&plugins_dir)?;
-    log_resolved_plugins(&report.plugins);
+    log_resolution(&report);
     Ok(report)
 }
 
@@ -59,9 +60,28 @@ fn resolve_plugins(plugins_dir: &Path) -> Result<ResolutionReport> {
         crate::paths::shared_config_dir().context("resolve_plugins: shared_config_dir")?;
     let registry = ensure_registry_initialized(&config_dir, plugins_dir)
         .map_err(|e| anyhow::anyhow!("Failed to initialize plugin registry: {}", e))?;
-    let report = resolve_effective_registry(&registry, &config_dir);
+    Ok(resolve_effective_registry(&registry, &config_dir))
+}
+
+fn log_resolution(report: &ResolutionReport) {
+    log_worktree_override(&report.worktree);
     log_unavailable(&report.unavailable);
-    Ok(report)
+    log_resolved_plugins(&report.plugins);
+}
+
+fn log_worktree_override(worktree: &WorktreeOverride) {
+    for id in &worktree.overridden {
+        log::info!("[worktree] overriding plugin={id} with active worktree slot");
+    }
+    for id in &worktree.promoted {
+        log::info!("[worktree] detaching dev link for {id}: promoting installed fallback");
+    }
+    if !worktree.removed.is_empty() {
+        log::info!(
+            "[worktree] detaching dev links outside the active selection: {}",
+            worktree.removed.join(", ")
+        );
+    }
 }
 
 fn log_unavailable(unavailable: &[PluginUnavailable]) {
@@ -82,6 +102,14 @@ fn log_unavailable(unavailable: &[PluginUnavailable]) {
 
 fn log_resolved_plugins(resolved: &[ResolvedPlugin]) {
     for plugin in resolved {
+        if let Some(failure) = &plugin.active_failure {
+            log::warn!(
+                "Plugin {} active slot invalid ({}); falling back to {}",
+                plugin.id,
+                failure.reason,
+                plugin.path.display()
+            );
+        }
         log::info!(
             "Resolved plugin: {} ({:?}) from {:?}",
             plugin.id,
@@ -115,4 +143,48 @@ pub(super) fn rebuild_identity_index(manager: &mut PluginManager) {
         );
     }
     manager.identity_index = index;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::resolver::{PluginSource, ResolutionOrigin, SlotFailure};
+    use crate::plugins::PluginId;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_load_pass_logs_every_worktree_change_and_fallback_once() {
+        let report = ResolutionReport {
+            plugins: vec![ResolvedPlugin {
+                id: PluginId::new("plugin-foo".to_string()),
+                path: PathBuf::from("/a/installed/plugin-foo"),
+                source: PluginSource::Installed,
+                resolved_from: ResolutionOrigin::Fallback,
+                active_failure: Some(SlotFailure {
+                    path: PathBuf::from("/a/deleted/plugin-foo"),
+                    reason: "not a directory: /a/deleted/plugin-foo".to_string(),
+                }),
+            }],
+            unavailable: Vec::new(),
+            worktree: WorktreeOverride {
+                overridden: vec!["plugin-bar".to_string()],
+                promoted: vec!["plugin-baz".to_string()],
+                removed: vec!["plugin-qux".to_string(), "plugin-quux".to_string()],
+            },
+        };
+
+        let ((), logs) =
+            crate::test_support::capture_logs(log::Level::Info, || log_resolution(&report));
+
+        assert_eq!(
+            logs,
+            [
+                "INFO [worktree] overriding plugin=plugin-bar with active worktree slot",
+                "INFO [worktree] detaching dev link for plugin-baz: promoting installed fallback",
+                "INFO [worktree] detaching dev links outside the active selection: plugin-qux, plugin-quux",
+                "WARN Plugin plugin-foo active slot invalid (not a directory: /a/deleted/plugin-foo); falling back to /a/installed/plugin-foo",
+                "INFO Resolved plugin: plugin-foo (Installed) from \"/a/installed/plugin-foo\"",
+            ]
+        );
+    }
 }
