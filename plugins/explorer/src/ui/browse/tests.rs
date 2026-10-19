@@ -909,6 +909,22 @@ fn a_picked_hard_link_renamed_with_its_unpicked_twin_stays_picked() {
 
 #[cfg(unix)]
 #[test]
+fn a_picked_hard_link_renamed_as_its_twin_is_removed_stays_picked() {
+    let temp = abc_folder();
+    fs::hard_link(temp.path().join("a.txt"), temp.path().join("e.txt")).unwrap();
+    let mut browser = opened(temp.path());
+    browser.toggle_pick();
+
+    fs::remove_file(temp.path().join("e.txt")).unwrap();
+    fs::rename(temp.path().join("a.txt"), temp.path().join("x.txt")).unwrap();
+    wait_until(&mut browser, "the rename", |browser| {
+        names(browser) == ["b.txt", "c.txt", "d.txt", "x.txt"]
+    });
+    assert_eq!(picked(&browser), ["x.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_renamed_entry_keeps_the_cursor_and_its_pick() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());

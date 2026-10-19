@@ -617,10 +617,11 @@ impl Browser {
         }
         for (id, from) in gone {
             let to = appeared.remove(&id).unwrap_or_default();
-            if from.len() != to.len() {
-                continue;
-            }
-            for (from, to) in from.into_iter().zip(to) {
+            let picked: Vec<&Path> = from
+                .into_iter()
+                .filter(|path| self.picks.is_picked(path))
+                .collect();
+            for (from, to) in picked.into_iter().zip(to) {
                 self.picks.rename(from, to);
             }
         }
