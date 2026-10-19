@@ -175,6 +175,9 @@ impl Browser {
         let mut drained = Drained::default();
         if self.incoming.is_some() {
             drained.changed = self.apply_incoming(events);
+            if self.read.is_none() {
+                self.incoming = None;
+            }
         } else if !events.is_empty() {
             for event in events {
                 self.listing.apply(event);

@@ -76,7 +76,7 @@ impl ExplorerView {
         let top = px(self.browser.cursor() as f32 * ROW);
         let row = Bounds::new(point(px(0.0), top), size(list.item.width, px(ROW)));
         let followed = follow_offset_y(viewport, row, px(-self.scroll_offset()), px(ROW));
-        self.set_scroll((-f32::from(followed)).clamp(0.0, max_scroll(&list)));
+        self.set_scroll((-f32::from(followed)).clamp(0.0, self.max_scroll(list)));
     }
 
     fn at_end(&self) -> bool {
@@ -84,7 +84,12 @@ impl ExplorerView {
             .0
             .borrow()
             .last_item_size
-            .is_some_and(|list| self.scroll_offset() + 0.5 >= max_scroll(&list))
+            .is_some_and(|list| self.scroll_offset() + 0.5 >= self.max_scroll(list))
+    }
+
+    fn max_scroll(&self, list: ItemSize) -> f32 {
+        let height: f32 = list.item.height.into();
+        (self.browser.row_count() as f32 * ROW - height).max(0.0)
     }
 
     fn page_rows(&self) -> usize {
@@ -276,10 +281,6 @@ impl ExplorerView {
             cx.notify();
         }
     }
-}
-
-fn max_scroll(list: &ItemSize) -> f32 {
-    (f32::from(list.contents.height) - f32::from(list.item.height)).max(0.0)
 }
 
 impl Focusable for ExplorerView {

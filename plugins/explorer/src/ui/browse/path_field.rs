@@ -80,11 +80,10 @@ impl PathField {
             .into_iter()
             .map(str::to_string)
             .collect();
-        if names == self.edit.suggestions() {
-            return false;
-        }
+        let changed = names != self.edit.suggestions();
+        let selected = self.edit.selected();
         self.edit.set_suggestions(names);
-        true
+        changed || self.edit.selected() != selected
     }
 }
 

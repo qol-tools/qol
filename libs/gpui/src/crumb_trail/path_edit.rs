@@ -19,6 +19,7 @@ pub struct PathEdit {
     field: TextField,
     suggestions: Vec<String>,
     selected: Option<usize>,
+    picked: bool,
 }
 
 impl PathEdit {
@@ -27,6 +28,7 @@ impl PathEdit {
             field: TextField::with_text(text),
             suggestions: Vec::new(),
             selected: None,
+            picked: false,
         }
     }
 
@@ -58,14 +60,18 @@ impl PathEdit {
     pub fn set_suggestions(&mut self, names: Vec<String>) {
         let kept = self
             .selected()
+            .filter(|_| self.picked)
             .and_then(|selected| self.suggestions.get(selected))
             .and_then(|selected| names.iter().position(|name| name == selected));
         self.suggestions = names;
         let segment = self.segment();
-        let selected = kept
-            .or_else(|| self.suggestions.iter().position(|name| name == segment))
-            .or_else(|| (!segment.is_empty() && !self.suggestions.is_empty()).then_some(0));
-        self.selected = selected;
+        let auto = if segment.is_empty() || self.suggestions.is_empty() {
+            None
+        } else {
+            let exact = self.suggestions.iter().position(|name| name == segment);
+            Some(exact.unwrap_or(0))
+        };
+        self.selected = kept.or(auto);
     }
 
     pub fn select_next(&mut self) -> bool {
@@ -74,6 +80,7 @@ impl PathEdit {
             return false;
         }
         self.selected = Some(next);
+        self.picked = true;
         true
     }
 
@@ -82,6 +89,7 @@ impl PathEdit {
             return false;
         };
         self.selected = selected.checked_sub(1);
+        self.picked = true;
         true
     }
 
@@ -91,6 +99,7 @@ impl PathEdit {
         };
         let completed = format!("{}{name}{MAIN_SEPARATOR}", self.parent());
         self.field.set_text(completed);
+        self.picked = false;
         true
     }
 
@@ -126,7 +135,10 @@ impl PathEdit {
                 PathKey::Handled
             }
             _ => match apply_edit_key(&mut self.field, keystroke, paste) {
-                EditKey::Changed => PathKey::Changed,
+                EditKey::Changed => {
+                    self.picked = false;
+                    PathKey::Changed
+                }
                 EditKey::Handled => PathKey::Handled,
                 EditKey::Ignored => PathKey::Ignored,
             },
@@ -190,6 +202,18 @@ mod tests {
     fn an_empty_segment_highlights_nothing_and_an_exact_name_wins() {
         assert_eq!(edit("~/", &["Git", "Games"]).selected(), None);
         assert_eq!(edit("~/b", &["B", "b", "beta"]).selected(), Some(1));
+    }
+
+    #[test]
+    fn typing_drops_the_highlight_at_the_folder_level_and_an_arrow_pick_sticks() {
+        let mut edit = edit("~/one/x", &["x"]);
+        assert_eq!(edit.selected(), Some(0));
+        assert_eq!(edit.key(&key("backspace", None), || None), PathKey::Changed);
+        edit.set_suggestions(names(&["x"]));
+        assert_eq!(edit.selected(), None);
+        assert!(edit.select_next());
+        edit.set_suggestions(names(&["w", "x"]));
+        assert_eq!(edit.selected(), Some(1));
     }
 
     #[test]

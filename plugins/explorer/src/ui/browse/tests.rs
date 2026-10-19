@@ -389,6 +389,33 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
 }
 
 #[test]
+fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.go(inner, 0.0);
+    settle(&mut browser);
+
+    browser.edit_path();
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        format!("~{MAIN_SEPARATOR}inner")
+    );
+    browser.path_key(&key("backspace", None), || None, 0.0);
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
+    assert_eq!(browser.path_edit().unwrap().selected(), Some(0));
+    for _ in 0.."inne".len() {
+        browser.path_key(&key("backspace", None), || None, 0.0);
+    }
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
+    assert_eq!(browser.path_edit().unwrap().selected(), None);
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Arrived);
+    assert_eq!(browser.folder(), temp.path());
+}
+
+#[test]
 fn escape_in_the_path_field_puts_the_trail_back() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
