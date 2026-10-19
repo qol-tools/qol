@@ -217,6 +217,12 @@ mod tests {
         RuntimeEvent::WindowListChanged
     }
 
+    fn connection_health_changed() -> RuntimeEvent {
+        RuntimeEvent::ConnectionHealthChanged {
+            health: Default::default(),
+        }
+    }
+
     fn drain<T>(rx: &std_mpsc::Receiver<T>) -> Vec<T> {
         let mut out = Vec::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(1)) {
@@ -254,6 +260,10 @@ mod tests {
             (launcher_apps_synced(), RuntimeEventKind::LauncherAppsSynced),
             (monitors_changed(), RuntimeEventKind::MonitorsChanged),
             (window_list_changed(), RuntimeEventKind::WindowListChanged),
+            (
+                connection_health_changed(),
+                RuntimeEventKind::ConnectionHealthChanged,
+            ),
         ];
         for (event, expected) in cases {
             assert_eq!(event_kind(&event), expected, "event: {event:?}");
@@ -306,6 +316,11 @@ mod tests {
             (
                 "window list has its own thread",
                 &[RuntimeEventKind::WindowListChanged],
+                false,
+            ),
+            (
+                "connection health has its own service",
+                &[RuntimeEventKind::ConnectionHealthChanged],
                 false,
             ),
             (
@@ -472,6 +487,7 @@ mod tests {
             Just(launcher_apps_synced()),
             Just(monitors_changed()),
             Just(window_list_changed()),
+            Just(connection_health_changed()),
         ]
     }
 
@@ -484,8 +500,9 @@ mod tests {
                 Just(RuntimeEventKind::LauncherAppsSynced),
                 Just(RuntimeEventKind::MonitorsChanged),
                 Just(RuntimeEventKind::WindowListChanged),
+                Just(RuntimeEventKind::ConnectionHealthChanged),
             ],
-            0..=6,
+            0..=7,
         )
     }
 

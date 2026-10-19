@@ -412,7 +412,7 @@ fn has_connection_failure(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<reqwest::Error>()
-            .is_some_and(|error| error.is_timeout() || error.is_connect())
+            .is_some_and(crate::features::connection_health::is_unreachable)
     })
 }
 

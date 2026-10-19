@@ -6,7 +6,7 @@ pub(super) const TIMEOUT: Duration = Duration::from_secs(6);
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
-pub(super) async fn run(watch: super::Watch) {
+pub(super) async fn run(mut watch: super::Watch) {
     let result = client().get(TARGET).send().await;
     watch.end(super::outcome(&result));
 }

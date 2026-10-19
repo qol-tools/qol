@@ -4,12 +4,13 @@ use std::time::{Duration, Instant};
 use qol_connection_health::{ConnectionHealth, Outcome, Thresholds, Ticket, Tracker};
 use tokio::sync::Notify;
 
+mod body;
 mod probe;
 mod service;
 #[cfg(test)]
 mod tests;
 
-pub const QUERY: &str = "connection";
+pub use body::{observe_body, ObservedBody};
 
 const THRESHOLDS: Thresholds = Thresholds {
     slow: Duration::from_millis(1500),
@@ -24,6 +25,29 @@ struct Shared {
     wake: Notify,
 }
 
+impl Shared {
+    fn new() -> Self {
+        Self {
+            tracker: Mutex::new(Tracker::new(THRESHOLDS)),
+            interest_until: Mutex::new(None),
+            wake: Notify::new(),
+        }
+    }
+
+    fn tracker(&self) -> MutexGuard<'_, Tracker> {
+        lock(&self.tracker)
+    }
+
+    fn note_interest(&self, now: Instant) {
+        *lock(&self.interest_until) = Some(now + INTEREST_WINDOW);
+        self.wake.notify_one();
+    }
+
+    fn watching(&self, now: Instant) -> bool {
+        lock(&self.interest_until).is_some_and(|until| until > now)
+    }
+}
+
 static SHARED: OnceLock<Shared> = OnceLock::new();
 
 pub fn spawn() {
@@ -31,12 +55,29 @@ pub fn spawn() {
 }
 
 pub fn current() -> ConnectionHealth {
-    tracker().health(Instant::now())
+    shared().tracker().health(Instant::now())
 }
 
 pub fn note_interest() {
-    *lock(&shared().interest_until) = Some(Instant::now() + INTEREST_WINDOW);
-    shared().wake.notify_one();
+    shared().note_interest(Instant::now());
+}
+
+pub fn is_unreachable(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request() || lost_connection(error)
+}
+
+fn lost_connection(error: &reqwest::Error) -> bool {
+    std::iter::successors(std::error::Error::source(error), |cause| cause.source()).any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            )
+        })
+    })
 }
 
 pub trait SendObserved {
@@ -49,12 +90,15 @@ impl SendObserved for reqwest::RequestBuilder {
     fn send_observed(
         self,
     ) -> impl std::future::Future<Output = reqwest::Result<reqwest::Response>> + Send {
-        observe(self)
+        observe(shared(), self)
     }
 }
 
-async fn observe(request: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
-    let watch = Watch::begin();
+async fn observe(
+    shared: &'static Shared,
+    request: reqwest::RequestBuilder,
+) -> reqwest::Result<reqwest::Response> {
+    let mut watch = Watch::begin(shared);
     let result = request.send().await;
     watch.end(outcome(&result));
     result
@@ -63,60 +107,62 @@ async fn observe(request: reqwest::RequestBuilder) -> reqwest::Result<reqwest::R
 fn outcome(result: &reqwest::Result<reqwest::Response>) -> Option<Outcome> {
     match result {
         Ok(_) => Some(Outcome::Answered),
-        Err(error) if error.is_timeout() || error.is_connect() || error.is_request() => {
-            Some(Outcome::Unreachable)
-        }
-        Err(_) => None,
+        Err(error) => failure(error),
     }
 }
 
-struct Watch(Option<Ticket>);
+fn failure(error: &reqwest::Error) -> Option<Outcome> {
+    is_unreachable(error).then_some(Outcome::Unreachable)
+}
+
+struct Watch {
+    shared: &'static Shared,
+    ticket: Option<Ticket>,
+}
 
 impl Watch {
-    fn begin() -> Self {
-        let ticket = tracker().begin(Instant::now());
-        shared().wake.notify_one();
-        Self(Some(ticket))
+    fn begin(shared: &'static Shared) -> Self {
+        let ticket = shared.tracker().begin(Instant::now());
+        shared.wake.notify_one();
+        Self {
+            shared,
+            ticket: Some(ticket),
+        }
     }
 
-    fn end(mut self, outcome: Option<Outcome>) {
-        let Some(ticket) = self.0.take() else {
+    fn progress(&self) {
+        if let Some(ticket) = &self.ticket {
+            self.shared.tracker().progress(ticket, Instant::now());
+        }
+    }
+
+    fn end(&mut self, outcome: Option<Outcome>) {
+        let Some(ticket) = self.ticket.take() else {
             return;
         };
         {
-            let mut tracker = tracker();
+            let mut tracker = self.shared.tracker();
             match outcome {
                 Some(outcome) => tracker.finish(ticket, outcome, Instant::now()),
                 None => tracker.abandon(ticket),
             }
         }
-        shared().wake.notify_one();
+        self.shared.wake.notify_one();
     }
 }
 
 impl Drop for Watch {
     fn drop(&mut self) {
-        if let Some(ticket) = self.0.take() {
-            tracker().abandon(ticket);
-            shared().wake.notify_one();
-        }
+        self.end(None);
     }
 }
 
 fn shared() -> &'static Shared {
-    SHARED.get_or_init(|| Shared {
-        tracker: Mutex::new(Tracker::new(THRESHOLDS)),
-        interest_until: Mutex::new(None),
-        wake: Notify::new(),
-    })
-}
-
-fn tracker() -> MutexGuard<'static, Tracker> {
-    lock(&shared().tracker)
+    SHARED.get_or_init(Shared::new)
 }
 
 fn interested(now: Instant) -> bool {
-    lock(&shared().interest_until).is_some_and(|until| until > now)
+    shared().watching(now)
         || crate::runtime::is_subscribed(
             qol_runtime::protocol::RuntimeEventKind::ConnectionHealthChanged,
         )

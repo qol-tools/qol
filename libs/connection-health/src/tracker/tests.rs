@@ -233,6 +233,63 @@ fn a_request_started_after_the_last_answer_still_counts_as_waiting() {
 }
 
 #[test]
+fn a_request_started_while_another_was_in_flight_still_waits() {
+    let (mut tracker, start) = tracker();
+    let first = tracker.begin(start);
+    let _second = tracker.begin(start + ms(100));
+    tracker.finish(first, Outcome::Answered, start + ms(300));
+    assert_eq!(tracker.waiting_since(), Some(start + ms(100)));
+    let health = tracker.health(start + ms(4100));
+    assert_eq!(
+        (health.level, health.cause),
+        (Level::Bad, Some(Cause::Waiting))
+    );
+}
+
+#[test]
+fn a_request_started_at_the_same_moment_is_not_superseded() {
+    let (mut tracker, start) = tracker();
+    let first = tracker.begin(start);
+    let _second = tracker.begin(start);
+    tracker.finish(first, Outcome::Answered, start + ms(200));
+    assert_eq!(tracker.waiting_since(), Some(start));
+}
+
+#[test]
+fn a_failure_does_not_count_toward_answer_latency() {
+    let (mut tracker, start) = tracker();
+    let ticket = tracker.begin(start);
+    tracker.finish(ticket, Outcome::Unreachable, start + ms(6000));
+    let end = answered_after(&mut tracker, start + ms(6000), ms(150));
+    assert_eq!(
+        tracker.health(end),
+        ConnectionHealth {
+            level: Level::Good,
+            cause: None,
+            latency_ms: Some(150),
+        }
+    );
+}
+
+#[test]
+fn progress_restarts_the_wait() {
+    let (mut tracker, start) = tracker();
+    let ticket = tracker.begin(start);
+    tracker.progress(&ticket, start + ms(3000));
+    assert_eq!(tracker.waiting_since(), Some(start + ms(3000)));
+    assert_eq!(tracker.health(start + ms(4000)).level, Level::Unknown);
+    assert_eq!(
+        tracker.next_change(start + ms(3000)),
+        Some(start + ms(4500))
+    );
+    let stalled = tracker.health(start + ms(7000));
+    assert_eq!(
+        (stalled.level, stalled.cause),
+        (Level::Bad, Some(Cause::Waiting))
+    );
+}
+
+#[test]
 fn concurrent_requests_answer_with_the_newest_start() {
     let (mut tracker, start) = tracker();
     let first = tracker.begin(start);

@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::io::Write;
 use std::path::Path;
-use tokio_stream::StreamExt;
 
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::features::plugin_store::release_integrity::{
@@ -121,14 +120,14 @@ async fn write_response(
     dest: &Path,
     mut on_percent: impl FnMut(u8),
 ) -> Result<()> {
-    let total = response.content_length();
-    let mut stream = response.bytes_stream();
+    let mut body = crate::features::connection_health::observe_body(response);
+    let total = body.content_length();
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded: u64 = 0;
     let mut last_percent: u8 = 0;
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk)?;
+    while let Some(chunk) = body.chunk().await? {
+        let chunk = chunk.as_ref();
+        file.write_all(chunk)?;
         downloaded += chunk.len() as u64;
         let percent = total
             .map(|t| ((downloaded * 100) / t).min(100) as u8)

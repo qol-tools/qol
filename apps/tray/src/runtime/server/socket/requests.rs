@@ -403,7 +403,7 @@ fn apply_focus(shared: &SharedState, monitor_idx: usize, label: &str) {
 mod tests {
     use super::*;
     use qol_runtime::MonitorBounds;
-    use std::io::Read;
+    use std::io::{BufRead, Read};
     use tempfile::TempDir;
 
     fn mon(x: f32) -> MonitorBounds {
@@ -930,6 +930,37 @@ mod tests {
             !shared.has_poll_subscribers(),
             "subscription must be removed when the daemon disconnects",
         );
+    }
+
+    #[test]
+    fn a_connection_health_subscriber_gets_the_current_health_after_the_ack() {
+        let shared = SharedState::new(vec![mon(0.0)]);
+        let (server, client) = pair();
+        let _ = client.set_read_timeout(Some(Duration::from_secs(5)));
+
+        std::thread::scope(|scope| {
+            let handle = scope.spawn(|| {
+                let mut server = server;
+                handle_request(
+                    r#"{"cmd":"subscribe","plugin_id":"plugin-x","events":["connection_health_changed"]}"#,
+                    &mut server,
+                    &shared,
+                );
+            });
+
+            let mut lines = std::io::BufReader::new(client).lines();
+            let ack = lines.next().expect("ack line").expect("readable ack");
+            assert!(ack.contains("subscribed"), "ack: {ack:?}");
+            let replay = lines.next().expect("replay line").expect("readable replay");
+            let event: RuntimeEvent = serde_json::from_str(&replay).expect("replay parses");
+            assert!(
+                matches!(event, RuntimeEvent::ConnectionHealthChanged { .. }),
+                "replay: {replay:?}",
+            );
+
+            drop(lines);
+            handle.join().expect("subscription handler thread");
+        });
     }
 
     #[test]

@@ -74,6 +74,12 @@ impl Tracker {
         });
     }
 
+    pub fn progress(&mut self, ticket: &Ticket, now: Instant) {
+        if let Some(entry) = self.in_flight.iter_mut().find(|(id, _)| *id == ticket.0) {
+            entry.1 = now;
+        }
+    }
+
     pub fn abandon(&mut self, ticket: Ticket) {
         self.take(ticket);
     }
