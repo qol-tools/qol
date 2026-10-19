@@ -3091,11 +3091,13 @@ impl SettingsPanelView {
             _ => 0.0,
         };
         let id = self.level().rows[index].id.clone();
+        let reach = track.map_or(0.0, |(_, style)| style.thumb_reach());
         let interact = move |element: Div| {
             element.child(slider_drag_track(
                 cx,
                 index,
                 id,
+                reach,
                 |panel: &mut SettingsPanelView,
                  row: usize,
                  fraction: f32,
@@ -4488,6 +4490,7 @@ fn slider_drag_track<O, M, R>(
     cx: &mut Context<SettingsPanelView>,
     row: usize,
     id: String,
+    reach: f32,
     on_down: O,
     move_to: M,
     release: R,
@@ -4503,7 +4506,10 @@ where
     let view = cx.weak_entity();
     div()
         .absolute()
-        .inset_0()
+        .top_0()
+        .bottom_0()
+        .left(px(-reach))
+        .right(px(-reach))
         .cursor(CursorStyle::PointingHand)
         .child(
             canvas(
@@ -4513,7 +4519,10 @@ where
                 },
             )
             .absolute()
-            .inset_0(),
+            .top_0()
+            .bottom_0()
+            .left(px(reach))
+            .right(px(reach)),
         )
         .on_mouse_down(
             MouseButton::Left,

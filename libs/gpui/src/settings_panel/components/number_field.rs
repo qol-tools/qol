@@ -32,6 +32,13 @@ impl SliderStyle {
         }
     }
 
+    pub(in crate::settings_panel) fn thumb_reach(self) -> f32 {
+        match self {
+            Self::Compact => 0.0,
+            Self::Wide | Self::Level => WIDE_THUMB / 2.0,
+        }
+    }
+
     fn track_height(self) -> f32 {
         match self {
             Self::Compact => 4.0,
@@ -187,11 +194,12 @@ pub(in crate::settings_panel) fn number_field(
                 .child(track)
                 .child(slider_thumb(fill, ground, hover))
         };
-        cell = cell.child(interact(match style {
+        let slider = interact(match style {
             SliderStyle::Compact => slider_bar(style, fill, ground, hover),
             SliderStyle::Wide => with_thumb(slider_bar(style, fill, ground, hover)),
             SliderStyle::Level => with_thumb(level_segments(fraction, level, width, ground, hover)),
-        }));
+        });
+        cell = cell.child(div().px(px(style.thumb_reach())).child(slider));
     }
     let chip = div()
         .flex()
@@ -250,6 +258,19 @@ mod tests {
                     "width {width} fraction {fraction}: fill {fill_edge} thumb {thumb_centre}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_thumbed_slider_reserves_room_for_the_thumb_past_both_track_ends() {
+        assert_eq!(SliderStyle::Compact.thumb_reach(), 0.0);
+        for style in [SliderStyle::Wide, SliderStyle::Level] {
+            let reach = style.thumb_reach();
+            assert_eq!(thumb_left(0.0), -reach);
+            assert_eq!(
+                thumb_left(style.track_width()) + WIDE_THUMB,
+                style.track_width() + reach
+            );
         }
     }
 

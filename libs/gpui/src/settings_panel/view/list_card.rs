@@ -648,10 +648,9 @@ where
         .items_center()
         .gap(px(qol_theme::SPACE_INSET))
         .cursor(CursorStyle::PointingHand)
-        .child(
-            settings_slider_track(fill, ground)
-                .child(slider_drag_track(cx, row, id, on_down, move_to, release)),
-        )
+        .child(settings_slider_track(fill, ground).child(slider_drag_track(
+            cx, row, id, 0.0, on_down, move_to, release,
+        )))
         .child(settings_slider_percent(percent, kit))
 }
 
