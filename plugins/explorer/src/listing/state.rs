@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use super::{Entry, ItemCount, ListingError, ListingEvent};
 
@@ -17,6 +17,7 @@ pub struct Listing {
     state: ListingState,
     entries: Vec<Entry>,
     counts: HashMap<PathBuf, (ItemCount, Instant)>,
+    started: SystemTime,
 }
 
 impl Listing {
@@ -26,7 +27,12 @@ impl Listing {
             state: ListingState::Loading,
             entries: Vec::new(),
             counts: HashMap::new(),
+            started: SystemTime::now(),
         }
+    }
+
+    pub fn started(&self) -> SystemTime {
+        self.started
     }
 
     pub fn folder(&self) -> &Path {

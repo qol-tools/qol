@@ -555,7 +555,7 @@ impl Browser {
             .map(|entry| (entry.path.clone(), entry.id));
         let before = mem::replace(&mut self.listing, fresh);
         self.refresh_rows();
-        if let Some(row) = at.and_then(|(path, id)| self.row_following(&path, id)) {
+        if let Some(row) = at.and_then(|(path, id)| self.row_following(&path, id, &before)) {
             self.cursor = row;
         }
         let failed = matches!(self.listing.state(), ListingState::Failed(_));
@@ -586,24 +586,40 @@ impl Browser {
 
     fn follow_counts(&mut self) {
         let folders = self.listing.folder_paths(FOLLOWED_FOLDERS);
-        self.counts.follow(folders, waker(&self.wake));
+        self.counts
+            .follow(folders, self.listing.started(), waker(&self.wake));
     }
 
     fn follow_renamed_picks(&mut self, before: &Listing) {
         if self.picks.is_empty() {
             return;
         }
-        let mut picked: HashMap<(u64, u64), &Path> = before
+        let listed: HashSet<&Path> = self
+            .listing
+            .entries()
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect();
+        let mut gone: HashMap<(u64, u64), &Path> = before
             .entries()
             .iter()
             .filter(|entry| self.picks.is_picked(&entry.path))
+            .filter(|entry| !listed.contains(entry.path.as_path()))
             .filter_map(|entry| Some((entry.id?, entry.path.as_path())))
             .collect();
+        if gone.is_empty() {
+            return;
+        }
+        let known: HashSet<&Path> = before
+            .entries()
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect();
         for entry in self.listing.entries() {
-            let Some(from) = entry.id.and_then(|id| picked.remove(&id)) else {
+            if known.contains(entry.path.as_path()) {
                 continue;
-            };
-            if from != entry.path {
+            }
+            if let Some(from) = entry.id.and_then(|id| gone.remove(&id)) {
                 self.picks.rename(from, entry.path.clone());
             }
         }
@@ -657,12 +673,18 @@ impl Browser {
             .position(|&index| self.listing.entries()[index].path == path)
     }
 
-    fn row_following(&self, path: &Path, id: Option<(u64, u64)>) -> Option<usize> {
+    fn row_following(
+        &self,
+        path: &Path,
+        id: Option<(u64, u64)>,
+        before: &Listing,
+    ) -> Option<usize> {
         self.row_of(path).or_else(|| {
             let id = id?;
-            self.rows
-                .iter()
-                .position(|&index| self.listing.entries()[index].id == Some(id))
+            self.rows.iter().position(|&index| {
+                let entry = &self.listing.entries()[index];
+                entry.id == Some(id) && !before.entries().iter().any(|old| old.path == entry.path)
+            })
         })
     }
 

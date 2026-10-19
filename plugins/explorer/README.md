@@ -12,7 +12,7 @@ Install from the [QoL Tray](../../apps/tray) plugin store.
 
 ## About
 
-`qol-explorer open` opens the window on the home folder, and `qol-explorer open <path>` opens it on that folder. The list follows the folder on disk, so files that appear, change or vanish show up while the window is open.
+`qol-explorer open` opens the window on the home folder, and `qol-explorer open <path>` opens it on that folder. The list follows the folder on disk, so files that appear, change or vanish show up while the window is open. Folder rows count their items, leaving out hidden ones until Ctrl+H shows them, and the counts follow changes inside those folders. Enter opens a file in its default app, or says in red that no app could open it.
 
 ## Keys
 

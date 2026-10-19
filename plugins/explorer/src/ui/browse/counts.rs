@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use qol_watch::{Watch, WatchNotice, WatchRoot};
 
@@ -14,6 +14,7 @@ use crate::listing::{self, FolderCount, ListingEvent, ListingRead};
 use crate::places;
 
 pub(super) const FOLLOWED_FOLDERS: usize = 1024;
+const CLOCK_SLACK: Duration = Duration::from_secs(2);
 
 type Stale = Arc<Mutex<HashSet<PathBuf>>>;
 
@@ -27,7 +28,12 @@ pub(super) struct LiveCounts {
 }
 
 impl LiveCounts {
-    pub(super) fn follow(&mut self, folders: Vec<PathBuf>, wake: impl Fn() + Send + 'static) {
+    pub(super) fn follow(
+        &mut self,
+        folders: Vec<PathBuf>,
+        counted_from: SystemTime,
+        wake: impl Fn() + Send + Clone + 'static,
+    ) {
         let folders: HashSet<PathBuf> = folders.into_iter().collect();
         if folders == self.folders {
             return;
@@ -42,7 +48,7 @@ impl LiveCounts {
         let stale = Arc::clone(&self.stale);
         let spawned = thread::Builder::new()
             .name("qol-explorer-counts".into())
-            .spawn(move || watch_counts(&watched, &slot, stale, wake));
+            .spawn(move || watch_counts(&watched, counted_from, &slot, stale, wake));
         if let Err(error) = spawned {
             log::warn!("folder counts will not follow changes: {error}");
         }
@@ -95,37 +101,57 @@ impl LiveCounts {
 
 fn watch_counts(
     folders: &[PathBuf],
+    counted_from: SystemTime,
     slot: &Weak<Mutex<Option<Watch>>>,
     stale: Stale,
-    wake: impl Fn() + Send + 'static,
+    wake: impl Fn() + Send + Clone + 'static,
 ) {
     let same_folders = same_folders(folders);
     let roots: Vec<WatchRoot> = folders.iter().map(WatchRoot::shallow).collect();
-    let watched = qol_watch::watch(&roots, move |notice| {
-        let WatchNotice::Changed(paths) = notice else {
-            return;
-        };
-        lock(&stale).extend(
-            paths
-                .iter()
-                .filter_map(|path| path.parent())
-                .flat_map(|folder| {
+    let noticed = Arc::clone(&stale);
+    let notice_wake = wake.clone();
+    let watched =
+        qol_watch::watch(&roots, move |notice| {
+            let WatchNotice::Changed(paths) = notice else {
+                return;
+            };
+            lock(&noticed).extend(paths.iter().filter_map(|path| path.parent()).flat_map(
+                |folder| {
                     same_folders
                         .get(folder)
                         .cloned()
                         .unwrap_or_else(|| vec![folder.to_path_buf()])
-                }),
-        );
-        wake();
-    });
-    match watched {
-        Ok(watch) => {
-            if let Some(slot) = slot.upgrade() {
-                *lock(&slot) = Some(watch);
-            }
+                },
+            ));
+            notice_wake();
+        });
+    let watch = match watched {
+        Ok(watch) => watch,
+        Err(error) => {
+            log::debug!("folder counts will not follow changes: {error}");
+            return;
         }
-        Err(error) => log::debug!("folder counts will not follow changes: {error}"),
+    };
+    let Some(slot) = slot.upgrade() else {
+        return;
+    };
+    *lock(&slot) = Some(watch);
+    let unseen: Vec<PathBuf> = folders
+        .iter()
+        .filter(|folder| changed_since(folder, counted_from))
+        .cloned()
+        .collect();
+    if !unseen.is_empty() {
+        lock(&stale).extend(unseen);
+        wake();
     }
+}
+
+fn changed_since(folder: &Path, since: SystemTime) -> bool {
+    let since = since.checked_sub(CLOCK_SLACK).unwrap_or(since);
+    fs::metadata(folder)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|modified| modified >= since)
 }
 
 fn same_folders(folders: &[PathBuf]) -> HashMap<PathBuf, Vec<PathBuf>> {

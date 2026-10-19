@@ -50,13 +50,28 @@ pub fn display_name(name: &OsStr) -> String {
     name.to_string_lossy()
         .chars()
         .map(|letter| {
-            if letter.is_control() {
+            if needs_mark(letter) {
                 char::REPLACEMENT_CHARACTER
             } else {
                 letter
             }
         })
         .collect()
+}
+
+pub fn needs_mark(letter: char) -> bool {
+    letter.is_control()
+        || matches!(
+            letter,
+            '\u{061C}'
+                | '\u{200B}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
 }
 
 impl AsRef<Path> for Entry {

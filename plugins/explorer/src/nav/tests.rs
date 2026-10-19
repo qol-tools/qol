@@ -436,3 +436,15 @@ fn folders_whose_names_are_not_text_are_not_suggested() {
 
     assert_eq!(path::suggestions(&listing, "caf", false), ["cafe"]);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn folders_whose_names_show_a_mark_are_not_suggested() {
+    let temp = tempfile::tempdir().unwrap();
+    for folder in ["dir\nnl", "dir\u{1b}", "dir\u{202E}txt", "dirt"] {
+        fs::create_dir(temp.path().join(folder)).unwrap();
+    }
+    let listing = read_listing(temp.path());
+
+    assert_eq!(path::suggestions(&listing, "dir", false), ["dirt"]);
+}

@@ -226,6 +226,29 @@ fn names_with_control_characters_show_a_replacement_mark() {
 }
 
 #[test]
+fn a_failure_note_marks_control_characters_in_the_folder() {
+    let error = ListingError {
+        folder: PathBuf::from("/tmp/new\nline"),
+        reason: FailureReason::Missing,
+    };
+    assert_eq!(error.to_string(), "/tmp/new\u{FFFD}line does not exist");
+}
+
+#[test]
+fn direction_overrides_and_zero_width_spaces_show_a_mark_but_joiners_stay() {
+    assert_eq!(
+        display_name(OsStr::new("invoice\u{202E}fdp.sh")),
+        "invoice\u{FFFD}fdp.sh"
+    );
+    assert_eq!(
+        display_name(OsStr::new("same\u{200B}name\u{2066}.txt")),
+        "same\u{FFFD}name\u{FFFD}.txt"
+    );
+    let joined = "\u{1F468}\u{200D}\u{1F4BB} notes.txt";
+    assert_eq!(display_name(OsStr::new(joined)), joined);
+}
+
+#[test]
 fn cancelling_stops_the_read_between_entries() {
     let temp = tempfile::tempdir().unwrap();
     for index in 0..10 {

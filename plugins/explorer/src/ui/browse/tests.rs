@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{Keystroke, Modifiers};
 
-use super::{Browser, Drained, Opening, PathStep};
+use super::counts::LiveCounts;
+use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET};
 use crate::listing::{ItemCount, ListingState};
 use crate::ui::keys::Step;
 
@@ -683,6 +684,50 @@ fn a_linked_folder_count_follows_files_added_inside_its_target() {
     wait_until(&mut browser, "both counts", |browser| {
         browser.listing().item_count(&real) == one && browser.listing().item_count(&link) == one
     });
+}
+
+#[test]
+fn a_subfolder_changed_before_its_watch_is_up_is_counted_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let sub = make_folder(temp.path(), "sub");
+    let counted_from = SystemTime::now();
+    touch(&sub, "late");
+    let mut counts = LiveCounts::default();
+    counts.follow(vec![sub.clone()], counted_from, || {});
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut now = Instant::now();
+    loop {
+        counts.recount_when_due(now, temp.path(), || {});
+        let recounted = counts.drain().into_iter().find(|count| count.path == sub);
+        if let Some(recounted) = recounted {
+            assert_eq!(recounted.count, ItemCount::Items { all: 1, shown: 1 });
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the changed subfolder was not recounted"
+        );
+        thread::sleep(Duration::from_millis(10));
+        now += REFRESH_QUIET;
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_renamed_hard_link_keeps_the_cursor_and_its_pick_off_its_twin() {
+    let temp = abc_folder();
+    fs::hard_link(temp.path().join("a.txt"), temp.path().join("e.txt")).unwrap();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(4);
+    browser.toggle_pick();
+
+    fs::rename(temp.path().join("e.txt"), temp.path().join("f.txt")).unwrap();
+    wait_until(&mut browser, "the rename", |browser| {
+        names(browser) == ["a.txt", "b.txt", "c.txt", "d.txt", "f.txt"]
+    });
+    assert_eq!(browser.cursor(), 4);
+    assert_eq!(picked(&browser), ["f.txt"]);
 }
 
 #[cfg(unix)]

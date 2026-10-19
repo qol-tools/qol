@@ -30,7 +30,7 @@ impl ListingError {
 
 impl fmt::Display for ListingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let folder = self.folder.display();
+        let folder = super::display_name(self.folder.as_os_str());
         match &self.reason {
             FailureReason::Permission => write!(f, "No permission to read {folder}"),
             FailureReason::Missing => write!(f, "{folder} does not exist"),

@@ -1,7 +1,7 @@
 use std::path::{is_separator, Component, Path, PathBuf, MAIN_SEPARATOR};
 
 use super::prefix::starts_with_ignoring_case;
-use crate::listing::Listing;
+use crate::listing::{needs_mark, Listing};
 
 const HOME: &str = "~";
 
@@ -86,6 +86,7 @@ pub fn suggestions<'a>(parent: &'a Listing, segment: &str, show_hidden: bool) ->
         .into_iter()
         .filter(|entry| entry.opens_as_folder)
         .filter_map(|entry| entry.name.to_str())
+        .filter(|name| !name.chars().any(needs_mark))
         .filter(|name| starts_with_ignoring_case(name, segment))
         .collect()
 }
