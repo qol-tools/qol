@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use anyhow::Context;
 use qol_runtime::local_http::Method;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::super::data::{request_json, request_text, REQUEST_TIMEOUT};
 
@@ -46,6 +48,8 @@ pub(super) struct SyncStatus {
     pub(super) last_error: Option<String>,
     pub(super) backup_count: usize,
     #[serde(default)]
+    pub(super) conflict_count: usize,
+    #[serde(default)]
     pub(super) latest_backup_file: Option<String>,
     pub(super) github_connect: GitHubConnect,
 }
@@ -70,6 +74,45 @@ pub(super) struct Backup {
     pub(super) size_bytes: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(super) struct Conflict {
+    pub(super) file: String,
+    #[serde(default)]
+    pub(super) plugin: Option<String>,
+    pub(super) key_path: String,
+    pub(super) local: serde_json::Value,
+    pub(super) remote: serde_json::Value,
+    #[serde(default)]
+    pub(super) local_edited: Option<String>,
+    #[serde(default)]
+    pub(super) remote_edited: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Side {
+    Mine,
+    Remote,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Review {
+    pub(super) conflicts: Vec<Conflict>,
+    pub(super) names: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct InstalledPlugin {
+    id: String,
+    uid: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct Installed {
+    plugins: Vec<InstalledPlugin>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Snapshot {
     pub(super) profiles: Vec<Profile>,
@@ -85,6 +128,42 @@ pub(super) fn load() -> anyhow::Result<Snapshot> {
 
 pub(super) fn backups() -> anyhow::Result<Vec<Backup>> {
     request_json(Method::Get, "/api/sync/backups", None, REQUEST_TIMEOUT)
+}
+
+pub(super) fn review() -> anyhow::Result<Review> {
+    let conflicts = request_json(Method::Get, "/api/sync/conflicts", None, REQUEST_TIMEOUT)?;
+    let names = request_json::<Installed>(Method::Get, "/api/installed", None, REQUEST_TIMEOUT)
+        .map(|installed| {
+            installed
+                .plugins
+                .into_iter()
+                .flat_map(|plugin| [(plugin.id, plugin.name.clone()), (plugin.uid, plugin.name)])
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Review { conflicts, names })
+}
+
+pub(super) fn resolve(conflicts: &[Conflict], picks: &[Side]) -> anyhow::Result<()> {
+    let choices = conflicts
+        .iter()
+        .zip(picks)
+        .map(|(conflict, side)| {
+            serde_json::json!({
+                "file": conflict.file,
+                "key_path": conflict.key_path,
+                "side": side,
+            })
+        })
+        .collect::<Vec<_>>();
+    let body = serde_json::json!({ "choices": choices }).to_string();
+    request_text(
+        Method::Post,
+        "/api/sync/conflicts/resolve",
+        Some(&body),
+        SYNC_TIMEOUT,
+    )
+    .map(drop)
 }
 
 pub(super) fn use_profile(name: &str) -> anyhow::Result<()> {
