@@ -1,5 +1,6 @@
 use super::document::{self, IndexDocument, RegistryLocation};
 use super::{registry, IndexLocation};
+use crate::features::connection_health::{observe_body, SendObserved};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -64,10 +65,11 @@ fn newest_served(registry_read: Result<Served>, pages_read: Result<Served>) -> R
 }
 
 async fn from_pages(client: &reqwest::Client, location: &IndexLocation) -> Result<Served> {
-    let signed = read_body(&location.url, get(client, &location.url).await?.bytes()).await?;
+    let response = get(client, &location.url).await?;
+    let signed = read_body(&location.url, observe_body(response).bytes()).await?;
     Ok(Served {
         document: document::verify_signed(&signed, &location.public_key)?,
-        signed: signed.to_vec(),
+        signed,
         from: location.url.clone(),
     })
 }
@@ -107,7 +109,7 @@ fn build_client(builder: reqwest::ClientBuilder) -> reqwest::Client {
 pub(super) async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response> {
     let response = client
         .get(url)
-        .send()
+        .send_observed()
         .await
         .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))?;
     let status = response.status();

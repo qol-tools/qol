@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::*;
 use gpui::*;
+use qol_connection_health::Level;
 use qol_gpui::activity_animation::ActivityAnimation;
 use qol_gpui::kit::kit;
 use qol_gpui::kit::Kit;
@@ -13,10 +14,11 @@ use qol_gpui::settings_panel::components::{
     SettingsHint,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
-    settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
-    CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
-    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_busy_message,
+    settings_connection_spinner, settings_description, settings_list, settings_value_text,
+    CustomHints, CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier,
+    CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
+    SettingsRow, SettingsValueTone,
 };
 use qol_gpui::surface::SurfaceDismisser;
 
@@ -157,6 +159,13 @@ impl UpdatesView {
             self.poll_skipped = true;
         }
         due
+    }
+
+    fn connection(&self) -> Level {
+        self.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.connection.level)
+            .unwrap_or_default()
     }
 
     fn apply_snapshot(&mut self, snapshot: UpdatesSnapshot) {
@@ -484,30 +493,33 @@ impl UpdatesView {
                     this.select_row(index, Selection::Summary, cx);
                 }
             }));
-        let label =
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(qol_theme::SPACE_STACK))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(qol_theme::SPACE_INSET))
-                        .children(summary.busy.then(|| {
-                            settings_action_spinner(("updates-summary-spinner", index), kit)
-                        }))
-                        .children(summary.dot.map(|dot| summary_dot(dot, kit)))
-                        .child(settings_label(summary.label.clone(), kit)),
-                )
-                .child(settings_description(
-                    summary.description.clone(),
-                    ground,
-                    kit,
-                ));
+        let label = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(qol_theme::SPACE_STACK))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(qol_theme::SPACE_INSET))
+                    .children(summary.busy.then(|| {
+                        settings_connection_spinner(
+                            ("updates-summary-spinner", index),
+                            self.connection(),
+                            kit,
+                        )
+                    }))
+                    .children(summary.dot.map(|dot| summary_dot(dot, kit)))
+                    .child(settings_label(summary.label.clone(), kit)),
+            )
+            .child(settings_description(
+                summary.description.clone(),
+                ground,
+                kit,
+            ));
         row.child(label)
             .child(
                 settings_value_group().children(summary.action_label.map(|label| {
@@ -542,11 +554,13 @@ impl UpdatesView {
         ))
         .child(
             settings_value_group()
-                .children(
-                    check
-                        .checking
-                        .then(|| settings_action_spinner(("updates-checked-spinner", index), kit)),
-                )
+                .children(check.checking.then(|| {
+                    settings_connection_spinner(
+                        ("updates-checked-spinner", index),
+                        self.connection(),
+                        kit,
+                    )
+                }))
                 .child(settings_value_text(
                     check.value.clone(),
                     value_tone(check.tone),
@@ -592,11 +606,13 @@ impl UpdatesView {
         ))
         .child(
             settings_value_group()
-                .children(
-                    target
-                        .spinner
-                        .then(|| settings_action_spinner(("updates-target-spinner", index), kit)),
-                )
+                .children(target.spinner.then(|| {
+                    settings_connection_spinner(
+                        ("updates-target-spinner", index),
+                        self.connection(),
+                        kit,
+                    )
+                }))
                 .child(settings_value_text(
                     target.value.clone(),
                     value_tone(target.tone),

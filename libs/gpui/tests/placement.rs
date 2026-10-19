@@ -49,6 +49,12 @@ fn from_event_resolves_monitor_only_for_carrying_events() {
         (RuntimeEvent::CursorMoved { x: 10.0, y: 20.0 }, false),
         (RuntimeEvent::WindowListChanged, false),
         (
+            RuntimeEvent::ConnectionHealthChanged {
+                health: Default::default(),
+            },
+            false,
+        ),
+        (
             RuntimeEvent::MonitorsChanged {
                 monitors: Vec::new(),
             },

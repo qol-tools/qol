@@ -6597,6 +6597,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-connection-health"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-controllers"
 version = "0.55.0"
 dependencies = [
@@ -6747,6 +6756,7 @@ dependencies = [
  "qol-apps",
  "qol-color",
  "qol-config",
+ "qol-connection-health",
  "qol-conventions",
  "qol-hotkeys",
  "qol-platform",
@@ -7349,6 +7359,7 @@ dependencies = [
  "libc",
  "log",
  "qol-config",
+ "qol-connection-health",
  "qol-conventions",
  "qol-peers",
  "qol-platform",
@@ -7553,6 +7564,7 @@ dependencies = [
  "qol-build-identity",
  "qol-color",
  "qol-config",
+ "qol-connection-health",
  "qol-conventions",
  "qol-dev-build",
  "qol-fs",

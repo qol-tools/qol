@@ -1,0 +1,16 @@
+[package]
+name = "qol-connection-health"
+version = "0.1.0"
+edition = "2021"
+description = "Connection health grading shared by qol-tray and its plugins"
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+serde.workspace = true
+workspace-hack.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

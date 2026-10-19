@@ -604,6 +604,14 @@ pub fn settings_action_spinner(id: impl Into<ElementId>, kit: Kit) -> Busy {
     Busy::ring(id, rgb(kit.palette.success))
 }
 
+pub fn settings_connection_spinner(
+    id: impl Into<ElementId>,
+    level: qol_connection_health::Level,
+    kit: Kit,
+) -> Busy {
+    Busy::ring(id, rgb(kit.connection_hue(level)))
+}
+
 /// Busy recipe sharing the settings_message frame for in-progress work.
 pub fn settings_busy_message(
     id: impl Into<ElementId>,

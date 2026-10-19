@@ -9,6 +9,7 @@ use super::types::{
     GitHubAuthSessionResponse, GitHubAuthSessionState, GitHubAuthStartResponse, GitHubAuthStatus,
     GitHubCredentialRecord, GitHubCredentialSource,
 };
+use crate::features::connection_health::SendObserved;
 
 const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
@@ -76,7 +77,7 @@ impl GitHubAuthService {
                 "client_id": self.client_id,
                 "scope": scope_param,
             }))
-            .send()
+            .send_observed()
             .await?;
 
         if !response.status().is_success() {
@@ -186,7 +187,7 @@ impl GitHubAuthService {
                 "device_code": device_code,
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             }))
-            .send()
+            .send_observed()
             .await
         {
             Ok(response) => response,
@@ -256,7 +257,7 @@ impl GitHubAuthService {
             .get(USER_URL)
             .header("User-Agent", "qol-tray")
             .header("Authorization", format!("Bearer {}", access_token))
-            .send()
+            .send_observed()
             .await?;
         if !response.status().is_success() {
             let status = response.status();

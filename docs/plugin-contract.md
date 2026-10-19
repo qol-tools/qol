@@ -527,7 +527,8 @@ in `libs/runtime/src/protocol.rs`; server in `apps/tray/src/runtime/server/`.
 Requests (newline JSON, `cmd`-tagged): `get_state` (monitors etc.),
 `set_focus {monitor_idx}` (fire-and-forget), `subscribe {plugin_id, events}` (held-open
 stream of `RuntimeEvent`; kinds include `active_monitor_changed`, `cursor_moved`,
-`focus_changed`, `monitors_changed`, `window_list_changed`, `launcher_apps_synced`),
+`focus_changed`, `monitors_changed`, `window_list_changed`, `launcher_apps_synced`,
+`connection_health_changed`),
 `lifeline {plugin_id}`
 (the watchdog), `armed_lifelines` (host-internal audit),
 `get_plugin_config`/`set_plugin_config {plugin_id, config}` (host-side config store),

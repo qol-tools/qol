@@ -1,1 +1,4 @@
 msrv = "1.95.0"
+disallowed-methods = [
+    { path = "reqwest::RequestBuilder::send", reason = "send through connection_health::SendObserved::send_observed so the connection health signal sees every request" },
+]
