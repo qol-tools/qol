@@ -120,6 +120,7 @@ qol-host-fixes.workspace = true
 qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true
+qol-connection-health.workspace = true
 qol-gpui.workspace = true
 gpui.workspace = true
 qol-mcp.workspace = true

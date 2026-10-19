@@ -10,6 +10,7 @@ use std::time::Duration;
 
 pub(crate) use publisher::events;
 pub use publisher::install_events;
+pub use publisher::is_subscribed;
 pub use publisher::publish;
 pub(crate) use server::push_status::PluginStatusRegistry;
 #[cfg(test)]

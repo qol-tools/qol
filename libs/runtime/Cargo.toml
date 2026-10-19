@@ -10,6 +10,7 @@ log.workspace = true
 zeroize = "1"
 qol-peers.workspace = true
 qol-config.workspace = true
+qol-connection-health.workspace = true
 qol-conventions.workspace = true
 qol-windowing.workspace = true
 serde.workspace = true

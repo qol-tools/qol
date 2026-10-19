@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use qol_runtime::protocol::RuntimeEvent;
+use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 
 use crate::daemon::EventBus;
 
@@ -38,4 +38,10 @@ pub fn publish(events: &[RuntimeEvent]) {
         return;
     };
     shared.publish(events);
+}
+
+pub fn is_subscribed(kind: RuntimeEventKind) -> bool {
+    PUBLISHER
+        .get()
+        .is_some_and(|shared| shared.has_event_subscribers(kind))
 }

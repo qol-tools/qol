@@ -20,6 +20,7 @@ qol-bluetooth-control = { path = "libs/bluetooth-control" }
 qol-cinnamon = { path = "libs/cinnamon" }
 qol-color = { path = "libs/color" }
 qol-config = { path = "libs/config" }
+qol-connection-health = { path = "libs/connection-health" }
 qol-conventions = { path = "libs/conventions" }
 qol-desktop-settings = { path = "libs/desktop-settings" }
 qol-dev-build = { path = "libs/dev-build" }

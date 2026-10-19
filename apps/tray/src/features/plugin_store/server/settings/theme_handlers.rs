@@ -32,6 +32,12 @@ pub(in super::super) async fn get_core_query(
 }
 
 fn get_core_query_inner(query: &str) -> HttpResult<Response> {
+    if query == crate::features::connection_health::QUERY {
+        crate::features::connection_health::note_interest();
+        let health = crate::features::connection_health::current();
+        let json = http_json::encode_json(&health, "Failed to serialize connection health")?;
+        return Ok(http_json::json_response(json));
+    }
     if query == "profiles" {
         let names = crate::features::profile::registry::list_profiles().unwrap_or_default();
         let json = http_json::encode_json(&names, "Failed to serialize profile list")?;
@@ -231,6 +237,17 @@ mod tests {
         assert!(get_core_query_inner("accent").is_ok());
         assert!(get_core_query_inner("os_do_not_disturb").is_ok());
         assert!(get_core_query_inner("unknown").is_err());
+    }
+
+    #[tokio::test]
+    async fn connection_query_answers_with_the_shared_health() {
+        let response = get_core_query_inner(crate::features::connection_health::QUERY).unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["level"].is_string(), "body: {body}");
+        serde_json::from_value::<qol_connection_health::ConnectionHealth>(body).unwrap();
     }
 
     #[test]

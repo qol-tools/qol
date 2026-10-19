@@ -1,5 +1,6 @@
 use super::document::{Blob, IndexedRelease, RegistryLocation};
 use super::fetch::{blob_client, get, read_body};
+use crate::features::connection_health::SendObserved;
 use crate::features::plugin_store::release_integrity;
 use anyhow::{Context, Result};
 use qol_plugin_index::{BearerChallenge, INDEX_TAG, SIGNED_INDEX_MEDIA_TYPE};
@@ -164,7 +165,7 @@ pub(super) fn blob_url(registry: &RegistryLocation, digest: &str) -> String {
 
 async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Response> {
     request
-        .send()
+        .send_observed()
         .await
         .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))
 }

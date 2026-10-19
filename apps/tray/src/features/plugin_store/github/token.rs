@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+use crate::features::connection_health::SendObserved;
+
 pub(crate) fn build_github_request(
     client: &reqwest::Client,
     url: &str,
@@ -16,7 +18,7 @@ pub(crate) fn build_github_request(
 }
 
 pub(crate) async fn send_checked(request: reqwest::RequestBuilder) -> Result<reqwest::Response> {
-    let response = request.send().await?;
+    let response = request.send_observed().await?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();

@@ -52,10 +52,14 @@ pub(super) fn has_poll_subscribers_in(subscribers: &[SubscriberEntry]) -> bool {
 }
 
 pub(super) fn has_window_list_subscribers(subscribers: &Mutex<Vec<SubscriberEntry>>) -> bool {
-    has_event_subscribers_in(
-        &lock_or_recover(subscribers),
-        RuntimeEventKind::WindowListChanged,
-    )
+    has_event_subscribers(subscribers, RuntimeEventKind::WindowListChanged)
+}
+
+pub(super) fn has_event_subscribers(
+    subscribers: &Mutex<Vec<SubscriberEntry>>,
+    kind: RuntimeEventKind,
+) -> bool {
+    has_event_subscribers_in(&lock_or_recover(subscribers), kind)
 }
 
 pub(super) fn has_event_subscribers_in(
@@ -140,6 +144,7 @@ fn amc_interested_ids(subscribers: &[SubscriberEntry]) -> Vec<String> {
 fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
     match event {
         RuntimeEvent::ActiveMonitorChanged { .. } => RuntimeEventKind::ActiveMonitorChanged,
+        RuntimeEvent::ConnectionHealthChanged { .. } => RuntimeEventKind::ConnectionHealthChanged,
         RuntimeEvent::CursorMoved { .. } => RuntimeEventKind::CursorMoved,
         RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
         RuntimeEvent::LauncherAppsSynced { .. } => RuntimeEventKind::LauncherAppsSynced,

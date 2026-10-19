@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod auth;
+pub mod connection_health;
 pub mod github_auth;
 pub mod gpu_driver_sync;
 pub mod launcher_apps;

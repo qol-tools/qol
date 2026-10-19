@@ -1,5 +1,6 @@
 use super::document::{self, IndexDocument, RegistryLocation};
 use super::{registry, IndexLocation};
+use crate::features::connection_health::SendObserved;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -107,7 +108,7 @@ fn build_client(builder: reqwest::ClientBuilder) -> reqwest::Client {
 pub(super) async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::Response> {
     let response = client
         .get(url)
-        .send()
+        .send_observed()
         .await
         .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))?;
     let status = response.status();

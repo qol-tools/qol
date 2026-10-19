@@ -301,6 +301,7 @@ fn handle_subscription(
     }
 
     let replayed_idx = replay_active_monitor(writer, shared, &events);
+    replay_connection_health(writer, &events);
     crate::runtime::server::trace::subscribed(clean_id, &events, replayed_idx);
 
     let _ = writer.set_write_timeout(Some(Duration::from_secs(SUBSCRIBER_WRITE_TIMEOUT_SECS)));
@@ -333,6 +334,15 @@ fn replay_active_monitor(
         },
     );
     Some(idx)
+}
+
+fn replay_connection_health(writer: &mut LocalStream, events: &[RuntimeEventKind]) {
+    if !events.contains(&RuntimeEventKind::ConnectionHealthChanged) {
+        return;
+    }
+    crate::features::connection_health::note_interest();
+    let health = crate::features::connection_health::current();
+    let _ = write_flushed_json_line(writer, &RuntimeEvent::ConnectionHealthChanged { health });
 }
 
 fn forward_events(writer: &mut LocalStream, rx: std_mpsc::Receiver<RuntimeEvent>) {

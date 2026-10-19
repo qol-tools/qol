@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use qol_connection_health::ConnectionHealth;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -50,6 +51,7 @@ struct UpdatesView {
     last_attempt: Option<SystemTime>,
     last_success: Option<SystemTime>,
     check_error: Option<String>,
+    connection: ConnectionHealth,
     tray_start: SystemTime,
     host: HostView,
     plugins: Vec<PluginView>,
@@ -116,6 +118,7 @@ struct UpdatesPayload {
     last_checked_secs: Option<u64>,
     last_success_secs: Option<u64>,
     check_error: Option<String>,
+    connection: ConnectionHealth,
     running: bool,
     host: HostPayload,
     plugins: Vec<PluginPayload>,
@@ -170,6 +173,7 @@ enum UpdateTarget {
 }
 
 pub(super) async fn get_updates(state: AppState) -> Response {
+    crate::features::connection_health::note_interest();
     http_json::blocking("updates query", move || {
         let view = collect_view(&state)?;
         let payload = build_updates_payload(&view, SystemTime::now());
@@ -330,6 +334,7 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
         last_attempt: health.last_attempt,
         last_success: last_good_check(health.last_success, catalog.fetched_at),
         check_error: check_error(health.last_error, catalog.failed),
+        connection: crate::features::connection_health::current(),
         tray_start: crate::updates::tray_start(),
         host: HostView {
             current: crate::updates::current_version().to_string(),
@@ -393,6 +398,7 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
         last_checked_secs: secs_since(now, view.last_attempt),
         last_success_secs: secs_since(now, view.last_success),
         check_error: view.check_error.clone(),
+        connection: view.connection,
         running: view
             .host
             .job
@@ -667,6 +673,7 @@ mod tests {
             last_attempt: None,
             last_success: None,
             check_error: None,
+            connection: ConnectionHealth::default(),
             tray_start: SystemTime::UNIX_EPOCH,
             host,
             plugins,
@@ -687,6 +694,11 @@ mod tests {
         state.checking = true;
         state.last_attempt = Some(now - Duration::from_secs(5));
         state.last_success = Some(now - Duration::from_secs(10));
+        state.connection = ConnectionHealth {
+            level: qol_connection_health::Level::Slow,
+            cause: Some(qol_connection_health::Cause::Waiting),
+            latency_ms: Some(240),
+        };
         let payload = build_updates_payload(&state, now);
         assert_eq!(
             serde_json::to_value(&payload).unwrap(),
@@ -696,6 +708,11 @@ mod tests {
                 "last_checked_secs": 5,
                 "last_success_secs": 10,
                 "check_error": null,
+                "connection": {
+                    "level": "slow",
+                    "cause": "waiting",
+                    "latency_ms": 240
+                },
                 "running": false,
                 "host": {
                     "id": "qol-tray",

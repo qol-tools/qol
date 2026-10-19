@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use qol_connection_health::ConnectionHealth;
 use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -41,6 +42,8 @@ pub(super) struct UpdatesSnapshot {
     pub(super) last_success_secs: Option<u64>,
     #[serde(default)]
     pub(super) check_error: Option<String>,
+    #[serde(default)]
+    pub(super) connection: ConnectionHealth,
     pub(super) running: bool,
     pub(super) host: UpdateTarget,
     #[serde(default)]
@@ -557,6 +560,29 @@ mod tests {
         RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
     };
 
+    #[test]
+    fn the_snapshot_carries_the_tray_connection_health() {
+        let host =
+            r#""host":{"id":"qol-tray","name":"qol-tray","current":"1.0.0","state":"up_to_date"}"#;
+        let older: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":true,"checks_enabled":true,"running":false,{host}}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            older.connection.level,
+            qol_connection_health::Level::Unknown
+        );
+        let slow: UpdatesSnapshot = serde_json::from_str(&format!(
+            r#"{{"checking":true,"checks_enabled":true,"running":false,"connection":{{"level":"slow","cause":"waiting"}},{host}}}"#
+        ))
+        .unwrap();
+        assert_eq!(slow.connection.level, qol_connection_health::Level::Slow);
+        assert_eq!(
+            slow.connection.cause,
+            Some(qol_connection_health::Cause::Waiting)
+        );
+    }
+
     fn target(id: &str, name: &str, state: TargetState) -> UpdateTarget {
         UpdateTarget {
             id: id.to_string(),
@@ -577,6 +603,7 @@ mod tests {
             last_checked_secs: Some(120),
             last_success_secs: Some(120),
             check_error: None,
+            connection: Default::default(),
             running: false,
             host,
             plugins,

@@ -227,6 +227,10 @@ impl SharedState {
         subscribers::has_window_list_subscribers(&self.subscribers)
     }
 
+    pub(crate) fn has_event_subscribers(&self, kind: RuntimeEventKind) -> bool {
+        subscribers::has_event_subscribers(&self.subscribers, kind)
+    }
+
     pub(super) fn input(&self) -> InputState {
         lock_or_recover(&self.input).clone()
     }
