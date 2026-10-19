@@ -14,6 +14,7 @@ use qol_terminal_sessions::cli::{
     CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
     CliSessionInterpreter, CliSessionStrategy, CliSessionSubscription, CliTool, CliViewportState,
 };
+use qol_terminal_sessions::closed;
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::SessionBinding;
 
@@ -1932,4 +1933,85 @@ fn live_parks_drop_dead_runners_and_unparseable_sessions() {
     assert_eq!(parks.len(), 1);
     assert_eq!(parks[0].id, kitty_session_id(5));
     assert_eq!(parks[0].runner_pid, 10);
+}
+
+struct ResumableAgent {
+    tool: CliTool,
+}
+
+impl CliSessionStrategy for ResumableAgent {
+    fn tool(&self) -> &CliTool {
+        &self.tool
+    }
+
+    fn matches(&self, pane: &Pane) -> bool {
+        pane.foreground_basenames
+            .iter()
+            .any(|name| name == "claude")
+    }
+
+    fn describe(&self, _pane: &Pane) -> CliSessionDescriptor {
+        CliSessionDescriptor {
+            tool: self.tool.clone(),
+            display_name: Some("Old chat".to_owned()),
+            external_id: Some("resumable-session".to_owned()),
+            external_id_authoritative: false,
+            has_activity: Some(false),
+            evidence: CliSessionEvidence::default(),
+        }
+    }
+
+    fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
+        Some(vec!["--resume".to_owned(), external_id.to_owned()])
+    }
+}
+
+#[test]
+fn a_conversation_is_recorded_closed_only_after_three_empty_discoveries() {
+    let root = tempfile::tempdir().unwrap();
+    let closed_dir = root.path().join("closed");
+    let interpreter = CliSessionInterpreter::from_strategies([Arc::new(ResumableAgent {
+        tool: claude_tool(),
+    })
+        as Arc<dyn CliSessionStrategy>])
+    .unwrap();
+    let mut caches = ReconcileCaches::default().with_closed_dir(Some(closed_dir.clone()));
+    let reg = Arc::new(Mutex::new(Registry::default()));
+    let mut host = FakeHost {
+        panes: vec![pane(61, "Claude", true, &["zsh", "claude"], "claude")],
+        screen: String::new(),
+    };
+    let mut tick_at = |host: &FakeHost, now: u64| {
+        tick_with_caches(
+            &reg,
+            host,
+            &interpreter,
+            &NoServiceProbe,
+            now,
+            now,
+            &mut caches,
+        );
+    };
+
+    tick_at(&host, 100);
+    assert!(closed::find(&closed_dir.join("live"), "resumable-session").is_some());
+    assert!(closed::records(&closed_dir).unwrap().is_empty());
+
+    let open = host.panes.remove(0);
+    for now in [101, 102] {
+        tick_at(&host, now);
+        assert!(
+            closed::records(&closed_dir).unwrap().is_empty(),
+            "a missing pane is not closed before three empty discoveries"
+        );
+    }
+    tick_at(&host, 103);
+    let records = closed::records(&closed_dir).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].external_id, "resumable-session");
+    assert_eq!(records[0].closed_at, 103);
+
+    host.panes.push(open);
+    tick_at(&host, 104);
+    assert!(closed::records(&closed_dir).unwrap().is_empty());
 }

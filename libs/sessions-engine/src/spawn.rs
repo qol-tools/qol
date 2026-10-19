@@ -1967,7 +1967,6 @@ pub(super) fn spawn_detached(
     prompt: &str,
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
-    resume: Option<&[String]>,
     park: bool,
 ) -> Result<DetachedLaunch> {
     super::switchboard::refuse_reserved_key(key)?;
@@ -1989,7 +1988,6 @@ pub(super) fn spawn_detached(
         prompt,
         dry_run,
         assignment,
-        resume,
         park,
         &[],
     )
@@ -2014,33 +2012,13 @@ pub(super) fn launch_detached(
     prompt: &str,
     dry_run: bool,
     assignment: Option<&AgentAssignment>,
-    resume: Option<&[String]>,
     park: bool,
     env: &[(String, String)],
 ) -> Result<DetachedLaunch> {
-    if resume.is_none() {
-        require_model_for_launch(model)?;
-    }
+    require_model_for_launch(model)?;
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
-    let _guard = locks.acquire(&prepared.key)?;
-    let started = Instant::now();
-    let snapshot = terminals.snapshot().context("session discovery failed")?;
-    if !matches!(
-        decide(interpreter, snapshot.sessions(), &prepared.identity),
-        SpawnDecision::Launch
-    ) {
-        bail!(
-            "spawn key `{key}` is already held by a live session; a detached fork always starts a fresh tree, so give it an unused key"
-        );
-    }
     let mut launch = wrap_launch(&prepared.launch, cap);
-    let flags = match resume {
-        Some(resume) => {
-            launch.args.extend(resume.iter().cloned());
-            super::launch_flags::tier_flags(&prepared.tool_id, model, effort)?
-        }
-        None => super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?,
-    };
+    let flags = super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?;
     launch.args.extend(flags);
     launch.args.extend(extra_args.iter().cloned());
     qol_agent_launch::account::apply(
@@ -2055,6 +2033,89 @@ pub(super) fn launch_detached(
     launch.env.extend(env.iter().cloned());
     if !dry_run && !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
+    }
+    start_detached(
+        terminals,
+        interpreter,
+        ledger,
+        locks,
+        prepared,
+        launch,
+        cwd,
+        model,
+        assignment,
+        if dry_run { prompt } else { "" },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn resume_detached(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    point: &super::resume::ResumePoint<'_>,
+    cwd: &str,
+    key: &str,
+    title: Option<&str>,
+    config: Option<SpawnSurface>,
+    cap: Option<&SpawnCapConfig>,
+) -> Result<DetachedLaunch> {
+    let prepared = prepare_spawn(
+        interpreter,
+        point.tool.as_str(),
+        Some(key),
+        None,
+        title,
+        config,
+    )?;
+    let mut launch = super::resume::resume_launch(
+        interpreter,
+        point,
+        cap,
+        &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
+    )?;
+    launch
+        .env
+        .push(qol_terminal_sessions::parking::launch_env(false));
+    start_detached(
+        terminals,
+        interpreter,
+        ledger,
+        locks,
+        prepared,
+        launch,
+        cwd,
+        point.model,
+        None,
+        "",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_detached(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    ledger: &SpawnLedger,
+    locks: &SpawnLocks,
+    prepared: SpawnContext,
+    launch: CliLaunchProgram,
+    cwd: &str,
+    model: Option<&str>,
+    assignment: Option<&AgentAssignment>,
+    typed_prompt: &str,
+) -> Result<DetachedLaunch> {
+    let _guard = locks.acquire(&prepared.key)?;
+    let started = Instant::now();
+    let snapshot = terminals.snapshot().context("session discovery failed")?;
+    if !matches!(
+        decide(interpreter, snapshot.sessions(), &prepared.identity),
+        SpawnDecision::Launch
+    ) {
+        bail!(
+            "spawn key `{}` is already held by a live session; a detached fork always starts a fresh tree, so give it an unused key",
+            prepared.key
+        );
     }
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
@@ -2086,11 +2147,11 @@ pub(super) fn launch_detached(
         .binding()
         .context("spawned session cannot bind to a stable token")?;
     ledger.bind_session(&prepared.key, &facts.cwd, &binding.token(), assignment)?;
-    if dry_run && !prompt.is_empty() {
+    if !typed_prompt.is_empty() {
         terminals
             .send_text(
                 &binding,
-                prompt,
+                typed_prompt,
                 qol_terminal_sessions::DeliveryMode::Insert,
             )
             .context("the dry-run prompt could not be typed into the launched session")?;
@@ -6752,7 +6813,6 @@ mod tests {
             &[],
             "",
             false,
-            None,
             None,
             false,
         )

@@ -179,18 +179,35 @@ pub(crate) struct ClosedRow {
     pub(crate) closed_ago: String,
 }
 
+#[derive(Default, Serialize)]
+pub(crate) struct ClosedOmitted {
+    pub(crate) lanes: usize,
+    pub(crate) missing_cwd: usize,
+    pub(crate) parked: usize,
+    pub(crate) beyond_limit: usize,
+}
+
 pub(crate) fn closed_row(record: &ClosedRecord, now: u64) -> ClosedRow {
-    let closed_at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(record.closed_at);
     ClosedRow {
         external_id: record.external_id.clone(),
         tool: record.tool.clone(),
         cwd: record.cwd.clone(),
         title: record.title.clone(),
         key: record.key.clone(),
-        closed_at: chrono::DateTime::<chrono::Local>::from(closed_at)
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        closed_at: local_time(record.closed_at),
         closed_ago: ago(now.saturating_sub(record.closed_at)),
     }
+}
+
+fn local_time(secs: u64) -> String {
+    i64::try_from(secs)
+        .ok()
+        .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+        })
+        .unwrap_or_else(|| secs.to_string())
 }
 
 fn ago(elapsed_secs: u64) -> String {
@@ -244,8 +261,24 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations the CLI Sessions daemon saw close in the last 14 days, newest first, so one can be brought back with session_reopen: each row carries external_id, tool, cwd, the title it last showed, its spawn key when it had one, closed_at in local time and closed_ago. A conversation closes when its tool exits or its terminal goes; one a live session holds again is left out, and the switchboard is never listed.",
-            input_schema: json!({ "type": "object", "properties": {} }),
+            description: "List the conversations the CLI Sessions daemon saw close in the last 14 days, newest first, so one can be brought back with session_reopen. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, the title it last showed, its spawn key when it had one, closed_at in local time and closed_ago. A conversation closes when its tool exits or its terminal goes while the daemon runs; one a live session holds again is left out, and the switchboard is never listed. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Most rows to return, newest first; 20 by default, clamped to 1 through 100",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Case-insensitive text a row's title, cwd, key, tool or external_id must contain; name a project, key or topic to narrow the list",
+                    },
+                    "include_lanes": {
+                        "type": "boolean",
+                        "description": "List spawned lanes too; false by default, so only the user's own sessions are listed",
+                    },
+                },
+            }),
         },
         ToolSpec {
             name: "session_spawn",
@@ -434,7 +467,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_reopen",
             label: "Reopen a closed session",
-            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode it ran with. It keeps the spawn key it had, so its mail still reaches it, and a conversation that had none gets a reopen-* key. Refuses a conversation a live session already holds and a key that is live. Returns the new session token with the key, tool, cwd and title.",
+            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode, model, effort and Claude account it ran with. It keeps the spawn key it had, so its mail still reaches it, and a conversation that had none gets a reopen-* key. Refuses a conversation a live session already holds, a key another live conversation holds, and a conversation a park still waits on. Returns the new session token with the key, tool, cwd, title, model and effort, and confirmed: true when the new tab reported the conversation within 15 seconds, which clears it from sessions_closed (ledger_cleared); confirmed: false means the tab is still starting, and CLI Sessions clears the record when it sees the conversation. A tool that exits right after it starts is an error, and the conversation stays in sessions_closed.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -746,6 +779,10 @@ mod tests {
             title: Some("Old chat".to_owned()),
             key: None,
             permission_mode: Some("bypassPermissions".to_owned()),
+            model: None,
+            effort: None,
+            claude_config_dir: None,
+            lane: false,
             closed_at: 1_700_000_000,
         };
         let row = closed_row(&record, 1_700_000_000 + 2 * 86_400 + 5);
@@ -767,6 +804,26 @@ mod tests {
         ] {
             assert_eq!(ago(elapsed), expected, "{elapsed}");
         }
+    }
+
+    #[test]
+    fn a_closed_row_never_panics_on_an_out_of_range_timestamp() {
+        let record = ClosedRecord {
+            external_id: "abc".to_owned(),
+            tool: "claude".to_owned(),
+            cwd: "/project".to_owned(),
+            title: None,
+            key: None,
+            permission_mode: None,
+            model: None,
+            effort: None,
+            claude_config_dir: None,
+            lane: false,
+            closed_at: u64::MAX,
+        };
+        let row = closed_row(&record, 1_700_000_000);
+        assert_eq!(row.closed_at, u64::MAX.to_string());
+        assert_eq!(row.closed_ago, "just now");
     }
 
     #[test]

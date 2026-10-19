@@ -270,9 +270,9 @@ fn app() -> HeadlessApp {
             ))
             .subcommand(command(
                 "switchboard",
-                "Launch the one control chat that starts, lists and closes sessions.",
+                "Launch the one control chat that starts, lists, reopens and closes sessions.",
                 "qol sessions switchboard --cwd PATH [--model MODEL] [--effort LEVEL] [--surface tab|os-window]",
-                "Launches a blank claude session keyed and titled switchboard whose only tools are ToolSearch and the qol-sessions MCP tools, with a system prompt that confines it to starting, listing and closing other sessions without doing their work. Only one runs at a time: a live session already holding the switchboard key is refused. --effort defaults to low; --model and --surface resolve as they do for a fork. The switchboard is not recorded as a fork and never parks.",
+                "Launches a blank claude session keyed and titled switchboard whose only tools are ToolSearch and the qol-sessions MCP tools, with a system prompt that confines it to starting, listing, reopening and closing other sessions without doing their work. Only one runs at a time: a live session already holding the switchboard key is refused. --effort defaults to low; --model and --surface resolve as they do for a fork. The switchboard is not recorded as a fork and never parks.",
                 "Switchboard JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when a switchboard is already running, or on validation, readiness, or launch failure.",
             ))

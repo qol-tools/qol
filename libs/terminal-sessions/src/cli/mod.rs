@@ -34,6 +34,14 @@ pub use subscription::{CliSessionSubscription, CliSessionSubscriptionError};
 
 pub type CliSessionChangeHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CliResumeSettings {
+    pub permission_mode: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub claude_config_dir: Option<String>,
+}
+
 pub trait CliSessionStrategy: Send + Sync {
     fn tool(&self) -> &CliTool;
 
@@ -139,8 +147,8 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
-    fn permission_mode(&self, _session: &SessionFacts) -> Option<String> {
-        None
+    fn resume_settings(&self, _session: &SessionFacts) -> CliResumeSettings {
+        CliResumeSettings::default()
     }
 
     fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {

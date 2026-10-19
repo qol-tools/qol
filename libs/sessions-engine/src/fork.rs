@@ -422,7 +422,6 @@ pub(super) fn fork_linked(
         &prompt,
         dry_run,
         admission.assignment.as_ref(),
-        None,
         park,
     )?;
     record.surface = launched.surface.to_owned();

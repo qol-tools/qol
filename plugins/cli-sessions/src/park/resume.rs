@@ -6,7 +6,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::path::Path;
 
 use qol_agent_launch::account::LaneExecCommand;
-use qol_terminal_sessions::cli::{launch_flags, CliSessionInterpreter, CliToolId};
+use qol_agent_launch::cap::SpawnCapConfig;
+use qol_sessions_engine::resume::{resume_launch, ResumePoint};
+use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{
     SessionId, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
@@ -26,21 +28,11 @@ pub fn resume(
 ) -> Result<String> {
     let tool = CliToolId::new(record.tool.clone())
         .map_err(|error| anyhow!("invalid tool `{}`: {error}", record.tool))?;
-    let mut launch = interpreter
-        .launch_for(&tool)
-        .ok_or_else(|| anyhow!("`{tool}` has no launch program"))?;
-    launch.args.extend(resume_args(interpreter, &tool, record)?);
+    let cap = qol_agent_launch::cap::resolve_spawn_cap(qol_agent_launch::cap::config_spawn_cap()?);
+    let mut launch = resume_program(interpreter, &tool, record, cap.as_ref())?;
     if !prompt.is_empty() {
         launch.args.push(prompt.to_owned());
     }
-    let cap = qol_agent_launch::cap::resolve_spawn_cap(qol_agent_launch::cap::config_spawn_cap()?);
-    let mut launch = qol_agent_launch::cap::wrap_launch(&launch, cap.as_ref());
-    qol_agent_launch::account::apply(
-        &mut launch,
-        &tool,
-        record.claude_config_dir.as_deref().map(Path::new),
-        &LaneExecCommand::current(&[crate::park::LANE_EXEC])?,
-    )?;
     launch.env.push(qol_terminal_sessions::parking::launch_env(
         record.closes_terminal,
     ));
@@ -87,24 +79,25 @@ fn resumed_key(record: &ParkRecord, kept: Option<SpawnKey>) -> Result<SpawnKey> 
     }
 }
 
-fn resume_args(
+fn resume_program(
     interpreter: &CliSessionInterpreter,
     tool: &CliToolId,
     record: &ParkRecord,
-) -> Result<Vec<String>> {
-    let mut args = interpreter
-        .resume_args_for(tool, &record.external_id)
-        .ok_or_else(|| anyhow!("`{tool}` has no resume command"))?;
-    args.extend(launch_flags::resume_permission_flags(
-        tool,
-        record.permission_mode.as_deref(),
-    ));
-    args.extend(launch_flags::tier_flags(
-        tool,
-        record.model.as_deref(),
-        record.effort.as_deref(),
-    )?);
-    Ok(args)
+    cap: Option<&SpawnCapConfig>,
+) -> Result<CliLaunchProgram> {
+    resume_launch(
+        interpreter,
+        &ResumePoint {
+            tool,
+            external_id: &record.external_id,
+            permission_mode: record.permission_mode.as_deref(),
+            model: record.model.as_deref(),
+            effort: record.effort.as_deref(),
+            claude_config_dir: record.claude_config_dir.as_deref().map(Path::new),
+        },
+        cap,
+        &LaneExecCommand::current(&[crate::park::LANE_EXEC])?,
+    )
 }
 
 fn ready_token(
@@ -162,8 +155,9 @@ mod tests {
         parked.permission_mode = Some("bypassPermissions".to_owned());
         parked.model = Some("opus-x".to_owned());
         parked.effort = Some("high".to_owned());
-        let args = resume_args(&interpreter, &tool, &parked).unwrap();
-        let joined = args.join(" ");
+        let launch = resume_program(&interpreter, &tool, &parked, None).unwrap();
+        assert_eq!(launch.program, "claude");
+        let joined = launch.args.join(" ");
         assert!(joined.contains("abc"), "{joined}");
         assert!(
             joined.contains("--dangerously-skip-permissions"),
