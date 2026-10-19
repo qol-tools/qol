@@ -16,5 +16,20 @@
       { "path": "plugins/memory/src/verification/mod.rs", "text": "macos", "why": "a protected word in recalled text, beside android and freebsd" },
       { "path": "plugins/update-manager/src/updates/platform/linux/names.rs", "text": "linux", "why": "the Debian kernel source package name" }
     ]
+  },
+  "window chrome": {
+    "owner": ["libs/gpui/src/popup_window/platform/", "libs/gpui/src/platform/"],
+    "use": "a chrome entry point (configure_popup_window, configure_overlay_window, disable_window_shadow, ...) that the Surface calls for its SurfaceKind before the window shows",
+    "calls": [
+      "setHasShadow", "setStyleMask", "setCollectionBehavior", "setAnimationBehavior", "setOpaque",
+      "setTitlebarAppearsTransparent", "setTitleVisibility", "setHidesOnDeactivate",
+      "DwmSetWindowAttribute", "SetWindowLongPtrW", "override_redirect"
+    ],
+    "entry_points": [
+      "configure_popup_window", "configure_overlay_window", "disable_window_shadow",
+      "make_override_redirect", "set_override_redirect_by_title", "square_window_corners",
+      "apply_tool_window_style"
+    ],
+    "allow": []
   }
 }

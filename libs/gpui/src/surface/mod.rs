@@ -534,6 +534,7 @@ impl Surface {
             if !configured {
                 configured = crate::popup_window::configure_popup_window(&title);
             }
+            crate::popup_window::disable_window_shadow(&title);
             let shown = crate::popup_window::show_toast_window_by_title(&title);
             visible.set(shown);
             qol_runtime::probe!(

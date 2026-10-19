@@ -936,9 +936,6 @@ fn show_window_by_title_with_focus(
         WindowPresentation::Normal => NSNormalWindowLevel,
     };
     window.setLevel(level);
-    if matches!(presentation, WindowPresentation::Notice) {
-        window.setHasShadow(false);
-    }
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(input_passthrough);
