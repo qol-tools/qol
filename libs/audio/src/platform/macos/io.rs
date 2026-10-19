@@ -112,6 +112,11 @@ pub(super) fn require_float_samples(
     direction: Direction,
 ) -> Result<(), AudioError> {
     let streams = hal::read_ids(device, Property::scoped(hal::STREAMS, direction))?;
+    if streams.is_empty() {
+        return Err(AudioError::Operation(
+            "the device has no streams to listen to".to_owned(),
+        ));
+    }
     for stream in streams {
         let format = hal::read_into(
             stream,

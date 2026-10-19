@@ -26,7 +26,7 @@ impl Meter {
         let device = hal::read_text(id, Property::global(hal::DEVICE_UID))?;
         match direction {
             Direction::Input => {
-                if identity::is_bluetooth(id) && identity::state_of(id) != State::Running {
+                if identity::is_bluetooth(id) && !microphone_in_use(id) {
                     return Err(AudioError::Operation(
                         "measuring an idle Bluetooth microphone would switch the headset to its call profile"
                             .to_owned(),
@@ -75,6 +75,12 @@ impl Meter {
         let _ = percent;
         self.peak()
     }
+}
+
+fn microphone_in_use(id: ObjectId) -> bool {
+    let plays_output = hal::read_ids(id, Property::scoped(hal::STREAMS, Direction::Output))
+        .map_or(true, |streams| !streams.is_empty());
+    !plays_output && identity::state_of(id) == State::Running
 }
 
 fn sample_rate(id: ObjectId) -> f64 {
