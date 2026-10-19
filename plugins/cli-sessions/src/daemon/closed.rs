@@ -9,10 +9,12 @@ use crate::host::Pane;
 use crate::session::registry::{is_master_key, meaningful_name};
 
 const MODE_REFRESH_SECS: u64 = 30;
+const MISSING_TICKS: u8 = 3;
 
 struct Sighting {
     record: ClosedRecord,
     mode_read_at: u64,
+    missed: u8,
 }
 
 #[derive(Default)]
@@ -69,17 +71,23 @@ impl ClosedLedger {
             Sighting {
                 record: next,
                 mode_read_at,
+                missed: 0,
             },
         );
     }
 
     pub fn retire_missing(&mut self, panes: &[Pane], now: u64) {
-        let gone: Vec<SessionId> = self
-            .live
-            .keys()
-            .filter(|id| !panes.iter().any(|pane| &pane.id == *id))
-            .cloned()
-            .collect();
+        let mut gone = Vec::new();
+        for (id, sighting) in &mut self.live {
+            if panes.iter().any(|pane| &pane.id == id) {
+                sighting.missed = 0;
+                continue;
+            }
+            sighting.missed = sighting.missed.saturating_add(1);
+            if sighting.missed >= MISSING_TICKS {
+                gone.push(id.clone());
+            }
+        }
         for id in gone {
             if let Some(sighting) = self.live.remove(&id) {
                 self.close(sighting.record, now);
@@ -235,6 +243,12 @@ mod tests {
         ClosedLedger::with_dir(Some(root.path().join("closed")))
     }
 
+    fn vanish(ledger: &mut ClosedLedger, now: u64) {
+        for _ in 0..MISSING_TICKS {
+            ledger.retire_missing(&[], now);
+        }
+    }
+
     fn closed_ids(root: &tempfile::TempDir) -> Vec<String> {
         closed::records(&root.path().join("closed"))
             .unwrap()
@@ -256,6 +270,10 @@ mod tests {
             100,
         );
         ledger.retire_missing(std::slice::from_ref(&first), 101);
+        ledger.retire_missing(&[], 102);
+        ledger.retire_missing(std::slice::from_ref(&first), 103);
+        ledger.retire_missing(&[], 104);
+        ledger.retire_missing(&[], 105);
         assert!(closed_ids(&root).is_empty());
 
         ledger.retire_missing(&[], 200);
@@ -331,7 +349,7 @@ mod tests {
             &descriptor(claude_tool(), Some("  ")),
             100,
         );
-        ledger.retire_missing(&[], 200);
+        vanish(&mut ledger, 200);
         assert!(closed_ids(&root).is_empty());
     }
 
@@ -363,7 +381,7 @@ mod tests {
         );
         *strategy.mode.lock().unwrap() = None;
         ledger.observe(&interpreter, &first, &seen, 100 + 2 * MODE_REFRESH_SECS);
-        ledger.retire_missing(&[], 300);
+        vanish(&mut ledger, 300);
         assert_eq!(
             closed::find(&root.path().join("closed"), "abc")
                 .unwrap()
@@ -383,7 +401,7 @@ mod tests {
             &descriptor(claude_tool(), Some("abc")),
             100,
         );
-        ledger.retire_missing(&[], 200);
+        vanish(&mut ledger, 200);
         assert!(ledger.live.is_empty());
     }
 }

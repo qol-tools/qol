@@ -505,6 +505,13 @@ impl McpSessionServer {
             .ok_or_else(|| "the sessions data directory is unavailable".to_owned())
     }
 
+    fn pruned_closed_dir(&self, now: u64) -> Result<&std::path::Path, String> {
+        let dir = self.closed_dir()?;
+        qol_terminal_sessions::closed::prune(dir, now)
+            .map_err(|error| format!("failed to prune the closed sessions: {error}"))?;
+        Ok(dir)
+    }
+
     fn live_conversations(&self) -> Result<Vec<LiveConversation>, String> {
         let facts = self
             .terminals
@@ -527,9 +534,9 @@ impl McpSessionServer {
     }
 
     fn tool_closed(&self) -> Result<String, String> {
-        let dir = self.closed_dir()?;
-        let live = self.live_conversations()?;
         let now = super::mailbox::now_ms() / 1_000;
+        let dir = self.pruned_closed_dir(now)?;
+        let live = self.live_conversations()?;
         let records = qol_terminal_sessions::closed::records(dir)
             .map_err(|error| format!("failed to read the closed sessions: {error}"))?;
         let rows = records
@@ -546,7 +553,7 @@ impl McpSessionServer {
 
     fn tool_reopen(&self, arguments: &Value) -> Result<String, String> {
         let external_id = string_argument(arguments, "external_id")?;
-        let dir = self.closed_dir()?;
+        let dir = self.pruned_closed_dir(super::mailbox::now_ms() / 1_000)?;
         let record = qol_terminal_sessions::closed::find(dir, external_id).ok_or_else(|| {
             format!(
                 "no closed session `{external_id}`; sessions_closed lists the ones that can be reopened"
@@ -2271,7 +2278,7 @@ mod tests {
             title: Some("Old chat".to_owned()),
             key: key.map(str::to_owned),
             permission_mode: Some("bypassPermissions".to_owned()),
-            closed_at: 1_700_000_000,
+            closed_at: super::super::mailbox::now_ms() / 1_000 - 60,
         }
     }
 
@@ -2289,9 +2296,18 @@ mod tests {
         qol_terminal_sessions::closed::write(&closed, &closed_record("def", &cwd, Some("lane-7")))
             .unwrap();
 
+        let mut stale = closed_record("stale", &cwd, None);
+        stale.closed_at = 1_700_000_000;
+        qol_terminal_sessions::closed::write(&closed, &stale).unwrap();
+
         let listed = tool_json(&tool_call(&server, "sessions_closed", json!({})));
         let rows = listed.as_array().unwrap();
         assert_eq!(rows.len(), 2, "{listed}");
+        assert!(qol_terminal_sessions::closed::find(&closed, "stale").is_none());
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "stale" })),
+            "no closed session `stale`",
+        );
         assert_eq!(rows[0]["external_id"], "abc");
         assert_eq!(rows[0]["tool"], "claude");
         assert_eq!(rows[0]["title"], "Old chat");
