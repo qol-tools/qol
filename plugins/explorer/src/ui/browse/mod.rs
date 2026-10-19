@@ -3,17 +3,22 @@ mod path_field;
 mod tests;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
+use qol_watch::{Watch, WatchRoot};
 
 use super::keys::Step;
 use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
 use crate::nav::{History, Jump, Picks, Spot};
 use path_field::PathField;
+
+const REFRESH_QUIET: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opening {
@@ -33,6 +38,7 @@ pub enum PathStep {
 pub struct Drained {
     pub changed: bool,
     pub scroll: Option<f32>,
+    pub wake_in: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +60,10 @@ pub struct Browser {
     arriving: Option<Spot>,
     failure: Option<String>,
     path: Option<PathField>,
+    incoming: Option<Listing>,
+    changed: Arc<AtomicBool>,
+    changed_at: Option<Instant>,
+    watch: Option<Watch>,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
 }
@@ -74,6 +84,10 @@ impl Browser {
             arriving: None,
             failure: None,
             path: None,
+            incoming: None,
+            changed: Arc::default(),
+            changed_at: None,
+            watch: None,
             wake,
             wakes: Some(wakes),
         };
@@ -83,6 +97,10 @@ impl Browser {
 
     pub fn take_wakes(&mut self) -> Option<UnboundedReceiver<()>> {
         self.wakes.take()
+    }
+
+    pub fn waker(&self) -> impl Fn() + Send + Clone + 'static {
+        waker(&self.wake)
     }
 
     pub fn home(&self) -> &Path {
@@ -152,23 +170,24 @@ impl Browser {
         self.failure = Some(message);
     }
 
-    pub fn drain(&mut self) -> Drained {
+    pub fn drain(&mut self, now: Instant) -> Drained {
         let events = drain_events(&mut self.read);
-        let mut drained = Drained {
-            changed: !events.is_empty(),
-            scroll: None,
-        };
-        for event in events {
-            self.listing.apply(event);
-        }
-        if drained.changed {
+        let mut drained = Drained::default();
+        if self.incoming.is_some() {
+            drained.changed = self.apply_incoming(events);
+        } else if !events.is_empty() {
+            for event in events {
+                self.listing.apply(event);
+            }
             self.refresh_rows();
+            drained.changed = true;
             drained.scroll = self.settle_arrival();
         }
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
         }
+        drained.wake_in = self.refresh_when_due(now);
         drained
     }
 
@@ -232,15 +251,15 @@ impl Browser {
         true
     }
 
-    pub fn move_cursor(&mut self, step: Step) -> bool {
-        self.set_cursor(self.stepped(step))
+    pub fn move_cursor(&mut self, step: Step, page: usize) -> bool {
+        self.set_cursor(self.stepped(step, page))
     }
 
-    pub fn extend_range(&mut self, step: Step) -> bool {
+    pub fn extend_range(&mut self, step: Step, page: usize) -> bool {
         if self.loading() || self.rows.is_empty() {
             return false;
         }
-        let to = self.stepped(step);
+        let to = self.stepped(step, page);
         let rows = self.listing.visible(self.show_hidden);
         self.picks.extend_range(&rows, self.cursor, to);
         self.cursor = to;
@@ -373,6 +392,10 @@ impl Browser {
     }
 
     fn arrive(&mut self, spot: Spot) {
+        self.incoming = None;
+        self.changed_at = None;
+        self.changed.store(false, Ordering::Relaxed);
+        self.watch = watch_folder(&spot.folder, self.changed.clone(), waker(&self.wake));
         self.read = Some(listing::start(
             spot.folder.clone(),
             Pass::WithCounts,
@@ -400,6 +423,57 @@ impl Browser {
         Some(spot.scroll)
     }
 
+    fn refresh_when_due(&mut self, now: Instant) -> Option<Duration> {
+        if self.changed.swap(false, Ordering::Relaxed) && self.changed_at.is_none() {
+            self.changed_at = Some(now);
+        }
+        let since = self.changed_at?;
+        if self.loading() || self.incoming.is_some() {
+            return None;
+        }
+        let due = since + REFRESH_QUIET;
+        if now < due {
+            return Some(due - now);
+        }
+        self.changed_at = None;
+        self.refresh();
+        None
+    }
+
+    fn refresh(&mut self) {
+        let folder = self.folder().to_path_buf();
+        self.read = Some(listing::start(
+            folder.clone(),
+            Pass::WithCounts,
+            waker(&self.wake),
+        ));
+        let mut incoming = Listing::new(folder);
+        incoming.carry_counts(&self.listing);
+        self.incoming = Some(incoming);
+    }
+
+    fn apply_incoming(&mut self, events: Vec<ListingEvent>) -> bool {
+        let done = self.incoming.as_mut().is_some_and(|incoming| {
+            for event in events {
+                incoming.apply(event);
+            }
+            *incoming.state() != ListingState::Loading
+        });
+        if !done {
+            return false;
+        }
+        let Some(fresh) = self.incoming.take() else {
+            return false;
+        };
+        let at = self.entry(self.cursor).map(|entry| entry.path.clone());
+        self.listing = fresh;
+        self.refresh_rows();
+        if let Some(row) = at.and_then(|path| self.row_of(&path)) {
+            self.cursor = row;
+        }
+        true
+    }
+
     fn refresh_rows(&mut self) {
         self.rows = self.listing.visible_indices(self.show_hidden);
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
@@ -411,10 +485,15 @@ impl Browser {
             .position(|&index| self.listing.entries()[index].path == path)
     }
 
-    fn stepped(&self, step: Step) -> usize {
+    fn stepped(&self, step: Step, page: usize) -> usize {
+        let last = self.rows.len().saturating_sub(1);
         match step {
             Step::Up => self.cursor.saturating_sub(1),
-            Step::Down => (self.cursor + 1).min(self.rows.len().saturating_sub(1)),
+            Step::Down => (self.cursor + 1).min(last),
+            Step::PageUp => self.cursor.saturating_sub(page),
+            Step::PageDown => (self.cursor + page).min(last),
+            Step::Home => 0,
+            Step::End => last,
         }
     }
 }
@@ -423,6 +502,24 @@ fn waker(wake: &UnboundedSender<()>) -> impl Fn() + Send + Clone + 'static {
     let wake = wake.clone();
     move || {
         let _ = wake.unbounded_send(());
+    }
+}
+
+fn watch_folder(
+    folder: &Path,
+    changed: Arc<AtomicBool>,
+    wake: impl Fn() + Send + 'static,
+) -> Option<Watch> {
+    let roots = [WatchRoot::shallow(folder)];
+    match qol_watch::watch(&roots, move |_| {
+        changed.store(true, Ordering::Relaxed);
+        wake();
+    }) {
+        Ok(watch) => Some(watch),
+        Err(error) => {
+            log::warn!("changes in {} will not show: {error}", folder.display());
+            None
+        }
     }
 }
 

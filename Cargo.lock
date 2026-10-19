@@ -6722,8 +6722,10 @@ dependencies = [
  "qol-log",
  "qol-platform",
  "qol-plugin-api",
+ "qol-watch",
  "serde_json",
  "tempfile",
+ "unicode-normalization",
  "windows-sys 0.59.0",
  "workspace-hack",
 ]

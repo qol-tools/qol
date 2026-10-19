@@ -68,6 +68,14 @@ impl Listing {
         self.counts.get(path).copied()
     }
 
+    pub fn carry_counts(&mut self, from: &Listing) {
+        self.counts.extend(
+            from.counts
+                .iter()
+                .map(|(path, count)| (path.clone(), *count)),
+        );
+    }
+
     pub fn apply(&mut self, event: ListingEvent) {
         match event {
             ListingEvent::Entries(batch) => {

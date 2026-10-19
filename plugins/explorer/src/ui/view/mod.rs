@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::{
-    div, point, px, AsyncApp, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent, ParentElement, Render,
-    ScrollHandle, ScrollStrategy, Styled, UniformListScrollHandle, WeakEntity, Window,
+    div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ItemSize, KeyDownEvent, Keystroke, ModifiersChangedEvent,
+    ParentElement, Point, Render, ScrollHandle, Styled, UniformListScrollHandle, WeakEntity,
+    Window,
 };
 use qol_gpui::kit::kit;
+use qol_gpui::scroll_list::follow_offset_y;
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click};
@@ -67,8 +69,41 @@ impl ExplorerView {
     }
 
     fn reveal_cursor(&self) {
+        let Some(list) = self.scroll.0.borrow().last_item_size else {
+            return;
+        };
+        let viewport = Bounds::new(Point::default(), list.item);
+        let top = px(self.browser.cursor() as f32 * ROW);
+        let row = Bounds::new(point(px(0.0), top), size(list.item.width, px(ROW)));
+        let followed = follow_offset_y(viewport, row, px(-self.scroll_offset()), px(ROW));
+        self.set_scroll((-f32::from(followed)).clamp(0.0, max_scroll(&list)));
+    }
+
+    fn at_end(&self) -> bool {
         self.scroll
-            .scroll_to_item(self.browser.cursor(), ScrollStrategy::Top);
+            .0
+            .borrow()
+            .last_item_size
+            .is_some_and(|list| self.scroll_offset() + 0.5 >= max_scroll(&list))
+    }
+
+    fn page_rows(&self) -> usize {
+        let height: f32 = self
+            .scroll
+            .0
+            .borrow()
+            .last_item_size
+            .map_or(0.0, |list| list.item.height.into());
+        ((height / ROW) as usize).max(1)
+    }
+
+    fn wake_in(&self, delay: Duration, cx: &mut Context<Self>) {
+        let wake = self.browser.waker();
+        cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
+            cx.background_executor().timer(delay).await;
+            wake();
+        })
+        .detach();
     }
 
     fn listen(&mut self, cx: &mut Context<Self>) {
@@ -88,13 +123,16 @@ impl ExplorerView {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let drained = self.browser.drain();
+        let drained = self.browser.drain(Instant::now());
         if let Some(scroll) = drained.scroll {
             self.set_scroll(scroll);
             self.reveal_cursor();
         }
         if drained.changed {
             cx.notify();
+        }
+        if let Some(delay) = drained.wake_in {
+            self.wake_in(delay, cx);
         }
     }
 
@@ -131,9 +169,10 @@ impl ExplorerView {
 
     fn apply(&mut self, action: Action, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
+        let page = self.page_rows();
         match action {
-            Action::Cursor(step) => self.revealed(|browser| browser.move_cursor(step)),
-            Action::Range(step) => self.revealed(|browser| browser.extend_range(step)),
+            Action::Cursor(step) => self.revealed(|browser| browser.move_cursor(step, page)),
+            Action::Range(step) => self.revealed(|browser| browser.extend_range(step, page)),
             Action::Open => self.open(),
             Action::Up => self.arrived(|browser| browser.up(scroll)),
             Action::Back => self.arrived(|browser| browser.back(scroll)),
@@ -237,6 +276,10 @@ impl ExplorerView {
             cx.notify();
         }
     }
+}
+
+fn max_scroll(list: &ItemSize) -> f32 {
+    (f32::from(list.contents.height) - f32::from(list.item.height)).max(0.0)
 }
 
 impl Focusable for ExplorerView {

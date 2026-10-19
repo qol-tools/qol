@@ -200,14 +200,17 @@ fn path_field(edit: &PathEdit, width: f32, kit: Kit, window: &mut Window) -> Any
 }
 
 fn suggestion_menu(edit: &PathEdit, width: f32, kit: Kit) -> Option<Div> {
-    let selected = edit.selected()?;
+    if edit.suggestions().is_empty() {
+        return None;
+    }
+    let selected = edit.selected();
     let shown = edit.shown(SUGGESTION_ROWS);
     let first = shown.start;
     let count = shown.len();
     let rows = edit.suggestions()[shown]
         .iter()
         .enumerate()
-        .map(|(offset, name)| suggestion_row(name, first + offset == selected, kit));
+        .map(|(offset, name)| suggestion_row(name, selected == Some(first + offset), kit));
     Some(
         div()
             .relative()

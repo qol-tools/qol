@@ -90,6 +90,8 @@ fn rows(
     let room = f32::from(window.viewport_size().height) - BAND - HEAD - reading;
     let shown = (room / ROW).floor().max(0.0) as usize;
     let first = (view.scroll_offset() / ROW).floor().max(0.0) as usize;
+    let left = total.saturating_sub(first);
+    let shown = if view.at_end() { left } else { shown.min(left) };
     div()
         .flex_1()
         .min_h_0()
@@ -111,7 +113,7 @@ fn rows(
         .child(kit.scroll_cue(
             ScrollSource::Window {
                 first,
-                shown: shown.min(total.saturating_sub(first)),
+                shown,
                 total,
             },
             kit.grounds.pane,

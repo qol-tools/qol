@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use gpui::{Keystroke, Modifiers};
 
 use super::{Browser, Drained, Opening, PathStep};
+use crate::listing::ListingState;
 use crate::ui::keys::Step;
 
 fn touch(folder: &Path, name: &str) {
@@ -22,13 +23,25 @@ fn settle(browser: &mut Browser) -> Drained {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut settled = Drained::default();
     while browser.reading() {
-        let drained = browser.drain();
+        let drained = browser.drain(Instant::now());
         settled.changed |= drained.changed;
         settled.scroll = drained.scroll.or(settled.scroll);
         assert!(Instant::now() < deadline, "the read never finished");
         thread::sleep(Duration::from_millis(2));
     }
     settled
+}
+
+fn wait_until(browser: &mut Browser, what: &str, done: impl Fn(&Browser) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let drained = browser.drain(Instant::now());
+        if done(browser) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{what} never happened");
+        thread::sleep(drained.wake_in.unwrap_or(Duration::from_millis(2)));
+    }
 }
 
 fn opened(folder: &Path) -> Browser {
@@ -79,33 +92,95 @@ fn the_cursor_moves_one_row_and_stops_at_both_ends() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
     assert_eq!(browser.cursor(), 0);
-    assert!(!browser.move_cursor(Step::Up));
+    assert!(!browser.move_cursor(Step::Up, 1));
     for expected in [1, 2, 3] {
-        assert!(browser.move_cursor(Step::Down));
+        assert!(browser.move_cursor(Step::Down, 1));
         assert_eq!(browser.cursor(), expected);
     }
-    assert!(!browser.move_cursor(Step::Down));
-    assert!(browser.move_cursor(Step::Up));
+    assert!(!browser.move_cursor(Step::Down, 1));
+    assert!(browser.move_cursor(Step::Up, 1));
     assert_eq!(browser.cursor(), 2);
+}
+
+#[test]
+fn page_and_edge_steps_jump_the_cursor_and_stop_at_the_ends() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert!(browser.move_cursor(Step::PageDown, 3));
+    assert_eq!(browser.cursor(), 3);
+    assert!(!browser.move_cursor(Step::PageDown, 3));
+    assert!(browser.move_cursor(Step::PageUp, 2));
+    assert_eq!(browser.cursor(), 1);
+    assert!(browser.move_cursor(Step::PageUp, 9));
+    assert_eq!(browser.cursor(), 0);
+    assert!(browser.move_cursor(Step::End, 1));
+    assert_eq!(browser.cursor(), 3);
+    assert!(browser.move_cursor(Step::Home, 1));
+    assert_eq!(browser.cursor(), 0);
+
+    browser.move_cursor(Step::Down, 1);
+    assert!(browser.extend_range(Step::End, 1));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
+    assert!(browser.extend_range(Step::PageUp, 1));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
+}
+
+#[test]
+fn files_that_appear_or_vanish_on_disk_show_up_and_the_cursor_keeps_its_entry() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(2);
+
+    touch(temp.path(), "e.txt");
+    wait_until(&mut browser, "the new file", |browser| {
+        browser.row_count() == 5
+    });
+    assert_eq!(
+        names(&browser),
+        ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"]
+    );
+    assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
+
+    fs::remove_file(temp.path().join("a.txt")).unwrap();
+    wait_until(&mut browser, "the removal", |browser| {
+        browser.row_count() == 4
+    });
+    assert_eq!(browser.cursor(), 1);
+    assert_eq!(browser.entry(1).unwrap().display, "c.txt");
+    assert_eq!(browser.note().count, "4 items");
+}
+
+#[test]
+fn a_folder_that_vanishes_while_shown_reports_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+
+    fs::remove_dir_all(&inner).unwrap();
+    wait_until(&mut browser, "the failure", |browser| {
+        matches!(browser.listing().state(), ListingState::Failed(_))
+    });
+    assert_eq!(browser.row_count(), 0);
 }
 
 #[test]
 fn shift_steps_pick_a_run_from_where_the_run_started() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
-    browser.move_cursor(Step::Down);
-    browser.extend_range(Step::Down);
-    browser.extend_range(Step::Down);
+    browser.move_cursor(Step::Down, 1);
+    browser.extend_range(Step::Down, 1);
+    browser.extend_range(Step::Down, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
     assert_eq!(browser.cursor(), 3);
 
-    browser.extend_range(Step::Up);
+    browser.extend_range(Step::Up, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
 
     browser.end_range();
-    browser.move_cursor(Step::Up);
-    browser.move_cursor(Step::Up);
-    browser.extend_range(Step::Up);
+    browser.move_cursor(Step::Up, 1);
+    browser.move_cursor(Step::Up, 1);
+    browser.extend_range(Step::Up, 1);
     assert_eq!(picked(&browser), ["a.txt", "b.txt", "c.txt"]);
 }
 

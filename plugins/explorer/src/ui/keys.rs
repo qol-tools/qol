@@ -4,6 +4,10 @@ use gpui::{Keystroke, Modifiers};
 pub enum Step {
     Up,
     Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,8 +45,16 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
     match (keystroke.key.as_str(), chord) {
         ("up", (false, false, false)) => Action::Cursor(Step::Up),
         ("down", (false, false, false)) => Action::Cursor(Step::Down),
+        ("pageup", (false, false, false)) => Action::Cursor(Step::PageUp),
+        ("pagedown", (false, false, false)) => Action::Cursor(Step::PageDown),
+        ("home", (false, false, false)) => Action::Cursor(Step::Home),
+        ("end", (false, false, false)) => Action::Cursor(Step::End),
         ("up", (false, false, true)) => Action::Range(Step::Up),
         ("down", (false, false, true)) => Action::Range(Step::Down),
+        ("pageup", (false, false, true)) => Action::Range(Step::PageUp),
+        ("pagedown", (false, false, true)) => Action::Range(Step::PageDown),
+        ("home", (false, false, true)) => Action::Range(Step::Home),
+        ("end", (false, false, true)) => Action::Range(Step::End),
         ("enter", (false, false, false)) => Action::Open,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
@@ -125,6 +137,17 @@ mod tests {
             (plain("down"), Action::Cursor(Step::Down)),
             (key("up", shift(), None), Action::Range(Step::Up)),
             (key("down", shift(), None), Action::Range(Step::Down)),
+            (plain("pageup"), Action::Cursor(Step::PageUp)),
+            (plain("pagedown"), Action::Cursor(Step::PageDown)),
+            (plain("home"), Action::Cursor(Step::Home)),
+            (plain("end"), Action::Cursor(Step::End)),
+            (key("pageup", shift(), None), Action::Range(Step::PageUp)),
+            (
+                key("pagedown", shift(), None),
+                Action::Range(Step::PageDown),
+            ),
+            (key("home", shift(), None), Action::Range(Step::Home)),
+            (key("end", shift(), None), Action::Range(Step::End)),
             (plain("enter"), Action::Open),
             (plain("backspace"), Action::Up),
             (key("up", alt(), None), Action::Up),

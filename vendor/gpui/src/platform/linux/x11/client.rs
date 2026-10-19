@@ -764,11 +764,13 @@ impl X11Client {
                 let mut state = self.0.borrow_mut();
 
                 if atom == state.atoms.WM_DELETE_WINDOW {
+                    drop(state);
                     // window "x" button clicked by user
                     if window.should_close() {
                         // Rest of the close logic is handled in drop_window()
                         window.close();
                     }
+                    state = self.0.borrow_mut();
                 } else if atom == state.atoms._NET_WM_SYNC_REQUEST {
                     window.state.borrow_mut().last_sync_counter =
                         Some(x11rb::protocol::sync::Int64 {

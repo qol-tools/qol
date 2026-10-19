@@ -78,6 +78,13 @@ fn sort_keys_ignore_case_and_break_ties_by_the_raw_name() {
 }
 
 #[test]
+fn sort_keys_fold_accents_into_their_plain_letters() {
+    let mut names = ["zebra", "Éclair", "eagle", "école", "apple"];
+    names.sort_by_key(|name| SortKey::new(OsStr::new(name), false));
+    assert_eq!(names, ["apple", "eagle", "Éclair", "école", "zebra"]);
+}
+
+#[test]
 fn a_read_folder_lists_folders_first_in_natural_order() {
     let temp = tempfile::tempdir().unwrap();
     for name in ["file10", "file2", "Zeta", "alpha.txt"] {

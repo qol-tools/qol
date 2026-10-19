@@ -1,5 +1,8 @@
 use std::ffi::{OsStr, OsString};
 
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SortKey {
     group: Group,
@@ -53,5 +56,6 @@ fn number(run: &str) -> Part {
 }
 
 fn text(run: &str) -> Part {
-    Part::Text(run.to_lowercase().into())
+    let plain: String = run.nfd().filter(|c| !is_combining_mark(*c)).collect();
+    Part::Text(plain.to_lowercase().into())
 }

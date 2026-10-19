@@ -18,7 +18,7 @@ pub enum PathKey {
 pub struct PathEdit {
     field: TextField,
     suggestions: Vec<String>,
-    selected: usize,
+    selected: Option<usize>,
 }
 
 impl PathEdit {
@@ -26,7 +26,7 @@ impl PathEdit {
         Self {
             field: TextField::with_text(text),
             suggestions: Vec::new(),
-            selected: 0,
+            selected: None,
         }
     }
 
@@ -51,36 +51,42 @@ impl PathEdit {
     }
 
     pub fn selected(&self) -> Option<usize> {
-        (self.selected < self.suggestions.len()).then_some(self.selected)
+        self.selected
+            .filter(|&selected| selected < self.suggestions.len())
     }
 
     pub fn set_suggestions(&mut self, names: Vec<String>) {
         let kept = self
-            .suggestions
-            .get(self.selected)
+            .selected()
+            .and_then(|selected| self.suggestions.get(selected))
             .and_then(|selected| names.iter().position(|name| name == selected));
         self.suggestions = names;
-        self.selected = kept.unwrap_or(0);
+        let segment = self.segment();
+        let selected = kept
+            .or_else(|| self.suggestions.iter().position(|name| name == segment))
+            .or_else(|| (!segment.is_empty() && !self.suggestions.is_empty()).then_some(0));
+        self.selected = selected;
     }
 
     pub fn select_next(&mut self) -> bool {
-        if self.selected + 1 >= self.suggestions.len() {
+        let next = self.selected().map_or(0, |selected| selected + 1);
+        if next >= self.suggestions.len() {
             return false;
         }
-        self.selected += 1;
+        self.selected = Some(next);
         true
     }
 
     pub fn select_previous(&mut self) -> bool {
-        if self.selected == 0 {
+        let Some(selected) = self.selected() else {
             return false;
-        }
-        self.selected -= 1;
+        };
+        self.selected = selected.checked_sub(1);
         true
     }
 
     pub fn complete(&mut self) -> bool {
-        let Some(name) = self.suggestions.get(self.selected) else {
+        let Some(name) = self.suggestions.get(self.selected().unwrap_or(0)) else {
             return false;
         };
         let completed = format!("{}{name}{MAIN_SEPARATOR}", self.parent());
@@ -90,7 +96,7 @@ impl PathEdit {
 
     pub fn shown(&self, rows: usize) -> Range<usize> {
         let total = self.suggestions.len();
-        let first = (self.selected + 2)
+        let first = (self.selected().unwrap_or(0) + 2)
             .saturating_sub(rows)
             .min(total.saturating_sub(rows));
         first..(first + rows).min(total)
@@ -102,7 +108,12 @@ impl PathEdit {
         paste: impl FnOnce() -> Option<String>,
     ) -> PathKey {
         match keystroke.key.as_str() {
-            "enter" => PathKey::Submit,
+            "enter" => {
+                if self.selected().is_some() {
+                    self.complete();
+                }
+                PathKey::Submit
+            }
             "escape" => PathKey::Cancel,
             "tab" if self.complete() => PathKey::Changed,
             "tab" => PathKey::Handled,
@@ -176,6 +187,12 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_segment_highlights_nothing_and_an_exact_name_wins() {
+        assert_eq!(edit("~/", &["Git", "Games"]).selected(), None);
+        assert_eq!(edit("~/b", &["B", "b", "beta"]).selected(), Some(1));
+    }
+
+    #[test]
     fn new_suggestions_keep_the_selected_name_when_it_is_still_there() {
         let mut edit = edit("~/G", &["Git", "Games"]);
         edit.select_next();
@@ -197,10 +214,15 @@ mod tests {
         assert!(!edit.select_previous());
         assert!(edit.select_next());
         assert!(edit.select_next());
+        assert!(edit.select_next());
         assert!(!edit.select_next());
         assert_eq!(edit.selected(), Some(2));
         assert!(edit.select_previous());
         assert_eq!(edit.selected(), Some(1));
+        assert!(edit.select_previous());
+        assert!(edit.select_previous());
+        assert_eq!(edit.selected(), None);
+        assert!(!edit.select_previous());
     }
 
     #[test]
@@ -220,11 +242,31 @@ mod tests {
     }
 
     #[test]
-    fn enter_submits_and_escape_cancels_without_editing() {
-        let mut edit = edit("~/Git", &["Git"]);
+    fn enter_takes_the_highlighted_suggestion_and_escape_cancels() {
+        let mut edit = edit("~/Gi", &["Git"]);
         assert_eq!(edit.key(&key("enter", None), || None), PathKey::Submit);
+        assert_eq!(edit.text(), format!("~/Git{MAIN_SEPARATOR}"));
         assert_eq!(edit.key(&key("escape", None), || None), PathKey::Cancel);
-        assert_eq!(edit.text(), "~/Git");
+        assert_eq!(edit.text(), format!("~/Git{MAIN_SEPARATOR}"));
+    }
+
+    #[test]
+    fn enter_without_a_highlight_submits_the_text_as_typed() {
+        let mut bare = edit("~/", &["Git", "Games"]);
+        assert_eq!(bare.key(&key("enter", None), || None), PathKey::Submit);
+        assert_eq!(bare.text(), "~/");
+
+        let mut unhighlighted = edit("~/Gi", &["Git"]);
+        assert_eq!(
+            unhighlighted.key(&key("up", None), || None),
+            PathKey::Handled
+        );
+        assert_eq!(unhighlighted.selected(), None);
+        assert_eq!(
+            unhighlighted.key(&key("enter", None), || None),
+            PathKey::Submit
+        );
+        assert_eq!(unhighlighted.text(), "~/Gi");
     }
 
     #[test]
@@ -243,9 +285,10 @@ mod tests {
         let all = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
         let mut edit = edit("~/", &all);
         assert_eq!(edit.shown(4), 0..4);
-        for _ in 0..3 {
+        for _ in 0..4 {
             edit.select_next();
         }
+        assert_eq!(edit.selected(), Some(3));
         assert_eq!(edit.shown(4), 1..5);
         for _ in 0..6 {
             edit.select_next();
