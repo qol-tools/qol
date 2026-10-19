@@ -27,7 +27,7 @@ use qol_gpui::settings_panel::{
 };
 use qol_gpui::text_edit::{self, TextField};
 
-use super::data::{self, Backup, GitHubConnect, Snapshot};
+use super::data::{self, Backup, GitHubConnect, Review, Side, Snapshot};
 use super::model::{self, Action, Dot, Level, Page, Row, Value};
 
 const MAX_VISIBLE: usize = 10;
@@ -42,6 +42,8 @@ pub(super) struct ProfilesView {
     notify: CustomPanelNotifier,
     snapshot: Option<Snapshot>,
     backups: Option<Vec<Backup>>,
+    review: Option<Review>,
+    picks: Vec<Side>,
     level: Level,
     return_to: usize,
     closing: Option<Level>,
@@ -73,6 +75,8 @@ impl ProfilesView {
             notify,
             snapshot: None,
             backups: None,
+            review: None,
+            picks: Vec::new(),
             level: Level::Main,
             return_to: 1,
             closing: None,
@@ -112,6 +116,7 @@ impl ProfilesView {
             Level::Main => model::main_rows(&page),
             Level::Profiles => model::profile_rows(&page),
             Level::Backups => model::backup_rows(self.backups.as_deref()),
+            Level::Review => model::review_rows(self.review.as_ref(), &self.picks),
         }
     }
 
@@ -323,6 +328,28 @@ impl ProfilesView {
                 },
                 cx,
             ),
+            Action::OpenReview => {
+                self.review = None;
+                self.picks.clear();
+                self.enter(Level::Review, 1);
+                self.run(
+                    data::review,
+                    |view, review, _| {
+                        view.picks = model::default_picks(&review.conflicts);
+                        view.review = Some(review);
+                    },
+                    cx,
+                );
+            }
+            Action::Pick(index) => {
+                if let Some(side) = self.picks.get_mut(index) {
+                    *side = match side {
+                        Side::Mine => Side::Remote,
+                        Side::Remote => Side::Mine,
+                    };
+                }
+            }
+            Action::Resolve => self.resolve(cx),
             Action::OpenBackups => {
                 self.backups = None;
                 self.enter(Level::Backups, 1);
@@ -339,6 +366,26 @@ impl ProfilesView {
             Action::Import => self.import(cx),
         }
         cx.notify();
+    }
+
+    fn resolve(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = &self.review else {
+            return;
+        };
+        let conflicts = review.conflicts.clone();
+        let picks = self.picks.clone();
+        self.run(
+            move || data::resolve(&conflicts, &picks),
+            |view, (), cx| {
+                view.leave(cx);
+                view.tell(
+                    CustomPanelNoticeTone::Success,
+                    "Sync is back on. Both sides are saved in backups.".to_string(),
+                    cx,
+                );
+            },
+            cx,
+        );
     }
 
     fn new_profile(&mut self, cx: &mut Context<Self>) {
@@ -749,6 +796,7 @@ impl CustomSettingsBreadcrumbs for ProfilesView {
             Level::Main => return Vec::new(),
             Level::Profiles => "profile",
             Level::Backups => "backups",
+            Level::Review => "review",
         };
         SettingsDestination::new(title).ok().into_iter().collect()
     }
@@ -829,6 +877,7 @@ fn list_id(level: Level) -> &'static str {
         Level::Main => "profiles-list",
         Level::Profiles => "profiles-card-list",
         Level::Backups => "backups-card-list",
+        Level::Review => "review-card-list",
     }
 }
 
@@ -837,5 +886,6 @@ fn row_id(level: Level) -> &'static str {
         Level::Main => "profiles-row",
         Level::Profiles => "profiles-card-row",
         Level::Backups => "backups-card-row",
+        Level::Review => "review-card-row",
     }
 }

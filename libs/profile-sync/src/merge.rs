@@ -284,16 +284,19 @@ fn merge_lock(
                 match resolve(file, &format!("plugins.{label}")) {
                     Some(true) => Some(r.clone()),
                     Some(false) => Some(l.clone()),
-                    None => {
-                        conflicts.push(FieldConflict {
-                            file: file.to_string(),
-                            plugin: Some(label.to_string()),
-                            key_path: format!("plugins.{label}"),
-                            local: l.clone(),
-                            remote: r.clone(),
-                        });
-                        Some(l.clone())
-                    }
+                    None => match newer_version(l, r) {
+                        Some(newer) => Some(newer.clone()),
+                        None => {
+                            conflicts.push(FieldConflict {
+                                file: file.to_string(),
+                                plugin: Some(label.to_string()),
+                                key_path: format!("plugins.{label}"),
+                                local: l.clone(),
+                                remote: r.clone(),
+                            });
+                            Some(l.clone())
+                        }
+                    },
                 }
             }
             (Some(only), None) | (None, Some(only)) => Some(only.clone()),
@@ -304,6 +307,21 @@ fn merge_lock(
         }
     }
     serde_json::json!({ "plugins": entries })
+}
+
+fn newer_version<'a>(local: &'a Value, remote: &'a Value) -> Option<&'a Value> {
+    let version = |entry: &Value| {
+        entry
+            .get("version")
+            .and_then(Value::as_str)
+            .and_then(qol_plugin_api::manifest::parse_version)
+    };
+    let (mine, theirs) = (version(local)?, version(remote)?);
+    match mine.cmp(&theirs) {
+        std::cmp::Ordering::Greater => Some(local),
+        std::cmp::Ordering::Less => Some(remote),
+        std::cmp::Ordering::Equal => None,
+    }
 }
 
 fn plugin_id_from_path(file: &str) -> Option<String> {
@@ -535,16 +553,12 @@ mod tests {
         let base = ProfileSnapshot {
             files: BTreeMap::new(),
         };
-        let local = lock_snapshot(vec![lock_entry(
-            Some("uid-lights"),
-            "plugin-lights",
-            "1.0.0",
-        )]);
-        let remote = lock_snapshot(vec![lock_entry(
-            Some("uid-lights"),
-            "plugin-lights",
-            "2.0.0",
-        )]);
+        let mut mine = lock_entry(Some("uid-lights"), "plugin-lights", "1.0.0");
+        mine["repo_url"] = json!("https://example.com/mine");
+        let mut theirs = lock_entry(Some("uid-lights"), "plugin-lights", "1.0.0");
+        theirs["repo_url"] = json!("https://example.com/theirs");
+        let local = lock_snapshot(vec![mine]);
+        let remote = lock_snapshot(vec![theirs]);
 
         let out = merge_profile(&base, &local, &remote);
 
@@ -556,6 +570,66 @@ mod tests {
             .unwrap();
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0]["id"], "qol-lights");
+    }
+
+    fn lock_version(out: &ProfileMerge) -> &Value {
+        &out.merged["core/plugins.lock.json"]["plugins"][0]["version"]
+    }
+
+    #[test]
+    fn plugins_lock_keeps_the_newer_version_when_both_sides_upgraded() {
+        let base = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.60.0")]);
+        let mut newer = lock_entry(Some("uid-rm"), "qol-removeapp", "0.79.2");
+        newer["platforms"] = json!(["linux", "macos", "windows"]);
+        let older = lock_entry(Some("uid-rm"), "qol-removeapp", "0.67.1");
+
+        let pulled = merge_profile(
+            &base,
+            &lock_snapshot(vec![older.clone()]),
+            &lock_snapshot(vec![newer.clone()]),
+        );
+        let pushed = merge_profile(
+            &base,
+            &lock_snapshot(vec![newer]),
+            &lock_snapshot(vec![older]),
+        );
+
+        assert!(pulled.conflicts.is_empty());
+        assert!(pushed.conflicts.is_empty());
+        assert_eq!(lock_version(&pulled), "0.79.2");
+        assert_eq!(lock_version(&pushed), "0.79.2");
+        assert_eq!(
+            pulled.merged["core/plugins.lock.json"]["plugins"][0]["platforms"],
+            json!(["linux", "macos", "windows"])
+        );
+    }
+
+    #[test]
+    fn plugins_lock_honours_an_explicit_pick_over_the_newer_version() {
+        let base = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.60.0")]);
+        let local = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.67.1")]);
+        let remote = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.79.2")]);
+
+        let out = merge_profile_with(&base, &local, &remote, &|_, key| {
+            (key == "plugins.qol-removeapp").then_some(false)
+        });
+
+        assert!(out.conflicts.is_empty());
+        assert_eq!(lock_version(&out), "0.67.1");
+    }
+
+    #[test]
+    fn plugins_lock_still_asks_when_versions_cannot_be_ordered() {
+        let base = ProfileSnapshot {
+            files: BTreeMap::new(),
+        };
+        let local = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "dev")]);
+        let remote = lock_snapshot(vec![lock_entry(Some("uid-rm"), "qol-removeapp", "0.79.2")]);
+
+        let out = merge_profile(&base, &local, &remote);
+
+        assert_eq!(out.conflicts.len(), 1);
+        assert_eq!(out.conflicts[0].key_path, "plugins.qol-removeapp");
     }
 
     #[test]
