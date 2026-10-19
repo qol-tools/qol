@@ -29,6 +29,7 @@ pub(super) const NOMINAL_SAMPLE_RATE: [u8; 4] = *b"nsrt";
 pub(super) const VIRTUAL_FORMAT: [u8; 4] = *b"sfmt";
 pub(super) const PROCESSES: [u8; 4] = *b"prs#";
 pub(super) const PROCESS_DEVICES: [u8; 4] = *b"pdv#";
+pub(super) const PROCESS_PID: [u8; 4] = *b"ppid";
 pub(super) const PROCESS_IS_RUNNING_INPUT: [u8; 4] = *b"piri";
 
 const GLOBAL_SCOPE: [u8; 4] = *b"glob";

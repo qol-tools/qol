@@ -17,6 +17,7 @@ pub(crate) struct Meter {
     device: String,
     listening: Listening,
     _system_tap: Option<SystemTap>,
+    borrowed_microphone: Option<ObjectId>,
     peaks: Box<Peaks>,
 }
 
@@ -26,17 +27,18 @@ impl Meter {
         let device = hal::read_text(id, Property::global(hal::DEVICE_UID))?;
         match direction {
             Direction::Input => {
-                if identity::is_bluetooth(id) && !microphone_in_use(id) {
+                let bluetooth = identity::is_bluetooth(id);
+                if bluetooth && !another_app_records(id) {
                     return Err(AudioError::Operation(
                         "measuring a Bluetooth microphone no app is recording from would switch the headset to its call profile"
                             .to_owned(),
                     ));
                 }
-                Self::listen(device, id, None)
+                Self::listen(device, id, None, bluetooth.then_some(id))
             }
             Direction::Output => {
                 let system_tap = SystemTap::create()?;
-                Self::listen(device, system_tap.device(), Some(system_tap))
+                Self::listen(device, system_tap.device(), Some(system_tap), None)
             }
         }
     }
@@ -45,6 +47,7 @@ impl Meter {
         device: String,
         source: ObjectId,
         system_tap: Option<SystemTap>,
+        borrowed_microphone: Option<ObjectId>,
     ) -> Result<Self, AudioError> {
         io::require_float_samples(source, Direction::Input)?;
         let peaks = Box::new(Peaks::new(window_size(sample_rate(source))));
@@ -54,6 +57,7 @@ impl Meter {
             device,
             listening,
             _system_tap: system_tap,
+            borrowed_microphone,
             peaks,
         })
     }
@@ -67,8 +71,12 @@ impl Meter {
     }
 
     pub(crate) fn is_finished(&self) -> bool {
-        !hal::read_u32(self.listening.device(), Property::global(hal::IS_ALIVE))
-            .is_ok_and(|alive| alive != 0)
+        let alive = hal::read_u32(self.listening.device(), Property::global(hal::IS_ALIVE))
+            .is_ok_and(|alive| alive != 0);
+        !alive
+            || self
+                .borrowed_microphone
+                .is_some_and(|microphone| !another_app_records(microphone))
     }
 
     pub(crate) fn peak_before_volume(&self, percent: u32) -> f32 {
@@ -77,22 +85,38 @@ impl Meter {
     }
 }
 
-fn microphone_in_use(id: ObjectId) -> bool {
+fn another_app_records(device: ObjectId) -> bool {
     hal::read_ids(hal::SYSTEM, Property::global(hal::PROCESSES)).is_ok_and(|processes| {
-        processes
-            .into_iter()
-            .any(|process| records_from(process, id))
+        let recordings: Vec<Recording> = processes.into_iter().filter_map(recording).collect();
+        records_elsewhere(&recordings, device, std::process::id())
     })
 }
 
-fn records_from(process: ObjectId, device: ObjectId) -> bool {
-    hal::read_u32(process, Property::global(hal::PROCESS_IS_RUNNING_INPUT))
-        .is_ok_and(|running| running != 0)
-        && hal::read_ids(
+#[derive(Debug, Clone, PartialEq)]
+struct Recording {
+    pid: u32,
+    devices: Vec<ObjectId>,
+}
+
+fn recording(process: ObjectId) -> Option<Recording> {
+    let running = hal::read_u32(process, Property::global(hal::PROCESS_IS_RUNNING_INPUT)).ok()?;
+    if running == 0 {
+        return None;
+    }
+    Some(Recording {
+        pid: hal::read_u32(process, Property::global(hal::PROCESS_PID)).ok()?,
+        devices: hal::read_ids(
             process,
             Property::scoped(hal::PROCESS_DEVICES, Direction::Input),
         )
-        .is_ok_and(|devices| devices.contains(&device))
+        .ok()?,
+    })
+}
+
+fn records_elsewhere(recordings: &[Recording], device: ObjectId, own_pid: u32) -> bool {
+    recordings
+        .iter()
+        .any(|recording| recording.pid != own_pid && recording.devices.contains(&device))
 }
 
 fn sample_rate(id: ObjectId) -> f64 {
@@ -179,6 +203,53 @@ mod tests {
 
     fn block(loudest: f32, frames: u32) -> Block {
         Block { loudest, frames }
+    }
+
+    fn recording(pid: u32, devices: &[ObjectId]) -> Recording {
+        Recording {
+            pid,
+            devices: devices.to_vec(),
+        }
+    }
+
+    #[test]
+    fn only_another_process_recording_from_the_device_counts() {
+        let own = 400;
+        let headset = 88;
+        let built_in = 77;
+        let cases: [(&str, Vec<Recording>, bool); 5] = [
+            ("nobody records", vec![], false),
+            (
+                "only this process records",
+                vec![recording(own, &[headset])],
+                false,
+            ),
+            (
+                "another app records elsewhere",
+                vec![recording(51, &[built_in])],
+                false,
+            ),
+            (
+                "another app records the headset",
+                vec![recording(51, &[headset])],
+                true,
+            ),
+            (
+                "this process and a call app record",
+                vec![
+                    recording(own, &[headset]),
+                    recording(51, &[built_in, headset]),
+                ],
+                true,
+            ),
+        ];
+        for (name, recordings, expected) in cases {
+            assert_eq!(
+                records_elsewhere(&recordings, headset, own),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]
