@@ -1173,6 +1173,10 @@ pub fn disable_window_shadow(_title: &str) -> bool {
     true
 }
 
+pub fn join_all_spaces(_title: &str) -> bool {
+    true
+}
+
 pub fn configure_popup_window(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {

@@ -58,6 +58,7 @@ pub(crate) fn pre_create_ghost(
 
         popup_window::configure_popup_window(&title);
         popup_window::disable_window_shadow(&title);
+        popup_window::join_all_spaces(&title);
         qol_gpui::ghost::hide_invisible(&title);
     }
     let keys = active.borrow().keys();
@@ -239,6 +240,7 @@ fn create_and_show_ghost(
     let all_titles = active.borrow().titles(LAUNCHER_WINDOW_TITLE);
     popup_window::configure_popup_window(&title);
     popup_window::disable_window_shadow(&title);
+    popup_window::join_all_spaces(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
         if let Some(plugin_id) = flow {

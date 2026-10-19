@@ -831,7 +831,6 @@ pub fn hide_for_capture(title: &str, window: &mut gpui::Window) -> bool {
             return false;
         }
     };
-    native_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     native_window.setLevel(NSPopUpMenuWindowLevel);
     native_window.setAlphaValue(0.0);
     native_window.setIgnoresMouseEvents(true);
@@ -1048,11 +1047,6 @@ pub fn hold_input(title: &str) -> bool {
         return false;
     };
     window.setLevel(NSFloatingWindowLevel);
-    window.setHidesOnDeactivate(false);
-    window.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            | NSWindowCollectionBehavior::FullScreenAuxiliary,
-    );
     let observer = hold_observer();
     let center = NSNotificationCenter::defaultCenter();
     unsafe {
@@ -1237,6 +1231,18 @@ fn install_process_square_corner_mask() {
 
 pub fn set_window_type_dock_by_title(_title: &str) -> bool {
     false
+}
+
+pub fn join_all_spaces(title: &str) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    window.setHidesOnDeactivate(false);
+    window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+    true
 }
 
 pub fn configure_overlay_window(title: &str) -> bool {
