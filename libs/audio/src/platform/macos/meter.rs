@@ -8,6 +8,7 @@ use super::default_output::default_device;
 use super::hal::{self, ObjectId, Property};
 use super::identity;
 use super::io::{self, Block, BufferList, Listening};
+use super::tap::SystemTap;
 
 const WINDOWS_PER_SECOND: f64 = 25.0;
 const FALLBACK_SAMPLE_RATE: f64 = 48_000.0;
@@ -15,35 +16,50 @@ const FALLBACK_SAMPLE_RATE: f64 = 48_000.0;
 pub(crate) struct Meter {
     device: String,
     listening: Listening,
-    tap: Box<Tap>,
+    _system_tap: Option<SystemTap>,
+    peaks: Box<Peaks>,
 }
 
 impl Meter {
     pub(crate) fn open(direction: Direction) -> Result<Self, AudioError> {
-        if direction == Direction::Output {
-            return Err(AudioError::Unsupported);
-        }
         let id = default_device(direction)?.ok_or_else(|| AudioError::no_default(direction))?;
-        if identity::is_bluetooth(id) && identity::state_of(id) != State::Running {
-            return Err(AudioError::Operation(
-                "measuring an idle Bluetooth microphone would switch the headset to its call profile"
-                    .to_owned(),
-            ));
-        }
         let device = hal::read_text(id, Property::global(hal::DEVICE_UID))?;
-        io::require_float_samples(id, direction)?;
-        let tap = Box::new(Tap::new(window_size(sample_rate(id))));
-        let client = (&raw const *tap).cast_mut().cast::<c_void>();
-        let listening = Listening::start(id, listen, client)?;
+        match direction {
+            Direction::Input => {
+                if identity::is_bluetooth(id) && identity::state_of(id) != State::Running {
+                    return Err(AudioError::Operation(
+                        "measuring an idle Bluetooth microphone would switch the headset to its call profile"
+                            .to_owned(),
+                    ));
+                }
+                Self::listen(device, id, None)
+            }
+            Direction::Output => {
+                let system_tap = SystemTap::create()?;
+                Self::listen(device, system_tap.device(), Some(system_tap))
+            }
+        }
+    }
+
+    fn listen(
+        device: String,
+        source: ObjectId,
+        system_tap: Option<SystemTap>,
+    ) -> Result<Self, AudioError> {
+        io::require_float_samples(source, Direction::Input)?;
+        let peaks = Box::new(Peaks::new(window_size(sample_rate(source))));
+        let client = (&raw const *peaks).cast_mut().cast::<c_void>();
+        let listening = Listening::start(source, listen, client)?;
         Ok(Self {
             device,
             listening,
-            tap,
+            _system_tap: system_tap,
+            peaks,
         })
     }
 
     pub(crate) fn peak(&self) -> f32 {
-        f32::from_bits(self.tap.published.load(Ordering::Relaxed))
+        f32::from_bits(self.peaks.published.load(Ordering::Relaxed))
     }
 
     pub(crate) fn device(&self) -> &str {
@@ -72,14 +88,14 @@ fn window_size(sample_rate: f64) -> u32 {
     ((sample_rate / WINDOWS_PER_SECOND).round() as u32).max(1)
 }
 
-struct Tap {
+struct Peaks {
     published: AtomicU32,
     window_peak: AtomicU32,
     window_frames: AtomicU32,
     size: u32,
 }
 
-impl Tap {
+impl Peaks {
     fn new(size: u32) -> Self {
         Self {
             published: AtomicU32::new(0f32.to_bits()),
@@ -133,8 +149,8 @@ unsafe extern "C" fn listen(
     _output_time: *const c_void,
     client: *mut c_void,
 ) -> i32 {
-    if let Some(tap) = unsafe { client.cast::<Tap>().as_ref() } {
-        tap.record(unsafe { io::block(input) });
+    if let Some(peaks) = unsafe { client.cast::<Peaks>().as_ref() } {
+        peaks.record(unsafe { io::block(input) });
     }
     0
 }
@@ -174,13 +190,13 @@ mod tests {
     }
 
     #[test]
-    fn the_tap_publishes_through_its_atomics() {
-        let tap = Tap::new(4);
-        tap.record(block(0.3, 2));
-        assert_eq!(f32::from_bits(tap.published.load(Ordering::Relaxed)), 0.0);
-        tap.record(block(0.5, 2));
-        assert_eq!(f32::from_bits(tap.published.load(Ordering::Relaxed)), 0.5);
-        tap.record(block(0.1, 4));
-        assert_eq!(f32::from_bits(tap.published.load(Ordering::Relaxed)), 0.1);
+    fn the_peaks_publish_through_their_atomics() {
+        let peaks = Peaks::new(4);
+        peaks.record(block(0.3, 2));
+        assert_eq!(f32::from_bits(peaks.published.load(Ordering::Relaxed)), 0.0);
+        peaks.record(block(0.5, 2));
+        assert_eq!(f32::from_bits(peaks.published.load(Ordering::Relaxed)), 0.5);
+        peaks.record(block(0.1, 4));
+        assert_eq!(f32::from_bits(peaks.published.load(Ordering::Relaxed)), 0.1);
     }
 }

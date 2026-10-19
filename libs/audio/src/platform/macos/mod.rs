@@ -3,6 +3,7 @@ mod hal;
 mod identity;
 mod io;
 mod meter;
+mod tap;
 mod volume;
 
 pub(crate) use default_output::{effective_default, set_default_output};
