@@ -8,10 +8,17 @@ use qol_terminal_sessions::SessionId;
 use crate::host::Pane;
 use crate::session::registry::{is_master_key, meaningful_name};
 
+const MODE_REFRESH_SECS: u64 = 30;
+
+struct Sighting {
+    record: ClosedRecord,
+    mode_read_at: u64,
+}
+
 #[derive(Default)]
 pub struct ClosedLedger {
     dir: Option<PathBuf>,
-    live: HashMap<SessionId, ClosedRecord>,
+    live: HashMap<SessionId, Sighting>,
 }
 
 impl ClosedLedger {
@@ -32,23 +39,38 @@ impl ClosedLedger {
         let previous = self.live.remove(&pane.id);
         let Some(mut next) = resumable(interpreter, pane, descriptor) else {
             if let Some(previous) = previous {
-                self.close(previous, now);
+                self.close(previous.record, now);
             }
             return;
         };
-        match previous {
-            Some(previous) if previous.external_id == next.external_id => {
-                next.permission_mode = previous.permission_mode;
+        let mode_read_at = match previous {
+            Some(previous) if previous.record.external_id == next.external_id => {
+                next.permission_mode = previous.record.permission_mode;
+                if now < previous.mode_read_at.saturating_add(MODE_REFRESH_SECS) {
+                    previous.mode_read_at
+                } else {
+                    if let Some(mode) = interpreter.permission_mode(pane) {
+                        next.permission_mode = Some(mode);
+                    }
+                    now
+                }
             }
             previous => {
                 if let Some(previous) = previous {
-                    self.close(previous, now);
+                    self.close(previous.record, now);
                 }
                 next.permission_mode = interpreter.permission_mode(pane);
                 self.forget(&next.external_id);
+                now
             }
-        }
-        self.live.insert(pane.id.clone(), next);
+        };
+        self.live.insert(
+            pane.id.clone(),
+            Sighting {
+                record: next,
+                mode_read_at,
+            },
+        );
     }
 
     pub fn retire_missing(&mut self, panes: &[Pane], now: u64) {
@@ -59,8 +81,8 @@ impl ClosedLedger {
             .cloned()
             .collect();
         for id in gone {
-            if let Some(record) = self.live.remove(&id) {
-                self.close(record, now);
+            if let Some(sighting) = self.live.remove(&id) {
+                self.close(sighting.record, now);
             }
         }
     }
@@ -133,8 +155,44 @@ fn resumable(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qol_terminal_sessions::cli::{claude_tool, generic_tool, CliSessionEvidence, CliTool};
-    use qol_terminal_sessions::{SessionCapabilities, SpawnIdentity, SpawnKey, SpawnSurface};
+    use std::sync::{Arc, Mutex};
+
+    use qol_terminal_sessions::cli::{
+        claude_tool, generic_tool, CliSessionEvidence, CliSessionStrategy, CliTool,
+    };
+    use qol_terminal_sessions::{
+        SessionCapabilities, SessionFacts, SpawnIdentity, SpawnKey, SpawnSurface,
+    };
+
+    struct ModeStrategy {
+        tool: CliTool,
+        mode: Mutex<Option<String>>,
+    }
+
+    impl CliSessionStrategy for ModeStrategy {
+        fn tool(&self) -> &CliTool {
+            &self.tool
+        }
+
+        fn matches(&self, session: &SessionFacts) -> bool {
+            session
+                .foreground_basenames
+                .iter()
+                .any(|name| name == "claude")
+        }
+
+        fn describe(&self, _session: &SessionFacts) -> CliSessionDescriptor {
+            descriptor(self.tool.clone(), None)
+        }
+
+        fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
+            Some(vec!["--resume".to_owned(), external_id.to_owned()])
+        }
+
+        fn permission_mode(&self, _session: &SessionFacts) -> Option<String> {
+            self.mode.lock().unwrap().clone()
+        }
+    }
 
     fn pane(window: u64) -> Pane {
         Pane {
@@ -275,6 +333,44 @@ mod tests {
         );
         ledger.retire_missing(&[], 200);
         assert!(closed_ids(&root).is_empty());
+    }
+
+    #[test]
+    fn the_permission_mode_is_refreshed_while_the_session_lives() {
+        let root = tempfile::tempdir().unwrap();
+        let strategy = Arc::new(ModeStrategy {
+            tool: claude_tool(),
+            mode: Mutex::new(Some("default".to_owned())),
+        });
+        let interpreter = CliSessionInterpreter::from_strategies([
+            strategy.clone() as Arc<dyn CliSessionStrategy>
+        ])
+        .unwrap();
+        let mut ledger = ledger(&root);
+        let first = pane(1);
+        let seen = descriptor(claude_tool(), Some("abc"));
+        ledger.observe(&interpreter, &first, &seen, 100);
+        *strategy.mode.lock().unwrap() = Some("bypassPermissions".to_owned());
+        ledger.observe(&interpreter, &first, &seen, 100 + MODE_REFRESH_SECS - 1);
+        assert_eq!(
+            ledger.live[&first.id].record.permission_mode.as_deref(),
+            Some("default")
+        );
+        ledger.observe(&interpreter, &first, &seen, 100 + MODE_REFRESH_SECS);
+        assert_eq!(
+            ledger.live[&first.id].record.permission_mode.as_deref(),
+            Some("bypassPermissions")
+        );
+        *strategy.mode.lock().unwrap() = None;
+        ledger.observe(&interpreter, &first, &seen, 100 + 2 * MODE_REFRESH_SECS);
+        ledger.retire_missing(&[], 300);
+        assert_eq!(
+            closed::find(&root.path().join("closed"), "abc")
+                .unwrap()
+                .permission_mode
+                .as_deref(),
+            Some("bypassPermissions")
+        );
     }
 
     #[test]

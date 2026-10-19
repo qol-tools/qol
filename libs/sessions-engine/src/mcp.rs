@@ -581,6 +581,7 @@ impl McpSessionServer {
             .key
             .clone()
             .unwrap_or_else(|| format!("reopen-{}", &super::spawn::generate_key()[..8]));
+        super::switchboard::refuse_reserved_key(&key).map_err(|error| error.to_string())?;
         let launched = super::spawn::launch_detached(
             self.terminals.as_ref(),
             &self.interpreter,
@@ -2349,7 +2350,7 @@ mod tests {
     }
 
     #[test]
-    fn session_reopen_refuses_a_key_that_is_live_and_an_unknown_id() {
+    fn session_reopen_refuses_a_live_key_the_switchboard_key_and_an_unknown_id() {
         let root = tempfile::TempDir::new().unwrap();
         let backend = Arc::new(
             FakeBackend::new(Vec::new(), false, false).with_id(BackendId::new("kitty").unwrap()),
@@ -2364,6 +2365,15 @@ mod tests {
         refused(
             &tool_call(&server, "session_reopen", json!({ "external_id": "ghi" })),
             "`lane-9` is live in",
+        );
+        qol_terminal_sessions::closed::write(
+            &closed,
+            &closed_record("sb", &cwd, Some(super::super::SWITCHBOARD_KEY)),
+        )
+        .unwrap();
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "sb" })),
+            "reserved for the switchboard",
         );
         refused(
             &tool_call(&server, "session_reopen", json!({ "external_id": "nope" })),
