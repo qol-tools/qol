@@ -63,6 +63,24 @@ pub(crate) fn resolve_effective_registry(
     resolve_from_registry(&effective)
 }
 
+pub(crate) fn resolve_plugin_path(config_dir: &Path, plugin_id: &str) -> Option<PathBuf> {
+    let mut registry = crate::plugins::registry::load_registry(config_dir).ok()?;
+    registry.entries.retain(|entry| entry.id == plugin_id);
+    let report = resolve_effective_registry(&registry, config_dir);
+    report
+        .plugins
+        .into_iter()
+        .next()
+        .map(|plugin| plugin.path)
+        .or_else(|| {
+            report
+                .unavailable
+                .into_iter()
+                .next()
+                .map(|unavailable| unavailable.active.path)
+        })
+}
+
 pub fn resolve_from_registry(registry: &Registry) -> ResolutionReport {
     let mut report = ResolutionReport::default();
     let entry_counts = registry
@@ -1145,5 +1163,51 @@ mod tests {
             matches!(effective.entries[0].active.source, SlotSource::ReleaseAsset),
             "promoted active must be the release slot"
         );
+    }
+
+    #[test]
+    fn resolve_plugin_path_uses_the_installed_copy_when_the_dev_link_is_gone() {
+        let tmp = TempDir::new().unwrap();
+        let installed_dir = tmp.path().join("plugin-foo");
+        fs::create_dir(&installed_dir).unwrap();
+        write_valid_manifest(&installed_dir, "plugin-foo");
+        let deleted_worktree = tmp.path().join("deleted-worktree");
+        let registry = Registry {
+            version: 1,
+            entries: vec![Entry {
+                id: "plugin-foo".to_string(),
+                active: Slot {
+                    path: deleted_worktree.clone(),
+                    source: SlotSource::DevLink {
+                        origin_path: deleted_worktree,
+                    },
+                },
+                fallback: Some(Slot {
+                    path: installed_dir.clone(),
+                    source: SlotSource::ReleaseAsset,
+                }),
+            }],
+        };
+        crate::plugins::registry::save_registry(tmp.path(), &registry).unwrap();
+
+        assert_eq!(
+            resolve_plugin_path(tmp.path(), "plugin-foo"),
+            Some(installed_dir)
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_path_is_none_for_a_plugin_the_registry_does_not_list() {
+        let tmp = TempDir::new().unwrap();
+        let installed_dir = tmp.path().join("plugin-bar");
+        fs::create_dir(&installed_dir).unwrap();
+        write_valid_manifest(&installed_dir, "plugin-bar");
+        let registry = Registry {
+            version: 1,
+            entries: vec![installed_entry("plugin-bar", &installed_dir)],
+        };
+        crate::plugins::registry::save_registry(tmp.path(), &registry).unwrap();
+
+        assert_eq!(resolve_plugin_path(tmp.path(), "plugin-foo"), None);
     }
 }

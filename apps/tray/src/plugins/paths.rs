@@ -18,27 +18,12 @@ pub(crate) fn resolve_plugin_root(plugin_id: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn resolve_plugin_root_from_plugins_dir(plugins_dir: &Path, plugin_id: &str) -> PathBuf {
-    if let Some(active) = crate::plugins::registry::current_active_path(plugin_id) {
-        return dev_resolved_root(plugins_dir, plugin_id, &active).unwrap_or(active);
-    }
-    plugins_dir.join(plugin_id)
-}
-
-#[cfg(feature = "dev")]
-fn dev_resolved_root(plugins_dir: &Path, plugin_id: &str, active: &Path) -> Option<PathBuf> {
-    let branch = crate::dev::get_active_worktree_branch(&crate::paths::shared_config_dir().ok()?)?;
-    let mut map = std::collections::HashMap::new();
-    map.insert(plugin_id.to_string(), active.to_path_buf());
-    let resolved = crate::dev::resolve_worktree_paths(&map, Some(&branch));
-    Some(match resolved.get(plugin_id) {
-        Some(root) => root.clone(),
-        None => plugins_dir.join(plugin_id),
-    })
-}
-
-#[cfg(not(feature = "dev"))]
-fn dev_resolved_root(_plugins_dir: &Path, _plugin_id: &str, _active: &Path) -> Option<PathBuf> {
-    None
+    crate::paths::shared_config_dir()
+        .ok()
+        .and_then(|config_dir| {
+            crate::plugins::resolver::resolve_plugin_path(&config_dir, plugin_id)
+        })
+        .unwrap_or_else(|| plugins_dir.join(plugin_id))
 }
 
 pub(crate) fn config_path(plugin_root: &Path) -> PathBuf {
