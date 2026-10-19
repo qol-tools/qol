@@ -8,9 +8,7 @@ use gpui::*;
 
 use crate::kit::Kit;
 use crate::monitor::MonitorTracker;
-use crate::placement::{
-    anchor_placement, Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN,
-};
+use crate::placement::{anchor_placement, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 use crate::popup_window::HiddenWindowsBarrier;
 
 mod banner;
@@ -51,7 +49,7 @@ pub const BANNER_STYLE: &str = qol_runtime::protocol::NotificationLayout::BANNER
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToastLayout {
-    placement: MonitorPlacement,
+    placement: Option<MonitorPlacement>,
     size: Size<Pixels>,
     style: ToastStyle,
 }
@@ -59,7 +57,7 @@ pub struct ToastLayout {
 impl Default for ToastLayout {
     fn default() -> Self {
         Self {
-            placement: MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
+            placement: None,
             size: size(px(pile::CARD_WIDTH), px(pile::CARD_HEIGHT)),
             style: ToastStyle::Default,
         }
@@ -69,14 +67,14 @@ impl Default for ToastLayout {
 impl ToastLayout {
     pub fn status() -> Self {
         Self {
-            placement: MonitorPlacement::top_center(TOP_CENTER_MARGIN),
+            placement: Some(MonitorPlacement::top_center(TOP_CENTER_MARGIN)),
             size: size(px(pile::CARD_WIDTH), px(qol_theme::toast::MESSAGE_HEIGHT)),
             style: ToastStyle::Status,
         }
     }
 
     pub fn at(mut self, placement: MonitorPlacement) -> Self {
-        self.placement = placement;
+        self.placement = Some(placement);
         self
     }
 
@@ -106,7 +104,7 @@ impl ToastLayout {
     }
 
     pub fn placement(self) -> MonitorPlacement {
-        self.placement
+        self.placement.unwrap_or_else(chosen_placement)
     }
 
     pub fn size(self) -> Size<Pixels> {
@@ -370,12 +368,29 @@ impl Toast {
     }
 }
 
-fn message_timeout() -> Duration {
+fn notification_settings() -> Option<serde_json::Value> {
     qol_config::config_dir()
         .and_then(|dir| {
             std::fs::read_to_string(dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE)).ok()
         })
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+}
+
+fn chosen_placement() -> MonitorPlacement {
+    placement_in(notification_settings().as_ref())
+}
+
+fn placement_in(settings: Option<&serde_json::Value>) -> MonitorPlacement {
+    let spot = settings
+        .and_then(|settings| settings.get(qol_conventions::NOTIFICATION_PLACEMENT_KEY))
+        .and_then(serde_json::Value::as_str)
+        .and_then(qol_config::placement::Spot::parse)
+        .unwrap_or(qol_config::placement::Spot::TOP_RIGHT);
+    MonitorPlacement::spot(spot.x, spot.y, CORNER_MARGIN)
+}
+
+fn message_timeout() -> Duration {
+    notification_settings()
         .map(|settings: serde_json::Value| {
             let seconds = |key: &str| settings.get(key).and_then(serde_json::Value::as_f64);
             qol_theme::message_stay(qol_theme::stored_message_stay(
@@ -490,8 +505,8 @@ mod tests {
     use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN, TOP_CENTER_MARGIN};
 
     use super::{
-        message_timeout, routed_presentation, Presentation, Toast, ToastLayout, ToastStyle,
-        ToastTone,
+        chosen_placement, message_timeout, placement_in, routed_presentation, Presentation, Toast,
+        ToastLayout, ToastStyle, ToastTone,
     };
 
     #[test]
@@ -528,10 +543,7 @@ mod tests {
             ToastLayout::for_push(None, None, None, Some("compact")),
             ToastLayout::default()
         );
-        assert_eq!(
-            ToastLayout::default().placement(),
-            MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN)
-        );
+        assert_eq!(ToastLayout::default().placement(), chosen_placement());
         assert_eq!(ToastLayout::default().size().width.to_f64(), 440.0);
         assert_eq!(ToastLayout::default().size().height.to_f64(), 84.0);
     }
@@ -581,11 +593,7 @@ mod tests {
     #[test]
     fn layouts_select_shared_placement_and_dimensions() {
         let cases = [
-            (
-                ToastLayout::default(),
-                MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
-                (440.0, 84.0),
-            ),
+            (ToastLayout::default(), chosen_placement(), (440.0, 84.0)),
             (
                 ToastLayout::status(),
                 MonitorPlacement::top_center(TOP_CENTER_MARGIN),
@@ -602,6 +610,37 @@ mod tests {
                 "layout: {layout:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_pile_goes_where_the_user_placed_it() {
+        let top_right = MonitorPlacement::spot(1.0, 0.0, CORNER_MARGIN);
+        assert_eq!(placement_in(None), top_right);
+        let cases = [
+            (serde_json::json!({}), top_right),
+            (
+                serde_json::json!({ "placement": "bottom-left" }),
+                MonitorPlacement::spot(0.0, 1.0, CORNER_MARGIN),
+            ),
+            (
+                serde_json::json!({ "placement": "0.25,0.6" }),
+                MonitorPlacement::spot(0.25, 0.6, CORNER_MARGIN),
+            ),
+            (serde_json::json!({ "placement": "somewhere" }), top_right),
+            (serde_json::json!({ "placement": 3 }), top_right),
+        ];
+        for (settings, expected) in cases {
+            assert_eq!(placement_in(Some(&settings)), expected, "{settings}");
+        }
+        let monitor = gpui::Bounds::new(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(1920.0), gpui::px(1080.0)),
+        );
+        let content = ToastLayout::default().size();
+        assert_eq!(
+            top_right.bounds(monitor, content),
+            MonitorPlacement::corner(Corner::TopRight, CORNER_MARGIN).bounds(monitor, content)
+        );
     }
 
     #[test]

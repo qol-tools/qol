@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use qol_plugin_daemon::notification::gate::NativeHandler;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -12,9 +11,6 @@ use super::http_json::{self, blocking};
 
 type HttpResult<T> = Result<T, Box<Response>>;
 
-const MESSAGE_SECONDS_MIN: f64 = qol_theme::STAY_MESSAGE_LEAST.as_secs_f64();
-const MESSAGE_SECONDS_MAX: f64 = qol_theme::STAY_MESSAGE_MOST.as_secs_f64();
-
 #[derive(Serialize)]
 struct CoreConfigResponse {
     theme: String,
@@ -22,8 +18,6 @@ struct CoreConfigResponse {
     native_theme: String,
     profile: String,
     residency: bool,
-    handler: NativeHandler,
-    message_seconds: f64,
 }
 
 #[derive(Deserialize)]
@@ -39,16 +33,6 @@ fn current_config() -> CoreConfigResponse {
         native_theme: crate::features::theme::current_native_theme_key(),
         profile: crate::paths::active_profile_name(),
         residency: qol_host_fixes::residency::HostResidency::current().is_resident(),
-        handler: crate::features::notifications::native_handler(),
-        message_seconds: crate::features::notifications::message_seconds(),
-    }
-}
-
-pub(super) fn do_not_disturb_status() -> String {
-    match qol_plugin_daemon::notification::platform::os_do_not_disturb() {
-        Some(true) => "On".to_string(),
-        Some(false) => "Off".to_string(),
-        None => "Unknown".to_string(),
     }
 }
 
@@ -100,16 +84,6 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             &as_str(field, value)?,
         ),
         "residency" => set_residency(as_bool(field, value)?),
-        "handler" => {
-            let previous = crate::features::notifications::native_handler();
-            let result =
-                crate::features::notifications::set_native_handler(as_handler(field, value)?);
-            crate::features::notifications::apply_native_handler(previous);
-            result
-        }
-        "message_seconds" => {
-            crate::features::notifications::set_message_seconds(as_seconds(field, value)?)
-        }
         _ => return Err(Box::new(bad_request(&format!("unknown field: {field}")))),
     };
     result.map_err(|error| Box::new(bad_request(&format!("{error:#}"))))
@@ -137,29 +111,6 @@ fn as_bool(field: &str, value: &serde_json::Value) -> HttpResult<bool> {
     value
         .as_bool()
         .ok_or_else(|| Box::new(bad_request(&format!("{field} expects a boolean"))))
-}
-
-fn as_seconds(field: &str, value: &serde_json::Value) -> HttpResult<f64> {
-    value
-        .as_f64()
-        .map(|seconds| (seconds * 10.0).round() / 10.0)
-        .filter(|seconds| (MESSAGE_SECONDS_MIN..=MESSAGE_SECONDS_MAX).contains(seconds))
-        .ok_or_else(|| {
-            Box::new(bad_request(&format!(
-                "{field} expects {MESSAGE_SECONDS_MIN} to {MESSAGE_SECONDS_MAX} seconds"
-            )))
-        })
-}
-
-fn as_handler(field: &str, value: &serde_json::Value) -> HttpResult<NativeHandler> {
-    match value.as_str() {
-        Some("qol") => Ok(NativeHandler::Qol),
-        Some("os") => Ok(NativeHandler::Os),
-        Some("both") => Ok(NativeHandler::Both),
-        _ => Err(Box::new(bad_request(&format!(
-            "{field} expects qol, os, or both"
-        )))),
-    }
 }
 
 fn core_config_response(config: &CoreConfigResponse) -> HttpResult<Response> {

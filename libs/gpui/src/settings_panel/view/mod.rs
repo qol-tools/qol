@@ -1,6 +1,7 @@
 mod choose_card;
 mod display_layout_card;
 mod list_card;
+mod placement_card;
 mod slider_flights;
 mod structured_list_editor;
 
@@ -261,6 +262,7 @@ pub(super) struct SettingsPanelView {
     card_marks: Vec<Option<f32>>,
     render_level: std::cell::Cell<usize>,
     height_cap: f32,
+    screen_aspect: f32,
     height_revision: u64,
     height_cache: HeightCache,
     save_error: Option<String>,
@@ -293,6 +295,9 @@ pub(super) struct SettingsPanelView {
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
+    placement_stage: Rc<Cell<Option<Bounds<Pixels>>>>,
+    placement_drag: Option<placement_card::PlacementDrag>,
+    placement_presses: u64,
     display_layout_motion: display_layout_card::DisplayLayoutMotion,
     attention: std::collections::HashSet<String>,
     attention_error_logged: bool,
@@ -307,6 +312,7 @@ pub(super) struct SettingsPanelState {
     /// row whose value came back null is unavailable from the first frame.
     pub(super) opening_answers: Vec<(String, QueryResult)>,
     pub(super) height_cap: f32,
+    pub(super) screen_aspect: f32,
 }
 
 enum ActiveControl {
@@ -451,6 +457,7 @@ impl SettingsPanelView {
             render_level: std::cell::Cell::new(usize::MAX),
             deck_motion: None,
             height_cap: state.height_cap,
+            screen_aspect: state.screen_aspect,
             height_revision: 0,
             height_cache: HeightCache::default(),
             save_error: None,
@@ -483,6 +490,9 @@ impl SettingsPanelView {
             body_bounds: Rc::new(Cell::new(None)),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
+            placement_stage: Rc::new(Cell::new(None)),
+            placement_drag: None,
+            placement_presses: 0,
             display_layout_motion: Default::default(),
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
@@ -1911,6 +1921,9 @@ impl SettingsPanelView {
         _key_char: Option<&str>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.on_placement_card_key(key, cx) {
+            return true;
+        }
         match key {
             "escape" => {
                 self.pop_card(cx);
@@ -2004,7 +2017,7 @@ impl SettingsPanelView {
                 self.open_display_layout_card(selected, cx);
                 cx.notify();
             }
-            RowControl::Gamepad { .. } | RowControl::QrCode { .. } => {
+            RowControl::Gamepad { .. } | RowControl::QrCode { .. } | RowControl::Placement(_) => {
                 self.open_live_card(selected, cx);
                 cx.notify();
             }
@@ -2181,6 +2194,7 @@ impl SettingsPanelView {
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. }
+            | RowControl::Placement(_)
             | RowControl::Unsupported { .. } => return,
         };
         let mut edit = TextField::with_text(edit);
@@ -2266,6 +2280,7 @@ impl SettingsPanelView {
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
             | RowControl::QrCode { .. }
+            | RowControl::Placement(_)
             | RowControl::Unsupported { .. } => return,
         }
         if live_number {
@@ -2343,6 +2358,7 @@ impl SettingsPanelView {
                 modules: modules.clone(),
                 error: error.clone(),
             },
+            RowControl::Placement(spot) => RowControl::Placement(*spot),
             _ => return,
         };
         let label = row.label.clone();
@@ -2839,6 +2855,7 @@ impl SettingsPanelView {
                 .map(|controller| controller.name.clone())
                 .unwrap_or_else(|| "Waiting".into()),
             RowControl::QrCode { url, .. } => url.clone().unwrap_or_default(),
+            RowControl::Placement(spot) => placement_card::spot_label(*spot),
             RowControl::Unsupported { reason, .. } => reason.clone(),
         }
     }
@@ -2874,7 +2891,7 @@ impl SettingsPanelView {
             RowControl::Status { .. } => SettingsValueTone::Normal,
             RowControl::List { .. } | RowControl::Gamepad { .. } => SettingsValueTone::Normal,
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
-            RowControl::QrCode { .. } => SettingsValueTone::Normal,
+            RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
             RowControl::Unsupported { .. } => SettingsValueTone::Muted,
         }
     }
@@ -3005,7 +3022,8 @@ impl SettingsPanelView {
             | RowControl::ObjectArray(_)
             | RowControl::DisplayLayout(_)
             | RowControl::Gamepad { .. }
-            | RowControl::QrCode { .. } => {}
+            | RowControl::QrCode { .. }
+            | RowControl::Placement(_) => {}
         }
         let mut cell = div()
             .flex()
@@ -3237,6 +3255,9 @@ impl SettingsPanelView {
         }
         if matches!(row.control, RowControl::QrCode { .. }) && self.level().live_card {
             return container.child(self.render_qr_code(index));
+        }
+        if matches!(row.control, RowControl::Placement(_)) && self.level().live_card {
+            return container.child(self.render_placement(index, cx));
         }
         if matches!(row.control, RowControl::Gamepad { .. })
             && (self.level().live_card || self.level().list_item.is_some())
@@ -4201,7 +4222,7 @@ impl SettingsPanelView {
             RowControl::Color(_) => Some("pick"),
             RowControl::List { items, .. } if !items.is_empty() => Some("open"),
             RowControl::ObjectArray(_) => Some("edit"),
-            RowControl::DisplayLayout(_) => Some("open"),
+            RowControl::DisplayLayout(_) | RowControl::Placement(_) => Some("open"),
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
                 Some("edit")
             }
@@ -4247,6 +4268,15 @@ impl SettingsPanelView {
         }
         if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
             return self.card_hint_bar(bar);
+        }
+        if self.stack.len() > 1
+            && self.level().live_card
+            && self.placement_spot().is_some()
+            && !self.filter_open
+        {
+            return bar
+                .left(placement_card::placement_hints())
+                .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
@@ -5178,18 +5208,21 @@ fn live_card_sync_back(root_rows: &mut [Row], level: &Level) {
     let Some(row) = level.rows.first() else {
         return;
     };
-    if let (
-        RowControl::Gamepad {
-            monitor: root_monitor,
-            ..
-        },
-        RowControl::Gamepad {
-            monitor: card_monitor,
-            ..
-        },
-    ) = (&mut parent.control, &row.control)
-    {
-        *root_monitor = card_monitor.clone();
+    match (&mut parent.control, &row.control) {
+        (
+            RowControl::Gamepad {
+                monitor: root_monitor,
+                ..
+            },
+            RowControl::Gamepad {
+                monitor: card_monitor,
+                ..
+            },
+        ) => *root_monitor = card_monitor.clone(),
+        (RowControl::Placement(root_spot), RowControl::Placement(card_spot)) => {
+            *root_spot = *card_spot;
+        }
+        _ => {}
     }
 }
 
@@ -5299,6 +5332,7 @@ fn opens_a_card(control: &RowControl) -> bool {
         | RowControl::DisplayLayout(_)
         | RowControl::Gamepad { .. }
         | RowControl::QrCode { .. }
+        | RowControl::Placement(_)
         | RowControl::TextList(_) => true,
         RowControl::Toggle(_)
         | RowControl::Number { .. }
@@ -5368,7 +5402,7 @@ fn value_cell_width(control: &RowControl) -> f32 {
         RowControl::Action { .. } => 90.0,
         RowControl::Status { .. } => 130.0,
         RowControl::ObjectArray(_) => 60.0,
-        RowControl::DisplayLayout(_) => 120.0,
+        RowControl::DisplayLayout(_) | RowControl::Placement(_) => 120.0,
         RowControl::List { .. } => 120.0,
         RowControl::QrCode { .. } => 260.0,
         RowControl::Unsupported { .. } => 200.0,
@@ -7385,6 +7419,33 @@ active_value_from = "active"
                 .map(|controller| controller.name.as_str()),
             Some("beta")
         );
+    }
+
+    #[test]
+    fn live_card_sync_back_returns_the_placed_spot_to_the_root() {
+        let placed = qol_config::placement::Spot::new(0.25, 0.6);
+        let mut root = vec![Row {
+            id: "placement".into(),
+            label: "Position".into(),
+            config_key: "placement".into(),
+            control: RowControl::Placement(qol_config::placement::Spot::TOP_RIGHT),
+            ..gamepad_row()
+        }];
+        let mut card = live_card_level(
+            "Position",
+            None,
+            "placement",
+            0,
+            RowControl::Placement(qol_config::placement::Spot::TOP_RIGHT),
+            0,
+            SettingsDestination::from_static("Position"),
+        );
+        card.rows[0].control = RowControl::Placement(placed);
+        live_card_sync_back(&mut root, &card);
+        let RowControl::Placement(spot) = root[0].control else {
+            panic!("expected root placement");
+        };
+        assert_eq!(spot, placed);
     }
 
     #[test]

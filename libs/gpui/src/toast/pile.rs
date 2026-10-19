@@ -278,6 +278,63 @@ impl Pose {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Gravity {
+    across: f32,
+    down: f32,
+}
+
+impl Gravity {
+    pub(super) fn new(across: f32, down: f32) -> Self {
+        Self {
+            across: across.clamp(0.0, 1.0),
+            down: down.clamp(0.0, 1.0),
+        }
+    }
+
+    pub(super) fn hangs(self) -> bool {
+        self.down < 0.5
+    }
+
+    pub(super) fn base(self, height: f32) -> f32 {
+        let travel = (height - CARD_HEIGHT).max(0.0);
+        if self.hangs() {
+            self.down * travel
+        } else {
+            height - (1.0 - self.down) * travel
+        }
+    }
+
+    pub(super) fn room(self, height: f32) -> f32 {
+        if self.hangs() {
+            height - self.base(height)
+        } else {
+            self.base(height)
+        }
+    }
+
+    pub(super) fn left(self, width: f32, pile_width: f32) -> f32 {
+        (width - pile_width).max(0.0) * self.across
+    }
+
+    pub(super) fn pile_top(self, height: f32, pile_height: f32) -> f32 {
+        if self.hangs() {
+            self.base(height)
+        } else {
+            self.base(height) - pile_height
+        }
+    }
+
+    pub(super) fn top(self, height: f32, pile_height: f32, frame: Frame) -> f32 {
+        let inside = if self.hangs() {
+            pile_height - frame.top - frame.height
+        } else {
+            frame.top
+        };
+        self.pile_top(height, pile_height) + inside
+    }
+}
+
 pub(super) fn edge_fade(centre: f32, room: f32, above: f32, below: f32) -> f32 {
     let fade = |inside: f32, hidden: f32| {
         lerp(
@@ -378,6 +435,62 @@ mod tests {
                 "folded cards take the newest card's height"
             );
         }
+    }
+
+    #[test]
+    fn the_bottom_right_gravity_rests_the_pile_on_the_window_floor() {
+        let gravity = Gravity::new(1.0, 1.0);
+        let pile = layout(&even(3), 0.0, 0.0, &[], 0.0);
+        assert!(!gravity.hangs());
+        assert!(close(gravity.base(1000.0), 1000.0));
+        assert!(close(gravity.room(1000.0), 1000.0));
+        assert!(close(gravity.left(WIDTH, pile.width), WIDTH - pile.width));
+        let newest = pile.cards[0].frame;
+        assert!(close(
+            gravity.top(1000.0, pile.height, newest),
+            1000.0 - pile.height + newest.top
+        ));
+    }
+
+    #[test]
+    fn a_hanging_pile_mirrors_its_cards_below_the_newest() {
+        let gravity = Gravity::new(0.0, 0.0);
+        let height = 1000.0;
+        let pile = layout(&even(3), 0.0, 0.0, &[], 0.0);
+        assert!(gravity.hangs());
+        assert!(close(gravity.base(height), 0.0));
+        assert!(close(gravity.room(height), height));
+        assert!(close(gravity.left(WIDTH, pile.width), 0.0));
+        let strip = pile.strip.unwrap().frame;
+        let newest = pile.cards[0].frame;
+        let older = pile.cards[1].frame;
+        assert!(close(gravity.top(height, pile.height, strip), 0.0));
+        assert!(close(
+            gravity.top(height, pile.height, newest),
+            strip.height
+        ));
+        assert!(
+            gravity.top(height, pile.height, older) + older.height
+                > gravity.top(height, pile.height, newest) + newest.height,
+            "the older edge peeks out below the newest card"
+        );
+    }
+
+    #[test]
+    fn a_lone_toast_sits_at_its_fraction_of_the_window_either_way() {
+        let height = 1032.0;
+        let lone = layout(&even(1), 0.0, 0.0, &[], 0.0);
+        for down in [0.0, 0.2, 0.49, 0.5, 0.75, 1.0] {
+            let gravity = Gravity::new(0.5, down);
+            let top = gravity.top(height, lone.height, lone.cards[0].frame);
+            assert!(close(top, down * (height - CARD_HEIGHT)), "{down}: {top}");
+            assert!(gravity.room(height) >= CARD_HEIGHT, "{down}");
+        }
+        let centred = Gravity::new(0.5, 0.5);
+        assert!(close(
+            centred.left(WIDTH, lone.width),
+            (WIDTH - lone.width) / 2.0
+        ));
     }
 
     #[test]

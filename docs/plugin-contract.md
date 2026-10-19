@@ -217,7 +217,8 @@ Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
   buttons referencing runtime action names). Order preserved.
 - `[field.<id>]`: required `type` (`FieldKind`, snake_case: `boolean`, `string`,
   `number`, `select`, `string_array`, `object_array`, `object_map`, `color`,
-  `action`, `list`, `status`, `qr_code`, `display_layout`), plus `config_key`, `label`,
+  `placement`, `action`, `list`, `status`, `qr_code`, `display_layout`), plus
+  `config_key`, `label`,
   `description`, `placeholder`, `section`, `default`, `lookup_label`, `show_when`, `align`,
   `span`.
 
@@ -235,6 +236,9 @@ Per-kind rules (validated, not ignored):
 - `object_array`: `[field.<id>.item.fields]`; `object_map`: `key_label` +
   `[field.<id>.entry_fields]`.
 - `color`: hex string, optional `alpha`; streamable.
+- `placement`: a string naming one of nine screen spots (`top-left` through
+  `bottom-right`, `center` in the middle) or free `x,y` fractions in 0..1; the
+  default must be one of those forms.
 - **`action` / `list` / `status` / `qr_code` / `display_layout` hold no stored value**: they must NOT
   have a `default`, and they require a matching `qol-runtime.toml` declaration. Every
   other kind **must** have a `default`.
@@ -245,7 +249,8 @@ Per-kind rules (validated, not ignored):
 - Card copy: `card_description` is the card sub header (a sentence in sentence
   case with a period, at most 36 characters) and is required on every field that
   opens a card: `select`, `object_array`, `object_map`, a `string_array` with no
-  `options` and no `query`, `list`, `display_layout`, `gamepad`, `qr_code`.
+  `options` and no `query`, `list`, `display_layout`, `gamepad`, `qr_code`,
+  `placement`.
   `item_label` (at most 24 characters) is required on `object_array`,
   `object_map` and card-opening `string_array` fields. `lookup_label` (at most
   24 characters) is required on every `select` with a `query` and names what

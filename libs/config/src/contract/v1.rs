@@ -245,6 +245,7 @@ pub enum FieldKind {
     QrCode,
     Gamepad,
     DisplayLayout,
+    Placement,
 }
 
 impl FieldKind {
@@ -276,6 +277,7 @@ impl FieldKind {
             Self::QrCode => "qr_code",
             Self::Gamepad => "gamepad",
             Self::DisplayLayout => "display_layout",
+            Self::Placement => "placement",
         }
     }
 }

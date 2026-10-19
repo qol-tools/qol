@@ -16,6 +16,7 @@ mod hint_bar;
 mod key_combination;
 mod modifier_chip;
 mod number_field;
+mod placement_preview;
 mod qr_code;
 mod row;
 mod text_field;
@@ -33,6 +34,9 @@ pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
 pub(super) use number_field::{number_field, NumberText, SliderStyle};
+pub use placement_preview::{
+    placement_caption, placement_hold_progress, placement_toast, PlacementHold,
+};
 pub(super) use qr_code::qr_code_display;
 pub use row::SettingsRow;
 pub use text_field::SettingsTextField;

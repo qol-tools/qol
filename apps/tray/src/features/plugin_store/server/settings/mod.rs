@@ -7,6 +7,7 @@ mod http_json;
 mod media_apps_handlers;
 mod media_cover_handlers;
 mod media_icon_handlers;
+mod notifications_config;
 mod notifications_handlers;
 mod plugin_config_handlers;
 mod plugins_handlers;
@@ -84,6 +85,14 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/core/config",
             axum::routing::put(core_config::set_core_config),
+        )
+        .route(
+            "/core/notifications/config",
+            get(notifications_config::get_config).put(notifications_config::set_config),
+        )
+        .route(
+            "/core/notifications/queries/{query}",
+            get(notifications_config::get_query),
         )
         .route(
             "/notifications",
