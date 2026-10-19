@@ -142,7 +142,7 @@ fn bluetooth_address(facts: &Facts) -> Option<&str> {
         .map(|(address, _)| address)
 }
 
-pub(super) fn state_of(id: ObjectId) -> State {
+fn state_of(id: ObjectId) -> State {
     match hal::read_u32(id, Property::global(hal::IS_RUNNING_SOMEWHERE)) {
         Ok(0) => State::Idle,
         Ok(_) => State::Running,

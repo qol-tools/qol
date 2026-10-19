@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::devices::{Direction, State};
+use crate::devices::Direction;
 use crate::AudioError;
 
 use super::default_output::default_device;
@@ -28,7 +28,7 @@ impl Meter {
             Direction::Input => {
                 if identity::is_bluetooth(id) && !microphone_in_use(id) {
                     return Err(AudioError::Operation(
-                        "measuring an idle Bluetooth microphone would switch the headset to its call profile"
+                        "measuring a Bluetooth microphone no app is recording from would switch the headset to its call profile"
                             .to_owned(),
                     ));
                 }
@@ -78,9 +78,21 @@ impl Meter {
 }
 
 fn microphone_in_use(id: ObjectId) -> bool {
-    let plays_output = hal::read_ids(id, Property::scoped(hal::STREAMS, Direction::Output))
-        .map_or(true, |streams| !streams.is_empty());
-    !plays_output && identity::state_of(id) == State::Running
+    hal::read_ids(hal::SYSTEM, Property::global(hal::PROCESSES)).is_ok_and(|processes| {
+        processes
+            .into_iter()
+            .any(|process| records_from(process, id))
+    })
+}
+
+fn records_from(process: ObjectId, device: ObjectId) -> bool {
+    hal::read_u32(process, Property::global(hal::PROCESS_IS_RUNNING_INPUT))
+        .is_ok_and(|running| running != 0)
+        && hal::read_ids(
+            process,
+            Property::scoped(hal::PROCESS_DEVICES, Direction::Input),
+        )
+        .is_ok_and(|devices| devices.contains(&device))
 }
 
 fn sample_rate(id: ObjectId) -> f64 {

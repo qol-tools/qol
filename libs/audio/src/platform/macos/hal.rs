@@ -27,6 +27,9 @@ pub(super) const VIRTUAL_MAIN_VOLUME: [u8; 4] = *b"vmvc";
 pub(super) const MUTE: [u8; 4] = *b"mute";
 pub(super) const NOMINAL_SAMPLE_RATE: [u8; 4] = *b"nsrt";
 pub(super) const VIRTUAL_FORMAT: [u8; 4] = *b"sfmt";
+pub(super) const PROCESSES: [u8; 4] = *b"prs#";
+pub(super) const PROCESS_DEVICES: [u8; 4] = *b"pdv#";
+pub(super) const PROCESS_IS_RUNNING_INPUT: [u8; 4] = *b"piri";
 
 const GLOBAL_SCOPE: [u8; 4] = *b"glob";
 const INPUT_SCOPE: [u8; 4] = *b"inpt";
