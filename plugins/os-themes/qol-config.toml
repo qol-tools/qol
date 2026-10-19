@@ -10,6 +10,7 @@ actions = ["run"]
 [field.enabled]
 type = "boolean"
 label = "Enable shake to grow"
+description = "Grow the cursor when you shake the mouse."
 section = "shake_to_grow"
 default = true
 

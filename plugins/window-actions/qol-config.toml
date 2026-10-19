@@ -10,6 +10,7 @@ actions = ["center"]
 [field.center_mode]
 type = "select"
 label = "Center size mode"
+description = "Pick a fixed size or a share of the screen."
 section = "center"
 default = "pixels"
 card_description = "How big a centered window gets."
@@ -26,6 +27,7 @@ percent = "relative-size"
 [field.center_width_px]
 type = "number"
 label = "Centered width"
+description = "Width of a centered window, in pixels."
 section = "center"
 default = 1152
 min = 320
@@ -38,6 +40,7 @@ equals = "pixels"
 [field.center_height_px]
 type = "number"
 label = "Centered height"
+description = "Height of a centered window, in pixels."
 section = "center"
 default = 892
 min = 240
@@ -87,6 +90,7 @@ actions = ["snap-left", "snap-right", "snap-bottom"]
 [field.snap_fraction]
 type = "number"
 label = "Snap size"
+description = "How much of the screen a snapped window fills."
 section = "snap"
 default = 0.5
 min = 0.1
@@ -102,6 +106,7 @@ actions = ["move-monitor-left", "move-monitor-right"]
 [field.reveal_taskbar_after_move]
 type = "boolean"
 label = "Show taskbar after move"
+description = "Bring up a hidden taskbar after a window moves."
 section = "monitor_move"
 platforms = ["linux"]
 default = true
@@ -114,6 +119,7 @@ actions = ["glide-left", "glide-right", "glide-up", "glide-down"]
 [field.glide_speed_px_per_second]
 type = "number"
 label = "Glide speed"
+description = "How fast a window moves while you hold the keys."
 section = "glide"
 default = 1200
 min = 100

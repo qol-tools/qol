@@ -10,6 +10,7 @@ actions = ["open", "open-reverse"]
 [field.action_mode]
 type = "select"
 label = "Action mode"
+description = "Pick whether letting go switches to the window."
 section = "behavior"
 default = "hold_to_switch"
 card_description = "What releasing the shortcut does."
@@ -26,6 +27,7 @@ sticky = "sticky"
 [field.open_behavior]
 type = "select"
 label = "Open behavior"
+description = "Pick whether opening moves to the next window."
 section = "behavior"
 default = "cycle_once"
 card_description = "What opening the switcher does."
@@ -42,6 +44,7 @@ show_only = "show-only"
 [field.reset_selection_on_open]
 type = "boolean"
 label = "Reset selection on open"
+description = "Start from the top of the list each time it opens."
 section = "behavior"
 default = true
 
@@ -68,6 +71,7 @@ switchable = "boolean"
 type = "boolean"
 config_key = "display.show_minimized"
 label = "Show minimized windows"
+description = "List minimized windows too."
 section = "windows"
 default = true
 
@@ -75,6 +79,7 @@ default = true
 type = "boolean"
 config_key = "display.show_hotkey_hints"
 label = "Show shortcut hints"
+description = "Show the key hints under the windows."
 section = "windows"
 default = true
 
@@ -137,6 +142,7 @@ top_left = "icon-corner:left"
 type = "number"
 config_key = "display.max_columns"
 label = "Max columns"
+description = "The most windows shown side by side."
 section = "layout"
 default = 6
 min = 2
@@ -147,6 +153,7 @@ step = 1
 type = "boolean"
 config_key = "display.transparent_background"
 label = "Transparent background"
+description = "Hide the panel behind the window cards."
 section = "layout"
 default = false
 
@@ -174,6 +181,7 @@ variant = "slider"
 type = "number"
 config_key = "display.card_background_opacity"
 label = "Card background opacity"
+description = "How solid the card backgrounds look."
 section = "layout"
 default = 0.85
 min = 0.0
@@ -230,6 +238,7 @@ default = false
 type = "boolean"
 config_key = "label.show_window_title"
 label = "Show window title"
+description = "Show each window's title on its card."
 section = "labels"
 default = true
 
@@ -243,6 +252,7 @@ dev_only = true
 type = "boolean"
 config_key = "display.show_debug_overlay"
 label = "Show debug overlay"
+description = "Show a header and window numbers for debugging."
 section = "debug"
 default = false
 

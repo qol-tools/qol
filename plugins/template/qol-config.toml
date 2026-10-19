@@ -11,10 +11,12 @@ description = "Settings for a qol-tray plugin scaffolded from the template."
 type = "boolean"
 config_key = "general.enabled"
 label = "Enable plugin"
+description = "Turn the plugin on or off."
 default = true
 
 [field.display_name]
 type = "string"
 config_key = "general.display_name"
 label = "Display name"
+description = "The name the plugin shows."
 default = "My Plugin"
