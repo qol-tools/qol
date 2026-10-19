@@ -76,10 +76,10 @@ fn header(kit: Kit) -> impl IntoElement {
 
 fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
     let total = view.browser.row_count();
-    let shown = (view.list_height() / ROW).floor().max(0.0) as usize;
-    let first = (view.scroll_offset() / ROW).floor().max(0.0) as usize;
-    let left = total.saturating_sub(first);
-    let shown = if view.at_end() { left } else { shown.min(left) };
+    let scroll = view.scroll_offset();
+    let first = ((scroll - 0.5) / ROW).ceil().max(0.0) as usize;
+    let end = ((scroll + view.list_height() + 0.5) / ROW).floor().max(0.0) as usize;
+    let shown = end.min(total).saturating_sub(first);
     div()
         .flex_1()
         .min_h_0()

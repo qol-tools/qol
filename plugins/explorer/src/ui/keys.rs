@@ -68,7 +68,14 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
     }
 }
 
-pub fn waits(action: Action, arriving: bool, queued: bool) -> bool {
+pub fn leaves(action: Action) -> bool {
+    matches!(action, Action::Up | Action::Back | Action::Forward)
+}
+
+pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> bool {
+    if stalled && leaves(action) {
+        return false;
+    }
     if queued {
         return action != Action::Nothing;
     }
@@ -111,7 +118,7 @@ fn typed(keystroke: &Keystroke) -> Option<char> {
 mod tests {
     use gpui::{Keystroke, Modifiers};
 
-    use super::{action, click, waits, Action, Click, Step};
+    use super::{action, click, leaves, waits, Action, Click, Step};
 
     fn key(key: &str, modifiers: Modifiers, key_char: Option<&str>) -> Keystroke {
         Keystroke {
@@ -253,15 +260,28 @@ mod tests {
             Action::PathField,
         ];
         for action in on_rows {
-            assert!(waits(action, true, false), "{action:?}");
-            assert!(!waits(action, false, false), "{action:?}");
+            assert!(waits(action, true, false, false), "{action:?}");
+            assert!(!waits(action, false, false, false), "{action:?}");
         }
         for action in leaving {
-            assert!(!waits(action, true, false), "{action:?}");
-            assert!(waits(action, true, true), "{action:?}");
-            assert!(waits(action, false, true), "{action:?}");
+            assert!(!waits(action, true, false, false), "{action:?}");
+            assert!(waits(action, true, false, true), "{action:?}");
+            assert!(waits(action, false, false, true), "{action:?}");
         }
-        assert!(!waits(Action::Nothing, true, true));
+        assert!(!waits(Action::Nothing, true, false, true));
+    }
+
+    #[test]
+    fn leaving_keys_skip_the_queue_of_a_stalled_folder() {
+        for action in [Action::Up, Action::Back, Action::Forward] {
+            assert!(leaves(action), "{action:?}");
+            assert!(!waits(action, true, true, true), "{action:?}");
+        }
+        for action in [Action::Open, Action::Cursor(Step::Down), Action::Unpick] {
+            assert!(!leaves(action), "{action:?}");
+            assert!(waits(action, true, true, true), "{action:?}");
+        }
+        assert!(waits(Action::Open, true, true, false));
     }
 
     #[test]

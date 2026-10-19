@@ -5,12 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{Entry, ListingError};
 
 const BATCH_SIZE: usize = 128;
 const BATCH_GROWTH_LIMIT: usize = 8192;
+const HELD_COUNT_RETRY: Duration = Duration::from_millis(100);
 
 static COUNTING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
@@ -56,6 +57,7 @@ pub enum ListingEvent {
     Done,
     Failed(ListingError),
     Counts(Vec<FolderCount>),
+    Held(Vec<PathBuf>),
 }
 
 #[derive(Debug)]
@@ -98,7 +100,13 @@ pub fn recount(
     wake: impl Fn() + Send + Clone + 'static,
 ) -> ListingRead {
     spawn(folder, wake, move |cancel, mut emit| {
-        count_folders(&folders, BATCH_SIZE, cancel, &mut emit);
+        let pending: Vec<&PathBuf> = folders.iter().collect();
+        let Some(held) = count_folders(&pending, BATCH_SIZE, cancel, &mut emit) else {
+            return;
+        };
+        if !held.is_empty() {
+            emit(ListingEvent::Held(held.into_iter().cloned().collect()));
+        }
     })
 }
 
@@ -148,7 +156,14 @@ pub(super) fn run(
     if !emit(ListingEvent::Done) || pass == Pass::NamesOnly {
         return;
     }
-    count_folders(&folders, batch_size, cancel, &mut emit);
+    let mut pending: Vec<&PathBuf> = folders.iter().collect();
+    while let Some(held) = count_folders(&pending, batch_size, cancel, &mut emit) {
+        if held.is_empty() {
+            return;
+        }
+        thread::sleep(HELD_COUNT_RETRY);
+        pending = held;
+    }
 }
 
 fn open(folder: &Path) -> Result<fs::ReadDir, ListingError> {
@@ -210,36 +225,37 @@ fn read_entries(
     Some(folders)
 }
 
-fn count_folders(
-    folders: &[PathBuf],
+fn count_folders<'a>(
+    folders: &[&'a PathBuf],
     batch_size: usize,
     cancel: &CancelToken,
     emit: &mut impl FnMut(ListingEvent) -> bool,
-) {
+) -> Option<Vec<&'a PathBuf>> {
     let mut batch = Vec::with_capacity(batch_size.min(folders.len()));
-    for folder in folders {
+    let mut held = Vec::new();
+    for &folder in folders {
         if cancel.is_cancelled() {
-            return;
+            return None;
         }
         let Some(_claim) = CountClaim::take(folder) else {
+            held.push(folder);
             continue;
         };
         let read_at = Instant::now();
-        let Some(count) = count_items(folder, cancel) else {
-            return;
-        };
+        let count = count_items(folder, cancel)?;
         batch.push(FolderCount {
             path: folder.clone(),
             count,
             read_at,
         });
         if batch.len() >= batch_size && !emit(ListingEvent::Counts(mem::take(&mut batch))) {
-            return;
+            return None;
         }
     }
-    if !batch.is_empty() {
-        emit(ListingEvent::Counts(batch));
+    if !batch.is_empty() && !emit(ListingEvent::Counts(batch)) {
+        return None;
     }
+    Some(held)
 }
 
 pub(super) struct CountClaim(PathBuf);

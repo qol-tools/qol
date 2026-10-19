@@ -2,27 +2,28 @@ mod counts;
 mod path_field;
 #[cfg(test)]
 mod tests;
+mod watch;
 
 use std::collections::{HashMap, HashSet};
 use std::mem;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
-use qol_watch::{Watch, WatchNotice, WatchRoot};
+use qol_watch::WatchError;
 
 use super::keys::Step;
 use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
 use crate::nav::{History, Jump, Picks, Spot};
 use counts::{LiveCounts, FOLLOWED_FOLDERS};
 use path_field::PathField;
+use watch::FolderWatch;
 
 const REFRESH_QUIET: Duration = Duration::from_millis(150);
+const STALLED_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opening {
@@ -63,16 +64,14 @@ pub struct Browser {
     jump: Jump,
     show_hidden: bool,
     arriving: Option<Spot>,
+    progressed_at: Instant,
     landing: Option<PathBuf>,
     failure: Option<String>,
     path: Option<PathField>,
     incoming: Option<Listing>,
     counts: LiveCounts,
-    changed: Arc<AtomicBool>,
-    root_gone: Arc<AtomicBool>,
     changed_at: Option<Instant>,
-    watch: Option<Watch>,
-    watched: Option<PathBuf>,
+    watch: FolderWatch,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
 }
@@ -91,16 +90,14 @@ impl Browser {
             jump: Jump::new(),
             show_hidden: false,
             arriving: None,
+            progressed_at: Instant::now(),
             landing: None,
             failure: None,
             path: None,
             incoming: None,
             counts: LiveCounts::default(),
-            changed: Arc::default(),
-            root_gone: Arc::default(),
             changed_at: None,
-            watch: None,
-            watched: None,
+            watch: FolderWatch::default(),
             wake,
             wakes: Some(wakes),
         };
@@ -166,6 +163,11 @@ impl Browser {
         self.arriving.is_some()
     }
 
+    pub fn stalled(&self, now: Instant) -> bool {
+        self.arriving.is_some()
+            && now.saturating_duration_since(self.progressed_at) >= STALLED_AFTER
+    }
+
     #[cfg(test)]
     pub fn reading(&self) -> bool {
         self.read.is_some() || self.path.as_ref().is_some_and(PathField::reading)
@@ -196,6 +198,9 @@ impl Browser {
 
     pub fn drain(&mut self, now: Instant) -> Drained {
         let events = drain_events(&mut self.read);
+        if !events.is_empty() {
+            self.progressed_at = now;
+        }
         let mut drained = Drained::default();
         if self.incoming.is_some() {
             let before = self.cursor as isize;
@@ -445,9 +450,8 @@ impl Browser {
         self.incoming = None;
         self.counts = LiveCounts::default();
         self.changed_at = None;
-        self.changed.store(false, Ordering::Relaxed);
-        self.root_gone.store(false, Ordering::Relaxed);
-        self.watch_folder(&spot.folder);
+        let watched = self.watch.arm(&spot.folder, waker(&self.wake));
+        warn_unwatched(&spot.folder, watched);
         self.read = Some(listing::start(
             spot.folder.clone(),
             Pass::WithCounts,
@@ -462,6 +466,7 @@ impl Browser {
         self.path = None;
         self.landing = None;
         self.arriving = Some(spot);
+        self.progressed_at = Instant::now();
     }
 
     fn settle_arrival(&mut self) -> Option<(f32, isize)> {
@@ -500,7 +505,7 @@ impl Browser {
     }
 
     fn refresh_when_due(&mut self, now: Instant) -> Option<Duration> {
-        if self.changed.swap(false, Ordering::Relaxed) && self.changed_at.is_none() {
+        if self.watch.changed() && self.changed_at.is_none() {
             self.changed_at = Some(now);
         }
         let since = self.changed_at?;
@@ -556,10 +561,8 @@ impl Browser {
         }
         self.follow_counts();
         let folder = self.folder().to_path_buf();
-        let elsewhere = self.watched.as_deref() != Some(folder.as_path());
-        if failed || elsewhere || self.root_gone.swap(false, Ordering::Relaxed) {
-            self.watch_folder(&folder);
-        }
+        let watched = self.watch.rearm(&folder, failed, waker(&self.wake));
+        warn_unwatched(&folder, watched);
         true
     }
 
@@ -591,13 +594,13 @@ impl Browser {
             .iter()
             .map(|entry| entry.path.as_path())
             .collect();
-        let mut gone: HashMap<(u64, u64), &Path> = before
-            .entries()
-            .iter()
-            .filter(|entry| self.picks.is_picked(&entry.path))
-            .filter(|entry| !listed.contains(entry.path.as_path()))
-            .filter_map(|entry| Some((entry.id?, entry.path.as_path())))
-            .collect();
+        let mut gone: HashMap<(u64, u64), Vec<&Path>> = HashMap::new();
+        for entry in before.entries() {
+            if let Some(id) = entry.id.filter(|_| !listed.contains(entry.path.as_path())) {
+                gone.entry(id).or_default().push(entry.path.as_path());
+            }
+        }
+        gone.retain(|_, paths| paths.iter().all(|path| self.picks.is_picked(path)));
         if gone.is_empty() {
             return;
         }
@@ -606,51 +609,21 @@ impl Browser {
             .iter()
             .map(|entry| entry.path.as_path())
             .collect();
+        let mut appeared: HashMap<(u64, u64), Vec<PathBuf>> = HashMap::new();
         for entry in self.listing.entries() {
-            if known.contains(entry.path.as_path()) {
+            if let Some(id) = entry.id.filter(|_| !known.contains(entry.path.as_path())) {
+                appeared.entry(id).or_default().push(entry.path.clone());
+            }
+        }
+        for (id, from) in gone {
+            let to = appeared.remove(&id).unwrap_or_default();
+            if from.len() != to.len() {
                 continue;
             }
-            if let Some(from) = entry.id.and_then(|id| gone.remove(&id)) {
-                self.picks.rename(from, entry.path.clone());
+            for (from, to) in from.into_iter().zip(to) {
+                self.picks.rename(from, to);
             }
         }
-    }
-
-    fn watch_folder(&mut self, folder: &Path) {
-        self.watch = None;
-        self.watched = None;
-        for root in folder.ancestors() {
-            match self.watch_root(root) {
-                Ok(watch) => {
-                    self.watch = Some(watch);
-                    self.watched = Some(root.to_path_buf());
-                    return;
-                }
-                Err(error) if root == folder => {
-                    log::warn!(
-                        "{} cannot be watched, watching its nearest parent instead: {error}",
-                        folder.display()
-                    );
-                }
-                Err(_) => {}
-            }
-        }
-    }
-
-    fn watch_root(&self, root: &Path) -> Result<Watch, qol_watch::WatchError> {
-        let changed = self.changed.clone();
-        let root_gone = self.root_gone.clone();
-        let wake = waker(&self.wake);
-        let watched = root.to_path_buf();
-        qol_watch::watch(&[WatchRoot::shallow(root)], move |notice| {
-            let root_hit =
-                matches!(&notice, WatchNotice::Changed(paths) if paths.contains(&watched));
-            if root_hit {
-                root_gone.store(true, Ordering::Relaxed);
-            }
-            changed.store(true, Ordering::Relaxed);
-            wake();
-        })
     }
 
     fn refresh_rows(&mut self) {
@@ -689,6 +662,15 @@ impl Browser {
             Step::Home => 0,
             Step::End => last,
         }
+    }
+}
+
+fn warn_unwatched(folder: &Path, watched: Result<(), WatchError>) {
+    if let Err(error) = watched {
+        log::warn!(
+            "{} cannot be watched, watching its nearest parent instead: {error}",
+            folder.display()
+        );
     }
 }
 

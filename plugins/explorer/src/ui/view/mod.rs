@@ -109,10 +109,6 @@ impl ExplorerView {
         }
     }
 
-    fn at_end(&self) -> bool {
-        self.scroll_offset() + 0.5 >= self.max_scroll()
-    }
-
     fn max_scroll(&self) -> f32 {
         (self.browser.row_count() as f32 * ROW - self.list_height()).max(0.0)
     }
@@ -173,10 +169,19 @@ impl ExplorerView {
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let action = keys::action(&event.keystroke, self.browser.path_open());
-        if keys::waits(action, self.browser.arriving(), !self.waiting.is_empty()) {
+        let stalled = self.browser.stalled(Instant::now());
+        if keys::waits(
+            action,
+            self.browser.arriving(),
+            stalled,
+            !self.waiting.is_empty(),
+        ) {
             self.waiting.push_back(event.keystroke.clone());
             cx.stop_propagation();
             return;
+        }
+        if keys::leaves(action) {
+            self.waiting.clear();
         }
         if !self.dispatch(action, &event.keystroke, cx) {
             return;
@@ -188,7 +193,7 @@ impl ExplorerView {
     fn replay(&mut self, cx: &mut Context<Self>) {
         while let Some(keystroke) = self.waiting.front() {
             let action = keys::action(keystroke, self.browser.path_open());
-            if keys::waits(action, self.browser.arriving(), false) {
+            if keys::waits(action, self.browser.arriving(), false, false) {
                 return;
             }
             let Some(keystroke) = self.waiting.pop_front() else {

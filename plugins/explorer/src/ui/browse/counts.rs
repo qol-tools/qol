@@ -64,6 +64,7 @@ impl LiveCounts {
         self.reads.retain(|read| loop {
             match read.events().try_recv() {
                 Ok(ListingEvent::Counts(batch)) => counts.extend(batch),
+                Ok(ListingEvent::Held(folders)) => lock(&self.stale).extend(folders),
                 Ok(_) => {}
                 Err(TryRecvError::Empty) => break true,
                 Err(TryRecvError::Disconnected) => break false,

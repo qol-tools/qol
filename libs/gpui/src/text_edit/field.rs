@@ -21,14 +21,16 @@ pub struct CaretStyle {
     pub radius: f32,
 }
 
-type CaretMeasure<'a> = Box<dyn FnOnce(&str) -> f32 + 'a>;
+const FIT_SLACK: f32 = 0.5;
+
+type Measure<'a> = Box<dyn FnMut(&str) -> f32 + 'a>;
 
 pub struct TextFieldElement<'a> {
     field: &'a TextField,
     visible: usize,
     advance: f32,
     marks: bool,
-    measure: Option<CaretMeasure<'a>>,
+    measure: Option<Measure<'a>>,
     selection: Option<(Hsla, Option<Hsla>)>,
     caret: Option<CaretStyle>,
     placeholder: Option<(SharedString, Hsla)>,
@@ -276,6 +278,23 @@ impl TextField {
         (view_start, view_end)
     }
 
+    fn window_within(
+        &self,
+        visible: usize,
+        budget: f32,
+        mut width: impl FnMut(usize, usize) -> f32,
+    ) -> (usize, usize) {
+        let (mut start, mut end) = self.visible_window(visible);
+        while end - start > 1 && width(start, end) > budget {
+            if self.cursor - start > end - self.cursor {
+                start += 1;
+            } else {
+                end -= 1;
+            }
+        }
+        (start, end)
+    }
+
     pub fn cursor_offset(&self, visible: usize) -> usize {
         let (view_start, view_end) = self.visible_window(visible);
         self.cursor
@@ -345,7 +364,7 @@ impl<'a> TextFieldElement<'a> {
         self
     }
 
-    pub fn measure_caret(mut self, measure: impl FnOnce(&str) -> f32 + 'a) -> Self {
+    pub fn measure(mut self, measure: impl FnMut(&str) -> f32 + 'a) -> Self {
         self.measure = Some(Box::new(measure));
         self
     }
@@ -365,7 +384,17 @@ impl<'a> TextFieldElement<'a> {
         self
     }
 
-    pub fn render(self) -> Div {
+    fn shown(&self, start: usize, end: usize) -> String {
+        let text = self.field.text();
+        let slice = &text[char_to_byte(text, start)..char_to_byte(text, end)];
+        if self.marks {
+            marked(slice)
+        } else {
+            slice.to_owned()
+        }
+    }
+
+    pub fn render(mut self) -> Div {
         let caret = self.caret.filter(|_| self.field.selected_range().is_none());
         if self.field.is_empty() {
             let mut row = div().relative();
@@ -378,15 +407,16 @@ impl<'a> TextFieldElement<'a> {
             return row;
         }
 
-        let text = self.field.text();
-        let (view_start, view_end) = self.field.visible_window(self.visible);
-        let start_byte = char_to_byte(text, view_start);
-        let end_byte = char_to_byte(text, view_end);
-        let windowed = if self.marks {
-            marked(&text[start_byte..end_byte])
-        } else {
-            text[start_byte..end_byte].to_owned()
+        let mut measure = self.measure.take();
+        let (view_start, view_end) = match measure.as_mut() {
+            Some(measure) => self.field.window_within(
+                self.visible,
+                self.visible as f32 * self.advance + FIT_SLACK,
+                |start, end| measure(&self.shown(start, end)),
+            ),
+            None => self.field.visible_window(self.visible),
         };
+        let windowed = self.shown(view_start, view_end);
 
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
         if let (Some((background, foreground)), Some((selection_start, selection_end))) =
@@ -410,8 +440,12 @@ impl<'a> TextFieldElement<'a> {
         }
 
         let caret_x = caret.map(|_| {
-            let offset = self.field.cursor_offset(self.visible);
-            match self.measure {
+            let offset = self
+                .field
+                .cursor()
+                .saturating_sub(view_start)
+                .min(view_end - view_start);
+            match measure.as_mut() {
                 Some(measure) => measure(&windowed[..char_to_byte(&windowed, offset)]),
                 None => offset as f32 * self.advance,
             }
@@ -645,6 +679,31 @@ mod tests {
         assert_eq!(field.cursor_offset(25), 23);
         assert_eq!(field.cursor_x(25, 10.0), 230.0);
         assert_eq!(TextField::new().cursor_x(25, 10.0), 0.0);
+    }
+
+    #[test]
+    fn wide_letters_shrink_the_window_around_the_cursor() {
+        let wide = |field: &TextField, start: usize, end: usize| -> f32 {
+            field
+                .text()
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .map(|letter| {
+                    if letter == char::REPLACEMENT_CHARACTER {
+                        2.0
+                    } else {
+                        1.0
+                    }
+                })
+                .sum()
+        };
+        let at_end = TextField::with_text(format!("{}{}", "a".repeat(30), "\u{FFFD}".repeat(10)));
+        let window = at_end.window_within(25, 25.0, |start, end| wide(&at_end, start, end));
+        assert_eq!(window, (25, 40));
+        let at_home = field(&format!("{}{}", "\u{FFFD}".repeat(10), "a".repeat(30)), 0);
+        let window = at_home.window_within(25, 25.0, |start, end| wide(&at_home, start, end));
+        assert_eq!(window, (0, 15));
     }
 
     #[test]

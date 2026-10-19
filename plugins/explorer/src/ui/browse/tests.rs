@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use gpui::{Keystroke, Modifiers};
 
 use super::counts::LiveCounts;
-use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET};
+use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
 use crate::listing::{ItemCount, ListingState};
 use crate::ui::keys::Step;
 
@@ -89,6 +89,19 @@ fn abc_folder() -> tempfile::TempDir {
         touch(temp.path(), name);
     }
     temp
+}
+
+#[test]
+fn a_folder_that_sends_nothing_for_a_while_counts_as_stalled() {
+    let temp = abc_folder();
+    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf());
+    let now = Instant::now();
+    assert!(browser.arriving());
+    assert!(!browser.stalled(now));
+    assert!(browser.stalled(now + STALLED_AFTER));
+
+    settle(&mut browser);
+    assert!(!browser.stalled(Instant::now() + STALLED_AFTER));
 }
 
 #[test]
@@ -604,6 +617,46 @@ fn a_folder_made_while_the_path_field_is_open_is_suggested() {
     });
 }
 
+#[test]
+fn a_typed_parent_deleted_and_made_again_is_suggested_from_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let alpha = make_folder(temp.path(), "alpha");
+    make_folder(&alpha, "aa");
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(&mut browser, &format!("alpha{MAIN_SEPARATOR}"));
+    settle(&mut browser);
+    assert_eq!(browser.path_edit().unwrap().suggestions(), ["aa"]);
+
+    fs::remove_dir_all(&alpha).unwrap();
+    wait_until(&mut browser, "the menu to empty", |browser| {
+        browser.path_edit().unwrap().suggestions().is_empty()
+    });
+    make_folder(temp.path(), "alpha");
+    make_folder(&alpha, "newdir");
+    wait_until(&mut browser, "the new folder to be suggested", |browser| {
+        browser.path_edit().unwrap().suggestions() == ["newdir"]
+    });
+}
+
+#[test]
+fn a_typed_parent_made_after_it_was_typed_is_suggested_from() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(&mut browser, &format!("later{MAIN_SEPARATOR}"));
+    settle(&mut browser);
+    assert!(browser.path_edit().unwrap().suggestions().is_empty());
+
+    let later = make_folder(temp.path(), "later");
+    make_folder(&later, "kid");
+    wait_until(&mut browser, "the new folder to be suggested", |browser| {
+        browser.path_edit().unwrap().suggestions() == ["kid"]
+    });
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn the_path_field_reaches_a_folder_whose_name_shows_a_mark() {
@@ -776,6 +829,24 @@ fn a_renamed_hard_link_keeps_the_cursor_and_its_pick_off_its_twin() {
     });
     assert_eq!(browser.cursor(), 4);
     assert_eq!(picked(&browser), ["f.txt"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn two_picked_hard_links_renamed_together_both_stay_picked() {
+    let temp = abc_folder();
+    fs::hard_link(temp.path().join("a.txt"), temp.path().join("e.txt")).unwrap();
+    let mut browser = opened(temp.path());
+    browser.toggle_pick();
+    browser.set_cursor(4);
+    browser.toggle_pick();
+
+    fs::rename(temp.path().join("a.txt"), temp.path().join("x.txt")).unwrap();
+    fs::rename(temp.path().join("e.txt"), temp.path().join("y.txt")).unwrap();
+    wait_until(&mut browser, "both renames", |browser| {
+        names(browser) == ["b.txt", "c.txt", "d.txt", "x.txt", "y.txt"]
+    });
+    assert_eq!(picked(&browser), ["x.txt", "y.txt"]);
 }
 
 #[cfg(unix)]

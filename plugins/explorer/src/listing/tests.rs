@@ -3,7 +3,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::read::{run, CountClaim};
@@ -412,22 +413,91 @@ fn errors_say_why_the_folder_cannot_be_read() {
     }
 }
 
+fn run_in_background(folder: &Path, cancel: &CancelToken) -> mpsc::Receiver<ListingEvent> {
+    let (sender, events) = mpsc::channel();
+    let folder = folder.to_path_buf();
+    let cancel = cancel.clone();
+    thread::spawn(move || {
+        run(&folder, Pass::WithCounts, 2, &cancel, |event| {
+            sender.send(event).is_ok()
+        });
+    });
+    events
+}
+
+fn apply_until(
+    listing: &mut Listing,
+    events: &mpsc::Receiver<ListingEvent>,
+    done: impl Fn(&Listing) -> bool,
+) {
+    while !done(listing) {
+        listing.apply(events.recv_timeout(Duration::from_secs(10)).unwrap());
+    }
+}
+
 #[test]
-fn a_subfolder_whose_count_never_returned_is_skipped_until_it_does() {
+fn a_subfolder_whose_count_is_held_elsewhere_is_counted_once_it_frees() {
     let temp = tempfile::tempdir().unwrap();
     make_folder(temp.path(), "stuck");
     make_folder(temp.path(), "quick");
     let stuck = temp.path().join("stuck");
+    let quick = temp.path().join("quick");
     let claim = CountClaim::take(&stuck).unwrap();
     assert!(CountClaim::take(&stuck).is_none());
 
-    let listing = listing_of(temp.path());
+    let events = run_in_background(temp.path(), &CancelToken::new());
+    let mut listing = Listing::new(temp.path().to_path_buf());
+    apply_until(&mut listing, &events, |listing| {
+        listing.item_count(&quick).is_some()
+    });
+    assert_eq!(listing.item_count(&quick), items(0));
     assert_eq!(listing.item_count(&stuck), None);
-    assert_eq!(listing.item_count(&temp.path().join("quick")), items(0));
 
     drop(claim);
-    let listing = listing_of(temp.path());
+    apply_until(&mut listing, &events, |listing| {
+        listing.item_count(&stuck).is_some()
+    });
     assert_eq!(listing.item_count(&stuck), items(0));
+}
+
+#[test]
+fn a_recount_hands_back_a_subfolder_whose_count_is_held_elsewhere() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "held");
+    make_folder(temp.path(), "free");
+    let held = temp.path().join("held");
+    let free = temp.path().join("free");
+    let _claim = CountClaim::take(&held).unwrap();
+
+    let read = recount(
+        temp.path().to_path_buf(),
+        vec![held.clone(), free.clone()],
+        || {},
+    );
+    let events: Vec<ListingEvent> = read.events().iter().collect();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(&events[0], ListingEvent::Counts(counts) if counts[0].path == free));
+    assert_eq!(events[1], ListingEvent::Held(vec![held]));
+}
+
+#[test]
+fn a_count_pass_waiting_on_a_held_subfolder_ends_when_cancelled() {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "stuck");
+    let _claim = CountClaim::take(&temp.path().join("stuck")).unwrap();
+    let cancel = CancelToken::new();
+    let events = run_in_background(temp.path(), &cancel);
+    let mut listing = Listing::new(temp.path().to_path_buf());
+    apply_until(&mut listing, &events, |listing| {
+        *listing.state() == ListingState::Done
+    });
+
+    cancel.cancel();
+    while events.recv_timeout(Duration::from_secs(10)).is_ok() {}
+    assert!(matches!(
+        events.try_recv(),
+        Err(mpsc::TryRecvError::Disconnected)
+    ));
 }
 
 #[cfg(unix)]

@@ -1,14 +1,12 @@
 use std::fs;
 use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::Keystroke;
 use qol_gpui::text_edit::marked;
 use qol_gpui::{PathEdit, PathKey};
-use qol_watch::{Watch, WatchRoot};
 
+use super::watch::FolderWatch;
 use crate::listing::{self, FailureReason, Listing, ListingError, ListingRead, ListingState, Pass};
 use crate::nav::path::{self, PathInput};
 
@@ -21,8 +19,7 @@ pub(super) struct PathField {
     listing: Listing,
     incoming: Option<Listing>,
     read: Option<ListingRead>,
-    watch: Option<Watch>,
-    stale: Arc<AtomicBool>,
+    watch: FolderWatch,
     wake: UnboundedSender<()>,
 }
 
@@ -41,8 +38,7 @@ impl PathField {
             listing: Listing::new(PathBuf::new()),
             incoming: None,
             read: None,
-            watch: None,
-            stale: Arc::default(),
+            watch: FolderWatch::default(),
             wake,
         }
     }
@@ -80,8 +76,7 @@ impl PathField {
         let (parent, segment) = self.typed_parent(home);
         self.segment = segment;
         if parent != self.parent {
-            self.stale.store(false, Ordering::Relaxed);
-            self.watch = self.watch_parent(&parent);
+            let _ = self.watch.arm(&parent, super::waker(&self.wake));
             self.read = Some(self.read_parent(&parent));
             self.listing = Listing::new(parent.clone());
             self.incoming = None;
@@ -102,8 +97,12 @@ impl PathField {
             .take_if(|incoming| *incoming.state() != ListingState::Loading)
         {
             self.listing = fresh;
+            let failed = matches!(self.listing.state(), ListingState::Failed(_));
+            let _ = self
+                .watch
+                .rearm(&self.parent, failed, super::waker(&self.wake));
         }
-        if self.read.is_none() && self.stale.swap(false, Ordering::Relaxed) {
+        if self.read.is_none() && self.watch.changed() {
             self.read = Some(self.read_parent(&self.parent));
             self.incoming = Some(Listing::new(self.parent.clone()));
         }
@@ -136,16 +135,6 @@ impl PathField {
             Pass::NamesOnly,
             super::waker(&self.wake),
         )
-    }
-
-    fn watch_parent(&self, parent: &Path) -> Option<Watch> {
-        let stale = Arc::clone(&self.stale);
-        let wake = super::waker(&self.wake);
-        qol_watch::watch(&[WatchRoot::shallow(parent)], move |_| {
-            stale.store(true, Ordering::Relaxed);
-            wake();
-        })
-        .ok()
     }
 
     pub(super) fn refresh_suggestions(&mut self, show_hidden: bool) -> bool {
