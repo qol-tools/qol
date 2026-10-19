@@ -151,10 +151,15 @@ pub(super) unsafe fn block(list: *const BufferList) -> Block {
         loudest: 0.0,
         frames: 0,
     };
-    let Some(list) = (unsafe { list.as_ref() }) else {
+    if list.is_null() {
         return block;
+    }
+    let buffers = unsafe {
+        std::slice::from_raw_parts(
+            (&raw const (*list).buffers).cast::<Buffer>(),
+            (*list).count as usize,
+        )
     };
-    let buffers = unsafe { std::slice::from_raw_parts(list.buffers.as_ptr(), list.count as usize) };
     for buffer in buffers {
         if buffer.data.is_null() {
             continue;
