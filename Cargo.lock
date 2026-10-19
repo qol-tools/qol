@@ -7076,7 +7076,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.40.0"
+version = "0.40.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7530,7 +7530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.108.0"
+version = "3.108.1"
 dependencies = [
  "anyhow",
  "axum",
