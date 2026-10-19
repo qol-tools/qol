@@ -1,4 +1,4 @@
-use super::platform::ICON_SIZE;
+use super::platform::{ICON_SIDE_PADDING, ICON_SIZE};
 use super::tone::PanelTone;
 use tray_icon::Icon;
 
@@ -44,8 +44,23 @@ const fn checked(bytes: &'static [u8], size: u32) -> &'static [u8] {
 }
 
 pub fn tray_icon(update: bool, tone: PanelTone) -> Icon {
-    Icon::from_rgba(art(update, tone).to_vec(), ICON_SIZE, ICON_SIZE)
+    let canvas = pad_sides(art(update, tone), ICON_SIZE, ICON_SIDE_PADDING);
+    Icon::from_rgba(canvas, ICON_SIZE + 2 * ICON_SIDE_PADDING, ICON_SIZE)
         .expect("embedded tray art is valid")
+}
+
+fn pad_sides(art: &[u8], size: u32, padding: u32) -> Vec<u8> {
+    let art_row = (size * 4) as usize;
+    let canvas_row = ((size + 2 * padding) * 4) as usize;
+    let left = (padding * 4) as usize;
+    let mut canvas = vec![0u8; canvas_row * size as usize];
+    for (src, dst) in art
+        .chunks_exact(art_row)
+        .zip(canvas.chunks_exact_mut(canvas_row))
+    {
+        dst[left..left + art_row].copy_from_slice(src);
+    }
+    canvas
 }
 
 fn art(update: bool, tone: PanelTone) -> &'static [u8] {
@@ -74,6 +89,25 @@ mod tests {
             for other in &variants[index + 1..] {
                 assert_ne!(bytes, other, "variant {index} repeats another variant");
             }
+        }
+    }
+
+    #[test]
+    fn pad_sides_without_padding_returns_the_art_unchanged() {
+        let art: Vec<u8> = (1..=2 * 2 * 4).collect();
+        assert_eq!(pad_sides(&art, 2, 0), art);
+    }
+
+    #[test]
+    fn pad_sides_centres_each_row_between_transparent_margins() {
+        let art: Vec<u8> = (1..=2 * 2 * 4).collect();
+        let canvas = pad_sides(&art, 2, 3);
+        let canvas_row = (2 + 2 * 3) * 4;
+        assert_eq!(canvas.len(), canvas_row * 2);
+        for (y, row) in canvas.chunks_exact(canvas_row).enumerate() {
+            assert!(row[..12].iter().all(|&b| b == 0), "left margin of row {y}");
+            assert_eq!(&row[12..20], &art[y * 8..y * 8 + 8], "art row {y}");
+            assert!(row[20..].iter().all(|&b| b == 0), "right margin of row {y}");
         }
     }
 

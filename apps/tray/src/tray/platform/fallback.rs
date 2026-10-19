@@ -8,6 +8,7 @@ use tokio::sync::broadcast;
 use tray_icon::Icon;
 
 pub(crate) const ICON_SIZE: u32 = 64;
+pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 
 pub enum PlatformTray {}
 
