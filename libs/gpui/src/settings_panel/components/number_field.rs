@@ -149,8 +149,13 @@ fn slider_bar(style: SliderStyle, fill: f32, ground: Ground, hover: Option<Groun
     ))
 }
 
+pub(in crate::settings_panel) struct NumberText {
+    pub(in crate::settings_panel) shown: String,
+    pub(in crate::settings_panel) widest: String,
+}
+
 pub(in crate::settings_panel) fn number_field(
-    display: String,
+    text: NumberText,
     unit: Option<&'static str>,
     track: Option<(f32, SliderStyle)>,
     level: f32,
@@ -160,7 +165,7 @@ pub(in crate::settings_panel) fn number_field(
 ) -> gpui::Div {
     let ground = row.rest(kit);
     let hover = row.hover(kit);
-    let (text, text_hover) = match row {
+    let (ink, ink_hover) = match row {
         RowGround::Pane => (ground.soft, None),
         RowGround::Band => (ground.ink, hover.map(|hover| hover.ink)),
     };
@@ -199,8 +204,17 @@ pub(in crate::settings_panel) fn number_field(
         .border(px(qol_theme::LINE))
         .border_color(rgba(ground.edge.packed()))
         .child(
-            ground_text(div().text(TextStyle::Value), rgb(text), text_hover.map(rgb))
-                .child(display),
+            div()
+                .relative()
+                .child(ground_text(div().text(TextStyle::Value), rgba(0), None).child(text.widest))
+                .child(
+                    ground_text(
+                        div().absolute().top_0().right_0().text(TextStyle::Value),
+                        rgb(ink),
+                        ink_hover.map(rgb),
+                    )
+                    .child(text.shown),
+                ),
         )
         .children(unit.map(|unit| {
             ground_text(

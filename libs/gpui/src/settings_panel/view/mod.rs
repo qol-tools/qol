@@ -23,7 +23,7 @@ use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
     rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
     settings_action_spinner, settings_error_line, settings_label_group, settings_page,
-    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, RowGround,
+    settings_query_spinner, settings_swatch, settings_value_text, ChoiceArt, NumberText, RowGround,
     SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
     SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
@@ -3115,7 +3115,10 @@ impl SettingsPanelView {
             ))
         };
         number_field(
-            self.display_value(index),
+            NumberText {
+                shown: self.display_value(index),
+                widest: widest_number(&number),
+            },
             number_unit(&self.level().rows[index].id),
             track,
             level,
@@ -4362,6 +4365,31 @@ struct NumberSpec {
     step: Option<f64>,
 }
 
+fn widest_number(number: &NumberSpec) -> String {
+    let decimals = number
+        .step
+        .map(format_number)
+        .and_then(|step| step.split_once('.').map(|(_, fraction)| fraction.len()))
+        .unwrap_or(0);
+    [number.min, number.max, Some(number.value)]
+        .into_iter()
+        .flatten()
+        .map(|bound| {
+            let whole = format_number(bound.trunc());
+            match decimals {
+                0 => whole,
+                _ => format!("{whole}.{}", "0".repeat(decimals)),
+            }
+        })
+        .max_by_key(|text| text.chars().count())
+        .map(|text| {
+            text.chars()
+                .map(|glyph| if glyph.is_ascii_digit() { '0' } else { glyph })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
     (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
 }
@@ -5271,10 +5299,10 @@ mod tests {
         parsed_number, pop_level, push_level, query_is_due, rail_group_breaks,
         release_slider_dispatch, row_body_height, schedule_slider_generation, slider_fraction,
         slider_generation_current, slider_protected, source_window_height_for, stepped_number,
-        text_or_placeholder, transition_in_flight, transition_policy, AppliedQueryPayloads,
-        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberFinishPlan,
-        ObjectArrayState, Row, RowControl, RowSection, SettingsDestination, TransitionAction,
-        TransitionTracker,
+        text_or_placeholder, transition_in_flight, transition_policy, widest_number,
+        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        LiveNumberDispatch, NumberFinishPlan, NumberSpec, ObjectArrayState, Row, RowControl,
+        RowSection, SettingsDestination, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -5411,6 +5439,47 @@ mod tests {
         ];
         for (value, expected) in cases {
             assert_eq!(color_display(value), expected, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn the_number_box_is_sized_for_the_widest_value_the_field_allows() {
+        let number = |value, min, max, step| NumberSpec {
+            value,
+            min,
+            max,
+            step,
+        };
+        let cases = [
+            (
+                "percent",
+                number(44.0, Some(0.0), Some(100.0), Some(1.0)),
+                "000",
+            ),
+            (
+                "single digit now",
+                number(5.0, Some(0.0), Some(100.0), None),
+                "000",
+            ),
+            (
+                "brightness",
+                number(128.0, Some(0.0), Some(255.0), Some(1.0)),
+                "000",
+            ),
+            (
+                "fractional step",
+                number(1.5, Some(0.5), Some(4.0), Some(0.25)),
+                "0.00",
+            ),
+            (
+                "negative bound",
+                number(0.0, Some(-12.0), Some(6.0), Some(1.0)),
+                "-00",
+            ),
+            ("unbounded", number(1234.0, None, None, None), "0000"),
+        ];
+        for (label, number, widest) in cases {
+            assert_eq!(widest_number(&number), widest, "{label}");
         }
     }
 
