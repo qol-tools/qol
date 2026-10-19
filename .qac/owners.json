@@ -28,8 +28,14 @@
     "entry_points": [
       "configure_popup_window", "configure_overlay_window", "disable_window_shadow",
       "make_override_redirect", "set_override_redirect_by_title", "square_window_corners",
-      "apply_tool_window_style"
+      "apply_tool_window_style", "join_all_spaces"
     ],
-    "allow": []
+    "allow": [
+      {
+        "path": "libs/gpui/src/popup_window/platform/windows.rs",
+        "text": "cloak",
+        "why": "DWMWA_CLOAK hides and reveals the window without unmapping it; that is visibility, not chrome"
+      }
+    ]
   }
 }

@@ -77,7 +77,7 @@ pub use platform::{
     capture_focus_return, configure_keepalive_window, configure_overlay_window,
     configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
     focus_window_by_title, grab_escape, hide_for_capture, hide_invisible, hide_window_by_title,
-    hide_windows_by_title_prefix, hold_input, input_held, make_override_redirect,
+    hide_windows_by_title_prefix, hold_input, input_held, join_all_spaces, make_override_redirect,
     park_window_by_title, pinned_window_kind, pointer_on_window_by_title,
     pointer_over_window_by_title, prepare_window_reveal_by_title, present_topmost,
     register_native_display, release_focus_by_title, release_input, reposition_window_by_title,

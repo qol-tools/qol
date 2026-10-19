@@ -203,6 +203,10 @@ pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }
 
+pub fn join_all_spaces(_title: &str) -> bool {
+    false
+}
+
 pub fn configure_popup_window(_title: &str) -> bool {
     false
 }
