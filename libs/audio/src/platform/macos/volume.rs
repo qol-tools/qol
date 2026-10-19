@@ -6,15 +6,18 @@ use super::hal::{self, ObjectId, Property};
 
 const FULL_SCALE: f32 = 100.0;
 
+fn control_on(device: ObjectId, direction: Direction, selector: [u8; 4]) -> Option<Property> {
+    let property = Property::scoped(selector, direction);
+    hal::has(device, property).then_some(property)
+}
+
 fn control(
     direction: Direction,
     selector: [u8; 4],
 ) -> Result<Option<(ObjectId, Property)>, AudioError> {
-    let Some(device) = default_device(direction)? else {
-        return Ok(None);
-    };
-    let property = Property::scoped(selector, direction);
-    Ok(hal::has(device, property).then_some((device, property)))
+    Ok(default_device(direction)?.and_then(|device| {
+        control_on(device, direction, selector).map(|property| (device, property))
+    }))
 }
 
 fn required_control(
@@ -22,10 +25,10 @@ fn required_control(
     selector: [u8; 4],
     missing: &str,
 ) -> Result<(ObjectId, Property), AudioError> {
-    if default_device(direction)?.is_none() {
-        return Err(AudioError::no_default(direction));
-    }
-    control(direction, selector)?.ok_or_else(|| AudioError::Operation(missing.to_owned()))
+    let device = default_device(direction)?.ok_or_else(|| AudioError::no_default(direction))?;
+    let property = control_on(device, direction, selector)
+        .ok_or_else(|| AudioError::Operation(missing.to_owned()))?;
+    Ok((device, property))
 }
 
 pub(crate) fn volume_percent(direction: Direction) -> Result<Option<u32>, AudioError> {
