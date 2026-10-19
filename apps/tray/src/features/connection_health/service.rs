@@ -26,14 +26,14 @@ pub(super) async fn run() {
         let now = Instant::now();
         let published = shared.published();
         let probes = shared.probes();
-        let interested = shared.watching(now);
+        let interested = shared.watching(now)
+            || crate::runtime::is_subscribed(RuntimeEventKind::ConnectionHealthChanged);
         let step = step(&shared.tracker(), now, published, probes, interested);
         if let Some(health) = step.publish {
             shared.announce(health, publish);
         }
         if step.probe {
-            shared.probe_started(now);
-            tokio::spawn(super::probe::run(shared));
+            tokio::spawn(super::probe::run(super::probe::start(shared, now)));
             continue;
         }
         let wake = shared.wake.notified();

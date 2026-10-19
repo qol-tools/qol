@@ -41,10 +41,10 @@ answers; clippy refuses a plain `RequestBuilder::send` in the tray. A download
 reads its body through `observe_body`, so a body that stops arriving counts as
 waiting and a body cut short counts as unreachable.
 
-While a settings page is open, and for a few seconds after a plugin subscribes,
-the tray also requests `https://api.github.com/rate_limit`. That endpoint does
-not count against the GitHub rate limit, and the request goes through the same
-proxy environment variables as every other one. The tray probes the moment a
+While a settings page is open or a plugin subscribes, the tray also requests
+`https://api.github.com/rate_limit`. That endpoint does not count against the
+GitHub rate limit, and the request goes through the same proxy environment
+variables as every other one. The tray probes the moment a
 request waits past the bad threshold, and otherwise when nothing has measured
 recently: every minute while `good`, and from every 10 seconds backing off to
 every minute while probes keep failing. Only one probe runs at a time.

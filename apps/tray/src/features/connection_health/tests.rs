@@ -402,3 +402,14 @@ async fn a_body_that_times_out_is_unreachable() {
     assert!(super::is_unreachable(&error), "{error:?}");
     assert_eq!(health(shared).cause, Some(Cause::Unreachable));
 }
+
+#[tokio::test]
+async fn a_cancelled_probe_still_lets_the_next_one_run() {
+    let shared = isolated();
+    let running = super::probe::start(shared, Instant::now());
+    assert!(shared.probes().running);
+    let probe = tokio::spawn(super::probe::run(running));
+    probe.abort();
+    let _ = probe.await;
+    assert!(!shared.probes().running);
+}
