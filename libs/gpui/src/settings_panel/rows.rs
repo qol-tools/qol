@@ -319,6 +319,7 @@ pub(super) struct RowSection {
     pub(super) description: Option<String>,
     pub(super) rows: Vec<usize>,
     pub(super) source: usize,
+    pub(super) device_kind: Option<String>,
 }
 
 pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
@@ -353,6 +354,7 @@ pub(super) fn sections_from_resolved(
             description: config.description.clone(),
             rows: root_rows,
             source,
+            device_kind: None,
         });
     }
     sections.extend(config.sections.iter().filter_map(|section| {
@@ -373,6 +375,7 @@ pub(super) fn sections_from_resolved(
             description: section.description.clone(),
             rows: section_rows,
             source,
+            device_kind: section.device_kind.clone(),
         })
     }));
     sections

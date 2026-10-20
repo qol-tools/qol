@@ -138,6 +138,7 @@ impl SettingsPanelView {
             description: Some(RESOLUTION_CARD_DESCRIPTION.to_string()),
             rows: Vec::new(),
             source,
+            device_kind: None,
         };
         let child = Level {
             rows: Vec::new(),
@@ -1079,6 +1080,7 @@ fn display_layout_card_level(
         description,
         rows: display_layout_card_row_indices(has_slider),
         source,
+        device_kind: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Level {

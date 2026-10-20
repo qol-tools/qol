@@ -215,6 +215,17 @@ Schema in `libs/config/src/contract/v1.rs` (`ConfigSpecV1`, `SectionSpec`,
 - Top level: `schema_version` (must be `1`), optional `title`, `description`.
 - `[section.<id>]`: `label`, `description`, optional `actions` (section-level
   buttons referencing runtime action names). Order preserved.
+- `[devices]`: `query` (a declared runtime query) and `kinds`, an ordered table
+  of kind id to group label (`kinds = { mouse = "Mouse", keyboard = "Keyboard" }`).
+  The panel draws a device list beside the body, grouped under those labels, and
+  shows only the sections whose `device_kind` names the chosen device's kind
+  (sections without one show for every device). The query answers
+  `{ "items": [...] }` or a bare array; each item carries `kind` and `name`, plus
+  optional `id`, `picture` (a picture spec), `status` (the line under the name)
+  and `state` (`live` draws a green dot, `away` a grey one and dims the entry).
+  Before the first answer the list holds one entry per kind. A section's
+  `device_kind` must name a declared kind, and `[devices]` cannot sit beside
+  `[pages]`.
 - `[field.<id>]`: required `type` (`FieldKind`, snake_case: `boolean`, `string`,
   `number`, `select`, `string_array`, `object_array`, `object_map`, `color`,
   `placement`, `action`, `list`, `status`, `qr_code`, `display_layout`), plus

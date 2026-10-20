@@ -29,6 +29,10 @@ use super::components::{
     SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
     SettingsToggle, SettingsValueTone, SliderStyle,
 };
+use super::components::{
+    settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
+};
+use super::devices::Presence;
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
 use super::object_array_row::ObjectArrayState;
@@ -36,8 +40,7 @@ use super::persistence::{panel_base, save_values};
 use super::rows::{
     answers_absent, apply_level_query, apply_runtime_query, filtered_list_items, level_query_names,
     merged_config, query_flag_value, retire_number_holds, row_action, row_query_names, row_streams,
-    row_value_source, runtime_query_names, stream_gated, Row, RowControl, RowQueryState,
-    RowSection, SliderHold,
+    row_value_source, stream_gated, Row, RowControl, RowQueryState, RowSection, SliderHold,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -302,6 +305,7 @@ pub(super) struct SettingsPanelView {
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    device_scroll: ScrollHandle,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
     placement_stage: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -409,10 +413,20 @@ impl SettingsPanelView {
             .collect();
         let focused_source = panel.focused_index();
         let has_many_sources = state.sources.len() > 1;
-        let runtime_queries =
-            runtime_query_names(state.rows.iter().filter(|row| row.source == focused_source));
+        let runtime_queries = super::source_queries(&state.rows, focused_source, &state.sources);
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
+        let mut sources = state.sources;
+        if let Some(pane) = sources
+            .get_mut(focused_source)
+            .and_then(|source| source.devices.as_mut())
+        {
+            for (query, answer) in &state.opening_answers {
+                if let (true, Ok(value)) = (query == &pane.query, answer) {
+                    pane.answer(value);
+                }
+            }
+        }
         let root = Level {
             rows: state.rows,
             sections: state.sections,
@@ -436,14 +450,12 @@ impl SettingsPanelView {
         let mut view = Self {
             panel,
             parent_link: Rc::clone(&parent_link),
-            runtime: state
-                .sources
+            runtime: sources
                 .get(focused_source)
                 .map(|source| source.runtime.clone())
                 .unwrap_or_else(SettingsRuntime::empty),
             runtime_queries,
-            streams: state
-                .sources
+            streams: sources
                 .iter()
                 .map(|source| {
                     super::stream::StreamClient::new(
@@ -453,7 +465,7 @@ impl SettingsPanelView {
                     )
                 })
                 .collect(),
-            sources: state.sources,
+            sources,
             selected_source: focused_source,
             materialized_source: focused_source,
             source_settle_generation: 0,
@@ -499,6 +511,7 @@ impl SettingsPanelView {
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
             body_bounds: Rc::new(Cell::new(None)),
+            device_scroll: ScrollHandle::new(),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
             placement_stage: Rc::new(Cell::new(None)),
@@ -627,13 +640,24 @@ impl SettingsPanelView {
     }
 
     fn current_visible_rows(&self) -> Vec<usize> {
-        filtered_visible_rows(
+        let visible = filtered_visible_rows(
             &self.level().rows,
             &self.level().sections,
             self.sources.len(),
             self.filter_needle().as_deref(),
             self.materialized_source,
-        )
+        );
+        let hidden: Vec<usize> = self
+            .level()
+            .sections
+            .iter()
+            .filter(|section| !self.section_shown(section))
+            .flat_map(|section| section.rows.iter().copied())
+            .collect();
+        visible
+            .into_iter()
+            .filter(|row| !hidden.contains(row))
+            .collect()
     }
 
     fn filtering(&self) -> bool {
@@ -890,6 +914,9 @@ impl SettingsPanelView {
         let Some(section) = self.level().sections.get(index) else {
             return Vec::new();
         };
+        if !self.section_shown(section) {
+            return Vec::new();
+        }
         section
             .rows
             .iter()
@@ -1079,8 +1106,7 @@ impl SettingsPanelView {
             .get(next)
             .map(|source| source.runtime.clone())
             .unwrap_or_else(SettingsRuntime::empty);
-        self.runtime_queries =
-            runtime_query_names(self.level().rows.iter().filter(|row| row.source == next));
+        self.runtime_queries = super::source_queries(&self.root().rows, next, &self.sources);
         self.drop_slider_press();
         self.drop_edit();
         let selected_section = (0..self.level().sections.len())
@@ -1138,6 +1164,7 @@ impl SettingsPanelView {
     fn descend_source_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.drop_slider_press();
         self.materialize_source(cx);
+        self.leave_device();
         self.source_settle_generation = self.source_settle_generation.wrapping_add(1);
         self.resume_runtime_poll(cx);
         self.set_source_menu(false);
@@ -1167,6 +1194,11 @@ impl SettingsPanelView {
             self.finish_pop(cx);
         }
         self.take_pointer_keys();
+        if self.stack.len() == 1 && self.device_list_shows() {
+            if let Some(pane) = self.device_pane_mut() {
+                pane.inside = true;
+            }
+        }
         cx.notify();
     }
 
@@ -1530,6 +1562,9 @@ impl SettingsPanelView {
     ) {
         let state = self.applied_query_payloads.record(source, query, &result);
         self.query_states.insert((source, query.to_string()), state);
+        if let Ok(value) = &result {
+            self.answer_devices(source, query, value);
+        }
         retire_number_holds(
             &self.stack[0].rows,
             &mut self.slider_holds,
@@ -1556,6 +1591,128 @@ impl SettingsPanelView {
         self.sync_item_card_input(query);
         self.sync_live_card(query);
         self.sync_display_layout_card(query);
+    }
+
+    fn answer_devices(&mut self, source: usize, query: &str, value: &serde_json::Value) {
+        let Some(pane) = self
+            .sources
+            .get_mut(source)
+            .and_then(|state| state.devices.as_mut())
+            .filter(|pane| pane.query == query)
+        else {
+            return;
+        };
+        if !pane.answer(value) {
+            return;
+        }
+        self.height_revision += 1;
+        if source == self.materialized_source && self.stack.len() == 1 {
+            self.settle_on_the_chosen_device();
+        }
+    }
+
+    fn device_pane(&self) -> Option<&super::devices::DevicePane> {
+        self.sources.get(self.materialized_source)?.devices.as_ref()
+    }
+
+    fn device_pane_mut(&mut self) -> Option<&mut super::devices::DevicePane> {
+        self.sources
+            .get_mut(self.materialized_source)?
+            .devices
+            .as_mut()
+    }
+
+    fn device_list_shows(&self) -> bool {
+        self.device_pane().is_some() && !self.filtering()
+    }
+
+    fn inside_a_device(&self) -> bool {
+        !self.filter_open
+            && self.stack.len() == 1
+            && self.device_list_shows()
+            && self.device_pane().is_some_and(|pane| pane.inside)
+    }
+
+    fn device_list_has_focus(&self) -> bool {
+        self.stack.len() == 1
+            && matches!(self.focus_level(), PanelFocus::Body)
+            && self.device_list_shows()
+            && self.device_pane().is_some_and(|pane| !pane.inside)
+    }
+
+    fn section_shown(&self, section: &RowSection) -> bool {
+        if self.filtering() {
+            return true;
+        }
+        self.sources
+            .get(section.source)
+            .and_then(|state| state.devices.as_ref())
+            .is_none_or(|pane| pane.shows(section.device_kind.as_deref()))
+    }
+
+    fn settle_on_the_chosen_device(&mut self) {
+        self.drop_edit();
+        let first = (0..self.level().sections.len())
+            .find(|index| {
+                self.level().sections[*index].source == self.materialized_source
+                    && !self.section_visible_rows(*index).is_empty()
+            })
+            .unwrap_or(0);
+        self.level_mut().selected_section = first;
+        let visible = self.current_visible_rows();
+        let selected = self.level().selected;
+        self.level_mut().selected = clamp_selected(&visible, selected);
+        self.level().body_scroll.rewind();
+        self.height_revision += 1;
+    }
+
+    fn step_device(&mut self, direction: isize) {
+        if self
+            .device_pane_mut()
+            .is_some_and(|pane| pane.step(direction))
+        {
+            self.settle_on_the_chosen_device();
+        }
+    }
+
+    fn choose_device(&mut self, index: usize) {
+        let Some(pane) = self.device_pane_mut() else {
+            return;
+        };
+        let moved = pane.selected != index && index < pane.devices.len();
+        if moved {
+            pane.selected = index;
+            self.settle_on_the_chosen_device();
+        }
+    }
+
+    fn enter_device(&mut self) {
+        let Some(pane) = self.device_pane_mut() else {
+            return;
+        };
+        pane.inside = true;
+        let first = self.current_visible_rows().into_iter().next();
+        if let Some(first) = first {
+            self.level_mut().selected = first;
+            self.sync_scroll();
+        }
+    }
+
+    fn leave_device(&mut self) {
+        self.drop_edit();
+        if let Some(pane) = self.device_pane_mut() {
+            pane.inside = false;
+        }
+    }
+
+    fn on_device_list_key(&mut self, key: &str) -> bool {
+        match key {
+            "up" => self.step_device(-1),
+            "down" => self.step_device(1),
+            "right" | "enter" | "return" | "space" => self.enter_device(),
+            _ => return false,
+        }
+        true
     }
 
     fn sync_live_card(&mut self, query: &str) {
@@ -1724,6 +1881,10 @@ impl SettingsPanelView {
             self.on_rail_key(key, window, cx);
             return;
         }
+        if !self.filter_open && self.device_list_has_focus() && self.on_device_list_key(key) {
+            cx.notify();
+            return;
+        }
         if let Some(ActiveControl::Wheel(wheel)) = &self.level().active_control {
             let popup = wheel.popup;
             let _ = popup.update(cx, |popup, popup_window, popup_cx| {
@@ -1778,6 +1939,16 @@ impl SettingsPanelView {
                 self.commit_edit(cx);
             }
         }
+        if key == "left"
+            && !editing
+            && !self.filter_open
+            && self.stack.len() == 1
+            && self.device_list_shows()
+        {
+            self.leave_device();
+            cx.notify();
+            return;
+        }
         let Some(intent) = intent(key, key_char, editing) else {
             return;
         };
@@ -1822,6 +1993,7 @@ impl SettingsPanelView {
                 }
             }
             Intent::CancelEdit => self.drop_edit(),
+            Intent::Close if self.inside_a_device() => self.leave_device(),
             Intent::Close if !self.filter_open && self.filtering() && self.finder().is_some() => {
                 self.set_panel_filter(String::new());
             }
@@ -3034,7 +3206,7 @@ impl SettingsPanelView {
     }
 
     fn body_has_focus(&self) -> bool {
-        matches!(self.focus_level(), PanelFocus::Body)
+        matches!(self.focus_level(), PanelFocus::Body) && !self.device_list_has_focus()
     }
 
     fn mark_selected<E: Styled + ParentElement>(&self, row: E, selected: bool) -> E {
@@ -3955,6 +4127,7 @@ impl SettingsPanelView {
         level_index: usize,
         items: Vec<AnyElement>,
         custom_view: Option<AnyView>,
+        devices: Option<AnyElement>,
     ) -> Div {
         let children = items.len();
         let front = level_index + 1 == self.stack.len();
@@ -3984,29 +4157,121 @@ impl SettingsPanelView {
         )
         .absolute()
         .inset_0();
-        div().flex_1().min_w_0().h_full().flex().flex_col().child(
-            div()
-                .relative()
-                .flex_1()
-                .min_h(px(0.))
-                .w_full()
-                .flex()
-                .flex_col()
-                .child(body)
-                .when(front, |frame| frame.child(frame_bounds))
-                .when(front && !has_custom_view, |frame| {
-                    frame.child(self.kit.scroll_cue(
-                        crate::scrollbar::ScrollSource::Handle {
-                            handle: self.stack[level_index].body_scroll.handle().clone(),
-                            children,
-                        },
-                        self.kit.grounds.pane,
-                    ))
-                })
-                .when(self.filter_open && front && !has_custom_view, |frame| {
-                    frame.child(self.render_filter_overlay())
+        let beside_devices = devices.is_some();
+        let frame = div()
+            .relative()
+            .flex_1()
+            .min_h(px(0.))
+            .map(|frame| {
+                if beside_devices {
+                    frame.min_w_0()
+                } else {
+                    frame.w_full()
+                }
+            })
+            .flex()
+            .flex_col()
+            .child(body)
+            .when(front, |frame| frame.child(frame_bounds))
+            .when(front && !has_custom_view, |frame| {
+                frame.child(self.kit.scroll_cue(
+                    crate::scrollbar::ScrollSource::Handle {
+                        handle: self.stack[level_index].body_scroll.handle().clone(),
+                        children,
+                    },
+                    self.kit.grounds.pane,
+                ))
+            })
+            .when(self.filter_open && front && !has_custom_view, |frame| {
+                frame.child(self.render_filter_overlay())
+            });
+        let card = div().flex_1().min_w_0().h_full().flex().flex_col();
+        match devices {
+            Some(devices) => card.child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .child(devices)
+                    .child(frame),
+            ),
+            None => card.child(frame),
+        }
+    }
+
+    fn render_device_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(pane) = self.device_pane() else {
+            return div().into_any_element();
+        };
+        let focused = self.device_list_has_focus();
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let mut entries = Vec::new();
+        for (label, members) in pane.groups() {
+            entries.push(settings_device_kind(label, self.kit).into_any_element());
+            for index in members {
+                let device = &pane.devices[index];
+                let light = match device.presence {
+                    Presence::Live => DeviceLight::Live,
+                    Presence::Away => DeviceLight::Away,
+                    Presence::Fixed => DeviceLight::Unlit,
+                };
+                let entry = SettingsDeviceEntry::new(
+                    device.name.clone(),
+                    device.picture.clone(),
+                    context,
+                    self.kit,
+                )
+                .status(device.status.clone().map(SharedString::from), light)
+                .chosen(index == pane.selected, focused);
+                entries.push(
+                    div()
+                        .id(("settings-device", index))
+                        .cursor(CursorStyle::PointingHand)
+                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            if event.standard_click() {
+                                this.choose_device(index);
+                                this.leave_device();
+                                cx.notify();
+                            }
+                        }))
+                        .child(entry)
+                        .into_any_element(),
+                );
+            }
+        }
+        let children = entries.len();
+        settings_device_list(self.rail_is_open(), self.kit)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.leave_device();
+                    cx.notify();
                 }),
-        )
+            )
+            .child(
+                div()
+                    .id("settings-device-list")
+                    .track_scroll(&self.device_scroll)
+                    .size_full()
+                    .py(px(qol_theme::SPACE_INSET))
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scroll()
+                    .children(entries),
+            )
+            .child(self.kit.scroll_cue(
+                crate::scrollbar::ScrollSource::Handle {
+                    handle: self.device_scroll.clone(),
+                    children,
+                },
+                self.kit.grounds.rail,
+            ))
+            .into_any_element()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4021,12 +4286,15 @@ impl SettingsPanelView {
         custom_view: Option<AnyView>,
     ) -> Div {
         let mut depth = self.stack.len() - 1;
-        let mut card = self.render_card(self.stack.len() - 1, items, custom_view);
+        let mut devices = (custom_view.is_none() && self.device_list_shows())
+            .then(|| self.render_device_list(cx));
+        let mut devices_at = |level: usize| if level == 0 { devices.take() } else { None };
+        let mut card = self.render_card(depth, items, custom_view, devices_at(depth));
         let drawer = revealed.map(|items| {
             let slide = deck::exit(self.deck_transition.step, depth, width);
             let leaving = std::mem::replace(
                 &mut card,
-                self.render_card(self.stack.len() - 2, items, None),
+                self.render_card(depth - 1, items, None, devices_at(depth - 1)),
             );
             depth -= 1;
             (leaving, slide)
@@ -4343,13 +4611,22 @@ impl SettingsPanelView {
                     .unwrap_or_default()
             }
         } else {
-            self.stack
-                .iter()
-                .skip(1)
-                .filter_map(|level| match &level.header {
-                    LevelHeader::Card(destination) => Some(destination.label().to_string()),
-                    LevelHeader::Root => None,
-                })
+            let device = self
+                .device_pane()
+                .filter(|pane| pane.inside && self.device_list_shows())
+                .and_then(|pane| pane.chosen())
+                .map(|device| device.name.clone());
+            device
+                .into_iter()
+                .chain(
+                    self.stack
+                        .iter()
+                        .skip(1)
+                        .filter_map(|level| match &level.header {
+                            LevelHeader::Card(destination) => Some(destination.label().to_string()),
+                            LevelHeader::Root => None,
+                        }),
+                )
                 .collect()
         };
         crumb_labels(&self.panel.heading, plugin, cards)
@@ -4474,6 +4751,15 @@ impl SettingsPanelView {
                 .left(placement_card::placement_hints())
                 .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
+        if self.device_list_has_focus() && !self.filter_open {
+            let left = vec![
+                SettingsHint::new(Key::RIGHT, "its settings"),
+                SettingsHint::new(Key::UP_DOWN, "devices"),
+                SettingsHint::new(Key::TYPE, "search every plugin"),
+            ];
+            let right = vec![SettingsHint::new(Key::ESC, "close")];
+            return bar.left(left).right(right);
+        }
         let mut left = Vec::new();
         if let Some(label) = self.enter_hint() {
             left.push(SettingsHint::new(Key::ENTER, label));
@@ -4487,7 +4773,9 @@ impl SettingsPanelView {
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         let mut right = Vec::new();
-        if self.filtering() {
+        if self.inside_a_device() {
+            left.push(SettingsHint::new(Key::LEFT, "devices"));
+        } else if self.filtering() {
             left.push(SettingsHint::new(Key::ESC, "back to plugins"));
         } else if self.stack.len() == 1 {
             left.push(SettingsHint::new(Key::TYPE, "search every plugin"));
@@ -5413,6 +5701,7 @@ fn live_card_level(
         description: None,
         rows: vec![0],
         source,
+        device_kind: None,
     };
     Level {
         rows: vec![row],
@@ -5996,6 +6285,7 @@ mod tests {
             description: None,
             rows,
             source,
+            device_kind: None,
         }
     }
 
@@ -8303,6 +8593,7 @@ active_value_from = "active"
             description: None,
             rows: vec![0],
             source: 0,
+            device_kind: None,
         }];
         assert_eq!(
             list_fit_updates(&rows, &sections, 0, 720.0),
@@ -8335,6 +8626,7 @@ active_value_from = "active"
             description: None,
             rows: vec![0, 1],
             source: 0,
+            device_kind: None,
         }];
         let uncapped = source_window_height_for(&rows, &sections, 0, 720.0);
         assert_eq!(

@@ -9,6 +9,7 @@ use crate::kit::Kit;
 use crate::theme::Ground;
 
 mod choice_value;
+mod device_entry;
 mod display_layout_tile;
 mod feedback;
 mod finder;
@@ -25,6 +26,10 @@ mod tile;
 mod toggle;
 
 pub use choice_value::{ChoiceArt, SettingsChevron, SettingsChoiceArt, SettingsChoiceValue};
+pub use device_entry::{
+    settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
+    DEVICE_KIND_HEIGHT, DEVICE_LIST_WIDTH,
+};
 pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,

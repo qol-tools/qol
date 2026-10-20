@@ -19,6 +19,7 @@ enum Action {
     Kill,
     Reload,
     Theme,
+    Devices,
     Mouse,
     Touchpad,
     Keyboard,
@@ -55,6 +56,7 @@ fn classify(action: &str) -> Option<Action> {
         "ping" => Some(Action::Ping),
         "kill" => Some(Action::Kill),
         "reload" => Some(Action::Reload),
+        "devices" => Some(Action::Devices),
         "mouse" => Some(Action::Mouse),
         "touchpad" => Some(Action::Touchpad),
         "keyboard" => Some(Action::Keyboard),
@@ -94,6 +96,7 @@ fn dispatch(action: &str, input: &serde_json::Value) -> ReadResult<Command> {
     match parsed {
         Action::Ping | Action::Reload | Action::Theme => ReadResult::Handled,
         Action::Kill => ReadResult::Command(Command::Kill),
+        Action::Devices => query(Ok(peripherals::devices()), "failed to list the devices"),
         Action::Mouse => query(peripherals::mouse(), "failed to read the mouse settings"),
         Action::Touchpad => query(
             peripherals::touchpad(),
@@ -226,6 +229,7 @@ mod tests {
             ("ping", Action::Ping),
             ("kill", Action::Kill),
             ("reload", Action::Reload),
+            ("devices", Action::Devices),
             ("mouse", Action::Mouse),
             ("touchpad", Action::Touchpad),
             ("keyboard", Action::Keyboard),
@@ -296,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn the_contract_lays_out_mouse_touchpad_keyboard_and_validates_against_the_runtime() {
+    fn the_contract_groups_its_sections_by_device_and_validates_against_the_runtime() {
         let manifest =
             PluginManifest::load_and_validate("plugin.toml").expect("plugin.toml invalid");
         let config =
@@ -304,8 +308,36 @@ mod tests {
         assert_eq!(manifest.plugin.name, "Input");
         assert_eq!(manifest.menu.label, "Input");
         assert_eq!(config.title.as_deref(), Some("Input"));
-        let sections: Vec<&str> = config.sections.keys().map(String::as_str).collect();
-        assert_eq!(sections, ["mouse", "touchpad", "keyboard"]);
+        let devices = config.devices.as_ref().expect("a [devices] table");
+        let kinds: Vec<&str> = devices.kinds.keys().map(String::as_str).collect();
+        assert_eq!(kinds, ["mouse", "touchpad", "keyboard"]);
+        let listed: Vec<&str> = peripherals::devices()
+            .into_iter()
+            .map(|device| device.kind)
+            .collect();
+        assert!(listed.iter().all(|kind| kinds.contains(kind)), "{listed:?}");
+        let sections: Vec<(&str, Option<&str>)> = config
+            .sections
+            .iter()
+            .map(|(id, section)| (id.as_str(), section.device_kind.as_deref()))
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                ("mouse_pointer", Some("mouse")),
+                ("mouse_scrolling", Some("mouse")),
+                ("mouse_buttons", Some("mouse")),
+                ("touchpad_pointer", Some("touchpad")),
+                ("touchpad_clicking", Some("touchpad")),
+                ("touchpad_scrolling", Some("touchpad")),
+                ("keyboard_repeat", Some("keyboard")),
+            ]
+        );
+        assert_eq!(
+            qol_config::validation::validate_spec_collect(&config),
+            [],
+            "qol-config.toml must validate on its own"
+        );
         let runtime = qol_config::contract::parse_runtime_spec("qol-runtime.toml")
             .expect("qol-runtime.toml invalid");
         qol_config::contract::validate_contracts(&config, Some(&runtime))

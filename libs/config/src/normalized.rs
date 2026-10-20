@@ -24,6 +24,8 @@ pub struct ResolvedSection {
     pub fields: Vec<ResolvedField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -346,6 +348,7 @@ fn build_sections(spec: &ConfigSpec, include_dev_only: bool) -> Vec<ResolvedSect
             actions: section.actions.clone(),
             fields: Vec::new(),
             platforms: section.platforms.clone(),
+            device_kind: section.device_kind.clone(),
         })
         .collect()
 }

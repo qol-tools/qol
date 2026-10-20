@@ -1,5 +1,9 @@
 schema_version = 1
 
+[query.devices]
+description = "The mouse, touchpad and keyboard entries the settings list, one per kind this computer has"
+poll_interval_ms = 2000
+
 [query.mouse]
 description = "Pointer speed from 0 to 100, acceleration, swapped buttons, double-click time in milliseconds and natural scrolling; null where this computer has no such setting"
 poll_interval_ms = 2000
