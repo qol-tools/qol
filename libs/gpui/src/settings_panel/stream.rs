@@ -2,8 +2,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
-const SEND_MIN_INTERVAL: Duration = Duration::from_millis(100);
-
 enum StreamMessage {
     Frame(String),
     Close,
@@ -54,12 +52,12 @@ impl StreamClient {
         }
     }
 
-    pub(super) fn send(&self, frame: String) {
+    pub(super) fn send(&self, frame: String, interval: Duration) {
         if self.count.load(Ordering::SeqCst) == 0 {
             return;
         }
         let mut last = self.last_sent.lock().expect("stream throttle lock");
-        if last.is_some_and(|sent| sent.elapsed() < SEND_MIN_INTERVAL) {
+        if last.is_some_and(|sent| sent.elapsed() < interval) {
             return;
         }
         *last = Some(Instant::now());
@@ -124,10 +122,12 @@ fn valid_hex(hex: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{brightness_frame, color_frame, StreamClient, SEND_MIN_INTERVAL};
+    use super::{brightness_frame, color_frame, StreamClient};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    const INTERVAL: Duration = Duration::from_millis(100);
 
     fn stub_server() -> (u16, mpsc::Receiver<Vec<(Instant, String)>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -160,13 +160,13 @@ mod tests {
         let (port, received) = stub_server();
         let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
         client.open();
-        client.send("frame-0".into());
+        client.send("frame-0".into(), INTERVAL);
         let within_interval = Instant::now() + Duration::from_secs(60);
         *client.last_sent.lock().unwrap() = Some(within_interval);
-        client.send("throttled".into());
-        let past_interval = Instant::now() - SEND_MIN_INTERVAL * 2;
+        client.send("throttled".into(), INTERVAL);
+        let past_interval = Instant::now() - INTERVAL * 2;
         *client.last_sent.lock().unwrap() = Some(past_interval);
-        client.send("frame-1".into());
+        client.send("frame-1".into(), INTERVAL);
         client.close();
         let frames = received.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(
@@ -179,16 +179,46 @@ mod tests {
     }
 
     #[test]
+    fn send_throttles_by_the_interval_the_stream_declares() {
+        let (port, received) = stub_server();
+        let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
+        client.open();
+        let cases = [
+            ("1000ms-after-150ms", 1000, 150, false),
+            ("1000ms-after-1200ms", 1000, 1200, true),
+            ("20ms-after-50ms", 20, 50, true),
+        ];
+        for (frame, interval_ms, since_last_ms, _) in cases {
+            *client.last_sent.lock().unwrap() =
+                Some(Instant::now() - Duration::from_millis(since_last_ms));
+            client.send(frame.into(), Duration::from_millis(interval_ms));
+        }
+        client.close();
+        let frames = received.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            frames
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            cases
+                .iter()
+                .filter(|(_, _, _, delivered)| *delivered)
+                .map(|(frame, ..)| *frame)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn open_refcounts_one_connection_and_close_at_zero_ends_it() {
         let (port, received) = stub_server();
         let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
         client.open();
         client.open();
         std::thread::sleep(Duration::from_millis(150));
-        client.send("first".into());
+        client.send("first".into(), INTERVAL);
         std::thread::sleep(Duration::from_millis(120));
         client.close();
-        client.send("second".into());
+        client.send("second".into(), INTERVAL);
         std::thread::sleep(Duration::from_millis(120));
         client.close();
         let frames = received.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -205,9 +235,9 @@ mod tests {
     fn a_client_without_a_daemon_port_never_connects_or_panics() {
         let client = StreamClient::new(None);
         client.open();
-        client.send("frame".into());
+        client.send("frame".into(), INTERVAL);
         client.close();
-        client.send("after".into());
+        client.send("after".into(), INTERVAL);
     }
 
     #[test]

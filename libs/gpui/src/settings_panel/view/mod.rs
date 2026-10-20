@@ -612,6 +612,20 @@ impl SettingsPanelView {
         self.streams.get(source)
     }
 
+    fn send_stream_frame(&self, row: usize, frame: String) {
+        let Some(row) = self.level().rows.get(row) else {
+            return;
+        };
+        let (Some(stream), Some(source), Some(name)) = (
+            self.streams.get(row.source),
+            self.sources.get(row.source),
+            row.stream.as_deref(),
+        ) else {
+            return;
+        };
+        stream.send(frame, source.runtime.stream_interval(name));
+    }
+
     fn current_visible_rows(&self) -> Vec<usize> {
         filtered_visible_rows(
             &self.level().rows,
@@ -1908,9 +1922,7 @@ impl SettingsPanelView {
         };
         if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
             if let Some(frame) = super::stream::color_frame(&value) {
-                if let Some(stream) = self.streams.get(self.level().rows[row].source) {
-                    stream.send(frame);
-                }
+                self.send_stream_frame(row, frame);
             }
         }
         let Some(ActiveControl::Wheel(wheel)) = self.level_mut().active_control.as_mut() else {
@@ -2485,10 +2497,8 @@ impl SettingsPanelView {
         }
         let level = value.clamp(0.0, 255.0) as u8;
         let hex = self.stream_hex();
-        if let Some(stream) = self.stream_for(row) {
-            if let Some(frame) = super::stream::brightness_frame(level, &hex) {
-                stream.send(frame);
-            }
+        if let Some(frame) = super::stream::brightness_frame(level, &hex) {
+            self.send_stream_frame(row, frame);
         }
     }
 
