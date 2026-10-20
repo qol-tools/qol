@@ -255,9 +255,7 @@ fn read_tail(path: &Path) -> Tail {
                 }
             }
         }
-        (tail.facts.title.is_some() || tail.ai_title.is_some())
-            && tail.facts.permission_mode.is_some()
-            && tail.facts.request.is_some()
+        false
     });
     tail
 }
@@ -326,6 +324,7 @@ mod tests {
                 ENTRY,
                 r#"{"type":"user","isMeta":true,"cwd":"/work/proj","message":{"role":"user","content":"<local-command-caveat>ignored"}}"#,
                 &first,
+                r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/6"}"#,
                 &prompt("a later prompt"),
                 r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"high"}}}"#,
                 r#"{"type":"ai-title","aiTitle":"Older title"}"#,
@@ -358,6 +357,7 @@ mod tests {
                 pr_urls: vec![
                     "https://github.com/o/r/pull/7".to_owned(),
                     "https://github.com/o/r/pull/8".to_owned(),
+                    "https://github.com/o/r/pull/6".to_owned(),
                 ],
                 settings: CliResumeSettings {
                     permission_mode: Some("bypassPermissions".to_owned()),
