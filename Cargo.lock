@@ -7061,7 +7061,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.39.0"
+version = "0.40.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7583,7 +7583,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.114.0"
+version = "3.115.0"
 dependencies = [
  "anyhow",
  "axum",
