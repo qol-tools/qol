@@ -47,9 +47,7 @@ permissions = ["screen-capture"]
 
 [menu]
 label = "Shot"
-items = [
-    { type = "checkbox", id = "audio-enable", label = "Enable audio", checked = true, action = "toggle-config", config_key = "audio.enabled" },
-]
+items = []
 
 [daemon]
 enabled = true

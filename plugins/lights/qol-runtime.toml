@@ -26,7 +26,6 @@ description = "Start Zigbee pairing mode"
 
 [action.stop_pair]
 description = "Stop Zigbee pairing mode"
-duration_seconds = 60
 
 [action.set_color_main]
 description = "Apply the live color to the main target"
