@@ -124,7 +124,10 @@ fn capture(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let restored = !warm.lifecycle().is_live(&key);
+    let restored = !warm.lifecycle().is_live(&key)
+        && nameable(&mut warm, &caller)
+            .context("capture: the fact was stored but its lifecycle could not be checked")?
+            .contains(&key);
     if restored {
         crate::lifecycle::restore(&store, &key, &caller)
             .context("capture: the fact was stored but could not be brought back")?;
@@ -154,10 +157,18 @@ fn supersede(state: &Arc<Mutex<WarmState>>, input: &Value) -> Result<Value> {
     let caller = qol_agent_homes::Registry::load()
         .resolve_caller(optional_string_field(input, "agent_home", "supersede")?.as_deref());
     let mut warm = lock_state(state);
-    let keys = nameable(&mut warm, &caller)?.resolve(&raw_keys)?;
+    let visible = nameable(&mut warm, &caller)?;
+    let keys = visible.resolve(&raw_keys)?;
     let store = warm.store().clone();
-    let replaced =
-        crate::lifecycle::supersede_with_capture(&store, &keys, text, cwd, &caller, warm.keys())?;
+    let replaced = crate::lifecycle::supersede_with_capture(
+        &store,
+        &visible,
+        &keys,
+        text,
+        cwd,
+        &caller,
+        warm.keys(),
+    )?;
     if replaced.appended > 0 {
         warm.push_units(std::slice::from_ref(&replaced.unit));
     }
@@ -223,18 +234,23 @@ fn related_facts(
     let found = warm
         .ask_views(caller)
         .and_then(|(store, aliases, units, notes, indexes)| {
-            crate::ask::run_with_warm(
-                store,
-                aliases,
-                &req,
-                units,
-                notes,
-                &lifecycle,
-                indexes.as_ref(),
-            )
+            indexes
+                .map(|indexes| {
+                    crate::ask::run_with_warm(
+                        store,
+                        aliases,
+                        &req,
+                        units,
+                        notes,
+                        &lifecycle,
+                        Some(&indexes),
+                    )
+                })
+                .transpose()
         });
     match found {
-        Ok(output) => crate::ask::related_facts(&output, key),
+        Ok(Some(output)) => crate::ask::related_facts(&output, key),
+        Ok(None) => Vec::new(),
         Err(error) => {
             log::warn!("qol-memory capture could not look up related facts: {error:#}");
             Vec::new()
@@ -805,6 +821,7 @@ mod tests {
         "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade topaz";
     const QUARTZ_AMBER: &str =
         "zephyr quartz flint cobalt onyx basalt garnet pyrite mica slate beryl opal jade amber";
+    const THEIR_HOME: &str = "/tmp/qol-home-theirs";
 
     fn fillers() -> [Value; 4] {
         [
@@ -922,14 +939,55 @@ mod tests {
 
     #[test]
     fn request_lifecycle_calls_change_nothing_for_keys_they_cannot_resolve() {
-        let mut state = warm_state("lifecycle-refusals", &fillers());
+        let hidden = "0f1e2d3c4b5a6978";
+        let mut theirs = unit_value(
+            hidden,
+            "the other agent home keeps its scratch notes in a private folder",
+        );
+        theirs["source"] = json!("claude");
+        theirs["agent_home"] = json!(THEIR_HOME);
+        let mut units = fillers().to_vec();
+        units.push(theirs);
+        let mut state = warm_state("lifecycle-refusals", &units);
         let captured = data(
             &mut state,
             "capture",
             json!({ "text": OLD_LANES, "cwd": "/fixture/project" }),
         );
         let key = captured["key"].as_str().expect("capture answers a key");
+        let units_path = state.lock().expect("lock").store().units_path();
+        let stored = std::fs::read_to_string(&units_path).expect("read units");
+        let long_reason = "x".repeat(crate::lifecycle::MAX_REASON_CHARS + 1);
+        let too_long = format!(
+            "the reason is {} characters",
+            crate::lifecycle::MAX_REASON_CHARS + 1
+        );
         let cases = [
+            (
+                "forget",
+                json!({ "keys": hidden, "reason": "stale" }),
+                "nothing changed: no fact you can see has key `0f1e2d3c4b5a6978`",
+            ),
+            (
+                "forget",
+                json!({ "keys": &hidden[..8], "reason": "stale" }),
+                "no fact you can see has key `0f1e2d3c`",
+            ),
+            (
+                "supersede",
+                json!({ "keys": hidden, "text": NEW_LANES, "cwd": "/fixture/project" }),
+                "no fact you can see has key `0f1e2d3c4b5a6978`",
+            ),
+            (
+                "supersede",
+                json!({ "keys": "0123456789abcdef", "text": NEW_LANES, "cwd": "/fixture/project" }),
+                "no fact you can see has key `0123456789abcdef`",
+            ),
+            (
+                "forget",
+                json!({ "keys": key, "reason": long_reason }),
+                too_long.as_str(),
+            ),
             (
                 "forget",
                 json!({ "keys": "0123456789abcdef", "reason": "stale" }),
@@ -966,10 +1024,73 @@ mod tests {
             assert!(message.contains(expected), "{action}: {message}");
         }
         let warm = state.lock().expect("lock");
+        assert_eq!(
+            std::fs::read_to_string(&units_path).expect("read units"),
+            stored,
+            "refused calls must not append units"
+        );
         assert!(
             !warm.store().lifecycle_path().exists(),
             "refused calls must not write the lifecycle log"
         );
+    }
+
+    #[test]
+    fn request_lifecycle_calls_leave_another_homes_facts_alone() {
+        let mut state = warm_state("lifecycle-homes", &fillers());
+        let theirs = data(
+            &mut state,
+            "capture",
+            json!({ "text": QUARTZ, "cwd": "/tmp/proj", "agent_home": THEIR_HOME }),
+        );
+        let their_key = theirs["key"]
+            .as_str()
+            .expect("capture answers a key")
+            .to_string();
+        let store = state.lock().expect("lock").store().clone();
+        crate::lifecycle::forget(
+            &store,
+            std::slice::from_ref(&their_key),
+            "stale",
+            THEIR_HOME,
+        )
+        .expect("their home forgets its fact");
+
+        let recaptured = data(
+            &mut state,
+            "capture",
+            json!({ "text": QUARTZ, "cwd": "/tmp/proj" }),
+        );
+        assert_eq!(recaptured["key"], their_key);
+        assert_eq!(recaptured["appended"], 0);
+        assert_eq!(recaptured["restored"], false);
+        let named = data(
+            &mut state,
+            "capture",
+            json!({ "unit": unit_value(&their_key, QUARTZ) }),
+        );
+        assert_eq!(named["restored"], false);
+
+        let own = data(
+            &mut state,
+            "capture",
+            json!({ "text": OLD_LANES, "cwd": "/fixture/project" }),
+        );
+        let own_key = own["key"].as_str().expect("capture answers a key");
+        let message = refusal(
+            &mut state,
+            "supersede",
+            json!({ "keys": own_key, "text": QUARTZ, "cwd": "/tmp/proj" }),
+        );
+        assert!(
+            message.contains("a fact you cannot see already has this text"),
+            "{message}"
+        );
+
+        let lifecycle = crate::lifecycle::Lifecycle::load(&store);
+        assert!(lifecycle.is_forgotten(&their_key));
+        assert!(lifecycle.is_live(own_key));
+        assert_eq!(lifecycle.counts().records, 1);
     }
 
     #[test]

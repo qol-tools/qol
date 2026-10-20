@@ -995,7 +995,7 @@ pub(crate) fn run_with_warm(
     }
 
     if let Some(found) = answer.as_mut() {
-        if let Some(State::Superseded { by, ts }) = lifecycle.state(&found.key) {
+        if let Some(State::Superseded { ts, .. }) = lifecycle.state(&found.key) {
             let live = lifecycle.live_replacement(&found.key);
             found.superseded_by =
                 live.and_then(|key| replacement(key, warm, &units.items, &caller, &registry));
@@ -1004,11 +1004,11 @@ pub(crate) fn run_with_warm(
                 (Some(current), _) => {
                     format!("superseded on {date}; the current fact is {}", current.key)
                 }
-                (None, Some(key)) => {
-                    format!("superseded on {date} by {key}, which this agent home cannot see")
+                (None, Some(_)) => {
+                    format!("superseded on {date} by a fact this agent home cannot see")
                 }
                 (None, None) => {
-                    format!("superseded on {date} by {by}, which was later forgotten")
+                    format!("superseded on {date} by a fact that was later forgotten")
                 }
             };
             outcome = Outcome::Qualified;

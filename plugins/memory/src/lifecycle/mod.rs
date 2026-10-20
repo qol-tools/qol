@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::store::Store;
 
 pub const MIN_KEY_PREFIX: usize = 8;
+pub const MAX_REASON_CHARS: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,10 +157,6 @@ impl Lifecycle {
         self.states.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.states.is_empty()
-    }
-
     pub fn read_error(&self) -> Option<&str> {
         self.read_error.as_deref()
     }
@@ -197,6 +194,12 @@ impl Catalog {
         Catalog { keys, facts }
     }
 
+    pub fn contains(&self, key: &str) -> bool {
+        self.keys
+            .binary_search_by(|(known, _)| known.as_str().cmp(key))
+            .is_ok()
+    }
+
     pub fn resolve(&self, raw: &str) -> Result<Vec<String>> {
         let mut resolved: Vec<String> = Vec::new();
         let mut problems = Vec::new();
@@ -231,9 +234,9 @@ impl Catalog {
                         }
                     }
                 }
-                None if matches.is_empty() => {
-                    problems.push(format!("no fact you can see has key `{token}`"))
-                }
+                None if matches.is_empty() => problems.push(format!(
+                    "no fact you can see has key `{token}`; ask again for the fact's current key"
+                )),
                 None => problems.push(format!(
                     "`{token}` matches {} keys ({}); pass more characters",
                     matches.len(),
@@ -250,13 +253,23 @@ impl Catalog {
             bail!("nothing changed: {}", problems.join("; "));
         }
         if resolved.is_empty() {
-            bail!("nothing changed: no keys given");
+            bail!(
+                "nothing changed: no keys given; pass one or more keys, each in full or its first \
+                 {MIN_KEY_PREFIX} or more characters"
+            );
         }
         Ok(resolved)
     }
 }
 
 pub fn forget(store: &Store, keys: &[String], reason: &str, agent_home: &str) -> Result<()> {
+    let length = reason.chars().count();
+    if length > MAX_REASON_CHARS {
+        bail!(
+            "nothing changed: the reason is {length} characters; shorten it to \
+             {MAX_REASON_CHARS} or fewer"
+        );
+    }
     let ts = crate::text::now_iso();
     let records: Vec<Record> = keys
         .iter()
@@ -270,7 +283,10 @@ pub fn forget(store: &Store, keys: &[String], reason: &str, agent_home: &str) ->
 
 pub fn supersede(store: &Store, keys: &[String], by: &str, agent_home: &str) -> Result<()> {
     if keys.iter().any(|key| key == by) {
-        bail!("nothing changed: the new fact is the same capture as `{by}`");
+        bail!(
+            "nothing changed: the new fact is the same capture as `{by}`; pass the corrected \
+             fact as the new text, or use forget"
+        );
     }
     let ts = crate::text::now_iso();
     let records: Vec<Record> = keys
@@ -291,6 +307,7 @@ pub struct Replaced {
 
 pub fn supersede_with_capture(
     store: &Store,
+    visible: &Catalog,
     keys: &[String],
     text: &str,
     cwd: &str,
@@ -307,9 +324,18 @@ pub fn supersede_with_capture(
         .unwrap_or_default()
         .to_owned();
     if keys.contains(&key) {
-        bail!("nothing changed: the new fact is the same capture as `{key}`");
+        bail!(
+            "nothing changed: the new fact is the same capture as `{key}`; pass the corrected \
+             fact as the new text, or use forget"
+        );
     }
     let appended = crate::ingest::append_units(store, std::slice::from_ref(&unit), known)?;
+    if appended == 0 && !visible.contains(&key) {
+        bail!(
+            "nothing changed: a fact you cannot see already has this text in `{cwd}`; reword the \
+             new fact"
+        );
+    }
     supersede(store, keys, &key, agent_home)?;
     Ok(Replaced {
         appended,
@@ -642,7 +668,6 @@ mod tests {
     fn missing_log_loads_empty() {
         let dir = TempDir::new("missing");
         let lifecycle = Lifecycle::load(&dir.store());
-        assert!(lifecycle.is_empty());
         assert_eq!(lifecycle.read_error(), None);
         assert_eq!(lifecycle.counts(), Counts::default());
     }

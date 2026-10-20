@@ -76,8 +76,9 @@ impl WarmState {
             .map(|meta| (meta.len(), mtime_nanos(&meta)))
             .unwrap_or((0, 0));
         if self.lifecycle_fingerprint != Some(fingerprint) {
-            self.lifecycle = Arc::new(Lifecycle::load(&self.store));
-            self.lifecycle_fingerprint = Some(fingerprint);
+            let lifecycle = Lifecycle::load(&self.store);
+            self.lifecycle_fingerprint = lifecycle.read_error().is_none().then_some(fingerprint);
+            self.lifecycle = Arc::new(lifecycle);
         }
         Arc::clone(&self.lifecycle)
     }

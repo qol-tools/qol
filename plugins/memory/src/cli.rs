@@ -195,9 +195,9 @@ fn supersede_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .usage(USAGE_SUPERSEDE)
         .detail(
             "--keys names the stale facts: each key in full or its first 8 or more characters, \
-             separated by spaces or commas. Keys come from ask, rows and the capture reply. A \
-             statement repeated in several sessions is one fact, so naming one copy covers every \
-             copy this agent home can see, and the reply lists their keys.",
+             separated by spaces or commas. Keys come from ask --json, rows and the capture \
+             reply. A statement repeated in several sessions is one fact, so naming one copy \
+             covers every copy this agent home can see, and the reply lists their keys.",
         )
         .detail("--text and --cwd are the new fact, stored the same way as capture stores it.")
         .detail(
@@ -220,10 +220,15 @@ fn forget_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .about("Keep facts out of answers, launcher rows and the session-start block.")
         .usage(USAGE_FORGET)
         .detail("--keys names the facts the same way supersede does.")
-        .detail("--reason says why; it is kept in the lifecycle log next to the keys.")
         .detail(
-            "Nothing is deleted. Capturing the same text in the same cwd brings a forgotten fact \
-             back. Forgetting a replacement does not bring back the facts it replaced.",
+            "--reason says why, in at most 500 characters; it is kept in the lifecycle log next \
+             to the keys.",
+        )
+        .detail(
+            "Nothing is deleted. Capturing the same text in the same cwd brings a forgotten \
+             capture back; a forgotten transcript statement or note stays forgotten. The facts a \
+             forgotten replacement replaced stay superseded, so ask can still return them marked \
+             superseded.",
         )
         .output("The `forgotten: <keys>` line in plain text; the forgotten keys with --json.")
         .exit_behavior("Usage errors exit 64; unknown keys and other failures exit 1.")
@@ -1034,7 +1039,8 @@ fn in_process_capture(invocation: &CaptureInvocation) -> Result<Value> {
         .unwrap_or_default()
         .to_string();
     let caller = invocation.agent_home.clone().unwrap_or_default();
-    let restored = !crate::lifecycle::Lifecycle::load(&store).is_live(&key);
+    let restored = !crate::lifecycle::Lifecycle::load(&store).is_live(&key)
+        && in_process_nameable(&store, &caller)?.contains(&key);
     if restored {
         crate::lifecycle::restore(&store, &key, &caller)
             .context("capture: the fact was stored but could not be brought back")?;
@@ -1114,10 +1120,12 @@ fn supersede_payload(invocation: &LifecycleInvocation) -> Result<Value> {
     }
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
-    let keys = in_process_nameable(&store, &invocation.agent_home)?.resolve(&invocation.keys)?;
+    let visible = in_process_nameable(&store, &invocation.agent_home)?;
+    let keys = visible.resolve(&invocation.keys)?;
     let mut known = crate::ingest::KeySet::load(&store)?;
     let replaced = crate::lifecycle::supersede_with_capture(
         &store,
+        &visible,
         &keys,
         &invocation.text,
         &invocation.cwd,
@@ -1467,7 +1475,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use qol_headless::{DoctorReport, EXIT_SUCCESS, EXIT_USAGE};
+    use qol_headless::{DoctorReport, EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE};
     use serde_json::json;
 
     use super::*;
@@ -2182,6 +2190,103 @@ mod tests {
         assert_eq!(forget.keys, "72ed4718");
         assert_eq!(forget.reason, "wrong path");
         assert_eq!(forget.store, None);
+    }
+
+    #[test]
+    fn lifecycle_commands_run_in_process_with_a_store() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let store_dir = std::env::temp_dir().join(format!("qol-memory-cli-lifecycle-{nanos}"));
+        std::fs::create_dir_all(&store_dir).expect("create temp store");
+        let run = |args: &[&str]| {
+            let mut full: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+            full.extend([
+                "--store".to_string(),
+                store_dir.display().to_string(),
+                "--agent-home".to_string(),
+                "/tmp/qol-home-cli".to_string(),
+            ]);
+            app().execute(full)
+        };
+        let reply = |args: &[&str]| -> Value {
+            let execution = run(args);
+            assert_eq!(
+                execution.exit_code, EXIT_SUCCESS,
+                "{args:?}: {}",
+                execution.stderr
+            );
+            serde_json::from_str(&execution.stdout).expect("JSON reply")
+        };
+        let old_text = "Q: Which model do lanes run? A: deepseek-flash at low effort";
+        let new_text = "Q: Which model do lanes run? A: claude-opus-5-5 at high effort";
+        let old = reply(&[
+            "--json",
+            "capture",
+            "--text",
+            old_text,
+            "--cwd",
+            "/fixture/project",
+        ]);
+        let old_key = old["key"].as_str().expect("capture key").to_string();
+        let replaced = reply(&[
+            "--json",
+            "supersede",
+            "--keys",
+            &old_key[..8],
+            "--text",
+            new_text,
+            "--cwd",
+            "/fixture/project",
+        ]);
+        assert_eq!(replaced["appended"], 1);
+        assert_eq!(replaced["superseded"], json!([old_key]));
+        let new_key = replaced["key"].as_str().expect("supersede key").to_string();
+        let forgotten = reply(&[
+            "--json",
+            "forget",
+            "--keys",
+            &new_key,
+            "--reason",
+            "wrong model",
+        ]);
+        assert_eq!(forgotten["forgotten"], json!([new_key]));
+        let recaptured = reply(&[
+            "--json",
+            "capture",
+            "--text",
+            new_text,
+            "--cwd",
+            "/fixture/project",
+        ]);
+        assert_eq!(recaptured["key"], new_key);
+        assert_eq!(recaptured["appended"], 0);
+        assert_eq!(recaptured["restored"], true);
+
+        let refused = run(&["forget", "--keys", "0123456789abcdef", "--reason", "stale"]);
+        assert_eq!(refused.exit_code, EXIT_RUNTIME_ERROR);
+        assert!(
+            refused
+                .stderr
+                .contains("no fact you can see has key `0123456789abcdef`"),
+            "{}",
+            refused.stderr
+        );
+
+        let store = Store::resolve(Some(&store_dir)).expect("store resolves");
+        let log = std::fs::read_to_string(store.lifecycle_path()).expect("read lifecycle log");
+        let ops: Vec<String> = log
+            .lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).expect("record parses")["op"]
+                    .as_str()
+                    .expect("op")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(ops, ["supersede", "forget", "restore"]);
+        std::fs::remove_dir_all(&store_dir).ok();
     }
 
     #[test]
