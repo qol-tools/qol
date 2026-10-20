@@ -8,13 +8,6 @@ version = "0.12.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
-[config.scope]
-pointer_speed = "device"
-touchpad_speed = "device"
-double_click = "core"
-repeat_delay = "core"
-repeat_rate = "core"
-
 [runtime]
 command = "qol-input"
 

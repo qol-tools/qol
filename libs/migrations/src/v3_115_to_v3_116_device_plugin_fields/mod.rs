@@ -16,12 +16,9 @@ const NAME: &str = "v3.115-to-v3.116-device-plugin-fields";
 const DEVICE_FIELDS: &[(&str, &[&str])] = &[
     ("qol-bluetooth", &["adapter", "managed_devices"]),
     ("qol-ide-checkout", &["tempDir"]),
-    ("qol-input", &["pointer_speed", "touchpad_speed"]),
     ("qol-launcher", &["extra_file_scan_roots"]),
-    ("qol-lights", &["backend.serial_port"]),
     ("qol-memory", &["verifier_endpoint"]),
     ("qol-shot", &["audio.mic_device", "audio.system_device"]),
-    ("qol-sound", &["volume", "input_volume"]),
     (
         "qol-voice",
         &["audio.input_device", "recognition.model_dir"],

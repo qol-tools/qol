@@ -15,7 +15,6 @@ night_from = "core"
 night_to = "core"
 night_coordination = "core"
 policy = "core"
-preferred_brightness = "core"
 sync_brightness_levels = "core"
 notify_on_change = "core"
 

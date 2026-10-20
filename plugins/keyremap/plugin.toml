@@ -12,7 +12,6 @@ platforms = ["macos", "windows"]
 enabled = "core"
 excluded_apps = "core"
 char_rules = "core"
-char_swaps = "core"
 key_rules = "core"
 mouse_rules = "core"
 scroll_rules = "core"

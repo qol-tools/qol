@@ -32,7 +32,7 @@ fn stored_keys(plugin_dir: &Path) -> Vec<String> {
         .unwrap_or_else(|err| panic!("parse {}: {err:?}", plugin_dir.display()));
     spec.fields
         .iter()
-        .filter(|(_, field)| field.kind.has_stored_value())
+        .filter(|(_, field)| field.has_stored_value())
         .map(|(id, field)| field.config_key.clone().unwrap_or_else(|| id.clone()))
         .collect()
 }
