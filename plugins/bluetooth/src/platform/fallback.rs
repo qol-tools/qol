@@ -10,6 +10,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
+    settings_pane: None,
 };
 
 pub fn required_binaries_check() -> DoctorCheckResult {
@@ -74,6 +75,10 @@ pub fn search_devices(_config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
 }
 
 pub fn stop_search() -> Result<()> {
+    bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
+}
+
+pub fn open_settings() -> Result<()> {
     bail!("{} is not implemented on this platform", crate::PLUGIN_ID)
 }
 

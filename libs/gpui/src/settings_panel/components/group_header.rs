@@ -4,9 +4,11 @@ use gpui::{div, px, App, IntoElement, RenderOnce, SharedString, Window};
 use qol_theme::TextStyle;
 
 use super::{
-    masthead_rule, settings_action_spinner, settings_value_text, RowGround, SettingsValueTone,
+    masthead_rule, settings_action_spinner, settings_description, settings_search_mark,
+    settings_value_text, RowGround, SettingsValueTone, FINDER_MARK_SMALL,
 };
 use crate::kit::Kit;
+use crate::search_mark::MarkState;
 
 #[derive(IntoElement)]
 pub struct SettingsGroupHeader {
@@ -14,6 +16,7 @@ pub struct SettingsGroupHeader {
     detail: Option<SharedString>,
     current: bool,
     activity: Option<SharedString>,
+    summary: Option<(SharedString, bool)>,
     kit: Kit,
 }
 
@@ -24,6 +27,7 @@ impl SettingsGroupHeader {
             detail,
             current: false,
             activity: None,
+            summary: None,
             kit,
         }
     }
@@ -34,6 +38,7 @@ impl SettingsGroupHeader {
             detail: None,
             current: false,
             activity: None,
+            summary: None,
             kit,
         }
     }
@@ -45,6 +50,11 @@ impl SettingsGroupHeader {
 
     pub fn activity(mut self, label: impl Into<SharedString>) -> Self {
         self.activity = Some(label.into());
+        self
+    }
+
+    pub fn summary(mut self, text: impl Into<SharedString>, live: bool) -> Self {
+        self.summary = Some((text.into(), live));
         self
     }
 }
@@ -68,10 +78,32 @@ impl RenderOnce for SettingsGroupHeader {
             .child(
                 div()
                     .flex()
-                    .items_center()
+                    .map(|line| match self.summary.is_some() {
+                        true => line.items_end(),
+                        false => line.items_center(),
+                    })
                     .justify_between()
                     .gap(px(qol_theme::SPACE_CELL))
                     .child(title)
+                    .when_some(self.summary, |row, (text, live)| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .gap(px(qol_theme::SPACE_SNUG))
+                                .when(live, |summary| {
+                                    summary.child(settings_search_mark(
+                                        "settings-group-summary",
+                                        FINDER_MARK_SMALL,
+                                        MarkState::Live,
+                                        RowGround::Pane,
+                                        self.kit,
+                                    ))
+                                })
+                                .child(settings_description(text, RowGround::Pane, self.kit)),
+                        )
+                    })
                     .when_some(self.activity, |row, label| {
                         row.child(
                             div()

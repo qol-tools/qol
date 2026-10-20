@@ -110,6 +110,54 @@ impl RenderOnce for SettingsChoiceValue {
             "…",
             cx,
         );
+        let tones = choice_tones(row, kit);
+        let word = div()
+            .flex_none()
+            .max_w(px(CHOICE_WORD_MAX_WIDTH))
+            .text(TextStyle::Value);
+        let word = match word_color {
+            Some(color) => word.text_color(rgb(color)),
+            None => ground_text(word, rgb(tones.word), Some(rgb(tones.word_hover))),
+        };
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .child(word.child(text))
+            .child(SettingsChoiceArt::new(art, row, context, kit))
+            .children(chevron.then(|| SettingsChevron::new(row, kit)))
+    }
+}
+
+#[derive(IntoElement)]
+pub struct SettingsChoiceArt {
+    art: ChoiceArt,
+    row: RowGround,
+    context: PictureContext,
+    kit: Kit,
+}
+
+impl SettingsChoiceArt {
+    pub fn new(art: ChoiceArt, row: RowGround, context: PictureContext, kit: Kit) -> Self {
+        Self {
+            art,
+            row,
+            context,
+            kit,
+        }
+    }
+}
+
+impl RenderOnce for SettingsChoiceArt {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let SettingsChoiceArt {
+            art,
+            row,
+            context,
+            kit,
+        } = self;
         let scale = window.scale_factor();
         let tones = choice_tones(row, kit);
         let art_image = |tone: Tone| {
@@ -145,7 +193,7 @@ impl RenderOnce for SettingsChoiceValue {
             .flex_none()
             .w(px(CHOICE_PICTURE_WIDTH))
             .h(px(CHOICE_PICTURE_HEIGHT));
-        let art_box = if tones.wakes_on_hover {
+        if tones.wakes_on_hover {
             art_box
                 .child(
                     div()
@@ -168,24 +216,7 @@ impl RenderOnce for SettingsChoiceValue {
                 )
         } else {
             art_box.children(art_image(Tone::Awake))
-        };
-        let word = div()
-            .flex_none()
-            .max_w(px(CHOICE_WORD_MAX_WIDTH))
-            .text(TextStyle::Value);
-        let word = match word_color {
-            Some(color) => word.text_color(rgb(color)),
-            None => ground_text(word, rgb(tones.word), Some(rgb(tones.word_hover))),
-        };
-        div()
-            .flex()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(qol_theme::SPACE_CELL))
-            .child(word.child(text))
-            .child(art_box)
-            .children(chevron.then(|| SettingsChevron::new(row, kit)))
+        }
     }
 }
 

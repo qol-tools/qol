@@ -13,6 +13,7 @@ type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowKind {
+    Lead,
     Setting,
     Rule,
     Add,
@@ -34,6 +35,10 @@ pub struct SettingsRow {
 impl SettingsRow {
     pub fn setting(id: impl Into<ElementId>, kit: Kit) -> Self {
         Self::new(id, kit, RowKind::Setting)
+    }
+
+    pub fn lead(id: impl Into<ElementId>, kit: Kit) -> Self {
+        Self::new(id, kit, RowKind::Lead)
     }
 
     pub fn rule(id: impl Into<ElementId>, kit: Kit) -> Self {
@@ -98,6 +103,7 @@ impl RenderOnce for SettingsRow {
         let shared = kit();
         let attention = self.attention && !(self.selected && self.focused);
         let height = match self.kind {
+            RowKind::Lead => qol_theme::HEIGHT_SETTING_ROW + 2.0 * qol_theme::SPACE_GUTTER,
             RowKind::Setting => qol_theme::HEIGHT_SETTING_ROW,
             RowKind::Rule | RowKind::Add => qol_theme::HEIGHT_RULE_ROW,
         };

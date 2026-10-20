@@ -4,7 +4,7 @@ description = "Choose the Bluetooth devices qol should keep connected."
 
 [section.devices]
 label = "Devices"
-description = "Search for nearby devices and inspect the devices this computer is already paired with."
+description = "Turn Bluetooth on, choose the adapter, and manage paired devices or find new ones."
 
 [field.adapter_power]
 type = "action"
@@ -28,31 +28,16 @@ query = "adapter_options"
 lookup_label = "adapters"
 card_description = "The Bluetooth adapter qol uses."
 
-[field.search]
-type = "action"
-label = "Start search"
-active_label = "Stop search"
-description = "Discover Bluetooth devices for up to 60 seconds, or stop the search early."
-section = "devices"
-action = "start_search"
-active_action = "stop_search"
-active_query = "search_status"
-active_value_from = "searching"
-label_map = { false = "Scan", true = "Stop" }
-
 [field.devices]
 type = "list"
 label = "Bluetooth devices"
 section = "devices"
 query = "devices"
-active_query = "search_status"
-active_value_from = "searching"
-active_label = "Searching"
 row_label = "{name}"
 row_subtitle = "{detail}"
 search = true
-empty_message = "No paired devices. Start search to discover nearby devices."
-card_description = "Devices nearby and already paired."
+empty_message = "No paired devices. Find devices to pair one."
+card_description = "Devices paired with this computer."
 
 [[field.devices.row_actions]]
 action = "connect_device"
@@ -76,13 +61,6 @@ when = "can_disconnect"
 input = { address = "{address}" }
 
 [[field.devices.row_actions]]
-action = "pair_device"
-label = "Pair"
-description = "Pairs the device with this computer."
-when = "can_pair"
-input = { address = "{address}" }
-
-[[field.devices.row_actions]]
 action = "trust_device"
 label = "Trust"
 description = "Lets the device connect on its own."
@@ -102,6 +80,70 @@ label = "Remove"
 description = "Forgets the pairing."
 when = "can_remove"
 input = { address = "{address}" }
+
+[field.find_devices]
+type = "list"
+label = "Find devices"
+description = "Search for devices nearby and pair a new one."
+section = "devices"
+query = "nearby_devices"
+row_label = "{name}"
+row_subtitle = "{detail}"
+search = true
+items_label = "found devices"
+card_description = "closest first. pick one to pair."
+
+[field.find_devices.lead]
+label = "search"
+description = "{description}"
+row_label = "{label}"
+row_subtitle = "{detail}"
+
+[[field.find_devices.lead.actions]]
+action = "enable_adapter"
+label = "Turn on"
+when = "can_enable"
+
+[[field.find_devices.lead.actions]]
+action = "stop_search"
+label = "Stop"
+when = "can_stop"
+
+[[field.find_devices.lead.actions]]
+action = "start_search"
+label = "Search"
+when = "can_start"
+
+[[field.find_devices.lead.actions]]
+action = "start_search"
+label = "Search again"
+when = "can_search_again"
+
+[[field.find_devices.row_actions]]
+action = "pair_device"
+label = "Pair"
+description = "Pairs the device with this computer."
+when = "can_pair"
+input = { address = "{address}" }
+
+[[field.find_devices.row_actions]]
+action = "pair_device"
+label = "Try again"
+description = "Tries pairing the device again."
+when = "can_retry"
+input = { address = "{address}" }
+
+[[field.find_devices.row_actions]]
+action = "open_system_settings"
+label = "Pair in System Settings"
+description = "Opens the Bluetooth settings, where this device pairs."
+when = "can_open_settings"
+
+[[field.find_devices.row_actions]]
+label = "Open"
+description = "Shows the device in bluetooth devices."
+when = "paired"
+open = "devices"
 
 [section.reconnection]
 label = "Reconnection"

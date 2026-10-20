@@ -30,6 +30,7 @@ pub mod probe;
 pub mod runtime_config;
 pub mod scroll_list;
 pub mod scrollbar;
+pub mod search_mark;
 pub mod settings_panel;
 pub mod status_indicator;
 pub mod surface;
@@ -46,6 +47,7 @@ pub use crumb_trail::{CrumbTrail, PathEdit, PathKey};
 pub use format::{format_bytes, plural};
 pub use icon::Icon;
 pub use key::Key;
+pub use search_mark::{MarkState, SearchMark};
 pub use status_indicator::StatusIndicator;
 pub use trail::Trail;
 

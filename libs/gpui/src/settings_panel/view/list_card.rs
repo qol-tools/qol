@@ -6,12 +6,13 @@ use qol_config::contract::{is_picture_spec, resolve_slider_action, ResolvedRowAc
 
 use super::super::components::{
     settings_action_spinner, settings_label, settings_slider_percent, settings_slider_track,
-    ChoiceArt, RowGround, SettingsChoiceValue, SettingsRow,
+    ChoiceArt, FinderPickEnd, RowGround, SettingsChoiceValue, SettingsFinderLead,
+    SettingsFinderPick, SettingsRow, SettingsValueTone,
 };
 use super::super::rows::{
     begin_list_item_action, filtered_list_items, list_item_actions, list_slider_value,
-    primary_list_item_action, selected_list_item, ListActions, ListItem, ListSlider, Row,
-    RowControl, RowSection, SliderHold,
+    primary_list_item_action, selected_list_item, ListActions, ListFinder, ListItem, ListSlider,
+    Row, RowControl, RowSection, SliderHold,
 };
 use super::super::SettingsDestination;
 use super::{
@@ -21,10 +22,23 @@ use super::{
 use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
+use crate::search_mark::MarkState;
+use crate::status_indicator::StatusTone;
 
 pub(super) const SLIDER_DISPATCH_INTERVAL: std::time::Duration =
     std::time::Duration::from_millis(30);
 pub(super) const SLIDER_HOLD_DURATION: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const FINDER_LEAD_ROW: &str = "finder:lead";
+const FINDER_GROUP_KEY: &str = "group";
+const FINDER_SIGNAL_KEY: &str = "signal";
+const FINDER_SIGNAL_BARS: u64 = 4;
+
+pub(super) struct FinderBody {
+    pub(super) summary: Option<(String, bool)>,
+    pub(super) empty_title: String,
+    pub(super) empty_detail: Option<String>,
+    pub(super) empty_mark: MarkState,
+}
 
 impl SettingsPanelView {
     fn slider_rows(&mut self) -> &mut [Row] {
@@ -33,6 +47,24 @@ impl SettingsPanelView {
         } else {
             self.level_mut().rows.as_mut_slice()
         }
+    }
+
+    pub(super) fn finder(&self) -> Option<&ListFinder> {
+        if !self.level().list_card {
+            return None;
+        }
+        let origin_row = self.level().origin_row?;
+        match &self.root().rows.get(origin_row)?.control {
+            RowControl::List {
+                finder: Some(finder),
+                ..
+            } => Some(finder),
+            _ => None,
+        }
+    }
+
+    pub(super) fn list_card_offset(&self) -> usize {
+        usize::from(self.finder().is_some())
     }
 
     pub(super) fn sync_list_card(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -109,10 +141,17 @@ impl SettingsPanelView {
         )
     }
 
-    fn open_list_card_item(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn open_list_card_item(&mut self, cx: &mut Context<Self>) {
         let Some(origin_row) = self.level().origin_row else {
             return;
         };
+        if self.finder().is_some() {
+            match self.level().selected.checked_sub(1) {
+                None => self.run_finder_lead(origin_row, cx),
+                Some(slot) => self.run_finder_pick(origin_row, slot, cx),
+            }
+            return;
+        }
         let slot = self.level().selected;
         let Some(RowControl::List {
             actions,
@@ -177,6 +216,324 @@ impl SettingsPanelView {
         };
         self.push_card(destination, child);
         self.sync_scroll();
+    }
+
+    fn run_finder_lead(&mut self, origin_row: usize, cx: &mut Context<Self>) {
+        let Some(runtime) = self
+            .root_source_for(origin_row)
+            .map(|source| source.runtime.clone())
+        else {
+            return;
+        };
+        let Some(row) = self.root_mut().rows.get_mut(origin_row) else {
+            return;
+        };
+        let source = row.source;
+        let RowControl::List {
+            query,
+            finder: Some(finder),
+            ..
+        } = &mut row.control
+        else {
+            return;
+        };
+        if finder.pending {
+            return;
+        }
+        let Some(action) = finder.actions().into_iter().next() else {
+            return;
+        };
+        finder.pending = true;
+        finder.error = None;
+        let query = query.clone();
+        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut async_cx = cx.clone();
+            async move {
+                let (result, refreshed) = async_cx
+                    .background_spawn(async move {
+                        let result = runtime.run_action(&action.action, action.input);
+                        let refreshed = result.is_ok().then(|| runtime.query(&query));
+                        (result, refreshed.map(|refreshed| (query, refreshed)))
+                    })
+                    .await;
+                let _ = this.update(&mut async_cx, |this, cx| {
+                    if let Some(RowControl::List {
+                        finder: Some(finder),
+                        ..
+                    }) = this
+                        .root_mut()
+                        .rows
+                        .get_mut(origin_row)
+                        .map(|row| &mut row.control)
+                    {
+                        finder.pending = false;
+                        finder.error = result.err();
+                    }
+                    if let Some((query, refreshed)) = refreshed {
+                        this.apply_query(source, &query, refreshed, cx);
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn run_finder_pick(&mut self, origin_row: usize, slot: usize, cx: &mut Context<Self>) {
+        let Some(RowControl::List {
+            actions,
+            items,
+            filter,
+            ..
+        }) = self.root().rows.get(origin_row).map(|row| &row.control)
+        else {
+            return;
+        };
+        let Some(item) = selected_list_item(actions, items, filter, slot) else {
+            return;
+        };
+        if item.pending {
+            return;
+        }
+        let Some(action) = primary_list_item_action(actions, item) else {
+            return;
+        };
+        let item_id = item.id.clone();
+        match action.open.clone() {
+            Some(field) => self.open_list_target(origin_row, &field, &item_id, cx),
+            None => self.dispatch_resolved_list_action(origin_row, &item_id, action, cx),
+        }
+    }
+
+    fn open_list_target(
+        &mut self,
+        origin_row: usize,
+        field: &str,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self.root().rows.get(origin_row).map(|row| row.source) else {
+            return;
+        };
+        let Some(target) = self
+            .root()
+            .rows
+            .iter()
+            .position(|row| row.source == source && row.id == field)
+        else {
+            return;
+        };
+        let slot = match &self.root().rows[target].control {
+            RowControl::List {
+                actions,
+                items,
+                filter,
+                ..
+            } => filtered_list_items(actions, items, filter)
+                .iter()
+                .position(|index| items[*index].id == item_id)
+                .unwrap_or(0),
+            _ => return,
+        };
+        self.drop_slider_press();
+        self.closing = false;
+        self.stack.truncate(1);
+        self.card_marks.clear();
+        self.filter_open = false;
+        self.filter.clear();
+        self.root_mut().selected = target;
+        if let RowControl::List { list, .. } = &mut self.root_mut().rows[target].control {
+            list.selected = slot;
+        }
+        self.open_list_card(target, cx);
+        cx.notify();
+    }
+
+    pub(super) fn finder_enter_hint(&self) -> Option<String> {
+        let finder = self.finder()?;
+        let Some(slot) = self.level().selected.checked_sub(1) else {
+            if finder.pending {
+                return None;
+            }
+            return finder
+                .actions()
+                .into_iter()
+                .next()
+                .map(|action| action.label.to_lowercase());
+        };
+        let origin_row = self.level().origin_row?;
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            ..
+        } = &self.root().rows.get(origin_row)?.control
+        else {
+            return None;
+        };
+        let item = selected_list_item(actions, items, filter, slot)?;
+        if item.pending {
+            return None;
+        }
+        let action = primary_list_item_action(actions, item)?;
+        let Some(field) = action.open.as_deref() else {
+            return Some(action.label.to_lowercase());
+        };
+        let target = self
+            .root()
+            .rows
+            .iter()
+            .find(|row| row.id == field)
+            .map(|row| row.label.to_lowercase())?;
+        Some(format!("{} in {target}", action.label.to_lowercase()))
+    }
+
+    pub(super) fn finder_body(&self) -> Option<FinderBody> {
+        let finder = self.finder()?;
+        let origin_row = self.level().origin_row?;
+        let RowControl::List { items, .. } = &self.root().rows.get(origin_row)?.control else {
+            return None;
+        };
+        let typed = self.filter.trim();
+        let filtering = !typed.is_empty();
+        let shown = self
+            .current_visible_rows()
+            .iter()
+            .filter(|row| **row > 0)
+            .count();
+        let state = finder.state();
+        let summary = if filtering && !items.is_empty() {
+            Some((format!("matching \u{201c}{typed}\u{201d}"), false))
+        } else {
+            finder
+                .summary
+                .clone()
+                .map(|summary| (summary, state == MarkState::Live))
+        };
+        let (empty_title, empty_detail) = if filtering && !items.is_empty() && shown == 0 {
+            (
+                format!("Nothing matches \u{201c}{typed}\u{201d}"),
+                Some("esc clears the filter.".to_string()),
+            )
+        } else {
+            finder
+                .empty
+                .as_ref()
+                .map(|empty| (empty.title.clone(), empty.detail.clone()))
+                .unwrap_or_else(|| (finder.items_label.clone(), None))
+        };
+        let empty_mark = match state {
+            MarkState::Live if filtering => MarkState::Rest,
+            state => state,
+        };
+        Some(FinderBody {
+            summary,
+            empty_title,
+            empty_detail,
+            empty_mark,
+        })
+    }
+
+    fn render_finder_row(
+        &self,
+        finder: &ListFinder,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = index == self.level().selected;
+        let focused = self.body_has_focus();
+        let click = cx.listener(move |this, event: &ClickEvent, _, cx| {
+            if !event.standard_click() {
+                return;
+            }
+            let already_selected = this.level().selected == index;
+            this.level_mut().selected = index;
+            if already_selected {
+                this.open_list_card_item(cx);
+            }
+            cx.notify();
+        });
+        let Some(slot) = index.checked_sub(1) else {
+            return SettingsFinderLead::new(
+                "settings-finder-lead",
+                finder.label(),
+                finder.state(),
+                self.kit,
+            )
+            .subtitle(finder.subtitle().map(SharedString::from))
+            .selected(selected, focused)
+            .on_click(click)
+            .into_any_element();
+        };
+        let Some(RowControl::List {
+            actions,
+            items,
+            filter,
+            ..
+        }) = self
+            .level()
+            .origin_row
+            .and_then(|origin_row| self.root().rows.get(origin_row))
+            .map(|row| &row.control)
+        else {
+            return div()
+                .id(("settings-finder-empty", index))
+                .into_any_element();
+        };
+        let Some(item) = selected_list_item(actions, items, filter, slot) else {
+            return div()
+                .id(("settings-finder-empty", index))
+                .into_any_element();
+        };
+        let visible = filtered_list_items(actions, items, filter);
+        let context = PictureContext::for_accent(
+            qol_theme::runtime_theme().mode,
+            qol_theme::runtime_accent_key(),
+        );
+        let signal = item
+            .data
+            .get(FINDER_SIGNAL_KEY)
+            .and_then(serde_json::Value::as_u64)
+            .map(|level| level.min(FINDER_SIGNAL_BARS) as u8)
+            .filter(|level| *level > 0);
+        SettingsFinderPick::new(
+            ("settings-finder-pick", index),
+            item.label.clone(),
+            list_item_art(items, &visible, slot),
+            context,
+            self.kit,
+        )
+        .subtitle(item.subtitle.clone().map(SharedString::from))
+        .end(finder_pick_end(actions, item, selected && focused))
+        .signal(signal)
+        .under(self.finder_group_start(index).map(SharedString::from))
+        .selected(selected, focused)
+        .on_click(click)
+        .into_any_element()
+    }
+
+    fn finder_group_start(&self, index: usize) -> Option<String> {
+        let origin_row = self.level().origin_row?;
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            ..
+        } = &self.root().rows.get(origin_row)?.control
+        else {
+            return None;
+        };
+        let group_of = |row: usize| {
+            selected_list_item(actions, items, filter, row.checked_sub(1)?)
+                .and_then(finder_item_group)
+        };
+        let group = group_of(index)?;
+        let previous = self
+            .current_visible_rows()
+            .into_iter()
+            .rfind(|row| *row > 0 && *row < index)
+            .and_then(group_of);
+        (previous.as_deref() != Some(group.as_str())).then_some(group)
     }
 
     fn dispatch_resolved_list_action(
@@ -277,7 +634,9 @@ impl SettingsPanelView {
         let Some(origin_row) = self.level().origin_row else {
             return false;
         };
-        let slot = self.level().selected;
+        let Some(slot) = self.level().selected.checked_sub(self.list_card_offset()) else {
+            return false;
+        };
         let Some(RowControl::List {
             actions,
             slider,
@@ -410,6 +769,7 @@ impl SettingsPanelView {
             items,
             filter,
             list,
+            finder,
             ..
         } = &row.control
         else {
@@ -422,9 +782,12 @@ impl SettingsPanelView {
                 source,
                 row: row_index,
             },
-            actions,
-            items,
-            filter,
+            ListCardBody {
+                actions,
+                items,
+                filter,
+                finder: finder.as_deref(),
+            },
             list.selected,
             destination.clone(),
             description,
@@ -475,6 +838,9 @@ impl SettingsPanelView {
     }
 
     pub(super) fn render_list_card_item(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(finder) = self.finder() {
+            return self.render_finder_row(finder, index, cx);
+        }
         let Some(origin_row) = self.level().origin_row else {
             return div()
                 .id(("settings-list-card-empty", index))
@@ -573,6 +939,46 @@ fn list_card_word_color(item: &ListItem, kit: Kit) -> u32 {
         kit.grounds.pane.faint
     } else {
         kit.grounds.pane.soft
+    }
+}
+
+fn finder_item_group(item: &ListItem) -> Option<String> {
+    item.data
+        .get(FINDER_GROUP_KEY)
+        .and_then(serde_json::Value::as_str)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string)
+}
+
+fn finder_pick_end(actions: &ListActions, item: &ListItem, band: bool) -> FinderPickEnd {
+    let badge = item.badge.clone().unwrap_or_default();
+    if band {
+        if item.pending {
+            return FinderPickEnd::Action {
+                text: badge.into(),
+                working: true,
+            };
+        }
+        if let Some(action) = primary_list_item_action(actions, item) {
+            return FinderPickEnd::Action {
+                text: action.label.into(),
+                working: false,
+            };
+        }
+    }
+    if badge.is_empty() && !item.pending {
+        return FinderPickEnd::None;
+    }
+    let tone = match item.effective_badge_tone() {
+        StatusTone::Success => SettingsValueTone::Success,
+        StatusTone::Danger => SettingsValueTone::Danger,
+        StatusTone::Warning => SettingsValueTone::Attention,
+        StatusTone::Accent | StatusTone::Muted => SettingsValueTone::Normal,
+    };
+    FinderPickEnd::Word {
+        text: badge.into(),
+        tone,
+        working: item.pending,
     }
 }
 
@@ -742,34 +1148,87 @@ struct ListCardOrigin<'a> {
     row: usize,
 }
 
+struct ListCardBody<'a> {
+    actions: &'a ListActions,
+    items: &'a [ListItem],
+    filter: &'a str,
+    finder: Option<&'a ListFinder>,
+}
+
+fn list_card_body(
+    origin: &ListCardOrigin,
+    body: ListCardBody,
+    description: Option<String>,
+) -> (Vec<Row>, Vec<RowSection>) {
+    let visible = filtered_list_items(body.actions, body.items, body.filter);
+    let mut rows = Vec::new();
+    let mut sections = Vec::new();
+    if let Some(finder) = body.finder {
+        rows.push(finder_lead_row(origin.config_key, origin.source, finder));
+        sections.push(RowSection {
+            label: finder.lead.label.clone(),
+            description: finder.description(),
+            rows: vec![0],
+            source: origin.source,
+        });
+    }
+    let offset = rows.len();
+    rows.extend(list_card_child_rows(
+        origin.label,
+        origin.config_key,
+        origin.source,
+        body.items,
+        &visible,
+    ));
+    sections.push(RowSection {
+        label: body
+            .finder
+            .map(|finder| finder.items_label.clone())
+            .unwrap_or_else(|| origin.label.to_string()),
+        description,
+        rows: (offset..rows.len()).collect(),
+        source: origin.source,
+    });
+    (rows, sections)
+}
+
+fn finder_lead_row(key: &str, source: usize, finder: &ListFinder) -> Row {
+    Row {
+        id: FINDER_LEAD_ROW.to_string(),
+        section_id: None,
+        section_label: None,
+        label: finder.label(),
+        description: finder.subtitle(),
+        placeholder: None,
+        variant: None,
+        config_key: key.to_string(),
+        default: qol_config::contract::FieldDefault::String(String::new()),
+        stream: None,
+        action: None,
+        visibility: None,
+        source,
+        control: RowControl::Text(String::new()),
+    }
+}
+
 fn list_card_level(
     origin: ListCardOrigin,
-    actions: &ListActions,
-    items: &[ListItem],
-    filter: &str,
+    body: ListCardBody,
     selected_slot: usize,
     destination: SettingsDestination,
     description: Option<String>,
 ) -> Level {
-    let ListCardOrigin {
-        label,
-        config_key,
-        source,
-        row: origin_row,
-    } = origin;
-    let visible = filtered_list_items(actions, items, filter);
-    let rows = list_card_child_rows(label, config_key, source, items, &visible);
-    let section = RowSection {
-        label: label.to_string(),
-        description,
-        rows: (0..rows.len()).collect(),
-        source,
-    };
+    let finder = body.finder.is_some();
+    let (rows, sections) = list_card_body(&origin, body, description);
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
-    let selected = selected_slot.min(rows.len().saturating_sub(1));
+    let selected = if finder {
+        0
+    } else {
+        selected_slot.min(rows.len().saturating_sub(1))
+    };
     Level {
         rows,
-        sections: vec![section],
+        sections,
         selected,
         active_section: None,
         selected_section: 0,
@@ -777,7 +1236,7 @@ fn list_card_level(
         active_control: None,
         row_bounds,
         header: LevelHeader::Card(destination),
-        origin_row: Some(origin_row),
+        origin_row: Some(origin.row),
         object_array: None,
         display_layout: None,
         list_card: true,
@@ -933,6 +1392,7 @@ pub(super) fn list_card_activity<'a>(level: &Level, root_rows: &'a [Row]) -> Opt
         active_query: Some(_),
         active_label,
         active: true,
+        finder: None,
         ..
     } = &row.control
     else {
@@ -989,7 +1449,7 @@ fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
     let selected_id = level.rows.get(selected).map(|row| row.id.clone());
     let description = level
         .sections
-        .first()
+        .last()
         .and_then(|section| section.description.clone());
     let (label, config_key, source) = {
         let Some(parent) = root_rows.get(origin_row) else {
@@ -1006,34 +1466,48 @@ fn list_card_sync(root_rows: &mut [Row], level: &mut Level) {
         items,
         filter,
         list,
+        finder,
         ..
     }) = root_rows.get_mut(origin_row).map(|row| &mut row.control)
     else {
         return;
     };
+    let offset = usize::from(finder.is_some());
     let visible = filtered_list_items(actions, items, filter);
     let visible_ids = visible
         .iter()
         .map(|slot| items[*slot].id.clone())
         .collect::<Vec<_>>();
+    let last = (visible.len() + offset).saturating_sub(1);
     let next = match selected_id {
+        Some(id) if offset > 0 && id == FINDER_LEAD_ROW => 0,
         Some(id) => visible_ids
             .iter()
             .position(|candidate| candidate == &id)
-            .unwrap_or_else(|| selected.min(visible.len().saturating_sub(1))),
-        None => selected.min(visible.len().saturating_sub(1)),
+            .map(|slot| slot + offset)
+            .unwrap_or_else(|| selected.min(last)),
+        None => selected.min(last),
     };
-    list.selected = next;
+    list.selected = next.saturating_sub(offset);
     list.sync(visible.len());
-    let rows = list_card_child_rows(&label, &config_key, source, items, &visible);
-    let section = RowSection {
-        label: label.clone(),
-        description,
-        rows: (0..rows.len()).collect(),
+    let origin = ListCardOrigin {
+        label: &label,
+        config_key: &config_key,
         source,
+        row: origin_row,
     };
+    let (rows, sections) = list_card_body(
+        &origin,
+        ListCardBody {
+            actions,
+            items,
+            filter,
+            finder: finder.as_deref(),
+        },
+        description,
+    );
     level.rows = rows;
-    level.sections = vec![section];
+    level.sections = sections;
     level.row_bounds = (0..level.rows.len())
         .map(|_| Rc::new(Cell::new(None)))
         .collect();
@@ -1180,9 +1654,12 @@ mod tests {
                 source: 0,
                 row: 0,
             },
-            actions,
-            items,
-            filter,
+            super::ListCardBody {
+                actions,
+                items,
+                filter,
+                finder: None,
+            },
             list.selected,
             SettingsDestination::from_static("Devices"),
             None,
@@ -1246,6 +1723,7 @@ mod tests {
     ) -> RowActionSpec {
         RowActionSpec {
             action: action.into(),
+            open: None,
             input: None,
             label: Some(label.into()),
             description: description.map(str::to_string),
@@ -1658,9 +2136,12 @@ mod tests {
                 source: 0,
                 row: 0,
             },
-            actions,
-            items,
-            filter,
+            super::ListCardBody {
+                actions,
+                items,
+                filter,
+                finder: None,
+            },
             list.selected,
             SettingsDestination::from_static("Devices"),
             None,
@@ -1734,5 +2215,196 @@ mod tests {
             .get(&well_item.id)
             .expect("the step records the hold under the id the well would step");
         assert_eq!(hold.value, 0.9);
+    }
+
+    const FINDER_SPEC: &str = r#"
+schema_version = 1
+
+[field.find]
+type = "list"
+label = "Find devices"
+query = "nearby"
+row_label = "{name}"
+items_label = "found devices"
+
+[field.find.lead]
+label = "search"
+row_label = "{label}"
+
+[[field.find.lead.actions]]
+action = "start_search"
+label = "Search"
+when = "can_start"
+
+[[field.find.row_actions]]
+action = "pair_device"
+label = "Pair"
+when = "can_pair"
+"#;
+
+    fn finder_fixture(payload: serde_json::Value) -> (Vec<Row>, Level) {
+        let spec = qol_config::contract::parse_spec_str(FINDER_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = super::super::super::rows::rows_from_resolved(&resolved, 0);
+        super::super::super::rows::apply_runtime_query(
+            &mut rows,
+            0,
+            "nearby",
+            Ok(payload),
+            &|_, _| false,
+        );
+        let RowControl::List {
+            actions,
+            items,
+            filter,
+            list,
+            finder,
+            ..
+        } = &rows[0].control
+        else {
+            unreachable!();
+        };
+        let child = super::list_card_level(
+            super::ListCardOrigin {
+                label: "Find devices",
+                config_key: "find",
+                source: 0,
+                row: 0,
+            },
+            super::ListCardBody {
+                actions,
+                items,
+                filter,
+                finder: finder.as_deref(),
+            },
+            list.selected,
+            SettingsDestination::from_static("Find devices"),
+            None,
+        );
+        (rows, child)
+    }
+
+    fn nearby(names: &[&str]) -> serde_json::Value {
+        serde_json::json!({
+            "lead": { "label": "Search nearby", "can_start": true },
+            "items": names
+                .iter()
+                .map(|name| serde_json::json!({ "address": name, "name": name, "can_pair": true }))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    #[test]
+    fn a_finder_card_leads_with_its_search_row_above_the_found_items() {
+        let (_, child) = finder_fixture(nearby(&["Keys", "Mouse"]));
+        let ids = child
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [super::FINDER_LEAD_ROW, "Keys", "Mouse"]);
+        assert_eq!(child.rows[0].label, "Search nearby");
+        assert_eq!(child.selected, 0, "the card opens on the search row");
+        let sections = child
+            .sections
+            .iter()
+            .map(|section| (section.label.as_str(), section.rows.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sections,
+            [("search", vec![0]), ("found devices", vec![1, 2])]
+        );
+    }
+
+    #[test]
+    fn a_finder_rebuild_keeps_the_selection_on_the_same_row_past_the_lead() {
+        let (mut rows, mut child) = finder_fixture(nearby(&["Keys", "Mouse"]));
+        child.selected = 2;
+        super::super::super::rows::apply_runtime_query(
+            &mut rows,
+            0,
+            "nearby",
+            Ok(nearby(&["Mouse", "Pad", "Keys"])),
+            &|_, _| false,
+        );
+        super::list_card_sync(&mut rows, &mut child);
+        assert_eq!(child.rows[child.selected].id, "Mouse");
+        assert_eq!(child.selected, 1);
+        let RowControl::List { list, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        assert_eq!(list.selected, 0, "the item slot skips the search row");
+
+        child.selected = 0;
+        super::list_card_sync(&mut rows, &mut child);
+        assert_eq!(child.rows[child.selected].id, super::FINDER_LEAD_ROW);
+    }
+
+    #[test]
+    fn a_finder_pick_ends_in_its_verb_when_selected_and_its_state_word_otherwise() {
+        use crate::settings_panel::components::{FinderPickEnd, SettingsValueTone};
+        let (rows, _) = finder_fixture(serde_json::json!({ "items": [] }));
+        let RowControl::List { actions, .. } = &rows[0].control else {
+            unreachable!();
+        };
+        let item = |data: serde_json::Value| {
+            let mut item = list_item("a", "Keys");
+            item.badge = data["badge"].as_str().map(str::to_string);
+            item.badge_tone = data["badge_tone"]
+                .as_str()
+                .and_then(super::StatusTone::from_contract);
+            item.pending = data["action_pending"].as_bool().unwrap_or(false);
+            item.data = data;
+            item
+        };
+        let word = |text: &str, tone, working| FinderPickEnd::Word {
+            text: text.to_string().into(),
+            tone,
+            working,
+        };
+        let action = |text: &str, working| FinderPickEnd::Action {
+            text: text.to_string().into(),
+            working,
+        };
+        let pairing = serde_json::json!({ "badge": "Pairing", "action_pending": true });
+        let failed = serde_json::json!({ "badge": "Couldn't pair", "badge_tone": "danger" });
+        let paired = serde_json::json!({ "badge": "Paired", "badge_tone": "success" });
+        let cases = [
+            (
+                serde_json::json!({ "can_pair": true }),
+                true,
+                action("Pair", false),
+            ),
+            (
+                serde_json::json!({ "can_pair": true }),
+                false,
+                FinderPickEnd::None,
+            ),
+            (pairing.clone(), true, action("Pairing", true)),
+            (
+                pairing,
+                false,
+                word("Pairing", SettingsValueTone::Normal, true),
+            ),
+            (
+                failed,
+                false,
+                word("Couldn't pair", SettingsValueTone::Danger, false),
+            ),
+            (
+                paired,
+                false,
+                word("Paired", SettingsValueTone::Success, false),
+            ),
+        ];
+        for (data, band, expected) in cases {
+            let label = format!("{data} band={band}");
+            assert_eq!(
+                super::finder_pick_end(actions, &item(data), band),
+                expected,
+                "{label}"
+            );
+        }
     }
 }

@@ -35,6 +35,10 @@ args = ["search"]
 label = "Stop Bluetooth Search"
 args = ["stop_search"]
 
+[action.open_system_settings]
+label = "Open Bluetooth Settings"
+args = ["open_settings"]
+
 [action.pair_device]
 label = "Pair Bluetooth Device"
 args = ["pair"]

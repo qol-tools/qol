@@ -33,6 +33,10 @@ pub fn is_escape_held() -> bool {
     false
 }
 
+pub fn reduce_motion() -> bool {
+    objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+}
+
 pub fn ghost_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::Normal
 }

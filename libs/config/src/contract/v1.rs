@@ -127,6 +127,10 @@ pub struct FieldSpec {
     #[serde(default)]
     pub row_slider: Option<RowSliderSpec>,
     #[serde(default)]
+    pub lead: Option<ListLeadSpec>,
+    #[serde(default)]
+    pub items_label: Option<String>,
+    #[serde(default)]
     pub item_card_field: Option<String>,
     #[serde(default)]
     pub search: Option<bool>,
@@ -189,7 +193,10 @@ pub struct NestedListSpec {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RowActionSpec {
+    #[serde(default)]
     pub action: String,
+    #[serde(default)]
+    pub open: Option<String>,
     #[serde(default)]
     pub input: Option<IndexMap<String, String>>,
     #[serde(default)]
@@ -200,6 +207,19 @@ pub struct RowActionSpec {
     pub key: Option<String>,
     #[serde(default)]
     pub when: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ListLeadSpec {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub row_label: Option<String>,
+    #[serde(default)]
+    pub row_subtitle: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<RowActionSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]

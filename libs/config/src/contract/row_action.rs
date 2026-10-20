@@ -5,6 +5,7 @@ use super::{RowActionSpec, RowSliderSpec};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRowAction {
     pub action: String,
+    pub open: Option<String>,
     pub label: String,
     pub description: Option<String>,
     pub input: Value,
@@ -21,6 +22,7 @@ pub fn resolve_row_actions(
         .filter(|spec| row_action_is_visible(spec, row))
         .map(|spec| ResolvedRowAction {
             action: spec.action.clone(),
+            open: spec.open.clone(),
             label: spec.label.clone().unwrap_or_else(|| "Run".into()),
             description: spec.description.clone(),
             input: resolve_input(spec.input.as_ref(), row),
@@ -36,6 +38,7 @@ pub fn resolve_slider_action(slider: &RowSliderSpec, row: &Value, value: f64) ->
     merged["value"] = slider_value_json(value);
     ResolvedRowAction {
         action: slider.action.clone(),
+        open: None,
         label: "Run".into(),
         description: None,
         input: resolve_input(slider.input.as_ref(), &merged),
@@ -147,6 +150,7 @@ mod tests {
     ) -> RowActionSpec {
         RowActionSpec {
             action: name.into(),
+            open: None,
             input: Some(IndexMap::from([
                 ("address".into(), "{address}".into()),
                 ("message".into(), "Connect {name} ({missing})".into()),
@@ -186,6 +190,7 @@ mod tests {
 
         assert_eq!(resolved.len(), 2);
         assert_eq!(resolved[0].action, "inspect");
+        assert_eq!(resolved[0].open, None);
         assert_eq!(resolved[0].label, "Run");
         assert_eq!(resolved[0].description, None);
         assert_eq!(resolved[1].action, "connect");
@@ -309,6 +314,23 @@ mod tests {
         let resolved = resolve_slider_action(&slider, &row, 7.0);
 
         assert_eq!(resolved.input["value"], serde_json::json!(7));
+    }
+
+    #[test]
+    fn an_open_action_resolves_to_the_field_it_opens() {
+        let open = RowActionSpec {
+            action: String::new(),
+            open: Some("devices".into()),
+            ..action("", Some("Open"), None, Some("paired"))
+        };
+        let row = serde_json::json!({ "address": "AA", "paired": true });
+
+        let resolved = resolve_row_actions(None, std::slice::from_ref(&open), &row);
+
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].open.as_deref(), Some("devices"));
+        assert_eq!(resolved[0].label, "Open");
+        assert!(resolve_row_actions(None, &[open], &serde_json::json!({})).is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::contract::{
-    ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, NestedListSpec, NumberConstraints,
-    RowActionSpec, RowSliderSpec,
+    ConfigSpec, FieldAlign, FieldDefault, FieldKind, ItemSpec, ListLeadSpec, NestedListSpec,
+    NumberConstraints, RowActionSpec, RowSliderSpec,
 };
 use crate::validation::{validate_spec_collect, ValidationError};
 use indexmap::IndexMap;
@@ -87,6 +87,10 @@ pub struct ResolvedField {
     pub row_actions: Vec<RowActionSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_slider: Option<RowSliderSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lead: Option<ListLeadSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_card_field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,6 +206,8 @@ pub fn resolve_config(
             row_action: field.row_action.clone(),
             row_actions: field.row_actions.clone(),
             row_slider: field.row_slider.clone(),
+            lead: field.lead.clone(),
+            items_label: field.items_label.clone(),
             item_card_field: field.item_card_field.clone(),
             search: field.search,
             empty_message: field.empty_message.clone(),

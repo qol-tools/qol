@@ -10,6 +10,10 @@ pub fn is_escape_held() -> bool {
     false
 }
 
+pub fn reduce_motion() -> bool {
+    false
+}
+
 pub fn set_accessory_policy() {}
 
 pub fn ghost_window_kind() -> gpui::WindowKind {

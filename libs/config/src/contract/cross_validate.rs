@@ -16,6 +16,8 @@ pub fn validate_contracts(
         validate_display_layout_refs(id, field, runtime, &mut errors);
         validate_stream_ref(id, field, runtime, &mut errors);
         validate_row_action_ref(id, field, runtime, &mut errors);
+        validate_row_action_opens(id, field, config, &mut errors);
+        validate_lead_refs(id, field, runtime, &mut errors);
         validate_item_card_field_ref(id, field, config, &mut errors);
     }
     validate_pages(config, runtime, &mut errors);
@@ -365,7 +367,7 @@ fn validate_row_action_ref(
         return;
     };
     for (index, action) in actions.into_iter().enumerate() {
-        if rt.actions.contains_key(action.action.as_str()) {
+        if action.open.is_some() || rt.actions.contains_key(action.action.as_str()) {
             continue;
         }
         let path = if index == 0 && field.row_action.is_some() {
@@ -383,6 +385,78 @@ fn validate_row_action_ref(
             errors.push(ValidationError::new(
                 format!("field.{id}.row_slider.action"),
                 format!("references undeclared action: {}", slider.action),
+            ));
+        }
+    }
+}
+
+fn validate_row_action_opens(
+    id: &str,
+    field: &FieldSpec,
+    config: &ConfigSpec,
+    errors: &mut Vec<ValidationError>,
+) {
+    let actions = field.row_action.iter().chain(field.row_actions.iter());
+    for action in actions {
+        let path = format!("field.{id}.row_actions");
+        match (action.action.is_empty(), action.open.as_deref()) {
+            (true, None) => errors.push(ValidationError::new(
+                format!("{path}.action"),
+                "needs an action or an open target",
+            )),
+            (false, Some(_)) => errors.push(ValidationError::new(
+                format!("{path}.open"),
+                "cannot be combined with an action",
+            )),
+            (true, Some(target)) => match config.fields.get(target).map(|target| target.kind) {
+                Some(FieldKind::List) if target != id => {}
+                Some(_) => errors.push(ValidationError::new(
+                    format!("{path}.open"),
+                    format!("`{target}` must be another list field"),
+                )),
+                None => errors.push(ValidationError::new(
+                    format!("{path}.open"),
+                    format!("names undeclared field `{target}`"),
+                )),
+            },
+            (false, None) => {}
+        }
+    }
+}
+
+fn validate_lead_refs(
+    id: &str,
+    field: &FieldSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(lead) = field.lead.as_ref() else {
+        return;
+    };
+    let path = format!("field.{id}.lead");
+    if field.kind != FieldKind::List {
+        errors.push(ValidationError::new(path, "is only valid for list fields"));
+        return;
+    }
+    if lead.label.trim().is_empty() {
+        errors.push(ValidationError::new(
+            format!("{path}.label"),
+            "cannot be empty",
+        ));
+    }
+    for action in &lead.actions {
+        if action.open.is_some() {
+            errors.push(ValidationError::new(
+                format!("{path}.actions.open"),
+                "lead actions run runtime actions only",
+            ));
+            continue;
+        }
+        let declared = runtime.is_some_and(|rt| rt.actions.contains_key(action.action.as_str()));
+        if !declared {
+            errors.push(ValidationError::new(
+                format!("{path}.actions.action"),
+                format!("references undeclared action: {}", action.action),
             ));
         }
     }
@@ -1402,5 +1476,147 @@ poll_interval_ms = 1000
         let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].path, "pages");
+    }
+
+    const FINDER_RUNTIME: &str = r#"
+schema_version = 1
+
+[query.nearby]
+description = "test"
+poll_interval_ms = 1000
+
+[query.paired]
+description = "test"
+poll_interval_ms = 1000
+
+[action.start_search]
+description = "Start"
+
+[action.pair_device]
+description = "Pair"
+"#;
+
+    fn finder_config(lead_action: &str, open: &str) -> ConfigSpec {
+        parse_spec_str(&format!(
+            r#"
+schema_version = 1
+
+[field.paired]
+type = "list"
+query = "paired"
+
+[field.status]
+type = "status"
+query = "paired"
+
+[field.nearby]
+type = "list"
+query = "nearby"
+items_label = "Found devices"
+
+[field.nearby.lead]
+label = "Search"
+description = "{{description}}"
+
+[[field.nearby.lead.actions]]
+action = "{lead_action}"
+label = "Search"
+when = "can_search"
+
+[[field.nearby.row_actions]]
+action = "pair_device"
+label = "Pair"
+when = "can_pair"
+
+[[field.nearby.row_actions]]
+open = "{open}"
+label = "Open"
+when = "paired"
+"#
+        ))
+        .expect("parse config")
+    }
+
+    #[test]
+    fn a_list_lead_and_an_open_action_validate_against_their_targets() {
+        let runtime = parse_runtime_spec_str(FINDER_RUNTIME).expect("parse runtime");
+        let cases = [
+            ("start_search", "paired", None),
+            (
+                "nonexistent",
+                "paired",
+                Some("field.nearby.lead.actions.action"),
+            ),
+            (
+                "start_search",
+                "status",
+                Some("field.nearby.row_actions.open"),
+            ),
+            (
+                "start_search",
+                "nearby",
+                Some("field.nearby.row_actions.open"),
+            ),
+            (
+                "start_search",
+                "missing",
+                Some("field.nearby.row_actions.open"),
+            ),
+        ];
+        for (lead_action, open, failure) in cases {
+            let result = validate_contracts(&finder_config(lead_action, open), Some(&runtime));
+            match failure {
+                None => assert!(result.is_ok(), "{lead_action}/{open}: {result:?}"),
+                Some(path) => {
+                    let errors = result.expect_err("should fail");
+                    assert!(
+                        errors.iter().any(|error| error.path == path),
+                        "{lead_action}/{open}: {errors:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_row_action_needs_exactly_one_of_action_and_open() {
+        let runtime = parse_runtime_spec_str(FINDER_RUNTIME).expect("parse runtime");
+        for (body, path) in [
+            ("label = \"Nothing\"", "field.nearby.row_actions.action"),
+            (
+                "action = \"pair_device\"\nopen = \"paired\"",
+                "field.nearby.row_actions.open",
+            ),
+        ] {
+            let config = parse_spec_str(&format!(
+                "schema_version = 1\n\n[field.paired]\ntype = \"list\"\nquery = \"paired\"\n\n[field.nearby]\ntype = \"list\"\nquery = \"nearby\"\n\n[[field.nearby.row_actions]]\n{body}\n"
+            ))
+            .expect("parse config");
+            let errors = validate_contracts(&config, Some(&runtime)).expect_err("should fail");
+            assert!(errors.iter().any(|error| error.path == path), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn a_lead_belongs_to_a_list_field() {
+        let config = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.status]
+type = "status"
+query = "nearby"
+
+[field.status.lead]
+label = "Search"
+"#,
+        )
+        .expect("parse config");
+        let runtime = parse_runtime_spec_str(FINDER_RUNTIME).expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&runtime)).expect_err("should fail");
+        assert!(
+            errors.iter().any(|error| error.path == "field.status.lead"),
+            "{errors:?}"
+        );
     }
 }

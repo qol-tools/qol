@@ -33,6 +33,10 @@ pub fn is_escape_held() -> bool {
     imp::is_escape_held()
 }
 
+pub fn reduce_motion() -> bool {
+    imp::reduce_motion()
+}
+
 pub fn set_accessory_policy() {
     imp::set_accessory_policy()
 }

@@ -39,6 +39,100 @@ pub fn is_escape_held() -> bool {
         .unwrap_or(false)
 }
 
+const MOTION_READ_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const ENABLE_ANIMATIONS: &str = "Gtk/EnableAnimations";
+
+pub fn reduce_motion() -> bool {
+    static CACHE: Mutex<Option<(std::time::Instant, bool)>> = Mutex::new(None);
+    let Ok(mut cache) = CACHE.lock() else {
+        return false;
+    };
+    if let Some((read_at, reduce)) = *cache {
+        if read_at.elapsed() < MOTION_READ_INTERVAL {
+            return reduce;
+        }
+    }
+    let reduce = xsettings_blob()
+        .and_then(|blob| xsettings_int(&blob, ENABLE_ANIMATIONS))
+        .is_some_and(|enabled| enabled == 0);
+    *cache = Some((std::time::Instant::now(), reduce));
+    reduce
+}
+
+fn xsettings_blob() -> Option<Vec<u8>> {
+    let guard = keymap_conn().lock().ok()?;
+    let conn = guard.as_ref()?;
+    let selection = conn
+        .intern_atom(true, b"_XSETTINGS_S0")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    let property = conn
+        .intern_atom(true, b"_XSETTINGS_SETTINGS")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    if selection == x11rb::NONE || property == x11rb::NONE {
+        return None;
+    }
+    let owner = conn
+        .get_selection_owner(selection)
+        .ok()?
+        .reply()
+        .ok()?
+        .owner;
+    if owner == x11rb::NONE {
+        return None;
+    }
+    let reply = conn
+        .get_property(false, owner, property, property, 0, u32::MAX / 4)
+        .ok()?
+        .reply()
+        .ok()?;
+    Some(reply.value)
+}
+
+fn xsettings_int(blob: &[u8], name: &str) -> Option<i32> {
+    let big = *blob.first()? == 1;
+    let card16 = |at: usize| -> Option<u16> {
+        let bytes: [u8; 2] = blob.get(at..at + 2)?.try_into().ok()?;
+        Some(if big {
+            u16::from_be_bytes(bytes)
+        } else {
+            u16::from_le_bytes(bytes)
+        })
+    };
+    let card32 = |at: usize| -> Option<u32> {
+        let bytes: [u8; 4] = blob.get(at..at + 4)?.try_into().ok()?;
+        Some(if big {
+            u32::from_be_bytes(bytes)
+        } else {
+            u32::from_le_bytes(bytes)
+        })
+    };
+    let padded = |length: usize| length.div_ceil(4) * 4;
+    let count = card32(8)?;
+    let mut at = 12;
+    for _ in 0..count {
+        let kind = *blob.get(at)?;
+        let name_length = usize::from(card16(at + 2)?);
+        let found = blob.get(at + 4..at + 4 + name_length)? == name.as_bytes();
+        let value = at + 4 + padded(name_length) + 4;
+        if found && kind == 0 {
+            return card32(value).map(|raw| raw as i32);
+        }
+        at = match kind {
+            0 => value + 4,
+            1 => value + 4 + padded(card32(value)? as usize),
+            2 => value + 8,
+            _ => return None,
+        };
+    }
+    None
+}
+
 fn keycode_held(keys: &[u8; 32], keycode: u8) -> bool {
     keys[usize::from(keycode / 8)] & (1 << (keycode % 8)) != 0
 }

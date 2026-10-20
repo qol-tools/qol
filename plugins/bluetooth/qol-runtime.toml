@@ -12,6 +12,9 @@ description = "Start Bluetooth discovery for up to 60 seconds"
 [action.stop_search]
 description = "Stop the active Bluetooth discovery session"
 
+[action.open_system_settings]
+description = "Open the system Bluetooth settings, where Bluetooth LE devices pair"
+
 [action.pair_device]
 description = "Pair a discovered Bluetooth device using its appropriate transport"
 input = { address = "string" }
@@ -73,8 +76,12 @@ description = "Current power state of the default Bluetooth adapter"
 poll_interval_ms = 500
 
 [query.devices]
-description = "Unified paired and discovered Bluetooth device inventory"
+description = "Paired, trusted and connected Bluetooth devices"
 poll_interval_ms = 1000
+
+[query.nearby_devices]
+description = "Search state and the Bluetooth devices the current or last search found"
+poll_interval_ms = 500
 
 [query.managed_device_options]
 description = "Paired Bluetooth devices available for automatic reconnection"
