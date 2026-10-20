@@ -36,9 +36,7 @@ impl Advertisement {
         }
         let alias = [&self.local_name, &self.peripheral_name]
             .into_iter()
-            .flatten()
-            .map(|name| name.trim())
-            .find(|name| !name.is_empty())?;
+            .find_map(|name| named(name.clone()))?;
         let mut uuids = self
             .service_uuids
             .iter()
@@ -48,7 +46,7 @@ impl Advertisement {
         uuids.dedup();
         Some(DeviceInfo {
             address: self.identifier.clone(),
-            alias: alias.to_string(),
+            alias,
             paired: false,
             trusted: false,
             connected: false,
@@ -88,7 +86,12 @@ impl Sightings {
 }
 
 fn named(name: Option<String>) -> Option<String> {
-    name.filter(|name| !name.trim().is_empty())
+    let printable = name?
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect::<String>();
+    let printable = printable.trim();
+    (!printable.is_empty()).then(|| printable.to_string())
 }
 
 fn signal(rssi: i64) -> Option<i16> {
@@ -264,6 +267,44 @@ mod tests {
                 "{local_name:?} {peripheral_name:?}"
             );
         }
+    }
+
+    #[test]
+    fn control_characters_in_an_advertised_name_never_reach_the_device_name() {
+        let cases = [
+            (
+                Some("X\nAA:BB:CC:DD:EE:FF  Fake  paired=true"),
+                None,
+                Some("XAA:BB:CC:DD:EE:FF  Fake  paired=true"),
+            ),
+            (
+                Some("\u{1b}[2J\u{1b}]0;LIFT\u{7}"),
+                None,
+                Some("[2J]0;LIFT"),
+            ),
+            (Some("\r\n\u{7}"), Some(" MX KEYS B\n"), Some("MX KEYS B")),
+            (Some("\u{1b}"), Some("\t"), None),
+        ];
+        for (local_name, peripheral_name, alias) in cases {
+            let devices = sighted([Advertisement {
+                peripheral_name: peripheral_name.map(str::to_string),
+                ..advertisement(LIFT, local_name, -60)
+            }]);
+            assert_eq!(
+                devices.first().map(|device| device.alias.as_str()),
+                alias,
+                "{local_name:?} {peripheral_name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_later_name_of_only_control_characters_keeps_the_name_seen_so_far() {
+        let devices = sighted([
+            advertisement(LIFT, Some("LIFT"), -60),
+            advertisement(LIFT, Some("\u{1b}\n"), -58),
+        ]);
+        assert_eq!(devices[0].alias, "LIFT");
     }
 
     #[test]
