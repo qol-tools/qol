@@ -7,9 +7,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliComposer, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -96,6 +96,10 @@ impl CliSessionStrategy for KimiStrategy {
 
     fn ui_rendered(&self, screen: &str) -> bool {
         crate::cli::screen::kimi_live(screen)
+    }
+
+    fn composer(&self, screen: &str) -> Option<CliComposer> {
+        Some(crate::cli::composer::kimi(screen))
     }
 
     fn launch(&self) -> Option<CliLaunchProgram> {

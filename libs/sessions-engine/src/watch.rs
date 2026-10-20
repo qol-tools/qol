@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 use qol_terminal_sessions::{
-    DeliveryMode, ScreenReader, SessionBinding, SessionFacts, SessionInventory, TerminalError,
+    ScreenReader, SessionBinding, SessionFacts, SessionInventory, TerminalError,
     TerminalSessionService, TextInput,
 };
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,8 @@ use super::spawn::{SpawnLedger, SpawnLocks};
 mod evidence;
 
 use qol_terminal_sessions::cli::{
-    below_composer, composer_draft, composer_holds_draft, composer_screen, CliRuntimeState,
-    CliSessionInterpreter,
+    below_composer, composer_screen, read_composer, CliComposer, CliRuntimeState,
+    CliSessionInterpreter, ComposerGuard, Typed, Typing, QUIET,
 };
 
 const POLL_BASE: Duration = Duration::from_secs(3);
@@ -1141,9 +1141,15 @@ fn nudge_missing_marker(
     };
     let joined = facts.is_some_and(|facts| super::bridge::session_is_pi(interpreter, facts));
     let prompt = super::bridge::missing_marker_prompt(&marker, joined);
-    let sent = terminals
-        .send_text(&round.binding, &prompt, DeliveryMode::Submit)
-        .is_ok();
+    let sent = ComposerGuard::default()
+        .type_text_within(
+            terminals,
+            interpreter,
+            Typing::submit(&round.binding, &prompt),
+            QUIET * 2,
+            &mut std::thread::sleep,
+        )
+        .is_ok_and(Typed::landed);
     qol_runtime::probe!(
         "CLI_SESSION_WATCH",
         "event=marker_nudge session={} sent={}",
@@ -2203,14 +2209,16 @@ fn composer_holds_draft_or_unreadable(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
 ) -> bool {
-    match composer_holds_draft(terminals, binding) {
+    match read_composer(terminals, &CliSessionInterpreter::system(), binding) {
+        Ok(composer) => composer != CliComposer::Empty,
         Err(TerminalError::Unsupported { .. }) => false,
-        result => result.unwrap_or(true),
+        Err(_) => true,
     }
 }
 
 enum ComposerWait {
-    Empty,
+    Typed(Typed),
+    Failed(TerminalError),
     Gone,
     Unreadable,
 }
@@ -2218,7 +2226,7 @@ enum ComposerWait {
 #[derive(Default)]
 struct DraftHold {
     deferrals: usize,
-    draft: Option<String>,
+    draft: Option<CliComposer>,
     steady: usize,
     stashed: bool,
     stash_tried: bool,
@@ -2226,7 +2234,7 @@ struct DraftHold {
 }
 
 impl DraftHold {
-    fn observe(&mut self, draft: String) {
+    fn observe(&mut self, draft: CliComposer) {
         if self.draft.as_ref() == Some(&draft) {
             self.steady += 1;
         } else {
@@ -2236,31 +2244,38 @@ impl DraftHold {
     }
 }
 
-fn wait_for_empty_composer(
+fn type_when_empty(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
+    message: &str,
     sleep: &mut dyn FnMut(Duration),
     hold: &mut DraftHold,
 ) -> ComposerWait {
+    let interpreter = CliSessionInterpreter::system();
+    let mut guard = ComposerGuard::default();
     let mut unread = 0usize;
     loop {
-        match composer_screen(terminals, binding) {
-            Ok(screen) => {
-                let Some(draft) = composer_draft(&screen) else {
-                    return ComposerWait::Empty;
-                };
+        match read_composer(terminals, &interpreter, binding) {
+            Ok(CliComposer::Empty) | Err(TerminalError::Unsupported { .. }) => {
+                match guard.type_text(terminals, &interpreter, Typing::submit(binding, message)) {
+                    Ok(Typed::Held(_)) => {}
+                    Ok(typed) => return ComposerWait::Typed(typed),
+                    Err(error) => return ComposerWait::Failed(error),
+                }
+            }
+            Ok(composer) => {
                 unread = 0;
-                hold.observe(draft);
-                if hold.steady >= WAKE_DRAFT_SETTLE_POLLS && !hold.stash_tried {
+                let draft = matches!(composer, CliComposer::Draft { .. });
+                hold.observe(composer);
+                if draft && hold.steady >= WAKE_DRAFT_SETTLE_POLLS && !hold.stash_tried {
                     hold.stash_tried = true;
-                    hold.stashed = stash_draft(terminals, binding, &screen);
+                    hold.stashed = stash_draft(terminals, binding);
                 }
                 if hold.deferrals >= WAKE_DRAFT_NOTIFY_POLLS && !hold.notified {
                     hold.notified = true;
                     notify_held_wake();
                 }
             }
-            Err(TerminalError::Unsupported { .. }) => return ComposerWait::Empty,
             Err(_) if session_gone(terminals, binding) => return ComposerWait::Gone,
             Err(_) if unread + 1 >= WAKE_UNREADABLE_POLLS => return ComposerWait::Unreadable,
             Err(_) => unread += 1,
@@ -2274,12 +2289,15 @@ fn wait_for_empty_composer(
 /// text, cursor and paste chips, and puts it back after the next submit. A
 /// tool without a stash, or one already holding a stash the key would
 /// replace, keeps the draft where it is.
-fn stash_draft(terminals: &TerminalSessionService, binding: &SessionBinding, screen: &str) -> bool {
+fn stash_draft(terminals: &TerminalSessionService, binding: &SessionBinding) -> bool {
     let Ok(Some(stash)) = CliSessionInterpreter::system().draft_stash_for(terminals, binding)
     else {
         return false;
     };
-    if below_composer(screen).contains(stash.indicator) {
+    let Ok(screen) = composer_screen(terminals, binding) else {
+        return false;
+    };
+    if below_composer(&screen).contains(stash.indicator) {
         return false;
     }
     terminals.send_key(binding, stash.key).is_ok()
@@ -2329,7 +2347,7 @@ fn deliver_wake(
                     }
                 } else {
                     let mut hold = DraftHold::default();
-                    let wait = wait_for_empty_composer(terminals, &binding, sleep, &mut hold);
+                    let wait = type_when_empty(terminals, &binding, message, sleep, &mut hold);
                     let deferrals = hold.deferrals;
                     if deferrals > 0 {
                         qol_runtime::probe!(
@@ -2352,7 +2370,7 @@ fn deliver_wake(
                                         chrono::Utc::now().to_rfc3339(),
                                         driver,
                                         deferrals,
-                                        matches!(wait, ComposerWait::Empty),
+                                        matches!(wait, ComposerWait::Typed(_)),
                                         hold.stashed,
                                         hold.notified
                                     )
@@ -2361,15 +2379,20 @@ fn deliver_wake(
                             });
                     }
                     match wait {
-                        ComposerWait::Empty => match terminals.send_text(&binding, message, DeliveryMode::Submit) {
-                            Ok(()) => WakeDelivery {
-                                delivered: true,
-                                error: None,
-                            },
-                            Err(error) => WakeDelivery {
-                                delivered: false,
-                                error: Some(error.to_string()),
-                            },
+                        ComposerWait::Typed(typed) if typed.landed() => WakeDelivery {
+                            delivered: true,
+                            error: None,
+                        },
+                        ComposerWait::Typed(_) => WakeDelivery {
+                            delivered: false,
+                            error: Some(
+                                "the wake was typed but not submitted, because the initiator's input box changed while it was typed"
+                                    .to_owned(),
+                            ),
+                        },
+                        ComposerWait::Failed(error) => WakeDelivery {
+                            delivered: false,
+                            error: Some(error.to_string()),
                         },
                         ComposerWait::Gone => WakeDelivery {
                             delivered: false,

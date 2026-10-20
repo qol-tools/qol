@@ -10,16 +10,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typing};
 use qol_terminal_sessions::{
-    screen_contains_ignoring_whitespace, DeliveryMode, ScreenReader, SessionBinding, SessionFacts,
-    SessionInventory, TerminalSessionService, TextInput,
+    screen_contains_ignoring_whitespace, ScreenReader, SessionBinding, SessionFacts,
+    SessionInventory, TerminalSessionService,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
 use super::spawn::{SpawnLedger, SpawnLocks};
+use super::typing::type_into;
 
 const DELIVERY_VERIFY_WINDOW: Duration = Duration::from_secs(15);
 const DELIVERY_VERIFY_INTERVAL: Duration = Duration::from_secs(1);
@@ -1156,7 +1157,13 @@ pub(super) fn execute(
     let pre_screen = terminals
         .read_screen(binding)
         .context("bridge screen read failed")?;
-    if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
+    let mut guard = ComposerGuard::default();
+    if let Err(error) = type_into(
+        terminals,
+        interpreter,
+        &mut guard,
+        Typing::submit(binding, &prompt),
+    ) {
         pending.acknowledge(binding, &marker.token, false)?;
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
@@ -1178,9 +1185,13 @@ pub(super) fn execute(
             "event=delivery_retry target_backend={}",
             binding.session_id().backend()
         );
-        terminals
-            .send_text(binding, &prompt, DeliveryMode::Submit)
-            .context("bridge task redelivery failed")?;
+        type_into(
+            terminals,
+            interpreter,
+            &mut guard,
+            Typing::submit(binding, &prompt),
+        )
+        .context("bridge task redelivery failed")?;
         if !delivery_observed(
             terminals,
             binding,
@@ -1336,7 +1347,13 @@ pub(super) fn submit(
     let pre_screen = terminals
         .read_screen(binding)
         .context("submit screen read failed")?;
-    if let Err(error) = terminals.send_text(binding, &prompt, DeliveryMode::Submit) {
+    let mut guard = ComposerGuard::default();
+    if let Err(error) = type_into(
+        terminals,
+        interpreter,
+        &mut guard,
+        Typing::submit(binding, &prompt),
+    ) {
         pending.acknowledge(binding, &marker.token, false)?;
         qol_runtime::probe!(
             "CLI_SESSION_BRIDGE",
@@ -1358,9 +1375,13 @@ pub(super) fn submit(
             "event=submit_delivery_retry target_backend={}",
             binding.session_id().backend()
         );
-        terminals
-            .send_text(binding, &prompt, DeliveryMode::Submit)
-            .context("submit task redelivery failed")?;
+        type_into(
+            terminals,
+            interpreter,
+            &mut guard,
+            Typing::submit(binding, &prompt),
+        )
+        .context("submit task redelivery failed")?;
         if !delivery_observed(
             terminals,
             binding,
@@ -1545,6 +1566,7 @@ fn resume_owned(
         let prompt = kickstart_prompt(&marker, joined);
         deliver_kickstart(
             terminals,
+            interpreter,
             binding,
             &prompt,
             &marker.left,
@@ -1717,15 +1739,21 @@ fn kickstart_submitted(
 
 fn deliver_kickstart(
     terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
     binding: &SessionBinding,
     prompt: &str,
     fragment: &str,
     window: Duration,
 ) -> Result<()> {
+    let mut guard = ComposerGuard::default();
     for attempt in 0..2 {
-        terminals
-            .send_text(binding, prompt, DeliveryMode::Submit)
-            .context("bridge kickstart delivery failed")?;
+        type_into(
+            terminals,
+            interpreter,
+            &mut guard,
+            Typing::submit(binding, prompt),
+        )
+        .context("bridge kickstart delivery failed")?;
         if kickstart_submitted(terminals, binding, fragment, window)? {
             return Ok(());
         }
@@ -2343,8 +2371,8 @@ mod tests {
         CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolColor, CliToolId,
     };
     use qol_terminal_sessions::{
-        BackendId, SessionCapabilities, SessionFocus, SessionId, TerminalBackend, TerminalError,
-        TerminalSnapshot,
+        BackendId, DeliveryMode, SessionCapabilities, SessionFocus, SessionId, TerminalBackend,
+        TerminalError, TerminalSnapshot, TextInput,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2793,6 +2821,7 @@ mod tests {
 
         let error = deliver_kickstart(
             &terminals,
+            &CliSessionInterpreter::system(),
             &binding,
             "kickstart prompt",
             "QOL_BRIDGE_DONE_9a62a1a6",
@@ -2828,6 +2857,7 @@ mod tests {
 
         deliver_kickstart(
             &terminals,
+            &CliSessionInterpreter::system(),
             &binding,
             "kickstart prompt",
             "QOL_BRIDGE_DONE_9a62a1a6",

@@ -8,14 +8,13 @@ use anyhow::{anyhow, Context, Result};
 use qol_sessions_engine::knocks::KNOCK_HEADER;
 use qol_sessions_engine::FORK_HEADER;
 use qol_terminal_sessions::cli::{
-    composer_holds_draft, ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter,
-    COMPACTED_SUMMARY_HEADER,
+    read_composer, ChatRole, ChatTurn, CliComposer, CliRuntimeState, CliSessionInterpreter,
+    ComposerGuard, Typed, Typing, COMPACTED_SUMMARY_HEADER,
 };
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::parking::ParkingStore;
 use qol_terminal_sessions::{
-    DeliveryMode, SessionBinding, SessionFacts, TerminalError, TerminalSessionService,
-    TerminalSnapshot, TextInput,
+    SessionBinding, SessionFacts, TerminalError, TerminalSessionService, TerminalSnapshot,
 };
 
 use super::prompt::{read_tail, wake_prompt, wake_section, CLOSE_NOTE, WAKE_HEADER};
@@ -268,6 +267,7 @@ fn deliver(
     let mut unknown = 0;
     let mut busy = 0;
     let mut settle = SettleGate::default();
+    let mut guard = ComposerGuard::default();
     loop {
         {
             let _turn = store.lock_conversation(&record.external_id)?;
@@ -286,9 +286,13 @@ fn deliver(
                     Holder::Live(binding) => {
                         unknown = 0;
                         if prompt_free(terminals, interpreter, &binding)
-                            && terminals
-                                .send_text(&binding, &prompt, DeliveryMode::Submit)
-                                .is_ok()
+                            && guard
+                                .type_text(
+                                    terminals,
+                                    interpreter,
+                                    Typing::submit(&binding, &prompt),
+                                )
+                                .is_ok_and(|typed| !matches!(typed, Typed::Held(_)))
                         {
                             settle_batch(store, &batch, ParkState::Delivered, &binding, None);
                             qol_runtime::probe!(
@@ -347,8 +351,8 @@ pub fn prompt_free(
     binding: &SessionBinding,
 ) -> bool {
     caller_state(terminals, interpreter, binding) == CallerState::Ready
-        && match composer_holds_draft(terminals, binding) {
-            Ok(draft) => !draft,
+        && match read_composer(terminals, interpreter, binding) {
+            Ok(composer) => composer == CliComposer::Empty,
             Err(TerminalError::Unsupported { .. }) => true,
             Err(_) => false,
         }

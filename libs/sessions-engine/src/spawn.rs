@@ -15,7 +15,7 @@ use qol_terminal_sessions::cli::launch_flags::LaneProfile;
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{
     ScreenReader, SessionBinding, SessionFacts, SessionId, SessionInventory, SpawnIdentity,
-    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService, TextInput,
+    SpawnKey, SpawnRequest, SpawnSurface, TerminalSessionService,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2177,13 +2177,17 @@ fn start_detached(
         .context("spawned session cannot bind to a stable token")?;
     ledger.bind_session(&prepared.key, &facts.cwd, &binding.token(), assignment)?;
     if !typed_prompt.is_empty() {
-        terminals
-            .send_text(
-                &binding,
-                typed_prompt,
-                qol_terminal_sessions::DeliveryMode::Insert,
-            )
-            .context("the dry-run prompt could not be typed into the launched session")?;
+        super::typing::type_into(
+            terminals,
+            interpreter,
+            &mut qol_terminal_sessions::cli::ComposerGuard::default(),
+            qol_terminal_sessions::cli::Typing {
+                binding: &binding,
+                text: typed_prompt,
+                mode: qol_terminal_sessions::DeliveryMode::Insert,
+            },
+        )
+        .context("the dry-run prompt could not be typed into the launched session")?;
     }
     Ok(DetachedLaunch {
         session: binding.token(),

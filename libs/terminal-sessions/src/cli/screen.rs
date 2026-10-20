@@ -446,14 +446,6 @@ pub fn composer_screen(
         .map(|screen| without_faint_text(&screen))
 }
 
-/// Whether a session's composer holds a draft the user typed; faint placeholder text is ignored.
-pub fn composer_holds_draft(
-    terminals: &TerminalSessionService,
-    binding: &SessionBinding,
-) -> Result<bool, TerminalError> {
-    composer_screen(terminals, binding).map(|screen| composer_busy(&screen))
-}
-
 pub fn without_faint_text(styled: &str) -> String {
     let mut text = String::with_capacity(styled.len());
     let mut faint = false;
