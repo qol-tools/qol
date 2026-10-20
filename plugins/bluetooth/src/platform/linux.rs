@@ -29,11 +29,12 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
-    devices_payload, has_audio_class, is_audio_device, managed_device_options, normalize_address,
+    device_order, devices_payload, has_audio_class, is_audio_device, managed_device_options,
+    normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities,
-    DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, ReconnectFailure,
-    ReconnectReport, ReconnectSelection,
+    DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, Pairing,
+    ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 use crate::hostfix::BluetoothHostFixes;
@@ -42,6 +43,7 @@ use crate::platform::audio;
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: true,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
+    settings_pairing: None,
 };
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
@@ -639,6 +641,7 @@ async fn device_properties(device: &Device) -> Result<DeviceInfo> {
         class: device.class().await?,
         uuids,
         rssi: device.rssi().await?,
+        pairing: Pairing::Backend,
     })
 }
 
@@ -674,15 +677,7 @@ async fn search_until_cancelled(adapter: &Adapter) -> Result<Vec<DeviceInfo>> {
 
     let mut devices = list_devices_with(adapter).await?;
     devices.retain(|device| device.paired || discovery.contains(&device.address));
-    devices.sort_by(|left, right| {
-        right
-            .connected
-            .cmp(&left.connected)
-            .then_with(|| right.paired.cmp(&left.paired))
-            .then_with(|| right.rssi.cmp(&left.rssi))
-            .then_with(|| left.alias.to_lowercase().cmp(&right.alias.to_lowercase()))
-            .then_with(|| left.address.cmp(&right.address))
-    });
+    devices.sort_by(device_order);
     qol_runtime::probe!(
         "BLUETOOTH_SEARCH",
         "outcome={outcome} devices={}",

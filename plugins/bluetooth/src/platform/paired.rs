@@ -9,7 +9,8 @@ use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
-    adapter_options, connection_ready, devices_payload, managed_device_options, normalize_address,
+    adapter_options, connection_ready, device_address, devices_payload, managed_device_options,
+    normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, AdapterHealth, AdapterInfo, DeviceActionState, DeviceInfo, DeviceIntent,
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
@@ -344,7 +345,7 @@ fn request_address(request: &DaemonRequest) -> std::result::Result<String, Strin
     else {
         return Err(format!("{} requires an address", request.action));
     };
-    normalize_address(address).map_err(|error| error.to_string())
+    device_address(address, super::CAPABILITIES).map_err(|error| error.to_string())
 }
 
 fn reclaim_command(request: &DaemonRequest) -> ReadResult<DaemonCommand> {
@@ -552,6 +553,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+    use crate::bluetooth::Pairing;
 
     const REFUSAL: &str = "this stack pairs and trusts in one step";
 
@@ -615,6 +617,7 @@ mod tests {
             class: None,
             uuids: Vec::new(),
             rssi: None,
+            pairing: Pairing::Backend,
         }
     }
 

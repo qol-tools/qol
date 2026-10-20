@@ -1,10 +1,20 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ffi::CString;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
 use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2_core_bluetooth::{
+    CBAdvertisementDataIsConnectable, CBAdvertisementDataLocalNameKey,
+    CBAdvertisementDataServiceUUIDsKey, CBCentralManager, CBCentralManagerDelegate,
+    CBCentralManagerScanOptionAllowDuplicatesKey, CBManager, CBManagerAuthorization,
+    CBManagerState, CBPeripheral, CBUUID,
+};
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRunLoop};
-use objc2_foundation::{NSArray, NSString};
+use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 use objc2_io_bluetooth::{
     BluetoothHCIPowerState, IOBluetoothDevice, IOBluetoothDeviceInquiry, IOBluetoothDevicePair,
     IOBluetoothHostController, IOBluetoothSDPUUID,
@@ -12,23 +22,26 @@ use objc2_io_bluetooth::{
 use qol_headless::DoctorCheckResult;
 
 use crate::bluetooth::{
-    normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo, ReconnectReport,
+    normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo, Pairing, ReconnectReport,
     ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
 
+use super::nearby::{self, Advertisement, Sightings};
 use super::paired::{self, PairedStack};
 pub use super::paired::{search_status_snapshot, settings_action, settings_query, stop_search};
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
+    settings_pairing: Some("System Settings"),
 };
 
 const AUDIO_SINK_UUID16: u16 = 0x110b;
 const AUDIO_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
 const IO_RETURN_SUCCESS: i32 = 0;
 const RSSI_UNAVAILABLE: i8 = 127;
+const RSSI_UNTRACKED: i8 = 0;
 const SEARCH_SECONDS: u8 = 10;
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -36,6 +49,8 @@ const RUN_LOOP_SLICE: Duration = Duration::from_millis(100);
 const ADAPTER_POWER_SYMBOL: &str = "IOBluetoothPreferenceSetControllerPowerState";
 const TRUST_UNSUPPORTED: &str =
     "macOS pairs and trusts in one step, so there is no separate trust to change";
+const BLUETOOTH_PRIVACY_SETTINGS: &str = "System Settings > Privacy & Security > Bluetooth";
+const LOW_ENERGY_LEFT_OUT: &str = "Bluetooth LE devices are left out of this search because";
 
 struct MacOs;
 
@@ -175,59 +190,224 @@ fn cached_audio_sink_service(device: &IOBluetoothDevice) -> (bool, Vec<String>) 
     (services_resolved, uuids)
 }
 
-fn device_info(device: &IOBluetoothDevice) -> Result<DeviceInfo> {
+fn device_info(device: &IOBluetoothDevice, paired: &HashSet<String>) -> Result<DeviceInfo> {
     let address = device_address(device)?;
     let alias = device_alias(device, &address);
-    let paired = unsafe { device.isPaired() };
+    let paired = paired.contains(&address) || unsafe { device.isPaired() };
     let (services_resolved, uuids) = cached_audio_sink_service(device);
-    let rssi = unsafe { device.RSSI() };
+    let connected = unsafe { device.isConnected() };
     Ok(DeviceInfo {
         alias,
         trusted: paired,
         paired,
-        connected: unsafe { device.isConnected() },
+        connected,
         audio_connected: None,
         services_resolved,
         icon: None,
         class: Some(unsafe { device.classOfDevice() }),
         uuids,
-        rssi: (rssi != RSSI_UNAVAILABLE).then_some(i16::from(rssi)),
+        rssi: iobluetooth_signal(unsafe { device.rawRSSI() }),
+        pairing: Pairing::Backend,
         address,
     })
 }
 
-fn richer_duplicate(existing: &DeviceInfo, candidate: &DeviceInfo) -> bool {
-    (candidate.connected, candidate.paired, candidate.uuids.len())
-        > (existing.connected, existing.paired, existing.uuids.len())
+fn iobluetooth_signal(raw_rssi: i8) -> Option<i16> {
+    match raw_rssi {
+        RSSI_UNAVAILABLE | RSSI_UNTRACKED => None,
+        measured => Some(i16::from(measured)),
+    }
 }
 
-fn readable_device_infos(devices: Option<Retained<NSArray>>) -> Vec<DeviceInfo> {
+fn iobluetooth_devices(devices: Option<Retained<NSArray>>) -> Vec<Retained<IOBluetoothDevice>> {
     let Some(devices) = devices else {
         return Vec::new();
     };
-    let mut ordered: Vec<DeviceInfo> = Vec::new();
-    for object in devices.iter() {
-        let device = unsafe { Retained::cast_unchecked::<IOBluetoothDevice>(object) };
-        let Ok(info) = device_info(&device) else {
-            continue;
-        };
-        match ordered
-            .iter_mut()
-            .find(|existing| existing.address == info.address)
-        {
-            Some(existing) => {
-                if richer_duplicate(existing, &info) {
-                    *existing = info;
-                }
-            }
-            None => ordered.push(info),
-        }
-    }
-    ordered
+    devices
+        .iter()
+        .map(|object| unsafe { Retained::cast_unchecked::<IOBluetoothDevice>(object) })
+        .collect()
+}
+
+fn addresses(devices: &[Retained<IOBluetoothDevice>]) -> HashSet<String> {
+    devices
+        .iter()
+        .filter_map(|device| device_address(device).ok())
+        .collect()
+}
+
+fn readable_device_infos(
+    devices: &[Retained<IOBluetoothDevice>],
+    paired: &HashSet<String>,
+) -> Vec<DeviceInfo> {
+    nearby::unique(
+        devices
+            .iter()
+            .filter_map(|device| device_info(device, paired).ok()),
+    )
+}
+
+fn paired_addresses() -> HashSet<String> {
+    addresses(&iobluetooth_devices(unsafe {
+        IOBluetoothDevice::pairedDevices()
+    }))
 }
 
 fn paired_devices() -> Vec<DeviceInfo> {
-    readable_device_infos(unsafe { IOBluetoothDevice::pairedDevices() })
+    let devices = iobluetooth_devices(unsafe { IOBluetoothDevice::pairedDevices() });
+    readable_device_infos(&devices, &addresses(&devices))
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RefCell<Sightings>]
+    struct LowEnergyScanner;
+
+    unsafe impl NSObjectProtocol for LowEnergyScanner {}
+
+    unsafe impl CBCentralManagerDelegate for LowEnergyScanner {
+        #[unsafe(method(centralManagerDidUpdateState:))]
+        fn central_state_changed(&self, _central: &CBCentralManager) {}
+
+        #[unsafe(method(centralManager:didDiscoverPeripheral:advertisementData:RSSI:))]
+        fn peripheral_advertised(
+            &self,
+            _central: &CBCentralManager,
+            peripheral: &CBPeripheral,
+            advertisement_data: &NSDictionary<NSString, AnyObject>,
+            rssi: &NSNumber,
+        ) {
+            let sighting = advertisement(peripheral, advertisement_data, rssi);
+            self.ivars().borrow_mut().record(sighting);
+        }
+    }
+);
+
+impl LowEnergyScanner {
+    fn new(marker: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(marker).set_ivars(RefCell::new(Sightings::default()));
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
+struct LowEnergyScan {
+    central: Retained<CBCentralManager>,
+    scanner: Retained<LowEnergyScanner>,
+    scanning: bool,
+}
+
+impl LowEnergyScan {
+    fn begin() -> Option<Self> {
+        let Some(marker) = MainThreadMarker::new() else {
+            log::warn!("{LOW_ENERGY_LEFT_OUT} it is not running on the main thread");
+            return None;
+        };
+        if low_energy_denied(unsafe { CBManager::authorization_class() }) {
+            log::warn!("{LOW_ENERGY_LEFT_OUT} {}", access_denied());
+            return None;
+        }
+        let scanner = LowEnergyScanner::new(marker);
+        let central = unsafe { CBCentralManager::new() };
+        unsafe { central.setDelegate(Some(ProtocolObject::from_ref(&*scanner))) };
+        Some(Self {
+            central,
+            scanner,
+            scanning: false,
+        })
+    }
+
+    fn scan_once_powered(&mut self) {
+        if self.scanning || unsafe { self.central.state() } != CBManagerState::PoweredOn {
+            return;
+        }
+        let allow_duplicates = NSNumber::new_bool(true);
+        let value: &AnyObject = &allow_duplicates;
+        let options = NSDictionary::from_slices(
+            &[unsafe { CBCentralManagerScanOptionAllowDuplicatesKey }],
+            &[value],
+        );
+        unsafe {
+            self.central
+                .scanForPeripheralsWithServices_options(None, Some(&options))
+        };
+        self.scanning = true;
+    }
+
+    fn devices(&self) -> Vec<DeviceInfo> {
+        self.scanner.ivars().borrow().devices()
+    }
+
+    fn report_unscanned(&self) {
+        if self.scanning {
+            return;
+        }
+        let state = unsafe { self.central.state() };
+        log::warn!("{LOW_ENERGY_LEFT_OUT} {}", unready_reason(state));
+    }
+}
+
+impl Drop for LowEnergyScan {
+    fn drop(&mut self) {
+        if self.scanning {
+            unsafe { self.central.stopScan() };
+        }
+        unsafe { self.central.setDelegate(None) };
+    }
+}
+
+fn low_energy_denied(authorization: CBManagerAuthorization) -> bool {
+    authorization == CBManagerAuthorization::Denied
+        || authorization == CBManagerAuthorization::Restricted
+}
+
+fn access_denied() -> String {
+    format!("macOS denies this app Bluetooth access; allow it in {BLUETOOTH_PRIVACY_SETTINGS}")
+}
+
+fn unready_reason(state: CBManagerState) -> String {
+    match state {
+        CBManagerState::Unauthorized => access_denied(),
+        CBManagerState::PoweredOff => "CoreBluetooth reports Bluetooth as off".into(),
+        CBManagerState::Unsupported => "this Mac does not support Bluetooth LE".into(),
+        other => format!("CoreBluetooth did not become ready (state {})", other.0),
+    }
+}
+
+fn advertisement(
+    peripheral: &CBPeripheral,
+    data: &NSDictionary<NSString, AnyObject>,
+    rssi: &NSNumber,
+) -> Advertisement {
+    let local_name = data
+        .objectForKey(unsafe { CBAdvertisementDataLocalNameKey })
+        .and_then(|name| name.downcast::<NSString>().ok())
+        .map(|name| name.to_string());
+    let connectable = data
+        .objectForKey(unsafe { CBAdvertisementDataIsConnectable })
+        .and_then(|flag| flag.downcast::<NSNumber>().ok())
+        .is_some_and(|flag| flag.as_bool());
+    let service_uuids = data
+        .objectForKey(unsafe { CBAdvertisementDataServiceUUIDsKey })
+        .and_then(|uuids| uuids.downcast::<NSArray>().ok())
+        .map(|uuids| advertised_services(&uuids))
+        .unwrap_or_default();
+    Advertisement {
+        identifier: unsafe { peripheral.identifier() }.UUIDString().to_string(),
+        local_name,
+        peripheral_name: unsafe { peripheral.name() }.map(|name| name.to_string()),
+        rssi: rssi.as_i64(),
+        connectable,
+        service_uuids,
+    }
+}
+
+fn advertised_services(uuids: &NSArray) -> Vec<String> {
+    uuids
+        .iter()
+        .filter_map(|uuid| uuid.downcast::<CBUUID>().ok())
+        .map(|uuid| unsafe { uuid.UUIDString() }.to_string())
+        .collect()
 }
 
 fn device_handle(address: &str) -> Result<Retained<IOBluetoothDevice>> {
@@ -300,7 +480,7 @@ pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInf
     paired::ensure_powered::<MacOs>(power_on_adapter)?;
     let device = device_handle(address)?;
     if unsafe { device.isConnected() } {
-        return device_info(&device);
+        return device_info(&device, &paired_addresses());
     }
     let result = unsafe { device.openConnection() };
     if result != IO_RETURN_SUCCESS {
@@ -309,7 +489,7 @@ pub fn connect_device(address: &str, power_on_adapter: bool) -> Result<DeviceInf
     if !deliver_callbacks_until(CONNECT_TIMEOUT, || unsafe { device.isConnected() }) {
         bail!("{address} did not finish connecting");
     }
-    device_info(&device)
+    device_info(&device, &paired_addresses())
 }
 
 pub fn disconnect_device(address: &str) -> Result<DeviceInfo> {
@@ -318,14 +498,15 @@ pub fn disconnect_device(address: &str) -> Result<DeviceInfo> {
     if result != IO_RETURN_SUCCESS {
         bail!("macOS could not disconnect {address} (code {result})");
     }
-    device_info(&device)
+    device_info(&device, &paired_addresses())
 }
 
 pub fn pair_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> {
     paired::ensure_powered::<MacOs>(power_on_adapter)?;
     let device = device_handle(address)?;
-    if unsafe { device.isPaired() } {
-        return device_info(&device);
+    let known = device_info(&device, &paired_addresses())?;
+    if known.paired {
+        return Ok(known);
     }
     let pairing = unsafe { IOBluetoothDevicePair::pairWithDevice(Some(&device)) }
         .ok_or_else(|| anyhow!("macOS could not start pairing with {address}"))?;
@@ -338,7 +519,7 @@ pub fn pair_device(address: &str, power_on_adapter: bool) -> Result<DeviceInfo> 
     if !paired {
         bail!("pairing with {address} did not complete");
     }
-    device_info(&device)
+    device_info(&device, &paired_addresses())
 }
 
 pub fn set_device_trusted(_address: &str, _trusted: bool) -> Result<DeviceInfo> {
@@ -366,19 +547,55 @@ pub fn search_devices(config: &ReconnectConfig) -> Result<Vec<DeviceInfo>> {
         bail!("macOS refused to start a Bluetooth search (code {started})");
     }
 
+    let mut low_energy = LowEnergyScan::begin();
+    let watched = watch_search(&inquiry, low_energy.as_mut());
+    unsafe { inquiry.stop() };
+    let found = found_devices(&inquiry, low_energy.as_ref());
+    if let Some(scan) = &low_energy {
+        scan.report_unscanned();
+    }
+    drop(low_energy);
+    paired::mark_search_stopped()?;
+    watched?;
+
+    let devices = nearby::merge(paired_devices().into_iter().chain(found));
+    qol_runtime::probe!(
+        "BLUETOOTH_SEARCH",
+        "stage=stop devices={} low_energy={}",
+        devices.len(),
+        devices
+            .iter()
+            .filter(|device| device.pairing == Pairing::SystemSettings)
+            .count()
+    );
+    Ok(devices)
+}
+
+fn watch_search(
+    inquiry: &IOBluetoothDeviceInquiry,
+    mut low_energy: Option<&mut LowEnergyScan>,
+) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(u64::from(SEARCH_SECONDS));
     while Instant::now() < deadline && paired::searching()? {
         deliver_pending_iobluetooth_callbacks(RUN_LOOP_SLICE);
-        for device in readable_device_infos(unsafe { inquiry.foundDevices() }) {
+        if let Some(scan) = low_energy.as_deref_mut() {
+            scan.scan_once_powered();
+        }
+        for device in found_devices(inquiry, low_energy.as_deref()) {
             paired::record_discovered_device(device)?;
         }
     }
-    unsafe { inquiry.stop() };
-    paired::mark_search_stopped()?;
+    Ok(())
+}
 
-    let found = readable_device_infos(unsafe { inquiry.foundDevices() });
-    qol_runtime::probe!("BLUETOOTH_SEARCH", "stage=stop found={}", found.len());
-    Ok(found)
+fn found_devices(
+    inquiry: &IOBluetoothDeviceInquiry,
+    low_energy: Option<&LowEnergyScan>,
+) -> Vec<DeviceInfo> {
+    let classic = iobluetooth_devices(unsafe { inquiry.foundDevices() });
+    let mut found = readable_device_infos(&classic, &paired_addresses());
+    found.extend(low_energy.map(LowEnergyScan::devices).unwrap_or_default());
+    found
 }
 
 pub fn reconnect_devices(
@@ -401,31 +618,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_dual_mode_device_listed_twice_keeps_its_richest_entry() {
-        let bare = DeviceInfo {
-            address: "AA:BB:CC:DD:EE:FF".into(),
-            alias: "Jabra Evolve2 65 Flex".into(),
-            paired: true,
-            trusted: true,
-            connected: false,
-            audio_connected: None,
-            services_resolved: false,
-            icon: None,
-            class: None,
-            uuids: Vec::new(),
-            rssi: None,
-        };
-        let connected = DeviceInfo {
-            connected: true,
-            uuids: vec!["0000110b-0000-1000-8000-00805f9b34fb".into()],
-            ..bare.clone()
-        };
-
-        assert!(richer_duplicate(&bare, &connected));
-        assert!(!richer_duplicate(&connected, &bare));
-    }
-
-    #[test]
     fn addresses_from_iobluetooth_reach_the_domain_in_colon_form() {
         let cases = [
             ("aa-bb-cc-dd-ee-ff", "AA:BB:CC:DD:EE:FF"),
@@ -437,6 +629,19 @@ mod tests {
                 normalize_address(&colon_separated_address(raw)).unwrap(),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn a_signal_iobluetooth_could_not_read_is_reported_as_unknown() {
+        let cases = [
+            (-48, Some(-48)),
+            (-61, Some(-61)),
+            (RSSI_UNTRACKED, None),
+            (RSSI_UNAVAILABLE, None),
+        ];
+        for (raw_rssi, expected) in cases {
+            assert_eq!(iobluetooth_signal(raw_rssi), expected, "{raw_rssi}");
         }
     }
 }

@@ -1,13 +1,55 @@
+use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 pub mod retry;
 
+const UUID_GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
+const SYSTEM_BLUETOOTH_SETTINGS: &str = "the system Bluetooth settings";
+
 pub fn normalize_address(value: &str) -> Result<String> {
     Ok(qol_bluetooth_control::normalize_address(value)?)
+}
+
+pub fn low_energy_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    let grouped = value.split('-').map(str::len).eq(UUID_GROUP_LENGTHS);
+    let hex = value
+        .chars()
+        .all(|character| character == '-' || character.is_ascii_hexdigit());
+    (grouped && hex).then(|| value.to_ascii_uppercase())
+}
+
+pub fn device_address(value: &str, capabilities: BackendCapabilities) -> Result<String> {
+    let error = match normalize_address(value) {
+        Ok(address) => return Ok(address),
+        Err(error) => error,
+    };
+    let (Some(settings), Some(identifier)) =
+        (capabilities.settings_pairing, low_energy_identifier(value))
+    else {
+        return Err(error);
+    };
+    bail!(
+        "{identifier} is a Bluetooth LE device this computer reports only by identifier, so qol cannot pair, connect or remove it; pair it in {settings}"
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pairing {
+    Backend,
+    SystemSettings,
+}
+
+impl Pairing {
+    fn is_backend(&self) -> bool {
+        *self == Self::Backend
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -24,6 +66,8 @@ pub struct DeviceInfo {
     pub class: Option<u32>,
     pub uuids: Vec<String>,
     pub rssi: Option<i16>,
+    #[serde(skip_serializing_if = "Pairing::is_backend")]
+    pub pairing: Pairing,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -38,6 +82,7 @@ pub struct DeviceOption {
 pub struct BackendCapabilities {
     pub separate_trust_flag: bool,
     pub audio_reclaim: bool,
+    pub settings_pairing: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,6 +260,54 @@ pub struct AdapterHealth {
     pub powered: bool,
 }
 
+pub fn device_order(left: &DeviceInfo, right: &DeviceInfo) -> Ordering {
+    right
+        .connected
+        .cmp(&left.connected)
+        .then_with(|| right.paired.cmp(&left.paired))
+        .then_with(|| right.rssi.cmp(&left.rssi))
+        .then_with(|| left.alias.to_lowercase().cmp(&right.alias.to_lowercase()))
+        .then_with(|| left.address.cmp(&right.address))
+}
+
+pub fn without_settings_twins(devices: Vec<&DeviceInfo>) -> Vec<&DeviceInfo> {
+    let backend_names = devices
+        .iter()
+        .filter(|device| device.pairing == Pairing::Backend)
+        .map(|device| name_key(device))
+        .collect::<HashSet<_>>();
+    devices
+        .into_iter()
+        .filter(|device| {
+            device.pairing == Pairing::Backend || !backend_names.contains(&name_key(device))
+        })
+        .collect()
+}
+
+fn name_key(device: &DeviceInfo) -> String {
+    device.alias.trim().to_lowercase()
+}
+
+fn resting_status(
+    device: &DeviceInfo,
+    ready: bool,
+    audio: bool,
+    capabilities: BackendCapabilities,
+) -> Cow<'static, str> {
+    match device.pairing {
+        Pairing::SystemSettings => Cow::Owned(format!(
+            "Pair in {}",
+            capabilities
+                .settings_pairing
+                .unwrap_or(SYSTEM_BLUETOOTH_SETTINGS)
+        )),
+        Pairing::Backend if ready => Cow::Borrowed("Connected"),
+        Pairing::Backend if device.connected && audio => Cow::Borrowed("Connected without audio"),
+        Pairing::Backend if device.paired => Cow::Borrowed("Paired"),
+        Pairing::Backend => Cow::Borrowed("Available"),
+    }
+}
+
 pub fn devices_payload(
     devices: &[DeviceInfo],
     managed_devices: &[String],
@@ -240,15 +333,8 @@ pub fn devices_payload(
             .values()
             .filter(|device| !current_addresses.contains(device.address.as_str())),
     );
-    visible.sort_by(|left, right| {
-        right
-            .connected
-            .cmp(&left.connected)
-            .then_with(|| right.paired.cmp(&left.paired))
-            .then_with(|| right.rssi.cmp(&left.rssi))
-            .then_with(|| left.alias.to_lowercase().cmp(&right.alias.to_lowercase()))
-            .then_with(|| left.address.cmp(&right.address))
-    });
+    let mut visible = without_settings_twins(visible);
+    visible.sort_by(|left, right| device_order(left, right));
     let connected_count = visible.iter().filter(|device| device.connected).count();
     let ready_count = visible
         .iter()
@@ -265,22 +351,14 @@ pub fn devices_payload(
                     && (action.pending || !action.intent.reached_by(device))
             });
             let action_pending = device_action.is_some_and(|action| action.pending);
-            let device_status = if ready {
-                "Connected"
-            } else if device.connected && audio {
-                "Connected without audio"
-            } else if device.paired {
-                "Paired"
-            } else {
-                "Available"
-            };
+            let device_status = resting_status(device, ready, audio, capabilities);
             let signal = device
                 .rssi
                 .map(|rssi| format!("{rssi} dBm"))
                 .unwrap_or_else(|| "Signal unknown".into());
             let status = device_action
                 .map(|action| action.status.as_str())
-                .unwrap_or(device_status);
+                .unwrap_or(device_status.as_ref());
             let action_failed = device_action.is_some_and(|action| !action.pending);
             let accent = if action_failed {
                 "danger"
@@ -298,7 +376,7 @@ pub fn devices_payload(
             } else if action_failed {
                 "Needs attention"
             } else {
-                device_status
+                device_status.as_ref()
             };
             let detail = if device_action.is_some() {
                 format!("{status} · {signal} · {}", device.address)
@@ -314,7 +392,7 @@ pub fn devices_payload(
                 "badge_tone": accent,
                 "can_connect": device.paired && !ready,
                 "can_disconnect": device.connected,
-                "can_pair": !device.paired,
+                "can_pair": !device.paired && device.pairing == Pairing::Backend,
                 "can_reclaim": capabilities.audio_reclaim && ready && audio,
                 "can_remove": device.paired || device.trusted,
                 "can_trust": capabilities.separate_trust_flag && device.paired && !device.trusted,
@@ -403,11 +481,20 @@ mod tests {
     const TRUST_CAPABLE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: true,
         audio_reclaim: false,
+        settings_pairing: None,
     };
     const TRUST_FREE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
+        settings_pairing: None,
     };
+    const SETTINGS_PAIRED: BackendCapabilities = BackendCapabilities {
+        separate_trust_flag: false,
+        audio_reclaim: false,
+        settings_pairing: Some("System Settings"),
+    };
+    const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
+    const KEYBOARD: &str = "9F6F5B65-F881-6552-4B8E-85914E7FAFD7";
 
     #[test]
     fn address_normalization_accepts_only_six_hex_octets() {
@@ -885,6 +972,192 @@ mod tests {
             class: None,
             uuids: Vec::new(),
             rssi,
+            pairing: Pairing::Backend,
         }
+    }
+
+    fn low_energy_device(identifier: &str, alias: &str, rssi: Option<i16>) -> DeviceInfo {
+        DeviceInfo {
+            address: identifier.into(),
+            pairing: Pairing::SystemSettings,
+            ..device("00", alias, false, false, false, rssi)
+        }
+    }
+
+    fn discovered(devices: &[DeviceInfo]) -> DiscoveryState {
+        let mut discovery = DiscoveryState::default();
+        discovery.start();
+        for device in devices {
+            discovery.record_device(device.clone());
+        }
+        discovery
+    }
+
+    #[test]
+    fn low_energy_identifiers_are_recognised_in_canonical_uuid_form() {
+        let cases = [
+            (LIFT, Some(LIFT)),
+            (
+                " 31cae991-2662-5d9b-d7b9-8ce2cd5ff04c ",
+                Some("31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C"),
+            ),
+            ("{31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C}", None),
+            ("31CAE99126625D9BD7B98CE2CD5FF04C", None),
+            ("31CAE991-2662-5D9B-D7B9-8CE2CD5FF04", None),
+            ("31CAE991-2662-5D9B-D7B9-8CE2CD5FF0GG", None),
+            ("AA:BB:CC:DD:EE:FF", None),
+            ("", None),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                low_energy_identifier(input).as_deref(),
+                expected,
+                "input={input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_settings_paired_identifier_is_refused_with_where_to_pair_it() {
+        let error = device_address(&LIFT.to_lowercase(), SETTINGS_PAIRED)
+            .expect_err("identifiers cannot be paired by qol")
+            .to_string();
+        assert!(error.starts_with(LIFT), "{error}");
+        assert!(error.contains("cannot pair, connect or remove"), "{error}");
+        assert!(error.ends_with("pair it in System Settings"), "{error}");
+        assert_eq!(
+            device_address(" aa:bb:cc:dd:ee:ff ", SETTINGS_PAIRED).unwrap(),
+            "AA:BB:CC:DD:EE:FF"
+        );
+    }
+
+    #[test]
+    fn an_identifier_stays_an_invalid_address_where_the_backend_lists_only_addresses() {
+        for capabilities in [TRUST_CAPABLE, TRUST_FREE] {
+            let address_error = normalize_address(LIFT).unwrap_err().to_string();
+            let error = device_address(LIFT, capabilities).unwrap_err().to_string();
+            assert_eq!(error, address_error);
+        }
+    }
+
+    #[test]
+    fn device_facts_mention_settings_pairing_only_for_settings_paired_devices() {
+        let classic = serde_json::to_value(device("01", "Alpha", true, true, true, None)).unwrap();
+        let low_energy = serde_json::to_value(low_energy_device(LIFT, "LIFT", Some(-58))).unwrap();
+        assert_eq!(classic.get("pairing"), None);
+        assert_eq!(low_energy["pairing"], "system_settings");
+        assert_eq!(low_energy["address"], LIFT);
+    }
+
+    #[test]
+    fn a_settings_paired_device_keeps_the_row_shape_and_offers_no_qol_action() {
+        let lift = low_energy_device(LIFT, "LIFT", Some(-58));
+        let payload = devices_payload(&[], &[], &discovered(&[lift]), None, SETTINGS_PAIRED);
+        assert_eq!(
+            payload["items"][0],
+            serde_json::json!({
+                "accent": "muted",
+                "address": LIFT,
+                "action_pending": false,
+                "audio": false,
+                "badge": "Pair in System Settings",
+                "badge_tone": "muted",
+                "can_connect": false,
+                "can_disconnect": false,
+                "can_pair": false,
+                "can_reclaim": false,
+                "can_remove": false,
+                "can_trust": false,
+                "can_untrust": false,
+                "connected": false,
+                "detail": format!("-58 dBm · {LIFT}"),
+                "managed": false,
+                "name": "LIFT",
+                "paired": false,
+                "ready": false,
+                "rssi": -58,
+                "services_resolved": false,
+                "signal": "-58 dBm",
+                "status": "Pair in System Settings",
+                "trusted": false,
+                "uuids": [],
+            })
+        );
+    }
+
+    #[test]
+    fn settings_paired_devices_sort_by_signal_among_the_other_unpaired_devices() {
+        let devices = [
+            device("01", "soundcore P40i", true, true, false, Some(-48)),
+            device("02", "Galaxy S21 5G", false, false, false, Some(-70)),
+        ];
+        let low_energy = [
+            low_energy_device(LIFT, "LIFT", Some(-58)),
+            low_energy_device(KEYBOARD, "MX KEYS B", Some(-80)),
+        ];
+        let mut discovery = discovered(&low_energy);
+        discovery.record("AA:BB:CC:DD:EE:02");
+        let payload = devices_payload(&devices, &[], &discovery, None, SETTINGS_PAIRED);
+        let names = payload["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["soundcore P40i", "LIFT", "Galaxy S21 5G", "MX KEYS B"]
+        );
+    }
+
+    #[test]
+    fn a_settings_paired_device_named_like_a_listed_device_is_shown_once() {
+        let cases = [
+            (
+                "paired twin",
+                device("01", "MX KEYS B", true, true, true, None),
+                "MX KEYS B",
+                1,
+            ),
+            (
+                "discovered twin",
+                device("02", " galaxy s21 5g ", false, false, false, Some(-70)),
+                "Galaxy S21 5G",
+                1,
+            ),
+            (
+                "differently named device",
+                device("03", "soundcore P40i", true, true, false, None),
+                "MX KEYS B",
+                2,
+            ),
+        ];
+        for (label, listed, low_energy_name, expected) in cases {
+            let mut discovery =
+                discovered(&[low_energy_device(KEYBOARD, low_energy_name, Some(-60))]);
+            discovery.record(listed.address.clone());
+            let payload = devices_payload(
+                std::slice::from_ref(&listed),
+                &[],
+                &discovery,
+                None,
+                SETTINGS_PAIRED,
+            );
+            assert_eq!(payload["count"], expected, "case: {label}");
+            assert_eq!(
+                payload["items"][0]["address"], listed.address,
+                "case: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn settings_paired_devices_sharing_a_name_with_each_other_all_stay() {
+        let twins = [
+            low_energy_device(LIFT, "LIFT", Some(-58)),
+            low_energy_device(KEYBOARD, "LIFT", Some(-70)),
+        ];
+        let visible = without_settings_twins(twins.iter().collect());
+        assert_eq!(visible.len(), 2);
     }
 }

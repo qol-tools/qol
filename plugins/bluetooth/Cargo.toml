@@ -25,6 +25,7 @@ workspace-hack.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2.workspace = true
+objc2-core-bluetooth.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-io-bluetooth.workspace = true

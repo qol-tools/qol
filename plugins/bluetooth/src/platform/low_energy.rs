@@ -1,4 +1,4 @@
-use crate::bluetooth::DeviceInfo;
+use crate::bluetooth::{DeviceInfo, Pairing};
 
 const DEVICE_PREFIX: &str = "dev_";
 const ADDRESS_DIGITS: usize = 12;
@@ -42,6 +42,7 @@ pub(super) fn device(
         class: None,
         uuids: Vec::new(),
         rssi: None,
+        pairing: Pairing::Backend,
         address,
     }
 }

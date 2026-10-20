@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
 use super::{Handoff, Local, Operation, Peer, Remote, RemoteError};
-use crate::bluetooth::DeviceInfo;
+use crate::bluetooth::{DeviceInfo, Pairing};
 use crate::connect::{Attempt, Route};
 
 const EARBUDS: &str = "AA:BB:CC:DD:EE:FF";
@@ -24,6 +24,7 @@ fn earbuds(connected: bool) -> DeviceInfo {
         class: Some(0x240404),
         uuids: vec!["0000110b-0000-1000-8000-00805f9b34fb".into()],
         rssi: None,
+        pairing: Pairing::Backend,
     }
 }
 

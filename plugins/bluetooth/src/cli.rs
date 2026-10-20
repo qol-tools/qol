@@ -5,7 +5,8 @@ use qol_headless::{Command, DoctorCheck, DoctorCheckResult, HeadlessApp, PlainTe
 use qol_host_fixes::HostFixes;
 
 use crate::bluetooth::{
-    normalize_address, AdapterHealth, DeviceInfo, ReconnectReport, ReconnectSelection,
+    device_address, normalize_address, AdapterHealth, DeviceInfo, Pairing, ReconnectReport,
+    ReconnectSelection,
 };
 use crate::hostfix::{self, BluetoothHostFixes};
 use crate::{config, handoff, platform, PLUGIN_ID};
@@ -93,7 +94,12 @@ fn search_command() -> Command {
         .about("Search for Bluetooth devices for up to 60 seconds.")
         .usage(format!("{PLUGIN_ID} search"))
         .detail("Press Ctrl+C to stop discovery early and print the devices found.")
-        .output("Paired and discovered devices ordered by connection state and signal strength.")
+        .detail(
+            "On macOS the search also scans for Bluetooth LE devices that advertise a name and accept connections. macOS reports such a device only by an identifier, not an address, and only System Settings can pair it, so its line ends in pairing=system_settings and pair, connect, disconnect and remove refuse that identifier. A device found both ways is listed once, under its address.",
+        )
+        .output(
+            "Paired and discovered devices ordered by connection state and signal strength, one line each, or a JSON array with --json in which those Bluetooth LE devices carry \"pairing\": \"system_settings\".",
+        )
         .exit_behavior("Exits non-zero when discovery cannot run.")
         .run_plain_text(|context| {
             reject_args(context.args())?;
@@ -143,7 +149,9 @@ fn connect_command() -> Command {
             "Powers on the adapter first when enabled and repairs audio devices the Bluetooth stack only knows through Bluetooth LE.",
         )
         .output("The resulting device state.")
-        .exit_behavior("Exits non-zero when the address is invalid or the connection fails.")
+        .exit_behavior(
+            "Exits non-zero when the address is invalid, is a Bluetooth LE identifier that only the system Bluetooth settings can pair, or the connection fails.",
+        )
         .run_plain_text(|context| {
             let address = one_address("connect", context.args())?;
             let device = connect_for_user(&address)?;
@@ -168,7 +176,9 @@ fn pair_command() -> Command {
         .about("Pair one Bluetooth device using its appropriate transport.")
         .usage(format!("{PLUGIN_ID} pair AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
-        .exit_behavior("Exits non-zero when pairing or profile discovery fails.")
+        .exit_behavior(
+            "Exits non-zero when pairing or profile discovery fails, or when given a Bluetooth LE identifier from search, which only the system Bluetooth settings can pair.",
+        )
         .run_plain_text(|context| {
             let address = one_address("pair", context.args())?;
             let device = platform::pair_device(&address, config::load().power_on_adapter)?;
@@ -216,7 +226,9 @@ fn disconnect_command() -> Command {
         .about("Disconnect every active profile for one Bluetooth device.")
         .usage(format!("{PLUGIN_ID} disconnect AA:BB:CC:DD:EE:FF"))
         .output("The resulting device state.")
-        .exit_behavior("Exits non-zero when the Bluetooth stack cannot disconnect the device.")
+        .exit_behavior(
+            "Exits non-zero when the Bluetooth stack cannot disconnect the device, or when given a Bluetooth LE identifier from search.",
+        )
         .run_plain_text(|context| {
             let address = one_address("disconnect", context.args())?;
             let device = platform::disconnect_device(&address)?;
@@ -286,7 +298,9 @@ fn remove_command() -> Command {
         .about("Remove one Bluetooth device and its pairing information.")
         .usage(format!("{PLUGIN_ID} remove AA:BB:CC:DD:EE:FF"))
         .output("No stdout on success.")
-        .exit_behavior("Exits non-zero when the Bluetooth stack cannot remove the device.")
+        .exit_behavior(
+            "Exits non-zero when the Bluetooth stack cannot remove the device, or when given a Bluetooth LE identifier from search.",
+        )
         .run_plain_text(|context| {
             let address = one_address("remove", context.args())?;
             platform::remove_device(&address)?;
@@ -546,7 +560,7 @@ fn one_address(command: &str, args: &[String]) -> Result<String> {
     if args.len() != 1 {
         bail!("{command} requires exactly one Bluetooth address")
     }
-    normalize_address(&args[0])
+    device_address(&args[0], platform::CAPABILITIES)
 }
 
 fn device_lines(devices: &[DeviceInfo]) -> String {
@@ -558,7 +572,7 @@ fn device_lines(devices: &[DeviceInfo]) -> String {
 }
 
 fn device_line(device: &DeviceInfo) -> String {
-    format!(
+    let line = format!(
         "{}  {}  paired={} trusted={} connected={} ready={} rssi={}",
         device.address,
         device.alias,
@@ -570,7 +584,11 @@ fn device_line(device: &DeviceInfo) -> String {
             .rssi
             .map(|rssi| rssi.to_string())
             .unwrap_or_else(|| "unavailable".into())
-    )
+    );
+    match device.pairing {
+        Pairing::Backend => line,
+        Pairing::SystemSettings => format!("{line} pairing=system_settings"),
+    }
 }
 
 fn adapter_health_line(health: &AdapterHealth) -> String {
