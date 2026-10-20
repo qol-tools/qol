@@ -243,6 +243,8 @@ fn attention_value_is_truthy(value: &serde_json::Value) -> bool {
     }
 }
 
+const DEFAULT_STREAM_THROTTLE: Duration = Duration::from_millis(100);
+
 #[derive(Clone)]
 pub struct SettingsRuntime {
     query: Arc<QueryHandler>,
@@ -250,6 +252,7 @@ pub struct SettingsRuntime {
     action: Arc<ActionHandler>,
     poll_interval: Duration,
     query_intervals: std::collections::HashMap<String, Duration>,
+    stream_intervals: std::collections::HashMap<String, Duration>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -614,6 +617,7 @@ impl SettingsRuntime {
             action: Arc::new(|action, _| Err(format!("action `{action}` is unavailable"))),
             poll_interval: Duration::from_secs(2),
             query_intervals: std::collections::HashMap::new(),
+            stream_intervals: std::collections::HashMap::new(),
         }
     }
 
@@ -682,11 +686,23 @@ impl SettingsRuntime {
         self
     }
 
+    pub fn throttle_stream(mut self, name: impl Into<String>, interval: Duration) -> Self {
+        self.stream_intervals.insert(name.into(), interval);
+        self
+    }
+
     fn query_interval(&self, name: &str) -> Duration {
         self.query_intervals
             .get(name)
             .copied()
             .unwrap_or(self.poll_interval)
+    }
+
+    fn stream_interval(&self, name: &str) -> Duration {
+        self.stream_intervals
+            .get(name)
+            .copied()
+            .unwrap_or(DEFAULT_STREAM_THROTTLE)
     }
 
     fn query(&self, name: &str) -> Result<serde_json::Value, String> {
@@ -1504,6 +1520,21 @@ active_query = "status"
         assert_eq!(
             runtime.query_interval("controllers_snapshot"),
             std::time::Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn stream_intervals_override_only_their_declared_stream() {
+        let runtime = super::SettingsRuntime::empty()
+            .throttle_stream("live_color", std::time::Duration::from_millis(250));
+
+        assert_eq!(
+            runtime.stream_interval("live_color"),
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            runtime.stream_interval("motor"),
+            std::time::Duration::from_millis(100)
         );
     }
 

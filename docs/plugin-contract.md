@@ -320,7 +320,10 @@ that `qol-config.toml` fields (and section `actions`) bind to. Schema in
 - `[query.<name>]`: `description`, `poll_interval_ms`, optional `agent_tool`
   (bool), optional `tool_description`, optional `input` map.
 - `[stream.<name>]`: `description`, `throttle_ms` (clamped 16..=1000), optional
-  `initial_query`.
+  `initial_query`. While a control streams, the settings panel sends at most one
+  frame per `throttle_ms` on that stream; a frame inside the window is held, a
+  newer one replaces it, and the held frame goes out when the window ends.
+  Finishing the edit sends any held frame at once, so the final value arrives.
 - Names must be `[a-z][a-z0-9_]*` (stricter than action ids: no dashes, no
   uppercase, no leading digit) and globally unique across actions/queries/streams.
 

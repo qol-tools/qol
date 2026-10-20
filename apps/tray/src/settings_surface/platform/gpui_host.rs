@@ -898,6 +898,9 @@ fn load_plugin_source_from_root(
         for (name, query) in &runtime_contract.queries {
             runtime = runtime.poll_query_every(name, Duration::from_millis(query.poll_interval_ms));
         }
+        for (name, stream) in &runtime_contract.streams {
+            runtime = runtime.throttle_stream(name, Duration::from_millis(stream.throttle_ms));
+        }
     }
     Ok((
         PluginSettingsSource {
