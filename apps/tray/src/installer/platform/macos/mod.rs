@@ -18,7 +18,7 @@ impl InstallerOps for Platform {
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        Ok(qol_apps::tray_install::install_dir()?)
+        crate::paths::tray_install_dir()
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {

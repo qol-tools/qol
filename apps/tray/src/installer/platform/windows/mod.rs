@@ -39,7 +39,7 @@ impl InstallerOps for Platform {
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        Ok(qol_apps::tray_install::install_dir()?)
+        crate::paths::tray_install_dir()
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
@@ -115,7 +115,7 @@ pub(crate) fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> R
 }
 
 fn installed_layout(binary: &Path) -> Result<Option<Layout>> {
-    let installed = qol_apps::tray_install::installed_binary()?;
+    let installed = crate::paths::tray_installed_binary()?;
     if !same_path(binary, &installed)
         || !crate::installer::has_install_marker(&installed)
         || !crate::installer::mode::is_production_mode()
@@ -161,7 +161,7 @@ impl UninstallSteps for WindowsUninstall<'_> {
     }
 
     fn remove_files(&mut self) -> Result<FileRemoval> {
-        let install_dir = qol_apps::tray_install::install_dir()?;
+        let install_dir = crate::paths::tray_install_dir()?;
         let current =
             std::env::current_exe().context("Failed to determine the uninstaller path")?;
         match plan(self.binary, &install_dir, &current)? {

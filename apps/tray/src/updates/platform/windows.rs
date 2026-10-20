@@ -14,7 +14,7 @@ const RETIRED_SUFFIX: &str = "old";
 const STAGED_SUFFIX: &str = "new";
 
 pub(super) fn recover_interrupted_update() {
-    let Ok(target) = qol_apps::tray_install::installed_binary() else {
+    let Ok(target) = crate::paths::tray_installed_binary() else {
         return;
     };
     match restore_retired_binary(&target) {
@@ -53,7 +53,7 @@ pub(super) fn detect_install_kind() -> InstallKind {
     let Ok(executable) = std::env::current_exe() else {
         return InstallKind::SystemWide;
     };
-    let install_dir = qol_apps::tray_install::install_dir().ok();
+    let install_dir = crate::paths::tray_install_dir().ok();
     install_kind_for(&executable, install_dir.as_deref())
 }
 

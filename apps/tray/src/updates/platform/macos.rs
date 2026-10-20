@@ -30,7 +30,9 @@ pub(super) fn detect_install_kind() -> InstallKind {
         .as_deref()
         .and_then(|path| path.to_str())
         .unwrap_or_default();
-    let home = dirs::home_dir().and_then(|path| path.to_str().map(String::from));
+    let home = crate::paths::user_home_dir()
+        .ok()
+        .and_then(|path| path.to_str().map(String::from));
     InstallKind::for_path(
         executable,
         home.as_deref(),
