@@ -2,6 +2,8 @@ use unicode_normalization::char::is_combining_mark;
 
 use crate::listing::{Entry, EntryKind, ItemCount};
 
+const UNREADABLE: &str = "unreadable";
+
 pub fn kind_label(kind: EntryKind) -> &'static str {
     match kind {
         EntryKind::Folder => "Folder",
@@ -12,7 +14,9 @@ pub fn kind_label(kind: EntryKind) -> &'static str {
 
 pub fn size_label(entry: &Entry, count: Option<ItemCount>, show_hidden: bool) -> String {
     if !entry.opens_as_folder {
-        return qol_gpui::format_bytes(entry.size);
+        return entry
+            .size
+            .map_or_else(|| UNREADABLE.to_string(), qol_gpui::format_bytes);
     }
     match count {
         Some(ItemCount::Items { all, shown }) => qol_gpui::plural(
@@ -20,7 +24,7 @@ pub fn size_label(entry: &Entry, count: Option<ItemCount>, show_hidden: bool) ->
             "item",
             "items",
         ),
-        Some(ItemCount::Unreadable) => "unreadable".to_string(),
+        Some(ItemCount::Unreadable) => UNREADABLE.to_string(),
         None => String::new(),
     }
 }
@@ -57,7 +61,7 @@ mod tests {
             path: PathBuf::from("/thing"),
             id: None,
             kind,
-            size,
+            size: Some(size),
             hidden: false,
             opens_as_folder,
         }
@@ -75,9 +79,14 @@ mod tests {
         let file = entry(EntryKind::File, 2048, false);
         let folder = entry(EntryKind::Folder, 0, true);
         let linked_folder = entry(EntryKind::Link, 0, true);
+        let unread = Entry {
+            size: None,
+            ..entry(EntryKind::File, 0, false)
+        };
         let items = |all, shown| Some(ItemCount::Items { all, shown });
         let cases = [
             (&file, None, qol_gpui::format_bytes(2048)),
+            (&unread, None, "unreadable".to_string()),
             (&folder, None, String::new()),
             (&folder, items(1, 1), "1 item".to_string()),
             (&folder, items(12, 12), "12 items".to_string()),

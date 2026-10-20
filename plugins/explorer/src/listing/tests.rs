@@ -112,7 +112,7 @@ fn a_read_folder_lists_folders_first_in_natural_order() {
     );
     let file = &listing.entries()[3];
     assert_eq!(file.kind, EntryKind::File);
-    assert_eq!(file.size, "file2".len() as u64);
+    assert_eq!(file.size, Some("file2".len() as u64));
     assert_eq!(file.path, temp.path().join("file2"));
     assert_eq!(listing.entries()[0].kind, EntryKind::Folder);
 }
@@ -505,6 +505,43 @@ fn a_count_pass_waiting_on_a_held_subfolder_ends_when_cancelled() {
         events.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
     ));
+}
+
+#[cfg(unix)]
+#[test]
+fn entries_of_a_folder_that_cannot_be_searched_are_listed_without_a_size() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let blind = temp.path().join("blind");
+    make_folder(temp.path(), "blind");
+    touch(&blind, "file");
+    make_folder(&blind, "sub");
+    fs::set_permissions(&blind, fs::Permissions::from_mode(0o644)).unwrap();
+    let readable_anyway = fs::metadata(blind.join("file")).is_ok();
+    let parent = listing_of(temp.path());
+    let listing = listing_of(&blind);
+    fs::set_permissions(&blind, fs::Permissions::from_mode(0o755)).unwrap();
+    if readable_anyway {
+        return;
+    }
+
+    assert_eq!(parent.item_count(&blind), items(2));
+    assert_eq!(names(&listing), ["sub", "file"]);
+    let sub = &listing.entries()[0];
+    assert_eq!(
+        (sub.kind, sub.size, sub.opens_as_folder),
+        (EntryKind::Folder, None, true)
+    );
+    assert_eq!(
+        listing.item_count(&blind.join("sub")),
+        Some(ItemCount::Unreadable)
+    );
+    let file = &listing.entries()[1];
+    assert_eq!(
+        (file.kind, file.size, file.opens_as_folder),
+        (EntryKind::File, None, false)
+    );
 }
 
 #[cfg(unix)]
