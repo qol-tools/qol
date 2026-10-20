@@ -235,11 +235,15 @@ impl GitRepo {
     }
 
     pub fn reset_to_remote(&self) -> Result<()> {
-        let repo = self.open_repo()?;
-        let remote_oid = remote_branch_oid(&repo)?;
-        let object = repo.find_object(remote_oid, None)?;
-        repo.reset(&object, git2::ResetType::Hard, None)
+        self.reset_to(self.remote_oid()?)
             .context("reset local branch to remote")
+    }
+
+    pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
+        let repo = self.open_repo()?;
+        let object = repo.find_object(oid, None)?;
+        repo.reset(&object, git2::ResetType::Hard, None)?;
+        Ok(())
     }
 
     pub fn head_sha(&self) -> Result<Option<String>> {
