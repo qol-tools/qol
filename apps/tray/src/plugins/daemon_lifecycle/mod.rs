@@ -412,6 +412,27 @@ items = []
             .unwrap()
     }
 
+    #[cfg(unix)]
+    fn spawn_ignoring_term() -> Child {
+        use std::io::{BufRead, BufReader};
+        let mut child = Command::new("sh")
+            .args(["-c", "trap '' TERM; echo ready; exec sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(
+            ready, "ready\n",
+            "the daemon must ignore TERM before the stop starts"
+        );
+        child
+    }
+
     fn spawn_short_lived() -> Child {
         let mut command = if cfg!(unix) {
             Command::new("true")
@@ -557,15 +578,13 @@ items = []
     #[cfg(unix)]
     #[test]
     fn stopping_several_daemons_shares_one_grace_deadline() {
-        let ignore_term = ["-c", "trap '' TERM; exec sleep 30"];
         let daemons: Vec<_> = (0..3)
             .map(|index| StoppingDaemon {
                 plugin_id: format!("plugin-stop-{index}"),
-                child: spawn_quiet(Command::new("sh").args(ignore_term)),
+                child: spawn_ignoring_term(),
             })
             .collect();
         let pids: Vec<_> = daemons.iter().map(|daemon| daemon.child.id()).collect();
-        std::thread::sleep(Duration::from_millis(100));
         let grace = Duration::from_secs(2);
         let started = Instant::now();
 
