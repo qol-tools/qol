@@ -164,7 +164,9 @@ class RerunWaitsTests(unittest.TestCase):
 
 
 class ApplyOverrideTests(unittest.TestCase):
-    def apply(self, api: FakeApi, entries: list[dict]) -> tuple[int, mock.Mock, str]:
+    NAMED = f"/review-override {SHA[:7]}"
+
+    def apply(self, api: FakeApi, entries: list[dict], body: str = NAMED) -> tuple[int, mock.Mock, str]:
         sleep = mock.Mock()
         with (
             mock.patch.object(gate, "gh_json", api.gh_json),
@@ -174,49 +176,65 @@ class ApplyOverrideTests(unittest.TestCase):
         ):
             out = io.StringIO()
             with redirect_stdout(out):
-                code = gate.apply_override("o/r", "7", SHA, "KMRH47", sleep)
+                code = gate.apply_override("o/r", "7", body, "KMRH47", sleep)
         return code, sleep, out.getvalue()
 
-    def test_the_override_removes_the_label_records_once_and_reruns_the_failed_verdict_and_waits(self):
+    def refusal(self, reason: str) -> list[str]:
+        return ["--method", "POST", "repos/o/r/issues/7/comments", "-f", f"body=> [!WARNING]\n> **Review override refused** · {reason}\n"]
+
+    def test_the_override_records_once_and_reruns_the_failed_verdict_and_waits(self):
         api = FakeApi(
             review=[run(5, conclusion="cancelled"), run(6)],
             runs=[run(6), run(7, workflow=2)],
             jobs={6: [{"id": 61, "name": "Review with qol-code-review"}, {"id": 62, "name": "claude review"}], 7: [{"name": "Wait for the review", "conclusion": "failure"}]},
         )
         api.statuses[6] = ["completed", "queued"]
-        code, sleep, _ = self.apply(api, [])
-        self.assertEqual(code, 0)
-        self.assertEqual(api.calls[0], ["--method", "DELETE", "repos/o/r/issues/7/labels/review-override"])
-        self.assertEqual(api.calls[1], ["--method", "POST", "repos/o/r/issues/7/comments", "-f", f"body={gate.record(SHA, 'KMRH47')}"])
-        self.assertEqual(api.calls[2], ["--method", "POST", "repos/o/r/actions/jobs/62/rerun"])
-        self.assertEqual(api.calls[3], ["--method", "POST", "repos/o/r/actions/runs/7/rerun-failed-jobs"])
-        self.assertEqual(sleep.call_count, 1)
-
-    def test_a_second_label_does_not_record_twice(self):
-        api = FakeApi(review=[run(6)], jobs={6: [{"id": 62, "name": "claude review"}]})
-        api.statuses[6] = ["queued"]
-        code, _, _ = self.apply(api, [comment(gate.record(SHA, "KMRH47"))])
+        code, sleep, _ = self.apply(api, [], f"{self.NAMED}\nRound 130 picked the squeezed rows.")
         self.assertEqual(code, 0)
         self.assertEqual(
             api.calls,
-            [["--method", "DELETE", "repos/o/r/issues/7/labels/review-override"], ["--method", "POST", "repos/o/r/actions/jobs/62/rerun"]],
+            [
+                ["--method", "POST", "repos/o/r/issues/7/comments", "-f", f"body={gate.record(SHA, 'KMRH47')}"],
+                ["--method", "POST", "repos/o/r/actions/jobs/62/rerun"],
+                ["--method", "POST", "repos/o/r/actions/runs/7/rerun-failed-jobs"],
+            ],
         )
+        self.assertEqual(sleep.call_count, 1)
 
-    def test_only_a_finished_review_of_the_labelled_commit_can_be_overridden(self):
+    def test_a_second_override_does_not_record_twice(self):
+        api = FakeApi(review=[run(6)], jobs={6: [{"id": 62, "name": "claude review"}]})
+        api.statuses[6] = ["queued"]
+        code, _, _ = self.apply(api, [comment(gate.record(SHA, "KMRH47"))], f"/review-override {SHA}")
+        self.assertEqual(code, 0)
+        self.assertEqual(api.calls, [["--method", "POST", "repos/o/r/actions/jobs/62/rerun"]])
+
+    def test_the_override_names_the_head_commit_or_is_refused(self):
+        for body, reason in [
+            (f"/review-override {OTHER[:7]}", f"`{OTHER[:7]}` is not the head commit `1f8c4b7`, so its review was not overridden."),
+            ("/review-override 1f8c", "name the head commit the override is for: `/review-override <sha>`."),
+            (f"/review-override {SHA[:7]} please", "name the head commit the override is for: `/review-override <sha>`."),
+        ]:
+            with self.subTest(body=body):
+                api = FakeApi(review=[run(6)])
+                code, _, out = self.apply(api, [], body)
+                self.assertEqual(code, 1)
+                self.assertEqual(api.calls, [self.refusal(reason)])
+                self.assertIn(f"::error::{reason}", out)
+
+    def test_only_a_finished_review_can_be_overridden(self):
         for review in [[], [run(6, "in_progress", None)]]:
             with self.subTest(review=review):
                 api = FakeApi(review=review)
-                code, _, out = self.apply(api, [])
+                code, _, _ = self.apply(api, [])
                 self.assertEqual(code, 1)
-                self.assertIn("the review of 1f8c4b7 has not finished, so there is no verdict to override", out)
-                self.assertEqual(api.calls, [["--method", "DELETE", "repos/o/r/issues/7/labels/review-override"]])
+                self.assertEqual(api.calls, [self.refusal("the review of `1f8c4b7` has not finished, so there is no verdict to override yet.")])
 
     def test_a_passed_review_needs_no_override(self):
         api = FakeApi(review=[run(6, conclusion="success")])
         code, _, out = self.apply(api, [])
         self.assertEqual(code, 0)
         self.assertIn("the review of 1f8c4b7 already passed", out)
-        self.assertEqual(api.calls, [["--method", "DELETE", "repos/o/r/issues/7/labels/review-override"]])
+        self.assertEqual(api.calls, [])
 
 
 class MainTests(unittest.TestCase):

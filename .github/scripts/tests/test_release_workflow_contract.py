@@ -329,21 +329,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         publish = workflow.split("  publish:\n", 1)[1].split("    runs-on:", 1)[0]
         self.assertIn("needs.review.result != 'cancelled'", publish)
 
-    def test_only_the_owner_overrides_the_review_and_only_for_the_labelled_head(self):
+    def test_only_the_owner_overrides_the_review_and_only_for_the_commit_named(self):
         workflow = (ROOT / ".github/workflows/review-override.yml").read_text()
-        self.assertIn("  pull_request:\n    types: [labeled]\n", workflow.split("jobs:\n", 1)[0])
+        self.assertIn("  issue_comment:\n    types: [created]\n", workflow.split("jobs:\n", 1)[0])
         override = workflow.split("jobs:\n", 1)[1]
         for contract in [
-            "github.event.label.name == 'review-override'",
-            "github.event.sender.login == 'KMRH47'",
+            "github.event.issue.pull_request &&",
+            "startsWith(github.event.comment.body, '/review-override ')",
+            "github.event.comment.user.login == 'KMRH47'",
             "github.triggering_actor == 'KMRH47'",
-            "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+            "COMMENT: ${{ github.event.comment.body }}",
             "run: python3 .github/scripts/review_gate.py override",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, override)
-        self.assertNotIn("name: claude review", override)
-        self.assertNotIn("cargo", override)
+        for loose in ["head.sha", "ref:", "name: claude review", "cargo"]:
+            with self.subTest(loose=loose):
+                self.assertNotIn(loose, override)
 
     def test_a_new_review_run_reruns_the_checks_its_old_verdict_stopped(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()

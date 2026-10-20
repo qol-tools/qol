@@ -12,10 +12,10 @@ from queue_verdict import gh_json
 from stop_on_failure import cancel
 from wait_for_review import review_runs
 
-LABEL = "review-override"
 REVIEW_BOT = "github-actions[bot]"
 VERDICT_JOB = "claude review"
 WAIT_JOB = "Wait for the review"
+COMMAND = re.compile(r"/review-override ([0-9a-f]{7,40})")
 RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) -->")
 CANCEL_GRACE_SECONDS = 300
 RESTART_POLLS = 12
@@ -116,15 +116,22 @@ def rerun_verdict(repo: str, review: dict, sleep: Callable[[float], None]) -> No
         sleep(POLL_SECONDS)
 
 
-def apply_override(repo: str, pr: str, head_sha: str, actor: str, sleep: Callable[[float], None] = time.sleep) -> int:
-    try:
-        gh(["--method", "DELETE", f"repos/{repo}/issues/{pr}/labels/{LABEL}"])
-    except RuntimeError as error:
-        print(f"::warning::the {LABEL} label stays: {error}")
+def refuse(repo: str, pr: str, reason: str) -> int:
+    gh(["--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body=> [!WARNING]\n> **Review override refused** · {reason}\n"])
+    print(f"::error::{reason}")
+    return 1
+
+
+def apply_override(repo: str, pr: str, body: str, actor: str, sleep: Callable[[float], None] = time.sleep) -> int:
+    named = COMMAND.fullmatch((body.strip().splitlines() or [""])[0].strip())
+    if not named:
+        return refuse(repo, pr, "name the head commit the override is for: `/review-override <sha>`.")
+    head_sha = gh_json([f"repos/{repo}/pulls/{pr}"])["head"]["sha"]
+    if not head_sha.startswith(named.group(1)):
+        return refuse(repo, pr, f"`{named.group(1)}` is not the head commit `{head_sha[:7]}`, so its review was not overridden.")
     review = max(review_runs(repo, head_sha), key=lambda run: run["id"], default=None)
     if review is None or review.get("status") != "completed":
-        print(f"::error::the review of {head_sha[:7]} has not finished, so there is no verdict to override; add the label again once it has")
-        return 1
+        return refuse(repo, pr, f"the review of `{head_sha[:7]}` has not finished, so there is no verdict to override yet.")
     if review.get("conclusion") == "success":
         print(f"the review of {head_sha[:7]} already passed: {review['html_url']}")
         return 0
@@ -146,7 +153,7 @@ def main(argv: list[str]) -> int:
         if command == "superseded":
             return end_if_superseded(env["GITHUB_REPOSITORY"], env["HEAD_SHA"], env["GITHUB_RUN_ID"])
         if command == "override":
-            return apply_override(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["HEAD_SHA"], env["ACTOR"])
+            return apply_override(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["COMMENT"], env["ACTOR"])
         if command == "rerun-waits":
             for url in rerun_waits(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["HEAD_SHA"]):
                 print(f"reran {url}")
