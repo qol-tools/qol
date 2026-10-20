@@ -140,10 +140,10 @@ fn nearby_item(
     let pairs_here = device.pairing == Pairing::Backend;
     let low_energy = device.pairing == Pairing::SystemSettings
         || low_energy_identifier(&device.address).is_some();
-    let kind_line = match kind {
-        Some(kind) if low_energy => format!("{kind} · {LOW_ENERGY}"),
-        Some(kind) => kind.to_string(),
-        None => UNKNOWN_KIND.to_string(),
+    let kind_name = kind.unwrap_or(UNKNOWN_KIND);
+    let kind_line = match low_energy {
+        true => format!("{kind_name} · {LOW_ENERGY}"),
+        false => kind_name.to_string(),
     };
     let (badge, tone, detail) = if let Some(action) = pending {
         (action.status.clone(), "accent", kind_line)
@@ -638,6 +638,26 @@ mod tests {
             assert_eq!(item["can_pair"], false);
             assert_eq!(item["low_energy"], true);
             assert_eq!(item["signal"], 3);
+        }
+    }
+
+    #[test]
+    fn a_bluetooth_le_find_says_so_whatever_its_kind() {
+        let cases = [
+            (vec![HID_UUID.to_string()], "Input device · Bluetooth LE"),
+            (Vec::new(), "Unknown kind · Bluetooth LE"),
+        ];
+        for (uuids, detail) in cases {
+            let mut discovery = DiscoveryState::default();
+            discovery.start();
+            discovery.record_device(DeviceInfo {
+                address: LIFT.into(),
+                pairing: Pairing::SystemSettings,
+                uuids,
+                ..device("00", "BYD BLE3", Some(-70), None)
+            });
+            let payload = nearby_payload(&[], &discovery, None, true, MACOS, later(1));
+            assert_eq!(payload["items"][0]["detail"], detail);
         }
     }
 
