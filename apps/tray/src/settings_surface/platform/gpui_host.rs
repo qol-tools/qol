@@ -880,19 +880,14 @@ fn load_plugin_source_from_root(
     plugin_root: &Path,
 ) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
     let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(plugin_root)?;
-    let combined = crate::plugins::config::load_combined_contracts_from_root(plugin_root)?;
-    let (contract, runtime_contract) = match combined {
-        Some((_, runtime_contract)) => {
-            let contract =
-                std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
-                    .context("failed to read the plugin settings contract")?;
-            (contract, runtime_contract)
-        }
-        None => (
-            super::generated_contract::generate_contract(&manifest),
-            None,
-        ),
+    let Some((_, runtime_contract)) =
+        crate::plugins::config::load_combined_contracts_from_root(plugin_root)?
+    else {
+        bail!("plugin has no settings contract");
     };
+    let contract =
+        std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
+            .context("failed to read the plugin settings contract")?;
     let mut runtime = SettingsRuntime::tray(plugin_id);
     if let Some(runtime_contract) = runtime_contract.as_ref() {
         for (name, query) in &runtime_contract.queries {
@@ -905,7 +900,7 @@ fn load_plugin_source_from_root(
     Ok((
         PluginSettingsSource {
             contract,
-            heading: super::generated_contract::rail_label(&manifest),
+            heading: rail_label(&manifest),
             mark: crate::features::launcher_apps::icon::manifest_mark(plugin_id, &manifest),
         },
         runtime,
@@ -957,10 +952,12 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                 continue;
             }
         };
-        if !manifest.plugin.supports_current_platform() {
+        if !manifest.plugin.supports_current_platform()
+            || !crate::plugins::paths::has_config(&resolved.path)
+        {
             continue;
         }
-        eligible.push((super::generated_contract::rail_label(&manifest), resolved));
+        eligible.push((rail_label(&manifest), resolved));
     }
     eligible.sort_by(|left, right| left.0.cmp(&right.0));
     for (_, resolved) in eligible {
@@ -1004,6 +1001,14 @@ fn resolved_plugins() -> anyhow::Result<Vec<crate::plugins::resolver::ResolvedPl
     let registry = crate::plugins::registry::ensure_registry_initialized(&config_dir, &plugins_dir)
         .map_err(|error| anyhow::anyhow!("plugin registry is unavailable: {error}"))?;
     Ok(crate::plugins::resolver::resolve_effective_registry(&registry, &config_dir).plugins)
+}
+
+fn rail_label(manifest: &crate::plugins::manifest::PluginManifest) -> String {
+    let menu_label = manifest.menu.label.trim();
+    if !menu_label.is_empty() {
+        return menu_label.to_string();
+    }
+    manifest.plugin.name.trim().to_string()
 }
 
 fn forward_open(plugin_id: &str) -> bool {
@@ -1318,15 +1323,32 @@ mod tests {
         crate::plugins::registry::save_registry(&config_dir, &registry).unwrap();
     }
 
-    fn install_test_plugin(root: &std::path::Path, plugin_id: &str, manifest: &str) {
+    const TEST_CONTRACT: &str = r#"schema_version = 1
+title = "Test"
+
+[field.enabled]
+type = "boolean"
+label = "Enabled"
+default = true
+"#;
+
+    fn install_test_plugin(
+        root: &std::path::Path,
+        plugin_id: &str,
+        manifest: &str,
+        contract: Option<&str>,
+    ) {
         let installed = root.join("installed").join(plugin_id);
         std::fs::create_dir_all(&installed).unwrap();
         std::fs::write(installed.join("plugin.toml"), manifest).unwrap();
+        if let Some(contract) = contract {
+            std::fs::write(installed.join("qol-config.toml"), contract).unwrap();
+        }
         register_test_plugin(plugin_id, &installed);
     }
 
     #[test]
-    fn unified_rail_lists_a_plugin_without_gpui_capability_and_without_a_contract() {
+    fn a_plugin_without_a_contract_has_no_settings_page() {
         let root = tempfile::TempDir::new().unwrap();
         let _paths = crate::paths::push_test_path_root(root.path());
         install_test_plugin(
@@ -1345,26 +1367,28 @@ args = ["lock"]
 [menu]
 label = "Session"
 items = []
+
+[[shortcuts]]
+id = "lock"
+name = "Lock Screen"
+action = "lock"
 "#,
+            None,
         );
 
         let (unified, _) = super::load_unified_panel().unwrap();
-        let listed = unified
-            .sources
-            .iter()
-            .find(|source| source.plugin_id == "plugin-session")
-            .expect("plugin-session is listed in the rail");
-        assert_eq!(listed.heading, "Session");
-        assert!(matches!(
-            listed.group,
-            qol_gpui::settings_panel::PanelSourceGroup::Plugin
-        ));
-        let spec = qol_config::contract::parse_spec_str(&listed.contract)
-            .expect("generated contract parses");
-        assert_eq!(spec.title.as_deref(), Some("Session"));
-        assert_eq!(spec.description.as_deref(), Some("Lock the screen."));
-        let lock = spec.fields.get("lock").expect("generated lock action");
-        assert_eq!(lock.action.as_deref(), Some("lock"));
+        assert!(
+            unified
+                .sources
+                .iter()
+                .all(|source| source.plugin_id != "plugin-session"),
+            "the rail lists no page for a plugin with nothing to set"
+        );
+        let refused = super::load_plugin_panel("plugin-session").err();
+        assert!(
+            refused.is_some_and(|error| format!("{error:#}").contains("no settings contract")),
+            "opening its settings directly finds no page either"
+        );
     }
 
     #[test]
@@ -1414,7 +1438,7 @@ default = false
         assert_eq!(
             spec.description.as_deref(),
             Some("Author-defined description."),
-            "the author's contract wins over the generated description"
+            "the rail shows the author's contract"
         );
         assert!(
             spec.fields.contains_key("verify_answers"),
@@ -1439,6 +1463,7 @@ version = "1.0.0"
 label = "Display"
 items = []
 "#,
+            Some(TEST_CONTRACT),
         );
 
         let (unified, _) = super::load_unified_panel().unwrap();
@@ -1483,6 +1508,7 @@ label = "Other OS"
 items = []
 "#
             ),
+            Some(TEST_CONTRACT),
         );
         install_test_plugin(
             root.path(),
@@ -1501,6 +1527,7 @@ args = ["open"]
 label = "Every OS"
 items = []
 "#,
+            Some(TEST_CONTRACT),
         );
 
         let (unified, _) = super::load_unified_panel().unwrap();
@@ -1521,43 +1548,34 @@ items = []
     }
 
     #[test]
-    fn load_plugin_panel_generates_a_contract_when_the_plugin_has_none() {
-        let root = tempfile::TempDir::new().unwrap();
-        let _paths = crate::paths::push_test_path_root(root.path());
-        install_test_plugin(
-            root.path(),
-            "plugin-removeapp",
-            r#"[plugin]
-id = "plugin-removeapp"
-name = "Remove App"
-description = "Uninstall apps."
+    fn rail_label_prefers_menu_label_then_falls_back_to_plugin_name() {
+        for (menu_label, expected) in [
+            ("Menu Label", "Menu Label"),
+            ("", "Fallback"),
+            ("   ", "Fallback"),
+        ] {
+            let manifest: crate::plugins::manifest::PluginManifest = toml::from_str(&format!(
+                r#"[plugin]
+id = "x"
+name = "Fallback"
+description = ""
 version = "1.0.0"
-
-[action.open]
-label = "Open Remove App"
-args = ["open"]
-
 [menu]
-label = "Remove App"
+label = "{menu_label}"
 items = []
-
-[[shortcuts]]
-id = "open"
-name = "Remove App"
-action = "open"
-"#,
-        );
-
-        let (single, _) = super::load_plugin_panel("plugin-removeapp").unwrap();
-        assert_eq!(single.sources[0].heading, "Remove App");
-        let spec = qol_config::contract::parse_spec_str(&single.sources[0].contract)
-            .expect("generated contract parses");
-        assert!(spec.fields.contains_key("open"));
-        assert!(spec.fields.contains_key("shortcut__open"));
+"#
+            ))
+            .expect("manifest parse");
+            assert_eq!(
+                super::rail_label(&manifest),
+                expected,
+                "menu label {menu_label:?}"
+            );
+        }
     }
 
     #[test]
-    fn every_bundled_plugin_toml_yields_a_rail_label_and_a_parseable_contract() {
+    fn every_bundled_plugin_yields_a_rail_label_and_its_contract_parses() {
         use crate::plugins::manifest::PluginManifest;
         use qol_config::contract::parse_spec_str;
 
@@ -1580,21 +1598,20 @@ action = "open"
                 .unwrap_or_else(|error| panic!("parse {}: {error}", manifest_path.display()));
             let folder = entry.file_name().to_string_lossy().into_owned();
 
-            let label = super::super::generated_contract::rail_label(&manifest);
+            let label = super::rail_label(&manifest);
             assert!(
                 !label.is_empty(),
                 "plugin at {folder} must produce a non-empty rail label"
             );
 
             let contract_path = entry.path().join("qol-config.toml");
-            let contract = if contract_path.exists() {
-                std::fs::read_to_string(&contract_path)
-                    .unwrap_or_else(|error| panic!("read {}: {error}", contract_path.display()))
-            } else {
-                super::super::generated_contract::generate_contract(&manifest)
-            };
-            parse_spec_str(&contract)
-                .unwrap_or_else(|error| panic!("rail contract for {folder} must parse: {error:?}"));
+            if contract_path.exists() {
+                let contract = std::fs::read_to_string(&contract_path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", contract_path.display()));
+                parse_spec_str(&contract).unwrap_or_else(|error| {
+                    panic!("rail contract for {folder} must parse: {error:?}")
+                });
+            }
             discovered += 1;
         }
         assert!(
