@@ -263,7 +263,7 @@ impl Tail {
     }
 
     fn complete(&self) -> bool {
-        (self.facts.title.is_some() || self.ai_title.is_some())
+        self.facts.title.is_some()
             && self.facts.permission_mode.is_some()
             && self.facts.request.is_some()
     }
@@ -271,7 +271,7 @@ impl Tail {
     fn fill_from(&mut self, older: Tail) {
         self.facts = std::mem::take(&mut self.facts).or(older.facts);
         self.ai_title = self.ai_title.take().or(older.ai_title);
-        for url in older.pr_urls {
+        for url in older.pr_urls.into_iter().rev() {
             if !self.pr_urls.contains(&url) {
                 self.pr_urls.push(url);
             }
@@ -540,8 +540,12 @@ mod tests {
             r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/3"}"#.to_owned(),
             r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"low"}}}"#.to_owned(),
         ];
+        lines.push(r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/2"}"#.to_owned());
         lines.extend(std::iter::repeat_n(filler, 80));
-        lines.push(r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/4"}"#.to_owned());
+        lines.extend([
+            r#"{"type":"ai-title","aiTitle":"Generated"}"#.to_owned(),
+            r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/4"}"#.to_owned(),
+        ]);
         let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
         write_transcript(home.path(), "long", &lines);
 
@@ -558,6 +562,7 @@ mod tests {
             found[0].pr_urls,
             [
                 "https://github.com/o/r/pull/4",
+                "https://github.com/o/r/pull/2",
                 "https://github.com/o/r/pull/3"
             ]
         );
