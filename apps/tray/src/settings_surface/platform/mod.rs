@@ -1,8 +1,6 @@
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-mod generated_contract;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod gpui_host;
 #[cfg(target_os = "linux")]
 mod linux;
