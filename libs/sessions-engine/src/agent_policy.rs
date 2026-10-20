@@ -191,6 +191,12 @@ impl AgentProfileSpec {
         if self.model.trim().is_empty() {
             bail!("agent profile `{name}` must declare a non-empty model");
         }
+        if self.model.contains('*') {
+            bail!(
+                "agent profile `{name}` must declare a concrete model, not the pattern `{}`",
+                self.model
+            );
+        }
         if self
             .provider
             .as_deref()
@@ -785,6 +791,9 @@ fn resolve_recorded_assignment(
 }
 
 pub(super) fn model_entry_matches(entry: &str, model: &str) -> bool {
+    if model.contains('*') {
+        return false;
+    }
     match entry.strip_suffix('*') {
         Some(prefix) => model.starts_with(prefix),
         None => entry == model,
@@ -1388,6 +1397,11 @@ mod tests {
                 "{model}"
             );
         }
+        let pattern = dispatch
+            .admit_launch("claude", Some("claude-*"))
+            .unwrap_err()
+            .to_string();
+        assert!(pattern.contains("claude-*"), "{pattern}");
         assert!(dispatch.admit_launch("pi", Some("flash")).is_ok());
 
         let unpaid = dispatch

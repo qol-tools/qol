@@ -206,6 +206,16 @@ fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
     };
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    if let Some(model) = config
+        .spawn_model
+        .as_deref()
+        .filter(|model| model.contains('*'))
+    {
+        bail!(
+            "spawn_model must name a concrete model, not the pattern `{model}`, in {}",
+            path.display()
+        );
+    }
     let allowed_models = allowed_models_from(config.allowed_models, config.spawn_model.clone());
     for model in &allowed_models {
         require_trailing_wildcard("allowed_models", model, path)?;
@@ -3746,6 +3756,10 @@ mod tests {
         fs::write(&path, "allowed_models = [\"claude-**\"]\n").unwrap();
         let doubled = config_dispatch_policy_at(&path).unwrap_err().to_string();
         assert!(doubled.contains("allowed_models"), "{doubled}");
+
+        fs::write(&path, "spawn_model = \"claude-*\"\n").unwrap();
+        let pattern_default = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(pattern_default.contains("spawn_model"), "{pattern_default}");
 
         fs::write(
             &path,
