@@ -510,14 +510,19 @@ pub fn pointer_over_window_by_title(title: &str) -> bool {
     pointer_on_window_by_title(title).is_some_and(|pointer| pointer.inside)
 }
 
-pub fn set_input_region_by_title(
-    _title: &str,
-    _x: i16,
-    _y: i16,
-    _width: u16,
-    _height: u16,
-) -> bool {
-    false
+pub fn set_input_region_by_title(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    let scale = window.backingScaleFactor().max(1.0);
+    let points = |pixels: f64| pixels / scale;
+    set_input_region_on_main(
+        title,
+        points(f64::from(x)).floor() as i16,
+        points(f64::from(y)).floor() as i16,
+        points(f64::from(width)).ceil() as u16,
+        points(f64::from(height)).ceil() as u16,
+    )
 }
 
 pub fn make_override_redirect(_title: &str) -> bool {
