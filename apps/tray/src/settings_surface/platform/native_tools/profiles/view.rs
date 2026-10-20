@@ -376,13 +376,27 @@ impl ProfilesView {
         let picks = self.picks.clone();
         self.run(
             move || data::resolve(&conflicts, &picks),
-            |view, (), cx| {
-                view.leave(cx);
-                view.tell(
-                    CustomPanelNoticeTone::Success,
-                    "Sync is back on. Both sides are saved in backups.".to_string(),
-                    cx,
-                );
+            |view, review, cx| match review {
+                Some(review) => {
+                    let earlier = view.review.take().unwrap_or_default();
+                    view.picks =
+                        model::carried_picks(&earlier.conflicts, &view.picks, &review.conflicts);
+                    view.review = Some(review);
+                    view.tell(
+                        CustomPanelNoticeTone::Failure,
+                        "Another computer changed settings while you picked. Check the list again."
+                            .to_string(),
+                        cx,
+                    );
+                }
+                None => {
+                    view.leave(cx);
+                    view.tell(
+                        CustomPanelNoticeTone::Success,
+                        "Sync is back on. Both sides are saved in backups.".to_string(),
+                        cx,
+                    );
+                }
             },
             cx,
         );

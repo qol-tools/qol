@@ -144,7 +144,7 @@ pub(super) fn review() -> anyhow::Result<Review> {
     Ok(Review { conflicts, names })
 }
 
-pub(super) fn resolve(conflicts: &[Conflict], picks: &[Side]) -> anyhow::Result<()> {
+pub(super) fn resolve(conflicts: &[Conflict], picks: &[Side]) -> anyhow::Result<Option<Review>> {
     let choices = conflicts
         .iter()
         .zip(picks)
@@ -157,13 +157,19 @@ pub(super) fn resolve(conflicts: &[Conflict], picks: &[Side]) -> anyhow::Result<
         })
         .collect::<Vec<_>>();
     let body = serde_json::json!({ "choices": choices }).to_string();
-    request_text(
+    let result: serde_json::Value = request_json(
         Method::Post,
         "/api/sync/conflicts/resolve",
         Some(&body),
         SYNC_TIMEOUT,
-    )
-    .map(drop)
+    )?;
+    if let Some(error) = result["status"]["last_error"].as_str() {
+        anyhow::bail!("{error}");
+    }
+    match result["status"]["conflict_count"].as_u64() {
+        Some(count) if count > 0 => review().map(Some),
+        _ => Ok(None),
+    }
 }
 
 pub(super) fn use_profile(name: &str) -> anyhow::Result<()> {

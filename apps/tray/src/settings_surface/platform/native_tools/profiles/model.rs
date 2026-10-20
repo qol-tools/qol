@@ -407,6 +407,24 @@ pub(super) fn default_picks(conflicts: &[Conflict]) -> Vec<Side> {
         .collect()
 }
 
+pub(super) fn carried_picks(
+    earlier: &[Conflict],
+    picks: &[Side],
+    conflicts: &[Conflict],
+) -> Vec<Side> {
+    conflicts
+        .iter()
+        .zip(default_picks(conflicts))
+        .map(|(conflict, default)| {
+            earlier
+                .iter()
+                .zip(picks)
+                .find(|(old, _)| old.file == conflict.file && old.key_path == conflict.key_path)
+                .map_or(default, |(_, side)| *side)
+        })
+        .collect()
+}
+
 pub(super) fn review_rows(review: Option<&Review>, picks: &[Side]) -> Vec<Row> {
     let Some(review) = review else {
         return vec![Row::header("review", "reading the changes")];
@@ -946,6 +964,18 @@ mod tests {
         assert_eq!(
             rows[2].detail,
             "This computer a long value that keeps going far past… · GitHub 0.75"
+        );
+    }
+
+    #[test]
+    fn a_second_review_keeps_the_picks_already_made() {
+        let earlier = [removeapp_conflict(), opacity_conflict()];
+        let mut blur = opacity_conflict();
+        blur.key_path = "appearance.blur".to_string();
+        let again = [opacity_conflict(), blur, removeapp_conflict()];
+        assert_eq!(
+            carried_picks(&earlier, &[Side::Mine, Side::Remote], &again),
+            [Side::Remote, Side::Mine, Side::Mine]
         );
     }
 

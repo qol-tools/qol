@@ -191,6 +191,12 @@ impl AgentProfileSpec {
         if self.model.trim().is_empty() {
             bail!("agent profile `{name}` must declare a non-empty model");
         }
+        if self.model.contains('*') {
+            bail!(
+                "agent profile `{name}` must declare a concrete model, not the pattern `{}`",
+                self.model
+            );
+        }
         if self
             .provider
             .as_deref()
@@ -290,12 +296,19 @@ impl DispatchPolicy {
                 "a launch without an explicit tool needs tool_models to resolve the harness for model `{model}`; declare the harness in tool_models or pass the tool explicitly"
             );
         }
-        let matches = self
-            .tool_models
-            .iter()
-            .filter(|(_, models)| models.iter().any(|entry| entry == model))
-            .map(|(tool, _)| tool.as_str())
-            .collect::<Vec<_>>();
+        let tools_where = |matches: fn(&str, &str) -> bool| {
+            self.tool_models
+                .iter()
+                .filter(|(_, models)| models.iter().any(|entry| matches(entry, model)))
+                .map(|(tool, _)| tool.as_str())
+                .collect::<Vec<_>>()
+        };
+        let exact = tools_where(|entry, model| entry == model);
+        let matches = if exact.is_empty() {
+            tools_where(model_entry_matches)
+        } else {
+            exact
+        };
         match matches.as_slice() {
             [tool] => Ok((*tool).to_owned()),
             [] => bail!(
@@ -777,8 +790,24 @@ fn resolve_recorded_assignment(
     ))
 }
 
+pub(super) fn model_entry_matches(entry: &str, model: &str) -> bool {
+    if model.contains('*') {
+        return false;
+    }
+    match entry.strip_suffix('*') {
+        Some(prefix) => model.starts_with(prefix),
+        None => entry == model,
+    }
+}
+
+pub(super) fn model_declared(entries: &[String], model: &str) -> bool {
+    entries
+        .iter()
+        .any(|entry| model_entry_matches(entry, model))
+}
+
 pub(super) fn enforce_allowed_model(model: &str, allowed: &[String]) -> Result<()> {
-    if allowed.is_empty() || allowed.iter().any(|entry| entry == model) {
+    if allowed.is_empty() || model_declared(allowed, model) {
         return Ok(());
     }
     bail!(
@@ -801,7 +830,7 @@ pub(super) fn enforce_tool_model(
             tool_models_catalog(declared)
         );
     };
-    if models.iter().any(|entry| entry == model) {
+    if model_declared(models, model) {
         return Ok(());
     }
     bail!(
@@ -1347,6 +1376,72 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(empty.contains("tool_models"), "{empty}");
+    }
+
+    #[test]
+    fn a_trailing_wildcard_admits_every_model_with_its_prefix() {
+        let dispatch = AgentDispatch::new(
+            DispatchPolicy {
+                allowed_models: vec!["claude-*".to_owned(), "flash".to_owned()],
+                tool_models: BTreeMap::from([
+                    ("claude".to_owned(), vec!["claude-*".to_owned()]),
+                    ("pi".to_owned(), vec!["*".to_owned()]),
+                ]),
+                ..DispatchPolicy::default()
+            },
+            AssignmentRequest::default(),
+        );
+        for model in ["claude-opus-5-5", "claude-fable-5-1", "claude-next-9"] {
+            assert!(
+                dispatch.admit_launch("claude", Some(model)).is_ok(),
+                "{model}"
+            );
+        }
+        let pattern = dispatch
+            .admit_launch("claude", Some("claude-*"))
+            .unwrap_err()
+            .to_string();
+        assert!(pattern.contains("claude-*"), "{pattern}");
+        assert!(dispatch.admit_launch("pi", Some("flash")).is_ok());
+
+        let unpaid = dispatch
+            .admit_launch("pi", Some("glm-5.3-flash"))
+            .unwrap_err()
+            .to_string();
+        assert!(unpaid.contains("allowed_models"), "{unpaid}");
+        let wrong_tool = dispatch
+            .admit_launch("claude", Some("flash"))
+            .unwrap_err()
+            .to_string();
+        assert!(wrong_tool.contains("tool_models"), "{wrong_tool}");
+    }
+
+    #[test]
+    fn an_exact_declaration_wins_over_a_wildcard_when_resolving_the_harness() {
+        let policy = DispatchPolicy {
+            tool_models: BTreeMap::from([
+                ("claude".to_owned(), vec!["claude-*".to_owned()]),
+                ("pi".to_owned(), vec!["flash".to_owned(), "*".to_owned()]),
+                ("codex".to_owned(), vec!["gpt-*".to_owned()]),
+            ]),
+            ..DispatchPolicy::default()
+        };
+        let ambiguous = policy
+            .tool_for_model("claude-fable-5-1")
+            .unwrap_err()
+            .to_string();
+        assert!(ambiguous.contains("more than one"), "{ambiguous}");
+        assert_eq!(policy.tool_for_model("flash").unwrap(), "pi");
+        let narrow = DispatchPolicy {
+            tool_models: BTreeMap::from([
+                ("claude".to_owned(), vec!["claude-*".to_owned()]),
+                ("codex".to_owned(), vec!["gpt-*".to_owned()]),
+            ]),
+            ..DispatchPolicy::default()
+        };
+        assert_eq!(narrow.tool_for_model("claude-fable-5-1").unwrap(), "claude");
+        assert_eq!(narrow.tool_for_model("gpt-6-astra").unwrap(), "codex");
+        assert!(narrow.tool_for_model("glm-5.3-flash").is_err());
     }
 
     #[test]

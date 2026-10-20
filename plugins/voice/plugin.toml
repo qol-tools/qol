@@ -4,7 +4,7 @@ uid = "1236ab1d-880a-49c7-b50a-4ff0970117b4"
 name = "Voice"
 icon = "voice"
 description = "Speak and have your words typed into terminal sessions"
-version = "0.69.0"
+version = "0.70.2"
 author = "KMRH47"
 platforms = ["linux", "windows"]
 
@@ -17,6 +17,11 @@ default_scope = "os"
 [config.scope]
 activation = "device"
 routing = "device"
+audio = "os"
+"audio.input_device" = "device"
+recognition = "os"
+"recognition.model_dir" = "device"
+segmentation = "os"
 
 [runtime]
 command = "qol-voice"

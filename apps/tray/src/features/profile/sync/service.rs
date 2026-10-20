@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use qol_profile_sync::{
     backup_file_path, build_status, ensure_sync_dirs, filename_string, list_backup_entries,
-    load_state_file, load_toggles, merge_profile_with, mergeable_path, now_rfc3339,
+    load_state_file, load_toggles, merge_profile, merge_profile_with, mergeable_path, now_rfc3339,
     promote::{promote_clone_git_dir, promotion_scope, promotion_scope_label, PromotionScope},
-    reconcile, repair_profile_schema, save_state_file, save_toggles, ConflictChoice, FieldConflict,
-    GitRepo, ProfileSnapshot, PullOutcome, ResolvableConflict, Side, SignatureSpec,
-    SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest, SyncIncident,
-    SyncIncidentKind, SyncLock, SyncPaths, SyncStateFile, SyncStatus, SyncToggles,
+    reconcile, repair_profile_schema, retry_while_remote_moves, save_state_file, save_toggles,
+    ConflictChoice, FieldConflict, GitRepo, ProfileSnapshot, PullOutcome, ResolvableConflict, Side,
+    SignatureSpec, SyncActionResult, SyncBackupEntry, SyncBackupPreview, SyncConnectRequest,
+    SyncIncident, SyncIncidentKind, SyncLock, SyncPaths, SyncStateFile, SyncStatus, SyncToggles,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -352,21 +352,12 @@ impl SyncService {
             state.conflicts.clear();
         } else {
             let (local, remote) = match &outcome {
-                PullOutcome::Diverged { local, remote } => (local.clone(), remote.clone()),
-                _ => (String::new(), String::new()),
+                PullOutcome::Diverged { local, remote } => (local.as_str(), remote.as_str()),
+                _ => ("", ""),
             };
-            state.incident = Some(SyncIncident {
-                kind: SyncIncidentKind::Conflict,
-                message: format!(
-                    "{} setting(s) differ (local {} vs remote {})",
-                    conflicts.len(),
-                    short_sha(&local),
-                    short_sha(&remote)
-                ),
-                backup_file: None,
-                created_at: now_rfc3339(),
-            });
+            state.incident = Some(conflict_incident(conflicts.len(), local, remote));
             state.conflicts = conflicts;
+            state.last_error = None;
         }
         state.head_sha = head;
         state.last_sync_at = Some(now_rfc3339());
@@ -391,56 +382,33 @@ impl SyncService {
         let token = require_github_token()?;
         let repo_path = crate::paths::profile_dir()?;
         let lock_path = SyncPaths::new(repo_path.clone()).lock_path();
-        let resolved = tokio::task::spawn_blocking(move || -> Result<Option<String>> {
+        let resolved = tokio::task::spawn_blocking(move || -> Result<ResolveTaskOutput> {
             let _sync_lock = SyncLock::acquire(&lock_path)?;
             let repo = GitRepo::open(&repo_path)?;
-            let local_oid = repo
-                .local_oid()?
-                .ok_or_else(|| anyhow::anyhow!("local branch has no commit"))?;
-            let remote_oid = repo.remote_oid()?;
-            let base: BTreeMap<String, Value> = match repo.merge_base_with_remote()? {
-                Some(oid) => repo.snapshot_json_at(oid, mergeable_path)?,
-                None => BTreeMap::new(),
-            };
-            let local = repo.snapshot_json_at(local_oid, mergeable_path)?;
-            let remote = repo.snapshot_json_at(remote_oid, mergeable_path)?;
-            write_conflict_backup(&serde_json::json!({ "local": local, "remote": remote }))?;
-            let resolve = |file: &str, key: &str| -> Option<bool> {
-                choices
-                    .iter()
-                    .find(|choice| choice.file == file && choice.key_path == key)
-                    .map(|choice| matches!(choice.side, Side::Remote))
-            };
-            let merged = merge_profile_with(
-                &ProfileSnapshot { files: base },
-                &ProfileSnapshot { files: local },
-                &ProfileSnapshot { files: remote },
-                &resolve,
-            );
-            apply_merged_profile(&repo, &repo_path, &merged.merged, "resolve_conflicts")?;
-            normalize_synced_plugin_configs();
-            repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
-            repo.push(Some(&token))?;
-            repo.head_sha()
+            resolve_and_push(&repo, &repo_path, &token, &choices)
         })
         .await
         .context("join resolve task")?;
-        let head = match resolved {
+        let output = match resolved {
             Ok(value) => value,
             Err(error) => return self.persisted_error(error, Some(&target)),
         };
+        let message = match output.conflicts.len() {
+            0 => "Conflicts resolved".to_string(),
+            count => format!("{count} setting(s) need review"),
+        };
         let mut state = self.state_mut();
-        state.conflicts.clear();
-        state.incident = None;
+        state.conflicts = output.conflicts;
+        state.incident = output.incident;
         state.last_error = None;
-        state.head_sha = head;
+        state.head_sha = output.head;
         state.last_sync_at = Some(now_rfc3339());
         save_state_file(&sync_paths()?, &state)?;
         let saved = state.clone();
         drop(state);
         Ok(SyncActionResult {
-            message: "Conflicts resolved".to_string(),
-            applied_remote: true,
+            message,
+            applied_remote: output.applied_remote,
             status: self.build_status_with(&saved, Some(&target)),
         })
     }
@@ -876,6 +844,19 @@ fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
 
+fn conflict_incident(count: usize, local: &str, remote: &str) -> SyncIncident {
+    SyncIncident {
+        kind: SyncIncidentKind::Conflict,
+        message: format!(
+            "{count} setting(s) differ (local {} vs remote {})",
+            short_sha(local),
+            short_sha(remote)
+        ),
+        backup_file: None,
+        created_at: now_rfc3339(),
+    }
+}
+
 struct PullTaskOutput {
     outcome: PullOutcome,
     head: Option<String>,
@@ -888,6 +869,13 @@ struct PushTaskOutput {
     pushed: bool,
     head: Option<String>,
     conflicts: Vec<ResolvableConflict>,
+    applied_remote: bool,
+}
+
+struct ResolveTaskOutput {
+    head: Option<String>,
+    conflicts: Vec<ResolvableConflict>,
+    incident: Option<SyncIncident>,
     applied_remote: bool,
 }
 
@@ -913,12 +901,23 @@ fn push_profile_changes(
     ensure_gitignore(repo_path)?;
     repair_profile_schema_under_guard(repo_path)?;
     repo.commit_all(reason, &SignatureSpec::default_for_app())?;
+    let mut applied_remote = false;
+    retry_while_remote_moves(|| {
+        merge_remote_then_push(&repo, repo_path, token, &mut applied_remote)
+    })
+}
+
+fn merge_remote_then_push(
+    repo: &GitRepo,
+    repo_path: &Path,
+    token: Option<&str>,
+    applied_remote: &mut bool,
+) -> Result<PushTaskOutput> {
     let outcome = repo.fetch(token)?;
     let mut conflicts = Vec::new();
-    let mut applied_remote = false;
 
     if matches!(outcome, PullOutcome::FastForwarded { .. }) {
-        apply_fast_forward(&repo, &outcome, "push")?;
+        apply_fast_forward(repo, &outcome, "push")?;
         let normalization = normalize_synced_plugin_configs();
         if normalization.changed {
             repo.commit_all(
@@ -926,18 +925,18 @@ fn push_profile_changes(
                 &SignatureSpec::default_for_app(),
             )?;
         }
-        applied_remote = true;
+        *applied_remote = true;
     }
 
     if matches!(outcome, PullOutcome::Diverged { .. }) {
-        let merge = reconcile(&repo)?;
+        let merge = reconcile(repo)?;
         if merge.conflicts.is_empty() {
-            apply_merged_profile(&repo, repo_path, &merge.merged, "push")?;
+            apply_merged_profile(repo, repo_path, &merge.merged, "push")?;
             normalize_synced_plugin_configs();
             repo.commit_all("merge remote changes", &SignatureSpec::default_for_app())?;
-            applied_remote = true;
+            *applied_remote = true;
         } else {
-            conflicts = decorate_conflicts(&repo, merge.conflicts)?;
+            conflicts = decorate_conflicts(repo, merge.conflicts)?;
         }
     }
 
@@ -948,7 +947,7 @@ fn push_profile_changes(
             pushed,
             head,
             conflicts,
-            applied_remote,
+            applied_remote: *applied_remote,
         });
     }
     let head = repo.head_sha()?;
@@ -956,8 +955,105 @@ fn push_profile_changes(
         pushed: false,
         head,
         conflicts,
-        applied_remote,
+        applied_remote: *applied_remote,
     })
+}
+
+fn resolve_and_push(
+    repo: &GitRepo,
+    repo_path: &Path,
+    token: &str,
+    choices: &[ConflictChoice],
+) -> Result<ResolveTaskOutput> {
+    let local_oid = repo
+        .local_oid()?
+        .ok_or_else(|| anyhow::anyhow!("local branch has no commit"))?;
+    retry_while_remote_moves(|| {
+        repo.fetch(Some(token))?;
+        let unreviewed = resolve_onto_remote(repo, repo_path, token, local_oid, choices)?;
+        if unreviewed.is_empty() {
+            return Ok(ResolveTaskOutput {
+                head: repo.head_sha()?,
+                conflicts: Vec::new(),
+                incident: None,
+                applied_remote: true,
+            });
+        }
+        let remote = repo.remote_oid()?.to_string();
+        Ok(ResolveTaskOutput {
+            incident: Some(conflict_incident(
+                unreviewed.len(),
+                &local_oid.to_string(),
+                &remote,
+            )),
+            conflicts: decorate_conflicts(repo, unreviewed)?,
+            head: repo.head_sha()?,
+            applied_remote: false,
+        })
+    })
+}
+
+fn resolve_onto_remote(
+    repo: &GitRepo,
+    repo_path: &Path,
+    token: &str,
+    local_oid: git2::Oid,
+    choices: &[ConflictChoice],
+) -> Result<Vec<FieldConflict>> {
+    let remote_oid = repo.remote_oid()?;
+    let base = ProfileSnapshot {
+        files: match repo.merge_base(local_oid, remote_oid)? {
+            Some(oid) => repo.snapshot_json_at(oid, mergeable_path)?,
+            None => BTreeMap::new(),
+        },
+    };
+    let local = ProfileSnapshot {
+        files: repo.snapshot_json_at(local_oid, mergeable_path)?,
+    };
+    let remote = ProfileSnapshot {
+        files: repo.snapshot_json_at(remote_oid, mergeable_path)?,
+    };
+    let resolve = |file: &str, key: &str| -> Option<bool> {
+        choices
+            .iter()
+            .find(|choice| choice.file == file && choice.key_path == key)
+            .map(|choice| matches!(choice.side, Side::Remote))
+    };
+    let merged = merge_profile_with(&base, &local, &remote, &resolve);
+    if !merged.conflicts.is_empty() {
+        return Ok(merge_profile(&base, &local, &remote).conflicts);
+    }
+    write_conflict_backup(&serde_json::json!({ "local": local.files, "remote": remote.files }))?;
+    if let Err(error) = push_merged_profile(repo, repo_path, token, &merged.merged) {
+        restore_local_branch(repo, local_oid)?;
+        return Err(error);
+    }
+    Ok(Vec::new())
+}
+
+fn push_merged_profile(
+    repo: &GitRepo,
+    repo_path: &Path,
+    token: &str,
+    merged: &BTreeMap<String, Value>,
+) -> Result<()> {
+    apply_merged_profile(repo, repo_path, merged, "resolve_conflicts")?;
+    normalize_synced_plugin_configs();
+    repo.commit_all("resolve sync conflicts", &SignatureSpec::default_for_app())?;
+    repo.push(Some(token))?;
+    Ok(())
+}
+
+fn restore_local_branch(repo: &GitRepo, local_oid: git2::Oid) -> Result<()> {
+    if repo.local_oid()? == Some(local_oid) {
+        return Ok(());
+    }
+    let profile_guard = crate::plugins::config::profile_config_write_guard_unmarked();
+    let generation =
+        profile_guard.mark_changed(crate::plugins::config::ProfileConfigInvalidation::All);
+    repo.reset_to(local_oid).context("restore local branch")?;
+    trace_profile_sync_apply("resolve_conflicts", "restored", generation);
+    Ok(())
 }
 
 fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> Result<()> {
@@ -1191,6 +1287,22 @@ mod tests {
             name: "Tester".to_string(),
             email: "tester@example.com".to_string(),
         }
+    }
+
+    fn connect_sync(url: &str) {
+        write_file(
+            &crate::paths::github_auth_path().unwrap(),
+            &json!({
+                "access_token": "test-token",
+                "source": "oauth",
+                "scopes": ["repo"]
+            }),
+        );
+        save_sync_target(&SyncTarget {
+            repo_url: url.to_string(),
+            auto_created: false,
+        })
+        .unwrap();
     }
 
     fn seed_profile_repo(path: &Path, url: &str) -> GitRepo {
@@ -1598,19 +1710,7 @@ options = ["top-left", "top-right"]
         let outcome = repo.fetch(None).unwrap();
         assert!(matches!(outcome, PullOutcome::Diverged { .. }));
 
-        write_file(
-            &crate::paths::github_auth_path().unwrap(),
-            &json!({
-                "access_token": "test-token",
-                "source": "oauth",
-                "scopes": ["repo"]
-            }),
-        );
-        save_sync_target(&SyncTarget {
-            repo_url: url,
-            auto_created: false,
-        })
-        .unwrap();
+        connect_sync(&url);
 
         let manifest: crate::plugins::PluginManifest = toml::from_str(
             r#"
@@ -1762,6 +1862,208 @@ items = []
         assert_eq!(
             read_json(&verify_path.join("default/core/plugin-configs/plugin-a.json")),
             json!({"value": 2})
+        );
+    }
+
+    fn diverge_from_other_computer(tmp: &TempDir, local: Value) -> (String, GitRepo, PathBuf) {
+        let profile_path = crate::paths::profile_dir().unwrap();
+        let url = init_bare_origin(&tmp.path().join("origin.git"));
+        std::fs::create_dir_all(&profile_path).unwrap();
+        std::fs::write(
+            profile_path.join(".gitignore"),
+            qol_profile_sync::GITIGNORE_CONTENTS,
+        )
+        .unwrap();
+        let repo = seed_profile_repo(&profile_path, &url);
+        let other_path = tmp.path().join("other/profile");
+        let other = GitRepo::clone(&url, &other_path, None).unwrap();
+        write_file(
+            &other_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2}),
+        );
+        other.commit_all("other computer", &sig()).unwrap();
+        other.push(None).unwrap();
+        write_file(
+            &profile_path.join("default/core/plugin-configs/plugin-a.json"),
+            &local,
+        );
+        repo.commit_all("this computer", &sig()).unwrap();
+        connect_sync(&url);
+        (url, other, other_path)
+    }
+
+    fn plugin_a_choice(key_path: &str, side: Side) -> ConflictChoice {
+        ConflictChoice {
+            file: "default/core/plugin-configs/plugin-a.json".to_string(),
+            key_path: key_path.to_string(),
+            side,
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_recovers_from_a_push_the_other_computer_outran() {
+        let _env = crate::test_support::env_lock().lock().await;
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        let (url, other, other_path) = diverge_from_other_computer(&tmp, json!({"value": 3}));
+        save_state_file(
+            &sync_paths().unwrap(),
+            &SyncStateFile {
+                last_error: Some("push to remote: cannot push".to_string()),
+                ..SyncStateFile::default()
+            },
+        )
+        .unwrap();
+        let service = SyncService::new(crate::paths::plugins_dir().unwrap()).unwrap();
+
+        let review = service.manual_pull().await.unwrap();
+        assert_eq!(review.status.conflict_count, 1, "{}", review.message);
+        assert_eq!(review.status.last_error, None);
+        assert_eq!(
+            review.status.health,
+            qol_profile_sync::SyncHealth::Attention,
+            "a finished pull must surface the review, not the old push error"
+        );
+
+        write_file(
+            &other_path.join("default/core/plugin-configs/plugin-b.json"),
+            &json!({"enabled": true}),
+        );
+        other
+            .commit_all("other computer, during review", &sig())
+            .unwrap();
+        other.push(None).unwrap();
+
+        let resolved = service
+            .resolve_conflicts(vec![plugin_a_choice("value", Side::Mine)])
+            .await
+            .unwrap();
+        assert_eq!(resolved.message, "Conflicts resolved");
+        assert_eq!(resolved.status.last_error, None);
+
+        let verify_path = tmp.path().join("verify/profile");
+        GitRepo::clone(&url, &verify_path, None).unwrap();
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 3})
+        );
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-b.json")),
+            json!({"enabled": true})
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_asks_again_when_the_other_computer_conflicts_during_review() {
+        let _env = crate::test_support::env_lock().lock().await;
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        let (url, other, other_path) =
+            diverge_from_other_computer(&tmp, json!({"value": 3, "mode": "mine"}));
+        let service = SyncService::new(crate::paths::plugins_dir().unwrap()).unwrap();
+        let review = service.manual_pull().await.unwrap();
+        assert_eq!(review.status.conflict_count, 1, "{}", review.message);
+
+        write_file(
+            &other_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2, "mode": "theirs"}),
+        );
+        other
+            .commit_all("other computer, during review", &sig())
+            .unwrap();
+        other.push(None).unwrap();
+
+        let again = service
+            .resolve_conflicts(vec![plugin_a_choice("value", Side::Mine)])
+            .await
+            .unwrap();
+        assert_eq!(again.status.conflict_count, 2, "{}", again.message);
+        assert_eq!(again.status.last_error, None);
+        assert_eq!(again.status.health, qol_profile_sync::SyncHealth::Attention);
+        let unchanged_path = tmp.path().join("unchanged/profile");
+        GitRepo::clone(&url, &unchanged_path, None).unwrap();
+        assert_eq!(
+            read_json(&unchanged_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 2, "mode": "theirs"}),
+            "a setting nobody reviewed must not be overwritten"
+        );
+
+        let resolved = service
+            .resolve_conflicts(vec![
+                plugin_a_choice("value", Side::Mine),
+                plugin_a_choice("mode", Side::Remote),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(resolved.message, "Conflicts resolved");
+        let verify_path = tmp.path().join("verify/profile");
+        GitRepo::clone(&url, &verify_path, None).unwrap();
+        assert_eq!(
+            read_json(&verify_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 3, "mode": "theirs"})
+        );
+    }
+
+    #[test]
+    fn a_refused_resolve_push_puts_the_local_branch_back() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        let (_url, other, other_path) =
+            diverge_from_other_computer(&tmp, json!({"value": 3, "mode": "mine"}));
+        let profile_path = crate::paths::profile_dir().unwrap();
+        let plugin_a = profile_path.join("default/core/plugin-configs/plugin-a.json");
+        let repo = GitRepo::open(&profile_path).unwrap();
+        repo.fetch(None).unwrap();
+        let local_oid = repo.local_oid().unwrap().unwrap();
+        write_file(
+            &other_path.join("default/core/plugin-configs/plugin-a.json"),
+            &json!({"value": 2, "mode": "theirs"}),
+        );
+        other
+            .commit_all("other computer, during review", &sig())
+            .unwrap();
+        other.push(None).unwrap();
+        let choices = [plugin_a_choice("value", Side::Mine)];
+
+        let refused = resolve_onto_remote(&repo, &profile_path, "test-token", local_oid, &choices);
+        assert!(refused.is_err());
+        assert_eq!(repo.local_oid().unwrap(), Some(local_oid));
+        assert_eq!(read_json(&plugin_a), json!({"value": 3, "mode": "mine"}));
+
+        let reopened = resolve_and_push(&repo, &profile_path, "test-token", &choices).unwrap();
+        assert_eq!(reopened.conflicts.len(), 2);
+        assert!(!reopened.applied_remote);
+        assert_eq!(repo.local_oid().unwrap(), Some(local_oid));
+        assert_eq!(read_json(&plugin_a), json!({"value": 3, "mode": "mine"}));
+    }
+
+    #[test]
+    fn a_backup_that_cannot_be_written_leaves_the_local_branch_alone() {
+        let _env_lock = crate::test_support::env_lock().blocking_lock();
+        let tmp = TempDir::new().unwrap();
+        let _path = TestPathRootEnvGuard::new(tmp.path());
+        diverge_from_other_computer(&tmp, json!({"value": 3}));
+        let profile_path = crate::paths::profile_dir().unwrap();
+        let repo = GitRepo::open(&profile_path).unwrap();
+        repo.fetch(None).unwrap();
+        let local_oid = repo.local_oid().unwrap().unwrap();
+        let backups = sync_paths().unwrap().backups_dir();
+        std::fs::create_dir_all(backups.parent().unwrap()).unwrap();
+        std::fs::write(&backups, "not a directory").unwrap();
+
+        let resolved = resolve_onto_remote(
+            &repo,
+            &profile_path,
+            "test-token",
+            local_oid,
+            &[plugin_a_choice("value", Side::Remote)],
+        );
+        assert!(resolved.is_err());
+        assert_eq!(repo.local_oid().unwrap(), Some(local_oid));
+        assert_eq!(
+            read_json(&profile_path.join("default/core/plugin-configs/plugin-a.json")),
+            json!({"value": 3})
         );
     }
 }

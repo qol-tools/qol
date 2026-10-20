@@ -4,9 +4,19 @@ uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Display"
 icon = "display"
 description = "Control display brightness, night mode and resolution"
-version = "0.44.0"
+version = "0.44.2"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
+
+[config.scope]
+night_temperature = "core"
+night_schedule = "core"
+night_from = "core"
+night_to = "core"
+night_coordination = "core"
+policy = "core"
+sync_brightness_levels = "core"
+notify_on_change = "core"
 
 [runtime]
 command = "qol-monitor"

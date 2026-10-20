@@ -52,19 +52,17 @@ pub fn split_by_declarations(config: &Value, decl: &ConfigDeclarations) -> Confi
         return ConfigSlices::default();
     };
 
-    let mut core = Map::new();
-    let mut os = Map::new();
-    let mut device = Map::new();
-
+    let mut parts = [Map::new(), Map::new(), Map::new()];
     for (key, value) in map {
-        let target = match decl.scope_for(key) {
-            ConfigScope::Core => &mut core,
-            ConfigScope::Os => &mut os,
-            ConfigScope::Device => &mut device,
-        };
-        target.insert(key.clone(), value.clone());
+        let [core, os, device] = split_path(key, value, decl.scope_for(key), decl);
+        for (part, piece) in parts.iter_mut().zip([core, os, device]) {
+            if let Some(piece) = piece {
+                part.insert(key.clone(), piece);
+            }
+        }
     }
 
+    let [core, os, device] = parts;
     ConfigSlices {
         core: Value::Object(core),
         os: Value::Object(os),
@@ -72,17 +70,90 @@ pub fn split_by_declarations(config: &Value, decl: &ConfigDeclarations) -> Confi
     }
 }
 
+fn split_path(
+    path: &str,
+    value: &Value,
+    scope: ConfigScope,
+    decl: &ConfigDeclarations,
+) -> [Option<Value>; 3] {
+    let mut out = [None, None, None];
+    let nested = value
+        .as_object()
+        .filter(|map| !map.is_empty() && has_nested_scope(decl, path));
+    let Some(map) = nested else {
+        out[slot(scope)] = Some(value.clone());
+        return out;
+    };
+    let mut parts = [Map::new(), Map::new(), Map::new()];
+    for (key, child) in map {
+        let child_path = format!("{path}.{key}");
+        let child_scope = decl.scope.get(&child_path).copied().unwrap_or(scope);
+        let pieces = split_path(&child_path, child, child_scope, decl);
+        for (part, piece) in parts.iter_mut().zip(pieces) {
+            if let Some(piece) = piece {
+                part.insert(key.clone(), piece);
+            }
+        }
+    }
+    for (index, part) in parts.into_iter().enumerate() {
+        if !part.is_empty() {
+            out[index] = Some(Value::Object(part));
+        }
+    }
+    out
+}
+
+fn has_nested_scope(decl: &ConfigDeclarations, path: &str) -> bool {
+    let prefix = format!("{path}.");
+    decl.scope.keys().any(|key| key.starts_with(&prefix))
+}
+
+fn slot(scope: ConfigScope) -> usize {
+    match scope {
+        ConfigScope::Core => 0,
+        ConfigScope::Os => 1,
+        ConfigScope::Device => 2,
+    }
+}
+
 pub fn merge_slices(slices: &ConfigSlices) -> Value {
     let mut out = Map::new();
     for slice in [&slices.core, &slices.os, &slices.device] {
-        let Some(map) = slice.as_object() else {
-            continue;
-        };
-        for (key, value) in map {
-            out.insert(key.clone(), value.clone());
+        if let Some(map) = slice.as_object() {
+            merge_into(&mut out, map);
         }
     }
     Value::Object(out)
+}
+
+pub fn merge_declared_slices(slices: &ConfigSlices, decl: &ConfigDeclarations) -> Value {
+    merge_slices(&ConfigSlices {
+        core: synced_part(&slices.core, decl),
+        os: synced_part(&slices.os, decl),
+        device: slices.device.clone(),
+    })
+}
+
+fn synced_part(slice: &Value, decl: &ConfigDeclarations) -> Value {
+    let split = split_by_declarations(slice, decl);
+    merge_slices(&ConfigSlices {
+        core: split.core,
+        os: split.os,
+        device: Value::Object(Map::new()),
+    })
+}
+
+fn merge_into(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    for (key, value) in source {
+        match (target.get_mut(key), value) {
+            (Some(Value::Object(existing)), Value::Object(incoming)) => {
+                merge_into(existing, incoming)
+            }
+            _ => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 fn is_empty_object(value: &Value) -> bool {
@@ -289,5 +360,108 @@ mod tests {
             "legacy `any` field on persisted slices must round-trip into the renamed `core` slot"
         );
         assert_eq!(slices.os, json!({ "k": "v" }));
+    }
+
+    #[test]
+    fn split_by_declarations_routes_dotted_paths_inside_shared_objects() {
+        let config = json!({
+            "audio": { "enabled": true, "inputs": ["mic"], "mic_device": "usb-mic" },
+            "video": { "crf": 18 },
+        });
+        let decl = declarations(
+            Some(ConfigScope::Os),
+            &[("audio.mic_device", ConfigScope::Device)],
+        );
+
+        let slices = split_by_declarations(&config, &decl);
+
+        assert_eq!(slices.core, json!({}));
+        assert_eq!(
+            slices.os,
+            json!({ "audio": { "enabled": true, "inputs": ["mic"] }, "video": { "crf": 18 } })
+        );
+        assert_eq!(
+            slices.device,
+            json!({ "audio": { "mic_device": "usb-mic" } })
+        );
+        assert_eq!(merge_slices(&slices), config);
+    }
+
+    #[test]
+    fn split_by_declarations_nested_paths_inherit_the_parent_scope() {
+        let config = json!({
+            "backend": { "serial_port": "/dev/ttyUSB0", "channel": 11, "deep": { "a": 1 } },
+        });
+        let decl = declarations(
+            None,
+            &[
+                ("backend", ConfigScope::Os),
+                ("backend.serial_port", ConfigScope::Device),
+            ],
+        );
+
+        let slices = split_by_declarations(&config, &decl);
+
+        assert_eq!(
+            slices.os,
+            json!({ "backend": { "channel": 11, "deep": { "a": 1 } } })
+        );
+        assert_eq!(
+            slices.device,
+            json!({ "backend": { "serial_port": "/dev/ttyUSB0" } })
+        );
+        assert_eq!(slices.core, json!({}));
+    }
+
+    #[test]
+    fn merge_combines_nested_objects_leaf_by_leaf() {
+        let slices = ConfigSlices {
+            core: json!({ "audio": { "enabled": true, "mic_device": "stale" } }),
+            os: json!({}),
+            device: json!({ "audio": { "mic_device": "usb-mic" }, "volume": 40 }),
+        };
+        assert_eq!(
+            merge_slices(&slices),
+            json!({ "audio": { "enabled": true, "mic_device": "usb-mic" }, "volume": 40 })
+        );
+    }
+
+    #[test]
+    fn merge_declared_slices_never_reads_device_paths_from_synced_slices() {
+        let decl = declarations(
+            None,
+            &[
+                ("adapter", ConfigScope::Device),
+                ("audio.mic_device", ConfigScope::Device),
+            ],
+        );
+        let cases = [
+            (
+                json!({ "adapter": "84:2F:57:43:D1:14", "auto_reconnect": true }),
+                json!({}),
+                json!({}),
+                json!({ "auto_reconnect": true }),
+            ),
+            (
+                json!({ "adapter": "84:2F:57:43:D1:14" }),
+                json!({ "adapter": "AA:AA:AA:AA:AA:AA" }),
+                json!({ "adapter": "10:91:D1:28:D5:A6" }),
+                json!({ "adapter": "10:91:D1:28:D5:A6" }),
+            ),
+            (
+                json!({ "audio": { "enabled": true, "mic_device": "other-machine" } }),
+                json!({ "audio": { "mic_device": "other-os-machine" } }),
+                json!({}),
+                json!({ "audio": { "enabled": true } }),
+            ),
+        ];
+        for (core, os, device, expected) in cases {
+            let slices = ConfigSlices { core, os, device };
+            assert_eq!(
+                merge_declared_slices(&slices, &decl),
+                expected,
+                "slices {slices:?}"
+            );
+        }
     }
 }

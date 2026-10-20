@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 
-use super::agent_policy::{AgentDispatch, DispatchPolicy};
+use super::agent_policy::{model_declared, AgentDispatch, DispatchPolicy};
 use super::launch_flags::{takes_effort, takes_remote_control};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,8 +144,11 @@ fn model_for_tool(tool: &str, default: Option<&str>, policy: &DispatchPolicy) ->
     candidates
         .into_iter()
         .flatten()
-        .find(|model| declared.iter().any(|entry| entry == model))
-        .or(declared.first().map(String::as_str))
+        .find(|model| model_declared(declared, model))
+        .or(declared
+            .iter()
+            .map(String::as_str)
+            .find(|entry| !entry.ends_with('*')))
         .map(str::to_owned)
 }
 

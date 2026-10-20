@@ -97,6 +97,21 @@ Every launch path enforces the pair: a tool present with a listed model is eligi
 When `tool_models` is absent or empty, explicit tool/model pairs keep the legacy behavior and only `allowed_models` applies.
 Resolving a default harness from a model requires the mapping to declare that model for exactly one tool; zero matches and multiple matches are refused.
 
+An entry in `tool_models` or `allowed_models` that ends in `*` matches every model with that prefix, and `*` alone matches any model:
+
+```toml
+allowed_models = ["claude-*", "deepseek-flash"]
+
+[tool_models]
+claude = ["claude-*"]
+pi = ["deepseek-flash"]
+```
+
+A model the harness ships later, such as `claude-fable-5-1`, then launches without a config edit, while spending stays opt-in per prefix.
+`*` anywhere but the last character is refused at parse time.
+When resolving a harness from a model, an exact entry wins over a wildcard, and only when no tool lists the model exactly do wildcards count.
+A spawn that names a tool but no model uses the first exact entry for that tool, never a wildcard.
+
 The existing `allowed_models` spending allowlist stays independent and is applied to the resolved model on every launch path, including the MCP fork path that previously skipped it, and to a constrained submit so a now-disallowed recorded model cannot keep consuming paid work.
 There is no automatic model upgrade, no preference-based launch, no fallback launch, and no widening of `allowed_models`.
 `qol sessions capability` lists the configured profiles sorted by preference with their declarations and a `spend_allowed` flag so a caller can choose within budget.

@@ -87,6 +87,10 @@ fn rail_covered(focus: PanelFocus, rail_kept: bool) -> bool {
 }
 
 const RAIL_SECTION_OPACITY: f32 = qol_theme::OPACITY_REST;
+const RAIL_ITEM_MIN_HEIGHT: f32 = {
+    let name = qol_theme::TextStyle::Name.spec();
+    name.size * name.line_height
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransitionAction {
@@ -266,6 +270,7 @@ pub(super) struct SettingsPanelView {
     source_menu: bool,
     rail_kept: bool,
     rail_transition: TransitionTracker,
+    rail_scroll: crate::scroll_list::SelectionScroll,
     deck_transition: TransitionTracker,
     deck_motion: Option<DeckMotion>,
     closing: bool,
@@ -472,6 +477,7 @@ impl SettingsPanelView {
             source_menu: has_many_sources,
             rail_kept: false,
             rail_transition: TransitionTracker::default(),
+            rail_scroll: crate::scroll_list::SelectionScroll::new(),
             deck_transition: TransitionTracker::default(),
             closing: false,
             back_target: None,
@@ -3702,6 +3708,7 @@ impl SettingsPanelView {
             .w(px(super::PANEL_RAIL_WIDTH))
             .ml(px(-qol_theme::SPACE_INSET))
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .min_h(px(RAIL_ITEM_MIN_HEIGHT))
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
             .gap(px(qol_theme::SPACE_INSET))
             .child(crate::icon::mark(mark, super::PANEL_RAIL_MARK_SIZE, line))
@@ -3755,6 +3762,7 @@ impl SettingsPanelView {
             .justify_end()
             .w_full()
             .h(px(super::PANEL_RAIL_ITEM_HEIGHT))
+            .min_h(px(RAIL_ITEM_MIN_HEIGHT))
             .px(px(qol_theme::SPACE_CELL))
             .children(dot)
             .into_any_element()
@@ -4019,6 +4027,14 @@ impl Render for SettingsPanelView {
                 let dot = attention.then(|| self.render_rail_dot());
                 rail_dots.push(self.rail_item_dot_spacer(dot));
             }
+            let child = rail_child_index(self.selected_source, &separators);
+            let lead = (self.selected_source == 0 || separators.contains(&self.selected_source))
+                .then(|| child - 1);
+            self.rail_scroll.follow(
+                Some(child),
+                lead,
+                px(crate::scrollbar::OVERFLOW_FADE_HEIGHT),
+            );
             (rail, rail_dots)
         } else {
             (Vec::new(), Vec::new())
@@ -4342,6 +4358,7 @@ impl SettingsPanelView {
         let snapped = self.rail_transition.snapped
             || !transition_in_flight(self.rail_transition.started, std::time::Instant::now());
         let ease = || crate::motion::animation(qol_theme::Motion::SETTLE);
+        let rail_children = rail.len();
         let rail_column = div()
             .id("settings-section-rail")
             .flex_none()
@@ -4350,19 +4367,45 @@ impl SettingsPanelView {
             .flex_col()
             .h_full()
             .w(px(super::PANEL_RAIL_WIDTH))
-            .p(px(qol_theme::SPACE_INSET))
-            .children(rail);
+            .child(
+                div()
+                    .id("settings-rail-scroll")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .p(px(qol_theme::SPACE_INSET))
+                    .track_scroll(self.rail_scroll.handle())
+                    .overflow_y_scroll()
+                    .children(rail),
+            )
+            .child(self.kit.scroll_cue(
+                crate::scrollbar::ScrollSource::Handle {
+                    handle: self.rail_scroll.handle().clone(),
+                    children: rail_children,
+                },
+                self.kit.grounds.rail,
+            ));
         let rail_attention = div()
             .absolute()
             .left_0()
             .top_0()
             .bottom_0()
-            .flex_none()
-            .flex()
-            .flex_col()
             .w(px(super::PANEL_RAIL_WIDTH))
-            .p(px(qol_theme::SPACE_INSET))
-            .children(rail_dots);
+            .overflow_hidden()
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(self.rail_scroll.handle().offset().y)
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .w(px(super::PANEL_RAIL_WIDTH))
+                    .p(px(qol_theme::SPACE_INSET))
+                    .children(rail_dots),
+            );
         let scrim = rail_scrim_layer(self.kit)
             .id("settings-rail-back")
             .when(entering, |scrim| {
@@ -5877,6 +5920,10 @@ pub(super) fn rail_open(sources: usize, filtering: bool) -> bool {
     sources > 1 && !filtering
 }
 
+fn rail_child_index(source: usize, breaks: &[usize]) -> usize {
+    1 + source + breaks.iter().filter(|at| **at <= source).count()
+}
+
 fn rail_group_breaks(groups: &[PanelSourceGroup]) -> Vec<usize> {
     groups
         .windows(2)
@@ -6022,13 +6069,14 @@ mod tests {
         live_card_sync_back, live_number_dispatch_plan, number_cue, number_finish_plan,
         number_limit, number_preview, number_release, number_unit, parsed_color, parsed_number,
         pending_edit_on_scrub, pointer_keys, pop_level, pressed_slider, push_level, query_is_due,
-        rail_group_breaks, release_slider_dispatch, row_body_height, schedule_slider_generation,
-        slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
-        stepped_number, text_or_placeholder, transition_in_flight, transition_policy, type_number,
-        widest_number, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
-        LiveNumberDispatch, NumberCue, NumberFinishPlan, NumberRelease, NumberSpec,
-        ObjectArrayState, PendingEdit, Row, RowControl, RowSection, SettingsDestination,
-        SliderPress, SliderStyle, TransitionAction, TransitionTracker, SCRUB_SLOP,
+        rail_child_index, rail_group_breaks, release_slider_dispatch, row_body_height,
+        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
+        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
+        transition_policy, type_number, widest_number, AppliedQueryPayloads, EscapeStep,
+        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberCue, NumberFinishPlan,
+        NumberRelease, NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
+        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
+        SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -6055,6 +6103,16 @@ mod tests {
             vec![3]
         );
         assert!(rail_group_breaks(&[PanelSourceGroup::Core]).is_empty());
+    }
+
+    #[test]
+    fn rail_child_index_counts_the_captions_above_a_source() {
+        let breaks = [3];
+        assert_eq!(rail_child_index(0, &breaks), 1);
+        assert_eq!(rail_child_index(2, &breaks), 3);
+        assert_eq!(rail_child_index(3, &breaks), 5);
+        assert_eq!(rail_child_index(4, &breaks), 6);
+        assert_eq!(rail_child_index(0, &[]), 1);
     }
 
     pub(super) fn rows(headers: &[bool]) -> Vec<Row> {

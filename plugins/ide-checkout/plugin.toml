@@ -4,9 +4,13 @@ uid = "b61195c4-a0a8-4be5-a507-9aeb45edb060"
 name = "IDE Checkout"
 icon = "ide-checkout"
 description = "Check out a git branch from your browser and open it in your editor."
-version = "1.69.0"
+version = "1.69.2"
 author = "KMRH47"
 platforms = ["macos", "linux", "windows"]
+
+[config.scope]
+tempDir = "device"
+apps = "core"
 
 [runtime]
 command = "qol-ide-checkout"
