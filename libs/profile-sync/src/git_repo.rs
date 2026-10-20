@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_BRANCH: &str = "main";
 const DEFAULT_REMOTE: &str = "origin";
+const PUSH_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PullOutcome {
@@ -276,6 +277,10 @@ impl GitRepo {
         Ok(repo.merge_base(local, remote).ok())
     }
 
+    pub fn merge_base(&self, one: git2::Oid, two: git2::Oid) -> Result<Option<git2::Oid>> {
+        Ok(self.open_repo()?.merge_base(one, two).ok())
+    }
+
     pub fn snapshot_json_at<F: Fn(&Path) -> bool>(
         &self,
         oid: git2::Oid,
@@ -337,6 +342,22 @@ impl GitRepo {
         Repository::open(&self.repo_path)
             .with_context(|| format!("open git repo at {}", self.repo_path.display()))
     }
+}
+
+pub fn retry_while_remote_moves<T>(mut attempt: impl FnMut() -> Result<T>) -> Result<T> {
+    let mut tries = 1;
+    loop {
+        match attempt() {
+            Err(error) if tries < PUSH_ATTEMPTS && remote_moved(&error) => tries += 1,
+            outcome => return outcome,
+        }
+    }
+}
+
+fn remote_moved(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<git2::Error>()
+        .is_some_and(|error| error.code() == git2::ErrorCode::NotFastForward)
 }
 
 fn local_branch_oid(repo: &Repository) -> Option<git2::Oid> {
@@ -539,9 +560,7 @@ mod tests {
         assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
     }
 
-    #[test]
-    fn push_rejects_a_non_fast_forward_advance() {
-        let tmp = TempDir::new().unwrap();
+    fn stale_clone(tmp: &TempDir) -> GitRepo {
         let origin_dir = tmp.path().join("origin.git");
         let url = init_bare_origin(&origin_dir);
 
@@ -559,12 +578,54 @@ mod tests {
 
         write_file(&alice_path.join("data.txt"), "alice diverged");
         alice.commit_all("alice diverged", &signature()).unwrap();
-        let error = alice.push(None).unwrap_err();
+        alice
+    }
+
+    #[test]
+    fn push_rejects_a_non_fast_forward_advance() {
+        let tmp = TempDir::new().unwrap();
+        let error = stale_clone(&tmp).push(None).unwrap_err();
         let message = format!("{error:#}");
         assert!(
             message.contains("rejected") || message.contains("cannot push"),
             "stale local push must not succeed silently: {message}"
         );
+    }
+
+    #[test]
+    fn retry_while_remote_moves_reruns_only_pushes_the_remote_outran() {
+        let tmp = TempDir::new().unwrap();
+        let stale = stale_clone(&tmp);
+
+        let mut calls = 0;
+        let recovered = retry_while_remote_moves(|| {
+            calls += 1;
+            match calls {
+                1 => stale.push(None),
+                _ => Ok(PushOutcome { transferred: true }),
+            }
+        });
+        assert!(recovered.is_ok(), "a refetched attempt must get its turn");
+        assert_eq!(calls, 2);
+
+        let mut calls = 0;
+        let exhausted = retry_while_remote_moves(|| {
+            calls += 1;
+            stale.push(None)
+        });
+        assert!(exhausted.is_err());
+        assert_eq!(
+            calls, PUSH_ATTEMPTS,
+            "a remote that keeps moving is not chased forever"
+        );
+
+        let mut calls = 0;
+        let offline = retry_while_remote_moves(|| -> Result<()> {
+            calls += 1;
+            bail!("network unreachable")
+        });
+        assert!(offline.is_err());
+        assert_eq!(calls, 1, "only a push the remote outran is worth a refetch");
     }
 
     #[test]

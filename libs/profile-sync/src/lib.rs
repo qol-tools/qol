@@ -56,7 +56,7 @@ pub mod scope;
 pub mod state;
 pub mod types;
 
-pub use git_repo::{CommitInfo, GitRepo, PullOutcome, SignatureSpec};
+pub use git_repo::{retry_while_remote_moves, CommitInfo, GitRepo, PullOutcome, SignatureSpec};
 pub use lock::SyncLock;
 pub use merge::{
     merge_json, merge_json_resolved, merge_profile, merge_profile_with, ConflictResolver,
