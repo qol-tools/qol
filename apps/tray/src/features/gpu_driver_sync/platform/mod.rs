@@ -17,7 +17,7 @@ pub(crate) enum Observation {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-pub(super) use linux::bounded_modinfo_version;
+pub(super) use linux::probe_modinfo_version;
 #[cfg(target_os = "linux")]
 pub(super) use linux::{observe, watch_supported};
 #[cfg(target_os = "macos")]

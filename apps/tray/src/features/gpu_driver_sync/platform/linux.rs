@@ -37,17 +37,13 @@ fn proc_version_path() -> PathBuf {
 fn on_disk_version() -> Option<String> {
     MODINFO_CANDIDATES
         .iter()
-        .find_map(|binary| bounded_modinfo_version(Path::new(binary), MODINFO_PROBE_TIMEOUT))
+        .find_map(|binary| probe_modinfo_version(Path::new(binary), MODINFO_PROBE_TIMEOUT).ok())
 }
 
-pub(crate) fn bounded_modinfo_version(
+pub(crate) fn probe_modinfo_version(
     binary: &Path,
     timeout: std::time::Duration,
-) -> Option<String> {
-    probe_modinfo_version(binary, timeout).ok()
-}
-
-fn probe_modinfo_version(binary: &Path, timeout: std::time::Duration) -> io::Result<String> {
+) -> io::Result<String> {
     let mut command = Command::new(binary);
     command.args(["-F", "version", "nvidia"]);
     let output = qol_process::run_guarded_with_output_timeout(
@@ -168,11 +164,9 @@ mod tests {
         std::fs::set_permissions(&script, permissions).unwrap();
 
         let started = std::time::Instant::now();
-        let version = bounded_modinfo_version(&script, std::time::Duration::from_millis(300));
-        assert_eq!(
-            version, None,
-            "a hanging modinfo probe must be aborted, not answered"
-        );
+        let error = probe_modinfo_version(&script, std::time::Duration::from_millis(300))
+            .expect_err("a hanging modinfo probe must be aborted, not answered");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut, "{error}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "the hanging probe must be terminated well before its 30 second sleep ends"

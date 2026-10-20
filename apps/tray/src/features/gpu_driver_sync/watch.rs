@@ -876,7 +876,7 @@ mod lifecycle_tests {
             let _ = started.send(());
             let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
             peak.fetch_max(now, Ordering::SeqCst);
-            let _ = super::platform::bounded_modinfo_version(&script, Duration::from_millis(300));
+            let _ = super::platform::probe_modinfo_version(&script, Duration::from_millis(300));
             concurrent.fetch_sub(1, Ordering::SeqCst);
             (
                 Observation::OnDiskUnavailable {
