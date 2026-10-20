@@ -79,6 +79,10 @@ fn focus_level(source_menu: bool, sources: usize) -> PanelFocus {
     }
 }
 
+fn rail_covered(focus: PanelFocus, rail_kept: bool) -> bool {
+    focus == PanelFocus::Body && !rail_kept
+}
+
 const RAIL_SECTION_OPACITY: f32 = qol_theme::OPACITY_REST;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -257,6 +261,7 @@ pub(super) struct SettingsPanelView {
     materialized_source: usize,
     source_settle_generation: u64,
     source_menu: bool,
+    rail_kept: bool,
     rail_transition: TransitionTracker,
     deck_transition: TransitionTracker,
     deck_motion: Option<DeckMotion>,
@@ -453,6 +458,7 @@ impl SettingsPanelView {
             materialized_source: focused_source,
             source_settle_generation: 0,
             source_menu: has_many_sources,
+            rail_kept: false,
             rail_transition: TransitionTracker::default(),
             deck_transition: TransitionTracker::default(),
             closing: false,
@@ -1127,10 +1133,19 @@ impl SettingsPanelView {
     }
 
     fn set_source_menu(&mut self, open: bool) {
-        let changed = self.source_menu != open;
-        self.source_menu = open;
+        self.move_rail(open, self.rail_kept && !open);
+    }
+
+    fn move_rail(&mut self, source_menu: bool, rail_kept: bool) {
+        let covered = self.rail_covered();
+        self.source_menu = source_menu;
+        self.rail_kept = rail_kept;
         self.rail_transition
-            .state_changed(changed, std::time::Instant::now());
+            .state_changed(covered != self.rail_covered(), std::time::Instant::now());
+    }
+
+    fn rail_covered(&self) -> bool {
+        rail_covered(self.focus_level(), self.rail_kept)
     }
 
     fn press_body(&mut self, cx: &mut Context<Self>) {
@@ -1146,7 +1161,7 @@ impl SettingsPanelView {
         let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
         let (focus, filter_open) = pointer_keys(self.filter_open, editing);
         if self.focus_level() != focus {
-            self.set_source_menu(focus == PanelFocus::Sources);
+            self.move_rail(focus == PanelFocus::Sources, true);
         }
         if self.filter_open != filter_open {
             self.filter_open = filter_open;
@@ -3510,6 +3525,7 @@ impl SettingsPanelView {
             }
             this.forget_last_visit();
             this.select_source(index, cx);
+            this.move_rail(false, true);
             this.descend_source_menu(window, cx);
             cx.notify();
         }))
@@ -4010,7 +4026,7 @@ impl SettingsPanelView {
             }
             return base.child(self.render_deck(depth, card, slide, drawer, cx));
         }
-        let entering = !self.rail_source_level();
+        let entering = self.rail_covered();
         let progress = move |delta: f32| if entering { delta } else { 1.0 - delta };
         let step = self.rail_transition.step;
         let snapped = self.rail_transition.snapped
@@ -6687,6 +6703,24 @@ active_value_from = "active"
         ];
         for (result, path, expected) in cases {
             assert_eq!(action_refresh_payload(&result, path), expected);
+        }
+    }
+
+    #[test]
+    fn only_a_keyboard_descent_slides_the_card_over_the_rail() {
+        use super::PanelFocus::{Body, Sources};
+        let cases = [
+            (Sources, false, false),
+            (Sources, true, false),
+            (Body, false, true),
+            (Body, true, false),
+        ];
+        for (focus, rail_kept, expected) in cases {
+            assert_eq!(
+                super::rail_covered(focus, rail_kept),
+                expected,
+                "focus={focus:?} rail_kept={rail_kept}"
+            );
         }
     }
 
