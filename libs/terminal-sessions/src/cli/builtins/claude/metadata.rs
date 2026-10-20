@@ -48,8 +48,8 @@ struct Timed<T> {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct FileSignature {
-    modified: Option<SystemTime>,
+pub(super) struct FileSignature {
+    pub(super) modified: Option<SystemTime>,
     length: u64,
 }
 
@@ -61,18 +61,18 @@ struct CachedFacts {
 }
 
 #[derive(Clone, Default)]
-struct TranscriptFacts {
-    title: Option<String>,
+pub(super) struct TranscriptFacts {
+    pub(super) title: Option<String>,
     has_message: bool,
-    permission_mode: Option<String>,
-    request: Option<RequestTier>,
+    pub(super) permission_mode: Option<String>,
+    pub(super) request: Option<RequestTier>,
     assistant_model: Option<String>,
 }
 
 #[derive(Clone)]
-struct RequestTier {
+pub(super) struct RequestTier {
     model: String,
-    effort: Option<String>,
+    pub(super) effort: Option<String>,
 }
 
 impl ClaudeMetadataResolver {
@@ -254,7 +254,7 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
 }
 
 impl TranscriptFacts {
-    fn model(&self) -> Option<String> {
+    pub(super) fn model(&self) -> Option<String> {
         self.request
             .as_ref()
             .map(|request| request.model.clone())
@@ -268,7 +268,7 @@ impl TranscriptFacts {
             && self.request.is_some()
     }
 
-    fn absorb(&mut self, line: &[u8], newer: bool) {
+    pub(super) fn absorb(&mut self, line: &[u8], newer: bool) {
         self.has_message = self.has_message || is_message(line);
         let title = (newer || self.title.is_none()) && contains_bytes(line, CUSTOM_TITLE_TAG);
         let mode =
@@ -316,11 +316,24 @@ fn absorb_appended(path: &Path, offset: u64, transcript: &mut TranscriptFacts) -
 }
 
 fn absorb_backwards(path: &Path, transcript: &mut TranscriptFacts) -> Option<()> {
+    scan_backwards(path, REVERSE_READ_CHUNK, u64::MAX, |line| {
+        transcript.absorb(line, false);
+        transcript.complete()
+    })
+}
+
+pub(super) fn scan_backwards(
+    path: &Path,
+    chunk_size: u64,
+    budget: u64,
+    mut visit: impl FnMut(&[u8]) -> bool,
+) -> Option<()> {
     let mut file = fs::File::open(path).ok()?;
     let mut cursor = file.metadata().ok()?.len();
+    let floor = cursor.saturating_sub(budget);
     let mut suffix = Vec::new();
-    while cursor > 0 {
-        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
+    while cursor > floor {
+        let start = cursor.saturating_sub(chunk_size).max(floor);
         let length = usize::try_from(cursor - start).ok()?;
         let mut chunk = vec![0; length];
         file.seek(SeekFrom::Start(start)).ok()?;
@@ -329,8 +342,7 @@ fn absorb_backwards(path: &Path, transcript: &mut TranscriptFacts) -> Option<()>
         let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
         let complete_from = usize::from(start > 0);
         for line in lines[complete_from..].iter().rev() {
-            transcript.absorb(line, false);
-            if transcript.complete() {
+            if visit(line) {
                 return Some(());
             }
         }
@@ -344,13 +356,13 @@ fn is_message(line: &[u8]) -> bool {
     contains_bytes(line, b"\"type\":\"user\"") || contains_bytes(line, b"\"type\":\"assistant\"")
 }
 
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
 }
 
-fn file_signature(path: &Path) -> Option<FileSignature> {
+pub(super) fn file_signature(path: &Path) -> Option<FileSignature> {
     let metadata = fs::metadata(path).ok()?;
     Some(FileSignature {
         modified: metadata.modified().ok(),
@@ -391,7 +403,7 @@ const LOCAL_COMMAND_TAGS: [&str; 3] = [
     "<local-command-stdout>",
 ];
 
-fn is_local_command(value: &Value) -> bool {
+pub(super) fn is_local_command(value: &Value) -> bool {
     let content = value
         .get("message")
         .and_then(|message| message.get("content"));

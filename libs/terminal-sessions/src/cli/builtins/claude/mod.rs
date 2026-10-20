@@ -1,4 +1,5 @@
 mod environment;
+mod history;
 mod metadata;
 
 #[cfg(test)]
@@ -7,7 +8,7 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliDraftStash, CliLaunchProgram, CliResumeSettings, CliRuntimeState,
+    ChatTurn, CliConversation, CliDraftStash, CliLaunchProgram, CliResumeSettings, CliRuntimeState,
     CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
     CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool,
     CliViewportState,
@@ -15,12 +16,14 @@ use crate::cli::{
 use crate::SessionFacts;
 
 use self::environment::{ClaudeEnvironment, SystemClaudeEnvironment};
+use self::history::ClaudeHistory;
 use self::metadata::ClaudeMetadataResolver;
 use super::{claude_tool, fallback_name};
 
 pub(super) struct ClaudeStrategy {
     tool: CliTool,
     metadata: ClaudeMetadataResolver,
+    history: ClaudeHistory,
 }
 
 impl Default for ClaudeStrategy {
@@ -34,6 +37,7 @@ impl ClaudeStrategy {
         Self {
             tool: claude_tool(),
             metadata: ClaudeMetadataResolver::new(environment),
+            history: ClaudeHistory::system(),
         }
     }
 }
@@ -117,6 +121,10 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
         self.metadata.resume_settings(session)
+    }
+
+    fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
+        self.history.closed_conversations(&self.tool.id, since)
     }
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

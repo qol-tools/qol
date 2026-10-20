@@ -9,9 +9,9 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliResumeSettings, CliRuntimeState,
-    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy,
-    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolId,
+    ChatTurn, CliConversation, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliResumeSettings,
+    CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
+    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -196,6 +196,21 @@ impl CliSessionInterpreter {
 
     pub fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
         self.strategy_for(session).resume_settings(session)
+    }
+
+    pub fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
+        let mut conversations = self
+            .strategies
+            .iter()
+            .flat_map(|strategy| strategy.closed_conversations(since))
+            .collect::<Vec<_>>();
+        conversations.sort_by(|left, right| {
+            right
+                .last_active
+                .cmp(&left.last_active)
+                .then_with(|| left.external_id.cmp(&right.external_id))
+        });
+        conversations
     }
 
     pub fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

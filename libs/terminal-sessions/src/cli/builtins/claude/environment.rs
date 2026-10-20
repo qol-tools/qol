@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -56,9 +57,27 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
     }
 }
 
-fn custom_config_dir(home: &Path) -> Option<PathBuf> {
+pub(super) fn custom_config_dir(home: &Path) -> Option<PathBuf> {
     let builtin = dirs::home_dir().map(|user_home| Harness::Claude.default_home(&user_home));
     (builtin.as_deref() != Some(home)).then(|| home.to_path_buf())
+}
+
+pub(super) fn open_session_ids(home: &Path) -> HashSet<String> {
+    let Ok(entries) = fs::read_dir(home.join("sessions")) else {
+        return HashSet::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .filter_map(|path| path.file_stem()?.to_str()?.parse::<i32>().ok())
+        .filter(|pid| u32::try_from(*pid).is_ok_and(qol_process::is_pid_alive))
+        .filter_map(|pid| read_record(home, pid))
+        .map(|record| record.session_id)
+        .filter(|session_id| !session_id.is_empty())
+        .collect()
 }
 
 fn read_record(home: &Path, pid: i32) -> Option<ClaudeSessionRecord> {
