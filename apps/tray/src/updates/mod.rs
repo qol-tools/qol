@@ -153,14 +153,6 @@ pub fn updated_from() -> Option<String> {
 }
 
 pub async fn check_for_updates() -> Result<bool> {
-    check_for_updates_inner(false).await
-}
-
-pub async fn check_for_updates_force() -> Result<bool> {
-    check_for_updates_inner(true).await
-}
-
-async fn check_for_updates_inner(force: bool) -> Result<bool> {
     if !checks_enabled() {
         return Ok(false);
     }
@@ -168,12 +160,9 @@ async fn check_for_updates_inner(force: bool) -> Result<bool> {
         let Some(mut state) = lock_update_state() else {
             return Ok(false);
         };
-        let last_success_age = state.last_success.and_then(|moment| moment.elapsed().ok());
-        if check_skippable(state.checking, force, last_success_age) {
-            return Ok(state.update_found);
+        if let Some(running) = begin_check(&mut state, SystemTime::now()) {
+            return Ok(running);
         }
-        state.checking = true;
-        state.last_attempt = Some(SystemTime::now());
     }
     let _in_flight = CheckInFlight;
 
@@ -198,6 +187,15 @@ async fn check_for_updates_inner(force: bool) -> Result<bool> {
     }
 }
 
+fn begin_check(state: &mut UpdateState, now: SystemTime) -> Option<bool> {
+    if state.checking {
+        return Some(state.update_found);
+    }
+    state.checking = true;
+    state.last_attempt = Some(now);
+    None
+}
+
 struct CheckInFlight;
 
 impl Drop for CheckInFlight {
@@ -218,13 +216,6 @@ fn check_delay(last_error: Option<&str>) -> Duration {
     } else {
         CHECK_INTERVAL
     }
-}
-
-fn check_skippable(checking: bool, force: bool, last_success_age: Option<Duration>) -> bool {
-    if checking {
-        return true;
-    }
-    !force && last_success_age.is_some_and(|age| age < CHECK_INTERVAL)
 }
 
 async fn fetch_host_update() -> Result<FetchedRelease, String> {
@@ -516,7 +507,7 @@ pub(crate) async fn install_host_update(
 
 async fn newest_update_before_install() -> Option<FoundUpdate> {
     let cached = latest_update();
-    let refreshed = check_for_updates_force().await.map(|_| latest_update());
+    let refreshed = check_for_updates().await.map(|_| latest_update());
     version_to_install(refreshed, cached)
 }
 
@@ -992,37 +983,21 @@ mod tests {
     }
 
     #[test]
-    fn check_reuse_rule_table() {
-        let fresh = Some(Duration::from_secs(60));
-        let expired = Some(CHECK_INTERVAL);
-        let cases = [
-            ("check already running, not forced", true, false, None, true),
-            ("check already running, forced", true, true, None, true),
-            ("fresh cache, not forced", false, false, fresh, true),
-            (
-                "cache exactly at the interval",
-                false,
-                false,
-                expired,
-                false,
-            ),
-            (
-                "stale cache, not forced",
-                false,
-                false,
-                Some(CHECK_INTERVAL + Duration::from_secs(1)),
-                false,
-            ),
-            ("no success recorded, not forced", false, false, None, false),
-            ("fresh cache, forced", false, true, fresh, false),
-        ];
-        for (name, checking, force, age, expected) in cases {
-            assert_eq!(
-                check_skippable(checking, force, age),
-                expected,
-                "case: {name}"
-            );
-        }
+    fn only_a_running_check_holds_back_the_next_one() {
+        let now = SystemTime::now();
+        let mut state = UpdateState {
+            last_attempt: Some(now),
+            last_success: Some(now),
+            last_error: None,
+            checking: false,
+            etag: None,
+            update_found: false,
+        };
+        assert_eq!(begin_check(&mut state, now), None);
+        assert!(state.checking);
+
+        state.update_found = true;
+        assert_eq!(begin_check(&mut state, now), Some(true));
     }
 
     #[test]

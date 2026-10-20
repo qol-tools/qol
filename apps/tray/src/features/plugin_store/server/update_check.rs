@@ -13,21 +13,13 @@ impl Drop for Claim {
     }
 }
 
-pub(super) fn claim(
-    state: &AppState,
-    force: bool,
-) -> Option<impl Future<Output = ()> + Send + 'static> {
+pub(super) fn claim(state: &AppState) -> Option<impl Future<Output = ()> + Send + 'static> {
     let claim = take(&state.update_check_running)?;
     let catalog = plugin_services::claim_catalog_revalidation(state);
     Some(async move {
         let _claim = claim;
         let host = async {
-            let checked = if force {
-                crate::updates::check_for_updates_force().await
-            } else {
-                crate::updates::check_for_updates().await
-            };
-            if let Err(error) = checked {
+            if let Err(error) = crate::updates::check_for_updates().await {
                 log::debug!("Update check failed: {}", error);
             }
         };
