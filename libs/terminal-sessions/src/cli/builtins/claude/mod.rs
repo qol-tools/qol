@@ -129,8 +129,14 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
         self.metadata
-            .remote_controlled(session)
-            .then(|| REMOTE_CONTROL_REASON.to_owned())
+            .remote_control_session(session)
+            .map(|_| REMOTE_CONTROL_REASON.to_owned())
+    }
+
+    fn remote_control_url(&self, session: &SessionFacts) -> Option<String> {
+        self.metadata
+            .remote_control_session(session)
+            .map(|id| format!("{REMOTE_CONTROL_URL}{id}"))
     }
 
     fn harness_busy(&self, session: &SessionFacts) -> bool {
@@ -162,6 +168,7 @@ impl CliSessionStrategy for ClaudeStrategy {
 
 const PLACEHOLDER_TITLE: &str = "Claude Code";
 const REMOTE_CONTROL_REASON: &str = "Claude Code Remote Control is on";
+const REMOTE_CONTROL_URL: &str = "https://claude.ai/code/";
 
 fn clean_title(title: &str) -> Option<String> {
     let stripped = title.trim().trim_start_matches(|character: char| {

@@ -22,7 +22,7 @@ use args::ParkArgs;
 pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
-use runner::{caller_state, holder, watch_woken, CallerState, Holder};
+use runner::{caller_state, holder, turn_in_progress, watch_woken, CallerState, Holder};
 pub(crate) use runner::{prompt_free, target, Target};
 use store::ParkStore;
 pub use wake::{wake, wakeable};
@@ -206,6 +206,9 @@ fn watch_launch(
     let binding = token
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
+    let final_turn = parsed
+        .final_turn
+        .then(|| turn_in_progress(terminals, interpreter, &binding));
     if let Some(ready) = parsed.ready.as_deref() {
         std::fs::write(ready, "")
             .with_context(|| format!("failed to confirm the watch at {ready}"))?;
@@ -255,7 +258,7 @@ fn watch_launch(
         record.id,
         token
     );
-    watch_woken(terminals, interpreter, store, &mut record)
+    watch_woken(terminals, interpreter, store, &mut record, final_turn)
 }
 
 fn launched_conversation(

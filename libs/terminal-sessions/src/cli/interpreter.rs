@@ -217,6 +217,10 @@ impl CliSessionInterpreter {
         self.strategy_for(session).keep_open_reason(session)
     }
 
+    pub fn remote_control_url(&self, session: &SessionFacts) -> Option<String> {
+        self.strategy_for(session).remote_control_url(session)
+    }
+
     pub fn keep_open_reason_for(
         &self,
         terminals: &TerminalSessionService,

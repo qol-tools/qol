@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use super::agent_policy::{AgentDispatch, DispatchPolicy};
-use super::launch_flags::takes_effort;
+use super::launch_flags::{takes_effort, takes_remote_control};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LaunchKind {
@@ -18,6 +18,8 @@ pub(super) struct LaunchDefaults {
     pub(super) fork_effort: Option<String>,
     pub(super) fork_surface: Option<String>,
     pub(super) spawn_effort: Option<String>,
+    pub(super) fork_remote_control: bool,
+    pub(super) spawn_remote_control: bool,
 }
 
 impl LaunchDefaults {
@@ -42,6 +44,13 @@ impl LaunchDefaults {
         }
     }
 
+    fn remote_control(&self, kind: LaunchKind) -> bool {
+        match kind {
+            LaunchKind::Fork => self.fork_remote_control,
+            LaunchKind::Spawn => self.spawn_remote_control,
+        }
+    }
+
     fn alias(&self, value: Option<String>) -> Option<String> {
         value.map(|value| self.aliases.get(&value).cloned().unwrap_or(value))
     }
@@ -53,6 +62,7 @@ pub(super) struct LaunchChoice {
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
     pub(super) surface: Option<String>,
+    pub(super) remote_control: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +71,7 @@ pub(super) struct Launch {
     pub(super) model: Option<String>,
     pub(super) effort: Option<String>,
     pub(super) surface: Option<String>,
+    pub(super) remote_control: bool,
 }
 
 pub(super) fn resolve(
@@ -89,11 +100,15 @@ pub(super) fn resolve(
     let surface = defaults
         .alias(explicit.surface)
         .or_else(|| defaults.surface(kind).map(str::to_owned));
+    let remote_control = explicit
+        .remote_control
+        .unwrap_or_else(|| defaults.remote_control(kind) && takes_remote_control(&tool));
     Ok(Launch {
         tool,
         model,
         effort,
         surface,
+        remote_control,
     })
 }
 
@@ -173,6 +188,8 @@ mod tests {
             fork_effort: Some("high".to_owned()),
             fork_surface: Some("tab".to_owned()),
             spawn_effort: Some("medium".to_owned()),
+            fork_remote_control: false,
+            spawn_remote_control: false,
         }
     }
 
@@ -187,6 +204,7 @@ mod tests {
             model: model.map(str::to_owned),
             effort: effort.map(str::to_owned),
             surface: surface.map(str::to_owned),
+            remote_control: None,
         }
     }
 
@@ -201,6 +219,7 @@ mod tests {
             model: model.map(str::to_owned),
             effort: effort.map(str::to_owned),
             surface: surface.map(str::to_owned),
+            remote_control: false,
         }
     }
 
@@ -251,6 +270,52 @@ mod tests {
         for (kind, choice, expected) in cases {
             let resolved = resolve(kind, choice.clone(), &defaults(), &dispatch()).unwrap();
             assert_eq!(resolved, expected, "{kind:?} {choice:?}");
+        }
+    }
+
+    #[test]
+    fn remote_control_follows_its_launch_kind_default_unless_named_and_skips_tools_without_it() {
+        let configured = LaunchDefaults {
+            fork_remote_control: true,
+            ..defaults()
+        };
+        let cases = [
+            (LaunchKind::Fork, ask(None, None, None, None), None, true),
+            (
+                LaunchKind::Fork,
+                ask(None, None, None, None),
+                Some(false),
+                false,
+            ),
+            (
+                LaunchKind::Spawn,
+                ask(Some("cc"), None, None, None),
+                None,
+                false,
+            ),
+            (
+                LaunchKind::Spawn,
+                ask(Some("cc"), None, None, None),
+                Some(true),
+                true,
+            ),
+            (
+                LaunchKind::Fork,
+                ask(Some("codex"), None, None, None),
+                None,
+                false,
+            ),
+            (
+                LaunchKind::Fork,
+                ask(Some("codex"), None, None, None),
+                Some(true),
+                true,
+            ),
+        ];
+        for (kind, mut choice, explicit, expected) in cases {
+            choice.remote_control = explicit;
+            let resolved = resolve(kind, choice.clone(), &configured, &dispatch()).unwrap();
+            assert_eq!(resolved.remote_control, expected, "{kind:?} {choice:?}");
         }
     }
 
