@@ -4,14 +4,16 @@ use qol_platform::native::input::key_held;
 use qol_platform::native::wide::wide_nul;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::core::{GUID, HRESULT};
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{BOOL, HWND};
 use windows_sys::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, VK_ESCAPE, VK_MENU, VK_SHIFT,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    PostMessageW, SystemParametersInfoW, HTCAPTION, SPI_GETCLIENTAREAANIMATION, WM_NCLBUTTONDOWN,
+};
 
 const PROPERTY_STORE: GUID = GUID::from_u128(0x886d8eeb_8cf2_4446_8d02_cdba1dbdcf99);
 const APP_USER_MODEL: GUID = GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3);
@@ -64,6 +66,19 @@ pub fn is_shift_held() -> bool {
 
 pub fn is_escape_held() -> bool {
     key_held(VK_ESCAPE)
+}
+
+pub fn reduce_motion() -> bool {
+    let mut animate: BOOL = 1;
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            (&mut animate as *mut BOOL).cast(),
+            0,
+        )
+    };
+    read != 0 && animate == 0
 }
 
 pub fn set_accessory_policy() {}

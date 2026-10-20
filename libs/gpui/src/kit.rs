@@ -624,6 +624,20 @@ impl Kit {
             .text_color(rgb(self.palette.text_primary))
     }
 
+    pub fn button_inked(&self, ground: Ground) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_SNUG))
+            .px(px(qol_theme::SPACE_INSET))
+            .py(px(qol_theme::SPACE_TIGHT))
+            .rounded(px(qol_theme::RADIUS_CONTROL))
+            .bg(rgb(ground.mark))
+            .text(TextStyle::ListName)
+            .text_color(rgb(ground.on_mark))
+    }
+
     fn lifted_well(&self, control: Div) -> Div {
         let hover = rgba(translucent(self.palette.text_primary, Alpha::Tint));
         control

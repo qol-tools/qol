@@ -1,6 +1,6 @@
 use qol_config::contract::{
-    interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ResolvedRowAction,
-    RowActionSpec, RowSliderSpec,
+    interpolate_row_template, resolve_row_actions, FieldDefault, FieldKind, ListLeadSpec,
+    ResolvedRowAction, RowActionSpec, RowSliderSpec,
 };
 use qol_config::normalized::{ResolvedConfig, ResolvedField, ResolvedSection, ResolvedShowWhen};
 use qol_config::object_array::item_schema;
@@ -10,6 +10,7 @@ use super::display_layout::{DisplayLayoutBindings, DisplayLayoutState};
 use super::object_array_row::ObjectArrayState;
 use crate::gamepad::GamepadMonitor;
 use crate::scroll_list::ScrollList;
+use crate::search_mark::MarkState;
 use crate::status_indicator::StatusTone;
 
 pub(super) const LIST_MAX_VISIBLE: usize = 5;
@@ -44,6 +45,95 @@ pub(super) struct SliderHold {
 pub(super) struct ListSlider {
     pub(super) spec: RowSliderSpec,
     pub(super) values: std::collections::HashMap<String, SliderHold>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FinderEmpty {
+    pub(super) title: String,
+    pub(super) detail: Option<String>,
+}
+
+/// A list that leads with one action row, such as a search, above its items.
+#[derive(Debug)]
+pub(super) struct ListFinder {
+    pub(super) lead: ListLeadSpec,
+    pub(super) items_label: String,
+    pub(super) data: serde_json::Value,
+    pub(super) summary: Option<String>,
+    pub(super) empty: Option<FinderEmpty>,
+    pub(super) pending: bool,
+    pub(super) error: Option<String>,
+}
+
+impl ListFinder {
+    fn new(lead: ListLeadSpec, items_label: String) -> Self {
+        Self {
+            lead,
+            items_label,
+            data: serde_json::Value::Null,
+            summary: None,
+            empty: None,
+            pending: false,
+            error: None,
+        }
+    }
+
+    fn apply(&mut self, value: &serde_json::Value) {
+        self.data = value
+            .get("lead")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        self.summary = payload_text(value.get("summary"));
+        self.empty = value.get("empty").and_then(|empty| {
+            Some(FinderEmpty {
+                title: payload_text(empty.get("title"))?,
+                detail: payload_text(empty.get("detail")),
+            })
+        });
+        self.error = None;
+    }
+
+    pub(super) fn state(&self) -> MarkState {
+        match self.data.get("state").and_then(serde_json::Value::as_str) {
+            Some("active") => MarkState::Live,
+            Some("off") => MarkState::Off,
+            _ => MarkState::Rest,
+        }
+    }
+
+    pub(super) fn label(&self) -> String {
+        let template = self.lead.row_label.as_deref().unwrap_or(&self.lead.label);
+        let label = interpolate_row_template(template, &self.data);
+        if label.is_empty() {
+            self.lead.label.clone()
+        } else {
+            label
+        }
+    }
+
+    pub(super) fn subtitle(&self) -> Option<String> {
+        if let Some(error) = &self.error {
+            return Some(error.clone());
+        }
+        let template = self.lead.row_subtitle.as_deref()?;
+        Some(interpolate_row_template(template, &self.data)).filter(|text| !text.is_empty())
+    }
+
+    pub(super) fn description(&self) -> Option<String> {
+        let template = self.lead.description.as_deref()?;
+        Some(interpolate_row_template(template, &self.data)).filter(|text| !text.is_empty())
+    }
+
+    pub(super) fn actions(&self) -> Vec<ResolvedRowAction> {
+        resolve_row_actions(None, &self.lead.actions, &self.data)
+    }
+}
+
+fn payload_text(value: Option<&serde_json::Value>) -> Option<String> {
+    value
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Debug)]
@@ -164,6 +254,7 @@ pub(super) enum RowControl {
         items: Vec<ListItem>,
         list: ScrollList,
         error: Option<String>,
+        finder: Option<Box<ListFinder>>,
     },
     Gamepad {
         query: String,
@@ -552,6 +643,13 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 items: Vec::new(),
                 list: ScrollList::new(LIST_MAX_VISIBLE),
                 error: None,
+                finder: field.lead.clone().map(|lead| {
+                    let items_label = field
+                        .items_label
+                        .clone()
+                        .unwrap_or_else(|| field.label.clone());
+                    Box::new(ListFinder::new(lead, items_label))
+                }),
             },
             None => RowControl::Unsupported {
                 kind: FieldKind::List,
@@ -1099,9 +1197,13 @@ pub(super) fn apply_runtime_query(
                 list,
                 slider,
                 error,
+                finder,
                 ..
             } => {
                 if row_query == query {
+                    if let (Some(finder), Ok(value)) = (finder.as_mut(), &result) {
+                        finder.apply(value);
+                    }
                     match &result {
                         Ok(value) => {
                             let refreshed = list_items(value, row_label, row_subtitle.as_deref());
@@ -3739,6 +3841,7 @@ default = 5
         let actions = ListActions {
             primary: Some(qol_config::contract::RowActionSpec {
                 action: "connect".into(),
+                open: None,
                 input: None,
                 label: Some("Connect".into()),
                 description: None,
@@ -3747,6 +3850,7 @@ default = 5
             }),
             additional: vec![qol_config::contract::RowActionSpec {
                 action: "remove".into(),
+                open: None,
                 input: None,
                 label: Some("Remove".into()),
                 description: None,

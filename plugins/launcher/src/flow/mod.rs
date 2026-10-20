@@ -697,6 +697,7 @@ mod tests {
     fn render_action_input_substitutes_string_fields() {
         let action = qol_config::contract::RowActionSpec {
             action: "remember".to_string(),
+            open: None,
             input: Some(qol_config::contract::IndexMap::from([
                 ("note".to_string(), "{text}".to_string()),
                 ("prefix".to_string(), "keep {missing} as-is".to_string()),
@@ -720,6 +721,7 @@ mod tests {
 
         let action = qol_config::contract::RowActionSpec {
             action: "remember".to_string(),
+            open: None,
             input: None,
             label: None,
             description: None,

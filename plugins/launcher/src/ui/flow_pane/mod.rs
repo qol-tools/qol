@@ -492,6 +492,7 @@ mod tests {
             query: "rows".to_string(),
             row_actions: vec![qol_config::contract::RowActionSpec {
                 action: "pin".to_string(),
+                open: None,
                 input: None,
                 label: Some("Pin".to_string()),
                 description: None,

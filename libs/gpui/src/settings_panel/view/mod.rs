@@ -23,11 +23,11 @@ use super::components::{
 use super::components::{
     number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
     rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
-    settings_action_spinner, settings_error_line, settings_label_group, settings_page,
-    settings_query_spinner, settings_selected_text, settings_swatch, settings_value_text,
-    ChoiceArt, NumberCue, NumberText, RowGround, SettingsChoiceValue, SettingsFeedback,
-    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
-    SettingsValueTone, SliderStyle,
+    settings_action_spinner, settings_error_line, settings_finder_empty, settings_label_group,
+    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
+    settings_value_text, ChoiceArt, NumberCue, NumberText, RowGround, SettingsChoiceValue,
+    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
+    SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
@@ -672,7 +672,7 @@ impl SettingsPanelView {
             "escape" => {
                 self.filter_open = false;
                 self.set_panel_filter(String::new());
-                if self.sources.len() > 1 {
+                if self.sources.len() > 1 && self.finder().is_none() {
                     self.set_source_menu(true);
                 }
                 true
@@ -1809,6 +1809,9 @@ impl SettingsPanelView {
                 }
             }
             Intent::CancelEdit => self.drop_edit(),
+            Intent::Close if !self.filter_open && self.filtering() && self.finder().is_some() => {
+                self.set_panel_filter(String::new());
+            }
             Intent::Close => {
                 match escape_step(self.stack.len() - 1, self.filter_open, self.can_ascend()) {
                     EscapeStep::CloseFilter => {
@@ -2034,6 +2037,10 @@ impl SettingsPanelView {
             self.run_item_card_action(cx);
             return;
         }
+        if self.level().list_card {
+            self.open_list_card_item(cx);
+            return;
+        }
         let selected = self.level().selected;
         if self.filtering()
             && self
@@ -2055,7 +2062,7 @@ impl SettingsPanelView {
             RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
             RowControl::Status { .. } => {}
-            RowControl::List { items, .. } if !items.is_empty() => {
+            RowControl::List { items, finder, .. } if !items.is_empty() || finder.is_some() => {
                 self.open_list_card(selected, cx);
                 cx.notify();
             }
@@ -2943,10 +2950,17 @@ impl SettingsPanelView {
                 items,
                 filter,
                 error,
+                finder,
                 ..
             } => {
                 if error.is_some() {
                     "unavailable".into()
+                } else if let Some(finder) = finder {
+                    finder
+                        .summary
+                        .clone()
+                        .or_else(|| finder.subtitle())
+                        .unwrap_or_else(|| format!("{} found", items.len()))
                 } else if filter.trim().is_empty() {
                     format!("{} found", items.len())
                 } else {
@@ -3888,20 +3902,39 @@ impl SettingsPanelView {
         if self.level().display_layout.is_some() {
             items.extend(self.render_display_layout_card(cx));
         } else {
-            for (title, detail, rows) in self.body_groups() {
+            let finder = self.finder_body();
+            let groups = self.body_groups();
+            let found = groups.len().saturating_sub(1);
+            for (group, (title, detail, rows)) in groups.into_iter().enumerate() {
+                let finder = finder.as_ref().filter(|_| group == found && group > 0);
                 let labels: Vec<&str> = rows
                     .iter()
                     .map(|index| self.level().rows[*index].label.as_str())
                     .collect();
                 if self.group_header_shows(&title, detail.as_deref(), &labels) {
                     let here = self.body_has_focus() && rows.contains(&self.level().selected);
-                    items.push(
-                        self.render_group_header(&title, detail.as_deref(), here)
-                            .into_any_element(),
-                    );
+                    let header = self.render_group_header(&title, detail.as_deref(), here);
+                    let header = match finder.and_then(|body| body.summary.clone()) {
+                        Some((summary, live)) => header.summary(summary, live),
+                        None => header,
+                    };
+                    items.push(header.into_any_element());
                 }
+                let empty = rows.is_empty();
                 for index in rows {
                     items.push(self.render_row(index, cx).into_any_element());
+                }
+                if let Some(body) = finder.filter(|_| empty) {
+                    items.push(
+                        settings_finder_empty(
+                            "settings-finder-empty",
+                            body.empty_title.clone(),
+                            body.empty_detail.clone().map(SharedString::from),
+                            body.empty_mark,
+                            self.kit,
+                        )
+                        .into_any_element(),
+                    );
                 }
             }
         }
@@ -4240,7 +4273,7 @@ impl SettingsPanelView {
     }
 
     fn body_groups(&self) -> Vec<(String, Option<String>, Vec<usize>)> {
-        if !self.filtering() {
+        if !self.filtering() || self.finder().is_some() {
             return (0..self.level().sections.len())
                 .filter(|section| {
                     self.level().sections[*section].source == self.materialized_source
@@ -4331,7 +4364,7 @@ impl SettingsPanelView {
         title: &str,
         detail: Option<&str>,
         here: bool,
-    ) -> impl IntoElement {
+    ) -> SettingsGroupHeader {
         let header = SettingsGroupHeader::new(
             title.to_string(),
             detail.map(|detail| SharedString::from(detail.to_string())),
@@ -4360,7 +4393,9 @@ impl SettingsPanelView {
             RowControl::Action { .. } => Some("run"),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
             RowControl::Color(_) => Some("pick"),
-            RowControl::List { items, .. } if !items.is_empty() => Some("open"),
+            RowControl::List { items, finder, .. } if !items.is_empty() || finder.is_some() => {
+                Some("open")
+            }
             RowControl::ObjectArray(_) => Some("edit"),
             RowControl::DisplayLayout(_) | RowControl::Placement(_) => Some("open"),
             RowControl::Number { .. } | RowControl::Text(_) | RowControl::TextList(_) => {
@@ -4408,6 +4443,18 @@ impl SettingsPanelView {
         }
         if (self.level().entries.is_some() || self.level().form.is_some()) && !self.filter_open {
             return self.card_hint_bar(bar);
+        }
+        if self.finder().is_some() {
+            let mut left = Vec::new();
+            if let Some(label) = self.finder_enter_hint() {
+                left.push(SettingsHint::new(Key::ENTER, label));
+            }
+            left.push(SettingsHint::new(Key::UP_DOWN, "move"));
+            left.push(SettingsHint::new(Key::TYPE, "filter"));
+            let escape = if self.filtering() { "clear" } else { "back" };
+            return bar
+                .left(left)
+                .right(vec![SettingsHint::new(Key::ESC, escape)]);
         }
         if self.stack.len() > 1
             && self.level().live_card
@@ -5476,7 +5523,8 @@ fn card_enter_hint(level: &Level) -> Option<&'static str> {
 }
 
 fn row_matches(row: &Row, needle: &str) -> bool {
-    row.label.to_lowercase().contains(needle)
+    row.id == list_card::FINDER_LEAD_ROW
+        || row.label.to_lowercase().contains(needle)
         || row
             .description
             .as_deref()
@@ -5554,7 +5602,7 @@ fn filtered_visible_rows(
 
 fn opens_a_card(control: &RowControl) -> bool {
     match control {
-        RowControl::List { items, .. } => !items.is_empty(),
+        RowControl::List { items, finder, .. } => !items.is_empty() || finder.is_some(),
         RowControl::Select { .. }
         | RowControl::MultiSelect { .. }
         | RowControl::ObjectArray(_)
@@ -6138,6 +6186,7 @@ mod tests {
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),
                 error: None,
+                finder: None,
             },
         }
     }
@@ -6319,43 +6368,55 @@ default = "visible"
     }
 
     #[test]
-    fn bluetooth_search_button_says_scan_and_answers_the_click() {
+    fn bluetooth_find_devices_leads_with_the_search_verb() {
         let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../plugins/bluetooth/qol-config.toml");
         let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
         let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
             .expect("bluetooth config");
-        let rows = rows_from_resolved(&resolved, 0);
-        let row = rows
-            .iter()
-            .find(|row| row.id == "search")
-            .expect("search row");
-        let RowControl::Action {
-            active_action,
-            active_query,
-            state_labels,
-            ..
-        } = &row.control
-        else {
-            panic!("search is an action row");
-        };
-        let label = |active, pending| {
-            action_value_label(
-                active,
-                pending,
-                false,
-                active_query.is_some(),
-                active_action.is_some(),
-                state_labels,
-            )
-        };
-        assert_eq!(label(false, false), "Scan");
-        assert_eq!(
-            label(false, true),
-            "Working",
-            "the click shows before BlueZ answers"
+        let mut rows = rows_from_resolved(&resolved, 0);
+        assert!(
+            rows.iter().all(|row| row.id != "search"),
+            "the search lives on find devices"
         );
-        assert_eq!(label(true, false), "Stop");
+        let lead = |rows: &[Row]| {
+            let row = rows
+                .iter()
+                .find(|row| row.id == "find_devices")
+                .expect("find devices row");
+            let RowControl::List {
+                finder: Some(finder),
+                ..
+            } = &row.control
+            else {
+                panic!("find devices is a finder list");
+            };
+            let verbs = finder
+                .actions()
+                .into_iter()
+                .map(|action| action.label)
+                .collect::<Vec<_>>();
+            (finder.label(), verbs)
+        };
+        let cases = [
+            ("rest", "Search nearby", "can_start", "Search"),
+            ("active", "Searching nearby", "can_stop", "Stop"),
+            (
+                "rest",
+                "Search finished",
+                "can_search_again",
+                "Search again",
+            ),
+            ("off", "Bluetooth is off", "can_enable", "Turn on"),
+        ];
+        for (state, label, flag, verb) in cases {
+            let payload = serde_json::json!({
+                "items": [],
+                "lead": { "state": state, "label": label, flag: true },
+            });
+            apply_runtime_query(&mut rows, 0, "nearby_devices", Ok(payload), &|_, _| false);
+            assert_eq!(lead(&rows), (label.to_string(), vec![verb.to_string()]));
+        }
     }
 
     #[test]

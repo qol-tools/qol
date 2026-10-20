@@ -261,6 +261,17 @@ Per-kind rules (validated, not ignored):
   not end in `_mods` needs a `[field.<id>.lists.<key>]` entry carrying
   `item_label` and `card_description`; the description may use the literal
   placeholder `{entry}`.
+- A `list` with `[field.<id>.lead]` opens as a finder: one tall lead row
+  (`label` names its group, `description`, `row_label` and `row_subtitle`
+  interpolate the payload's `lead` object) above the items, which sit in a
+  group named by `items_label`. `[[field.<id>.lead.actions]]` are row actions
+  resolved against `lead`; the first whose `when` holds runs on enter. Payload
+  keys: `lead.state` (`active` sweeps the searching mark, `off` fades it),
+  `summary` (the items group value), `empty { title, detail }` (shown when no
+  item is visible), and per item `group` (items with one start a subheader
+  under it, so order them last) and `signal` (0 to 4 bars). A row action with
+  `open = "<field id>"` and no `action` opens that field's card instead of
+  dispatching.
 - A picture spec is `name` or `name:argument`; `qol_config::contract::PICTURE_NAMES`
   lists every name. Arguments: `icon-corner` (`left`/`right`), `aa` (8..=48),
   `desktop-theme` (`bone`/`slate`), `web-theme` (`slate`/`midnight`), `swatch`

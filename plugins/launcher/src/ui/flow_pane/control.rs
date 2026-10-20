@@ -189,6 +189,7 @@ fn enter_action(entry: &FlowEntry, id: &str) -> RowActionSpec {
         .cloned()
         .unwrap_or_else(|| RowActionSpec {
             action: id.to_string(),
+            open: None,
             input: None,
             label: None,
             description: None,
@@ -206,6 +207,7 @@ mod tests {
     fn an_enter_action_uses_the_declared_row_action_or_a_bare_one() {
         let declared = RowActionSpec {
             action: "paste".to_string(),
+            open: None,
             input: None,
             label: Some("Paste".to_string()),
             description: None,
@@ -234,6 +236,7 @@ mod tests {
     fn a_row_without_copy_text_copies_through_the_declared_row_action() {
         let copy = RowActionSpec {
             action: "copy".to_string(),
+            open: None,
             input: Some(qol_config::contract::IndexMap::from([(
                 "id".to_string(),
                 "{id}".to_string(),
@@ -245,6 +248,7 @@ mod tests {
         };
         let pin = RowActionSpec {
             action: "pin".to_string(),
+            open: None,
             key: Some("ctrl+p".to_string()),
             ..copy.clone()
         };

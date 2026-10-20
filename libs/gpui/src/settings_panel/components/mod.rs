@@ -11,6 +11,7 @@ use crate::theme::Ground;
 mod choice_value;
 mod display_layout_tile;
 mod feedback;
+mod finder;
 mod group_header;
 mod hint_bar;
 mod key_combination;
@@ -23,12 +24,16 @@ mod text_field;
 mod tile;
 mod toggle;
 
-pub use choice_value::{ChoiceArt, SettingsChevron, SettingsChoiceValue};
+pub use choice_value::{ChoiceArt, SettingsChevron, SettingsChoiceArt, SettingsChoiceValue};
 pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,
 };
 pub use feedback::SettingsFeedback;
+pub use finder::{
+    settings_finder_empty, settings_search_mark, settings_signal_bars, FinderPickEnd,
+    SettingsFinderLead, SettingsFinderPick, FINDER_MARK_SMALL,
+};
 pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
@@ -162,6 +167,28 @@ pub fn settings_label(text: impl Into<SharedString>, kit: Kit) -> gpui::Div {
     div()
         .text(TextStyle::Name)
         .text_color(rgb(kit.grounds.pane.ink))
+        .child(text.into())
+}
+
+fn finder_display_label(text: impl Into<SharedString>, row: RowGround, kit: Kit) -> gpui::Div {
+    one_line(
+        div()
+            .text(TextStyle::Heading)
+            .text_color(rgb(row.rest(kit).ink))
+            .child(text.into()),
+    )
+}
+
+pub fn settings_list_subheader(text: impl Into<SharedString>, kit: Kit) -> gpui::Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .h(px(qol_theme::LIST_ENTRY_HEIGHTS[0]))
+        .pt(px(qol_theme::SPACE_CELL))
+        .px(px(qol_theme::SPACE_INSET))
+        .text(TextStyle::Colophon)
+        .text_color(rgb(kit.grounds.pane.faint))
         .child(text.into())
 }
 

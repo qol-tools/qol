@@ -141,6 +141,7 @@ mod tests {
     fn action(name: &str, key: Option<&str>) -> RowActionSpec {
         RowActionSpec {
             action: name.to_string(),
+            open: None,
             input: None,
             label: None,
             description: None,
