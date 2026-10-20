@@ -64,23 +64,57 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
     let mut used: HashSet<String> = HashSet::new();
     let has_answer = output.answer.is_some();
 
+    let superseded_answer = output.reason_code == super::Reason::SupersededAnswer;
     let restated = output
         .answer
         .as_ref()
-        .filter(|answer| answer.supporting_keys.is_empty())
+        .filter(|answer| answer.supporting_keys.is_empty() && !superseded_answer)
         .and_then(|answer| restated_by(answer, output));
     if let Some(answer) = &output.answer {
         let shown = restated.as_ref();
-        let text = shown.map_or(answer.text.as_str(), |unit| unit.text.as_str());
-        let key = shown.map_or(answer.key.as_str(), |unit| unit.key.as_str());
-        let host = shown.map_or(answer.host.as_deref(), |unit| unit.host.as_deref());
-        let at = shown.map_or(answer.source_ts.as_deref(), |unit| unit.ts.as_deref());
+        let current = answer.superseded_by.as_ref();
+        let (text, key, host, at, source_kind) = match (current, shown) {
+            (Some(current), _) => (
+                current.text.as_str(),
+                current.key.as_str(),
+                current.host.as_deref(),
+                current.source_ts.as_deref(),
+                current.source_kind.as_str(),
+            ),
+            (None, Some(unit)) => (
+                unit.text.as_str(),
+                unit.key.as_str(),
+                unit.host.as_deref(),
+                unit.ts.as_deref(),
+                answer.source_kind.as_str(),
+            ),
+            (None, None) => (
+                answer.text.as_str(),
+                answer.key.as_str(),
+                answer.host.as_deref(),
+                answer.source_ts.as_deref(),
+                answer.source_kind.as_str(),
+            ),
+        };
         let mut trail = vec![TrailEntry {
             at: date_of(at),
-            tag: "true now".to_string(),
+            tag: if superseded_answer && current.is_none() {
+                "superseded"
+            } else {
+                "true now"
+            }
+            .to_string(),
             text: text.to_string(),
             struck: false,
         }];
+        if current.is_some() {
+            trail.push(TrailEntry {
+                at: date_of(answer.source_ts.as_deref()),
+                tag: "superseded".to_string(),
+                text: answer.text.clone(),
+                struck: true,
+            });
+        }
         if let Some(Some(superseded)) = &answer.superseded {
             for entry in superseded {
                 trail.push(TrailEntry {
@@ -113,12 +147,16 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         ));
         detail.extend(detail_field("session", answer.session.clone()));
         detail.extend(detail_field("key", Some(answer.key.clone())));
+        detail.extend(detail_field(
+            "replaced_by",
+            current.map(|current| current.key.clone()),
+        ));
         rows.push(FlowRow {
             title: title_of(text),
             subtitle: Some(format!(
                 "{} {} {}",
                 output.verdict,
-                answer.source_kind,
+                source_kind,
                 date_of(at)
             )),
             copy: text.to_string(),
@@ -141,7 +179,12 @@ pub fn from_output(output: &AskOutput, units: &UnitsLayer, notes: &NotesLayer) -
         used.extend(answer.supporting_keys.iter().cloned());
     }
 
-    let answer_text = output.answer.as_ref().map(|answer| answer.text.as_str());
+    let answer_text = output.answer.as_ref().map(|answer| {
+        answer
+            .superseded_by
+            .as_ref()
+            .map_or(answer.text.as_str(), |current| current.text.as_str())
+    });
     let mut folded = 0usize;
     if let Some(units_out) = &output.units {
         for unit in units_out {
@@ -361,7 +404,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::ask::Superseded;
+    use crate::ask::{Outcome, Reason, Replacement, Superseded};
     use crate::store::{Note, Unit};
 
     #[test]
@@ -584,10 +627,12 @@ mod tests {
             Superseded {
                 text: "newer stale text".to_string(),
                 source_ts: Some("2026-08-03T08:00:00.000Z".to_string()),
+                key: None,
             },
             Superseded {
                 text: "older stale text".to_string(),
                 source_ts: Some("2026-08-01T08:00:00.000Z".to_string()),
+                key: None,
             },
         ]));
         let (units, notes) = empty_layers();
@@ -610,6 +655,59 @@ mod tests {
         assert_eq!(rows[0].trail[2].at, "2026-08-01");
         assert_eq!(rows[0].trail[2].text, "older stale text");
         assert!(rows[0].trail[2].struck);
+    }
+
+    #[test]
+    fn a_superseded_answer_leads_with_its_replacement_and_strikes_itself() {
+        let mut output = output_fixture("c-old", vec![], Value::Null);
+        output.outcome = Outcome::Qualified;
+        output.reason_code = Reason::SupersededAnswer;
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.superseded_by = Some(Replacement {
+            key: "c-new".to_string(),
+            text: "lanes run claude-opus-5-5 at high effort".to_string(),
+            source_kind: "capture".to_string(),
+            source_ts: Some("2026-10-20T08:00:00.000Z".to_string()),
+            host: None,
+        });
+        let (units, notes) = empty_layers();
+
+        let rows = from_output(&output, &units, &notes);
+
+        assert_eq!(rows[0].key, "c-new");
+        assert_eq!(rows[0].copy, "lanes run claude-opus-5-5 at high effort");
+        assert_eq!(
+            rows[0].subtitle.as_deref(),
+            Some("answered capture 2026-10-20")
+        );
+        let tags = rows[0]
+            .trail
+            .iter()
+            .map(|entry| (entry.tag.as_str(), entry.struck))
+            .collect::<Vec<_>>();
+        assert_eq!(tags, [("true now", false), ("superseded", true)]);
+        assert_eq!(
+            rows[0].trail[1].text,
+            "the   clipboard ring survives tray restarts"
+        );
+        let detail = |label: &str| {
+            rows[0]
+                .detail
+                .iter()
+                .find(|field| field.label == label)
+                .map(|field| field.value.clone())
+        };
+        assert_eq!(detail("key").as_deref(), Some("c-old"));
+        assert_eq!(detail("replaced_by").as_deref(), Some("c-new"));
+        assert_eq!(detail("reason_code").as_deref(), Some("superseded_answer"));
+
+        let answer = output.answer.as_mut().expect("answer present");
+        answer.superseded_by = None;
+        let rows = from_output(&output, &units, &notes);
+        assert_eq!(rows[0].key, "c-old");
+        assert_eq!(rows[0].trail.len(), 1);
+        assert_eq!(rows[0].trail[0].tag, "superseded");
+        assert!(!rows[0].trail[0].struck);
     }
 
     #[test]

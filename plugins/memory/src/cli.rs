@@ -20,6 +20,10 @@ const USAGE_STATUS: &str = "usage: qol-memory status [--store PATH]";
 const USAGE_RUN: &str = "usage: qol-memory run";
 const USAGE_CAPTURE: &str =
     "usage: qol-memory capture (--unit '<json>' | --text '<fact>' --cwd PATH) [--store PATH] [--agent-home DIR]";
+const USAGE_SUPERSEDE: &str =
+    "usage: qol-memory supersede --keys '<key> [<key>...]' --text '<fact>' --cwd PATH [--store PATH] [--agent-home DIR]";
+const USAGE_FORGET: &str =
+    "usage: qol-memory forget --keys '<key> [<key>...]' --reason '<why>' [--store PATH] [--agent-home DIR]";
 const USAGE_CONTINUE: &str =
     "usage: qol-memory continue --cwd PATH --session ID [--store PATH] [--agent-home DIR]";
 const USAGE_REINDEX: &str = "usage: qol-memory reindex [--store PATH]";
@@ -38,6 +42,10 @@ struct Handlers {
     run_plain: PlainHandler,
     capture_plain: PlainHandler,
     capture_json: JsonHandler,
+    supersede_plain: PlainHandler,
+    supersede_json: JsonHandler,
+    forget_plain: PlainHandler,
+    forget_json: JsonHandler,
     continue_plain: PlainHandler,
     continue_json: JsonHandler,
     reindex_plain: PlainHandler,
@@ -60,6 +68,10 @@ impl Handlers {
             run_plain: Box::new(run_run_plain),
             capture_plain: Box::new(run_capture_plain),
             capture_json: Box::new(run_capture_json),
+            supersede_plain: Box::new(run_supersede_plain),
+            supersede_json: Box::new(run_supersede_json),
+            forget_plain: Box::new(run_forget_plain),
+            forget_json: Box::new(run_forget_json),
             continue_plain: Box::new(run_continue_plain),
             continue_json: Box::new(run_continue_json),
             reindex_plain: Box::new(run_reindex_plain),
@@ -93,6 +105,11 @@ fn app_with_handlers(handlers: Handlers) -> HeadlessApp {
             handlers.capture_plain,
             handlers.capture_json,
         ))
+        .command(supersede_command(
+            handlers.supersede_plain,
+            handlers.supersede_json,
+        ))
+        .command(forget_command(handlers.forget_plain, handlers.forget_json))
         .command(continue_command(
             handlers.continue_plain,
             handlers.continue_json,
@@ -157,8 +174,55 @@ fn capture_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .usage(USAGE_CAPTURE)
         .detail("Pass a fact with --text and --cwd, or a whole unit as a JSON object with --unit.")
         .detail("--agent-home names the caller's agent home; it is stamped on the unit.")
-        .output("The `appended: <n>` line in plain text; the appended count with --json.")
+        .detail(
+            "Capturing a forgotten or replaced fact again brings it back. The reply lists up to \
+             3 stored facts close to the new one with their keys; pass a stale one to supersede.",
+        )
+        .output(
+            "appended, key, restored and related lines in plain text; \
+             the result object with --json.",
+        )
         .exit_behavior("Usage errors exit 64; failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn supersede_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("supersede")
+        .about("Replace stale facts with one new fact; the latest statement wins.")
+        .usage(USAGE_SUPERSEDE)
+        .detail(
+            "--keys names the stale facts: each key in full or its first 8 or more characters, \
+             separated by spaces or commas. Keys come from ask, rows and the capture reply.",
+        )
+        .detail("--text and --cwd are the new fact, stored the same way as capture stores it.")
+        .detail(
+            "A question the new fact also answers drops the old facts and lists them as \
+             replaced. A question only an old fact answers still gets it, marked superseded, \
+             with the new fact beside it.",
+        )
+        .detail(
+            "An unknown key, an ambiguous prefix or a fact this agent home cannot see changes \
+             nothing, and the error names the key.",
+        )
+        .output("appended, key and superseded lines in plain text; the result object with --json.")
+        .exit_behavior("Usage errors exit 64; unknown keys and other failures exit 1.")
+        .run_result(move |context| plain(context))
+        .run_json(move |context| json(context))
+}
+
+fn forget_command(plain: PlainHandler, json: JsonHandler) -> Command {
+    Command::new("forget")
+        .about("Keep facts out of answers, launcher rows and the session-start block.")
+        .usage(USAGE_FORGET)
+        .detail("--keys names the facts the same way supersede does.")
+        .detail("--reason says why; it is kept in the lifecycle log next to the keys.")
+        .detail(
+            "Nothing is deleted. Capturing the same text in the same cwd brings a forgotten fact \
+             back. Forgetting a replacement does not bring back the facts it replaced.",
+        )
+        .output("The `forgotten: <keys>` line in plain text; the forgotten keys with --json.")
+        .exit_behavior("Usage errors exit 64; unknown keys and other failures exit 1.")
         .run_result(move |context| plain(context))
         .run_json(move |context| json(context))
 }
@@ -429,6 +493,88 @@ fn parse_capture_invocation(args: &[String]) -> std::result::Result<CaptureInvoc
         unit,
         store,
         agent_home,
+    })
+}
+
+#[derive(Debug)]
+struct LifecycleInvocation {
+    keys: String,
+    text: String,
+    cwd: String,
+    reason: String,
+    store: Option<PathBuf>,
+    agent_home: String,
+}
+
+fn parse_supersede_invocation(args: &[String]) -> std::result::Result<LifecycleInvocation, String> {
+    let invocation = parse_lifecycle_flags(args, &["--text", "--cwd"], USAGE_SUPERSEDE)?;
+    for (flag, value) in [("--text", &invocation.text), ("--cwd", &invocation.cwd)] {
+        if value.is_empty() {
+            return Err(format!("{flag} must not be empty\n{USAGE_SUPERSEDE}"));
+        }
+    }
+    Ok(invocation)
+}
+
+fn parse_forget_invocation(args: &[String]) -> std::result::Result<LifecycleInvocation, String> {
+    let invocation = parse_lifecycle_flags(args, &["--reason"], USAGE_FORGET)?;
+    if invocation.reason.is_empty() {
+        return Err(format!("--reason must not be empty\n{USAGE_FORGET}"));
+    }
+    Ok(invocation)
+}
+
+fn parse_lifecycle_flags(
+    args: &[String],
+    fields: &[&str],
+    usage: &str,
+) -> std::result::Result<LifecycleInvocation, String> {
+    let mut values: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    let mut store: Option<PathBuf> = None;
+    let mut agent_home: Option<String> = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let token = args[index].as_str();
+        match token {
+            "--store" => {
+                store = Some(PathBuf::from(value_flag_with(
+                    args, index, "--store", usage,
+                )?));
+                index += 2;
+            }
+            "--agent-home" => {
+                agent_home = Some(value_flag_with(args, index, "--agent-home", usage)?.to_string());
+                index += 2;
+            }
+            flag if flag == "--keys" || fields.contains(&flag) => {
+                let value = value_flag_with(args, index, flag, usage)?;
+                values.insert(flag, value.trim().to_string());
+                index += 2;
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unknown flag `{other}`\n{usage}"));
+            }
+            positional => {
+                return Err(format!("unexpected argument `{positional}`\n{usage}"));
+            }
+        }
+    }
+    for flag in std::iter::once("--keys").chain(fields.iter().copied()) {
+        if !values.contains_key(flag) {
+            return Err(format!("{flag} is required\n{usage}"));
+        }
+    }
+    let keys = values.remove("--keys").unwrap_or_default();
+    if keys.is_empty() {
+        return Err(format!("--keys must not be empty\n{usage}"));
+    }
+    Ok(LifecycleInvocation {
+        keys,
+        text: values.remove("--text").unwrap_or_default(),
+        cwd: values.remove("--cwd").unwrap_or_default(),
+        reason: values.remove("--reason").unwrap_or_default(),
+        store,
+        agent_home: qol_agent_homes::Registry::load().resolve_caller(agent_home.as_deref()),
     })
 }
 
@@ -837,19 +983,16 @@ fn run_capture_plain(context: &CommandContext) -> Result<Execution> {
         Ok(invocation) => invocation,
         Err(message) => return Ok(Execution::usage(message)),
     };
-    let appended = capture_appended(&invocation)?;
-    Ok(Execution::success(newline_terminated(format!(
-        "appended: {appended}"
-    ))))
+    let payload = capture_payload(&invocation)?;
+    Ok(Execution::success(capture_plain_lines(&payload)))
 }
 
 fn run_capture_json(context: &CommandContext) -> Result<Value> {
     let invocation = parse_capture_invocation(context.args()).map_err(anyhow::Error::msg)?;
-    let appended = capture_appended(&invocation)?;
-    Ok(json!({ "appended": appended }))
+    capture_payload(&invocation)
 }
 
-fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
+fn capture_payload(invocation: &CaptureInvocation) -> Result<Value> {
     if invocation.store.is_none() {
         let input = json!({
             "unit": invocation.unit.clone(),
@@ -857,13 +1000,10 @@ fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
         });
         match crate::app::send_request("capture", input) {
             Ok(Some(value)) => {
-                let appended = value
-                    .get("appended")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("qol-memory daemon returned no appended count")
-                    })?;
-                return Ok(appended as usize);
+                if value.get("appended").and_then(Value::as_u64).is_none() {
+                    anyhow::bail!("qol-memory daemon returned no appended count");
+                }
+                return Ok(value);
             }
             Ok(None) => anyhow::bail!("qol-memory daemon returned no capture payload"),
             Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
@@ -873,7 +1013,7 @@ fn capture_appended(invocation: &CaptureInvocation) -> Result<usize> {
     in_process_capture(invocation)
 }
 
-fn in_process_capture(invocation: &CaptureInvocation) -> Result<usize> {
+fn in_process_capture(invocation: &CaptureInvocation) -> Result<Value> {
     let store = Store::resolve(invocation.store.as_deref())
         .context("failed to resolve the qol-memory store")?;
     let mut unit = invocation.unit.clone();
@@ -883,7 +1023,197 @@ fn in_process_capture(invocation: &CaptureInvocation) -> Result<usize> {
         }
     }
     let mut keys = crate::ingest::KeySet::load(&store)?;
-    crate::ingest::append_units(&store, std::slice::from_ref(&unit), &mut keys)
+    let appended = crate::ingest::append_units(&store, std::slice::from_ref(&unit), &mut keys)?;
+    let key = unit
+        .get("key")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let caller = invocation.agent_home.clone().unwrap_or_default();
+    let restored = !crate::lifecycle::Lifecycle::load(&store).is_live(&key);
+    if restored {
+        crate::lifecycle::restore(&store, &key, &caller)
+            .context("capture: the fact was stored but could not be brought back")?;
+    }
+    let text = unit.get("text").and_then(Value::as_str).unwrap_or_default();
+    let related = if text.trim().is_empty() {
+        Vec::new()
+    } else {
+        in_process_related(&store, text, &key, &caller).unwrap_or_else(|error| {
+            log::warn!("qol-memory capture could not look up related facts: {error:#}");
+            Vec::new()
+        })
+    };
+    Ok(json!({
+        "appended": appended,
+        "key": key,
+        "restored": restored,
+        "related": related,
+    }))
+}
+
+fn in_process_related(
+    store: &Store,
+    text: &str,
+    key: &str,
+    caller: &str,
+) -> Result<Vec<crate::ask::RelatedFact>> {
+    let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    let request = AskRequest {
+        query: text.to_string(),
+        k: crate::ask::RELATED_FACT_FETCH,
+        brief: false,
+        exclude_session: None,
+        agent_home: Some(caller.to_string()),
+    };
+    let output =
+        crate::ask::run_with_layers(store, &crate::aliases::embedded(), &request, &units, &notes)?;
+    Ok(crate::ask::related_facts(&output, key))
+}
+
+fn capture_plain_lines(payload: &Value) -> String {
+    let mut lines = vec![format!(
+        "appended: {}",
+        payload
+            .get("appended")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    )];
+    if let Some(key) = payload
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+    {
+        lines.push(format!("key: {key}"));
+    }
+    if payload.get("restored").and_then(Value::as_bool) == Some(true) {
+        lines.push("restored: the fact was forgotten or replaced and answers again".to_string());
+    }
+    for fact in payload
+        .get("related")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let field = |name: &str| fact.get(name).and_then(Value::as_str).unwrap_or_default();
+        lines.push(format!("related: {}  {}", field("key"), field("text")));
+    }
+    newline_terminated(lines.join("\n"))
+}
+
+fn run_supersede_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_supersede_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let payload = supersede_payload(&invocation)?;
+    let field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
+    Ok(Execution::success(newline_terminated(format!(
+        "appended: {}\nkey: {}\nsuperseded: {}",
+        field("appended"),
+        field("key").as_str().unwrap_or_default(),
+        joined_keys(&field("superseded"))
+    ))))
+}
+
+fn run_supersede_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_supersede_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    supersede_payload(&invocation)
+}
+
+fn supersede_payload(invocation: &LifecycleInvocation) -> Result<Value> {
+    if invocation.store.is_none() {
+        let input = json!({
+            "keys": invocation.keys,
+            "text": invocation.text,
+            "cwd": invocation.cwd,
+            "agent_home": invocation.agent_home,
+        });
+        match crate::app::send_request("supersede", input) {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no supersede payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let keys = in_process_nameable(&store, &invocation.agent_home)?.resolve(&invocation.keys)?;
+    let mut known = crate::ingest::KeySet::load(&store)?;
+    let replaced = crate::lifecycle::supersede_with_capture(
+        &store,
+        &keys,
+        &invocation.text,
+        &invocation.cwd,
+        &invocation.agent_home,
+        &mut known,
+    )?;
+    Ok(json!({
+        "appended": replaced.appended,
+        "key": replaced.key,
+        "superseded": keys,
+    }))
+}
+
+fn run_forget_plain(context: &CommandContext) -> Result<Execution> {
+    let invocation = match parse_forget_invocation(context.args()) {
+        Ok(invocation) => invocation,
+        Err(message) => return Ok(Execution::usage(message)),
+    };
+    let payload = forget_payload(&invocation)?;
+    Ok(Execution::success(newline_terminated(format!(
+        "forgotten: {}",
+        joined_keys(payload.get("forgotten").unwrap_or(&Value::Null))
+    ))))
+}
+
+fn run_forget_json(context: &CommandContext) -> Result<Value> {
+    let invocation = parse_forget_invocation(context.args()).map_err(anyhow::Error::msg)?;
+    forget_payload(&invocation)
+}
+
+fn forget_payload(invocation: &LifecycleInvocation) -> Result<Value> {
+    if invocation.store.is_none() {
+        let input = json!({
+            "keys": invocation.keys,
+            "reason": invocation.reason,
+            "agent_home": invocation.agent_home,
+        });
+        match crate::app::send_request("forget", input) {
+            Ok(Some(value)) => return Ok(value),
+            Ok(None) => anyhow::bail!("qol-memory daemon returned no forget payload"),
+            Err(error) if !crate::app::daemon_unreachable(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    let store = Store::resolve(invocation.store.as_deref())
+        .context("failed to resolve the qol-memory store")?;
+    let keys = in_process_nameable(&store, &invocation.agent_home)?.resolve(&invocation.keys)?;
+    crate::lifecycle::forget(&store, &keys, &invocation.reason, &invocation.agent_home)?;
+    Ok(json!({ "forgotten": keys }))
+}
+
+fn in_process_nameable(store: &Store, caller: &str) -> Result<crate::lifecycle::Catalog> {
+    let units = store.read_units()?;
+    let notes = store.read_notes()?;
+    let registry = qol_agent_homes::Registry::load();
+    let visible = crate::ask::visible_notes(&notes.items, &units.items, caller, &registry);
+    Ok(crate::ask::nameable(
+        &units.items,
+        &visible,
+        caller,
+        &registry,
+    ))
+}
+
+fn joined_keys(keys: &Value) -> String {
+    keys.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn run_continue_plain(context: &CommandContext) -> Result<Execution> {
@@ -1173,6 +1503,8 @@ mod tests {
         status: AtomicUsize,
         run: AtomicUsize,
         capture: AtomicUsize,
+        supersede: AtomicUsize,
+        forget: AtomicUsize,
         continue_cmd: AtomicUsize,
         reindex: AtomicUsize,
         distill: AtomicUsize,
@@ -1187,6 +1519,8 @@ mod tests {
                 && self.status.load(Ordering::SeqCst) == 0
                 && self.run.load(Ordering::SeqCst) == 0
                 && self.capture.load(Ordering::SeqCst) == 0
+                && self.supersede.load(Ordering::SeqCst) == 0
+                && self.forget.load(Ordering::SeqCst) == 0
                 && self.continue_cmd.load(Ordering::SeqCst) == 0
                 && self.reindex.load(Ordering::SeqCst) == 0
                 && self.distill.load(Ordering::SeqCst) == 0
@@ -1204,6 +1538,10 @@ mod tests {
         let run_calls = Arc::clone(calls);
         let capture_calls = Arc::clone(calls);
         let capture_json_calls = Arc::clone(calls);
+        let supersede_calls = Arc::clone(calls);
+        let supersede_json_calls = Arc::clone(calls);
+        let forget_calls = Arc::clone(calls);
+        let forget_json_calls = Arc::clone(calls);
         let continue_calls = Arc::clone(calls);
         let continue_json_calls = Arc::clone(calls);
         let reindex_calls = Arc::clone(calls);
@@ -1243,6 +1581,24 @@ mod tests {
             capture_json: Box::new(move |_: &CommandContext| {
                 capture_json_calls.capture.fetch_add(1, Ordering::SeqCst);
                 Ok(json!({ "sentinel": "capture" }))
+            }),
+            supersede_plain: Box::new(move |_| {
+                supersede_calls.supersede.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel supersede"))
+            }),
+            supersede_json: Box::new(move |_: &CommandContext| {
+                supersede_json_calls
+                    .supersede
+                    .fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "supersede" }))
+            }),
+            forget_plain: Box::new(move |_| {
+                forget_calls.forget.fetch_add(1, Ordering::SeqCst);
+                Ok(Execution::success("sentinel forget"))
+            }),
+            forget_json: Box::new(move |_: &CommandContext| {
+                forget_json_calls.forget.fetch_add(1, Ordering::SeqCst);
+                Ok(json!({ "sentinel": "forget" }))
             }),
             continue_plain: Box::new(move |_| {
                 continue_calls.continue_cmd.fetch_add(1, Ordering::SeqCst);
@@ -1527,6 +1883,10 @@ mod tests {
             vec!["help", "doctor"],
             vec!["help", "run"],
             vec!["help", "capture"],
+            vec!["help", "supersede"],
+            vec!["supersede", "help"],
+            vec!["help", "forget"],
+            vec!["forget", "help"],
             vec!["help", "continue"],
             vec!["help", "reindex"],
             vec!["help", "distill"],
@@ -1744,6 +2104,134 @@ mod tests {
     }
 
     #[test]
+    fn supersede_and_forget_usage_errors_exit_64_with_the_usage_line() {
+        let cases = [
+            (vec!["supersede"], USAGE_SUPERSEDE, "--keys is required"),
+            (
+                vec!["supersede", "--keys", "af919076", "--cwd", "/p"],
+                USAGE_SUPERSEDE,
+                "--text is required",
+            ),
+            (
+                vec!["supersede", "--keys", "  ", "--text", "fact", "--cwd", "/p"],
+                USAGE_SUPERSEDE,
+                "--keys must not be empty",
+            ),
+            (
+                vec![
+                    "supersede",
+                    "--keys",
+                    "af919076",
+                    "--text",
+                    " ",
+                    "--cwd",
+                    "/p",
+                ],
+                USAGE_SUPERSEDE,
+                "--text must not be empty",
+            ),
+            (
+                vec![
+                    "supersede",
+                    "--keys",
+                    "af919076",
+                    "--text",
+                    "fact",
+                    "--cwd",
+                    " ",
+                ],
+                USAGE_SUPERSEDE,
+                "--cwd must not be empty",
+            ),
+            (
+                vec!["supersede", "--keys", "af919076", "--reason", "old"],
+                USAGE_SUPERSEDE,
+                "unknown flag `--reason`",
+            ),
+            (
+                vec!["forget", "--keys", "af919076"],
+                USAGE_FORGET,
+                "--reason is required",
+            ),
+            (
+                vec!["forget", "--keys", "af919076", "--reason", "  "],
+                USAGE_FORGET,
+                "--reason must not be empty",
+            ),
+            (
+                vec!["forget", "af919076", "--reason", "old"],
+                USAGE_FORGET,
+                "unexpected argument `af919076`",
+            ),
+            (
+                vec!["forget", "--keys"],
+                USAGE_FORGET,
+                "--keys requires a value",
+            ),
+        ];
+
+        for (args, usage, message) in cases {
+            let execution = app().execute(args.iter().map(|arg| (*arg).to_string()));
+            assert_eq!(execution.exit_code, EXIT_USAGE, "args: {args:?}");
+            assert!(execution.stderr.contains(usage), "args: {args:?}");
+            assert!(execution.stderr.contains(message), "args: {args:?}");
+        }
+    }
+
+    #[test]
+    fn supersede_and_forget_flags_parse() {
+        let owned = |args: &[&str]| {
+            args.iter()
+                .map(|arg| (*arg).to_string())
+                .collect::<Vec<_>>()
+        };
+        let supersede = parse_supersede_invocation(&owned(&[
+            "--keys",
+            " af919076 2e0e3996 ",
+            "--text",
+            " Q: Which model do lanes run? A: opus ",
+            "--cwd",
+            "/repo",
+            "--store",
+            "/tmp/store",
+        ]))
+        .expect("supersede flags parse");
+        assert_eq!(supersede.keys, "af919076 2e0e3996");
+        assert_eq!(supersede.text, "Q: Which model do lanes run? A: opus");
+        assert_eq!(supersede.cwd, "/repo");
+        assert_eq!(supersede.store, Some(PathBuf::from("/tmp/store")));
+
+        let forget =
+            parse_forget_invocation(&owned(&["--reason", "wrong path", "--keys", "72ed4718"]))
+                .expect("forget flags parse");
+        assert_eq!(forget.keys, "72ed4718");
+        assert_eq!(forget.reason, "wrong path");
+        assert_eq!(forget.store, None);
+    }
+
+    #[test]
+    fn capture_plain_lines_list_the_key_and_related_facts() {
+        let lines = capture_plain_lines(&json!({
+            "appended": 1,
+            "key": "0123456789abcdef",
+            "restored": true,
+            "related": [
+                {"key": "af919076cccccccc", "kind": "capture", "text": "lanes run opus"},
+            ],
+        }));
+        assert_eq!(
+            lines,
+            "appended: 1\nkey: 0123456789abcdef\n\
+             restored: the fact was forgotten or replaced and answers again\n\
+             related: af919076cccccccc  lanes run opus\n"
+        );
+        assert_eq!(
+            capture_plain_lines(&json!({ "appended": 0 })),
+            "appended: 0\n"
+        );
+    }
+
+    #[test]
     fn continue_requires_cwd_and_session() {
         let cases = [
             vec!["continue"],
@@ -1790,7 +2278,7 @@ mod tests {
         let report: DoctorReport =
             serde_json::from_str(&before.stdout).expect("doctor output must be valid JSON");
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 10);
+        assert_eq!(report.checks.len(), 11);
         let ids = report
             .checks
             .iter()
@@ -1808,7 +2296,8 @@ mod tests {
                 "skills_index",
                 "retrieval_log",
                 "aliases_valid",
-                "store_hygiene"
+                "store_hygiene",
+                "lifecycle_log"
             ]
         );
         assert!(report

@@ -81,6 +81,7 @@ pub fn run(store: &Store, request: &ContinueRequest) -> anyhow::Result<ContinueO
         &request.session,
         &caller,
         &registry,
+        &crate::lifecycle::Lifecycle::load(store),
     );
     if write_marker(
         store,
@@ -388,11 +389,14 @@ fn pick_units(
     session: &str,
     caller: &str,
     registry: &Registry,
+    lifecycle: &crate::lifecycle::Lifecycle,
 ) -> Vec<Value> {
     let mut candidates: Vec<&Value> = units
         .iter()
         .filter(|unit| {
-            is_candidate(unit, entry_ms, session) && home_visible(unit, caller, registry)
+            is_candidate(unit, entry_ms, session)
+                && lifecycle.is_live(key_text(unit))
+                && home_visible(unit, caller, registry)
         })
         .collect();
     candidates.sort_by(|left, right| {
@@ -908,6 +912,77 @@ mod tests {
         assert!(!block.contains(
             "Ship the tray icon change and update the changelog file with release notes"
         ));
+    }
+
+    #[test]
+    fn continue_leaves_out_forgotten_and_replaced_facts() {
+        let (_dir, store) = store_in("lifecycle");
+        const FORGOTTEN: &str = "Fix the launcher bug and verify the fix end to end in a guest run";
+        const REPLACED: &str =
+            "Document the picker flow and record the decision in the research notes";
+        const CURRENT: &str =
+            "Ship the tray icon change and update the changelog file with release notes";
+        let unit_for = |key: &str, session: &str, ts: &str, text: &str| {
+            json!({
+                "key": key,
+                "source": "pi",
+                "file": "a.jsonl",
+                "agent_home": CALLER,
+                "session": session,
+                "cwd": "/proj",
+                "kind": "user",
+                "ts": ts,
+                "text": text
+            })
+        };
+        let body = [
+            unit_for(
+                "0123456789abcdef",
+                "aaaaaaaa-1111",
+                "2026-08-02T10:00:00.000Z",
+                FORGOTTEN,
+            ),
+            unit_for(
+                "fedcba9876543210",
+                "bbbbbbbb-2222",
+                "2026-08-02T11:00:00.000Z",
+                REPLACED,
+            ),
+            unit_for(
+                "1111222233334444",
+                "cccccccc-3333",
+                "2026-08-02T12:00:00.000Z",
+                CURRENT,
+            ),
+        ]
+        .iter()
+        .map(|unit| serde_json::to_string(unit).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(store.units_path(), body).unwrap();
+        crate::lifecycle::forget(
+            &store,
+            &["0123456789abcdef".to_string()],
+            "wrong fix",
+            CALLER,
+        )
+        .unwrap();
+        crate::lifecycle::supersede(
+            &store,
+            &["fedcba9876543210".to_string()],
+            "1111222233334444",
+            CALLER,
+        )
+        .unwrap();
+        write_marker_fixture(&store, "2026-08-01T00:00:00.000Z", 3);
+
+        let outcome = run(&store, &request()).unwrap();
+
+        assert_eq!(outcome.count, 1);
+        let block = outcome.block.as_deref().expect("injected block");
+        assert!(block.contains(CURRENT));
+        assert!(!block.contains(FORGOTTEN));
+        assert!(!block.contains(REPLACED));
     }
 
     #[test]

@@ -300,15 +300,21 @@ mod tests {
             [
                 "qol-memory__ask",
                 "qol-memory__status",
-                "qol-memory__capture"
+                "qol-memory__capture",
+                "qol-memory__supersede",
+                "qol-memory__forget"
             ]
         );
         assert_eq!(bindings[0].kind, Invocation::Query);
         assert_eq!(bindings[1].kind, Invocation::Query);
-        assert_eq!(bindings[2].kind, Invocation::Action);
+        assert!(bindings[2..]
+            .iter()
+            .all(|binding| binding.kind == Invocation::Action));
         assert!(bindings[0].accepts_agent_home);
         assert!(!bindings[1].accepts_agent_home);
-        assert!(bindings[2].accepts_agent_home);
+        assert!(bindings[2..]
+            .iter()
+            .all(|binding| binding.accepts_agent_home));
         let ask = &runtime.queries["ask"];
         let mut published = ask.input.clone().unwrap();
         published.shift_remove("agent_home");
