@@ -8,6 +8,12 @@ version = "0.106.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+corner = "core"
+service_commands = "core"
+switchboard_model = "core"
+switchboard_effort = "core"
+
 [runtime]
 command = "qol-cli-sessions"
 

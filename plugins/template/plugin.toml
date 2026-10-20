@@ -11,6 +11,9 @@ version = "0.2.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+general = "core"
+
 [runtime]
 command = "qol-template"
 

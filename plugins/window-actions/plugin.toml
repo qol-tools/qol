@@ -8,6 +8,16 @@ version = "2.70.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+center_mode = "core"
+center_width_px = "core"
+center_height_px = "core"
+center_width_percent = "core"
+center_height_percent = "core"
+snap_fraction = "core"
+reveal_taskbar_after_move = "core"
+glide_speed_px_per_second = "core"
+
 [runtime]
 command = "qol-window-actions"
 

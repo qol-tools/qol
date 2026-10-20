@@ -8,6 +8,10 @@ version = "1.69.0"
 author = "KMRH47"
 platforms = ["macos", "linux", "windows"]
 
+[config.scope]
+tempDir = "device"
+apps = "core"
+
 [runtime]
 command = "qol-ide-checkout"
 

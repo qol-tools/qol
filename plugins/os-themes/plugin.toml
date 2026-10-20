@@ -8,6 +8,21 @@ version = "0.75.0"
 author = "KMRH47"
 platforms = ["linux", "windows"]
 
+[config.scope]
+enabled = "core"
+pause_in_games = "core"
+pause_in_fullscreen = "core"
+shake_strictness = "core"
+regrow_strictness = "core"
+regrow_min_extent_px = "core"
+shake_min_extent_px = "core"
+shake_window_ms = "core"
+scale_factor = "core"
+calm_duration_ms = "core"
+grow_ms = "core"
+shrink_ms = "core"
+tuning_revision = "core"
+
 [runtime]
 command = "qol-os-themes"
 

@@ -8,6 +8,16 @@ version = "0.72.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+adapter = "device"
+managed_devices = "device"
+auto_reconnect = "core"
+power_on_adapter = "core"
+retry_initial_seconds = "core"
+retry_max_seconds = "core"
+set_default_output = "core"
+auto_reclaim_on_play = "core"
+
 [runtime]
 command = "qol-bluetooth"
 

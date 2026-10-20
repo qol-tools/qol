@@ -111,6 +111,8 @@ doctor = true
 [config.scope]
 output = "device"
 input = "device"
+volume = "device"
+input_volume = "device"
 
 [menu]
 label = "Sound"

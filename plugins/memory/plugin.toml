@@ -8,6 +8,11 @@ version = "0.40.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+verify_answers = "core"
+verifier_endpoint = "device"
+notes_runs_kept = "core"
+
 [runtime]
 command = "qol-memory"
 

@@ -6,7 +6,9 @@ mod store;
 
 pub use resolver::{classify_os_bucket, resolve_plugin_config, PluginConfigResolution};
 pub(crate) use runtime_cache::{ActionCacheStatus, ManifestIdentity};
-pub use scope::{merge_slices, split_by_declarations, split_by_scope, ConfigSlices};
+pub use scope::{
+    merge_declared_slices, merge_slices, split_by_declarations, split_by_scope, ConfigSlices,
+};
 
 #[cfg(test)]
 mod tests;
@@ -953,7 +955,9 @@ pub fn load_plugin_config_merged(
     runtime_cache::record_profile_read();
     let paths = scope_store.plugin_config_slice_paths(uid, lock_entry, manifest)?;
     let slices = store::read_scoped_slices(&paths)?;
-    Ok(merge_slices(&slices))
+    let default_decl = crate::plugins::manifest::ConfigDeclarations::default();
+    let decl = manifest.map(|m| &m.config).unwrap_or(&default_decl);
+    Ok(merge_declared_slices(&slices, decl))
 }
 
 pub fn save_plugin_config_split(

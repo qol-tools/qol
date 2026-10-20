@@ -8,6 +8,12 @@ version = "0.10.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+max_clips = "core"
+max_age_days = "core"
+keep_secrets = "core"
+secret_seconds = "core"
+
 [runtime]
 command = "qol-clipboard"
 
