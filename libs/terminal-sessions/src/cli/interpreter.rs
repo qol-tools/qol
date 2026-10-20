@@ -9,9 +9,9 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliToolId,
+    ChatTurn, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliResumeSettings, CliRuntimeState,
+    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,8 +194,8 @@ impl CliSessionInterpreter {
         self.resume_args_for(tool, "").is_some()
     }
 
-    pub fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
-        self.strategy_for(session).permission_mode(session)
+    pub fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
+        self.strategy_for(session).resume_settings(session)
     }
 
     pub fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

@@ -675,6 +675,13 @@ impl PendingBridgeStore {
             .unwrap_or(Role::Architect))
     }
 
+    pub(super) fn recorded_role(&self, binding: &SessionBinding) -> Option<Role> {
+        let encoded = fs::read_to_string(self.role_file_for(binding)).ok()?;
+        serde_json::from_str::<StoredRole>(&encoded)
+            .ok()
+            .map(|stored| stored.role)
+    }
+
     pub(super) fn pending_rounds(&self) -> Result<Vec<PendingRound>> {
         let mut rounds = self
             .open_checkpoints(None)?
@@ -3324,6 +3331,34 @@ mod tests {
             store.role_file_for(&corrupt).exists(),
             "the checkpoint sweep must never delete role records"
         );
+    }
+
+    #[test]
+    fn the_recorded_role_reads_without_the_role_lock_and_never_creates_a_file() {
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = root.path().join("pending");
+        let store = PendingBridgeStore::with_dir(dir.clone());
+        let lane = SessionBinding::from_str("v1:fake:1:100").unwrap();
+        let architect = SessionBinding::from_str("v1:fake:2:200").unwrap();
+        let missing = SessionBinding::from_str("v1:fake:3:300").unwrap();
+
+        assert_eq!(store.recorded_role(&missing), None);
+        assert!(
+            !dir.exists(),
+            "reading a missing record must not create the pending dir"
+        );
+        store.set_role(&lane, Role::Lane).unwrap();
+        store.set_role(&architect, Role::Architect).unwrap();
+        let before = fs::read_dir(&dir).unwrap().count();
+        assert_eq!(store.recorded_role(&lane), Some(Role::Lane));
+        assert_eq!(store.recorded_role(&architect), Some(Role::Architect));
+        assert_eq!(store.recorded_role(&missing), None);
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            before,
+            "reading a role must not create a lock or record file"
+        );
+        assert!(!store.role_lock_for(&missing).exists());
     }
 
     #[test]

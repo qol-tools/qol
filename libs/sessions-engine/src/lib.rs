@@ -32,6 +32,7 @@ mod mailbox;
 use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
+pub mod resume;
 mod spawn;
 pub mod switchboard;
 mod watch;
@@ -46,6 +47,11 @@ pub fn mail_counts(key: &str) -> (usize, usize) {
     mailbox::MailboxStore::system()
         .and_then(|mail| mail.counts(key))
         .unwrap_or_default()
+}
+
+pub fn is_lane(binding: &SessionBinding) -> bool {
+    bridge::PendingBridgeStore::system()
+        .is_ok_and(|store| store.recorded_role(binding) == Some(bridge::Role::Lane))
 }
 
 pub struct SessionSubcommand {
@@ -329,7 +335,15 @@ Details:
   fork --blank launches a fresh session with no brief, no chat copy and no
   launch prompt, so the user types its first message.
   switchboard opens the one control chat per machine, or focuses the live
-  one; qol sessions switchboard help lists its flags.
+  one; qol sessions switchboard help lists its flags. It lists the sessions
+  the CLI Sessions daemon saw close in the last 14 days with sessions_closed
+  and brings one back in a new tab with session_reopen. sessions_closed
+  returns the newest 20 by default (`limit` takes 1 to 100), filters them
+  with `query`, and leaves out lanes unless `include_lanes` is true, along
+  with conversations a live session holds, ones a park still waits on and
+  ones whose cwd is gone, counting what it left out. session_reopen resumes
+  with the recorded permission mode, model, effort and account, and clears
+  the record only once the new tab reports the conversation.
   Sessions message each other only through the session_send, session_inbox
   and session_board agent tools, addressed by spawn key. session_send
   reaches a session's parent, its siblings and the switchboard, and the
@@ -1523,7 +1537,7 @@ mod tests {
         assert!(help.contains(
             "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
-        assert!(help.contains("sessions_list, session_spawn"));
+        assert!(help.contains("sessions_list, sessions_closed, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
         assert!(help.contains("qol sessions loop-close <session> --completion-marker MARKER"));
     }

@@ -8,6 +8,7 @@ use serde::Deserialize;
 pub(super) struct ClaudeSessionLocation {
     pub external_id: String,
     pub transcript_path: PathBuf,
+    pub config_dir: Option<PathBuf>,
 }
 
 pub(super) trait ClaudeEnvironment: Send + Sync {
@@ -36,9 +37,11 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
             .join("projects")
             .join(project)
             .join(format!("{}.jsonl", record.session_id));
+        let config_dir = custom_config_dir(&home);
         transcript_path.is_file().then_some(ClaudeSessionLocation {
             external_id: record.session_id,
             transcript_path,
+            config_dir,
         })
     }
 
@@ -51,6 +54,11 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
         read_record(&Registry::load().current(Harness::Claude).path, pid)
             .is_some_and(|record| record.busy())
     }
+}
+
+fn custom_config_dir(home: &Path) -> Option<PathBuf> {
+    let builtin = dirs::home_dir().map(|user_home| Harness::Claude.default_home(&user_home));
+    (builtin.as_deref() != Some(home)).then(|| home.to_path_buf())
 }
 
 fn read_record(home: &Path, pid: i32) -> Option<ClaudeSessionRecord> {
@@ -180,5 +188,17 @@ mod tests {
             location.transcript_path,
             home.join("projects").join("-work-proj").join("s-7.jsonl")
         );
+        assert_eq!(location.config_dir, Some(home));
+    }
+
+    #[test]
+    fn the_builtin_claude_home_needs_no_config_dir() {
+        let user_home = dirs::home_dir().unwrap();
+        assert_eq!(
+            custom_config_dir(&Harness::Claude.default_home(&user_home)),
+            None
+        );
+        let work = user_home.join(".claude-work");
+        assert_eq!(custom_config_dir(&work), Some(work));
     }
 }

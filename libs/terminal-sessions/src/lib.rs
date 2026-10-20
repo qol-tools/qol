@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod cli;
+pub mod closed;
 pub mod console;
 mod error;
 pub mod kitty;

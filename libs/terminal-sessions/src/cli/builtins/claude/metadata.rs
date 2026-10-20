@@ -10,7 +10,8 @@ use serde_json::Value;
 use qol_agent_homes::{Harness, Registry};
 
 use crate::cli::chat::{read_chat, text_blocks, ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
-use crate::cli::{tail, CliActivityEvidence, CliRuntimeState};
+use crate::cli::launch_flags::EFFORT_LEVELS;
+use crate::cli::{tail, CliActivityEvidence, CliResumeSettings, CliRuntimeState};
 use crate::SessionFacts;
 
 use super::environment::{ClaudeEnvironment, ClaudeSessionLocation};
@@ -52,11 +53,26 @@ struct FileSignature {
     length: u64,
 }
 
+#[derive(Clone)]
 struct CachedFacts {
     signature: FileSignature,
     scanned_length: u64,
+    transcript: TranscriptFacts,
+}
+
+#[derive(Clone, Default)]
+struct TranscriptFacts {
     title: Option<String>,
     has_message: bool,
+    permission_mode: Option<String>,
+    request: Option<RequestTier>,
+    assistant_model: Option<String>,
+}
+
+#[derive(Clone)]
+struct RequestTier {
+    model: String,
+    effort: Option<String>,
 }
 
 impl ClaudeMetadataResolver {
@@ -69,7 +85,10 @@ impl ClaudeMetadataResolver {
         }
     }
 
-    pub fn resolve(&self, session: &SessionFacts) -> ClaudeMetadata {
+    fn located_facts(
+        &self,
+        session: &SessionFacts,
+    ) -> (Option<ClaudeSessionLocation>, Option<CachedFacts>) {
         let mut cache = self.cache.lock().ok();
         let location = cache
             .as_mut()
@@ -79,11 +98,16 @@ impl ClaudeMetadataResolver {
                 .as_ref()
                 .and_then(|location| cached_facts(&location.transcript_path, cache))
         });
+        (location, facts)
+    }
+
+    pub fn resolve(&self, session: &SessionFacts) -> ClaudeMetadata {
+        let (location, facts) = self.located_facts(session);
         let activity = facts
             .as_ref()
             .map(|facts| CliActivityEvidence {
                 file_fresh: recently_active(facts.signature.modified),
-                file_has_work: Some(facts.has_message),
+                file_has_work: Some(facts.transcript.has_message),
                 file_quiet_secs: quiet_secs(facts.signature.modified),
             })
             .unwrap_or_default();
@@ -95,11 +119,24 @@ impl ClaudeMetadataResolver {
             })
             .unwrap_or(CliRuntimeState::Unknown);
         ClaudeMetadata {
-            custom_title: facts.as_ref().and_then(|facts| facts.title.clone()),
+            custom_title: facts.and_then(|facts| facts.transcript.title),
             external_id: location.map(|location| location.external_id),
             has_activity: activity.combined(),
             runtime,
             activity,
+        }
+    }
+
+    pub fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
+        let (location, facts) = self.located_facts(session);
+        let transcript = facts.map(|facts| facts.transcript).unwrap_or_default();
+        CliResumeSettings {
+            model: transcript.model(),
+            effort: transcript.request.and_then(|request| request.effort),
+            permission_mode: transcript.permission_mode,
+            claude_config_dir: location
+                .and_then(|location| location.config_dir)
+                .and_then(|directory| directory.to_str().map(str::to_owned)),
         }
     }
 
@@ -189,64 +226,118 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
     let signature = file_signature(path)?;
     if let Some(entry) = cache.facts.get(path) {
         if entry.signature == signature {
-            return Some(clone_facts(entry));
+            return Some(entry.clone());
         }
         if signature.length > entry.signature.length
             && entry.scanned_length == entry.signature.length
         {
-            let title = latest_custom_title_since(path, entry.scanned_length)
-                .or_else(|| entry.title.clone());
-            let has_message = entry.has_message || any_message_since(path, entry.scanned_length);
+            let mut transcript = entry.transcript.clone();
+            absorb_appended(path, entry.scanned_length, &mut transcript);
             let facts = CachedFacts {
                 signature,
                 scanned_length: tail::complete_length(path).unwrap_or(0),
-                title,
-                has_message,
+                transcript,
             };
-            cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
+            cache.facts.insert(path.to_path_buf(), facts.clone());
             return Some(facts);
         }
     }
+    let mut transcript = TranscriptFacts::default();
+    absorb_backwards(path, &mut transcript);
     let facts = CachedFacts {
         signature,
         scanned_length: tail::complete_length(path).unwrap_or(0),
-        title: latest_custom_title(path),
-        has_message: any_message(path),
+        transcript,
     };
-    cache.facts.insert(path.to_path_buf(), clone_facts(&facts));
+    cache.facts.insert(path.to_path_buf(), facts.clone());
     Some(facts)
 }
 
-fn clone_facts(facts: &CachedFacts) -> CachedFacts {
-    CachedFacts {
-        signature: facts.signature,
-        scanned_length: facts.scanned_length,
-        title: facts.title.clone(),
-        has_message: facts.has_message,
+impl TranscriptFacts {
+    fn model(&self) -> Option<String> {
+        self.request
+            .as_ref()
+            .map(|request| request.model.clone())
+            .or_else(|| self.assistant_model.clone())
+    }
+
+    fn complete(&self) -> bool {
+        self.title.is_some()
+            && self.has_message
+            && self.permission_mode.is_some()
+            && self.request.is_some()
+    }
+
+    fn absorb(&mut self, line: &[u8], newer: bool) {
+        self.has_message = self.has_message || is_message(line);
+        let title = (newer || self.title.is_none()) && contains_bytes(line, CUSTOM_TITLE_TAG);
+        let mode =
+            (newer || self.permission_mode.is_none()) && contains_bytes(line, PERMISSION_MODE_KEY);
+        let request = (newer || self.request.is_none()) && contains_bytes(line, API_REQUEST_TAG);
+        let assistant = self.request.is_none()
+            && (newer || self.assistant_model.is_none())
+            && contains_bytes(line, ASSISTANT_TAG);
+        if !(title || mode || request || assistant) {
+            return;
+        }
+        let Ok(value) = serde_json::from_slice::<Value>(line) else {
+            return;
+        };
+        if let Some(found) = title.then(|| custom_title(&value)).flatten() {
+            self.title = Some(found);
+        }
+        if let Some(found) = mode.then(|| permission_mode(&value)).flatten() {
+            self.permission_mode = Some(found);
+        }
+        if let Some(found) = request.then(|| request_tier(&value)).flatten() {
+            self.request = Some(found);
+        }
+        if let Some(found) = assistant.then(|| main_thread_model(&value)).flatten() {
+            self.assistant_model = Some(found);
+        }
     }
 }
 
-fn any_message(path: &Path) -> bool {
-    let Ok(file) = fs::File::open(path) else {
-        return false;
-    };
-    std::io::BufRead::lines(std::io::BufReader::new(file))
-        .map_while(Result::ok)
-        .any(|line| is_message(line.as_bytes()))
-}
+const CUSTOM_TITLE_TAG: &[u8] = b"\"type\":\"custom-title\"";
+const PERMISSION_MODE_KEY: &[u8] = b"\"permissionMode\"";
+const API_REQUEST_TAG: &[u8] = b"\"type\":\"api-request\"";
+const ASSISTANT_TAG: &[u8] = b"\"type\":\"assistant\"";
+const MAIN_THREAD_QUERY_SOURCES: [&str; 2] = ["repl_main_thread", "sdk"];
 
-fn any_message_since(path: &Path, offset: u64) -> bool {
-    let Ok(mut file) = fs::File::open(path) else {
-        return false;
-    };
-    if file.seek(SeekFrom::Start(offset)).is_err() {
-        return false;
-    }
+fn absorb_appended(path: &Path, offset: u64, transcript: &mut TranscriptFacts) -> Option<()> {
+    let mut file = fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(offset)).ok()?;
     let mut appended = Vec::new();
-    if file.read_to_end(&mut appended).is_err() {
-        return false;
+    file.read_to_end(&mut appended).ok()?;
+    for line in appended.split(|byte| *byte == b'\n') {
+        transcript.absorb(line, true);
     }
-    appended.split(|byte| *byte == b'\n').any(is_message)
+    Some(())
+}
+
+fn absorb_backwards(path: &Path, transcript: &mut TranscriptFacts) -> Option<()> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut cursor = file.metadata().ok()?.len();
+    let mut suffix = Vec::new();
+    while cursor > 0 {
+        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
+        let length = usize::try_from(cursor - start).ok()?;
+        let mut chunk = vec![0; length];
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.read_exact(&mut chunk).ok()?;
+        chunk.extend_from_slice(&suffix);
+        let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        let complete_from = usize::from(start > 0);
+        for line in lines[complete_from..].iter().rev() {
+            transcript.absorb(line, false);
+            if transcript.complete() {
+                return Some(());
+            }
+        }
+        suffix = lines.first().copied().unwrap_or_default().to_vec();
+        cursor = start;
+    }
+    Some(())
 }
 
 fn is_message(line: &[u8]) -> bool {
@@ -265,41 +356,6 @@ fn file_signature(path: &Path) -> Option<FileSignature> {
         modified: metadata.modified().ok(),
         length: metadata.len(),
     })
-}
-
-fn latest_custom_title(path: &Path) -> Option<String> {
-    let mut file = fs::File::open(path).ok()?;
-    let mut cursor = file.metadata().ok()?.len();
-    let mut suffix = Vec::new();
-    while cursor > 0 {
-        let start = cursor.saturating_sub(REVERSE_READ_CHUNK);
-        let length = usize::try_from(cursor - start).ok()?;
-        let mut chunk = vec![0; length];
-        file.seek(SeekFrom::Start(start)).ok()?;
-        file.read_exact(&mut chunk).ok()?;
-        chunk.extend_from_slice(&suffix);
-        let lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
-        let complete_from = usize::from(start > 0);
-        for line in lines[complete_from..].iter().rev() {
-            if let Some(title) = custom_title(line) {
-                return Some(title);
-            }
-        }
-        suffix = lines.first().copied().unwrap_or_default().to_vec();
-        cursor = start;
-    }
-    custom_title(&suffix)
-}
-
-fn latest_custom_title_since(path: &Path, offset: u64) -> Option<String> {
-    let mut file = fs::File::open(path).ok()?;
-    file.seek(SeekFrom::Start(offset)).ok()?;
-    let mut appended = Vec::new();
-    file.read_to_end(&mut appended).ok()?;
-    appended
-        .split(|byte| *byte == b'\n')
-        .filter_map(custom_title)
-        .next_back()
 }
 
 fn tail_runtime(path: &Path) -> CliRuntimeState {
@@ -377,8 +433,7 @@ fn is_interrupt_note(value: &Value) -> bool {
         })
 }
 
-fn custom_title(line: &[u8]) -> Option<String> {
-    let value = serde_json::from_slice::<Value>(line).ok()?;
+fn custom_title(value: &Value) -> Option<String> {
     if value.get("type").and_then(Value::as_str) != Some("custom-title") {
         return None;
     }
@@ -390,18 +445,34 @@ fn custom_title(line: &[u8]) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn permission_mode(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
-    text.lines()
-        .rev()
-        .filter(|line| line.contains("\"permissionMode\""))
-        .find_map(|line| {
-            serde_json::from_str::<Value>(line)
-                .ok()?
-                .get("permissionMode")?
-                .as_str()
-                .map(str::to_owned)
-        })
+fn permission_mode(value: &Value) -> Option<String> {
+    value
+        .get("permissionMode")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn request_tier(value: &Value) -> Option<RequestTier> {
+    if value.get("type").and_then(Value::as_str) != Some("api-request")
+        || !value
+            .get("querySource")
+            .and_then(Value::as_str)
+            .is_some_and(|source| MAIN_THREAD_QUERY_SOURCES.contains(&source))
+    {
+        return None;
+    }
+    let model = value
+        .pointer("/params/model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())?;
+    Some(RequestTier {
+        model: model.to_owned(),
+        effort: value
+            .pointer("/params/output_config/effort")
+            .and_then(Value::as_str)
+            .filter(|effort| EFFORT_LEVELS.contains(effort))
+            .map(str::to_owned),
+    })
 }
 
 pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
@@ -410,19 +481,23 @@ pub(super) fn chat_transcript(path: &Path) -> Option<Vec<ChatTurn>> {
 
 pub(super) fn current_model(path: &Path) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
-    contents.lines().rev().find_map(|line| {
-        let value = serde_json::from_str::<Value>(line).ok()?;
-        if value.get("type").and_then(Value::as_str) != Some("assistant")
-            || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
-        {
-            return None;
-        }
-        value
-            .pointer("/message/model")
-            .and_then(Value::as_str)
-            .filter(|model| !model.is_empty() && !model.starts_with('<'))
-            .map(str::to_owned)
-    })
+    contents
+        .lines()
+        .rev()
+        .find_map(|line| main_thread_model(&serde_json::from_str::<Value>(line).ok()?))
+}
+
+fn main_thread_model(value: &Value) -> Option<String> {
+    if value.get("type").and_then(Value::as_str) != Some("assistant")
+        || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
+    {
+        return None;
+    }
+    value
+        .pointer("/message/model")
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty() && !model.starts_with('<'))
+        .map(str::to_owned)
 }
 
 fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {

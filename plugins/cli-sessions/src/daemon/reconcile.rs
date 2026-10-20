@@ -12,6 +12,7 @@ use qol_terminal_sessions::cli::{
 use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{SessionBinding, SessionId};
 
+use super::closed::ClosedLedger;
 use super::knocks;
 use super::screen_analysis::ScreenAnalysis;
 use crate::attention::{reduce_with_policy, Attention, Evidence, Reason, Reduction};
@@ -38,6 +39,7 @@ pub struct ReconcileCaches {
     bridges: LiveBridgeReader,
     parked_dir: Option<std::path::PathBuf>,
     messaging: Option<Messaging>,
+    closed: ClosedLedger,
 }
 
 impl ReconcileCaches {
@@ -46,6 +48,11 @@ impl ReconcileCaches {
             parked_dir,
             ..Self::default()
         }
+    }
+
+    pub fn with_closed_dir(mut self, dir: Option<std::path::PathBuf>) -> Self {
+        self.closed = ClosedLedger::with_dir(dir);
+        self
     }
 
     pub fn with_messaging(mut self) -> Self {
@@ -215,10 +222,14 @@ pub fn tick_with_caches(
         panes.len()
     );
     prune_missing(registry, caches, &panes);
+    caches.closed.retire_missing(&panes, wall_now);
     let mut open_conversations = HashSet::new();
 
     for pane in &panes {
         let cli_session = cli_interpreter.describe(pane);
+        caches
+            .closed
+            .observe(cli_interpreter, pane, &cli_session, wall_now);
         open_conversations.extend(cli_session.external_id.clone());
         #[cfg(debug_assertions)]
         let cli_tool = cli_session.tool.id.to_string();

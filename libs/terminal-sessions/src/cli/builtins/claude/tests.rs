@@ -6,7 +6,7 @@ use tempfile::TempDir;
 
 use crate::cli::CliSessionStrategy;
 use crate::cli::{
-    ChatRole, ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    ChatRole, ChatTurn, CliLaunchProgram, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
     CliSessionInterpreter, CliViewportState,
 };
 use crate::{BackendId, SessionCapabilities, SessionFacts, SessionId};
@@ -96,6 +96,7 @@ fn transcript_title_changes_refresh_semantic_identity() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript.clone(),
+            config_dir: None,
         },
     }));
 
@@ -131,6 +132,7 @@ fn transcript_activity_tracks_the_last_write() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript.clone(),
+            config_dir: None,
         },
     }));
 
@@ -162,6 +164,7 @@ fn transcript_without_messages_reads_idle_even_when_fresh() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
 
@@ -176,6 +179,7 @@ fn missing_transcript_has_no_activity_hint() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: root.path().join("missing.jsonl"),
+            config_dir: None,
         },
     }));
 
@@ -184,13 +188,14 @@ fn missing_transcript_has_no_activity_hint() {
 }
 
 #[test]
-fn permission_mode_is_the_latest_recorded_one_and_absent_without_one() {
+fn resume_permission_mode_is_the_latest_recorded_one_and_absent_without_one() {
     let root = TempDir::new().unwrap();
     let transcript = root.path().join("session.jsonl");
     let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript.clone(),
+            config_dir: None,
         },
     }));
     let cases = [
@@ -207,7 +212,168 @@ fn permission_mode_is_the_latest_recorded_one_and_absent_without_one() {
     ];
     for (content, expected) in cases {
         std::fs::write(&transcript, content).unwrap();
-        assert_eq!(strategy.permission_mode(&session()).as_deref(), expected);
+        assert_eq!(
+            strategy
+                .resume_settings(&session())
+                .permission_mode
+                .as_deref(),
+            expected
+        );
+    }
+}
+
+fn transcript_strategy(transcript: &std::path::Path) -> ClaudeStrategy {
+    ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+        location: ClaudeSessionLocation {
+            external_id: "session-7".to_owned(),
+            transcript_path: transcript.to_path_buf(),
+            config_dir: None,
+        },
+    }))
+}
+
+#[test]
+fn the_main_thread_api_request_sets_the_resume_tier_over_an_older_assistant_model() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    let cases = [
+        (
+            concat!(
+                r#"{"type":"assistant","message":{"model":"claude-haiku-5-5","content":[]}}"#,
+                "\n",
+                r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"max"}}}"#,
+                "\n",
+                r#"{"type":"api-request","querySource":"agent:custom","params":{"model":"claude-sonnet-5-5","output_config":{"effort":"low"}}}"#,
+                "\n",
+            ),
+            Some("claude-opus-5-5"),
+            Some("max"),
+        ),
+        (
+            concat!(
+                r#"{"type":"api-request","querySource":"sdk","params":{"model":"claude-sonnet-5-5","output_config":{"effort":"turbo"}}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"model":"claude-haiku-5-5","content":[]}}"#,
+                "\n",
+            ),
+            Some("claude-sonnet-5-5"),
+            None,
+        ),
+        (
+            concat!(
+                r#"{"type":"api-request","querySource":"compact","params":{"model":"claude-sonnet-5-5","output_config":{"effort":"low"}}}"#,
+                "\n",
+            ),
+            None,
+            None,
+        ),
+    ];
+    for (contents, model, effort) in cases {
+        std::fs::write(&transcript, contents).unwrap();
+        let settings = transcript_strategy(&transcript).resume_settings(&session());
+        assert_eq!(settings.model.as_deref(), model, "{contents}");
+        assert_eq!(settings.effort.as_deref(), effort, "{contents}");
+    }
+}
+
+#[test]
+fn without_an_api_request_the_resume_model_is_the_last_main_thread_assistant_model() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"assistant","message":{"model":"claude-sonnet-5-5","content":[]}}"#,
+            "\n",
+            r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-haiku-5-5","content":[]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        transcript_strategy(&transcript).resume_settings(&session()),
+        CliResumeSettings {
+            model: Some("claude-sonnet-5-5".to_owned()),
+            ..CliResumeSettings::default()
+        }
+    );
+}
+
+#[test]
+fn lines_appended_after_the_first_read_update_the_resume_settings() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"permission-mode","permissionMode":"plan","sessionId":"session-7"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"model":"claude-haiku-5-5","content":[]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let strategy = transcript_strategy(&transcript);
+    assert_eq!(
+        strategy.resume_settings(&session()),
+        CliResumeSettings {
+            permission_mode: Some("plan".to_owned()),
+            model: Some("claude-haiku-5-5".to_owned()),
+            ..CliResumeSettings::default()
+        }
+    );
+
+    let mut file = std::fs::File::options()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        concat!(
+            r#"{"type":"permission-mode","permissionMode":"bypassPermissions","sessionId":"session-7"}"#,
+            "\n",
+            r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"high"}}}"#,
+            "\n",
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+
+    assert_eq!(
+        strategy.resume_settings(&session()),
+        CliResumeSettings {
+            permission_mode: Some("bypassPermissions".to_owned()),
+            model: Some("claude-opus-5-5".to_owned()),
+            effort: Some("high".to_owned()),
+            claude_config_dir: None,
+        }
+    );
+}
+
+#[test]
+fn the_resume_config_dir_is_the_location_home_and_absent_for_the_builtin_one() {
+    let root = TempDir::new().unwrap();
+    let transcript = root.path().join("session.jsonl");
+    std::fs::write(&transcript, "{}\n").unwrap();
+    let home = root.path().join("claude-work");
+    let cases = [
+        (None, None),
+        (Some(home.clone()), Some(home.to_str().unwrap().to_owned())),
+    ];
+    for (config_dir, expected) in cases {
+        let strategy = ClaudeStrategy::with_environment(Arc::new(FakeEnvironment {
+            location: ClaudeSessionLocation {
+                external_id: "session-7".to_owned(),
+                transcript_path: transcript.clone(),
+                config_dir,
+            },
+        }));
+        assert_eq!(
+            strategy.resume_settings(&session()).claude_config_dir,
+            expected
+        );
     }
 }
 
@@ -219,6 +385,7 @@ fn transcript_tail_type_drives_the_runtime() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript.clone(),
+            config_dir: None,
         },
     }));
 
@@ -303,6 +470,7 @@ fn a_missed_transcript_lookup_is_retried_after_half_a_second_not_thirty_seconds(
     environment.answer(Some(ClaudeSessionLocation {
         external_id: "session-7".to_owned(),
         transcript_path: transcript.clone(),
+        config_dir: None,
     }));
     assert_eq!(
         strategy.metadata.subscription_path(&session()),
@@ -341,6 +509,7 @@ fn a_resolved_transcript_hit_stays_cached_without_another_scan() {
     environment.answer(Some(ClaudeSessionLocation {
         external_id: "session-7".to_owned(),
         transcript_path: transcript.clone(),
+        config_dir: None,
     }));
 
     assert_eq!(
@@ -384,6 +553,7 @@ fn a_missing_transcript_reads_unknown() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: root.path().join("missing.jsonl"),
+            config_dir: None,
         },
     }));
 
@@ -402,6 +572,7 @@ fn an_empty_transcript_reads_unknown() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
 
@@ -427,6 +598,7 @@ fn a_trailing_partial_line_does_not_change_the_runtime() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
 
@@ -458,6 +630,7 @@ fn claude_strategy_exposes_its_transcript_subscription() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
 
@@ -586,6 +759,7 @@ fn the_startup_placeholder_title_falls_back_to_the_spawn_key() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
 
@@ -678,6 +852,7 @@ fn chat_transcript_keeps_human_turns_and_drops_tool_and_harness_noise() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
     assert_eq!(strategy.chat_transcript(&session()), Some(expected));
@@ -771,6 +946,7 @@ fn current_model_is_the_last_main_thread_assistant_model() {
         location: ClaudeSessionLocation {
             external_id: "session-7".to_owned(),
             transcript_path: transcript,
+            config_dir: None,
         },
     }));
     assert_eq!(

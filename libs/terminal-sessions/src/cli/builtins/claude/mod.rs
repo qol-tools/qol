@@ -7,9 +7,10 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliDraftStash, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
-    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
-    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliDraftStash, CliLaunchProgram, CliResumeSettings, CliRuntimeState,
+    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
+    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool,
+    CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -114,8 +115,8 @@ impl CliSessionStrategy for ClaudeStrategy {
         Some(vec!["--resume".to_owned(), external_id.to_owned()])
     }
 
-    fn permission_mode(&self, session: &SessionFacts) -> Option<String> {
-        metadata::permission_mode(&self.metadata.subscription_path(session)?)
+    fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
+        self.metadata.resume_settings(session)
     }
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

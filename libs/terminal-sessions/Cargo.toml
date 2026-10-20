@@ -7,6 +7,7 @@ description = "Backend-neutral live terminal session discovery and interaction"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "6.0"
 qol-agent-homes.workspace = true
 qol-config.workspace = true
 qol-headless.workspace = true
@@ -40,7 +41,6 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
-dirs = "6.0"
 tempfile = "3.8"
 
 [lints.rust]

@@ -399,7 +399,7 @@ const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _o
 
 const EXECUTE_THROUGH_MCP: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_NAME, arguments: params } };
-      const response = JSON.parse(await run(["mcp"], 30_000, `${JSON.stringify(request)}\n`, signal));
+      const response = JSON.parse(await run(["mcp"], CALL_TIMEOUT, `${JSON.stringify(request)}\n`, signal));
       const result = response?.result;
       const text = result?.content?.[0]?.text;
       if (result?.isError || typeof text !== "string") throw new Error(text || `${TOOL_NAME} failed`);
@@ -429,8 +429,16 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
-        "session_send" | "session_inbox" | "session_board" => {
-            through_mcp = EXECUTE_THROUGH_MCP.replace("TOOL_NAME", &format!("{:?}", spec.name));
+        "session_send" | "session_inbox" | "session_board" | "sessions_closed"
+        | "session_reopen" => {
+            let timeout_ms = if spec.name == "session_reopen" {
+                "60_000"
+            } else {
+                "30_000"
+            };
+            through_mcp = EXECUTE_THROUGH_MCP
+                .replace("TOOL_NAME", &format!("{:?}", spec.name))
+                .replace("CALL_TIMEOUT", timeout_ms);
             through_mcp.as_str()
         }
         other => bail!("no pi adapter template for contract tool `{other}`"),
@@ -513,10 +521,17 @@ mod tests {
     #[test]
     fn pi_messaging_tools_call_the_sessions_mcp_server_by_name() {
         let source = pi_extension().expect("render");
-        for name in ["session_send", "session_inbox", "session_board"] {
+        for name in [
+            "session_send",
+            "session_inbox",
+            "session_board",
+            "sessions_closed",
+            "session_reopen",
+        ] {
             assert!(source.contains(&format!("params: {{ name: {name:?}, arguments: params }}")));
         }
         assert!(!source.contains("TOOL_NAME"));
+        assert!(!source.contains("CALL_TIMEOUT"));
     }
 
     #[test]
