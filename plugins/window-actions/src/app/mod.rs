@@ -84,7 +84,7 @@ impl Runtime {
                 let result = crate::platform::execute_action(&action, &self.store, &config);
                 timer.finish(&result);
                 if let Err(error) = result {
-                    log::warn!("{error}");
+                    log::error!("{action} failed: {error}");
                 }
                 true
             }

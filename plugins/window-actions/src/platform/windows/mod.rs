@@ -80,9 +80,8 @@ fn move_monitor(delta: i32) -> Result<(), String> {
     let maximized = window.is_maximized();
     let frame = window.frame().ok_or("Cannot read window geometry")?;
     let screens = win32::work_areas_left_to_right();
-    let Some(target) = layout::moved_to_monitor(frame, &screens, delta) else {
-        return Ok(());
-    };
+    let target =
+        layout::moved_to_monitor(frame, &screens, delta).map_err(|error| error.to_string())?;
     window.set_frame(target)?;
     if maximized {
         window.maximize();

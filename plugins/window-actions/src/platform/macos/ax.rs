@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::fmt;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -13,7 +14,7 @@ use super::objc::{
     CGWindowListCopyWindowInfo, CfGuard, AX_VALUE_TYPE_CG_POINT, AX_VALUE_TYPE_CG_SIZE,
     CG_WINDOW_LIST_EXCLUDE_DESKTOP, CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY,
 };
-use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred, trace_geometry};
+use super::trace::{timed_bool, timed_opt, timed_pid, timed_pred, timed_result, trace_geometry};
 
 const VERIFY_TIMEOUT: Duration = Duration::from_millis(120);
 const VERIFY_INTERVAL: Duration = Duration::from_millis(8);
@@ -29,8 +30,12 @@ enum GeometryOutcome {
 }
 
 impl GeometryOutcome {
-    fn applied(self) -> bool {
-        matches!(self, Self::Exact | Self::Constrained | Self::Adjusted)
+    fn verified(self) -> Result<(), GeometryError> {
+        match self {
+            Self::Exact | Self::Constrained | Self::Adjusted => Ok(()),
+            Self::Unchanged => Err(GeometryError::Unchanged),
+            Self::Unreadable => Err(GeometryError::Unreadable),
+        }
     }
 
     fn as_str(self) -> &'static str {
@@ -40,6 +45,29 @@ impl GeometryOutcome {
             Self::Adjusted => "adjusted",
             Self::Unchanged => "unchanged",
             Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GeometryError {
+    NoWindow,
+    Unencodable,
+    Rejected { attribute: &'static str, code: i32 },
+    Unchanged,
+    Unreadable,
+}
+
+impl fmt::Display for GeometryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoWindow => f.write_str("the application has no window to move"),
+            Self::Unencodable => f.write_str("the target frame could not be encoded"),
+            Self::Rejected { attribute, code } => {
+                write!(f, "the application rejected {attribute} (AXError {code})")
+            }
+            Self::Unchanged => f.write_str("the window did not move"),
+            Self::Unreadable => f.write_str("the window's frame could not be read back"),
         }
     }
 }
@@ -109,25 +137,25 @@ fn activate_app(pid: i32, app: *const c_void, options: usize) -> bool {
     timed_bool("activate_app", pid, || unsafe {
         let _ = set_ax_bool_attr(app, "AXFrontmost", true);
         qol_windowing::platform::macos::activation::ax_app_frontmost(pid);
-        if wait_for_app_active(pid) {
+        if wait_for_app_active(pid, app) {
             return true;
         }
         if let Some(ns_app) = ns_running_app(pid) {
             msg_bool_usize(ns_app, sel("activateWithOptions:"), options);
         }
-        wait_for_app_active(pid)
+        wait_for_app_active(pid, app)
     })
 }
 
-fn wait_for_app_active(pid: i32) -> bool {
-    if app_is_active(pid) {
+fn wait_for_app_active(pid: i32, app: *const c_void) -> bool {
+    if app_is_active(pid, app) {
         return true;
     }
 
     let deadline = Instant::now() + VERIFY_TIMEOUT;
     while Instant::now() < deadline {
         sleep(VERIFY_INTERVAL);
-        if app_is_active(pid) {
+        if app_is_active(pid, app) {
             return true;
         }
     }
@@ -135,21 +163,21 @@ fn wait_for_app_active(pid: i32) -> bool {
     false
 }
 
-fn app_is_active(pid: i32) -> bool {
-    ns_app_bool(pid, "isActive") || frontmost_pid() == Some(pid)
+fn app_is_active(pid: i32, app: *const c_void) -> bool {
+    frontmost_pid() == Some(pid) || ax_bool_attr_is(app, "AXFrontmost", true)
 }
 
 fn read_ax_position(win: *const c_void) -> Option<CGPoint> {
     let pos_ref = ax_attr(win, "AXPosition")?;
     let mut pos = CGPoint { x: 0.0, y: 0.0 };
-    unsafe {
+    let read = unsafe {
         AXValueGetValue(
             pos_ref.as_const(),
             AX_VALUE_TYPE_CG_POINT,
             &mut pos as *mut _ as *mut c_void,
-        );
-    }
-    Some(pos)
+        )
+    };
+    (read != 0).then_some(pos)
 }
 
 fn read_ax_size(win: *const c_void) -> Option<CGSize> {
@@ -158,14 +186,14 @@ fn read_ax_size(win: *const c_void) -> Option<CGSize> {
         width: 0.0,
         height: 0.0,
     };
-    unsafe {
+    let read = unsafe {
         AXValueGetValue(
             size_ref.as_const(),
             AX_VALUE_TYPE_CG_SIZE,
             &mut size as *mut _ as *mut c_void,
-        );
-    }
-    Some(size)
+        )
+    };
+    (read != 0).then_some(size)
 }
 
 fn read_window_rect(win: *const c_void) -> Option<super::screen::Rect> {
@@ -398,11 +426,12 @@ pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
     })
 }
 
-pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool {
-    timed_bool("set_pos_size", pid, || {
-        let Some(ft) = front_target(pid) else {
-            return false;
-        };
+pub(super) fn set_position_and_size(
+    pid: i32,
+    rect: super::screen::Rect,
+) -> Result<(), GeometryError> {
+    timed_result("set_pos_size", pid, || {
+        let ft = front_target(pid).ok_or(GeometryError::NoWindow)?;
         let before = read_window_rect(ft.win);
         let pos = CGPoint {
             x: rect.x,
@@ -412,33 +441,47 @@ pub(super) fn set_position_and_size(pid: i32, rect: super::screen::Rect) -> bool
             width: rect.w,
             height: rect.h,
         };
-        let pos_val = CfGuard::new(unsafe {
-            AXValueCreate(AX_VALUE_TYPE_CG_POINT, &pos as *const _ as *const c_void)
-        })
-        .unwrap();
-        let size_val = CfGuard::new(unsafe {
-            AXValueCreate(AX_VALUE_TYPE_CG_SIZE, &size as *const _ as *const c_void)
-        })
-        .unwrap();
+        let pos_val = ax_value(AX_VALUE_TYPE_CG_POINT, &pos)?;
+        let size_val = ax_value(AX_VALUE_TYPE_CG_SIZE, &size)?;
+        let ax_pos = CfGuard::new(cfstr("AXPosition")).ok_or(GeometryError::Unencodable)?;
+        let ax_size = CfGuard::new(cfstr("AXSize")).ok_or(GeometryError::Unencodable)?;
 
-        let ax_pos = CfGuard::new(cfstr("AXPosition")).unwrap();
-        let ax_size = CfGuard::new(cfstr("AXSize")).unwrap();
-
-        let (size_before, position, size_after) = unsafe {
-            (
-                AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
-                AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const()),
-                AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
-            )
+        let codes = unsafe {
+            [
+                (
+                    "AXSize",
+                    AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
+                ),
+                (
+                    "AXPosition",
+                    AXUIElementSetAttributeValue(ft.win, ax_pos.as_const(), pos_val.as_const()),
+                ),
+                (
+                    "AXSize",
+                    AXUIElementSetAttributeValue(ft.win, ax_size.as_const(), size_val.as_const()),
+                ),
+            ]
         };
-        if size_before != 0 || position != 0 || size_after != 0 {
-            return false;
-        }
+        first_rejection(codes)?;
         let actual = read_window_rect(ft.win);
         let outcome = geometry_outcome(before, actual, rect);
         trace_geometry(pid, rect, actual, outcome.as_str());
-        outcome.applied()
+        outcome.verified()
     })
+}
+
+fn ax_value<T>(value_type: u32, value: &T) -> Result<CfGuard, GeometryError> {
+    CfGuard::new(unsafe { AXValueCreate(value_type, value as *const T as *const c_void) })
+        .ok_or(GeometryError::Unencodable)
+}
+
+fn first_rejection(
+    codes: impl IntoIterator<Item = (&'static str, i32)>,
+) -> Result<(), GeometryError> {
+    match codes.into_iter().find(|(_, code)| *code != 0) {
+        Some((attribute, code)) => Err(GeometryError::Rejected { attribute, code }),
+        None => Ok(()),
+    }
 }
 
 fn geometry_outcome(
@@ -514,7 +557,7 @@ fn hold_minimized(pid: i32, ft: &FrontTarget, branch: &str) {
     let app = ft.app.as_ptr();
     let outcome = if matches!(branch, "hide" | "hide-fallback") {
         hold_gone(
-            || app_is_hidden(pid, app),
+            || app_is_hidden(app),
             || {
                 let _ = set_ax_bool_attr(app, "AXHidden", true);
                 ns_hide_app(pid)
@@ -546,34 +589,34 @@ fn hide_then_minimize(pid: i32, ft: &FrontTarget) -> (&'static str, bool) {
 fn hide_app(pid: i32, app: *const c_void) -> bool {
     timed_bool("hide_app", pid, || {
         let _ = set_ax_bool_attr(app, "AXHidden", true);
-        if wait_for_app_hidden(pid, app, true) {
+        if wait_for_app_hidden(app, true) {
             return true;
         }
         let _ = ns_hide_app(pid);
-        wait_for_app_hidden(pid, app, true)
+        wait_for_app_hidden(app, true)
     })
 }
 
 fn show_app(pid: i32, app: *const c_void) -> bool {
     timed_bool("show_app", pid, || {
         let _ = set_ax_bool_attr(app, "AXHidden", false);
-        if wait_for_app_hidden(pid, app, false) {
+        if wait_for_app_hidden(app, false) {
             return true;
         }
         let _ = ns_unhide_app(pid);
-        wait_for_app_hidden(pid, app, false)
+        wait_for_app_hidden(app, false)
     })
 }
 
-fn wait_for_app_hidden(pid: i32, app: *const c_void, expected: bool) -> bool {
-    if app_is_hidden(pid, app) == expected {
+fn wait_for_app_hidden(app: *const c_void, expected: bool) -> bool {
+    if app_is_hidden(app) == expected {
         return true;
     }
 
     let deadline = Instant::now() + VERIFY_TIMEOUT;
     while Instant::now() < deadline {
         sleep(VERIFY_INTERVAL);
-        if app_is_hidden(pid, app) == expected {
+        if app_is_hidden(app) == expected {
             return true;
         }
     }
@@ -581,8 +624,8 @@ fn wait_for_app_hidden(pid: i32, app: *const c_void, expected: bool) -> bool {
     false
 }
 
-fn app_is_hidden(pid: i32, app: *const c_void) -> bool {
-    ax_bool_attr_is(app, "AXHidden", true) || ns_app_is_hidden(pid)
+fn app_is_hidden(app: *const c_void) -> bool {
+    ax_bool_attr_is(app, "AXHidden", true)
 }
 
 fn focus_window(win: *const c_void) {
@@ -596,10 +639,6 @@ fn ns_hide_app(pid: i32) -> bool {
 
 fn ns_unhide_app(pid: i32) -> bool {
     timed_bool("ns_unhide", pid, || ns_app_bool(pid, "unhide"))
-}
-
-fn ns_app_is_hidden(pid: i32) -> bool {
-    ns_app_bool(pid, "isHidden")
 }
 
 fn ns_app_bool(pid: i32, selector: &str) -> bool {
@@ -670,7 +709,7 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
         };
 
         // Check if app was hidden (AXHidden) vs individual window minimized (AXMinimized).
-        let was_hidden = app_is_hidden(pid, app.as_ptr());
+        let was_hidden = app_is_hidden(app.as_ptr());
 
         if was_hidden {
             let _ = show_app(pid, app.as_ptr());
@@ -709,14 +748,15 @@ pub(super) fn unminimize_and_raise(pid: i32) -> bool {
         }
 
         // Only raise the restored window, not all app windows.
-        restored && wait_for_app_active(pid)
+        restored && wait_for_app_active(pid, app.as_ptr())
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        geometry_outcome, layer_zero_pids, rect_matches, select_normal_window_pid, GeometryOutcome,
+        first_rejection, geometry_outcome, layer_zero_pids, rect_matches, select_normal_window_pid,
+        GeometryError, GeometryOutcome,
     };
     use crate::platform::macos::screen::Rect;
 
@@ -902,6 +942,51 @@ mod tests {
                 outcome,
                 "{name}"
             );
+        }
+    }
+
+    #[test]
+    fn only_a_frame_the_window_took_counts_as_a_move() {
+        let cases = [
+            (GeometryOutcome::Exact, Ok(())),
+            (GeometryOutcome::Constrained, Ok(())),
+            (GeometryOutcome::Adjusted, Ok(())),
+            (GeometryOutcome::Unchanged, Err(GeometryError::Unchanged)),
+            (GeometryOutcome::Unreadable, Err(GeometryError::Unreadable)),
+        ];
+        for (outcome, expected) in cases {
+            assert_eq!(outcome.verified(), expected, "{}", outcome.as_str());
+        }
+    }
+
+    #[test]
+    fn the_first_rejected_attribute_names_the_failure() {
+        let cases = [
+            ("all accepted", [0, 0, 0], Ok(())),
+            (
+                "size refused",
+                [-25205, 0, -25205],
+                Err(GeometryError::Rejected {
+                    attribute: "AXSize",
+                    code: -25205,
+                }),
+            ),
+            (
+                "position refused",
+                [0, -25200, 0],
+                Err(GeometryError::Rejected {
+                    attribute: "AXPosition",
+                    code: -25200,
+                }),
+            ),
+        ];
+        for (name, [size_before, position, size_after], expected) in cases {
+            let codes = [
+                ("AXSize", size_before),
+                ("AXPosition", position),
+                ("AXSize", size_after),
+            ];
+            assert_eq!(first_rejection(codes), expected, "{name}");
         }
     }
 

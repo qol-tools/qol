@@ -9,16 +9,13 @@ fn frontmost_screen() -> Result<(i32, Rect), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
     let win = ax::front_window_rect(pid).ok_or("Cannot read window geometry")?;
     let scr = screen::screen_for_point(win.x + win.w / 2.0, win.y + win.h / 2.0)
-        .ok_or("Cannot determine screen")?;
+        .map_err(|error| format!("Cannot determine screen: {error}"))?;
     Ok((pid, scr))
 }
 
 pub(super) fn ax_set(pid: i32, rect: Rect) -> Result<(), String> {
-    if ax::set_position_and_size(pid, rect) {
-        Ok(())
-    } else {
-        Err("Failed to set window geometry".into())
-    }
+    ax::set_position_and_size(pid, rect)
+        .map_err(|error| format!("Failed to set window geometry: {error}"))
 }
 
 fn frame(rect: Rect) -> WindowRect {
@@ -76,12 +73,11 @@ fn move_monitor(delta: i32) -> Result<(), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
     let win = ax::front_window_rect(pid).ok_or("Cannot read window geometry")?;
     let screens: Vec<WindowRect> = screen::all_screens_sorted()
-        .ok_or("Cannot read display layout")?
+        .map_err(|error| format!("Cannot read display layout: {error}"))?
         .into_iter()
         .map(frame)
         .collect();
-    match layout::moved_to_monitor(frame(win), &screens, delta) {
-        Some(target) => ax_set(pid, rect(target)),
-        None => Ok(()),
-    }
+    let target =
+        layout::moved_to_monitor(frame(win), &screens, delta).map_err(|error| error.to_string())?;
+    ax_set(pid, rect(target))
 }

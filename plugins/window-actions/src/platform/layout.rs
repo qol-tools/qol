@@ -1,3 +1,5 @@
+use std::fmt;
+
 use qol_windowing::WindowRect;
 
 use crate::config::{CenterMode, WindowActionsConfig};
@@ -62,24 +64,45 @@ fn center_size_for_monitor(
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MonitorMoveError {
+    NoOtherMonitor(usize),
+    WindowOffScreen,
+}
+
+impl fmt::Display for MonitorMoveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoOtherMonitor(monitors) => write!(
+                f,
+                "Cannot move the window to another monitor: {monitors} monitor(s) found"
+            ),
+            Self::WindowOffScreen => f.write_str(
+                "Cannot move the window to another monitor: its center is on no monitor's work area",
+            ),
+        }
+    }
+}
+
 pub(super) fn moved_to_monitor(
     window: WindowRect,
     screens_left_to_right: &[WindowRect],
     delta: i32,
-) -> Option<WindowRect> {
+) -> Result<WindowRect, MonitorMoveError> {
     let screens = screens_left_to_right;
     if screens.len() < 2 {
-        return None;
+        return Err(MonitorMoveError::NoOtherMonitor(screens.len()));
     }
     let from_index = screen_index_at(
         screens,
         window.x + window.width / 2.0,
         window.y + window.height / 2.0,
-    )?;
+    )
+    .ok_or(MonitorMoveError::WindowOffScreen)?;
     let to_index = ((from_index as i32 + delta).rem_euclid(screens.len() as i32)) as usize;
     let from = screens[from_index];
     let to = screens[to_index];
-    Some(WindowRect {
+    Ok(WindowRect {
         x: (to.x + (window.x - from.x) / from.width * to.width).round(),
         y: (to.y + (window.y - from.y) / from.height * to.height).round(),
         width: (window.width / from.width * to.width).round(),
@@ -170,23 +193,36 @@ mod tests {
                 &screens[..],
                 window,
                 1,
-                Some(rect(1200.0, 160.0, 1000.0, 800.0)),
+                Ok(rect(1200.0, 160.0, 1000.0, 800.0)),
             ),
             (
                 "previous wraps",
                 &screens[..],
                 window,
                 -1,
-                Some(rect(1200.0, 160.0, 1000.0, 800.0)),
+                Ok(rect(1200.0, 160.0, 1000.0, 800.0)),
             ),
-            ("full turn", &screens[..], window, 2, Some(window)),
-            ("one monitor", &screens[..1], window, 1, None),
+            ("full turn", &screens[..], window, 2, Ok(window)),
+            (
+                "one monitor",
+                &screens[..1],
+                window,
+                1,
+                Err(MonitorMoveError::NoOtherMonitor(1)),
+            ),
+            (
+                "no monitor",
+                &screens[..0],
+                window,
+                1,
+                Err(MonitorMoveError::NoOtherMonitor(0)),
+            ),
             (
                 "off screen",
                 &screens[..],
                 rect(5000.0, 0.0, 10.0, 10.0),
                 1,
-                None,
+                Err(MonitorMoveError::WindowOffScreen),
             ),
         ];
         for (name, screens, window, delta, expected) in cases {

@@ -97,6 +97,7 @@ pub(super) fn cf_boolean_true() -> *const c_void {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     pub(super) fn CGDisplayBounds(display: u32) -> CGRect;
+    pub(super) fn CGMainDisplayID() -> u32;
     pub(super) fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     pub(super) fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *mut c_void;
     pub(super) fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
