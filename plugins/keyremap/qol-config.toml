@@ -46,7 +46,7 @@ type = "object_array"
 label = "Character rules"
 description = "Press a key combination to type a chosen character."
 section = "rules"
-card_description = "Key combinations that type a character."
+card_description = "Keys that type a character."
 item_label = "character rule"
 default = []
 
