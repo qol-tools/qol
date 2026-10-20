@@ -23,6 +23,22 @@ pub(super) fn timed_bool(op: &'static str, pid: i32, f: impl FnOnce() -> bool) -
 }
 
 #[inline]
+pub(super) fn timed_result<T, E>(
+    op: &'static str,
+    pid: i32,
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    #[cfg(not(debug_assertions))]
+    let _ = (op, pid);
+    #[cfg(debug_assertions)]
+    let start = std::time::Instant::now();
+    let result = f();
+    #[cfg(debug_assertions)]
+    emit(op, pid, start, if result.is_ok() { "ok" } else { "fail" });
+    result
+}
+
+#[inline]
 pub(super) fn timed_pred(op: &'static str, pid: i32, f: impl FnOnce() -> bool) -> bool {
     #[cfg(not(debug_assertions))]
     let _ = (op, pid);
