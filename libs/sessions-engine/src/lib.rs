@@ -238,7 +238,9 @@ Details:
   the harness launch as --model); a selected agent profile's declared model is
   the default, and the spawn_model setting in the same file is the fallback.
   The tool_models mapping in the same file binds models to harnesses, and a
-  pair it does not declare is refused before launch. --effort (low, medium,
+  pair it does not declare is refused before launch. An entry ending in *
+  there or in allowed_models matches every model with that prefix
+  (claude-*), so a newly shipped model needs no edit. --effort (low, medium,
   high, xhigh, max) goes to harnesses that take one: claude as --effort, pi
   as --thinking; every claude launch also skips permission prompts. spawn
   and fork build these flags from the same source.
