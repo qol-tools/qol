@@ -29,7 +29,7 @@ use windows::Win32::Foundation::{
 };
 
 use crate::bluetooth::{
-    connection_ready, normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo,
+    connection_ready, normalize_address, AdapterHealth, BackendCapabilities, DeviceInfo, Pairing,
     ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
@@ -42,6 +42,7 @@ pub use super::paired::{search_status_snapshot, settings_action, settings_query,
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
+    settings_pairing: None,
 };
 
 const TRUST_UNSUPPORTED: &str =
@@ -380,6 +381,7 @@ fn device_info(record: &BLUETOOTH_DEVICE_INFO, endpoints: &[BluetoothEndpoint]) 
         class: Some(record.ulClassofDevice),
         uuids,
         rssi: None,
+        pairing: Pairing::Backend,
         address,
     }
 }

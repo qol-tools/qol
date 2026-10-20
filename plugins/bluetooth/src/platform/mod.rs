@@ -10,6 +10,8 @@ mod linux;
 mod low_energy;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod nearby;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod paired;
 #[cfg(target_os = "windows")]

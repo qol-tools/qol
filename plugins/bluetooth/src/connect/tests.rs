@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use anyhow::anyhow;
 
 use super::{connect, Attempt, Direct, Route};
-use crate::bluetooth::DeviceInfo;
+use crate::bluetooth::{DeviceInfo, Pairing};
 
 const ADDRESS: &str = "AA:BB:CC:DD:EE:FF";
 
@@ -20,6 +20,7 @@ fn device() -> DeviceInfo {
         class: None,
         uuids: Vec::new(),
         rssi: None,
+        pairing: Pairing::Backend,
     }
 }
 
