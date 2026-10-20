@@ -4,6 +4,7 @@ pub mod busy;
 pub mod canvas;
 pub mod color_wheel;
 pub mod command_loop;
+pub mod crumb_trail;
 pub mod deck;
 pub mod event_router;
 pub mod fonts;
@@ -41,6 +42,7 @@ pub mod window;
 pub mod window_options;
 
 pub use busy::Busy;
+pub use crumb_trail::{CrumbTrail, PathEdit, PathKey};
 pub use format::{format_bytes, plural};
 pub use icon::Icon;
 pub use key::Key;

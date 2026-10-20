@@ -21,10 +21,16 @@ pub struct CaretStyle {
     pub radius: f32,
 }
 
+const FIT_SLACK: f32 = 0.5;
+
+type Measure<'a> = Box<dyn FnMut(&str) -> f32 + 'a>;
+
 pub struct TextFieldElement<'a> {
     field: &'a TextField,
     visible: usize,
     advance: f32,
+    marks: bool,
+    measure: Option<Measure<'a>>,
     selection: Option<(Hsla, Option<Hsla>)>,
     caret: Option<CaretStyle>,
     placeholder: Option<(SharedString, Hsla)>,
@@ -60,6 +66,33 @@ fn caret_element(caret: CaretStyle, x: f32) -> Div {
 /// Strips control characters (newlines, tabs, carriage returns) so the text fits a single-line field.
 pub fn single_line(text: &str) -> String {
     text.chars().filter(|ch| !ch.is_control()).collect()
+}
+
+pub fn needs_mark(letter: char) -> bool {
+    letter.is_control()
+        || matches!(
+            letter,
+            '\u{061C}'
+                | '\u{200B}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+        )
+}
+
+pub fn marked(text: &str) -> String {
+    text.chars()
+        .map(|letter| {
+            if needs_mark(letter) {
+                char::REPLACEMENT_CHARACTER
+            } else {
+                letter
+            }
+        })
+        .collect()
 }
 
 impl TextField {
@@ -245,6 +278,23 @@ impl TextField {
         (view_start, view_end)
     }
 
+    fn window_within(
+        &self,
+        visible: usize,
+        budget: f32,
+        mut width: impl FnMut(usize, usize) -> f32,
+    ) -> (usize, usize) {
+        let (mut start, mut end) = self.visible_window(visible);
+        while end - start > 1 && width(start, end) > budget {
+            if self.cursor - start > end - self.cursor {
+                start += 1;
+            } else {
+                end -= 1;
+            }
+        }
+        (start, end)
+    }
+
     pub fn cursor_offset(&self, visible: usize) -> usize {
         let (view_start, view_end) = self.visible_window(visible);
         self.cursor
@@ -301,10 +351,22 @@ impl<'a> TextFieldElement<'a> {
             field,
             visible,
             advance,
+            marks: false,
+            measure: None,
             selection: None,
             caret: None,
             placeholder: None,
         }
+    }
+
+    pub fn with_marks(mut self) -> Self {
+        self.marks = true;
+        self
+    }
+
+    pub fn measure(mut self, measure: impl FnMut(&str) -> f32 + 'a) -> Self {
+        self.measure = Some(Box::new(measure));
+        self
     }
 
     pub fn selection(mut self, background: Hsla, foreground: Option<Hsla>) -> Self {
@@ -322,7 +384,17 @@ impl<'a> TextFieldElement<'a> {
         self
     }
 
-    pub fn render(self) -> Div {
+    fn shown(&self, start: usize, end: usize) -> String {
+        let text = self.field.text();
+        let slice = &text[char_to_byte(text, start)..char_to_byte(text, end)];
+        if self.marks {
+            marked(slice)
+        } else {
+            slice.to_owned()
+        }
+    }
+
+    pub fn render(mut self) -> Div {
         let caret = self.caret.filter(|_| self.field.selected_range().is_none());
         if self.field.is_empty() {
             let mut row = div().relative();
@@ -335,11 +407,16 @@ impl<'a> TextFieldElement<'a> {
             return row;
         }
 
-        let text = self.field.text();
-        let (view_start, view_end) = self.field.visible_window(self.visible);
-        let start_byte = char_to_byte(text, view_start);
-        let end_byte = char_to_byte(text, view_end);
-        let windowed = &text[start_byte..end_byte];
+        let mut measure = self.measure.take();
+        let (view_start, view_end) = match measure.as_mut() {
+            Some(measure) => self.field.window_within(
+                self.visible,
+                self.visible as f32 * self.advance + FIT_SLACK,
+                |start, end| measure(&self.shown(start, end)),
+            ),
+            None => self.field.visible_window(self.visible),
+        };
+        let windowed = self.shown(view_start, view_end);
 
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();
         if let (Some((background, foreground)), Some((selection_start, selection_end))) =
@@ -348,8 +425,8 @@ impl<'a> TextFieldElement<'a> {
             let width = view_end - view_start;
             let adjusted_start = selection_start.saturating_sub(view_start).min(width);
             let adjusted_end = selection_end.saturating_sub(view_start).min(width);
-            let start = char_to_byte(windowed, adjusted_start);
-            let end = char_to_byte(windowed, adjusted_end);
+            let start = char_to_byte(&windowed, adjusted_start);
+            let end = char_to_byte(&windowed, adjusted_end);
             if start < end {
                 highlights.push((
                     start..end,
@@ -362,11 +439,20 @@ impl<'a> TextFieldElement<'a> {
             }
         }
 
-        let styled =
-            StyledText::new(SharedString::from(windowed.to_owned())).with_highlights(highlights);
+        let caret_x = caret.map(|_| {
+            let offset = self
+                .field
+                .cursor()
+                .saturating_sub(view_start)
+                .min(view_end - view_start);
+            match measure.as_mut() {
+                Some(measure) => measure(&windowed[..char_to_byte(&windowed, offset)]),
+                None => offset as f32 * self.advance,
+            }
+        });
+        let styled = StyledText::new(SharedString::from(windowed)).with_highlights(highlights);
         let mut row = div().relative().child(styled);
-        if let Some(caret) = caret {
-            let x = self.field.cursor_offset(self.visible) as f32 * self.advance;
+        if let (Some(caret), Some(x)) = (caret, caret_x) {
             row = row.child(caret_element(caret, x));
         }
         row
@@ -375,7 +461,7 @@ impl<'a> TextFieldElement<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{single_line, visible_char_count, TextField};
+    use super::{marked, single_line, visible_char_count, TextField};
     use crate::text_edit::Span;
 
     fn field(text: &str, cursor: usize) -> TextField {
@@ -547,6 +633,15 @@ mod tests {
     }
 
     #[test]
+    fn marked_text_shows_direction_and_zero_width_characters_as_a_mark_but_keeps_joiners() {
+        assert_eq!(
+            marked("a\u{202E}b\u{200B}c\u{200D}d\u{7}e\u{2066}f"),
+            "a\u{FFFD}b\u{FFFD}c\u{200D}d\u{FFFD}e\u{FFFD}f"
+        );
+        assert_eq!(marked("plain/path"), "plain/path");
+    }
+
+    #[test]
     fn cut_selection_returns_the_removed_text() {
         let mut field = field("qol memory", 10);
         field.select_all();
@@ -584,6 +679,31 @@ mod tests {
         assert_eq!(field.cursor_offset(25), 23);
         assert_eq!(field.cursor_x(25, 10.0), 230.0);
         assert_eq!(TextField::new().cursor_x(25, 10.0), 0.0);
+    }
+
+    #[test]
+    fn wide_letters_shrink_the_window_around_the_cursor() {
+        let wide = |field: &TextField, start: usize, end: usize| -> f32 {
+            field
+                .text()
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .map(|letter| {
+                    if letter == char::REPLACEMENT_CHARACTER {
+                        2.0
+                    } else {
+                        1.0
+                    }
+                })
+                .sum()
+        };
+        let at_end = TextField::with_text(format!("{}{}", "a".repeat(30), "\u{FFFD}".repeat(10)));
+        let window = at_end.window_within(25, 25.0, |start, end| wide(&at_end, start, end));
+        assert_eq!(window, (25, 40));
+        let at_home = field(&format!("{}{}", "\u{FFFD}".repeat(10), "a".repeat(30)), 0);
+        let window = at_home.window_within(25, 25.0, |start, end| wide(&at_home, start, end));
+        assert_eq!(window, (0, 15));
     }
 
     #[test]

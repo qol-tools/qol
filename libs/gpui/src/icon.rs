@@ -31,11 +31,13 @@ pub enum Icon {
     Triangle,
     Home,
     Folder,
+    File,
+    Drive,
     Grid,
 }
 
 impl Icon {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::Enter,
         Self::Tab,
         Self::Backspace,
@@ -63,6 +65,8 @@ impl Icon {
         Self::Triangle,
         Self::Home,
         Self::Folder,
+        Self::File,
+        Self::Drive,
         Self::Grid,
     ];
 
@@ -95,6 +99,8 @@ impl Icon {
             Self::Triangle => "triangle",
             Self::Home => "home",
             Self::Folder => "folder",
+            Self::File => "file",
+            Self::Drive => "drive",
             Self::Grid => "grid",
         }
     }
@@ -142,6 +148,10 @@ impl Icon {
             Self::Triangle => r#"<path d="M6 2.2L10 9.3H2z"/>"#,
             Self::Home => r#"<path d="M2 6.2L6 2.5l4 3.7"/><path d="M3.3 5.2v4.3h5.4V5.2"/>"#,
             Self::Folder => r#"<path d="M1.5 3h3l1 1.2h5v5.3h-9z"/>"#,
+            Self::File => r#"<path d="M3 1.5h4l2 2v7H3z"/><path d="M7 1.5v2h2"/>"#,
+            Self::Drive => {
+                r#"<rect x="1.5" y="3.5" width="9" height="5" rx=".6"/><circle cx="8.2" cy="6" r=".7" fill="currentColor"/>"#
+            }
             Self::Grid => r#"<path d="M2 2h3v3H2zM7 2h3v3H7zM2 7h3v3H2zM7 7h3v3H7z"/>"#,
         }
     }

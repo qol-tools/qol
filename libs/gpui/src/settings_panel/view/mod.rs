@@ -45,6 +45,7 @@ use super::{
     SettingsDestination, SettingsPanel, SettingsRuntime, SourceState,
 };
 use crate::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelStyle};
+use crate::crumb_trail::CrumbTrail;
 use crate::deck::{self, Motion as DeckMotion, Slide as DeckSlide};
 use crate::gamepad::gamepad_panel;
 use crate::kit::Kit;
@@ -4202,7 +4203,11 @@ impl SettingsPanelView {
         let trail = self.trail(cx);
         settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit)
             .panel_drag_area()
-            .child(super::components::settings_crumb_trail(trail, self.kit))
+            .child(CrumbTrail::new(
+                "settings-crumb-trail",
+                trail.iter().map(|crumb| crumb.to_lowercase()),
+                self.kit,
+            ))
     }
 
     fn render_filter_field(&self) -> Div {

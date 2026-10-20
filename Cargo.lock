@@ -6717,6 +6717,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-explorer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "futures",
+ "gpui",
+ "libc",
+ "log",
+ "qol-apps",
+ "qol-conventions",
+ "qol-gpui",
+ "qol-headless",
+ "qol-log",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-watch",
+ "serde_json",
+ "tempfile",
+ "unicode-normalization",
+ "windows-sys 0.59.0",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-frecency"
 version = "0.2.0"
 dependencies = [

@@ -1,0 +1,28 @@
+[plugin]
+id = "qol-explorer"
+uid = "2f4c2ef3-2e20-4be6-8c5f-183d28fbc59d"
+name = "Explorer"
+icon = "qol"
+description = "Browse and pick files from the keyboard"
+version = "0.1.0"
+author = "KMRH47"
+platforms = ["linux"]
+
+[runtime]
+command = "qol-explorer"
+
+[action.open]
+label = "Open Explorer"
+args = ["open"]
+
+[capabilities]
+doctor = true
+
+[menu]
+label = "Explorer"
+items = []
+
+[[dependencies.binaries]]
+name = "qol-explorer"
+repo = "qol-tools/qol-explorer"
+pattern = "qol-explorer-{os}-{arch}"

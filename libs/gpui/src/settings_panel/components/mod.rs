@@ -303,43 +303,6 @@ pub fn settings_action_affordance(
     control.child(element.child(label.into()))
 }
 
-const CRUMB_MAX_WIDTH: f32 = 200.0;
-
-pub fn settings_crumb_trail(trail: Vec<String>, kit: Kit) -> gpui::Div {
-    let last = trail.len().saturating_sub(1);
-    let separator = rgba(qol_theme::translucent(
-        kit.grounds.pane.faint,
-        qol_theme::Alpha::Veil,
-    ));
-    let mut crumbs = Vec::with_capacity(trail.len() * 2);
-    for (index, label) in trail.into_iter().enumerate() {
-        if index > 0 {
-            crumbs.push(
-                div()
-                    .flex_none()
-                    .px(px(qol_theme::SPACE_TIGHT))
-                    .text_color(separator)
-                    .child("/"),
-            );
-        }
-        let crumb = if index == last {
-            div().text_color(rgb(kit.grounds.pane.ink))
-        } else {
-            div()
-                .max_w(px(CRUMB_MAX_WIDTH))
-                .text_color(rgb(kit.grounds.pane.faint))
-        };
-        crumbs.push(crumb.child(label.to_lowercase()));
-    }
-    div()
-        .min_w_0()
-        .flex()
-        .flex_row()
-        .items_center()
-        .text(TextStyle::Heading)
-        .children(crumbs)
-}
-
 pub fn rail_caption_height() -> f32 {
     qol_theme::HEIGHT_BAND
 }
