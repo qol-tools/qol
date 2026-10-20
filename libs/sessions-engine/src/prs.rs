@@ -105,14 +105,12 @@ impl PrStore {
         if prs.is_empty() {
             return Ok(prs);
         }
-        match forks.find_session(session)? {
-            Some(mut record) => {
-                if merge(&mut record.prs, &prs) {
-                    forks.record(&record)?;
-                }
+        if let Some(mut record) = forks.find_session(session)? {
+            if merge(&mut record.prs, &prs) {
+                forks.record(&record)?;
             }
-            None => self.add_keyed(key, &prs)?,
         }
+        self.add_keyed(key, &prs)?;
         Ok(prs)
     }
 
@@ -190,9 +188,10 @@ mod tests {
             store.of(&records, "v1:kitty:1:1", Some("chase")),
             [first, second]
         );
-        assert!(
-            !root.path().join("prs").exists(),
-            "a fork sender writes no keyed record"
+        assert_eq!(
+            store.keyed("chase"),
+            [first, second],
+            "the spawn key keeps them once the fork resumes under a new session"
         );
 
         store
