@@ -230,6 +230,9 @@ impl MailboxStore {
 impl Messaging<'_> {
     pub(super) fn send(&self, live_keys: &[String], request: &SendRequest<'_>) -> Result<Message> {
         validate_text(request.text, "message")?;
+        if request.from == USER_SENDER {
+            bail!("the key `{USER_SENDER}` is reserved for the user's words the switchboard relays, so a session carrying it cannot send");
+        }
         if request.as_user && request.from != SWITCHBOARD_KEY {
             bail!("only the switchboard relays the user's words with as_user");
         }
@@ -244,6 +247,9 @@ impl Messaging<'_> {
             other => other.to_owned(),
         };
         key_component(&to).map_err(|_| anyhow!("`{to}` is not a session key"))?;
+        if to == USER_SENDER {
+            bail!("the user's words came through the switchboard; answer the user in your own terminal, not with session_send");
+        }
         if to == request.from {
             bail!("a session cannot send a message to itself");
         }
@@ -883,6 +889,18 @@ pub(crate) mod tests {
             error_of(messaging.send(&keys, &relay("architect", MessageKind::Note)))
                 .contains("only the switchboard")
         );
+        let reply = SendRequest {
+            reply_to: Some(sent.id.as_str()),
+            ..request("lane", USER_SENDER, MessageKind::Reply, "done")
+        };
+        assert!(error_of(messaging.send(&keys, &reply))
+            .contains("answer the user in your own terminal"));
+        let impostor = live(&["architect", "lane", USER_SENDER]);
+        assert!(error_of(messaging.send(
+            &impostor,
+            &request(USER_SENDER, "lane", MessageKind::Note, "x")
+        ))
+        .contains("is reserved"));
     }
 
     #[test]
