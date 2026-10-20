@@ -880,17 +880,19 @@ fn load_plugin_source_from_root(
     plugin_root: &Path,
 ) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
     let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(plugin_root)?;
-    if !manifest.capabilities.gpui {
-        bail!("plugin does not opt into GPUI settings");
-    }
-    let Some((_, runtime_contract)) =
-        crate::plugins::config::load_combined_contracts_from_root(plugin_root)?
-    else {
-        bail!("plugin has no settings contract");
+    let combined = crate::plugins::config::load_combined_contracts_from_root(plugin_root)?;
+    let (contract, runtime_contract) = match combined {
+        Some((_, runtime_contract)) => {
+            let contract =
+                std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
+                    .context("failed to read the plugin settings contract")?;
+            (contract, runtime_contract)
+        }
+        None => (
+            super::generated_contract::generate_contract(&manifest),
+            None,
+        ),
     };
-    let contract =
-        std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
-            .context("failed to read the plugin settings contract")?;
     let mut runtime = SettingsRuntime::tray(plugin_id);
     if let Some(runtime_contract) = runtime_contract.as_ref() {
         for (name, query) in &runtime_contract.queries {
@@ -900,7 +902,7 @@ fn load_plugin_source_from_root(
     Ok((
         PluginSettingsSource {
             contract,
-            heading: manifest.plugin.name.clone(),
+            heading: super::generated_contract::rail_label(&manifest),
             mark: crate::features::launcher_apps::icon::manifest_mark(plugin_id, &manifest),
         },
         runtime,
@@ -952,10 +954,10 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                 continue;
             }
         };
-        if !manifest.capabilities.gpui || !crate::plugins::paths::has_config(&resolved.path) {
+        if !manifest.plugin.supports_current_platform() {
             continue;
         }
-        eligible.push((manifest.plugin.name.clone(), resolved));
+        eligible.push((super::generated_contract::rail_label(&manifest), resolved));
     }
     eligible.sort_by(|left, right| left.0.cmp(&right.0));
     for (_, resolved) in eligible {
@@ -1291,6 +1293,311 @@ mod tests {
         assert_eq!(listed.heading, "Foo");
         let (single, _) = super::load_plugin_panel("plugin-foo").unwrap();
         assert_eq!(single.sources[0].heading, "Foo");
+    }
+
+    fn register_test_plugin(plugin_id: &str, plugin_root: &std::path::Path) {
+        use crate::plugins::registry::{Entry, Registry, Slot, SlotSource};
+        let config_dir = crate::paths::shared_config_dir().unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let mut registry =
+            crate::plugins::registry::load_registry(&config_dir).unwrap_or(Registry {
+                version: 1,
+                entries: Vec::new(),
+            });
+        registry.entries.push(Entry {
+            id: plugin_id.to_string(),
+            active: Slot {
+                path: plugin_root.to_path_buf(),
+                source: SlotSource::ReleaseAsset,
+            },
+            fallback: None,
+        });
+        crate::plugins::registry::save_registry(&config_dir, &registry).unwrap();
+    }
+
+    fn install_test_plugin(root: &std::path::Path, plugin_id: &str, manifest: &str) {
+        let installed = root.join("installed").join(plugin_id);
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("plugin.toml"), manifest).unwrap();
+        register_test_plugin(plugin_id, &installed);
+    }
+
+    #[test]
+    fn unified_rail_lists_a_plugin_without_gpui_capability_and_without_a_contract() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-session",
+            r#"[plugin]
+id = "plugin-session"
+name = "Session"
+description = "Lock the screen."
+version = "1.0.0"
+
+[action.lock]
+label = "Lock Screen"
+args = ["lock"]
+
+[menu]
+label = "Session"
+items = []
+"#,
+        );
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-session")
+            .expect("plugin-session is listed in the rail");
+        assert_eq!(listed.heading, "Session");
+        assert!(matches!(
+            listed.group,
+            qol_gpui::settings_panel::PanelSourceGroup::Plugin
+        ));
+        let spec = qol_config::contract::parse_spec_str(&listed.contract)
+            .expect("generated contract parses");
+        assert_eq!(spec.title.as_deref(), Some("Session"));
+        assert_eq!(spec.description.as_deref(), Some("Lock the screen."));
+        let lock = spec.fields.get("lock").expect("generated lock action");
+        assert_eq!(lock.action.as_deref(), Some("lock"));
+    }
+
+    #[test]
+    fn unified_rail_renders_a_contract_even_without_gpui_capability() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        let plugin_dir = root.path().join("installed").join("plugin-memory");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"[plugin]
+id = "plugin-memory"
+name = "Memory"
+description = "Memory settings."
+version = "1.0.0"
+
+[menu]
+label = "Memory"
+items = []
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("qol-config.toml"),
+            r#"schema_version = 1
+title = "Memory"
+description = "Author-defined description."
+
+[field.verify_answers]
+type = "boolean"
+label = "Experimental"
+default = false
+"#,
+        )
+        .unwrap();
+        register_test_plugin("plugin-memory", &plugin_dir);
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-memory")
+            .expect("plugin-memory is listed in the rail");
+        assert_eq!(listed.heading, "Memory");
+        let spec =
+            qol_config::contract::parse_spec_str(&listed.contract).expect("author contract parses");
+        assert_eq!(
+            spec.description.as_deref(),
+            Some("Author-defined description."),
+            "the author's contract wins over the generated description"
+        );
+        assert!(
+            spec.fields.contains_key("verify_answers"),
+            "the author's fields are visible in the rail"
+        );
+    }
+
+    #[test]
+    fn unified_rail_label_prefers_menu_label_over_plugin_name() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-monitor",
+            r#"[plugin]
+id = "plugin-monitor"
+name = "Monitor"
+description = ""
+version = "1.0.0"
+
+[menu]
+label = "Display"
+items = []
+"#,
+        );
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-monitor")
+            .expect("plugin-monitor is listed");
+        assert_eq!(listed.heading, "Display");
+
+        let (single, _) = super::load_plugin_panel("plugin-monitor").unwrap();
+        assert_eq!(single.sources[0].heading, "Display");
+    }
+
+    #[test]
+    fn unified_rail_skips_plugins_that_do_not_support_the_current_platform() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        let current = qol_platform::Os::current().expect("test runs on a supported OS");
+        let other_platform = qol_platform::Os::ALL
+            .into_iter()
+            .find(|os| *os != current)
+            .expect("another supported OS exists")
+            .name();
+        install_test_plugin(
+            root.path(),
+            "plugin-other-os",
+            &format!(
+                r#"[plugin]
+id = "plugin-other-os"
+name = "Other OS"
+description = "Only runs on another OS."
+version = "1.0.0"
+platforms = ["{other_platform}"]
+
+[action.open]
+label = "Open"
+args = ["open"]
+
+[menu]
+label = "Other OS"
+items = []
+"#
+            ),
+        );
+        install_test_plugin(
+            root.path(),
+            "plugin-every-os",
+            r#"[plugin]
+id = "plugin-every-os"
+name = "Every OS"
+description = "Runs anywhere."
+version = "1.0.0"
+
+[action.open]
+label = "Open"
+args = ["open"]
+
+[menu]
+label = "Every OS"
+items = []
+"#,
+        );
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let plugin_ids: Vec<&str> = unified
+            .sources
+            .iter()
+            .map(|source| source.plugin_id.as_str())
+            .collect();
+        assert!(
+            !plugin_ids.contains(&"plugin-other-os"),
+            "the rail hides a plugin whose [plugin].platforms excludes {}",
+            current.name()
+        );
+        assert!(
+            plugin_ids.contains(&"plugin-every-os"),
+            "the rail keeps a plugin with no platforms list"
+        );
+    }
+
+    #[test]
+    fn load_plugin_panel_generates_a_contract_when_the_plugin_has_none() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-removeapp",
+            r#"[plugin]
+id = "plugin-removeapp"
+name = "Remove App"
+description = "Uninstall apps."
+version = "1.0.0"
+
+[action.open]
+label = "Open Remove App"
+args = ["open"]
+
+[menu]
+label = "Remove App"
+items = []
+
+[[shortcuts]]
+id = "open"
+name = "Remove App"
+action = "open"
+"#,
+        );
+
+        let (single, _) = super::load_plugin_panel("plugin-removeapp").unwrap();
+        assert_eq!(single.sources[0].heading, "Remove App");
+        let spec = qol_config::contract::parse_spec_str(&single.sources[0].contract)
+            .expect("generated contract parses");
+        assert!(spec.fields.contains_key("open"));
+        assert!(spec.fields.contains_key("shortcut__open"));
+    }
+
+    #[test]
+    fn every_bundled_plugin_toml_yields_a_rail_label_and_a_parseable_contract() {
+        use crate::plugins::manifest::PluginManifest;
+        use qol_config::contract::parse_spec_str;
+
+        let plugins_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let mut discovered = 0usize;
+        for entry in std::fs::read_dir(&plugins_dir)
+            .unwrap_or_else(|error| panic!("read {}: {error}", plugins_dir.display()))
+        {
+            let entry = entry.expect("plugin dir entry");
+            if !entry.metadata().expect("metadata").is_dir() {
+                continue;
+            }
+            let manifest_path = entry.path().join("plugin.toml");
+            if !manifest_path.exists() {
+                continue;
+            }
+            let text = std::fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", manifest_path.display()));
+            let manifest: PluginManifest = toml::from_str(&text)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", manifest_path.display()));
+            let folder = entry.file_name().to_string_lossy().into_owned();
+
+            let label = super::super::generated_contract::rail_label(&manifest);
+            assert!(
+                !label.is_empty(),
+                "plugin at {folder} must produce a non-empty rail label"
+            );
+
+            let contract_path = entry.path().join("qol-config.toml");
+            let contract = if contract_path.exists() {
+                std::fs::read_to_string(&contract_path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", contract_path.display()))
+            } else {
+                super::super::generated_contract::generate_contract(&manifest)
+            };
+            parse_spec_str(&contract)
+                .unwrap_or_else(|error| panic!("rail contract for {folder} must parse: {error:?}"));
+            discovered += 1;
+        }
+        assert!(
+            discovered >= 10,
+            "expected at least ten bundled plugins; found {discovered}"
+        );
     }
 
     #[test]
