@@ -18,6 +18,7 @@ pub(super) const RATE_WINDOW_MS: u64 = 60_000;
 pub(super) const RATE_MAX: usize = 12;
 pub(super) const BACKLOG_MAX: usize = 50;
 pub(super) const PARENT_ALIAS: &str = "parent";
+pub(super) const USER_SENDER: &str = "user";
 const COMPLETION_MARKER_PREFIX: &str = "QOL_BRIDGE_DONE_";
 const RESERVED_LINE_PREFIX: &str = "[qol session";
 
@@ -70,6 +71,8 @@ pub(super) struct Message {
     pub(super) kind: MessageKind,
     pub(super) text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) via: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) reply_to: Option<String>,
     pub(super) hops: u32,
     pub(super) sent_at_ms: u64,
@@ -91,6 +94,7 @@ pub(super) struct SendRequest<'a> {
     pub(super) kind: MessageKind,
     pub(super) text: &'a str,
     pub(super) reply_to: Option<&'a str>,
+    pub(super) as_user: bool,
 }
 
 pub(super) struct Messaging<'a> {
@@ -181,12 +185,32 @@ impl MailboxStore {
     }
 
     pub(super) fn sent_since(&self, sender: &str, since_ms: u64) -> Result<usize> {
+        Ok(self
+            .sent(|message| {
+                (message.from == sender || message.via.as_deref() == Some(sender))
+                    && message.sent_at_ms >= since_ms
+            })?
+            .len())
+    }
+
+    pub(super) fn last_sent_by(&self, sender: &str) -> Result<Option<Message>> {
+        Ok(self
+            .sent(|message| message.from == sender)?
+            .into_iter()
+            .max_by(|left, right| {
+                left.sent_at_ms
+                    .cmp(&right.sent_at_ms)
+                    .then_with(|| left.id.cmp(&right.id))
+            }))
+    }
+
+    fn sent(&self, keep: impl Fn(&Message) -> bool) -> Result<Vec<Message>> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error).context("failed to read the mail directory"),
         };
-        let mut count = 0;
+        let mut sent = Vec::new();
         for dir in entries.flatten().map(|entry| entry.path()) {
             let Some(key) = dir.file_name().and_then(|name| name.to_str()) else {
                 continue;
@@ -197,18 +221,24 @@ impl MailboxStore {
             let Ok(messages) = self.messages(key) else {
                 continue;
             };
-            count += messages
-                .iter()
-                .filter(|message| message.from == sender && message.sent_at_ms >= since_ms)
-                .count();
+            sent.extend(messages.into_iter().filter(|message| keep(message)));
         }
-        Ok(count)
+        Ok(sent)
     }
 }
 
 impl Messaging<'_> {
     pub(super) fn send(&self, live_keys: &[String], request: &SendRequest<'_>) -> Result<Message> {
         validate_text(request.text, "message")?;
+        if request.from == USER_SENDER {
+            bail!("the key `{USER_SENDER}` is reserved for the user's words the switchboard relays, so a session carrying it cannot send");
+        }
+        if request.as_user && request.from != SWITCHBOARD_KEY {
+            bail!("only the switchboard relays the user's words with as_user");
+        }
+        if request.as_user && request.kind != MessageKind::Note {
+            bail!("as_user relays the user's words as a note; the switchboard sends ask, reply and report as itself");
+        }
         let to = match request.to {
             PARENT_ALIAS => self
                 .lineage
@@ -217,6 +247,9 @@ impl Messaging<'_> {
             other => other.to_owned(),
         };
         key_component(&to).map_err(|_| anyhow!("`{to}` is not a session key"))?;
+        if to == USER_SENDER {
+            bail!("the user's words came through the switchboard; answer the user in your own terminal, not with session_send");
+        }
         if to == request.from {
             bail!("a session cannot send a message to itself");
         }
@@ -274,10 +307,14 @@ impl Messaging<'_> {
         let sent_at_ms = now_ms();
         let message = Message {
             id: unique_name("m", sent_at_ms),
-            from: request.from.to_owned(),
+            from: match request.as_user {
+                true => USER_SENDER.to_owned(),
+                false => request.from.to_owned(),
+            },
             to: to.clone(),
             kind: request.kind,
             text: request.text.to_owned(),
+            via: request.as_user.then(|| request.from.to_owned()),
             reply_to: request.reply_to.map(str::to_owned),
             hops,
             sent_at_ms,
@@ -306,8 +343,13 @@ impl Messaging<'_> {
     fn refresh_knock(&self, key: &str) -> Result<()> {
         let mut senders = Vec::new();
         let mut unread = 0;
+        let mut from_user = 0;
         for message in self.mail.messages(key)? {
             if message.read {
+                continue;
+            }
+            if message.from == USER_SENDER && message.via.is_some() {
+                from_user += 1;
                 continue;
             }
             unread += 1;
@@ -316,7 +358,7 @@ impl Messaging<'_> {
             }
         }
         self.knocks
-            .set_messages(key, unread, &senders)
+            .set_messages(key, unread, &senders, from_user)
             .context("failed to queue the knock")
     }
 
@@ -480,6 +522,7 @@ pub(crate) mod tests {
             kind,
             text,
             reply_to: None,
+            as_user: false,
         }
     }
 
@@ -762,6 +805,7 @@ pub(crate) mod tests {
                 to: "full".to_owned(),
                 kind: MessageKind::Note,
                 text: "old".to_owned(),
+                via: None,
                 reply_to: None,
                 hops: 1,
                 sent_at_ms: index as u64,
@@ -806,6 +850,57 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(stores.mail.counts(SWITCHBOARD_KEY).unwrap(), (1, 0));
+    }
+
+    #[test]
+    fn the_switchboard_relays_the_users_words_and_nobody_else_can() {
+        let stores = Stores::new();
+        stores.lineage.record("lane", Some("architect")).unwrap();
+        let messaging = stores.messaging();
+        let keys = live(&["architect", "lane"]);
+        let relay = |from, kind| SendRequest {
+            as_user: true,
+            ..request(from, "lane", kind, "rebase it on main")
+        };
+        let sent = messaging
+            .send(&keys, &relay(SWITCHBOARD_KEY, MessageKind::Note))
+            .unwrap();
+        assert_eq!(sent.from, USER_SENDER);
+        assert_eq!(sent.via.as_deref(), Some(SWITCHBOARD_KEY));
+        let knocks = stores.knocks.pending_knocks();
+        assert_eq!(
+            knocks[0].text,
+            "[qol session] The user wrote to you through the switchboard. Read it with session_inbox."
+        );
+        assert_eq!(stores.mail.sent_since(SWITCHBOARD_KEY, 0).unwrap(), 1);
+        let inbox = messaging
+            .inbox("lane", "lane", InboxState::Unread, None)
+            .unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].from, USER_SENDER);
+        assert!(stores.knocks.pending_knocks().is_empty());
+
+        for kind in [MessageKind::Ask, MessageKind::Reply, MessageKind::Report] {
+            assert!(messaging
+                .send(&keys, &relay(SWITCHBOARD_KEY, kind))
+                .is_err());
+        }
+        assert!(
+            error_of(messaging.send(&keys, &relay("architect", MessageKind::Note)))
+                .contains("only the switchboard")
+        );
+        let reply = SendRequest {
+            reply_to: Some(sent.id.as_str()),
+            ..request("lane", USER_SENDER, MessageKind::Reply, "done")
+        };
+        assert!(error_of(messaging.send(&keys, &reply))
+            .contains("answer the user in your own terminal"));
+        let impostor = live(&["architect", "lane", USER_SENDER]);
+        assert!(error_of(messaging.send(
+            &impostor,
+            &request(USER_SENDER, "lane", MessageKind::Note, "x")
+        ))
+        .contains("is reserved"));
     }
 
     #[test]

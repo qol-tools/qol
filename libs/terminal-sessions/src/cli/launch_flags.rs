@@ -66,6 +66,19 @@ pub fn lane_profile_flags(tool: &CliToolId, profile: &LaneProfile) -> Vec<String
     flags
 }
 
+pub fn remote_control_flags(tool: &CliToolId, name: &str) -> Result<Vec<String>> {
+    match tool.as_str() {
+        "claude" => Ok(vec!["--remote-control".to_owned(), name.to_owned()]),
+        other => Err(LaunchFlagError(format!(
+            "tool `{other}` has no remote control launch flag; drop remote_control or pick a tool that takes one"
+        ))),
+    }
+}
+
+pub fn takes_remote_control(tool: &str) -> bool {
+    tool == "claude"
+}
+
 fn permission_flags(tool: &CliToolId) -> Vec<String> {
     match tool.as_str() {
         "claude" => vec!["--dangerously-skip-permissions".to_owned()],
@@ -237,6 +250,22 @@ mod tests {
             assert!(lane_profile_flags(&tool(id), &profile).is_empty(), "{id}");
         }
         assert!(lane_profile_flags(&tool("claude"), &LaneProfile::default()).is_empty());
+    }
+
+    #[test]
+    fn remote_control_names_the_claude_session_and_other_tools_refuse_it() {
+        assert_eq!(
+            remote_control_flags(&tool("claude"), "chase-lockfile").unwrap(),
+            ["--remote-control", "chase-lockfile"]
+        );
+        assert!(takes_remote_control("claude"));
+        for id in ["pi", "codex", "kimi"] {
+            let error = remote_control_flags(&tool(id), "k")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("no remote control launch flag"), "{error}");
+            assert!(!takes_remote_control(id), "{id}");
+        }
     }
 
     #[test]

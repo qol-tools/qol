@@ -41,8 +41,8 @@ impl ClaudeEnvironment for RemoteControlledEnvironment {
         None
     }
 
-    fn remote_controlled(&self, pid: i32) -> bool {
-        pid == self.pid
+    fn remote_control_session(&self, pid: i32) -> Option<String> {
+        (pid == self.pid).then(|| "session_01Bridge".to_owned())
     }
 }
 
@@ -533,6 +533,11 @@ fn remote_control_on_the_foreground_claude_process_keeps_its_terminal_open() {
         assert_eq!(
             strategy.keep_open_reason(&session()).is_some(),
             expected,
+            "pid {pid}"
+        );
+        assert_eq!(
+            strategy.remote_control_url(&session()),
+            expected.then(|| "https://claude.ai/code/session_01Bridge".to_owned()),
             "pid {pid}"
         );
     }

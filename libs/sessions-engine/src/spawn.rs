@@ -145,6 +145,10 @@ struct SpawnConfigFile {
     fork_effort: Option<String>,
     fork_surface: Option<String>,
     spawn_effort: Option<String>,
+    #[serde(default)]
+    fork_remote_control: bool,
+    #[serde(default)]
+    spawn_remote_control: bool,
     spawn_claude_settings: Option<toml::Table>,
     spawn_claude_mcp_servers: Option<toml::Table>,
 }
@@ -186,6 +190,8 @@ pub(super) fn config_launch_defaults() -> Result<super::launch::LaunchDefaults> 
         fork_effort: config.fork_effort,
         fork_surface: config.fork_surface,
         spawn_effort: config.spawn_effort,
+        fork_remote_control: config.fork_remote_control,
+        spawn_remote_control: config.spawn_remote_control,
     })
 }
 
@@ -789,6 +795,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         model: parsed.model.take(),
         effort: parsed.effort.take(),
         surface: parsed.surface.take(),
+        remote_control: parsed.remote_control.then_some(true),
     };
     let launch = super::launch::resolve(
         super::launch::LaunchKind::Spawn,
@@ -800,6 +807,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     parsed.model = launch.model;
     parsed.effort = launch.effort;
     parsed.surface = launch.surface;
+    parsed.remote_control = launch.remote_control;
     let cap = resolve_spawn_cap(config_spawn_cap()?);
     if let Some(cap) = &cap {
         qol_runtime::probe!(
@@ -842,6 +850,7 @@ fn run_lanes_with(
         parsed.surface.as_deref(),
         parsed.model.as_deref(),
         parsed.effort.as_deref(),
+        parsed.remote_control,
         config,
         cap.as_ref(),
         locks,
@@ -880,6 +889,7 @@ fn run_with(
         parsed.surface.as_deref(),
         parsed.model.as_deref(),
         parsed.effort.as_deref(),
+        parsed.remote_control,
         parsed.title.as_deref(),
         config,
         cap.as_ref(),
@@ -1002,6 +1012,7 @@ struct SpawnArgs {
     surface: Option<String>,
     model: Option<String>,
     effort: Option<String>,
+    remote_control: bool,
     title: Option<String>,
     task: Option<String>,
     background: bool,
@@ -1025,7 +1036,7 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--remote-control] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --remote-control starts a claude lane with Remote Control on, named after its key, so the user can follow it from claude.ai; spawn_remote_control in sessions.toml turns it on for every claude spawn, and a tool without Remote Control refuses the flag. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -1035,6 +1046,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
     let mut title = None;
     let mut task = None;
     let mut background = false;
+    let mut remote_control = false;
     let mut silent_wake = false;
     let mut resume = None;
     let mut group = None;
@@ -1082,6 +1094,10 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
             }
             "--background" => {
                 background = true;
+                index += 1;
+            }
+            "--remote-control" => {
+                remote_control = true;
                 index += 1;
             }
             "--silent-wake" => {
@@ -1144,6 +1160,7 @@ fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
         surface,
         model,
         effort,
+        remote_control,
         title,
         task,
         background,
@@ -1221,6 +1238,7 @@ pub(super) fn spawn_lanes(
     surface: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
+    remote_control: bool,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
     locks: &SpawnLocks,
@@ -1301,6 +1319,7 @@ pub(super) fn spawn_lanes(
             surface,
             model,
             effort,
+            remote_control,
             lane.title.as_deref(),
             config,
             cap,
@@ -1380,6 +1399,7 @@ pub(super) fn spawn_or_reuse(
     surface: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
+    remote_control: bool,
     title: Option<&str>,
     config: Option<SpawnSurface>,
     cap: Option<&SpawnCapConfig>,
@@ -1471,6 +1491,14 @@ pub(super) fn spawn_or_reuse(
                     &prepared.tool_id,
                     &dispatch.policy.lane_profile,
                 ));
+                if remote_control {
+                    launch
+                        .args
+                        .extend(super::launch_flags::remote_control_flags(
+                            &prepared.tool_id,
+                            prepared.key.as_str(),
+                        )?);
+                }
                 qol_agent_launch::account::apply(
                     &mut launch,
                     &prepared.tool_id,
@@ -2751,6 +2779,7 @@ mod tests {
             surface,
             model,
             None,
+            false,
             title,
             config,
             cap.as_ref(),
@@ -5740,6 +5769,7 @@ mod tests {
             None,
             model,
             None,
+            false,
             None,
             None,
             None,
@@ -5787,6 +5817,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             &locks(&root),
@@ -6313,6 +6344,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             &locks(&root),
@@ -6371,6 +6403,7 @@ mod tests {
             None,
             None,
             None,
+            false,
             None,
             None,
             &locks(&root),
@@ -6834,6 +6867,7 @@ mod tests {
             None,
             Some("flash"),
             None,
+            false,
             None,
             None,
             &locks(&root),
