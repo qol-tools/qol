@@ -9,8 +9,10 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 qol-apps.workspace = true
+qol-config.workspace = true
 qol-headless.workspace = true
 qol-platform.workspace = true
+serde.workspace = true
 workspace-hack.workspace = true
 
 [build-dependencies]

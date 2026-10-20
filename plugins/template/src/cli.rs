@@ -13,7 +13,7 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
 
 fn app() -> HeadlessApp {
     app_with_handlers(
-        |_| Ok(PlainTextOutput::text("Hello from My Plugin")),
+        |_| Ok(PlainTextOutput::text(crate::config::load().greeting())),
         |_| {
             qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                 .context("failed to open settings URL")?;
@@ -117,10 +117,23 @@ mod tests {
         )
     }
 
+    fn greeting_app(config: crate::config::Config) -> HeadlessApp {
+        app_with_handlers(
+            move |_| Ok(PlainTextOutput::text(config.greeting())),
+            |_| Ok(PlainTextOutput::empty()),
+        )
+    }
+
     #[test]
-    fn default_and_explicit_run_preserve_the_example_output() {
-        let default = app().execute(Vec::new());
-        let explicit = app().execute(["run".to_string()]);
+    fn default_and_explicit_run_greet_with_the_configured_name() {
+        let config = crate::config::Config {
+            general: crate::config::General {
+                enabled: true,
+                display_name: "My Plugin".to_string(),
+            },
+        };
+        let default = greeting_app(config.clone()).execute(Vec::new());
+        let explicit = greeting_app(config).execute(["run".to_string()]);
 
         assert_eq!(default.exit_code, EXIT_SUCCESS);
         assert_eq!(default.stdout, "Hello from My Plugin\n");

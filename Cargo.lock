@@ -7535,10 +7535,12 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "qol-apps",
+ "qol-config",
  "qol-conventions",
  "qol-headless",
  "qol-platform",
  "qol-plugin-api",
+ "serde",
  "serde_json",
  "workspace-hack",
 ]
