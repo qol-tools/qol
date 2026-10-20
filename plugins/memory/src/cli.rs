@@ -175,8 +175,10 @@ fn capture_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .detail("Pass a fact with --text and --cwd, or a whole unit as a JSON object with --unit.")
         .detail("--agent-home names the caller's agent home; it is stamped on the unit.")
         .detail(
-            "Capturing a forgotten or replaced fact again brings it back. The reply lists up to \
-             3 stored facts close to the new one with their keys; pass a stale one to supersede.",
+            "Capturing a forgotten or replaced fact again brings it back. When the qol-memory \
+             daemon answers, the reply also lists up to 3 stored facts close to the new one with \
+             their keys; pass a stale one to supersede. With --store or no daemon running, that \
+             list is empty.",
         )
         .output(
             "appended, key, restored and related lines in plain text; \
@@ -193,7 +195,9 @@ fn supersede_command(plain: PlainHandler, json: JsonHandler) -> Command {
         .usage(USAGE_SUPERSEDE)
         .detail(
             "--keys names the stale facts: each key in full or its first 8 or more characters, \
-             separated by spaces or commas. Keys come from ask, rows and the capture reply.",
+             separated by spaces or commas. Keys come from ask, rows and the capture reply. A \
+             statement repeated in several sessions is one fact, so naming one copy covers every \
+             copy this agent home can see, and the reply lists their keys.",
         )
         .detail("--text and --cwd are the new fact, stored the same way as capture stores it.")
         .detail(
@@ -1035,41 +1039,12 @@ fn in_process_capture(invocation: &CaptureInvocation) -> Result<Value> {
         crate::lifecycle::restore(&store, &key, &caller)
             .context("capture: the fact was stored but could not be brought back")?;
     }
-    let text = unit.get("text").and_then(Value::as_str).unwrap_or_default();
-    let related = if text.trim().is_empty() {
-        Vec::new()
-    } else {
-        in_process_related(&store, text, &key, &caller).unwrap_or_else(|error| {
-            log::warn!("qol-memory capture could not look up related facts: {error:#}");
-            Vec::new()
-        })
-    };
     Ok(json!({
         "appended": appended,
         "key": key,
         "restored": restored,
-        "related": related,
+        "related": [],
     }))
-}
-
-fn in_process_related(
-    store: &Store,
-    text: &str,
-    key: &str,
-    caller: &str,
-) -> Result<Vec<crate::ask::RelatedFact>> {
-    let units = store.read_units()?;
-    let notes = store.read_notes()?;
-    let request = AskRequest {
-        query: text.to_string(),
-        k: crate::ask::RELATED_FACT_FETCH,
-        brief: false,
-        exclude_session: None,
-        agent_home: Some(caller.to_string()),
-    };
-    let output =
-        crate::ask::run_with_layers(store, &crate::aliases::embedded(), &request, &units, &notes)?;
-    Ok(crate::ask::related_facts(&output, key))
 }
 
 fn capture_plain_lines(payload: &Value) -> String {

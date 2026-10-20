@@ -16,7 +16,7 @@ use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef, Index};
 use crate::retrieval_log::{self, Exclusion, RetrievalEvent};
 use crate::skills::{self, Freshness, Served, SkillsIndex};
 use crate::store::{
-    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
+    dedupe_key, dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
 };
 use crate::text;
 
@@ -1212,16 +1212,25 @@ pub(crate) fn nameable(
     caller: &str,
     registry: &qol_agent_homes::Registry,
 ) -> Catalog {
-    Catalog::new(
-        units
-            .iter()
-            .filter(|unit| {
-                NAMEABLE_UNIT_KINDS.contains(&unit.kind.as_str())
-                    && agent_home::visible(unit, caller, registry)
-            })
-            .map(|unit| unit.key.clone())
-            .chain(visible_notes.iter().map(|note| note.key.clone())),
-    )
+    let mut facts: Vec<Vec<String>> = visible_notes
+        .iter()
+        .map(|note| vec![note.key.clone()])
+        .collect();
+    let mut copies: HashMap<String, Vec<String>> = HashMap::new();
+    for unit in units.iter().filter(|unit| {
+        NAMEABLE_UNIT_KINDS.contains(&unit.kind.as_str())
+            && agent_home::visible(unit, caller, registry)
+    }) {
+        if crate::store::in_answer_pool(&unit.kind) {
+            copies
+                .entry(dedupe_key(unit))
+                .or_default()
+                .push(unit.key.clone());
+        } else {
+            facts.push(vec![unit.key.clone()]);
+        }
+    }
+    Catalog::new(facts.into_iter().chain(copies.into_values()))
 }
 
 pub(crate) fn related_facts(output: &AskOutput, own_key: &str) -> Vec<RelatedFact> {

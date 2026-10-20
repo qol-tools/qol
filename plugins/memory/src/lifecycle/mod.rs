@@ -180,15 +180,21 @@ impl Lifecycle {
 }
 
 pub struct Catalog {
-    keys: Vec<String>,
+    keys: Vec<(String, usize)>,
+    facts: Vec<Vec<String>>,
 }
 
 impl Catalog {
-    pub fn new(keys: impl IntoIterator<Item = String>) -> Catalog {
-        let mut keys: Vec<String> = keys.into_iter().collect();
+    pub fn new(facts: impl IntoIterator<Item = Vec<String>>) -> Catalog {
+        let facts: Vec<Vec<String>> = facts.into_iter().collect();
+        let mut keys: Vec<(String, usize)> = facts
+            .iter()
+            .enumerate()
+            .flat_map(|(fact, copies)| copies.iter().map(move |key| (key.clone(), fact)))
+            .collect();
         keys.sort();
-        keys.dedup();
-        Catalog { keys }
+        keys.dedup_by(|later, earlier| later.0 == earlier.0);
+        Catalog { keys, facts }
     }
 
     pub fn resolve(&self, raw: &str) -> Result<Vec<String>> {
@@ -208,19 +214,21 @@ impl Catalog {
             }
             let start = self
                 .keys
-                .partition_point(|key| key.as_str() < wanted.as_str());
-            let matches: Vec<&String> = self.keys[start..]
+                .partition_point(|(key, _)| key.as_str() < wanted.as_str());
+            let matches: Vec<&(String, usize)> = self.keys[start..]
                 .iter()
-                .take_while(|key| key.starts_with(wanted.as_str()))
+                .take_while(|(key, _)| key.starts_with(wanted.as_str()))
                 .collect();
             let chosen = matches
                 .iter()
-                .find(|key| key.as_str() == wanted)
+                .find(|(key, _)| key.as_str() == wanted)
                 .or_else(|| matches.first().filter(|_| matches.len() == 1));
             match chosen {
-                Some(key) => {
-                    if !resolved.contains(*key) {
-                        resolved.push((*key).clone());
+                Some((key, fact)) => {
+                    for copy in std::iter::once(key).chain(&self.facts[*fact]) {
+                        if !resolved.contains(copy) {
+                            resolved.push(copy.clone());
+                        }
                     }
                 }
                 None if matches.is_empty() => {
@@ -232,7 +240,7 @@ impl Catalog {
                     matches
                         .iter()
                         .take(4)
-                        .map(|key| key.as_str())
+                        .map(|(key, _)| key.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 )),
@@ -543,18 +551,24 @@ mod tests {
     }
 
     #[test]
-    fn catalog_resolves_full_keys_and_unique_prefixes() {
-        let catalog = Catalog::new(
-            [
-                "72ed4718aaaaaaaa",
-                "72ed4718bbbbbbbb",
-                "af919076cccccccc",
-                "2e0e3996dddddddd",
-            ]
-            .map(str::to_owned),
-        );
+    fn catalog_resolves_full_keys_unique_prefixes_and_copies() {
+        let fact = |copies: &[&str]| -> Vec<String> {
+            copies.iter().map(|key| (*key).to_owned()).collect()
+        };
+        let catalog = Catalog::new([
+            fact(&["72ed4718aaaaaaaa"]),
+            fact(&["72ed4718bbbbbbbb"]),
+            fact(&["af919076cccccccc"]),
+            fact(&["2e0e3996dddddddd"]),
+            fact(&["5b5b5b5beeeeeeee", "9c9c9c9cffffffff"]),
+        ]);
         let cases: Vec<(&str, std::result::Result<Vec<&str>, &str>)> = vec![
             ("af919076", Ok(vec!["af919076cccccccc"])),
+            ("9c9c9c9c", Ok(vec!["9c9c9c9cffffffff", "5b5b5b5beeeeeeee"])),
+            (
+                "5b5b5b5b 9c9c9c9cffffffff",
+                Ok(vec!["5b5b5b5beeeeeeee", "9c9c9c9cffffffff"]),
+            ),
             ("AF919076", Ok(vec!["af919076cccccccc"])),
             ("72ed4718aaaaaaaa", Ok(vec!["72ed4718aaaaaaaa"])),
             (

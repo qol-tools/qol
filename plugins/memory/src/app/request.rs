@@ -996,6 +996,51 @@ mod tests {
     }
 
     #[test]
+    fn request_forget_covers_every_copy_of_a_repeated_statement() {
+        let earlier = "aaaaaaaa00000001";
+        let later = "bbbbbbbb00000002";
+        let mut repeated = unit_value(
+            later,
+            "The plugin clipboard history ring  survives tray restarts when the daemon runs",
+        );
+        repeated["session"] = json!("sess-live-bbb2");
+        repeated["ts"] = json!("2026-08-02T09:00:00.000Z");
+        let mut units = fillers().to_vec();
+        units.extend([
+            unit_value(
+                earlier,
+                "the plugin clipboard history ring survives tray restarts when the daemon runs",
+            ),
+            repeated,
+        ]);
+        let mut state = warm_state("forget-copies", &units);
+        let ask =
+            json!({ "query": "does the clipboard ring survive tray restarts", "no_log": true });
+        let listed = |state: &mut Arc<Mutex<WarmState>>| -> Vec<String> {
+            data(state, "ask", ask.clone())["units"]
+                .as_array()
+                .expect("ask lists units")
+                .iter()
+                .filter_map(|unit| unit["key"].as_str().map(str::to_owned))
+                .collect()
+        };
+        let before = listed(&mut state);
+        assert!(before.contains(&earlier.to_owned()), "{before:?}");
+
+        let forgotten = data(
+            &mut state,
+            "forget",
+            json!({ "keys": &later[..8], "reason": "the ring moved" }),
+        );
+        assert_eq!(forgotten["forgotten"], json!([later, earlier]));
+        let after = listed(&mut state);
+        assert!(
+            after.iter().all(|key| key != earlier && key != later),
+            "{after:?}"
+        );
+    }
+
+    #[test]
     fn request_unknown_action_is_fallback() {
         let mut state = warm_state("fallback", &[]);
         let result = respond(&mut state, "warp", json!({}));
