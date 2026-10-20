@@ -1170,6 +1170,7 @@ fn list_card_body(
             description: finder.description(),
             rows: vec![0],
             source: origin.source,
+            device_kind: None,
         });
     }
     let offset = rows.len();
@@ -1188,6 +1189,7 @@ fn list_card_body(
         description,
         rows: (offset..rows.len()).collect(),
         source: origin.source,
+        device_kind: None,
     });
     (rows, sections)
 }
@@ -1356,6 +1358,7 @@ fn list_item_card_level(
         description,
         rows: (0..rows.len()).collect(),
         source: row.source,
+        device_kind: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Some(Level {

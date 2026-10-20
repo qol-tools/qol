@@ -335,6 +335,7 @@ impl SettingsPanelView {
             description,
             rows: Vec::new(),
             source,
+            device_kind: None,
         };
         let child = Level {
             rows: Vec::new(),

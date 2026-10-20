@@ -23,6 +23,8 @@ pub struct ConfigSpecV1 {
     pub fields: IndexMap<String, FieldSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages: Option<PagesSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<DevicesSpec>,
 }
 
 impl ConfigSpecV1 {
@@ -42,6 +44,13 @@ pub struct PagesSpec {
     pub action: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DevicesSpec {
+    pub query: String,
+    pub kinds: IndexMap<String, String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
 pub struct SectionSpec {
     #[serde(default)]
@@ -54,6 +63,8 @@ pub struct SectionSpec {
     pub dev_only: bool,
     #[serde(default)]
     pub platforms: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -861,6 +872,37 @@ action = \"press\"
             })
         );
         assert!(spec.fields.is_empty());
+    }
+
+    #[test]
+    fn parses_a_devices_table_and_the_kind_each_section_belongs_to() {
+        let spec = parse_spec_str(
+            "
+schema_version = 1
+
+[devices]
+query = \"devices\"
+kinds = { mouse = \"Mouse\", keyboard = \"Keyboards\" }
+
+[section.pointer]
+label = \"Pointer\"
+device_kind = \"mouse\"
+",
+        )
+        .expect("valid spec");
+        let devices = spec.devices.expect("a devices table");
+        assert_eq!(devices.query, "devices");
+        assert_eq!(
+            devices.kinds.into_iter().collect::<Vec<_>>(),
+            [
+                ("mouse".to_string(), "Mouse".to_string()),
+                ("keyboard".to_string(), "Keyboards".to_string())
+            ]
+        );
+        assert_eq!(
+            spec.sections["pointer"].device_kind.as_deref(),
+            Some("mouse")
+        );
     }
 
     #[test]

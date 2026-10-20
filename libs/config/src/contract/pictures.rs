@@ -53,6 +53,9 @@ pub const PICTURE_NAMES: &[&str] = &[
     "fixed-size",
     "relative-size",
     "display-mode",
+    "mouse",
+    "trackpad",
+    "keyboard",
 ];
 
 const SWATCH_ARGUMENTS: [&str; 6] = ["amber", "green", "cyan", "magenta", "blue", "violet"];

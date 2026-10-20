@@ -2,23 +2,50 @@ schema_version = 1
 title = "Input"
 description = "How the mouse, touchpad and keyboard respond on this computer."
 
-[section.mouse]
-label = "Mouse"
-description = "Every mouse connected to this computer."
+[devices]
+query = "devices"
+kinds = { mouse = "Mouse", touchpad = "Touchpad", keyboard = "Keyboard" }
 
-[section.touchpad]
-label = "Touchpad"
-description = "The touchpad, when this computer has one."
+[section.mouse_pointer]
+label = "Pointer"
+description = "How far and how fast the pointer goes."
+device_kind = "mouse"
 
-[section.keyboard]
-label = "Keyboard"
+[section.mouse_scrolling]
+label = "Scrolling"
+description = "Which way the page moves."
+device_kind = "mouse"
+
+[section.mouse_buttons]
+label = "Buttons"
+description = "Which button clicks, and how quick a double-click is."
+device_kind = "mouse"
+
+[section.touchpad_pointer]
+label = "Pointer"
+description = "Whether a touch moves the pointer, and how far."
+device_kind = "touchpad"
+
+[section.touchpad_clicking]
+label = "Clicking"
+description = "What counts as a click."
+device_kind = "touchpad"
+
+[section.touchpad_scrolling]
+label = "Scrolling"
+description = "Which way the page moves."
+device_kind = "touchpad"
+
+[section.keyboard_repeat]
+label = "Key repeat"
 description = "What a held key does."
+device_kind = "keyboard"
 
 [field.pointer_speed]
 type = "number"
 label = "Pointer speed"
 description = "How far the pointer travels when you move the mouse."
-section = "mouse"
+section = "mouse_pointer"
 default = 50
 min = 0
 max = 100
@@ -33,11 +60,23 @@ type = "action"
 label = "Acceleration"
 active_label = "Acceleration"
 description = "Fast moves carry the pointer further than slow ones."
-section = "mouse"
+section = "mouse_pointer"
 action = "acceleration_on"
 active_action = "acceleration_off"
 active_query = "mouse"
 active_value_from = "acceleration"
+variant = "toggle"
+
+[field.mouse_natural_scroll]
+type = "action"
+label = "Natural scrolling"
+active_label = "Natural scrolling"
+description = "The page moves the way the wheel turns."
+section = "mouse_scrolling"
+action = "mouse_natural_scroll_on"
+active_action = "mouse_natural_scroll_off"
+active_query = "mouse"
+active_value_from = "natural_scroll"
 variant = "toggle"
 
 [field.swap_buttons]
@@ -45,7 +84,7 @@ type = "action"
 label = "Swap buttons"
 active_label = "Swap buttons"
 description = "The right button clicks and the left one opens menus."
-section = "mouse"
+section = "mouse_buttons"
 action = "swap_buttons_on"
 active_action = "swap_buttons_off"
 active_query = "mouse"
@@ -56,7 +95,7 @@ variant = "toggle"
 type = "number"
 label = "Double-click time"
 description = "The longest gap, in milliseconds, between two clicks that still counts as a double-click."
-section = "mouse"
+section = "mouse_buttons"
 default = 400
 min = 100
 max = 1000
@@ -66,36 +105,38 @@ action = "set_double_click"
 active_query = "mouse"
 active_value_from = "double_click"
 
-[field.mouse_natural_scroll]
-type = "action"
-label = "Natural scrolling"
-active_label = "Natural scrolling"
-description = "The page moves the way the wheel turns."
-section = "mouse"
-action = "mouse_natural_scroll_on"
-active_action = "mouse_natural_scroll_off"
-active_query = "mouse"
-active_value_from = "natural_scroll"
-variant = "toggle"
-
 [field.touchpad]
 type = "action"
 label = "Touchpad"
 active_label = "Touchpad"
 description = "Off ignores every touch, so a palm cannot move the pointer."
-section = "touchpad"
+section = "touchpad_pointer"
 action = "touchpad_on"
 active_action = "touchpad_off"
 active_query = "touchpad"
 active_value_from = "enabled"
 variant = "toggle"
 
+[field.touchpad_speed]
+type = "number"
+label = "Pointer speed"
+description = "How far the pointer travels when a finger moves on the touchpad."
+section = "touchpad_pointer"
+default = 50
+min = 0
+max = 100
+step = 5
+variant = "wide_slider"
+action = "set_touchpad_speed"
+active_query = "touchpad"
+active_value_from = "speed"
+
 [field.tap_to_click]
 type = "action"
 label = "Tap to click"
 active_label = "Tap to click"
 description = "A light tap clicks, without pressing the touchpad down."
-section = "touchpad"
+section = "touchpad_clicking"
 action = "tap_to_click_on"
 active_action = "tap_to_click_off"
 active_query = "touchpad"
@@ -107,32 +148,18 @@ type = "action"
 label = "Natural scrolling"
 active_label = "Natural scrolling"
 description = "Content follows your fingers, like on a phone."
-section = "touchpad"
+section = "touchpad_scrolling"
 action = "touchpad_natural_scroll_on"
 active_action = "touchpad_natural_scroll_off"
 active_query = "touchpad"
 active_value_from = "natural_scroll"
 variant = "toggle"
 
-[field.touchpad_speed]
-type = "number"
-label = "Pointer speed"
-description = "How far the pointer travels when a finger moves on the touchpad."
-section = "touchpad"
-default = 50
-min = 0
-max = 100
-step = 5
-variant = "wide_slider"
-action = "set_touchpad_speed"
-active_query = "touchpad"
-active_value_from = "speed"
-
 [field.repeat_delay]
 type = "number"
 label = "Repeat delay"
 description = "How long, in milliseconds, a key is held before it starts repeating."
-section = "keyboard"
+section = "keyboard_repeat"
 default = 500
 min = 100
 max = 1000
@@ -146,7 +173,7 @@ active_value_from = "repeat_delay"
 type = "number"
 label = "Repeat rate"
 description = "How many times a second a held key repeats."
-section = "keyboard"
+section = "keyboard_repeat"
 default = 30
 min = 2
 max = 50

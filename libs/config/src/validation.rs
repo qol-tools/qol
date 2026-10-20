@@ -39,6 +39,7 @@ pub fn validate_spec_collect(spec: &ConfigSpec) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     validate_schema_version(spec, &mut errors);
     validate_sections(spec, &mut errors);
+    validate_devices(spec, &mut errors);
     validate_fields(spec, &mut errors);
     errors
 }
@@ -80,6 +81,49 @@ fn validate_sections(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         }
         errors.push(ValidationError::new(format!("section.{id}"), "invalid id"));
         validate_section_actions(id, &section.actions, errors);
+    }
+}
+
+fn validate_devices(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
+    let kinds = spec.devices.as_ref().map(|devices| &devices.kinds);
+    if let Some(devices) = spec.devices.as_ref() {
+        if !valid_id(&devices.query) {
+            errors.push(ValidationError::new("devices.query", "invalid id"));
+        }
+        if devices.kinds.is_empty() {
+            errors.push(ValidationError::new(
+                "devices.kinds",
+                "must name at least one kind",
+            ));
+        }
+        for (kind, label) in &devices.kinds {
+            if !valid_id(kind) {
+                errors.push(ValidationError::new(
+                    format!("devices.kinds.{kind}"),
+                    "invalid id",
+                ));
+            }
+            if label.trim().is_empty() {
+                errors.push(ValidationError::new(
+                    format!("devices.kinds.{kind}"),
+                    "label must not be empty",
+                ));
+            }
+        }
+    }
+    for (id, section) in &spec.sections {
+        let Some(kind) = section.device_kind.as_deref() else {
+            continue;
+        };
+        let path = format!("section.{id}.device_kind");
+        match kinds {
+            None => errors.push(ValidationError::new(path, "requires a [devices] table")),
+            Some(kinds) if !kinds.contains_key(kind) => errors.push(ValidationError::new(
+                path,
+                format!("unknown device kind {kind}"),
+            )),
+            Some(_) => {}
+        }
     }
 }
 
@@ -1364,6 +1408,57 @@ platforms = ["linux", "macos", "windows"]
 "#,
         );
         assert!(valid.is_empty(), "{valid:?}");
+    }
+
+    #[test]
+    fn device_kinds_must_be_declared_in_the_devices_table() {
+        let errors = validate_contract(
+            r#"
+schema_version = 1
+
+[devices]
+query = "devices"
+kinds = { mouse = "Mouse", keyboard = "" }
+
+[section.pointer]
+device_kind = "mouse"
+
+[section.trackpad]
+device_kind = "touchpad"
+"#,
+        );
+        assert_has_error(&errors, "devices.kinds.keyboard", "label must not be empty");
+        assert_has_error(
+            &errors,
+            "section.trackpad.device_kind",
+            "unknown device kind touchpad",
+        );
+        assert_eq!(errors.len(), 2, "{errors:?}");
+
+        let orphan = validate_contract(
+            r#"
+schema_version = 1
+
+[section.pointer]
+device_kind = "mouse"
+"#,
+        );
+        assert_has_error(
+            &orphan,
+            "section.pointer.device_kind",
+            "requires a [devices]",
+        );
+
+        let empty = validate_contract(
+            r#"
+schema_version = 1
+
+[devices]
+query = "devices"
+kinds = {}
+"#,
+        );
+        assert_has_error(&empty, "devices.kinds", "at least one kind");
     }
 
     fn validate_contract(contract: &str) -> Vec<ValidationError> {

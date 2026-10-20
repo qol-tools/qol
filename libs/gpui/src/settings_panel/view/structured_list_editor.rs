@@ -555,6 +555,7 @@ impl SettingsPanelView {
             description: Some(description),
             rows: (0..rows.len()).collect(),
             source,
+            device_kind: None,
         };
         let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
         let Some(destination) = self.card_destination(&crumb, cx) else {
@@ -870,6 +871,7 @@ fn entries_card_level(
         description: origin.description,
         rows: (0..rows.len()).collect(),
         source,
+        device_kind: None,
     };
     let row_bounds = (0..rows.len()).map(|_| Rc::new(Cell::new(None))).collect();
     Level {
@@ -996,6 +998,7 @@ fn sync_entries_level(level: &mut Level) {
         description,
         rows: (0..rows.len()).collect(),
         source,
+        device_kind: None,
     };
     level.rows = rows;
     level.sections = vec![section];

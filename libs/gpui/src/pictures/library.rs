@@ -65,6 +65,9 @@ pub(crate) fn markup_for(spec: &str, context: &PictureContext) -> Option<String>
         "fixed-size" => fixed_size(),
         "relative-size" => relative_size(),
         "display-mode" => display_mode(argument)?,
+        "mouse" => mouse(),
+        "trackpad" => trackpad(),
+        "keyboard" => keyboard(),
         _ => return None,
     };
     Some(picture)
@@ -368,6 +371,33 @@ fn hdmi() -> String {
     out.push_str(&svg::line(38.0, 42.0, 38.0, 48.0, ""));
     out.push_str(&svg::path("M72 22 Q77 28 72 34", ""));
     out.push_str(&svg::path("M78 17 Q86 28 78 39", SOFT));
+    svg::svg(&out)
+}
+
+fn mouse() -> String {
+    let mut out = svg::wash(33.0, 5.0, 30.0, 50.0, 15.0, 0.2);
+    out.push_str(&svg::rect(33.0, 5.0, 30.0, 50.0, 15.0, ""));
+    out.push_str(&svg::path("M33 23 H63 M48 5 V23", ""));
+    out.push_str(&svg::rect(46.0, 10.0, 4.0, 8.0, 2.0, ""));
+    svg::svg(&out)
+}
+
+fn trackpad() -> String {
+    let mut out = svg::wash(15.0, 7.0, 66.0, 46.0, 7.0, 0.2);
+    out.push_str(&svg::rect(15.0, 7.0, 66.0, 46.0, 7.0, ""));
+    svg::svg(&out)
+}
+
+fn keyboard() -> String {
+    let mut out = svg::wash(5.0, 11.0, 86.0, 38.0, 5.0, 0.2);
+    out.push_str(&svg::rect(5.0, 11.0, 86.0, 38.0, 5.0, ""));
+    for y in [17.0, 24.0, 31.0] {
+        for column in 0..10 {
+            let x = 10.0 + 8.0 * f64::from(column);
+            out.push_str(&svg::rect(x, y, 5.0, 4.0, 1.0, FILL));
+        }
+    }
+    out.push_str(&svg::rect(28.0, 38.0, 40.0, 4.0, 1.0, FILL));
     svg::svg(&out)
 }
 

@@ -1,3 +1,4 @@
+mod devices;
 mod display_layout;
 mod entry_form;
 mod form_nav;
@@ -308,6 +309,7 @@ pub(super) struct SourceState {
     pub(super) daemon_port: Option<u16>,
     pub(super) copy: std::collections::BTreeMap<String, FieldCopy>,
     pub(super) pages: Option<qol_config::contract::PagesSpec>,
+    pub(super) devices: Option<devices::DevicePane>,
 }
 
 struct PreparedPanel {
@@ -835,7 +837,7 @@ fn answer_opening_page(
 ) -> (QueryStates, OpeningAnswers) {
     let mut states = QueryStates::new();
     let mut answers_seen = OpeningAnswers::new();
-    let queries = runtime_query_names(rows.iter().filter(|row| row.source == focused));
+    let queries = source_queries(rows, focused, sources);
     let Some(source) = sources.get(focused).filter(|_| !queries.is_empty()) else {
         return (states, answers_seen);
     };
@@ -864,6 +866,18 @@ fn answer_opening_page(
     (states, answers_seen)
 }
 
+fn source_queries(rows: &[Row], source: usize, sources: &[SourceState]) -> Vec<String> {
+    let mut queries = runtime_query_names(rows.iter().filter(|row| row.source == source));
+    let devices = sources
+        .get(source)
+        .and_then(|state| state.devices.as_ref())
+        .map(|pane| pane.query.clone());
+    if let Some(query) = devices.filter(|query| !queries.contains(query)) {
+        queries.push(query);
+    }
+    queries
+}
+
 type PageAnswer = (usize, String, Result<serde_json::Value, String>);
 
 fn ask_other_pages(
@@ -873,7 +887,7 @@ fn ask_other_pages(
 ) -> futures::channel::mpsc::UnboundedReceiver<PageAnswer> {
     let (sender, answers) = futures::channel::mpsc::unbounded();
     for (index, source) in sources.iter().enumerate() {
-        let queries = runtime_query_names(rows.iter().filter(|row| row.source == index));
+        let queries = source_queries(rows, index, sources);
         if index == open || queries.is_empty() {
             continue;
         }
@@ -953,6 +967,7 @@ fn prepare_source(
             daemon_port,
             copy,
             pages: None,
+            devices: spec.devices.as_ref().map(devices::DevicePane::new),
         },
     })
 }
@@ -973,6 +988,7 @@ fn bare_source(
             daemon_port: None,
             copy: std::collections::BTreeMap::new(),
             pages,
+            devices: None,
         },
     }
 }
@@ -1013,7 +1029,16 @@ fn size_prepared_panel(
     } else {
         0.0
     });
-    let width = body_width + rail_width(prepared.sources.len());
+    let device_list = if prepared
+        .sources
+        .iter()
+        .any(|source| source.devices.is_some())
+    {
+        components::DEVICE_LIST_WIDTH
+    } else {
+        0.0
+    };
+    let width = body_width + device_list + rail_width(prepared.sources.len());
     let height = panel_height(&prepared.rows, &prepared.sections)
         .max(if has_custom_source {
             PANEL_CUSTOM_HEIGHT
@@ -1073,6 +1098,26 @@ fn activation_decision(active: Option<&str>, requested: &str) -> ActivationDecis
 }
 
 fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
+    let kinds: std::collections::BTreeSet<&str> = sections
+        .iter()
+        .filter_map(|section| section.device_kind.as_deref())
+        .collect();
+    if kinds.is_empty() {
+        return stacked_height(rows, &sections.iter().collect::<Vec<_>>());
+    }
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let shown = sections
+                .iter()
+                .filter(|section| section.device_kind.as_deref().is_none_or(|own| own == kind))
+                .collect::<Vec<_>>();
+            stacked_height(rows, &shown)
+        })
+        .fold(0.0, f32::max)
+}
+
+fn stacked_height(rows: &[Row], sections: &[&RowSection]) -> f32 {
     let show_section_headers = sections.len() <= 1;
     let mut children = 0usize;
     let mut body = 0.0;
@@ -1094,7 +1139,7 @@ fn panel_height(rows: &[Row], sections: &[RowSection]) -> f32 {
         body += PANEL_GROUP_HEADER_HEIGHT + rows_height;
     }
     let gaps = children.saturating_sub(1) as f32 * PANEL_COLUMN_GAP;
-    chrome_height(sections) + body + gaps + qol_theme::SPACE_PAD
+    chrome_height(&[]) + body + gaps + qol_theme::SPACE_PAD
 }
 
 /// Sized against the same predicate the view opens the rail with, so a panel
@@ -1169,6 +1214,7 @@ mod tests {
             daemon_port: None,
             copy: std::collections::BTreeMap::new(),
             pages: None,
+            devices: None,
         }
     }
 
@@ -1298,6 +1344,7 @@ active_query = "status"
             description: None,
             rows: vec![0],
             source: 0,
+            device_kind: None,
         }];
         let expected = super::chrome_height(&sections)
             + super::PANEL_GROUP_HEADER_HEIGHT
@@ -1309,6 +1356,32 @@ active_query = "status"
     }
 
     #[test]
+    fn a_device_panel_is_as_tall_as_its_tallest_device() {
+        let rows = (0..5)
+            .map(|_| row(RowControl::Toggle(false)))
+            .collect::<Vec<_>>();
+        let section = |rows: Vec<usize>, kind: &str| RowSection {
+            label: kind.into(),
+            description: None,
+            rows,
+            source: 0,
+            device_kind: Some(kind.into()),
+        };
+        let mouse = section(vec![0, 1, 2], "mouse");
+        let keyboard = section(vec![3, 4], "keyboard");
+        assert_eq!(
+            panel_height(&rows, &[mouse.clone(), keyboard]),
+            panel_height(
+                &rows,
+                &[RowSection {
+                    device_kind: None,
+                    ..mouse
+                }]
+            )
+        );
+    }
+
+    #[test]
     fn the_filter_overlay_never_changes_the_window_height() {
         let rows = vec![row(RowControl::Toggle(false))];
         let sections = vec![RowSection {
@@ -1316,6 +1389,7 @@ active_query = "status"
             description: None,
             rows: vec![0],
             source: 0,
+            device_kind: None,
         }];
         assert_eq!(
             panel_height(&rows, &sections),
@@ -1357,6 +1431,7 @@ active_query = "status"
             description: None,
             rows: vec![0],
             source: 0,
+            device_kind: None,
         }];
         assert_eq!(
             panel_height(&gamepad, &sections),
@@ -1400,6 +1475,7 @@ active_query = "status"
             description: None,
             rows,
             source: 0,
+            device_kind: None,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -1426,6 +1502,7 @@ active_query = "status"
             description: None,
             rows,
             source: 0,
+            device_kind: None,
         };
         let sections = vec![plain("One", vec![0]), plain("Empty", Vec::new())];
 
@@ -1449,6 +1526,7 @@ active_query = "status"
             description: None,
             rows,
             source: 0,
+            device_kind: None,
         };
         let sections = vec![
             plain("One", vec![0]),
@@ -1479,6 +1557,7 @@ active_query = "status"
             description: None,
             rows: vec![0, 1, 2],
             source: 0,
+            device_kind: None,
         }];
 
         assert_eq!(

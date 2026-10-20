@@ -21,6 +21,7 @@ pub fn validate_contracts(
         validate_item_card_field_ref(id, field, config, &mut errors);
     }
     validate_pages(config, runtime, &mut errors);
+    validate_devices(config, runtime, &mut errors);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -520,6 +521,28 @@ fn validate_pages(
         errors.push(ValidationError::new(
             "pages.action",
             format!("references undeclared action: {}", pages.action),
+        ));
+    }
+}
+
+fn validate_devices(
+    config: &ConfigSpec,
+    runtime: Option<&RuntimeSpec>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(devices) = config.devices.as_ref() else {
+        return;
+    };
+    if config.pages.is_some() {
+        errors.push(ValidationError::new(
+            "devices",
+            "cannot sit beside [pages]; a page list has no device list",
+        ));
+    }
+    if !runtime.is_some_and(|runtime| runtime.queries.contains_key(&devices.query)) {
+        errors.push(ValidationError::new(
+            "devices.query",
+            format!("references undeclared query: {}", devices.query),
         ));
     }
 }
@@ -1476,6 +1499,24 @@ poll_interval_ms = 1000
         let errors = validate_contracts(&config, Some(&runtime)).unwrap_err();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].path, "pages");
+    }
+
+    #[test]
+    fn devices_must_name_a_declared_query() {
+        let config = parse_spec_str(
+            "schema_version = 1\n\n[devices]\nquery = \"devices\"\nkinds = { mouse = \"Mouse\" }\n",
+        )
+        .expect("parse config");
+        let declared = parse_runtime_spec_str(
+            "schema_version = 1\n\n[query.devices]\ndescription = \"Devices\"\npoll_interval_ms = 2000\n",
+        )
+        .expect("parse runtime");
+        assert!(validate_contracts(&config, Some(&declared)).is_ok());
+
+        let empty = parse_runtime_spec_str("schema_version = 1\n").expect("parse runtime");
+        let errors = validate_contracts(&config, Some(&empty)).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path, "devices.query");
     }
 
     const FINDER_RUNTIME: &str = r#"

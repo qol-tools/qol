@@ -41,6 +41,39 @@ pub struct Keyboard {
     pub repeat_rate: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Device {
+    pub id: &'static str,
+    pub kind: &'static str,
+    pub name: &'static str,
+    pub picture: &'static str,
+    pub status: &'static str,
+}
+
+const MOUSE: Device = Device {
+    id: "mouse",
+    kind: "mouse",
+    name: "Mouse",
+    picture: "mouse",
+    status: "Every mouse",
+};
+
+const TOUCHPAD: Device = Device {
+    id: "touchpad",
+    kind: "touchpad",
+    name: "Touchpad",
+    picture: "trackpad",
+    status: "Every touchpad",
+};
+
+const KEYBOARD: Device = Device {
+    id: "keyboard",
+    kind: "keyboard",
+    name: "Keyboard",
+    picture: "keyboard",
+    status: "Every keyboard",
+};
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Status {
     pub backend: &'static str,
@@ -316,6 +349,25 @@ pub fn keyboard() -> Result<Keyboard> {
     platform::keyboard()
 }
 
+pub fn devices() -> Vec<Device> {
+    listed_devices(&touchpad())
+}
+
+fn listed_devices(touchpad: &Result<Touchpad>) -> Vec<Device> {
+    let no_touchpad = matches!(
+        touchpad,
+        Ok(Touchpad { missing: Some(reason), .. }) if reason == NO_TOUCHPAD
+    );
+    [
+        Some(MOUSE),
+        (!no_touchpad).then_some(TOUCHPAD),
+        Some(KEYBOARD),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 pub fn status() -> Result<Status> {
     Ok(Status {
         backend: backend()?,
@@ -467,6 +519,42 @@ mod tests {
                 "natural_scroll": null,
                 "speed": null,
                 "missing": NO_TOUCHPAD,
+            })
+        );
+    }
+
+    #[test]
+    fn the_device_list_drops_the_touchpad_only_when_none_is_connected() {
+        let kinds = |touchpad: Result<Touchpad>| -> Vec<&str> {
+            listed_devices(&touchpad)
+                .into_iter()
+                .map(|device| device.kind)
+                .collect()
+        };
+        assert_eq!(
+            kinds(Ok(Touchpad::default())),
+            ["mouse", "touchpad", "keyboard"]
+        );
+        assert_eq!(
+            kinds(Ok(Touchpad::missing(TOUCHPAD_FIXED))),
+            ["mouse", "touchpad", "keyboard"]
+        );
+        assert_eq!(
+            kinds(Err(anyhow::anyhow!("unreadable"))),
+            ["mouse", "touchpad", "keyboard"]
+        );
+        assert_eq!(
+            kinds(Ok(Touchpad::missing(NO_TOUCHPAD))),
+            ["mouse", "keyboard"]
+        );
+        assert_eq!(
+            serde_json::to_value(listed_devices(&Ok(Touchpad::missing(NO_TOUCHPAD)))).unwrap()[0],
+            serde_json::json!({
+                "id": "mouse",
+                "kind": "mouse",
+                "name": "Mouse",
+                "picture": "mouse",
+                "status": "Every mouse",
             })
         );
     }
