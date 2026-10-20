@@ -1,0 +1,45 @@
+name: diag modinfo probe race
+
+on:
+  push:
+    branches: [diag/modinfo-probe-race]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+
+jobs:
+  stress:
+    name: stress (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: ci-ubuntu-latest
+          save-cache: "false"
+
+      - name: Build test binaries
+        id: build
+        run: |
+          cargo test --locked -p qol-process --lib --no-run --message-format=json >"$RUNNER_TEMP/process.json"
+          cargo test --locked -p qol-tray --lib --no-run --message-format=json >"$RUNNER_TEMP/tray.json"
+          process=$(jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "qol_process") | .executable' "$RUNNER_TEMP/process.json" | tail -1)
+          tray=$(jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "qol_tray") | .executable' "$RUNNER_TEMP/tray.json" | tail -1)
+          echo "process=$process" >>"$GITHUB_OUTPUT"
+          echo "tray=$tray" >>"$GITHUB_OUTPUT"
+          ls -la "$process" "$tray"
+
+      - name: Stress
+        env:
+          TRAY: ${{ steps.build.outputs.tray }}
+          PROCESS: ${{ steps.build.outputs.process }}
+        run: bash .github/diag/stress.sh "$TRAY" "$PROCESS" "${GITHUB_SHA::8}"

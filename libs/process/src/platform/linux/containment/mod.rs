@@ -298,9 +298,12 @@ impl ProcessTreeGuard {
                 .as_ref()
                 .is_some_and(|process| owned_process_alive(process).unwrap_or(true))
         {
+            let evidence = diag_exit_evidence(pid, &self.cgroup.path);
+            std::thread::sleep(Duration::from_millis(20));
+            let later = diag_exit_evidence(pid, &self.cgroup.path);
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("owned process root PID {pid} escaped its pre-exec cgroup"),
+                format!("owned process root PID {pid} escaped its pre-exec cgroup; DIAG at-check [{evidence}] after-20ms [{later}]"),
             ));
         }
         *target = Some(ProcessTreeTarget {
@@ -433,6 +436,41 @@ impl ProcessTreeGuard {
             .as_ref()
             .map_or(Ok(()), |guardian| guardian.disarm())
     }
+}
+fn diag_exit_evidence(pid: libc::pid_t, owned: &std::path::Path) -> String {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    let fields = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| {
+            fields
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let state = fields.first().cloned().unwrap_or_default();
+    let flags = fields
+        .get(6)
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_default();
+    let proc_cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).unwrap_or_default();
+    let directory = open_directory(owned);
+    let listed = directory
+        .as_ref()
+        .ok()
+        .and_then(|directory| read_at(directory.as_raw_fd(), "cgroup.procs").ok())
+        .and_then(|content| parse_cgroup_processes(&content).ok())
+        .map(|members| members.contains(&pid));
+    let populated = directory
+        .as_ref()
+        .ok()
+        .and_then(|directory| cgroup_populated(directory.as_raw_fd()).ok());
+    format!(
+        "state={state} flags={flags:#x} pf_exiting={} proc_cgroup={:?} owned={} listed_in_procs={listed:?} populated={populated:?}",
+        flags & 0x4 != 0,
+        proc_cgroup.trim(),
+        owned.display()
+    )
 }
 fn prepared_spawn_failure(error: io::Error, cleanup: io::Result<()>) -> PlatformSpawnFailure {
     match cleanup {

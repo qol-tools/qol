@@ -292,6 +292,43 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn diag_fast_root_stress() {
+        let Some(iterations) = std::env::var_os("QOL_DIAG_STRESS_ITERATIONS") else {
+            return;
+        };
+        let iterations: usize = iterations.to_string_lossy().parse().unwrap();
+        let mut failures = Vec::new();
+        for _ in 0..iterations {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "echo ok"]);
+            match run_guarded_with_output_timeout(
+                command,
+                guardian_command(),
+                Duration::from_secs(5),
+                1024,
+            ) {
+                Ok(BoundedCommandOutput::Completed(output))
+                    if output.status.success() && text(&output.stdout).trim() == "ok" => {}
+                Ok(BoundedCommandOutput::Completed(output)) => failures.push(format!(
+                    "completed status={} stdout={:?} stderr={:?}",
+                    output.status,
+                    text(&output.stdout),
+                    text(&output.stderr)
+                )),
+                Ok(BoundedCommandOutput::TimedOut { .. }) => failures.push("timed out".to_string()),
+                Err(error) => failures.push(format!("error kind={:?}: {error}", error.kind())),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "DIAG {} of {iterations} guarded runs failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
+    #[test]
     #[cfg(any(target_os = "linux", windows))]
     fn guarded_runner_preserves_successful_output() {
         let output = run_guarded_with_output_timeout(

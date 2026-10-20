@@ -1,4 +1,5 @@
 use super::Observation;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -43,6 +44,10 @@ pub(crate) fn bounded_modinfo_version(
     binary: &Path,
     timeout: std::time::Duration,
 ) -> Option<String> {
+    probe_modinfo_version(binary, timeout).ok()
+}
+
+fn probe_modinfo_version(binary: &Path, timeout: std::time::Duration) -> io::Result<String> {
     let mut command = Command::new(binary);
     command.args(["-F", "version", "nvidia"]);
     let output = qol_process::run_guarded_with_output_timeout(
@@ -50,25 +55,38 @@ pub(crate) fn bounded_modinfo_version(
         modinfo_guardian_command()?,
         timeout,
         MODINFO_OUTPUT_LIMIT,
-    )
-    .ok()?;
+    )?;
     let qol_process::BoundedCommandOutput::Completed(output) = output else {
-        return None;
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("{} did not finish within {timeout:?}", binary.display()),
+        ));
     };
     if !output.status.success() {
-        return None;
+        return Err(io::Error::other(format!(
+            "{} exited with {}: {}",
+            binary.display(),
+            output.status,
+            String::from_utf8_lossy(output.stderr.as_bytes()).trim()
+        )));
     }
     let version = String::from_utf8_lossy(output.stdout.as_bytes())
         .trim()
         .to_string();
-    is_version_token(&version).then_some(version)
+    if !is_version_token(&version) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} printed no version: {version:?}", binary.display()),
+        ));
+    }
+    Ok(version)
 }
 
-fn modinfo_guardian_command() -> Option<Command> {
-    let current = std::env::current_exe().ok()?;
+fn modinfo_guardian_command() -> io::Result<Command> {
+    let current = std::env::current_exe()?;
     #[cfg(not(test))]
     {
-        Some(qol_process::process_tree_guardian_command(&current))
+        Ok(qol_process::process_tree_guardian_command(&current))
     }
     #[cfg(test)]
     {
@@ -78,7 +96,7 @@ fn modinfo_guardian_command() -> Option<Command> {
             "features::gpu_driver_sync::platform::linux::tests::guarded_modinfo_helper",
             "--nocapture",
         ]);
-        Some(command)
+        Ok(command)
     }
 }
 
@@ -185,10 +203,9 @@ mod tests {
         std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
         std::fs::set_permissions(&script, permissions).unwrap();
 
-        assert_eq!(
-            bounded_modinfo_version(&script, std::time::Duration::from_secs(5)).as_deref(),
-            Some("580.159.02")
-        );
+        let version = probe_modinfo_version(&script, std::time::Duration::from_secs(5))
+            .unwrap_or_else(|error| panic!("the modinfo probe failed: {error}"));
+        assert_eq!(version, "580.159.02");
         std::fs::remove_dir_all(&dir).ok();
     }
 
