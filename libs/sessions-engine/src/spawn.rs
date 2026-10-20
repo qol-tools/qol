@@ -206,7 +206,20 @@ fn config_dispatch_policy_at(path: &Path) -> Result<DispatchPolicy> {
     };
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    if let Some(model) = config
+        .spawn_model
+        .as_deref()
+        .filter(|model| model.contains('*'))
+    {
+        bail!(
+            "spawn_model must name a concrete model, not the pattern `{model}`, in {}",
+            path.display()
+        );
+    }
     let allowed_models = allowed_models_from(config.allowed_models, config.spawn_model.clone());
+    for model in &allowed_models {
+        require_trailing_wildcard("allowed_models", model, path)?;
+    }
     let tool_models = tool_models_from(config.tool_models, path)?;
     let agent = AgentPolicy::build(
         config.agent_profiles,
@@ -300,11 +313,22 @@ fn tool_models_from(
                     path.display()
                 );
             }
+            require_trailing_wildcard(&format!("tool_models for `{tool}`"), &model, path)?;
             declared.push(model);
         }
         tool_models.insert(tool, declared);
     }
     Ok(tool_models)
+}
+
+fn require_trailing_wildcard(field: &str, model: &str, path: &Path) -> Result<()> {
+    if matches!(model.find('*'), Some(index) if index + 1 != model.len()) {
+        bail!(
+            "{field} entry `{model}` may use `*` only once, as its last character, in {}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn require_model_for_launch(model: Option<&str>) -> Result<()> {
@@ -3721,6 +3745,28 @@ mod tests {
         fs::write(&path, "[tool_models]\npi = [\"flash\", \"flash\"]\n").unwrap();
         let duplicate = config_dispatch_policy_at(&path).unwrap_err().to_string();
         assert!(duplicate.contains("tool_models"), "{duplicate}");
+
+        fs::write(&path, "[tool_models]\nclaude = [\"claude-*-5\"]\n").unwrap();
+        let inner_wildcard = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(
+            inner_wildcard.contains("last character"),
+            "{inner_wildcard}"
+        );
+
+        fs::write(&path, "allowed_models = [\"claude-**\"]\n").unwrap();
+        let doubled = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(doubled.contains("allowed_models"), "{doubled}");
+
+        fs::write(&path, "spawn_model = \"claude-*\"\n").unwrap();
+        let pattern_default = config_dispatch_policy_at(&path).unwrap_err().to_string();
+        assert!(pattern_default.contains("spawn_model"), "{pattern_default}");
+
+        fs::write(
+            &path,
+            "allowed_models = [\"claude-*\"]\n[tool_models]\nclaude = [\"claude-*\"]\n",
+        )
+        .unwrap();
+        assert!(config_dispatch_policy_at(&path).is_ok());
 
         fs::write(&path, "[tool_models]\npi = []\n").unwrap();
         let empty_list = config_dispatch_policy_at(&path).unwrap_err().to_string();

@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Result};
 use qol_terminal_sessions::cli::{CliModelCatalog, CliSessionInterpreter, CliToolId};
 use serde::Serialize;
 
-use super::agent_policy::{AgentRole, ImageInput, VisualReview};
+use super::agent_policy::{model_declared, AgentRole, ImageInput, VisualReview};
 use super::spawn::config_dispatch_policy;
 
 const USAGE: &str = "qol sessions capability [--tier TOKEN]";
@@ -153,10 +153,7 @@ fn profile_capability(
         image_input: profile.image_input,
         visual_review: profile.visual_review,
         preference: profile.preference,
-        spend_allowed: allowed_models.is_empty()
-            || allowed_models
-                .iter()
-                .any(|allowed| allowed == &profile.model),
+        spend_allowed: allowed_models.is_empty() || model_declared(allowed_models, &profile.model),
     }
 }
 
