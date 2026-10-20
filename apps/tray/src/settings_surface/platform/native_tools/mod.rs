@@ -16,8 +16,8 @@ use crate::settings_surface::CoreTool;
 use model::ToolKind;
 use view::NativeToolsView;
 
-pub(super) fn check_due_updates() {
-    if let Err(error) = updates::data::action("check_due_updates", None) {
+pub(super) fn check_updates() {
+    if let Err(error) = updates::data::action("check_updates", None) {
         log::warn!("Settings could not start an update check: {error:#}");
     }
 }

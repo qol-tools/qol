@@ -648,7 +648,7 @@ async fn activate(
     plugin_id: String,
     cx: &gpui::AsyncApp,
 ) {
-    cx.background_spawn(async { super::native_tools::check_due_updates() })
+    cx.background_spawn(async { super::native_tools::check_updates() })
         .await;
     if let Some(tool) = CoreTool::from_wire_id(&plugin_id) {
         let page_id = tool.page_wire_id().to_string();
