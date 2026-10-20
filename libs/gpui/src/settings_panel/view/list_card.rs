@@ -63,7 +63,7 @@ impl SettingsPanelView {
         }
     }
 
-    fn list_card_offset(&self) -> usize {
+    pub(super) fn list_card_offset(&self) -> usize {
         usize::from(self.finder().is_some())
     }
 

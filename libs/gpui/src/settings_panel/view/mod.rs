@@ -649,10 +649,9 @@ impl SettingsPanelView {
         self.filter = next;
         let visible = self.current_visible_rows();
         let selected = self.level().selected;
-        self.level_mut().selected = match self.filtering() {
-            true => visible.first().copied().unwrap_or(selected),
-            false => clamp_selected(&visible, selected),
-        };
+        let filtering = self.filtering();
+        let first_item = self.list_card_offset();
+        self.level_mut().selected = filtered_selection(&visible, selected, filtering, first_item);
         self.resync_scroll();
     }
 
@@ -5531,6 +5530,23 @@ fn row_matches(row: &Row, needle: &str) -> bool {
             .is_some_and(|text| text.to_lowercase().contains(needle))
 }
 
+fn filtered_selection(
+    visible: &[usize],
+    selected: usize,
+    filtering: bool,
+    first_item: usize,
+) -> usize {
+    if !filtering {
+        return clamp_selected(visible, selected);
+    }
+    visible
+        .iter()
+        .copied()
+        .find(|row| *row >= first_item)
+        .or_else(|| visible.first().copied())
+        .unwrap_or(selected)
+}
+
 /// Enter closes the filter and falls through to activate the highlighted row in the same press;
 /// tab only closes it.
 fn filter_close_activates(key: &str) -> bool {
@@ -6052,6 +6068,23 @@ mod tests {
         assert!(super::rail_open(2, false));
         assert!(!super::rail_open(1, false));
         assert!(!super::rail_open(1, true));
+    }
+
+    #[test]
+    fn a_finder_filter_selects_the_first_match_past_its_search_row() {
+        let cases = [
+            ("finder with matches", vec![0, 2, 3], true, 1, 2),
+            ("finder without matches", vec![0], true, 1, 0),
+            ("plain list", vec![1, 3], true, 0, 1),
+            ("filter cleared", vec![0, 1, 2], false, 1, 2),
+        ];
+        for (label, visible, filtering, first_item, expected) in cases {
+            assert_eq!(
+                super::filtered_selection(&visible, 2, filtering, first_item),
+                expected,
+                "case: {label}"
+            );
+        }
     }
 
     #[test]
