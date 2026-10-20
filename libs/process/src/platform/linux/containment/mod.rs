@@ -293,11 +293,12 @@ impl ProcessTreeGuard {
             ));
         }
         let root = capture_owned_process(pid)?;
-        if !self.cgroup.contains_recursive(pid)?
-            && root
-                .as_ref()
-                .is_some_and(|process| owned_process_alive(process).unwrap_or(true))
-        {
+        let listed = self.cgroup.contains_recursive(pid)?;
+        let recorded = !listed && self.cgroup.recorded_in_proc_cgroup(pid)?;
+        let alive = root
+            .as_ref()
+            .is_some_and(|process| owned_process_alive(process).unwrap_or(true));
+        if root_escaped(listed, recorded, alive) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("owned process root PID {pid} escaped its pre-exec cgroup"),
@@ -960,6 +961,20 @@ impl LinuxCgroup {
         Ok(self.members_recursive()?.contains(&pid))
     }
 
+    fn recorded_in_proc_cgroup(&self, pid: libc::pid_t) -> io::Result<bool> {
+        let content = match std::fs::read_to_string(format!("/proc/{pid}/cgroup")) {
+            Ok(content) => content,
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        proc_cgroup_within(&content, &self.path)
+    }
+
     fn members(&self) -> io::Result<Vec<libc::pid_t>> {
         parse_cgroup_processes(&self.read_control("cgroup.procs")?)
     }
@@ -1298,8 +1313,7 @@ fn validate_cgroup_controls(path: &std::path::Path) -> io::Result<()> {
     }
     Ok(())
 }
-fn current_cgroup_path() -> io::Result<std::path::PathBuf> {
-    let content = std::fs::read_to_string("/proc/self/cgroup")?;
+fn unified_cgroup_path(content: &str) -> io::Result<std::path::PathBuf> {
     let current = content
         .lines()
         .find_map(|line| line.strip_prefix("0::"))
@@ -1309,8 +1323,17 @@ fn current_cgroup_path() -> io::Result<std::path::PathBuf> {
                 "process is not attached to a unified cgroup v2 hierarchy",
             )
         })?;
-    let current = std::path::Path::new("/sys/fs/cgroup").join(current.trim_start_matches('/'));
-    std::fs::canonicalize(current)
+    Ok(std::path::Path::new("/sys/fs/cgroup").join(current.trim_start_matches('/')))
+}
+fn proc_cgroup_within(content: &str, owned: &std::path::Path) -> io::Result<bool> {
+    Ok(unified_cgroup_path(content)?.starts_with(owned))
+}
+fn root_escaped(listed: bool, recorded: bool, alive: bool) -> bool {
+    !listed && !recorded && alive
+}
+fn current_cgroup_path() -> io::Result<std::path::PathBuf> {
+    let content = std::fs::read_to_string("/proc/self/cgroup")?;
+    std::fs::canonicalize(unified_cgroup_path(&content)?)
 }
 fn owned_cgroup_parent(
     root: &std::path::Path,
@@ -2504,6 +2527,127 @@ mod tests {
             root,
             &root.join("arbitrary-child")
         ));
+    }
+    #[test]
+    fn the_unified_cgroup_entry_maps_under_the_cgroup_mount() {
+        let cases = [
+            (
+                "0::/user.slice/a.scope\n",
+                Some("/sys/fs/cgroup/user.slice/a.scope"),
+            ),
+            (
+                "12:cpu,cpuacct:/legacy\n0::/user.slice/b (deleted)\n",
+                Some("/sys/fs/cgroup/user.slice/b (deleted)"),
+            ),
+            ("0::/\n", Some("/sys/fs/cgroup")),
+            ("12:cpu,cpuacct:/legacy\n", None),
+        ];
+        for (content, expected) in cases {
+            assert_eq!(
+                unified_cgroup_path(content).ok(),
+                expected.map(std::path::PathBuf::from),
+                "{content:?}"
+            );
+        }
+    }
+    #[test]
+    fn a_proc_cgroup_entry_is_within_only_the_owned_subtree() {
+        let owned = std::path::Path::new("/sys/fs/cgroup/app.slice/qol-process-v1-a");
+        let cases = [
+            ("0::/app.slice/qol-process-v1-a\n", true),
+            ("0::/app.slice/qol-process-v1-a/nested\n", true),
+            ("0::/app.slice/qol-process-v1-a/nested (deleted)\n", true),
+            ("0::/app.slice/qol-process-v1-a (deleted)\n", false),
+            ("0::/app.slice/qol-process-v1-a-1\n", false),
+            ("0::/app.slice\n", false),
+            ("0::/../app.slice/qol-process-v1-a\n", false),
+        ];
+        for (content, expected) in cases {
+            assert_eq!(
+                proc_cgroup_within(content, owned).unwrap(),
+                expected,
+                "{content:?}"
+            );
+        }
+        assert!(proc_cgroup_within("12:cpu:/legacy\n", owned).is_err());
+    }
+    #[test]
+    fn only_a_live_root_neither_listed_nor_recorded_has_escaped() {
+        let cases = [
+            ((true, false, true), false),
+            ((true, false, false), false),
+            ((false, true, true), false),
+            ((false, true, false), false),
+            ((false, false, false), false),
+            ((false, false, true), true),
+        ];
+        for ((listed, recorded, alive), expected) in cases {
+            assert_eq!(
+                root_escaped(listed, recorded, alive),
+                expected,
+                "listed={listed} recorded={recorded} alive={alive}"
+            );
+        }
+    }
+    #[test]
+    fn a_root_moved_out_before_exec_is_refused_as_escaped() {
+        let guard = ProcessTreeGuard {
+            target: Mutex::new(None),
+            guardian: None,
+            cgroup: LinuxCgroup::create().unwrap(),
+            prepared: AtomicBool::new(false),
+        };
+        let elsewhere = LinuxCgroup::create().unwrap();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let prepared = guard.prepare_command(&mut command).unwrap();
+        let directory = elsewhere.directory.try_clone().unwrap();
+        let (_unread, acknowledge) = cloexec_pipe().unwrap();
+        let parent = unsafe { libc::getpid() };
+        unsafe {
+            command.pre_exec(move || attach_preexec_cgroup(&directory, parent, &acknowledge));
+        }
+
+        let failure = guard
+            .spawn_prepared(&mut command, prepared)
+            .expect_err("a root outside the owned cgroup must be refused");
+
+        assert!(
+            failure
+                .source
+                .to_string()
+                .contains("escaped its pre-exec cgroup"),
+            "{}",
+            failure.source
+        );
+        drop(elsewhere);
+    }
+    #[test]
+    fn an_exited_unreaped_root_is_still_recorded_in_its_cgroup() {
+        let cgroup = LinuxCgroup::create().unwrap();
+        let mut command = Command::new("sleep");
+        command.arg("30");
+        let _prepared = cgroup.prepare_command(&mut command).unwrap();
+        let mut child = command.spawn().unwrap();
+        let pid = pid_t(child.id()).unwrap();
+        assert!(cgroup.recorded_in_proc_cgroup(pid).unwrap());
+        assert!(!cgroup
+            .recorded_in_proc_cgroup(pid_t(std::process::id()).unwrap())
+            .unwrap());
+
+        child.kill().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while cgroup.contains_recursive(pid).unwrap() {
+            assert!(
+                Instant::now() < deadline,
+                "PID {pid} never left cgroup.procs"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert!(cgroup.recorded_in_proc_cgroup(pid).unwrap());
+        child.wait().unwrap();
+        assert!(!cgroup.recorded_in_proc_cgroup(pid).unwrap());
     }
     #[test]
     fn stale_journal_recovery_kills_and_removes_the_exact_recorded_cgroup() {
