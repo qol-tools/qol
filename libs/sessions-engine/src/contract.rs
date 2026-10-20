@@ -271,7 +271,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "query": {
                         "type": "string",
-                        "description": "Case-insensitive text a row's title, cwd, key, tool, external_id or a pull request URL the conversation opened or linked must contain; name a project, key, topic or pull request (`pull/230`) to narrow the list",
+                        "description": "Case-insensitive text a row's title, cwd, key, tool, external_id or a pull request URL the conversation linked must contain (for a history row, its latest pull request and any others linked in the last 256 KiB of its transcript); name a project, key, topic or pull request (`pull/230`) to narrow the list",
                     },
                     "include_lanes": {
                         "type": "boolean",

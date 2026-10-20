@@ -116,6 +116,9 @@ impl ClaudeHistory {
             }
         }
         cache.retain(|path, _| seen.contains(path));
+        found.sort_by_key(|conversation| std::cmp::Reverse(conversation.last_active));
+        let mut ids = HashSet::new();
+        found.retain(|conversation| ids.insert(conversation.external_id.clone()));
         found
     }
 }
@@ -399,13 +402,117 @@ mod tests {
             r#"{"sessionId":"open","cwd":"/work/proj"}"#,
         )
         .unwrap();
+        write_transcript(home.path(), "zero", &[ENTRY, &first]);
+        fs::write(
+            sessions.join("0.json"),
+            r#"{"sessionId":"zero","cwd":"/work/proj"}"#,
+        )
+        .unwrap();
 
         let found = history(home.path(), None).closed_conversations(&tool(), since);
 
-        assert_eq!(ids(&found), ["kept"]);
+        let mut listed = ids(&found);
+        listed.sort_unstable();
+        assert_eq!(listed, ["kept", "zero"]);
+        let found = [found
+            .into_iter()
+            .find(|conversation| conversation.external_id == "kept")
+            .unwrap()];
         assert_eq!(found[0].settings.claude_config_dir, None);
         assert_eq!(found[0].title, None);
         assert!(found[0].pr_urls.is_empty());
+    }
+
+    #[test]
+    fn a_session_record_holds_its_conversation_only_while_its_own_process_runs() {
+        let home = tempfile::tempdir().unwrap();
+        let first = prompt("hello");
+        write_transcript(home.path(), "reused", &[ENTRY, &first]);
+        let sessions = home.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let record = sessions.join(format!("{}.json", std::process::id()));
+        let write_record = |process_start: &str| {
+            fs::write(
+                &record,
+                serde_json::json!({ "sessionId": "reused", "cwd": "/work/proj", "procStart": process_start })
+                    .to_string(),
+            )
+            .unwrap();
+        };
+
+        write_record("not this process");
+        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+        assert_eq!(ids(&found), ["reused"]);
+
+        if let Some(started) = qol_process::process_start_time(std::process::id()) {
+            write_record(&started.to_string());
+            let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+            assert!(found.is_empty(), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn a_long_transcript_is_read_from_the_metadata_claude_appends_at_its_end() {
+        let home = tempfile::tempdir().unwrap();
+        let first = prompt("hello");
+        let filler = prompt(&"x".repeat(4_096));
+        let mut lines = vec![
+            r#"{"type":"permission-mode","permissionMode":"default"}"#.to_owned(),
+            ENTRY.to_owned(),
+            first,
+            r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/3"}"#.to_owned(),
+        ];
+        lines.extend(std::iter::repeat_n(filler, 80));
+        lines.extend([
+            r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"low"}}}"#.to_owned(),
+            r#"{"type":"custom-title","customTitle":"Named early"}"#.to_owned(),
+            r#"{"type":"permission-mode","permissionMode":"plan"}"#.to_owned(),
+            r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/4"}"#.to_owned(),
+        ]);
+        let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
+        write_transcript(home.path(), "long", &lines);
+
+        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+
+        assert_eq!(found[0].title.as_deref(), Some("Named early"));
+        assert_eq!(found[0].settings.permission_mode.as_deref(), Some("plan"));
+        assert_eq!(found[0].settings.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(found[0].settings.effort.as_deref(), Some("low"));
+        assert_eq!(found[0].pr_urls, ["https://github.com/o/r/pull/4"]);
+    }
+
+    #[test]
+    fn a_conversation_in_two_claude_homes_is_listed_once_from_the_newer_copy() {
+        let older = tempfile::tempdir().unwrap();
+        let newer = tempfile::tempdir().unwrap();
+        let first = prompt("hello");
+        let stale = write_transcript(older.path(), "dup", &[ENTRY, &first]);
+        write_transcript(newer.path(), "dup", &[ENTRY, &first]);
+        fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(600))
+            .unwrap();
+        let account = newer.path().join("account");
+        let history = ClaudeHistory::with_roots(vec![
+            HistoryRoot {
+                home: older.path().to_path_buf(),
+                config_dir: None,
+            },
+            HistoryRoot {
+                home: newer.path().to_path_buf(),
+                config_dir: Some(account.clone()),
+            },
+        ]);
+
+        let found = history.closed_conversations(&tool(), UNIX_EPOCH);
+
+        assert_eq!(ids(&found), ["dup"]);
+        assert_eq!(
+            found[0].settings.claude_config_dir.as_deref(),
+            account.to_str()
+        );
     }
 
     #[test]

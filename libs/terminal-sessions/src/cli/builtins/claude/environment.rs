@@ -73,9 +73,10 @@ pub(super) fn open_session_ids(home: &Path) -> HashSet<String> {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| path.file_stem()?.to_str()?.parse::<i32>().ok())
-        .filter(|pid| u32::try_from(*pid).is_ok_and(qol_process::is_pid_alive))
-        .filter_map(|pid| read_record(home, pid))
-        .map(|record| record.session_id)
+        .filter(|pid| *pid > 0)
+        .filter_map(|pid| Some((pid.unsigned_abs(), read_record(home, pid)?)))
+        .filter(|(pid, record)| record.held_by(*pid))
+        .map(|(_, record)| record.session_id)
         .filter(|session_id| !session_id.is_empty())
         .collect()
 }
@@ -94,9 +95,19 @@ struct ClaudeSessionRecord {
     bridge_session_id: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    #[serde(rename = "procStart", default)]
+    process_start: Option<String>,
 }
 
 impl ClaudeSessionRecord {
+    fn held_by(&self, pid: u32) -> bool {
+        qol_process::is_pid_alive(pid)
+            && self.process_start.as_ref().is_none_or(|recorded| {
+                qol_process::process_start_time(pid)
+                    .is_some_and(|started| started.to_string() == *recorded)
+            })
+    }
+
     fn busy(&self) -> bool {
         self.status
             .as_deref()
