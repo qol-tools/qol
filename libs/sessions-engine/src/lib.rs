@@ -1537,7 +1537,7 @@ mod tests {
         assert!(help.contains(
             "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
-        assert!(help.contains("sessions_list, session_spawn"));
+        assert!(help.contains("sessions_list, sessions_closed, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
         assert!(help.contains("qol sessions loop-close <session> --completion-marker MARKER"));
     }
