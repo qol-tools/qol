@@ -6,7 +6,7 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const PUBLIC_FLAG: &str = "--public";
 const DIRECT_ACTIONS: [(&str, &str); 5] = [
-    ("settings", "Open the PointZ settings surface."),
+    ("settings", "Open the PointZerver settings surface."),
     (
         "begin_pairing",
         "Ask qol-tray to open a one-minute window for a phone to pair.",
@@ -634,7 +634,9 @@ mod tests {
 
         assert_eq!(first.exit_code, EXIT_SUCCESS);
         assert_eq!(first.stdout, final_token.stdout);
-        assert!(first.stdout.contains("Open the PointZ settings surface."));
+        assert!(first
+            .stdout
+            .contains("Open the PointZerver settings surface."));
         assert_no_operations(&calls, &["help", "--action", "settings"]);
     }
 

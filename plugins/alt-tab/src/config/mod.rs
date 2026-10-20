@@ -56,21 +56,11 @@ pub enum PreviewIconPosition {
     TopRight,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum LabelSize {
-    Small,
-    #[default]
-    Medium,
-    Large,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LabelConfig {
     pub show_app_name: bool,
     pub show_window_title: bool,
-    pub size: LabelSize,
 }
 
 impl Default for LabelConfig {
@@ -78,7 +68,6 @@ impl Default for LabelConfig {
         Self {
             show_app_name: false,
             show_window_title: true,
-            size: LabelSize::default(),
         }
     }
 }

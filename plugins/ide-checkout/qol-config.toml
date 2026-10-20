@@ -16,7 +16,7 @@ placeholder = "System temporary files"
 default = ""
 
 [section.apps]
-label = "Applications"
+label = "Open with"
 description = "Apps that can open a checked-out branch."
 
 [field.apps]

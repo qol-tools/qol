@@ -13,7 +13,7 @@ label = "Action mode"
 description = "Pick whether letting go switches to the window."
 section = "behavior"
 default = "hold_to_switch"
-card_description = "What releasing the shortcut does."
+card_description = "What releasing the hotkey does."
 options = ["hold_to_switch", "sticky"]
 
 [field.action_mode.option_labels]
@@ -78,7 +78,7 @@ default = true
 [field.display_show_hotkey_hints]
 type = "boolean"
 config_key = "display.show_hotkey_hints"
-label = "Show shortcut hints"
+label = "Show key hints"
 description = "Show the key hints under the windows."
 section = "windows"
 default = true
@@ -205,26 +205,6 @@ variant = "slider"
 label = "Labels"
 description = "What text each window row should show."
 actions = ["open", "open-reverse"]
-
-[field.label_size]
-type = "select"
-config_key = "label.size"
-label = "Label size"
-description = "Text size relative to the card size."
-section = "labels"
-default = "medium"
-card_description = "Text size relative to the card size."
-options = ["small", "medium", "large"]
-
-[field.label_size.option_labels]
-small = "Small"
-medium = "Medium"
-large = "Large"
-
-[field.label_size.option_pictures]
-small = "aa:15"
-medium = "aa:22"
-large = "aa:30"
 
 [field.label_show_app_name]
 type = "boolean"

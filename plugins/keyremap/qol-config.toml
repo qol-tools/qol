@@ -37,16 +37,16 @@ default = [
   "com.todesktop.230313mzl4w4u92",
 ]
 
-[section.char_rules]
-label = "Character rules"
-description = "Type a character when you press a shortcut."
+[section.rules]
+label = "Rules"
+description = "What keys, clicks and scrolling turn into."
 
 [field.char_rules]
 type = "object_array"
 label = "Character rules"
-description = "Press a shortcut to type a chosen character."
-section = "char_rules"
-card_description = "Shortcuts that type a character."
+description = "Press a key combination to type a chosen character."
+section = "rules"
+card_description = "Key combinations that type a character."
 item_label = "character rule"
 default = []
 
@@ -56,15 +56,11 @@ from_key = "string"
 to_char = "string"
 global = "boolean"
 
-[section.key_rules]
-label = "Key rules"
-description = "Make a key or shortcut act as another one."
-
 [field.key_rules]
 type = "object_array"
 label = "Key rules"
-description = "Press one key or shortcut and get another."
-section = "key_rules"
+description = "Press one key or key combination and get another."
+section = "rules"
 card_description = "Keys that become other keys."
 item_label = "key rule"
 default = [
@@ -87,15 +83,11 @@ global = "boolean"
 item_label = "key"
 card_description = "Keys this rule translates."
 
-[section.mouse_rules]
-label = "Mouse rules"
-description = "Change what modifier keys do when you click."
-
 [field.mouse_rules]
 type = "object_array"
 label = "Mouse rules"
 description = "Swap the keys you hold while clicking."
-section = "mouse_rules"
+section = "rules"
 card_description = "Modifier remaps for mouse clicks."
 item_label = "mouse rule"
 default = [
@@ -108,15 +100,11 @@ button = "string"
 to_mods = "string_array"
 global = "boolean"
 
-[section.scroll_rules]
-label = "Scroll rules"
-description = "Change what modifier keys do when you scroll."
-
 [field.scroll_rules]
 type = "object_array"
 label = "Scroll rules"
 description = "Swap the keys you hold while scrolling."
-section = "scroll_rules"
+section = "rules"
 card_description = "Modifier remaps for scrolling."
 item_label = "scroll rule"
 default = [

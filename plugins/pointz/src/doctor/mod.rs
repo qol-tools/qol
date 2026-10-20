@@ -292,13 +292,13 @@ fn phone_pairing_result(status: Option<PointzStatus>) -> DoctorCheckResult {
             CHECK_IDS[5],
             "Some phones must pair again after pairing moved into qol-tray",
         )
-        .with_fix("Open PointZ settings and pair each phone again"),
+        .with_fix("Open PointZerver settings and pair each phone again"),
         _ if status.migration.is_none() => {
             DoctorCheckResult::ok(CHECK_IDS[5], "No phone has been paired yet")
         }
         PointzTransport::Stopped {} => {
             DoctorCheckResult::warn(CHECK_IDS[5], "qol-tray is not listening for phones")
-                .with_fix("Open PointZ settings and pair a phone")
+                .with_fix("Open PointZerver settings and pair a phone")
         }
         PointzTransport::Running { .. } => DoctorCheckResult::ok(
             CHECK_IDS[5],
