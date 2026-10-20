@@ -922,6 +922,7 @@ mod tests {
             "Document the picker flow and record the decision in the research notes";
         const CURRENT: &str =
             "Ship the tray icon change and update the changelog file with release notes";
+        const OTHER: &str = "Rename the settings rail entry and check the panel layout in a guest";
         let unit_for = |key: &str, session: &str, ts: &str, text: &str| {
             json!({
                 "key": key,
@@ -954,6 +955,12 @@ mod tests {
                 "2026-08-02T12:00:00.000Z",
                 CURRENT,
             ),
+            unit_for(
+                "5555666677778888",
+                "dddddddd-4444",
+                "2026-08-02T13:00:00.000Z",
+                OTHER,
+            ),
         ]
         .iter()
         .map(|unit| serde_json::to_string(unit).unwrap())
@@ -978,9 +985,10 @@ mod tests {
 
         let outcome = run(&store, &request()).unwrap();
 
-        assert_eq!(outcome.count, 1);
+        assert_eq!(outcome.count, 2);
         let block = outcome.block.as_deref().expect("injected block");
         assert!(block.contains(CURRENT));
+        assert!(block.contains(OTHER));
         assert!(!block.contains(FORGOTTEN));
         assert!(!block.contains(REPLACED));
     }
