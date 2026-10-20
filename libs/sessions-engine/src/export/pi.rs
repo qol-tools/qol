@@ -399,7 +399,7 @@ const EXECUTE_CLOSE: &str = r#"    async execute(_toolCallId, params, signal, _o
 
 const EXECUTE_THROUGH_MCP: &str = r#"    async execute(_toolCallId, params, signal, _onUpdate) {
       const request = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_NAME, arguments: params } };
-      const response = JSON.parse(await run(["mcp"], TIMEOUT_MS, `${JSON.stringify(request)}\n`, signal));
+      const response = JSON.parse(await run(["mcp"], CALL_TIMEOUT, `${JSON.stringify(request)}\n`, signal));
       const result = response?.result;
       const text = result?.content?.[0]?.text;
       if (result?.isError || typeof text !== "string") throw new Error(text || `${TOOL_NAME} failed`);
@@ -438,7 +438,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
             };
             through_mcp = EXECUTE_THROUGH_MCP
                 .replace("TOOL_NAME", &format!("{:?}", spec.name))
-                .replace("TIMEOUT_MS", timeout_ms);
+                .replace("CALL_TIMEOUT", timeout_ms);
             through_mcp.as_str()
         }
         other => bail!("no pi adapter template for contract tool `{other}`"),
@@ -531,7 +531,7 @@ mod tests {
             assert!(source.contains(&format!("params: {{ name: {name:?}, arguments: params }}")));
         }
         assert!(!source.contains("TOOL_NAME"));
-        assert!(!source.contains("TIMEOUT_MS"));
+        assert!(!source.contains("CALL_TIMEOUT"));
     }
 
     #[test]
