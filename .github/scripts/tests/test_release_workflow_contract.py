@@ -59,8 +59,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "needs: batch",
-            "if: ${{ !cancelled() && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
+            "needs: [plan, batch]",
+            "if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -197,6 +197,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 dependencies = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("needs: plan", dependencies)
                 self.assertIn("!cancelled() && needs.plan.result == 'success' && ", dependencies)
+        build = workflow.split("  release-build:\n", 1)[1].split("    env:", 1)[0]
+        self.assertIn("needs: [plan, batch]", build)
+        self.assertIn("!cancelled() && needs.plan.result == 'success' && ", build)
 
     def test_merge_gate_requires_a_successful_plan(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

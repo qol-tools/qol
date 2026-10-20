@@ -395,8 +395,8 @@ jobs:
   # the same cache key would drop one job's artifacts.
   release-build:
     name: release build (${{ matrix.os }})
-    needs: batch
-    if: ${{ !cancelled() && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}
+    needs: [plan, batch]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
