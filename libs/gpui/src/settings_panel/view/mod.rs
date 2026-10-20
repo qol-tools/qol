@@ -623,7 +623,7 @@ impl SettingsPanelView {
         ) else {
             return;
         };
-        stream.send(frame, source.runtime.stream_interval(name));
+        stream.send(name, source.runtime.stream_interval(name), frame);
     }
 
     fn current_visible_rows(&self) -> Vec<usize> {
