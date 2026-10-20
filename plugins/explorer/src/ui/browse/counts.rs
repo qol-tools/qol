@@ -38,13 +38,9 @@ impl LiveCounts {
         counted_from: SystemTime,
         wake: impl Fn() + Send + Clone + 'static,
     ) {
-        let folders: HashSet<PathBuf> = folders.into_iter().collect();
-        if folders == self.folders {
-            return;
-        }
         self.watch = Arc::default();
-        let watched: Vec<PathBuf> = folders.iter().cloned().collect();
-        self.folders = folders;
+        self.folders = folders.iter().cloned().collect();
+        let watched = folders;
         if watched.is_empty() {
             return;
         }

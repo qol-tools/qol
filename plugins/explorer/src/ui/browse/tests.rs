@@ -991,6 +991,35 @@ fn a_renamed_entry_keeps_the_cursor_and_its_pick() {
     assert_eq!(browser.cursor(), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_link_count_follows_the_folder_the_link_was_pointed_at_since() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let old = make_folder(temp.path(), "old");
+    touch(&old, "one");
+    let new = make_folder(temp.path(), "new");
+    touch(&new, "one");
+    touch(&new, "two");
+    let link = temp.path().join("link");
+    symlink(&old, &link).unwrap();
+    let mut browser = opened(temp.path());
+    let count = |all| Some(ItemCount::Items { all, shown: all });
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+
+    fs::remove_file(&link).unwrap();
+    symlink(&new, &link).unwrap();
+    wait_until(&mut browser, "the count of the new target", |browser| {
+        browser.listing().item_count(&link) == count(2)
+    });
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+    touch(&new, "three");
+    wait_until(&mut browser, "the count after a file appeared", |browser| {
+        browser.listing().item_count(&link) == count(3)
+    });
+}
+
 #[test]
 fn a_subfolder_count_follows_files_added_and_removed_inside_it() {
     let temp = tempfile::tempdir().unwrap();
