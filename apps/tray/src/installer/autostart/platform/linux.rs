@@ -28,8 +28,9 @@ impl AutostartOps for Platform {
 }
 
 fn autostart_path_impl() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir().context("Could not determine config directory")?;
-    Ok(config_dir.join("autostart").join("qol-tray.desktop"))
+    Ok(crate::paths::platform::linux::xdg_config_home()?
+        .join("autostart")
+        .join("qol-tray.desktop"))
 }
 
 fn write_desktop_to(path: &Path, binary: &Path) -> Result<()> {
@@ -120,5 +121,18 @@ mod tests {
         let desktop = tmp.path().join("qol-tray.desktop");
         std::fs::write(&desktop, "[Desktop Entry]\nName=QoL Tray\n").unwrap();
         assert_eq!(read_desktop_at(&desktop).unwrap(), None);
+    }
+
+    #[test]
+    fn autostart_target_is_written_under_the_test_path_root() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let binary = PathBuf::from("/home/x/.local/bin/qol-tray");
+        let expected = root.path().join("home/.config/autostart/qol-tray.desktop");
+
+        Platform.write_target(&binary).unwrap();
+
+        assert_eq!(Platform.autostart_path().unwrap(), expected);
+        assert_eq!(read_desktop_at(&expected).unwrap(), Some(binary));
     }
 }

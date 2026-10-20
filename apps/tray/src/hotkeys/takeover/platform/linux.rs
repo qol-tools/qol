@@ -215,7 +215,9 @@ pub(crate) fn write_spice(full_key: &str, json: &str) -> Result<(), HostFailure>
 }
 
 fn spices_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|config| config.join("cinnamon").join("spices"))
+    crate::paths::platform::linux::xdg_config_home()
+        .ok()
+        .map(|config| config.join("cinnamon").join("spices"))
 }
 
 fn spice_path(full_key: &str) -> Result<PathBuf, HostFailure> {

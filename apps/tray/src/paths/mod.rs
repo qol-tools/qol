@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) mod file_io;
 pub(crate) mod install_marker;
-mod platform;
+pub(crate) mod platform;
 
 const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 const ACTIVE_PROFILE_FILE: &str = "active";
@@ -85,6 +85,20 @@ fn test_env_path_root() -> Option<PathBuf> {
 #[cfg(any(test, debug_assertions))]
 pub(crate) fn test_log_dir() -> Option<PathBuf> {
     test_path_root().map(|root| root.join("data").join(qol_config::NAMESPACE).join("logs"))
+}
+
+#[cfg(any(test, debug_assertions))]
+fn test_home_dir() -> Option<PathBuf> {
+    test_path_root().map(|root| root.join("home"))
+}
+
+pub fn user_home_dir() -> Result<PathBuf> {
+    #[cfg(any(test, debug_assertions))]
+    if let Some(home) = test_home_dir() {
+        return Ok(home);
+    }
+
+    dirs::home_dir().context("Could not determine home directory")
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -389,6 +403,65 @@ mod tests {
                 assert!(path.to_string_lossy().contains("qol-tray"));
             }
         }
+    }
+
+    #[test]
+    fn user_home_dir_stays_under_the_test_path_root() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        assert_eq!(user_home_dir().unwrap(), tmp.path().join("home"));
+    }
+
+    const USER_DIR_LOOKUPS: [&str; 4] = [
+        "dirs::home_dir",
+        "dirs::data_dir",
+        "dirs::data_local_dir",
+        "dirs::config_dir",
+    ];
+
+    const READ_ONLY_USER_DIR_LOOKUPS: [&str; 6] = [
+        "dev/config/search_paths.rs dirs::home_dir",
+        "installer/platform/macos/codesign.rs dirs::home_dir",
+        "settings_surface/platform/native_tools/profiles/view.rs dirs::home_dir",
+        "updates/platform/fallback.rs dirs::home_dir",
+        "updates/platform/linux.rs dirs::home_dir",
+        "updates/platform/macos.rs dirs::home_dir",
+    ];
+
+    fn user_dir_lookups_in(src: &Path, file: &Path) -> Vec<String> {
+        let body = fs::read_to_string(file).unwrap();
+        let relative = file
+            .strip_prefix(src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        USER_DIR_LOOKUPS
+            .iter()
+            .flat_map(|lookup| vec![format!("{relative} {lookup}"); body.matches(lookup).count()])
+            .collect()
+    }
+
+    #[test]
+    fn home_and_user_dirs_resolve_through_paths_except_read_only_lookups() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let paths_module = src.join("paths");
+
+        let mut lookups: Vec<String> = walkdir::WalkDir::new(&src)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
+            .filter(|entry| !entry.path().starts_with(&paths_module))
+            .flat_map(|entry| user_dir_lookups_in(&src, entry.path()))
+            .collect();
+        lookups.sort();
+
+        assert_eq!(
+            lookups, READ_ONLY_USER_DIR_LOOKUPS,
+            "tray code outside crate::paths resolved the home or an OS user dir directly; \
+             route writers through crate::paths so a QOL_TRAY_TEST_PATH_ROOT tray stays \
+             inside its root, and list only read-only lookups here"
+        );
     }
 
     #[test]

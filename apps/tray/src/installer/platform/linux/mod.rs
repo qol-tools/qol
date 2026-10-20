@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use self::desktop_entry::format_desktop_exec_command;
 use super::InstallerOps;
+use crate::paths::platform::linux::xdg_data_home;
 
 pub(in crate::installer) mod desktop_entry;
 
@@ -58,7 +59,7 @@ impl InstallerOps for Platform {
     }
 
     fn register_application(&self, binary_path: &Path) -> Result<()> {
-        install_icons(&dirs::data_dir().context("Could not determine data directory")?)?;
+        install_icons(&xdg_data_home()?)?;
         install_desktop_entry(binary_path)?;
         refresh_caches();
         Ok(())
@@ -118,8 +119,7 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
 }
 
 fn desktop_apps_dir() -> Result<PathBuf> {
-    let data_dir = dirs::data_dir().context("Could not determine data directory")?;
-    Ok(data_dir.join("applications"))
+    Ok(xdg_data_home()?.join("applications"))
 }
 
 fn ensure_linux_desktop_entries(
@@ -137,8 +137,7 @@ fn ensure_linux_desktop_entries(
 }
 
 fn heal_icons() -> bool {
-    dirs::data_dir()
-        .context("Could not determine data directory")
+    xdg_data_home()
         .and_then(|data_dir| install_icons(&data_dir))
         .unwrap_or_else(|error| {
             log::warn!("app icon self-heal failed: {error:#}");
@@ -212,7 +211,7 @@ fn render_settings_surface_desktop_entry(binary_path: &Path) -> String {
 }
 
 fn refresh_caches() {
-    let data_dir = dirs::data_dir();
+    let data_dir = xdg_data_home().ok();
     if let Some(dir) = &data_dir {
         let _ = std::process::Command::new("update-desktop-database")
             .arg(dir.join("applications"))

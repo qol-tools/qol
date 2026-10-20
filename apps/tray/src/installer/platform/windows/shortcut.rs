@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use qol_platform::native::com::{Apartment, ComApartment};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use windows::core::{Interface, HSTRING};
 use windows::Win32::System::Com::{CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER};
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -12,11 +12,6 @@ pub(crate) struct Shortcut<'a> {
     pub(crate) arguments: &'a str,
     pub(crate) icon: &'a Path,
     pub(crate) description: &'a str,
-}
-
-pub(crate) fn programs_dir() -> Result<PathBuf> {
-    qol_apps::known_folder::programs_dir()
-        .ok_or_else(|| anyhow!("Failed to resolve the Start menu Programs folder"))
 }
 
 pub(crate) fn write(link: &Path, shortcut: &Shortcut<'_>) -> Result<()> {
