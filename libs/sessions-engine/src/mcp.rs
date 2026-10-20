@@ -621,7 +621,7 @@ impl McpSessionServer {
         let key = record
             .key
             .clone()
-            .unwrap_or_else(|| format!("reopen-{}", &super::spawn::generate_key()[..8]));
+            .unwrap_or_else(|| super::spawn::reopen_key(external_id));
         super::switchboard::refuse_reserved_key(&key).map_err(|error| error.to_string())?;
         for session in self.live_conversations()? {
             if session.external_id.as_deref() == Some(external_id) {
@@ -630,10 +630,9 @@ impl McpSessionServer {
                     session.token
                 ));
             }
-            if session.key.is_some() && session.key == record.key {
+            if session.key.as_deref() == Some(key.as_str()) {
                 return Err(format!(
-                    "`{}` is held by another live conversation in `{}`; close that session with session_close before this one can reopen",
-                    record.key.as_deref().unwrap_or_default(),
+                    "`{key}` is held by another live conversation in `{}`; close that session with session_close before this one can reopen",
                     session.token
                 ));
             }
@@ -2884,6 +2883,36 @@ mod tests {
         refused(&refusal, "`qol sessions unpark park-1-2`");
         assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 0);
         assert!(qol_terminal_sessions::closed::find(&closed, "parked").is_some());
+    }
+
+    #[test]
+    fn session_reopen_refuses_a_repeat_reopen_of_a_keyless_conversation_still_starting() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = kitty_backend();
+        let server = reopen_server(&backend, &root, false, &[]);
+        let closed = root.path().join("closed");
+        qol_terminal_sessions::closed::write(
+            &closed,
+            &closed_record("keyless", &spawn_cwd(&root), None),
+        )
+        .unwrap();
+        let first = tool_json(&tool_call(
+            &server,
+            "session_reopen",
+            json!({ "external_id": "keyless" }),
+        ));
+        assert_eq!(first["confirmed"], false, "{first}");
+        let key = first["key"].as_str().unwrap();
+        assert_eq!(key, super::super::spawn::reopen_key("keyless"));
+        refused(
+            &tool_call(
+                &server,
+                "session_reopen",
+                json!({ "external_id": "keyless" }),
+            ),
+            &format!("`{key}` is held by another live conversation in"),
+        );
+        assert_eq!(backend.spawn_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]

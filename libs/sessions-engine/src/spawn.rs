@@ -661,6 +661,11 @@ pub(super) fn generate_key() -> String {
     digest[..20].to_owned()
 }
 
+pub(super) fn reopen_key(external_id: &str) -> String {
+    let digest = format!("{:x}", Sha256::digest(external_id.as_bytes()));
+    format!("reopen-{}", &digest[..8])
+}
+
 const KEY_FILLER_WORDS: &[&str] = &[
     "a", "about", "actually", "all", "also", "alright", "an", "and", "any", "are", "as", "at",
     "be", "but", "by", "can", "could", "do", "does", "ensure", "for", "from", "gain", "get", "has",
