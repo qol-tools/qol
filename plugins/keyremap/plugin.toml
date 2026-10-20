@@ -4,7 +4,7 @@ uid = "e1bc6f9b-95e0-46c5-951b-6cc5de5c6d87"
 name = "Key Remap"
 icon = "key-remap"
 description = "Change what keys, mouse clicks and scrolling do."
-version = "1.72.0"
+version = "1.72.1"
 author = "KMRH47"
 platforms = ["macos", "windows"]
 
