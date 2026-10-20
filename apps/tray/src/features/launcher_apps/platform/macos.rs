@@ -10,7 +10,7 @@ const ICON_FILE: &str = "icon";
 const ICON_PIXELS: u32 = 1024;
 
 pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) -> Result<()> {
-    let dir = apps_dir().context("Could not determine home directory")?;
+    let dir = apps_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create launcher apps dir {}", dir.display()))?;
 
@@ -29,18 +29,19 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) 
     Ok(())
 }
 
-pub(super) fn apps_dir() -> Option<PathBuf> {
-    Some(dirs::home_dir()?.join("Applications").join("QoL"))
+pub(super) fn apps_dir() -> Result<PathBuf> {
+    Ok(crate::paths::user_home_dir()?
+        .join("Applications")
+        .join("QoL"))
 }
 
 pub(super) fn publish_synced() {
     use qol_runtime::protocol::RuntimeEvent;
 
-    let Some(dir) = apps_dir() else {
-        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
-        return;
-    };
-    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
+    match apps_dir() {
+        Ok(dir) => crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]),
+        Err(error) => log::warn!("launcher_apps: skipping LauncherAppsSynced: {error:#}"),
+    }
 }
 
 fn app_dirnames(entries: &[LauncherEntry]) -> HashMap<String, String> {
@@ -631,5 +632,16 @@ mod tests {
 
         let script = std::fs::read_to_string(tmp.path().join("Contents/MacOS/run")).unwrap();
         assert!(script.starts_with("#!/bin/sh\nexec /usr/bin/open"));
+    }
+
+    #[test]
+    fn apps_dir_stays_under_the_test_path_root() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(
+            apps_dir().unwrap(),
+            root.path().join("home/Applications/QoL")
+        );
     }
 }

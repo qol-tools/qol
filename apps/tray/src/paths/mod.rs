@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) mod file_io;
 pub(crate) mod install_marker;
-mod platform;
+pub(crate) mod platform;
 
 const ACTIVE_INSTALL_ID_FILE: &str = qol_config::ACTIVE_INSTALL_ID_FILE;
 const ACTIVE_PROFILE_FILE: &str = "active";
@@ -85,6 +85,33 @@ fn test_env_path_root() -> Option<PathBuf> {
 #[cfg(any(test, debug_assertions))]
 pub(crate) fn test_log_dir() -> Option<PathBuf> {
     test_path_root().map(|root| root.join("data").join(qol_config::NAMESPACE).join("logs"))
+}
+
+#[cfg(any(test, debug_assertions))]
+fn test_home_dir() -> Option<PathBuf> {
+    test_path_root().map(|root| root.join("home"))
+}
+
+pub fn user_home_dir() -> Result<PathBuf> {
+    #[cfg(any(test, debug_assertions))]
+    if let Some(home) = test_home_dir() {
+        return Ok(home);
+    }
+
+    dirs::home_dir().context("Could not determine home directory")
+}
+
+pub fn tray_install_dir() -> Result<PathBuf> {
+    #[cfg(any(test, debug_assertions))]
+    if let Some(home) = test_home_dir() {
+        return Ok(qol_apps::tray_install::install_dir_for_home(&home)?);
+    }
+
+    Ok(qol_apps::tray_install::install_dir()?)
+}
+
+pub fn tray_installed_binary() -> Result<PathBuf> {
+    Ok(tray_install_dir()?.join(qol_apps::tray_install::binary_filename()))
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -389,6 +416,84 @@ mod tests {
                 assert!(path.to_string_lossy().contains("qol-tray"));
             }
         }
+    }
+
+    #[test]
+    fn user_home_dir_stays_under_the_test_path_root() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+
+        assert_eq!(user_home_dir().unwrap(), tmp.path().join("home"));
+    }
+
+    #[test]
+    fn tray_install_dir_stays_under_the_test_path_root() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = push_test_path_root(tmp.path());
+        let home = tmp.path().join("home");
+
+        assert!(tray_install_dir().unwrap().starts_with(&home));
+        assert!(tray_installed_binary().unwrap().starts_with(&home));
+    }
+
+    const HOME_LOOKUPS: [&str; 6] = [
+        "dirs::home_dir",
+        "dirs::data_dir",
+        "dirs::data_local_dir",
+        "dirs::config_dir",
+        "tray_install::install_dir",
+        "tray_install::installed_binary",
+    ];
+
+    const READ_ONLY_HOME_LOOKUPS: [&str; 3] = [
+        "dev/config/search_paths.rs dirs::home_dir",
+        "installer/platform/macos/codesign.rs dirs::home_dir",
+        "settings_surface/platform/native_tools/profiles/view.rs dirs::home_dir",
+    ];
+
+    fn lookup_count(body: &str, lookup: &str) -> usize {
+        body.match_indices(lookup)
+            .filter(|(at, _)| {
+                !body[at + lookup.len()..]
+                    .starts_with(|next: char| next.is_alphanumeric() || next == '_')
+            })
+            .count()
+    }
+
+    fn home_lookups_in(src: &Path, file: &Path) -> Vec<String> {
+        let body = fs::read_to_string(file).unwrap();
+        let relative = file
+            .strip_prefix(src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        HOME_LOOKUPS
+            .iter()
+            .flat_map(|lookup| vec![format!("{relative} {lookup}"); lookup_count(&body, lookup)])
+            .collect()
+    }
+
+    #[test]
+    fn home_and_user_dirs_resolve_through_paths_except_read_only_lookups() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let paths_module = src.join("paths");
+
+        let mut lookups: Vec<String> = walkdir::WalkDir::new(&src)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
+            .filter(|entry| !entry.path().starts_with(&paths_module))
+            .flat_map(|entry| home_lookups_in(&src, entry.path()))
+            .collect();
+        lookups.sort();
+
+        assert_eq!(
+            lookups, READ_ONLY_HOME_LOOKUPS,
+            "tray code outside crate::paths resolved the home, an OS user dir or the tray \
+             install dir directly; route writers through crate::paths so a \
+             QOL_TRAY_TEST_PATH_ROOT tray stays inside its root, and list only read-only \
+             lookups here"
+        );
     }
 
     #[test]

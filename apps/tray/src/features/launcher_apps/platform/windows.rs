@@ -32,7 +32,7 @@ pub(super) fn publish_synced() {
 }
 
 fn apps_dir() -> Result<PathBuf> {
-    Ok(shortcut::programs_dir()?.join(shortcut::LAUNCHER_FOLDER))
+    Ok(crate::paths::platform::windows::start_menu_programs_dir()?.join(shortcut::LAUNCHER_FOLDER))
 }
 
 fn sync_into(

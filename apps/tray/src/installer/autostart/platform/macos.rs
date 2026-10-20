@@ -24,8 +24,7 @@ impl AutostartOps for Platform {
 }
 
 fn autostart_path_impl() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home
+    Ok(crate::paths::user_home_dir()?
         .join("Library")
         .join("LaunchAgents")
         .join(format!("{BUNDLE_ID}.plist")))
@@ -130,5 +129,21 @@ mod tests {
         let plist = tmp.path().join("autostart.plist");
         let binary = PathBuf::from("/Users/x/a&b<c>d/qol-tray");
         assert_eq!(write_then_read(&plist, &binary), Some(binary));
+    }
+
+    #[test]
+    fn autostart_target_is_written_under_the_test_path_root() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+        let binary = PathBuf::from("/Applications/QoL Tray.app/Contents/MacOS/qol-tray");
+        let expected = root
+            .path()
+            .join("home/Library/LaunchAgents")
+            .join(format!("{BUNDLE_ID}.plist"));
+
+        Platform.write_target(&binary).unwrap();
+
+        assert_eq!(Platform.autostart_path().unwrap(), expected);
+        assert_eq!(read_plist_at(&expected).unwrap(), Some(binary));
     }
 }

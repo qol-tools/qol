@@ -18,7 +18,7 @@ impl InstallerOps for Platform {
     }
 
     fn install_dir(&self) -> Result<PathBuf> {
-        Ok(qol_apps::tray_install::install_dir()?)
+        crate::paths::tray_install_dir()
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
@@ -43,7 +43,7 @@ impl InstallerOps for Platform {
         };
         Ok(bootstrap_allowed_for_bundle_root(
             &bundle_root,
-            dirs::home_dir().as_deref(),
+            crate::paths::user_home_dir().ok().as_deref(),
         ))
     }
 
@@ -63,7 +63,7 @@ impl InstallerOps for Platform {
     fn warn_system_install_conflict(&self) {}
 
     fn remove_legacy_install(&self) {
-        let Some(home) = dirs::home_dir() else {
+        let Ok(home) = crate::paths::user_home_dir() else {
             return;
         };
         let legacy_binary = home.join(".local").join("bin").join("qol-tray");

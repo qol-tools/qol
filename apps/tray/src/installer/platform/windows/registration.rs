@@ -24,7 +24,7 @@ impl Layout {
         let dir = binary
             .parent()
             .context("Installed binary has no parent directory")?;
-        let programs = shortcut::programs_dir()?;
+        let programs = crate::paths::platform::windows::start_menu_programs_dir()?;
         Ok(Self {
             binary: binary.to_path_buf(),
             uninstaller: dir.join(uninstaller_filename()),

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 const DESKTOP_PREFIX: &str = "qol-";
 
 pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) -> Result<()> {
-    let dir = apps_dir().context("Could not determine local data directory")?;
+    let dir = apps_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("Failed to create applications dir {}", dir.display()))?;
 
@@ -33,18 +33,17 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) 
     Ok(())
 }
 
-pub(super) fn apps_dir() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|p| p.join("applications"))
+pub(super) fn apps_dir() -> Result<PathBuf> {
+    Ok(crate::paths::platform::linux::xdg_data_home()?.join("applications"))
 }
 
 pub(super) fn publish_synced() {
     use qol_runtime::protocol::RuntimeEvent;
 
-    let Some(dir) = apps_dir() else {
-        log::warn!("launcher_apps: no apps dir on this platform; skipping LauncherAppsSynced");
-        return;
-    };
-    crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]);
+    match apps_dir() {
+        Ok(dir) => crate::runtime::publish(&[RuntimeEvent::LauncherAppsSynced { dir }]),
+        Err(error) => log::warn!("launcher_apps: skipping LauncherAppsSynced: {error:#}"),
+    }
 }
 
 fn desktop_filename(entry: &LauncherEntry) -> String {
@@ -360,6 +359,17 @@ mod tests {
         assert!(
             !tmp.path().join("qol-shortcut-space.desktop").exists(),
             "a dead desktop entry must not be written"
+        );
+    }
+
+    #[test]
+    fn apps_dir_stays_under_the_test_path_root() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert_eq!(
+            apps_dir().unwrap(),
+            root.path().join("home/.local/share/applications")
         );
     }
 }
