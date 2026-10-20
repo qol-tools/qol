@@ -177,3 +177,32 @@ fn applies_is_false_without_profiles_or_lock() {
         .applies(config.path())
         .unwrap());
 }
+
+#[test]
+fn a_rerun_after_the_device_write_finishes_the_strip_without_losing_the_value() {
+    let config = tempfile::tempdir().unwrap();
+    let archive = tempfile::tempdir().unwrap();
+    let profile = profile_dir(config.path());
+    write(
+        &core(&profile, BLUETOOTH_UID),
+        json!({ "adapter": "10:91:D1:28:D5:A6", "auto_reconnect": true }),
+    );
+    write(
+        &device(&profile, BLUETOOTH_UID),
+        json!({ "adapter": "10:91:D1:28:D5:A6" }),
+    );
+    let migration = V3_115ToV3_116DevicePluginFields;
+
+    assert!(migration.applies(config.path()).unwrap());
+    migration.migrate(config.path(), archive.path()).unwrap();
+
+    assert_eq!(
+        read(&core(&profile, BLUETOOTH_UID)),
+        json!({ "auto_reconnect": true })
+    );
+    assert_eq!(
+        read(&device(&profile, BLUETOOTH_UID)),
+        json!({ "adapter": "10:91:D1:28:D5:A6" })
+    );
+    assert!(!migration.applies(config.path()).unwrap());
+}

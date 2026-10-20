@@ -81,6 +81,7 @@ fn localize_plugin(
     let device_path = slice_path(profile_dir.join("device"), uid);
     let original_device = read_object(&device_path).unwrap_or_default();
     let mut device = original_device.clone();
+    let mut stripped = Vec::new();
     for path in synced_slices(profile_dir, uid).into_iter().rev() {
         let Some(original) = read_object(&path) else {
             continue;
@@ -94,8 +95,7 @@ fn localize_plugin(
             }
         }
         if slice != original {
-            archived.push(archive_original(config_dir, archive_dir, &path)?);
-            write_json_atomic(&path, &Value::Object(slice))?;
+            stripped.push((path, slice));
         }
     }
     if device != original_device {
@@ -103,6 +103,10 @@ fn localize_plugin(
             archived.push(archive_original(config_dir, archive_dir, &device_path)?);
         }
         write_json_atomic(&device_path, &Value::Object(device))?;
+    }
+    for (path, slice) in stripped {
+        archived.push(archive_original(config_dir, archive_dir, &path)?);
+        write_json_atomic(&path, &Value::Object(slice))?;
     }
     Ok(())
 }
