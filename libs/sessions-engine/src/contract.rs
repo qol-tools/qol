@@ -261,7 +261,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations the CLI Sessions daemon saw close in the last 14 days, newest first, so one can be brought back with session_reopen. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, the title it last showed, its spawn key when it had one, closed_at in local time and closed_ago. A conversation closes when its tool exits or its terminal goes while the daemon runs; one a live session holds again is left out, and the switchboard is never listed. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit).",
+            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, closed_at in local time and closed_ago (for a history row, when the conversation last wrote). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -271,7 +271,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "query": {
                         "type": "string",
-                        "description": "Case-insensitive text a row's title, cwd, key, tool or external_id must contain; name a project, key or topic to narrow the list",
+                        "description": "Case-insensitive text a row's title, cwd, key, tool, external_id or a pull request URL the conversation linked must contain (for a history row, its latest pull request and any others linked in the last 256 KiB of its transcript); name a project, key, topic or pull request (`pull/230`) to narrow the list",
                     },
                     "include_lanes": {
                         "type": "boolean",
@@ -467,7 +467,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_reopen",
             label: "Reopen a closed session",
-            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode, model, effort and Claude account it ran with. It keeps the spawn key it had, so its mail still reaches it, and a conversation that had none gets a reopen-* key derived from its id, so a second reopen while the first tab is still starting is refused. Refuses a conversation a live session already holds, a key another live conversation holds, and a conversation a park still waits on. Returns the new session token with the key, tool, cwd, title, model and effort, and confirmed: true when the new tab reported the conversation within 15 seconds, which clears it from sessions_closed (ledger_cleared); confirmed: false means the tab is still starting, and CLI Sessions clears the record when it sees the conversation. A tool that exits right after it starts is an error, and the conversation stays in sessions_closed.",
+            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode, model, effort and Claude account it ran with. It keeps the spawn key it had (a fork from history gets back the key of the fork that launched it), so its mail still reaches it, and a conversation that had none gets a reopen-* key derived from its id, so a second reopen while the first tab is still starting is refused. Refuses a conversation a live session already holds, a key another live conversation holds, and a conversation a park still waits on. Returns the new session token with the key, tool, cwd, title, model and effort, and confirmed: true when the new tab reported the conversation within 15 seconds, which clears it from sessions_closed (ledger_cleared); confirmed: false means the tab is still starting, and CLI Sessions clears the record when it sees the conversation. A tool that exits right after it starts is an error, and the conversation stays in sessions_closed.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
