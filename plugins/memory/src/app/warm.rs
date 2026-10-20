@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
@@ -8,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use crate::aliases::AliasMap;
 use crate::ask::{doc_refs, notes_refs, visible_notes, WarmIndexes};
+use crate::lifecycle::Lifecycle;
 use crate::retrieval::{build_index, cache, DocRef, Index};
 use crate::store::{
     dedupe_key, dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
@@ -19,6 +21,8 @@ pub struct WarmState {
     aliases: AliasMap,
     keys: crate::ingest::KeySet,
     layers_cache: Option<CachedLayers>,
+    lifecycle: Arc<Lifecycle>,
+    lifecycle_fingerprint: Option<(u64, u128)>,
 }
 
 struct CachedLayers {
@@ -55,11 +59,28 @@ impl WarmState {
             aliases,
             keys,
             layers_cache: None,
+            lifecycle: Arc::default(),
+            lifecycle_fingerprint: None,
         })
     }
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn lifecycle(&mut self) -> Arc<Lifecycle> {
+        let fingerprint = self
+            .store
+            .lifecycle_path()
+            .metadata()
+            .map(|meta| (meta.len(), mtime_nanos(&meta)))
+            .unwrap_or((0, 0));
+        if self.lifecycle_fingerprint != Some(fingerprint) {
+            let lifecycle = Lifecycle::load(&self.store);
+            self.lifecycle_fingerprint = lifecycle.read_error().is_none().then_some(fingerprint);
+            self.lifecycle = Arc::new(lifecycle);
+        }
+        Arc::clone(&self.lifecycle)
     }
 
     pub fn enable_verification(
@@ -85,12 +106,18 @@ impl WarmState {
         {
             return Ok(());
         }
+        let lifecycle = self.lifecycle();
         self.refresh_layers()?;
         let Some(layers) = &self.layers_cache else {
             return Ok(());
         };
-        let snapshot =
-            crate::ask::semantic::Snapshot::prepare(&self.store, request, &layers.units, source);
+        let snapshot = crate::ask::semantic::Snapshot::prepare(
+            &self.store,
+            request,
+            &layers.units,
+            &lifecycle,
+            source,
+        );
         if let (Some(snapshot), Some(service)) = (snapshot, &self.verification) {
             snapshot.apply(service, output);
         }

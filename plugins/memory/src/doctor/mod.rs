@@ -61,7 +61,63 @@ pub fn checks() -> Vec<DoctorCheck> {
             "Verify store temp files, product logs, and research artifacts.",
             store_hygiene_check,
         ),
+        DoctorCheck::new(
+            "lifecycle_log",
+            "Verify every forget and supersede record in the lifecycle log is readable.",
+            lifecycle_log_check,
+        ),
     ]
+}
+
+fn lifecycle_log_check() -> Result<DoctorCheckResult> {
+    let store = match Store::resolve(None) {
+        Ok(store) => store,
+        Err(error) => {
+            return Ok(DoctorCheckResult::warn(
+                "lifecycle_log",
+                format!("Skipped: failed to resolve the memory store: {error:#}"),
+            ))
+        }
+    };
+    Ok(lifecycle_log_result(&store))
+}
+
+fn lifecycle_log_result(store: &Store) -> DoctorCheckResult {
+    let lifecycle = crate::lifecycle::Lifecycle::load(store);
+    let path = store.lifecycle_path();
+    if let Some(error) = lifecycle.read_error() {
+        return DoctorCheckResult::warn(
+            "lifecycle_log",
+            format!(
+                "{} could not be read, so forgotten and replaced facts answer again: {error}",
+                path.display()
+            ),
+        )
+        .with_fix(format!("restore read access to {}", path.display()));
+    }
+    let counts = lifecycle.counts();
+    if counts.unreadable > 0 {
+        return DoctorCheckResult::warn(
+            "lifecycle_log",
+            format!(
+                "{} has {} unreadable line{}; the forget or supersede each one held has no effect.",
+                path.display(),
+                counts.unreadable,
+                if counts.unreadable == 1 { "" } else { "s" }
+            ),
+        )
+        .with_fix(format!(
+            "repair or delete the unreadable lines in {}",
+            path.display()
+        ));
+    }
+    DoctorCheckResult::ok(
+        "lifecycle_log",
+        format!(
+            "{} superseded and {} forgotten facts.",
+            counts.superseded, counts.forgotten
+        ),
+    )
 }
 
 fn agent_homes_check() -> Result<DoctorCheckResult> {
@@ -474,6 +530,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn lifecycle_log_check_warns_on_unreadable_lines() {
+        let dir = TempDir::new("lifecycle");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let empty = lifecycle_log_result(&store);
+        assert_eq!(empty.status, DoctorStatus::Ok);
+        assert!(empty.message.contains("0 superseded and 0 forgotten"));
+
+        std::fs::write(
+            store.lifecycle_path(),
+            "{\"ts\":\"2026-10-20T10:00:00.000Z\",\"op\":\"forget\",\"key\":\"a\"}\n{torn\n",
+        )
+        .unwrap();
+        let warn = lifecycle_log_result(&store);
+        assert_eq!(warn.id, "lifecycle_log");
+        assert_eq!(warn.status, DoctorStatus::Warn);
+        assert!(warn.message.contains("1 unreadable line;"));
+        assert!(warn.fix.is_some());
     }
 
     #[test]

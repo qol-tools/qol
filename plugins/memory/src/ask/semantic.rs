@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use sha2::{Digest, Sha256};
 
 use super::{question_match, selection, Answer, AskOutput, AskRequest};
+use crate::lifecycle::Lifecycle;
 use crate::retrieval::{bm25_ranks, build_index, DocRef};
 use crate::store::{Store, Unit, UnitsLayer};
 use crate::verification::service::{Job, Service, Status};
@@ -20,6 +21,7 @@ impl Snapshot {
         store: &Store,
         request: &AskRequest,
         units: &UnitsLayer,
+        lifecycle: &Lifecycle,
         source: &str,
     ) -> Option<Self> {
         let terms = crate::text::tokens(&request.query)
@@ -46,6 +48,7 @@ impl Snapshot {
                         .as_deref()
                         .is_none_or(|session| unit.session.as_deref() != Some(session))
                     && excluded.is_none_or(|keys| !keys.contains(&unit.key))
+                    && lifecycle.is_live(&unit.key)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -84,7 +87,8 @@ impl Snapshot {
             let (key, fact, entry) = if let Some((_, found)) =
                 evidence.iter().find(|(unit, _)| unit.key == ranked.key)
             {
-                let group = selection::select(&found.recorded_question, &visible, None, None);
+                let group =
+                    selection::select(&found.recorded_question, &visible, None, None, lifecycle);
                 if group.conflicts > 0 {
                     continue;
                 }
@@ -189,6 +193,7 @@ fn answer(unit: &Unit, text: String, supporting_keys: Vec<String>) -> Answer {
         score: 0.0,
         margin: None,
         superseded: None,
+        superseded_by: None,
         supporting_keys,
     }
 }

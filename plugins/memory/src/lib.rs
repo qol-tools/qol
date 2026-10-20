@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod feedback;
 pub mod host;
 pub mod ingest;
+pub mod lifecycle;
 pub mod platform;
 pub mod retrieval;
 pub mod retrieval_log;

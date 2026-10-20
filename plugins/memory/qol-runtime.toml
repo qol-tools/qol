@@ -31,8 +31,20 @@ input = { query = "the question the row answered", key = "key of the voted row",
 [action.capture]
 description = "Append one settled fact to the store"
 agent_tool = true
-tool_description = "Remember one settled fact for future sessions. Write one self-contained sentence carrying the identifiers a later reader needs (paths, commits, names, dates). It is stored verbatim, scoped to cwd, and comes back through qol-memory__ask and the session-start continue block. Calling it twice with the same text and cwd stores one fact."
+tool_description = "Remember one settled fact for future sessions. Write one self-contained sentence carrying the identifiers a later reader needs (paths, commits, names, dates). It is stored verbatim, scoped to cwd, and comes back through qol-memory__ask and the session-start continue block. Calling it twice with the same text and cwd stores one fact, and brings it back if it was forgotten or replaced. The reply gives the fact's key and up to 3 stored facts close to it with their keys; when one of them is now wrong, pass its key to qol-memory__supersede instead of leaving both."
 input = { text = "the fact as one self-contained sentence", cwd = "absolute working directory of the project the fact belongs to", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
+
+[action.supersede]
+description = "Replace stale facts with one new fact"
+agent_tool = true
+tool_description = "Replace stale facts with one new fact; the latest statement wins. Pass the stale facts' keys as qol-memory__ask or the capture reply shows them, each in full or its first 8 or more characters, and the new fact as one self-contained sentence with its cwd, stored the way qol-memory__capture stores it. A statement repeated in several sessions is one fact: naming one copy covers every copy you can see, and the reply lists their keys. A question the new fact also answers drops the old facts and lists them as replaced; a question only an old fact answers still gets it, marked superseded, with the new fact beside it. Nothing is deleted. An unknown key, an ambiguous prefix or a fact you cannot see changes nothing, and the error names the key. For a wrong fact with nothing to replace it, use qol-memory__forget."
+input = { keys = "keys of the stale facts, separated by spaces or commas", text = "the new fact as one self-contained sentence", cwd = "absolute working directory of the project the new fact belongs to", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
+
+[action.forget]
+description = "Keep facts out of answers"
+agent_tool = true
+tool_description = "Keep facts out of qol-memory__ask answers, launcher rows and the session-start continue block. Pass the keys as qol-memory__ask or the capture reply shows them, each in full or its first 8 or more characters, and a reason of at most 500 characters. A statement repeated in several sessions is one fact: naming one copy covers every copy you can see, and the reply lists their keys. Nothing is deleted: capturing the same text in the same cwd brings a forgotten capture back, while a forgotten transcript statement or note stays forgotten. The facts a forgotten replacement replaced stay superseded, so qol-memory__ask can still return them marked superseded; forget them too when they are wrong. An unknown key, an ambiguous prefix or a fact you cannot see changes nothing, and the error names the key. When a newer fact replaces the old one, use qol-memory__supersede so questions get the new fact."
+input = { keys = "keys of the facts to forget, separated by spaces or commas", reason = "why the facts are wrong or no longer useful", agent_home = "Agent home id of the caller; supplied by the host, never by the agent" }
 
 [action.reindex]
 description = "Drop the persisted BM25 indexes and rebuild them"

@@ -384,6 +384,88 @@ fn path_case_differences_remain_conflicting_answers() {
 }
 
 #[test]
+fn superseding_one_side_of_a_conflict_answers_with_the_newer_fact() {
+    let fixture = Fixture::new(&[capture(
+        "config-case",
+        "Q: Where is the quartz configuration stored? A: /fixture/quartz/Settings.toml",
+    )]);
+    qol_memory::lifecycle::supersede(&fixture.store, &["config".into()], "config-case", HOME)
+        .unwrap();
+    let result = fixture.ask("where is quartz configuration stored", 5);
+    assert_eq!(result["outcome"], "supported", "{result}");
+    assert_eq!(result["answer"]["key"], "config-case", "{result}");
+    assert_eq!(
+        result["answer"]["superseded"][0]["key"], "config",
+        "{result}"
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .ends_with("replaces 1 superseded fact"),
+        "{result}"
+    );
+    assert!(
+        result["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|unit| unit["key"] != "config"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_question_only_the_replaced_fact_answers_returns_it_qualified() {
+    let fixture = Fixture::new(&[capture(
+        "restart-v4",
+        "Q: Is the quartz clipboard history persisted? A: No. Since v4 it is cleared on every restart.",
+    )]);
+    qol_memory::lifecycle::supersede(&fixture.store, &["restart".into()], "restart-v4", HOME)
+        .unwrap();
+    let result = fixture.ask("does quartz clipboard survive restarts?", 5);
+    assert_eq!(result["answer"]["key"], "restart", "{result}");
+    assert_eq!(result["outcome"], "qualified", "{result}");
+    assert_eq!(result["reason_code"], "superseded_answer", "{result}");
+    assert_eq!(result["confidence"], "low", "{result}");
+    assert_eq!(
+        result["answer"]["superseded_by"]["key"], "restart-v4",
+        "{result}"
+    );
+    assert!(
+        result["reason"]
+            .as_str()
+            .unwrap()
+            .ends_with("the current fact is restart-v4"),
+        "{result}"
+    );
+}
+
+#[test]
+fn a_forgotten_fact_leaves_answers_and_recalled_units() {
+    let fixture = Fixture::new(&[]);
+    qol_memory::lifecycle::forget(&fixture.store, &["config".into()], "moved", HOME).unwrap();
+    let result = fixture.ask("where is quartz configuration stored", 5);
+    assert!(result["answer"].is_null(), "{result}");
+    assert!(
+        result["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|unit| unit["key"] != "config"),
+        "{result}"
+    );
+    assert!(
+        result["recalled"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|unit| unit["key"] != "config"),
+        "{result}"
+    );
+}
+
+#[test]
 fn daemon_rows_and_cold_ask_select_the_same_fact() {
     let caller = qol_agent_homes::Registry::load().resolve_caller(None);
     let fixture = Fixture::in_home(&[], &caller);

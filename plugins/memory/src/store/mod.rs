@@ -59,6 +59,10 @@ impl Store {
         self.root.join("candidates.jsonl")
     }
 
+    pub fn lifecycle_path(&self) -> PathBuf {
+        self.root.join("lifecycle.jsonl")
+    }
+
     pub fn ingest_state_path(&self) -> PathBuf {
         self.root.join("ingest-state.json")
     }

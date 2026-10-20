@@ -10,12 +10,13 @@ use serde_json::{json, Value};
 
 use crate::agent_home;
 use crate::aliases::AliasMap;
+use crate::lifecycle::{Catalog, Lifecycle, State};
 use crate::retrieval::cache;
 use crate::retrieval::{bm25_ranks, build_index, snippet, DocRef, Index};
 use crate::retrieval_log::{self, Exclusion, RetrievalEvent};
 use crate::skills::{self, Freshness, Served, SkillsIndex};
 use crate::store::{
-    dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
+    dedupe_key, dedupe_user_units, is_boilerplate_unit, Note, NotesLayer, Store, Unit, UnitsLayer,
 };
 use crate::text;
 
@@ -353,7 +354,8 @@ pub fn run_with_layers(
     units: &UnitsLayer,
     notes_layer: &NotesLayer,
 ) -> Result<AskOutput> {
-    run_with_warm(store, aliases, req, units, notes_layer, None)
+    let lifecycle = Lifecycle::load(store);
+    run_with_warm(store, aliases, req, units, notes_layer, &lifecycle, None)
 }
 
 pub(crate) fn run_with_warm(
@@ -362,6 +364,7 @@ pub(crate) fn run_with_warm(
     req: &AskRequest,
     units: &UnitsLayer,
     notes_layer: &NotesLayer,
+    lifecycle: &Lifecycle,
     warm: Option<&WarmIndexes<'_>>,
 ) -> Result<AskOutput> {
     let registry = qol_agent_homes::Registry::load();
@@ -430,10 +433,17 @@ pub(crate) fn run_with_warm(
     };
     let units_query =
         crate::aliases::expand_tokens_keep(&text::tokens(&req.query), aliases).join(" ");
-    let widened = warm_answer.is_some() && exclude_session.is_some() && req.k > 0;
-    let answer_fetch = if widened { req.k * 2 + 16 } else { req.k };
+    let non_live = lifecycle.non_live();
+    let widened =
+        req.k > 0 && ((warm_answer.is_some() && exclude_session.is_some()) || non_live > 0);
+    let answer_fetch = if widened {
+        req.k * 2 + 16 + non_live
+    } else {
+        req.k
+    };
     let mut answer_ranked: Vec<UnitHit> = bm25_ranks(&units_query, answer_idx, answer_fetch)
         .into_iter()
+        .filter(|ranked| !lifecycle.is_forgotten(&ranked.key))
         .filter_map(|ranked| {
             let unit = match warm {
                 Some(indexes) => {
@@ -461,6 +471,58 @@ pub(crate) fn run_with_warm(
             })
         })
         .collect();
+
+    let gates = Gates::from_env();
+    let disliked = crate::feedback::disliked_by_norm(store.root());
+    let query_norm = retrieval_log::normalize_query(&req.query);
+    let relevant_captures = selection::relevant(
+        &req.query,
+        answer_pool,
+        exclude_session.as_deref(),
+        disliked.get(&query_norm),
+        lifecycle,
+    );
+    let present: HashSet<String> = answer_ranked
+        .iter()
+        .filter(|hit| hit.score >= gates.floor)
+        .map(|hit| hit.key.clone())
+        .chain(
+            relevant_captures
+                .iter()
+                .map(|candidate| candidate.unit.key.clone()),
+        )
+        .collect();
+    let capture_selection = selection::decide(relevant_captures, lifecycle, &present);
+    let covered_by = |key: &str| {
+        lifecycle
+            .live_replacement(key)
+            .filter(|by| present.contains(*by))
+            .map(str::to_owned)
+    };
+    let mut covered: Vec<CoveredFact> = capture_selection
+        .covered
+        .iter()
+        .filter_map(|candidate| {
+            Some(CoveredFact {
+                key: candidate.unit.key.clone(),
+                by: covered_by(&candidate.unit.key)?,
+                text: candidate.evidence.display.clone(),
+                source_ts: candidate.unit.ts.clone(),
+            })
+        })
+        .collect();
+    answer_ranked.retain(|hit| match covered_by(&hit.key) {
+        Some(by) => {
+            covered.push(CoveredFact {
+                key: hit.key.clone(),
+                by,
+                text: snippet(&hit.text, &qtokens, SNIPPET_WINDOW),
+                source_ts: hit.ts.clone(),
+            });
+            false
+        }
+        None => true,
+    });
     if widened {
         answer_ranked.truncate(req.k);
     }
@@ -478,8 +540,9 @@ pub(crate) fn run_with_warm(
             &all_owned
         }
     };
-    let ranked_all: Vec<UnitHit> = bm25_ranks(&units_query, all_idx, req.k)
+    let ranked_all: Vec<UnitHit> = bm25_ranks(&units_query, all_idx, req.k + non_live)
         .into_iter()
+        .filter(|ranked| lifecycle.is_live(&ranked.key))
         .filter_map(|ranked| {
             let unit = match warm {
                 Some(indexes) => {
@@ -500,6 +563,7 @@ pub(crate) fn run_with_warm(
                 text: unit.text.clone(),
             })
         })
+        .take(req.k)
         .collect();
     let top_units: Vec<UnitOut> = ranked_all
         .iter()
@@ -541,14 +605,28 @@ pub(crate) fn run_with_warm(
     };
     let notes_query = qtokens.join(" ");
     let ranked_note_hits: Vec<(&crate::store::Note, f64)> = match &notes_idx {
-        Some(idx) => bm25_ranks(&notes_query, idx, NOTE_FETCH_LIMIT)
+        Some(idx) => bm25_ranks(&notes_query, idx, NOTE_FETCH_LIMIT + non_live)
             .into_iter()
+            .filter(|ranked| !lifecycle.is_forgotten(&ranked.key))
             .filter_map(|ranked| {
                 notes
                     .iter()
                     .find(|note| note.key == ranked.key)
                     .map(|note| (note, ranked.score))
             })
+            .filter(|(note, _)| match covered_by(&note.key) {
+                Some(by) => {
+                    covered.push(CoveredFact {
+                        key: note.key.clone(),
+                        by,
+                        text: note.text.clone(),
+                        source_ts: note.source_ts.clone(),
+                    });
+                    false
+                }
+                None => true,
+            })
+            .take(NOTE_FETCH_LIMIT)
             .collect(),
         None => Vec::new(),
     };
@@ -560,7 +638,7 @@ pub(crate) fn run_with_warm(
         .collect();
     let related: Vec<Related> = ranked_note_hits
         .iter()
-        .filter(|(note, _)| !crate::store::is_claim_note(note))
+        .filter(|(note, _)| !crate::store::is_claim_note(note) && lifecycle.is_live(&note.key))
         .take(RELATED_LIMIT)
         .map(|(note, _)| Related {
             text: note.text.clone(),
@@ -572,14 +650,6 @@ pub(crate) fn run_with_warm(
     let skills_out = build_skills_out(store, &req.query, req.brief)?;
 
     let note_top: Option<&NoteHit> = top_notes.first();
-    let disliked = crate::feedback::disliked_by_norm(store.root());
-    let query_norm = retrieval_log::normalize_query(&req.query);
-    let capture_selection = selection::select(
-        &req.query,
-        answer_pool,
-        exclude_session.as_deref(),
-        disliked.get(&query_norm),
-    );
     let selected_capture = capture_selection.winner.as_ref().map(|winner| UnitHit {
         key: winner.unit.key.clone(),
         score: answer_ranked
@@ -663,7 +733,6 @@ pub(crate) fn run_with_warm(
         }
     }
 
-    let gates = Gates::from_env();
     let note_cov = phrased_coverage(&qtokens, note_resolved.as_ref().map(|n| n.text.as_str()));
     let unit_cov = unit_top.as_ref().map_or(0.0, |top| {
         distinct_score(&qtokens, &top.text).0 as f64 / std::cmp::max(1, qtokens.len()) as f64
@@ -757,7 +826,7 @@ pub(crate) fn run_with_warm(
 
     let below_floor = |score: Option<f64>| score.unwrap_or(0.0) < gates.floor;
 
-    let reason;
+    let mut reason;
 
     if capture_selection.conflicts > 0 {
         verdict = "candidates".to_owned();
@@ -851,9 +920,11 @@ pub(crate) fn run_with_warm(
                         .map(|hit| Superseded {
                             text: hit.text.clone(),
                             source_ts: hit.source_ts.clone(),
+                            key: None,
                         })
                         .collect()
                 })),
+                superseded_by: None,
                 supporting_keys: Vec::new(),
             });
             verdict = "answered".to_string();
@@ -872,6 +943,9 @@ pub(crate) fn run_with_warm(
             );
         } else if unit_winner {
             let top = unit_top.as_ref().expect("unit winner keeps a top unit");
+            let replaced =
+                replaced_by_answer(&covered, &top.key, &capture_selection.supporting_keys);
+            let replaced_count = replaced.len();
             answer = Some(Answer {
                 text: snippet(&top.text, &qtokens, SNIPPET_WINDOW),
                 layer: "unit".to_string(),
@@ -883,7 +957,8 @@ pub(crate) fn run_with_warm(
                 host: top.host.clone(),
                 score: text::to_fixed2(top.score),
                 margin: None,
-                superseded: None,
+                superseded: (!replaced.is_empty()).then_some(Some(replaced)),
+                superseded_by: None,
                 supporting_keys: capture_selection.supporting_keys.clone(),
             });
             verdict = "answered".to_string();
@@ -894,12 +969,17 @@ pub(crate) fn run_with_warm(
             } else {
                 Reason::TranscriptAnswer
             };
-            reason = if top.kind == crate::ingest::CAPTURE_KIND {
-                "units layer answer (agent capture), confidence capped medium".to_string()
+            let layer = if top.kind == crate::ingest::CAPTURE_KIND {
+                "units layer answer (agent capture), confidence capped medium"
             } else if top.kind == crate::ingest::ASSISTANT_KIND {
-                "units layer answer (assistant reply), confidence capped medium".to_string()
+                "units layer answer (assistant reply), confidence capped medium"
             } else {
-                "units layer answer (user transcript), confidence capped medium".to_string()
+                "units layer answer (user transcript), confidence capped medium"
+            };
+            reason = match replaced_count {
+                0 => layer.to_string(),
+                1 => format!("{layer}; replaces 1 superseded fact"),
+                count => format!("{layer}; replaces {count} superseded facts"),
             };
         } else {
             verdict = "candidates".to_string();
@@ -914,6 +994,29 @@ pub(crate) fn run_with_warm(
         }
     }
 
+    if let Some(found) = answer.as_mut() {
+        if let Some(State::Superseded { ts, .. }) = lifecycle.state(&found.key) {
+            let live = lifecycle.live_replacement(&found.key);
+            found.superseded_by =
+                live.and_then(|key| replacement(key, warm, &units.items, &caller, &registry));
+            let date = text::utf16_slice(ts, 0, 10);
+            reason = match (&found.superseded_by, live) {
+                (Some(current), _) => {
+                    format!("superseded on {date}; the current fact is {}", current.key)
+                }
+                (None, Some(_)) => {
+                    format!("superseded on {date} by a fact this agent home cannot see")
+                }
+                (None, None) => {
+                    format!("superseded on {date} by a fact that was later forgotten")
+                }
+            };
+            outcome = Outcome::Qualified;
+            reason_code = Reason::SupersededAnswer;
+            confidence = "low".to_string();
+        }
+    }
+
     let live_units = units.run == "live";
     let stale_layer = !live_units
         && notes_layer
@@ -924,6 +1027,7 @@ pub(crate) fn run_with_warm(
 
     let mut recalled: Vec<Recalled> = top_notes
         .iter()
+        .filter(|note| lifecycle.is_live(&note.key))
         .map(|note| Recalled {
             key: note.key.clone(),
             cls: note.cls.clone(),
@@ -959,6 +1063,7 @@ pub(crate) fn run_with_warm(
 
     let out_notes: Vec<NoteOut> = top_notes
         .iter()
+        .filter(|note| lifecycle.is_live(&note.key))
         .map(|note| {
             if req.brief {
                 NoteOut {
@@ -1043,6 +1148,139 @@ fn is_boilerplate_unit_user(hit: &UnitHit) -> bool {
     crate::store::BOILERPLATE_MARKERS
         .iter()
         .any(|marker| hit.text.contains(marker))
+}
+
+struct CoveredFact {
+    key: String,
+    by: String,
+    text: String,
+    source_ts: Option<String>,
+}
+
+fn replaced_by_answer(
+    covered: &[CoveredFact],
+    answer_key: &str,
+    supporting_keys: &[String],
+) -> Vec<Superseded> {
+    let mut seen = HashSet::new();
+    covered
+        .iter()
+        .filter(|fact| fact.by == answer_key || supporting_keys.contains(&fact.by))
+        .filter(|fact| seen.insert(fact.key.as_str()))
+        .map(|fact| Superseded {
+            text: fact.text.clone(),
+            source_ts: fact.source_ts.clone(),
+            key: Some(fact.key.clone()),
+        })
+        .collect()
+}
+
+fn replacement(
+    key: &str,
+    warm: Option<&WarmIndexes<'_>>,
+    units: &[Unit],
+    caller: &str,
+    registry: &qol_agent_homes::Registry,
+) -> Option<Replacement> {
+    let unit = warm
+        .and_then(|indexes| {
+            let position = *indexes.by_key.get(key)?;
+            indexes.user_units.get(position)
+        })
+        .or_else(|| {
+            units
+                .iter()
+                .find(|unit| unit.key == key && agent_home::visible(unit, caller, registry))
+        })?;
+    Some(Replacement {
+        key: unit.key.clone(),
+        text: question_match::evidence(&unit.text)
+            .map_or_else(|| unit.text.clone(), |found| found.display),
+        source_kind: unit.kind.clone(),
+        source_ts: unit.ts.clone(),
+        host: unit.host.clone(),
+    })
+}
+
+const NAMEABLE_UNIT_KINDS: [&str; 4] = ["user", "capture", "assistant", "compaction"];
+const RELATED_FACT_LIMIT: usize = 3;
+pub(crate) const RELATED_FACT_FETCH: usize = 20;
+
+pub(crate) fn nameable(
+    units: &[Unit],
+    visible_notes: &[Note],
+    caller: &str,
+    registry: &qol_agent_homes::Registry,
+) -> Catalog {
+    let mut facts: Vec<Vec<String>> = visible_notes
+        .iter()
+        .map(|note| vec![note.key.clone()])
+        .collect();
+    let mut copies: HashMap<String, Vec<String>> = HashMap::new();
+    for unit in units.iter().filter(|unit| {
+        NAMEABLE_UNIT_KINDS.contains(&unit.kind.as_str())
+            && agent_home::visible(unit, caller, registry)
+    }) {
+        if crate::store::in_answer_pool(&unit.kind) {
+            copies
+                .entry(dedupe_key(unit))
+                .or_default()
+                .push(unit.key.clone());
+        } else {
+            facts.push(vec![unit.key.clone()]);
+        }
+    }
+    Catalog::new(facts.into_iter().chain(copies.into_values()))
+}
+
+pub(crate) fn related_facts(output: &AskOutput, own_key: &str) -> Vec<RelatedFact> {
+    let floor = output.gates.floor;
+    let units = output
+        .units
+        .iter()
+        .flatten()
+        .filter(|unit| {
+            unit.key != own_key
+                && unit.score >= floor
+                && crate::store::is_claim_unit_kind(&unit.kind)
+        })
+        .map(|unit| {
+            (
+                unit.score,
+                RelatedFact {
+                    key: unit.key.clone(),
+                    kind: unit.kind.clone(),
+                    text: rows::title_of(&unit.text),
+                    ts: unit.ts.clone(),
+                },
+            )
+        });
+    let notes = output
+        .notes
+        .iter()
+        .filter(|note| note.key != own_key && note.score >= floor)
+        .filter_map(|note| {
+            Some((
+                note.score,
+                RelatedFact {
+                    key: note.key.clone(),
+                    kind: note.cls.clone(),
+                    text: rows::title_of(note.text.as_deref()?),
+                    ts: note.source_ts.clone(),
+                },
+            ))
+        });
+    let mut facts: Vec<(f64, RelatedFact)> = units.chain(notes).collect();
+    facts.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.key.cmp(&b.1.key))
+    });
+    facts
+        .into_iter()
+        .take(RELATED_FACT_LIMIT)
+        .map(|(_, fact)| fact)
+        .collect()
 }
 
 pub(crate) fn visible_notes(
@@ -1282,7 +1520,8 @@ pub fn run_and_log_with_layers(
     warm: Option<&WarmIndexes<'_>>,
 ) -> Result<AskOutput> {
     let started = Instant::now();
-    let out = run_with_warm(store, aliases, req, units, notes, warm)?;
+    let lifecycle = Lifecycle::load(store);
+    let out = run_with_warm(store, aliases, req, units, notes, &lifecycle, warm)?;
     let latency_ms = started.elapsed().as_millis() as u64;
     log_output(store, req, log, &out, latency_ms);
     Ok(out)
@@ -1362,6 +1601,16 @@ pub fn render_text(out: &AskOutput) -> String {
                 answer.text,
                 host_suffix(&answer.host)
             ));
+            if let Some(current) = &answer.superseded_by {
+                lines.push(format!("replaced by {}: {}", current.key, current.text));
+            }
+            if let Some(Some(replaced)) = &answer.superseded {
+                for entry in replaced {
+                    if let Some(key) = &entry.key {
+                        lines.push(format!("replaces {key}: {}", entry.text));
+                    }
+                }
+            }
         }
     }
     lines.push("recalled:".to_string());
@@ -1468,6 +1717,7 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
         .map(|meta| meta.len())
         .unwrap_or(0);
     let last_ts = retrieval_log::last_event_ts(store.root());
+    let lifecycle = Lifecycle::load(store).counts();
 
     Ok(json!({
         "store": store.root().display().to_string(),
@@ -1489,6 +1739,11 @@ pub fn status_with_layers(store: &Store, units: &UnitsLayer, notes: &NotesLayer)
             "last_ts": last_ts,
         },
         "candidates_pending": retrieval_log::count_pending_candidates(store.root()),
+        "lifecycle": {
+            "superseded": lifecycle.superseded,
+            "forgotten": lifecycle.forgotten,
+            "unreadable": lifecycle.unreadable,
+        },
     }))
 }
 
@@ -1524,6 +1779,7 @@ pub enum Reason {
     TranscriptAnswer,
     NoDecisiveAnswer,
     VerifiedAnswer,
+    SupersededAnswer,
 }
 
 impl Reason {
@@ -1536,6 +1792,7 @@ impl Reason {
             Reason::TranscriptAnswer => "transcript_answer",
             Reason::NoDecisiveAnswer => "no_decisive_answer",
             Reason::VerifiedAnswer => "verified_answer",
+            Reason::SupersededAnswer => "superseded_answer",
         }
     }
 }
@@ -1584,6 +1841,8 @@ pub struct Answer {
     pub margin: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded: Option<Option<Vec<Superseded>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<Replacement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supporting_keys: Vec<String>,
 }
@@ -1593,6 +1852,28 @@ pub struct Superseded {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Replacement {
+    pub key: String,
+    pub text: String,
+    pub source_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ts: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RelatedFact {
+    pub key: String,
+    pub kind: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq)]
