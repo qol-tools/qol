@@ -24,6 +24,7 @@ fn app() -> HeadlessApp {
         .command(disable_adapter_command())
         .command(search_command())
         .command(stop_search_command())
+        .command(open_settings_command())
         .command(pair_command())
         .command(trust_command())
         .command(untrust_command())
@@ -73,6 +74,21 @@ fn adapter_power_command(name: &'static str, powered: bool) -> Command {
             Ok(serde_json::to_value(platform::set_adapter_powered(
                 powered,
             )?)?)
+        })
+}
+
+fn open_settings_command() -> Command {
+    Command::new("open_settings")
+        .about("Open the system Bluetooth settings, where Bluetooth LE devices pair.")
+        .usage(format!("{PLUGIN_ID} open_settings"))
+        .output("No stdout on success.")
+        .exit_behavior(
+            "Exits non-zero on platforms without a Bluetooth settings pane, such as Linux, where qol pairs every device itself.",
+        )
+        .run_plain_text(|context| {
+            reject_args(context.args())?;
+            platform::open_settings()?;
+            Ok(PlainTextOutput::empty())
         })
 }
 

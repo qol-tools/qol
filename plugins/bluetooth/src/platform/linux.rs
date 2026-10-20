@@ -30,7 +30,7 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
     device_order, devices_payload, has_audio_class, is_audio_device, managed_device_options,
-    normalize_address,
+    nearby_payload, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities,
     DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, Pairing,
@@ -44,6 +44,7 @@ pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: true,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
+    settings_pane: None,
 };
 
 const DAEMON_CONFIG: DaemonConfig = DaemonConfig {
@@ -64,7 +65,7 @@ static CONNECTION_FLIGHTS: LazyLock<RwLock<HashSet<Address>>> =
 
 type DeviceStreams = SelectAll<LocalBoxStream<'static, (Address, bool)>>;
 type DiscoveryStream = LocalBoxStream<'static, AdapterEvent>;
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
+const SEARCH_TIMEOUT: Duration = crate::bluetooth::SEARCH_WINDOW;
 const PROFILE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const AUDIO_PROFILE_WATCH_INTERVAL: Duration = Duration::from_secs(10);
 const AUDIO_REPAIR_COOLDOWN: Duration = Duration::from_secs(60);
@@ -244,6 +245,7 @@ enum DaemonAction {
     StartSearch,
     StopSearch,
     Devices,
+    NearbyDevices,
     ManagedDeviceOptions,
     AdapterOptions,
     SearchStatus,
@@ -278,6 +280,7 @@ impl TryFrom<&str> for DaemonAction {
             "start_search" => Ok(Self::StartSearch),
             "stop_search" => Ok(Self::StopSearch),
             "devices" => Ok(Self::Devices),
+            "nearby_devices" => Ok(Self::NearbyDevices),
             "managed_device_options" => Ok(Self::ManagedDeviceOptions),
             "adapter_options" => Ok(Self::AdapterOptions),
             "search_status" => Ok(Self::SearchStatus),
@@ -411,6 +414,10 @@ pub fn stop_search() -> Result<()> {
     bail!("Bluetooth daemon is not reachable")
 }
 
+pub fn open_settings() -> Result<()> {
+    bail!("BlueZ pairs devices here; there is no system Bluetooth settings pane to open")
+}
+
 pub fn devices_snapshot() -> Result<serde_json::Value> {
     let devices = if adapter_available()? {
         list_devices()?
@@ -439,6 +446,30 @@ pub fn devices_snapshot() -> Result<serde_json::Value> {
         payload["searching"]
     );
     Ok(payload)
+}
+
+pub fn nearby_snapshot() -> Result<serde_json::Value> {
+    let adapter = ADAPTER_STATE
+        .read()
+        .map_err(|_| anyhow!("Bluetooth adapter state is unavailable"))?
+        .clone();
+    let devices = if adapter.is_some() {
+        list_devices()?
+    } else {
+        Vec::new()
+    };
+    let action = DEVICE_ACTION_STATE
+        .read()
+        .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?
+        .clone();
+    Ok(nearby_payload(
+        &devices,
+        &discovery_state()?,
+        action.as_ref(),
+        adapter.is_some_and(|adapter| adapter.powered),
+        CAPABILITIES,
+        std::time::Instant::now(),
+    ))
 }
 
 pub fn search_status_snapshot() -> Result<serde_json::Value> {
@@ -1389,6 +1420,10 @@ fn dispatch_daemon_action(
             Ok(payload) => ReadResult::HandledWithData(payload),
             Err(error) => ReadResult::Error(format!("{error:#}")),
         },
+        DaemonAction::NearbyDevices => match nearby_snapshot() {
+            Ok(payload) => ReadResult::HandledWithData(payload),
+            Err(error) => ReadResult::Error(format!("{error:#}")),
+        },
         DaemonAction::ManagedDeviceOptions => {
             match current_managed_device_options().and_then(|options| {
                 serde_json::to_value(options).context("failed to encode Bluetooth device options")
@@ -2052,6 +2087,13 @@ fn begin_device_action(address: Address, intent: DeviceIntent) -> Result<()> {
         status: intent.pending_status().into(),
         pending: true,
     });
+    drop(state);
+    if intent == DeviceIntent::Pair {
+        DISCOVERY_STATE
+            .write()
+            .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?
+            .claim(&address.to_string());
+    }
     Ok(())
 }
 
@@ -3084,6 +3126,7 @@ mod tests {
             ("start_search", DaemonAction::StartSearch),
             ("stop_search", DaemonAction::StopSearch),
             ("devices", DaemonAction::Devices),
+            ("nearby_devices", DaemonAction::NearbyDevices),
             ("managed_device_options", DaemonAction::ManagedDeviceOptions),
             ("adapter_options", DaemonAction::AdapterOptions),
             ("search_status", DaemonAction::SearchStatus),

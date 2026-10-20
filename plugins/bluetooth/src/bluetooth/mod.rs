@@ -1,12 +1,18 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use anyhow::{bail, Result};
 
+pub mod find;
 pub mod retry;
+
+pub use find::nearby_payload;
+
+pub const SEARCH_WINDOW: Duration = Duration::from_secs(60);
 
 const UUID_GROUP_LENGTHS: [usize; 5] = [8, 4, 4, 4, 12];
 const SYSTEM_BLUETOOTH_SETTINGS: &str = "the system Bluetooth settings";
@@ -83,6 +89,7 @@ pub struct BackendCapabilities {
     pub separate_trust_flag: bool,
     pub audio_reclaim: bool,
     pub settings_pairing: Option<&'static str>,
+    pub settings_pane: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,27 +186,51 @@ pub struct DiscoveryState {
     searching: bool,
     addresses: HashSet<String>,
     devices: HashMap<String, DeviceInfo>,
+    claimed: HashSet<String>,
+    started: Option<Instant>,
+    ended: Option<Instant>,
 }
 
 impl DiscoveryState {
     pub fn start(&mut self) {
         self.addresses.clear();
         self.devices.clear();
+        self.claimed.clear();
         self.searching = true;
+        self.started = Some(Instant::now());
+        self.ended = None;
     }
 
     pub fn request(&mut self) {
+        if !self.searching {
+            self.started = Some(Instant::now());
+            self.ended = None;
+        }
         self.searching = true;
     }
 
     pub fn stop(&mut self) {
-        self.searching = false;
+        self.finish();
     }
 
     pub fn reset(&mut self) {
-        self.searching = false;
+        self.finish();
         self.addresses.clear();
         self.devices.clear();
+        self.claimed.clear();
+    }
+
+    fn finish(&mut self) {
+        if self.searching {
+            self.ended = Some(Instant::now());
+        }
+        self.searching = false;
+    }
+
+    pub fn claim(&mut self, address: &str) {
+        if self.addresses.contains(address) {
+            self.claimed.insert(address.to_string());
+        }
     }
 
     pub fn record(&mut self, address: impl Into<String>) {
@@ -319,20 +350,10 @@ pub fn devices_payload(
         .iter()
         .filter_map(|address| normalize_address(address).ok())
         .collect::<HashSet<_>>();
-    let mut visible = devices
+    let visible = devices
         .iter()
-        .filter(|device| device.paired || device.trusted || discovery.contains(&device.address))
+        .filter(|device| device.paired || device.trusted || device.connected)
         .collect::<Vec<_>>();
-    let current_addresses = devices
-        .iter()
-        .map(|device| device.address.as_str())
-        .collect::<HashSet<_>>();
-    visible.extend(
-        discovery
-            .devices
-            .values()
-            .filter(|device| !current_addresses.contains(device.address.as_str())),
-    );
     let mut visible = without_settings_twins(visible);
     visible.sort_by(|left, right| device_order(left, right));
     let connected_count = visible.iter().filter(|device| device.connected).count();
@@ -482,16 +503,19 @@ mod tests {
         separate_trust_flag: true,
         audio_reclaim: false,
         settings_pairing: None,
+        settings_pane: None,
     };
     const TRUST_FREE: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: None,
+        settings_pane: None,
     };
     const SETTINGS_PAIRED: BackendCapabilities = BackendCapabilities {
         separate_trust_flag: false,
         audio_reclaim: false,
         settings_pairing: Some("System Settings"),
+        settings_pane: None,
     };
     const LIFT: &str = "31CAE991-2662-5D9B-D7B9-8CE2CD5FF04C";
     const KEYBOARD: &str = "9F6F5B65-F881-6552-4B8E-85914E7FAFD7";
@@ -517,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn devices_payload_keeps_paired_and_discovered_devices_together() {
+    fn devices_payload_keeps_paired_devices_and_leaves_found_ones_to_find_devices() {
         let devices = [
             device("04", "Old Device", false, false, false, None),
             device("03", "Nearby Speaker", false, false, false, Some(-42)),
@@ -538,7 +562,7 @@ mod tests {
             payload,
             serde_json::json!({
                 "connected_count": 1,
-                "count": 3,
+                "count": 2,
                 "items": [
                     {
                         "accent": "success",
@@ -592,33 +616,6 @@ mod tests {
                         "signal": "Signal unknown",
                         "status": "Paired",
                         "trusted": true,
-                        "uuids": [],
-                    },
-                    {
-                        "accent": "muted",
-                        "address": "AA:BB:CC:DD:EE:03",
-                        "action_pending": false,
-                        "audio": false,
-                        "badge": "Available",
-                        "badge_tone": "muted",
-                        "can_connect": false,
-                        "can_disconnect": false,
-                        "can_pair": true,
-                        "can_reclaim": false,
-                        "can_remove": false,
-                        "can_trust": false,
-                        "can_untrust": false,
-                        "connected": false,
-                        "detail": "-42 dBm · AA:BB:CC:DD:EE:03",
-                        "managed": false,
-                        "name": "Nearby Speaker",
-                        "paired": false,
-                        "ready": false,
-                        "rssi": -42,
-                        "services_resolved": false,
-                        "signal": "-42 dBm",
-                        "status": "Available",
-                        "trusted": false,
                         "uuids": [],
                     },
                 ],
@@ -693,9 +690,8 @@ mod tests {
 
     #[test]
     fn devices_payload_keeps_a_pending_action_visible_with_its_stable_action_label() {
-        let devices = [device("03", "Luna 2", false, false, false, Some(-42))];
-        let mut discovery = DiscoveryState::default();
-        discovery.record("AA:BB:CC:DD:EE:03");
+        let devices = [device("03", "Luna 2", true, true, false, Some(-42))];
+        let discovery = DiscoveryState::default();
         let action = DeviceActionState {
             address: "AA:BB:CC:DD:EE:03".into(),
             intent: DeviceIntent::Connect,
@@ -706,9 +702,8 @@ mod tests {
         let item = &payload["items"][0];
         assert_eq!(item["status"], "Connecting");
         assert_eq!(item["action_pending"], true);
-        assert_eq!(item["can_connect"], false);
-        assert_eq!(item["can_pair"], true);
-        assert_eq!(item["can_remove"], false);
+        assert_eq!(item["can_pair"], false);
+        assert_eq!(item["can_remove"], true);
     }
 
     #[test]
@@ -777,17 +772,6 @@ mod tests {
             assert_eq!(item["can_untrust"], false, "case: {label}");
             assert_eq!(item["can_remove"], true, "case: {label}");
         }
-    }
-
-    #[test]
-    fn devices_payload_retains_a_discovered_snapshot_after_bluez_drops_the_object() {
-        let luna = device("03", "Luna 2", false, false, false, Some(-42));
-        let mut discovery = DiscoveryState::default();
-        discovery.record_device(luna);
-        let payload = devices_payload(&[], &[], &discovery, None, TRUST_CAPABLE);
-        assert_eq!(payload["count"], 1);
-        assert_eq!(payload["items"][0]["name"], "Luna 2");
-        assert_eq!(payload["items"][0]["status"], "Available");
     }
 
     #[test]
@@ -984,15 +968,6 @@ mod tests {
         }
     }
 
-    fn discovered(devices: &[DeviceInfo]) -> DiscoveryState {
-        let mut discovery = DiscoveryState::default();
-        discovery.start();
-        for device in devices {
-            discovery.record_device(device.clone());
-        }
-        discovery
-    }
-
     #[test]
     fn low_energy_identifiers_are_recognised_in_canonical_uuid_form() {
         let cases = [
@@ -1047,108 +1022,6 @@ mod tests {
         assert_eq!(classic.get("pairing"), None);
         assert_eq!(low_energy["pairing"], "system_settings");
         assert_eq!(low_energy["address"], LIFT);
-    }
-
-    #[test]
-    fn a_settings_paired_device_keeps_the_row_shape_and_offers_no_qol_action() {
-        let lift = low_energy_device(LIFT, "LIFT", Some(-58));
-        let payload = devices_payload(&[], &[], &discovered(&[lift]), None, SETTINGS_PAIRED);
-        assert_eq!(
-            payload["items"][0],
-            serde_json::json!({
-                "accent": "muted",
-                "address": LIFT,
-                "action_pending": false,
-                "audio": false,
-                "badge": "Pair in System Settings",
-                "badge_tone": "muted",
-                "can_connect": false,
-                "can_disconnect": false,
-                "can_pair": false,
-                "can_reclaim": false,
-                "can_remove": false,
-                "can_trust": false,
-                "can_untrust": false,
-                "connected": false,
-                "detail": format!("-58 dBm · {LIFT}"),
-                "managed": false,
-                "name": "LIFT",
-                "paired": false,
-                "ready": false,
-                "rssi": -58,
-                "services_resolved": false,
-                "signal": "-58 dBm",
-                "status": "Pair in System Settings",
-                "trusted": false,
-                "uuids": [],
-            })
-        );
-    }
-
-    #[test]
-    fn settings_paired_devices_sort_by_signal_among_the_other_unpaired_devices() {
-        let devices = [
-            device("01", "soundcore P40i", true, true, false, Some(-48)),
-            device("02", "Galaxy S21 5G", false, false, false, Some(-70)),
-        ];
-        let low_energy = [
-            low_energy_device(LIFT, "LIFT", Some(-58)),
-            low_energy_device(KEYBOARD, "MX KEYS B", Some(-80)),
-        ];
-        let mut discovery = discovered(&low_energy);
-        discovery.record("AA:BB:CC:DD:EE:02");
-        let payload = devices_payload(&devices, &[], &discovery, None, SETTINGS_PAIRED);
-        let names = payload["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|item| item["name"].as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            ["soundcore P40i", "LIFT", "Galaxy S21 5G", "MX KEYS B"]
-        );
-    }
-
-    #[test]
-    fn a_settings_paired_device_named_like_a_listed_device_is_shown_once() {
-        let cases = [
-            (
-                "paired twin",
-                device("01", "MX KEYS B", true, true, true, None),
-                "MX KEYS B",
-                1,
-            ),
-            (
-                "discovered twin",
-                device("02", " galaxy s21 5g ", false, false, false, Some(-70)),
-                "Galaxy S21 5G",
-                1,
-            ),
-            (
-                "differently named device",
-                device("03", "soundcore P40i", true, true, false, None),
-                "MX KEYS B",
-                2,
-            ),
-        ];
-        for (label, listed, low_energy_name, expected) in cases {
-            let mut discovery =
-                discovered(&[low_energy_device(KEYBOARD, low_energy_name, Some(-60))]);
-            discovery.record(listed.address.clone());
-            let payload = devices_payload(
-                std::slice::from_ref(&listed),
-                &[],
-                &discovery,
-                None,
-                SETTINGS_PAIRED,
-            );
-            assert_eq!(payload["count"], expected, "case: {label}");
-            assert_eq!(
-                payload["items"][0]["address"], listed.address,
-                "case: {label}"
-            );
-        }
     }
 
     #[test]

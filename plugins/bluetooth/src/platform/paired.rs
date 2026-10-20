@@ -10,7 +10,7 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     adapter_options, connection_ready, device_address, devices_payload, managed_device_options,
-    normalize_address,
+    nearby_payload, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, AdapterHealth, AdapterInfo, DeviceActionState, DeviceInfo, DeviceIntent,
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
@@ -63,6 +63,14 @@ pub fn stop_search() -> Result<()> {
         return Ok(());
     }
     bail!("Bluetooth daemon is not reachable")
+}
+
+pub fn open_settings() -> Result<()> {
+    let pane = super::CAPABILITIES
+        .settings_pane
+        .context("this computer has no Bluetooth settings pane to open")?;
+    qol_apps::desktop_integration::open_with_default_app(pane)
+        .context("failed to open the Bluetooth settings")
 }
 
 fn discovery_state() -> Result<DiscoveryState> {
@@ -178,6 +186,21 @@ pub(super) fn devices_snapshot<S: PairedStack>() -> Result<serde_json::Value> {
     Ok(payload)
 }
 
+fn nearby_snapshot<S: PairedStack>() -> Result<serde_json::Value> {
+    let action = DEVICE_ACTION_STATE
+        .read()
+        .map_err(|_| anyhow!("Bluetooth device action state is unavailable"))?
+        .clone();
+    Ok(nearby_payload(
+        &S::paired_devices(),
+        &discovery_state()?,
+        action.as_ref(),
+        S::adapter_health()?.powered,
+        super::CAPABILITIES,
+        Instant::now(),
+    ))
+}
+
 pub fn search_status_snapshot() -> Result<serde_json::Value> {
     Ok(search_status_payload(&discovery_state()?))
 }
@@ -263,11 +286,16 @@ fn parse_daemon_request<S: PairedStack>(request: &DaemonRequest) -> ReadResult<D
         }
         "trust_device" | "untrust_device" => ReadResult::Error(S::TRUST_REFUSAL.into()),
         "start_search" => ReadResult::Command(DaemonCommand::StartSearch),
+        "open_system_settings" => match open_settings() {
+            Ok(()) => ReadResult::Handled,
+            Err(error) => ReadResult::Error(error.to_string()),
+        },
         "stop_search" => match mark_search_stopped() {
             Ok(()) => ReadResult::Command(DaemonCommand::StopSearch),
             Err(error) => ReadResult::Error(error.to_string()),
         },
         "devices" => snapshot_result(devices_snapshot::<S>()),
+        "nearby_devices" => snapshot_result(nearby_snapshot::<S>()),
         "search_status" => snapshot_result(search_status_snapshot()),
         "adapter_status" => snapshot_result(adapter_status_snapshot::<S>()),
         "managed_device_options" => {
@@ -402,6 +430,13 @@ fn begin_device_action(address: &str, intent: DeviceIntent) -> Result<()> {
         status: intent.pending_status().to_string(),
         pending: true,
     });
+    drop(state);
+    if intent == DeviceIntent::Pair {
+        DISCOVERY_STATE
+            .write()
+            .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?
+            .claim(address);
+    }
     Ok(())
 }
 

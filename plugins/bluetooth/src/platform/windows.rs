@@ -37,12 +37,15 @@ use crate::config::ReconnectConfig;
 use super::input_service::{self, Journal};
 use super::low_energy;
 use super::paired::{self, PairedStack};
-pub use super::paired::{search_status_snapshot, settings_action, settings_query, stop_search};
+pub use super::paired::{
+    open_settings, search_status_snapshot, settings_action, settings_query, stop_search,
+};
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: None,
+    settings_pane: None,
 };
 
 const TRUST_UNSUPPORTED: &str =

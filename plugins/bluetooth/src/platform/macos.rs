@@ -29,12 +29,17 @@ use crate::config::ReconnectConfig;
 
 use super::nearby::{self, Advertisement, Sightings};
 use super::paired::{self, PairedStack};
-pub use super::paired::{search_status_snapshot, settings_action, settings_query, stop_search};
+pub use super::paired::{
+    open_settings, search_status_snapshot, settings_action, settings_query, stop_search,
+};
+
+const SETTINGS_PANE: &str = "x-apple.systempreferences:com.apple.BluetoothSettings";
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
     separate_trust_flag: false,
     audio_reclaim: crate::audio_claim::platform::RECLAIM_SUPPORTED,
     settings_pairing: Some("System Settings"),
+    settings_pane: Some(SETTINGS_PANE),
 };
 
 const AUDIO_SINK_UUID16: u16 = 0x110b;
