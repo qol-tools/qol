@@ -107,6 +107,10 @@ pub struct DeviceActionState {
     pub pending: bool,
 }
 
+pub fn forget_failed_pair(action: &mut Option<DeviceActionState>) {
+    action.take_if(|action| !action.pending && action.intent == DeviceIntent::Pair);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceIntent {
     Pair,
@@ -771,6 +775,35 @@ mod tests {
             assert_eq!(item["can_trust"], false, "case: {label}");
             assert_eq!(item["can_untrust"], false, "case: {label}");
             assert_eq!(item["can_remove"], true, "case: {label}");
+        }
+    }
+
+    #[test]
+    fn a_new_search_forgets_only_a_settled_pair() {
+        let action = |intent, pending| {
+            Some(DeviceActionState {
+                address: "AA:BB:CC:DD:EE:01".to_string(),
+                intent,
+                status: String::new(),
+                pending,
+            })
+        };
+        let cases = [
+            (action(DeviceIntent::Pair, false), None),
+            (
+                action(DeviceIntent::Pair, true),
+                action(DeviceIntent::Pair, true),
+            ),
+            (
+                action(DeviceIntent::Connect, false),
+                action(DeviceIntent::Connect, false),
+            ),
+            (None, None),
+        ];
+        for (before, after) in cases {
+            let mut state = before.clone();
+            forget_failed_pair(&mut state);
+            assert_eq!(state, after, "case: {before:?}");
         }
     }
 

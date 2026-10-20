@@ -29,8 +29,8 @@ use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
     adapter_options, audio_output_degraded, audio_profile_repairable, connection_ready,
-    device_order, devices_payload, has_audio_class, is_audio_device, managed_device_options,
-    nearby_payload, normalize_address,
+    device_order, devices_payload, forget_failed_pair, has_audio_class, is_audio_device,
+    managed_device_options, nearby_payload, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, supports_audio_sink, AdapterHealth, BackendCapabilities,
     DeviceActionState, DeviceInfo, DeviceIntent, DeviceOption, DiscoveryState, Pairing,
@@ -2239,6 +2239,11 @@ fn mark_search_starting() -> Result<()> {
         .write()
         .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
     state.start();
+    drop(state);
+    match DEVICE_ACTION_STATE.write() {
+        Ok(mut state) => forget_failed_pair(&mut state),
+        Err(_) => log::warn!("Bluetooth device action state is unavailable"),
+    }
     Ok(())
 }
 

@@ -9,8 +9,8 @@ use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
 
 use crate::bluetooth::{
-    adapter_options, connection_ready, device_address, devices_payload, managed_device_options,
-    nearby_payload, normalize_address,
+    adapter_options, connection_ready, device_address, devices_payload, forget_failed_pair,
+    managed_device_options, nearby_payload, normalize_address,
     retry::{RetryPolicy, RetryState},
     search_status_payload, AdapterHealth, AdapterInfo, DeviceActionState, DeviceInfo, DeviceIntent,
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
@@ -88,7 +88,11 @@ pub(super) fn mark_search_starting() -> Result<()> {
     DISCOVERY_STATE
         .write()
         .map(|mut state| state.start())
-        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))
+        .map_err(|_| anyhow!("Bluetooth discovery state is unavailable"))?;
+    if let Ok(mut state) = DEVICE_ACTION_STATE.write() {
+        forget_failed_pair(&mut state);
+    }
+    Ok(())
 }
 
 pub(super) fn mark_search_stopped() -> Result<()> {
