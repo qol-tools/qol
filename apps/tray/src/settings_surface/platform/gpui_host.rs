@@ -954,6 +954,9 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                 continue;
             }
         };
+        if !manifest.plugin.supports_current_platform() {
+            continue;
+        }
         eligible.push((super::generated_contract::rail_label(&manifest), resolved));
     }
     eligible.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1445,6 +1448,73 @@ items = []
 
         let (single, _) = super::load_plugin_panel("plugin-monitor").unwrap();
         assert_eq!(single.sources[0].heading, "Display");
+    }
+
+    #[test]
+    fn unified_rail_skips_plugins_that_do_not_support_the_current_platform() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        let current = qol_platform::Os::current().expect("test runs on a supported OS");
+        let other_platform = qol_platform::Os::ALL
+            .into_iter()
+            .find(|os| *os != current)
+            .expect("another supported OS exists")
+            .name();
+        install_test_plugin(
+            root.path(),
+            "plugin-other-os",
+            &format!(
+                r#"[plugin]
+id = "plugin-other-os"
+name = "Other OS"
+description = "Only runs on another OS."
+version = "1.0.0"
+platforms = ["{other_platform}"]
+
+[action.open]
+label = "Open"
+args = ["open"]
+
+[menu]
+label = "Other OS"
+items = []
+"#
+            ),
+        );
+        install_test_plugin(
+            root.path(),
+            "plugin-every-os",
+            r#"[plugin]
+id = "plugin-every-os"
+name = "Every OS"
+description = "Runs anywhere."
+version = "1.0.0"
+
+[action.open]
+label = "Open"
+args = ["open"]
+
+[menu]
+label = "Every OS"
+items = []
+"#,
+        );
+
+        let (unified, _) = super::load_unified_panel().unwrap();
+        let plugin_ids: Vec<&str> = unified
+            .sources
+            .iter()
+            .map(|source| source.plugin_id.as_str())
+            .collect();
+        assert!(
+            !plugin_ids.contains(&"plugin-other-os"),
+            "the rail hides a plugin whose [plugin].platforms excludes {}",
+            current.name()
+        );
+        assert!(
+            plugin_ids.contains(&"plugin-every-os"),
+            "the rail keeps a plugin with no platforms list"
+        );
     }
 
     #[test]
