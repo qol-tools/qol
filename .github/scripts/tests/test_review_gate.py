@@ -100,8 +100,8 @@ class SupersededTests(unittest.TestCase):
 
 
 class FakeApi:
-    def __init__(self, head: str = SHA, runs: list[dict] | None = None, jobs: dict | None = None, review: list[dict] | None = None):
-        self.head, self.runs, self.jobs, self.review = head, runs or [], jobs or {}, review or []
+    def __init__(self, head: str = SHA, jobs: dict | None = None, review: list[dict] | None = None):
+        self.head, self.jobs, self.review = head, jobs or {}, review or []
         self.calls: list[list[str]] = []
         self.statuses: dict[int, list[str]] = {}
 
@@ -109,9 +109,6 @@ class FakeApi:
         route = args[0]
         if route == "repos/o/r/pulls/7":
             return {"head": {"sha": self.head}}
-        if route.startswith("repos/o/r/actions/runs?"):
-            self.assertIn(f"head_sha={SHA}", route)
-            return {"workflow_runs": self.runs}
         if route.endswith("/jobs?per_page=100"):
             return {"jobs": self.jobs[int(route.split("/")[-2])]}
         run_id = int(route.split("/")[-1])
@@ -121,46 +118,15 @@ class FakeApi:
         self.calls.append(args)
         return "{}"
 
-    def assertIn(self, needle, haystack):
-        assert needle in haystack, (needle, haystack)
 
-
-class RerunWaitsTests(unittest.TestCase):
-    def rerun(self, api: FakeApi) -> list[str]:
-        with mock.patch.object(gate, "gh_json", api.gh_json), mock.patch.object(gate, "gh", api.gh):
-            with redirect_stdout(io.StringIO()):
-                return gate.rerun_waits("o/r", "7", SHA)
-
-    def test_only_the_latest_run_of_each_workflow_that_stopped_on_the_review_reruns(self):
-        wait_failed = [{"name": "Wait for the review", "conclusion": "failure"}, {"name": "merge gate", "conclusion": "failure"}]
-        api = FakeApi(
-            runs=[
-                run(10, workflow=1),
-                run(11, workflow=1),
-                run(20, workflow=2),
-                run(30, workflow=3),
-                run(40, "in_progress", None, workflow=4),
-                run(50, conclusion="success", workflow=5),
-            ],
-            jobs={
-                11: wait_failed,
-                20: wait_failed,
-                30: [{"name": "Wait for the review", "conclusion": "success"}, {"name": "lint + test", "conclusion": "failure"}],
-            },
-        )
-        self.assertEqual(self.rerun(api), ["https://x/runs/11", "https://x/runs/20"])
-        self.assertEqual(
-            api.calls,
-            [
-                ["--method", "POST", "repos/o/r/actions/runs/11/rerun-failed-jobs"],
-                ["--method", "POST", "repos/o/r/actions/runs/20/rerun-failed-jobs"],
-            ],
-        )
-
-    def test_a_pull_request_that_moved_on_keeps_its_checks(self):
-        api = FakeApi(head=OTHER, runs=[run(11)], jobs={11: [{"name": "Wait for the review", "conclusion": "failure"}]})
-        self.assertEqual(self.rerun(api), [])
-        self.assertEqual(api.calls, [])
+class ReviewRunsTests(unittest.TestCase):
+    def test_lists_the_pull_request_review_runs_of_the_commit(self):
+        with mock.patch.object(gate, "gh_json", return_value={"workflow_runs": [run(6)]}) as gh_json:
+            self.assertEqual(gate.review_runs("o/r", SHA), [run(6)])
+        route = gh_json.call_args.args[0][0]
+        self.assertTrue(route.startswith("repos/o/r/actions/workflows/claude-review.yml/runs?"))
+        self.assertIn(f"head_sha={SHA}", route)
+        self.assertIn("event=pull_request", route)
 
 
 class ApplyOverrideTests(unittest.TestCase):
@@ -182,11 +148,10 @@ class ApplyOverrideTests(unittest.TestCase):
     def refusal(self, reason: str) -> list[str]:
         return ["--method", "POST", "repos/o/r/issues/7/comments", "-f", f"body=> [!WARNING]\n> **Review override refused** · {reason}\n"]
 
-    def test_the_override_records_once_and_reruns_the_failed_verdict_and_waits(self):
+    def test_the_override_records_once_and_reruns_the_failed_verdict(self):
         api = FakeApi(
             review=[run(5, conclusion="cancelled"), run(6)],
-            runs=[run(6), run(7, workflow=2)],
-            jobs={6: [{"id": 61, "name": "Review with qol-code-review"}, {"id": 62, "name": "claude review"}], 7: [{"name": "Wait for the review", "conclusion": "failure"}]},
+            jobs={6: [{"id": 61, "name": "Review with qol-code-review"}, {"id": 62, "name": "claude review"}]},
         )
         api.statuses[6] = ["completed", "queued"]
         code, sleep, _ = self.apply(api, [], f"{self.NAMED}\nRound 130 picked the squeezed rows.")
@@ -196,7 +161,6 @@ class ApplyOverrideTests(unittest.TestCase):
             [
                 ["--method", "POST", "repos/o/r/issues/7/comments", "-f", f"body={gate.record(SHA, 'KMRH47')}"],
                 ["--method", "POST", "repos/o/r/actions/jobs/62/rerun"],
-                ["--method", "POST", "repos/o/r/actions/runs/7/rerun-failed-jobs"],
             ],
         )
         self.assertEqual(sleep.call_count, 1)
@@ -238,13 +202,10 @@ class ApplyOverrideTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
-    def test_a_failed_rerun_of_the_waits_only_warns(self):
-        env = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA}
-        with mock.patch.dict(gate.os.environ, env), mock.patch.object(gate, "rerun_waits", side_effect=RuntimeError("HTTP 502")):
-            out = io.StringIO()
-            with redirect_stdout(out):
-                self.assertEqual(gate.main(["review_gate.py", "rerun-waits"]), 0)
-        self.assertIn("::warning::the waiting checks were not rerun: HTTP 502", out.getvalue())
+    def test_an_unknown_command_is_a_usage_error(self):
+        with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(gate.main(["review_gate.py", "rerun-waits"]), 2)
+        self.assertIn("usage: review_gate.py verdict|superseded|override", stderr.getvalue())
 
     def test_a_failed_verdict_lookup_fails_closed(self):
         env = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA, "EVENT": "pull_request", "VERDICT": "conditional"}

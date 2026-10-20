@@ -18,32 +18,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A review that does not pass means a fix and a new push that runs every job
-  # again, so a pull request run lints and tests only a commit whose review passed.
-  review:
-    name: Wait for the review
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 80
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: .github/scripts
-
-      - name: Wait for a pass verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 .github/scripts/wait_for_review.py
-
+  # Every gate that needs no compiler runs here, so a failed lint or script
+  # test skips the matrix instead of starting it. The review runs beside this
+  # workflow: the queue admits a pull request only once both required checks
+  # pass, so no job waits for the verdict.
   plan:
     name: Plan affected crates
-    needs: review
-    # !cancelled() replaces the implicit success(), so a push or queue run, which skips the review wait, still plans.
-    if: "${{ !cancelled() && needs.review.result != 'failure' && !startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') }}"
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -110,31 +91,6 @@ jobs:
       - name: Plugin manifest versions agree
         run: python3 .github/scripts/plugin_version.py --check-manifests
 
-      - name: Reuse a verdict this workflow already reached
-        id: verdict
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/queue_verdict.py
-
-      - name: Compute affected crates
-        id: affected
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-        run: python3 .github/scripts/affected_crates.py
-
-  repository-lint:
-    name: Repository lint
-    needs: review
-    if: ${{ !cancelled() && needs.review.result != 'failure' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
       # qac lint runs the qol-project edit-time hooks over the whole repository.
       # Rules about the code as it stands hold on every file. Rules about added
       # code compare each file with the base, so they judge only this change.
@@ -145,6 +101,7 @@ jobs:
       # checks this repository out as qol/qol, so the lint reads a worktree
       # named like a local clone.
       - name: qac lint
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
@@ -162,13 +119,27 @@ jobs:
             process.exit(r.findings.length ? 1 : 0);
           ' "$RUNNER_TEMP/qac.json"
 
+      - name: Reuse a verdict this workflow already reached
+        id: verdict
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/queue_verdict.py
+
+      - name: Compute affected crates
+        id: affected
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/affected_crates.py
+
   check:
     name: lint + test (${{ matrix.os }})
     needs: plan
     # A run that reuses a verdict has nothing left to lint or test. Release
-    # binaries build in the release build job below, beside this one. A run
-    # outside a pull request skips the review wait, and a skipped ancestor
-    # skips every job below it unless the job tests plan's result itself.
+    # binaries build in the release build job below, beside this one. The
+    # version bump push skips the plan, and a skipped ancestor skips every
+    # job below it unless the job tests plan's result itself.
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' }}
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
@@ -181,8 +152,10 @@ jobs:
     defaults:
       run:
         shell: bash
+    # A failed queue entry goes back whatever the other runners find, so its
+    # first failure stops them; a pull request keeps every OS result for one fix.
     strategy:
-      fail-fast: false
+      fail-fast: ${{ github.event_name == 'merge_group' }}
       matrix:
         include:
           - os: ubuntu-latest
@@ -384,8 +357,7 @@ jobs:
   # run's merge_group base. queue_batch.py explains the rest of the batch.
   batch:
     name: batch role
-    needs: plan
-    if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}
+    if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -432,7 +404,7 @@ jobs:
       run:
         shell: bash
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - os: ubuntu-latest
@@ -522,7 +494,7 @@ jobs:
   # entry still queued.
   gate:
     name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}
-    needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]
+    needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -540,7 +512,6 @@ jobs:
         id: verdict
         env:
           PLAN: ${{ needs.plan.result }}
-          LINT: ${{ needs.repository-lint.result }}
           REUSED: ${{ needs.plan.outputs.reused }}
           CHECK: ${{ needs.check.result }}
           BATCH: ${{ needs.batch.result }}
@@ -552,7 +523,6 @@ jobs:
         run: |
           echo "plan: $PLAN, all: $RESULTS"
           [ "$PLAN" = success ] || exit 1
-          [ "$LINT" = success ] || exit 1
           if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
             [ "$BATCH" = success ] || exit 1
             [ "$ROLE" != tail ] || [ "$BUILD" = success ] || exit 1
@@ -569,32 +539,6 @@ jobs:
           VERDICT: ${{ steps.verdict.outcome }}
           ROLE: ${{ needs.batch.outputs.role }}
         run: python3 .github/scripts/queue_batch.py gate
-
-  # Any failure on a pull request means a fix and a new push that runs every
-  # job again, and any failure in the queue sends the entry back, so the first
-  # failed job cancels this run and frees its runners for the entries behind.
-  # The gate, the batch combine and the queue failure report run anyway: they
-  # run always(), and the failed job keeps its failure result. A watcher that
-  # outlives its timeout only stops watching, so it never fails a green run.
-  stop-on-failure:
-    name: Stop on first failure
-    needs: review
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'pull_request' && needs.review.result == 'success') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 75
-    continue-on-error: true
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: .github/scripts
-
-      - name: Watch the jobs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/stop_on_failure.py
 
   # A push to main rebuilds every waiting queue group on a new ref, and the
   # concurrency group, keyed on the run id, never cancels the run on the old ref.
@@ -622,7 +566,7 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure]
+    needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
