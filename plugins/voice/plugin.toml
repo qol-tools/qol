@@ -17,6 +17,11 @@ default_scope = "os"
 [config.scope]
 activation = "device"
 routing = "device"
+audio = "os"
+"audio.input_device" = "device"
+recognition = "os"
+"recognition.model_dir" = "device"
+segmentation = "os"
 
 [runtime]
 command = "qol-voice"

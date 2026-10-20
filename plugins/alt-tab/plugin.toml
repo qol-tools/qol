@@ -9,7 +9,12 @@ author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
 [config.scope]
+action_mode = "core"
+open_behavior = "core"
+reset_selection_on_open = "core"
 switchable_panels = "os"
+display = "core"
+label = "core"
 
 [runtime]
 command = "qol-alt-tab"

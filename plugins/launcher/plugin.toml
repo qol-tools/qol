@@ -8,6 +8,13 @@ version = "1.102.2"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
+[config.scope]
+extra_file_scan_roots = "device"
+most_used_apps = "core"
+recent_files = "core"
+escape_clears_text = "core"
+display = "core"
+
 [runtime]
 command = "qol-launcher"
 

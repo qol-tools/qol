@@ -11,6 +11,14 @@ platforms = ["linux", "macos", "windows"]
 [config]
 default_scope = "os"
 
+[config.scope]
+audio = "os"
+"audio.mic_device" = "device"
+"audio.system_device" = "device"
+video = "os"
+capture = "os"
+shortcuts = "os"
+
 [runtime]
 command = "qol-shot"
 

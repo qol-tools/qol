@@ -8,6 +8,15 @@ version = "1.72.1"
 author = "KMRH47"
 platforms = ["macos", "windows"]
 
+[config.scope]
+enabled = "core"
+excluded_apps = "core"
+char_rules = "core"
+key_rules = "core"
+mouse_rules = "core"
+scroll_rules = "core"
+modifier_keys = "core"
+
 [runtime]
 command = "qol-keyremap"
 
