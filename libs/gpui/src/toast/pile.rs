@@ -381,9 +381,8 @@ impl Tween {
     }
 
     pub(super) fn value(&self, now: Instant) -> f32 {
-        let progress = self
-            .motion
-            .progress(now.saturating_duration_since(self.start));
+        let progress =
+            crate::motion::progress(self.motion, now.saturating_duration_since(self.start));
         lerp(self.from, self.to, progress)
     }
 

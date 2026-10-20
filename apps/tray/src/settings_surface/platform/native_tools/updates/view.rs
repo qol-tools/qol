@@ -697,7 +697,10 @@ impl Render for UpdatesView {
 }
 
 fn fade_opacity(elapsed: Duration) -> f32 {
-    1.0 - qol_theme::Motion::FADE.progress(elapsed.saturating_sub(qol_theme::STAY_BRIEF))
+    1.0 - qol_gpui::motion::progress(
+        qol_theme::Motion::FADE,
+        elapsed.saturating_sub(qol_theme::STAY_BRIEF),
+    )
 }
 
 fn finished(state: TargetState) -> bool {

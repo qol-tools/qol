@@ -29,7 +29,7 @@ impl Tween {
         if elapsed >= self.motion.duration {
             return self.to;
         }
-        self.from + (self.to - self.from) * self.motion.progress(elapsed)
+        self.from + (self.to - self.from) * qol_gpui::motion::progress(self.motion, elapsed)
     }
 
     fn moving(&self, now: Instant) -> bool {

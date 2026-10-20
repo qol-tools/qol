@@ -16,6 +16,7 @@ struct CoreConfigResponse {
     theme: String,
     accent: String,
     native_theme: String,
+    animations: &'static str,
     profile: String,
     residency: bool,
 }
@@ -31,6 +32,7 @@ fn current_config() -> CoreConfigResponse {
         theme: crate::features::theme::current_theme_key(),
         accent: crate::features::theme::current_accent_key(),
         native_theme: crate::features::theme::current_native_theme_key(),
+        animations: crate::features::theme::current_animations().key(),
         profile: crate::paths::active_profile_name(),
         residency: qol_host_fixes::residency::HostResidency::current().is_resident(),
     }
@@ -79,6 +81,7 @@ fn dispatch_field(state: &AppState, field: &str, value: &serde_json::Value) -> H
             }
             result
         }
+        "animations" => crate::features::theme::save_animations(&as_str(field, value)?),
         "profile" => crate::features::profile::registry::switch_active_profile(
             &state.daemon,
             &as_str(field, value)?,

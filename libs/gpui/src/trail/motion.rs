@@ -104,7 +104,7 @@ pub fn fill(phase: Phase, delta: f32) -> f32 {
 pub fn position_at(from: f32, to: usize, elapsed_ms: u64) -> f32 {
     let elapsed = Duration::from_millis(elapsed_ms);
     if elapsed < Motion::TRAVEL.duration {
-        from + (to as f32 - from) * Motion::TRAVEL.progress(elapsed)
+        from + (to as f32 - from) * crate::motion::progress(Motion::TRAVEL, elapsed)
     } else {
         to as f32
     }

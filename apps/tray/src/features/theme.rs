@@ -2,13 +2,13 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 
-const THEME_SETTINGS_FILE: &str = "theme.json";
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct ThemeSettings {
     accent: Option<String>,
     theme: Option<String>,
     native_theme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    animations: Option<String>,
 }
 
 fn update_settings(update: impl FnOnce(&mut ThemeSettings)) -> Result<()> {
@@ -85,6 +85,21 @@ fn validated_native_theme_key(key: &str) -> Result<&str> {
     Err(anyhow!("unknown native theme: {key}"))
 }
 
+pub fn save_animations(key: &str) -> Result<()> {
+    let choice = qol_theme::Animations::parse(key)
+        .ok_or_else(|| anyhow!("unknown animations choice: {key}"))?;
+    update_settings(|settings| settings.animations = Some(choice.key().to_string()))
+}
+
+pub fn current_animations() -> qol_theme::Animations {
+    settings_path()
+        .and_then(|path| crate::file_io::load_json_or_default::<ThemeSettings>(&path))
+        .ok()
+        .and_then(|settings| settings.animations)
+        .and_then(|key| qol_theme::Animations::parse(&key))
+        .unwrap_or_default()
+}
+
 pub fn apply_theme_name_env(command: &mut Command) {
     command.env(qol_conventions::ENV_THEME_NAME, current_native_theme_key());
 }
@@ -131,7 +146,7 @@ pub fn apply_accent_env(command: &mut Command) {
 }
 
 fn settings_path() -> Result<std::path::PathBuf> {
-    crate::paths::shared_config_dir().map(|dir| dir.join(THEME_SETTINGS_FILE))
+    crate::paths::shared_config_dir().map(|dir| dir.join(qol_conventions::THEME_SETTINGS_FILE))
 }
 
 fn validated_accent_key(key: &str) -> Result<&str> {

@@ -49,10 +49,29 @@ impl Motion {
             curve,
         }
     }
+}
 
-    pub fn progress(self, elapsed: Duration) -> f32 {
-        self.curve
-            .at(elapsed.as_secs_f32() / self.duration.as_secs_f32())
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Animations {
+    #[default]
+    System,
+    On,
+    Off,
+}
+
+impl Animations {
+    pub const ALL: [Self; 3] = [Self::System, Self::On, Self::Off];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|choice| choice.key() == key)
     }
 }
 

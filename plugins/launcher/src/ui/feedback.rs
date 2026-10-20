@@ -181,18 +181,17 @@ pub fn hold_then_fade(hold: Duration, delta: f32) -> f32 {
     if at <= hold {
         1.0
     } else {
-        1.0 - Motion::QUICK
-            .curve
-            .at((at - hold) / Motion::QUICK.duration.as_secs_f32())
+        1.0 - qol_gpui::motion::ease(
+            Motion::QUICK,
+            (at - hold) / Motion::QUICK.duration.as_secs_f32(),
+        )
     }
 }
 
 pub fn fade_in_hold_fade(hold: Duration, delta: f32) -> f32 {
     let total = (hold + Motion::QUICK.duration).as_secs_f32();
     let at = delta * total;
-    let rise = Motion::QUICK
-        .curve
-        .at(at / Motion::QUICK.duration.as_secs_f32());
+    let rise = qol_gpui::motion::ease(Motion::QUICK, at / Motion::QUICK.duration.as_secs_f32());
     rise.min(hold_then_fade(hold, delta))
 }
 
@@ -205,9 +204,10 @@ pub fn ghost(delta: f32) -> f32 {
     } else {
         GHOST_OPACITY
             * (1.0
-                - Motion::FADE
-                    .curve
-                    .at((at - hold) / Motion::FADE.duration.as_secs_f32()))
+                - qol_gpui::motion::ease(
+                    Motion::FADE,
+                    (at - hold) / Motion::FADE.duration.as_secs_f32(),
+                ))
     }
 }
 
@@ -221,9 +221,9 @@ pub fn nudge(delta: f32) -> f32 {
     let at = delta * total;
     let hold = NUDGE_HOLD.as_secs_f32();
     if at <= hold {
-        NUDGE * Motion::QUICK.curve.at(at / quick)
+        NUDGE * qol_gpui::motion::ease(Motion::QUICK, at / quick)
     } else {
-        NUDGE * (1.0 - Motion::QUICK.curve.at((at - hold) / quick))
+        NUDGE * (1.0 - qol_gpui::motion::ease(Motion::QUICK, (at - hold) / quick))
     }
 }
 

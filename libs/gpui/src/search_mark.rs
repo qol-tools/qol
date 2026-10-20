@@ -51,12 +51,7 @@ impl SearchMark {
 impl RenderOnce for SearchMark {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let live = self.state == MarkState::Live;
-        let moving = live && !crate::platform::reduce_motion();
-        let turn = if moving {
-            crate::activity_animation::progress_of(qol_theme::MOTION_LOOP * 2)
-        } else {
-            0.0
-        };
+        let turn = crate::activity_animation::progress_of(qol_theme::MOTION_LOOP * 2);
         let tone = if live { self.live } else { self.rest };
         let size = self.size;
         let drawing = canvas(
@@ -72,7 +67,7 @@ impl RenderOnce for SearchMark {
         } else {
             mark
         };
-        crate::activity_animation::ActivityAnimation::new(self.id, moving, mark)
+        crate::activity_animation::ActivityAnimation::new(self.id, live, mark)
     }
 }
 

@@ -54,14 +54,22 @@ impl FrameClock {
 impl RenderOnce for ActivityAnimation {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         if self.active {
+            let interval = if crate::motion::moving() {
+                self.interval
+            } else {
+                crate::motion::RECHECK
+            };
             let clock = window.use_keyed_state(self.id, cx, |_, _| FrameClock::default());
-            clock.update(cx, |clock, cx| clock.schedule(self.interval, cx));
+            clock.update(cx, |clock, cx| clock.schedule(interval, cx));
         }
         self.child
     }
 }
 
 pub(crate) fn progress_of(cycle: Duration) -> f32 {
+    if !crate::motion::moving() {
+        return 0.0;
+    }
     static START: OnceLock<Instant> = OnceLock::new();
     cycle_progress(START.get_or_init(Instant::now).elapsed(), cycle)
 }

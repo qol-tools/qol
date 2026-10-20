@@ -424,7 +424,7 @@ impl BannerToastView {
             cool: 1.0 - card::counting(row, self.inside, now).unwrap_or(1.0),
             roll: shown.roll.as_ref().map(|(from, at)| card::Roll {
                 from: from.clone(),
-                progress: ROLL.progress(now.saturating_duration_since(*at)),
+                progress: crate::motion::progress(ROLL, now.saturating_duration_since(*at)),
             }),
         };
         let host = front.then(|| self.card.clone());
@@ -546,9 +546,9 @@ fn family_rule(family_arrived: Instant, stay: Duration, now: Instant) -> f32 {
 }
 
 fn message_pose(arrived: Instant, leaving: Option<Instant>, now: Instant) -> (f32, f32, bool) {
-    let shown = ARRIVE.progress(now.saturating_duration_since(arrived));
+    let shown = crate::motion::progress(ARRIVE, now.saturating_duration_since(arrived));
     let gone = leaving.map_or(0.0, |start| {
-        LEAVE.progress(now.saturating_duration_since(start))
+        crate::motion::progress(LEAVE, now.saturating_duration_since(start))
     });
     let moving = shown < 1.0 || (leaving.is_some() && gone < 1.0);
     (MESSAGE_RISE * gone, shown * (1.0 - gone), moving)

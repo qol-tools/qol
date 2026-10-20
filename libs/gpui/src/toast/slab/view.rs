@@ -308,7 +308,7 @@ impl Render for SlabToastView {
             });
         }
         let glide_t = self.glide.as_ref().map_or(1.0, |glide| {
-            pile::GLIDE.progress(now.saturating_duration_since(glide.start))
+            crate::motion::progress(pile::GLIDE, now.saturating_duration_since(glide.start))
         });
         if self
             .glide
@@ -353,7 +353,10 @@ impl Render for SlabToastView {
             self.arrival = Some(now);
         }
         let arrival = self.arrival.map_or(1.0, |start| {
-            qol_theme::Motion::TRAVEL.progress(now.saturating_duration_since(start))
+            crate::motion::progress(
+                qol_theme::Motion::TRAVEL,
+                now.saturating_duration_since(start),
+            )
         });
         let moving = self.grow.moving(now)
             || self.open.moving(now)

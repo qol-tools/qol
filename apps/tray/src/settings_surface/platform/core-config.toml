@@ -48,6 +48,20 @@ magenta = "swatch:magenta"
 blue = "swatch:blue"
 violet = "swatch:violet"
 
+[field.animations]
+type = "select"
+label = "Animations"
+description = "Motion in every qol window, spinners included."
+section = "appearance"
+default = "system"
+card_description = "Motion in qol windows."
+options = ["system", "on", "off"]
+
+[field.animations.option_labels]
+system = "Follow system"
+on = "Always on"
+off = "Off"
+
 [section.host]
 label = "This computer"
 description = "What qol is allowed to change on this computer."
