@@ -156,7 +156,7 @@ fn read_conversation(
         return None;
     }
     let cwd = head.cwd?;
-    let tail = read_tail(path);
+    let tail = read_tail(path, signature.length);
     let last_active = signature
         .modified?
         .duration_since(UNIX_EPOCH)
@@ -242,25 +242,70 @@ struct Tail {
     pr_urls: Vec<String>,
 }
 
-fn read_tail(path: &Path) -> Tail {
-    let mut tail = Tail::default();
-    scan_backwards(path, TAIL_CHUNK, TAIL_BUDGET, |line| {
-        tail.facts.absorb(line, false);
-        if tail.ai_title.is_none() && contains_bytes(line, AI_TITLE_TAG) {
-            tail.ai_title = parsed_field(line, "aiTitle")
+impl Tail {
+    fn absorb(&mut self, line: &[u8], newer: bool) {
+        self.facts.absorb(line, newer);
+        if (newer || self.ai_title.is_none()) && contains_bytes(line, AI_TITLE_TAG) {
+            if let Some(title) = parsed_field(line, "aiTitle")
                 .map(|title| title.trim().to_owned())
-                .filter(|title| !title.is_empty());
+                .filter(|title| !title.is_empty())
+            {
+                self.ai_title = Some(title);
+            }
         }
         if contains_bytes(line, PR_LINK_TAG) {
             if let Some(url) = parsed_field(line, "prUrl") {
-                if !tail.pr_urls.contains(&url) {
-                    tail.pr_urls.push(url);
+                if !self.pr_urls.contains(&url) {
+                    self.pr_urls.push(url);
                 }
             }
         }
+    }
+
+    fn complete(&self) -> bool {
+        (self.facts.title.is_some() || self.ai_title.is_some())
+            && self.facts.permission_mode.is_some()
+            && self.facts.request.is_some()
+    }
+
+    fn fill_from(&mut self, older: Tail) {
+        self.facts = std::mem::take(&mut self.facts).or(older.facts);
+        self.ai_title = self.ai_title.take().or(older.ai_title);
+        for url in older.pr_urls {
+            if !self.pr_urls.contains(&url) {
+                self.pr_urls.push(url);
+            }
+        }
+    }
+}
+
+fn read_tail(path: &Path, length: u64) -> Tail {
+    let mut tail = Tail::default();
+    scan_backwards(path, TAIL_CHUNK, TAIL_BUDGET, |line| {
+        tail.absorb(line, false);
         false
     });
+    if length > TAIL_BUDGET && !tail.complete() {
+        tail.fill_from(read_start(path));
+    }
     tail
+}
+
+fn read_start(path: &Path) -> Tail {
+    let mut start = Tail::default();
+    let Ok(file) = fs::File::open(path) else {
+        return start;
+    };
+    let mut reader = BufReader::new(file.take(HEAD_BUDGET));
+    let mut line = Vec::new();
+    while reader
+        .read_until(b'\n', &mut line)
+        .is_ok_and(|read| read > 0)
+    {
+        start.absorb(&line, true);
+        line.clear();
+    }
+    start
 }
 
 fn parsed_field(line: &[u8], name: &str) -> Option<String> {
@@ -479,6 +524,43 @@ mod tests {
         assert_eq!(found[0].settings.model.as_deref(), Some("claude-opus-5-5"));
         assert_eq!(found[0].settings.effort.as_deref(), Some("low"));
         assert_eq!(found[0].pr_urls, ["https://github.com/o/r/pull/4"]);
+    }
+
+    #[test]
+    fn settings_written_only_at_the_start_of_a_long_transcript_are_read() {
+        let home = tempfile::tempdir().unwrap();
+        let first = prompt("hello");
+        let filler = prompt(&"x".repeat(4_096));
+        let mut lines = vec![
+            r#"{"type":"permission-mode","permissionMode":"default"}"#.to_owned(),
+            ENTRY.to_owned(),
+            first,
+            r#"{"type":"permission-mode","permissionMode":"acceptEdits"}"#.to_owned(),
+            r#"{"type":"custom-title","customTitle":"Early name"}"#.to_owned(),
+            r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/3"}"#.to_owned(),
+            r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"low"}}}"#.to_owned(),
+        ];
+        lines.extend(std::iter::repeat_n(filler, 80));
+        lines.push(r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/4"}"#.to_owned());
+        let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
+        write_transcript(home.path(), "long", &lines);
+
+        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+
+        assert_eq!(found[0].title.as_deref(), Some("Early name"));
+        assert_eq!(
+            found[0].settings.permission_mode.as_deref(),
+            Some("acceptEdits")
+        );
+        assert_eq!(found[0].settings.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(found[0].settings.effort.as_deref(), Some("low"));
+        assert_eq!(
+            found[0].pr_urls,
+            [
+                "https://github.com/o/r/pull/4",
+                "https://github.com/o/r/pull/3"
+            ]
+        );
     }
 
     #[test]

@@ -50,7 +50,7 @@ struct Timed<T> {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct FileSignature {
     pub(super) modified: Option<SystemTime>,
-    length: u64,
+    pub(super) length: u64,
 }
 
 #[derive(Clone)]
@@ -254,6 +254,21 @@ fn cached_facts(path: &Path, cache: &mut ClaudeCache) -> Option<CachedFacts> {
 }
 
 impl TranscriptFacts {
+    pub(super) fn or(self, older: Self) -> Self {
+        let tiered = self.request.is_some() || self.assistant_model.is_some();
+        Self {
+            title: self.title.or(older.title),
+            has_message: self.has_message || older.has_message,
+            permission_mode: self.permission_mode.or(older.permission_mode),
+            request: if tiered { self.request } else { older.request },
+            assistant_model: if tiered {
+                self.assistant_model
+            } else {
+                older.assistant_model
+            },
+        }
+    }
+
     pub(super) fn model(&self) -> Option<String> {
         self.request
             .as_ref()
