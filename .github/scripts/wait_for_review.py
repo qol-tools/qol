@@ -20,13 +20,17 @@ POLL_SECONDS = 15
 FAILED_POLLS_ALLOWED = 4
 
 
+def review_runs(repo: str, head_sha: str) -> list[dict]:
+    return gh_json(
+        [f"repos/{repo}/actions/workflows/{REVIEW_WORKFLOW}/runs?head_sha={head_sha}&event=pull_request&per_page=20"]
+    )["workflow_runs"]
+
+
 def wait(repo: str, head_sha: str, sleep: Callable[[float], None] = time.sleep) -> dict:
     failed_polls = 0
     while True:
         try:
-            runs = gh_json(
-                [f"repos/{repo}/actions/workflows/{REVIEW_WORKFLOW}/runs?head_sha={head_sha}&event=pull_request&per_page=20"]
-            )["workflow_runs"]
+            runs = review_runs(repo, head_sha)
         except (RuntimeError, KeyError, json.JSONDecodeError) as error:
             failed_polls += 1
             if failed_polls > FAILED_POLLS_ALLOWED:
