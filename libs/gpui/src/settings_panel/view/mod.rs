@@ -30,7 +30,7 @@ use super::components::{
     SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::components::{
-    settings_device_kind, DeviceLight, SettingsDeviceEntry, DEVICE_LIST_WIDTH,
+    settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
 };
 use super::devices::Presence;
 use super::display_layout::DisplayLayoutState;
@@ -305,6 +305,7 @@ pub(super) struct SettingsPanelView {
     nav_guard: PhantomNavGuard,
     custom_views: Vec<Option<CustomPanelView>>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    device_scroll: ScrollHandle,
     display_layout_stage: Rc<Cell<(f32, f32)>>,
     display_layout_press: Option<(String, Point<Pixels>)>,
     placement_stage: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -510,6 +511,7 @@ impl SettingsPanelView {
             nav_guard: PhantomNavGuard::new(),
             custom_views: Vec::new(),
             body_bounds: Rc::new(Cell::new(None)),
+            device_scroll: ScrollHandle::new(),
             display_layout_stage: Rc::new(Cell::new((0.0, 0.0))),
             display_layout_press: None,
             placement_stage: Rc::new(Cell::new(None)),
@@ -4232,19 +4234,8 @@ impl SettingsPanelView {
                 );
             }
         }
-        div()
-            .id("settings-device-list")
-            .flex_none()
-            .w(px(DEVICE_LIST_WIDTH))
-            .h_full()
-            .py(px(qol_theme::SPACE_INSET))
-            .bg(rgb(self.kit.grounds.rail.bg))
-            .when(self.rail_is_open(), |list| {
-                list.rounded_l(px(qol_theme::RADIUS_CARD - qol_theme::LINE))
-            })
-            .flex()
-            .flex_col()
-            .overflow_y_scroll()
+        let children = entries.len();
+        settings_device_list(self.rail_is_open(), self.kit)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -4252,7 +4243,24 @@ impl SettingsPanelView {
                     cx.notify();
                 }),
             )
-            .children(entries)
+            .child(
+                div()
+                    .id("settings-device-list")
+                    .track_scroll(&self.device_scroll)
+                    .size_full()
+                    .py(px(qol_theme::SPACE_INSET))
+                    .flex()
+                    .flex_col()
+                    .overflow_y_scroll()
+                    .children(entries),
+            )
+            .child(self.kit.scroll_cue(
+                crate::scrollbar::ScrollSource::Handle {
+                    handle: self.device_scroll.clone(),
+                    children,
+                },
+                self.kit.grounds.rail,
+            ))
             .into_any_element()
     }
 

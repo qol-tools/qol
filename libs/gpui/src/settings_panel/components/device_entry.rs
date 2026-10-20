@@ -156,6 +156,18 @@ impl RenderOnce for SettingsDeviceEntry {
     }
 }
 
+pub fn settings_device_list(rounded: bool, kit: Kit) -> gpui::Div {
+    div()
+        .relative()
+        .flex_none()
+        .w(px(DEVICE_LIST_WIDTH))
+        .h_full()
+        .bg(rgb(kit.grounds.rail.bg))
+        .when(rounded, |list| {
+            list.rounded_l(px(qol_theme::RADIUS_CARD - qol_theme::LINE))
+        })
+}
+
 pub fn settings_device_kind(label: &str, kit: Kit) -> gpui::Div {
     div()
         .flex()
