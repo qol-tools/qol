@@ -1,0 +1,21 @@
+[package]
+name = "qol-session"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+qol-headless.workspace = true
+qol-platform.workspace = true
+qol-process.workspace = true
+workspace-hack.workspace = true
+
+[build-dependencies]
+qol-conventions.workspace = true
+
+[dev-dependencies]
+qol-plugin-api.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

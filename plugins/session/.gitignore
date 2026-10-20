@@ -1,0 +1,7 @@
+config.json
+*.log
+.DS_Store
+target/
+qol-session
+qol-session.new
+.cargo/config.toml

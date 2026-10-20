@@ -28,6 +28,7 @@ pub enum Mark {
     OsThemes,
     Pointz,
     RemoveApp,
+    Session,
     Shot,
     Sound,
     Voice,
@@ -44,7 +45,7 @@ pub enum Mark {
 const LINE_LIFT: f32 = 0.25;
 
 impl Mark {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::Qol,
         Self::Settings,
         Self::Shortcuts,
@@ -71,6 +72,7 @@ impl Mark {
         Self::OsThemes,
         Self::Pointz,
         Self::RemoveApp,
+        Self::Session,
         Self::Shot,
         Self::Sound,
         Self::Voice,
@@ -112,6 +114,7 @@ impl Mark {
             Self::OsThemes => "os-themes",
             Self::Pointz => "pointz",
             Self::RemoveApp => "remove-app",
+            Self::Session => "session",
             Self::Shot => "shot",
             Self::Sound => "sound",
             Self::Voice => "voice",
@@ -226,6 +229,9 @@ impl Mark {
             }
             Self::RemoveApp => {
                 r#"<path d="M8 13h32"/><path d="M18 13V9.5A2.5 2.5 0 0 1 20.5 7h7A2.5 2.5 0 0 1 30 9.5V13"/><path d="M12 13l1.8 25.3a4 4 0 0 0 4 3.7h12.4a4 4 0 0 0 4-3.7L36 13"/><path d="M20 21v13M28 21v13"/>"#
+            }
+            Self::Session => {
+                r#"<rect x="9" y="21" width="30" height="22" rx="5"/><path d="M16 21v-6a8 8 0 0 1 16 0v6"/><path d="M24 30v5"/>"#
             }
             Self::Shot => {
                 r#"<path d="M6 16V10a4 4 0 0 1 4-4h6M32 6h6a4 4 0 0 1 4 4v6M42 32v6a4 4 0 0 1-4 4h-6M16 42h-6a4 4 0 0 1-4-4v-6"/><circle cx="24" cy="24" r="7.5"/>"#

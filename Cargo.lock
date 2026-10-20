@@ -7421,6 +7421,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qol-conventions",
+ "qol-headless",
+ "qol-platform",
+ "qol-plugin-api",
+ "qol-process",
+ "serde_json",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-sessions-engine"
 version = "1.0.0"
 dependencies = [
