@@ -31,8 +31,7 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
   },
   "label": {
     "show_app_name": false,
-    "show_window_title": true,
-    "size": "medium"
+    "show_window_title": true
   }
 }
 ```
@@ -66,10 +65,10 @@ Install ID is resolved from `$QOL_TRAY_INSTALL_ID` env var or `<base>/active-ins
 |-----|------|---------|-------------|
 | `show_app_name` | bool | `false` | Show app name in card label. When the window title is also shown, the app name prefixes it with a separator. |
 | `show_window_title` | bool | `true` | Show window title in card label. |
-| `size` | `"small"` \| `"medium"` \| `"large"` | `"medium"` | Label text size relative to card size. |
 
 ## Legacy Keys
 
 - `display.preview_mode` and `display.preview_fps` are accepted by serde but have no effect on runtime behavior. They are preserved in config for backwards compatibility.
+- `label.size` is no longer read. A stored value is ignored.
 
 Unknown fields are ignored by default serde behavior.

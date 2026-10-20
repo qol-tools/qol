@@ -380,7 +380,7 @@ impl HotkeyDraft {
             return Some((2, "Action"));
         }
         if self.key.is_empty() {
-            return Some((3, "Shortcut"));
+            return Some((3, "Key combination"));
         }
         None
     }
@@ -734,7 +734,7 @@ mod tests {
         hotkey.action = String::new();
         assert_eq!(hotkey.first_empty(), Some((2, "Action")));
         hotkey.action = "open".to_string();
-        assert_eq!(hotkey.first_empty(), Some((3, "Shortcut")));
+        assert_eq!(hotkey.first_empty(), Some((3, "Key combination")));
         hotkey.key = "Ctrl+Alt+K".to_string();
         assert_eq!(hotkey.first_empty(), None);
     }

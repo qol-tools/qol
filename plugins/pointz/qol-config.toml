@@ -1,6 +1,6 @@
 schema_version = 1
 title = "PointZerver"
-description = "Control your computer from mobile devices."
+description = "Control your computer from your phone."
 
 [field.connection_status]
 type = "status"
@@ -12,7 +12,7 @@ tone_map = { ok = "success", offline = "danger" }
 
 [field.begin_pairing]
 type = "action"
-label = "Pair a device"
+label = "Pair a phone"
 action = "begin_pairing"
 variant = "primary"
 description = "Shows a one-minute pairing code; type it into the PointZ app to pair with this computer."

@@ -102,7 +102,10 @@ pub(super) fn rows(
     catalog: Option<&[CatalogOperation]>,
     withheld: &[PluginId],
 ) -> Vec<Row> {
-    let mut rows = vec![Row::header("this device", "how other devices see this one")];
+    let mut rows = vec![Row::header(
+        "this computer",
+        "how other devices see this one",
+    )];
     let Some(snapshot) = snapshot else {
         rows.push(Row::new("Refresh", "Check for changes", Some(Action::Refresh)).chip("refresh"));
         return rows;
@@ -110,7 +113,7 @@ pub(super) fn rows(
     let Some(authority) = &snapshot.status.authority else {
         let detail = match snapshot.status.lifecycle {
             Lifecycle::Unavailable { error } => format!("Linking could not start: {error}"),
-            _ => "Links this device to your other devices".into(),
+            _ => "Links this computer to your other devices".into(),
         };
         let row = match snapshot.status.lifecycle {
             Lifecycle::Inactive => {
@@ -670,11 +673,11 @@ fn phone_rows(
         PointzPlugin::Legacy => {
             rows.push(Row::header(
                 "phones",
-                "pointz phones that reach this device",
+                "pointz phones that reach this computer",
             ));
             rows.push(Row::new(
-                "PointZ",
-                "Keeps its own phone pairing until PointZ is updated",
+                "PointZerver",
+                "Keeps its own phone pairing until PointZerver is updated",
                 None,
             ));
             return rows;
@@ -683,7 +686,7 @@ fn phone_rows(
     }
     rows.push(Row::header(
         "phones",
-        "pointz phones that reach this device",
+        "pointz phones that reach this computer",
     ));
     if status
         .migration
@@ -692,7 +695,7 @@ fn phone_rows(
         rows.push(
             Row::new(
                 "Some phones must pair again",
-                "Not every PointZ pairing could move into linked devices",
+                "Not every PointZerver pairing could move into linked devices",
                 None,
             )
             .value("pair again", SettingsValueTone::Attention),
@@ -704,7 +707,7 @@ fn phone_rows(
     ) {
         rows.push(
             Row::new(
-                "PointZ is not listening",
+                "PointZerver is not listening",
                 "Another program may be using its network ports",
                 None,
             )
@@ -714,7 +717,7 @@ fn phone_rows(
     if phones.is_empty() {
         rows.push(Row::new(
             "No paired phones",
-            "Pair a phone from PointZ settings",
+            "Pair a phone from PointZerver settings",
             None,
         ));
     }
@@ -790,8 +793,8 @@ fn lifetime_label(lifetime: AuthorityLifetime) -> &'static str {
 
 fn lifetime_detail(lifetime: AuthorityLifetime) -> &'static str {
     match lifetime {
-        AuthorityLifetime::Session => "Links end when qol-tray stops on this device",
-        AuthorityLifetime::Persistent => "Links stay on this device",
+        AuthorityLifetime::Session => "Links end when qol stops",
+        AuthorityLifetime::Persistent => "Links stay after qol stops",
     }
 }
 

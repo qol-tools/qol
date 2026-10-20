@@ -1230,7 +1230,6 @@ mod tests {
         for (name, kind) in [
             ("native_theme", qol_config::contract::FieldKind::Select),
             ("accent", qol_config::contract::FieldKind::Select),
-            ("profile", qol_config::contract::FieldKind::Select),
             ("residency", qol_config::contract::FieldKind::Boolean),
         ] {
             let field = spec.field(name).unwrap_or_else(|| panic!("missing {name}"));
@@ -1242,10 +1241,7 @@ mod tests {
                 "{moved} lives on Notifications"
             );
         }
-        assert_eq!(
-            spec.field("profile").and_then(|field| field.query.clone()),
-            Some("profiles".to_string())
-        );
+        assert!(spec.field("profile").is_none(), "profile lives on Profiles");
         qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
             .expect("core contract must resolve with no stored values");
     }

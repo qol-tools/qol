@@ -136,12 +136,12 @@ input = { address = "{address}" }
 [[field.find_devices.row_actions]]
 action = "open_system_settings"
 label = "Pair in System Settings"
-description = "Opens the Bluetooth settings, where this device pairs."
+description = "Opens the system Bluetooth settings, where this device pairs."
 when = "can_open_settings"
 
 [[field.find_devices.row_actions]]
 label = "Open"
-description = "Shows the device in bluetooth devices."
+description = "Shows the device in Bluetooth devices."
 when = "paired"
 open = "devices"
 
