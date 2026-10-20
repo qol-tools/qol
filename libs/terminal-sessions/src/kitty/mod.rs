@@ -20,7 +20,7 @@ use endpoint::{Endpoint, EndpointSource, SystemEndpointSource};
 use crate::{
     BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCloser, SessionFacts,
     SessionFocus, SessionId, SessionInventory, SessionSpawner, SpawnIdentity, SpawnRequest,
-    SpawnSurface, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
+    SpawnSurface, TabTitler, TerminalBackend, TerminalError, TerminalSnapshot, TextInput,
 };
 
 const BACKEND_ID: &str = "kitty";
@@ -216,6 +216,10 @@ impl TerminalBackend for KittyBackend {
         Some(self)
     }
 
+    fn tab_titler(&self) -> Option<&dyn TabTitler> {
+        Some(self)
+    }
+
     fn read_screen_from_snapshot(
         &self,
         snapshot: &TerminalSnapshot,
@@ -293,6 +297,26 @@ impl SessionCloser for KittyBackend {
             &endpoint,
             "close session",
             &strings(["@", "close-window", "--match", &matcher(window_id)]),
+            None,
+        )
+        .map(drop)
+    }
+}
+
+impl TabTitler for KittyBackend {
+    fn set_tab_title(&self, target: &SessionBinding, title: &str) -> Result<(), TerminalError> {
+        self.ensure_capability(target, crate::SessionCapabilities::NONE, "tab title")?;
+        let (endpoint, window_id) = self.route_target(target)?;
+        self.run_at(
+            &endpoint,
+            "set tab title",
+            &strings([
+                "@",
+                "set-tab-title",
+                "--match",
+                &format!("window_id:{window_id}"),
+                title,
+            ]),
             None,
         )
         .map(drop)
@@ -624,7 +648,7 @@ mod tests {
     use crate::{
         kitty::backend_id, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities,
         SessionCloser, SessionFacts, SessionFocus, SessionId, SessionInventory, SpawnIdentity,
-        SpawnKey, SpawnRequest, SpawnSurface, TerminalBackend, TerminalError,
+        SpawnKey, SpawnRequest, SpawnSurface, TabTitler, TerminalBackend, TerminalError,
         TerminalSessionService, TerminalSnapshot, TextInput,
     };
 
@@ -809,6 +833,30 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].1, ["@", "ls"]);
         assert_eq!(calls[1].1, ["@", "close-window", "--match", "id:42"]);
+    }
+
+    #[test]
+    fn tab_title_validates_the_target_then_names_the_window_tab() {
+        let runner = FakeRunner::with_outputs(vec![success(ls(42, 900)), success(String::new())]);
+        let backend = KittyBackend::with_runner(runner.clone());
+
+        backend
+            .set_tab_title(&binding(42, 900), "#239 ci-speed")
+            .unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, ["@", "ls"]);
+        assert_eq!(
+            calls[1].1,
+            [
+                "@",
+                "set-tab-title",
+                "--match",
+                "window_id:42",
+                "#239 ci-speed"
+            ]
+        );
 
         let runner = FakeRunner::with_outputs(vec![success(ls(42, 901))]);
         let backend = KittyBackend::with_runner(runner.clone());

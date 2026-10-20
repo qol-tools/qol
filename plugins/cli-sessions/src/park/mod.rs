@@ -173,6 +173,9 @@ fn park(
         store.record_spawn_key(&id, &identity.key)?;
     }
     store.record(&record)?;
+    if let Some(identity) = facts.spawn_identity.as_ref() {
+        record_pull_requests(&record, identity.key.as_str());
+    }
     let mut runner = Command::new(executable);
     runner.args([PARK, "--run", &id]).current_dir(&record.cwd);
     qol_process::spawn_detached(&mut runner).context("failed to start the park runner")?;
@@ -194,6 +197,17 @@ fn park(
         command: record.command,
         instruction,
     })
+}
+
+fn record_pull_requests(record: &ParkRecord, key: &str) {
+    if let Err(error) =
+        qol_sessions_engine::record_pull_requests(&record.session, key, &record.command.join(" "))
+    {
+        log::warn!(
+            "[cli-sessions] pull requests of park {} not recorded: {error:#}",
+            record.id
+        );
+    }
 }
 
 fn watch_launch(

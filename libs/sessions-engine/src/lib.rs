@@ -52,6 +52,16 @@ pub fn mail_counts(key: &str) -> (usize, usize) {
         .unwrap_or_default()
 }
 
+pub fn pull_requests(key: &str) -> Vec<String> {
+    prs::PrStore::system()
+        .map(|store| store.keyed(key))
+        .unwrap_or_default()
+}
+
+pub fn record_pull_requests(session: &str, key: &str, text: &str) -> Result<Vec<String>> {
+    prs::PrStore::system()?.record(&fork::ForkStore::system()?, session, key, text)
+}
+
 pub fn is_lane(binding: &SessionBinding) -> bool {
     bridge::PendingBridgeStore::system()
         .is_ok_and(|store| store.recorded_role(binding) == Some(bridge::Role::Lane))
@@ -380,7 +390,10 @@ Details:
   and done true closes the sender's tab when its turn ends, through
   qol-cli-sessions park --watch --final; the switchboard relays the user's
   own words with as_user true, shown from user via switchboard. Every pull
-  request URL a message names is added to the sender's prs.
+  request URL a message names is added to the sender's prs, and so is every
+  one a qol-cli-sessions park command names. CLI Sessions starts the tab
+  title of each session with a spawn key and prs with their numbers, as
+  `#237,#240 ci-speed`; the switchboard's tab keeps its name.
   The MCP and generated agent surfaces expose {tool_names}. The remaining
   commands are human diagnostics.
 
