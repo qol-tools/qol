@@ -70,13 +70,6 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 pub(super) fn close_spawned_terminal(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
-) -> Result<CloseOutcome> {
-    close_terminal(terminals, binding, false)
-}
-
-fn close_terminal(
-    terminals: &TerminalSessionService,
-    binding: &SessionBinding,
     force: bool,
 ) -> Result<CloseOutcome> {
     if terminals.is_current(binding).unwrap_or(false) {
@@ -176,7 +169,7 @@ pub(super) fn close_loop_siblings(
             .screen
             .filter(|screen| !screen.is_empty())
             .unwrap_or_else(|| terminals.read_screen(&binding).unwrap_or_default());
-        let close = close_spawned_terminal(terminals, &binding)?;
+        let close = close_spawned_terminal(terminals, &binding, false)?;
         siblings.push(SiblingLaneClose {
             session: round.session,
             key: close.key,
@@ -205,7 +198,7 @@ pub(super) fn execute(
         Some(round) => Some(round),
         None => None,
     };
-    let mut outcome = close_terminal(terminals, binding, force)?;
+    let mut outcome = close_spawned_terminal(terminals, binding, force)?;
     if let Some(round) = hung {
         let marker = round.completion_marker.clone();
         pending.discard(binding)?;

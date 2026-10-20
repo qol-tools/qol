@@ -549,10 +549,7 @@ impl McpSessionServer {
         let mut rows = Vec::with_capacity(facts.len());
         let attention = super::attention::read();
         let now_ms = super::mailbox::now_ms();
-        let forks = self
-            .forks
-            .list()
-            .map_err(|error| format!("failed to read the fork records: {error}"))?;
+        let forks = self.forks.list().unwrap_or_default();
         let prs = self.prs();
         for session in &facts {
             let Ok(binding) = session.binding() else {
@@ -1309,7 +1306,7 @@ pub(super) fn execute_loop_close(
     }
     pending.acknowledge(command.binding, command.completion_marker, command.accepted)?;
     if command.accepted {
-        let close = super::close::close_spawned_terminal(terminals, command.binding)?;
+        let close = super::close::close_spawned_terminal(terminals, command.binding, false)?;
         receipt["terminal_closed"] = json!(close.closed);
         receipt["terminal_state"] = json!(close.terminal_state);
         if let Some(detail) = close.close_detail {

@@ -206,9 +206,13 @@ fn watch_launch(
     let binding = token
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
-    let final_turn = parsed
-        .final_turn
-        .then(|| turn_in_progress(terminals, interpreter, &binding));
+    let final_turn =
+        match parsed.final_turn {
+            true => Some(turn_in_progress(terminals, interpreter, &binding).context(
+                "the session's transcript shows no turn to watch, so its tab stays open",
+            )?),
+            false => None,
+        };
     if let Some(ready) = parsed.ready.as_deref() {
         std::fs::write(ready, "")
             .with_context(|| format!("failed to confirm the watch at {ready}"))?;

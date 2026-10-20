@@ -436,19 +436,47 @@ fn written_by_the_user(turn: &ChatTurn) -> bool {
         && !turn.text.starts_with(COMPACTED_SUMMARY_HEADER)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenTurn {
+    index: usize,
+    text: String,
+}
+
+impl OpenTurn {
+    fn find(turns: &[ChatTurn]) -> Option<Self> {
+        let index = turns.iter().rposition(|turn| turn.role == ChatRole::User)?;
+        Some(Self {
+            index,
+            text: turns[index].text.clone(),
+        })
+    }
+
+    fn opens(&self, turn: &ChatTurn) -> bool {
+        turn.role == ChatRole::User && turn.text == self.text
+    }
+
+    fn position(&self, turns: &[ChatTurn]) -> Option<usize> {
+        match turns.get(self.index) {
+            Some(turn) if self.opens(turn) => Some(self.index),
+            _ => turns.iter().rposition(|turn| self.opens(turn)),
+        }
+    }
+}
+
 pub fn turn_in_progress(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     session: &SessionBinding,
-) -> usize {
-    woken_turns(terminals, interpreter, session)
-        .iter()
-        .rposition(|turn| turn.role == ChatRole::User)
-        .unwrap_or_default()
+) -> Option<OpenTurn> {
+    OpenTurn::find(&woken_turns(terminals, interpreter, session))
 }
 
-fn woken_turn(turns: &[ChatTurn], final_turn: Option<usize>) -> WokenTurn {
-    let Some(start) = final_turn.or_else(|| turns.iter().rposition(opens_watched_turn)) else {
+fn woken_turn(turns: &[ChatTurn], final_turn: Option<&OpenTurn>) -> WokenTurn {
+    let start = match final_turn {
+        Some(open) => open.position(turns),
+        None => turns.iter().rposition(opens_watched_turn),
+    };
+    let Some(start) = start else {
         return WokenTurn::Working;
     };
     let after = turns.get(start + 1..).unwrap_or_default();
@@ -468,7 +496,7 @@ pub fn watch_woken(
     interpreter: &CliSessionInterpreter,
     store: &ParkStore,
     record: &mut ParkRecord,
-    final_turn: Option<usize>,
+    final_turn: Option<OpenTurn>,
 ) -> Result<()> {
     let Some(token) = record.resumed_session.clone() else {
         return Ok(());
@@ -491,7 +519,10 @@ pub fn watch_woken(
             continue;
         }
         let delivered = store.delivered_into(&token);
-        match woken_turn(&woken_turns(terminals, interpreter, &woken), final_turn) {
+        match woken_turn(
+            &woken_turns(terminals, interpreter, &woken),
+            final_turn.as_ref(),
+        ) {
             WokenTurn::Working => {
                 unread += 1;
                 if unread >= WOKEN_UNREAD_LIMIT {
@@ -527,8 +558,10 @@ pub fn watch_woken(
                         };
                         if !store.exited(&record.external_id).is_empty()
                             || store.delivered_into(&token) != delivered
-                            || woken_turn(&woken_turns(terminals, interpreter, &woken), final_turn)
-                                != WokenTurn::Finished(report.clone())
+                            || woken_turn(
+                                &woken_turns(terminals, interpreter, &woken),
+                                final_turn.as_ref(),
+                            ) != WokenTurn::Finished(report.clone())
                         {
                             continue;
                         }
@@ -712,6 +745,9 @@ mod tests {
             turns.extend_from_slice(extra);
             turns
         };
+        let open = OpenTurn::find(&earlier).unwrap();
+        assert_eq!(open.index, 2);
+        assert_eq!(OpenTurn::find(&[]), None);
         let cases = [
             (with(&[]), WokenTurn::Working),
             (
@@ -735,9 +771,23 @@ mod tests {
             ),
         ];
         for (turns, expected) in cases {
-            assert_eq!(woken_turn(&turns, Some(2)), expected, "{turns:?}");
+            assert_eq!(woken_turn(&turns, Some(&open)), expected, "{turns:?}");
         }
-        assert_eq!(woken_turn(&earlier, Some(9)), WokenTurn::Working);
+        let shifted = [
+            vec![turn(ChatRole::Assistant, "Resumed.")],
+            with(&[turn(ChatRole::Assistant, "PR 180 merged.")]),
+        ]
+        .concat();
+        assert_eq!(
+            woken_turn(&shifted, Some(&open)),
+            WokenTurn::Finished("PR 180 merged.".to_owned()),
+            "an anchor that moved is found again by its text"
+        );
+        let lost = OpenTurn {
+            index: 9,
+            text: "not in the transcript".to_owned(),
+        };
+        assert_eq!(woken_turn(&earlier, Some(&lost)), WokenTurn::Working);
     }
 
     #[test]
