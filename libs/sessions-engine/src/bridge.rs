@@ -33,6 +33,7 @@ pub(super) const WAIT_CANCELLED_MESSAGE: &str =
 const WAIT_SUPERSEDED_MESSAGE: &str =
     "bridge wait superseded by a newer session_bridge for this session; the round stays open";
 const TASK_MAX_BYTES: usize = 64 * 1024;
+pub(super) const BRIDGE_HEADER: &str = "[qol session bridge]";
 const STALE_TMP_AFTER: Duration = Duration::from_secs(3600);
 const CLOSED_RETENTION: Duration = Duration::from_secs(7 * 24 * 3600);
 const GATE_LOCK_MESSAGE: &str = "Blocking waiting for file lock";
@@ -2102,11 +2103,11 @@ pub(super) fn bridge_prompt(
 ) -> String {
     match role {
         Role::Lane if joined => format!(
-            "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with this completion token alone on a line of its own.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
+            "{BRIDGE_HEADER}\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with this completion token alone on a line of its own.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
             token = marker.token
         ),
         Role::Lane => format!(
-            "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
+            "{BRIDGE_HEADER}\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
             marker.left, marker.right
         ),
         Role::Architect if joined => format!(

@@ -42,6 +42,18 @@ pub struct CliResumeSettings {
     pub claude_config_dir: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliConversation {
+    pub tool: CliToolId,
+    pub external_id: String,
+    pub cwd: String,
+    pub title: Option<String>,
+    pub first_prompt: Option<String>,
+    pub last_active: u64,
+    pub pr_urls: Vec<String>,
+    pub settings: CliResumeSettings,
+}
+
 pub trait CliSessionStrategy: Send + Sync {
     fn tool(&self) -> &CliTool;
 
@@ -149,6 +161,10 @@ pub trait CliSessionStrategy: Send + Sync {
 
     fn resume_settings(&self, _session: &SessionFacts) -> CliResumeSettings {
         CliResumeSettings::default()
+    }
+
+    fn closed_conversations(&self, _since: std::time::SystemTime) -> Vec<CliConversation> {
+        Vec::new()
     }
 
     fn keep_open_reason(&self, _session: &SessionFacts) -> Option<String> {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -56,9 +57,28 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
     }
 }
 
-fn custom_config_dir(home: &Path) -> Option<PathBuf> {
+pub(super) fn custom_config_dir(home: &Path) -> Option<PathBuf> {
     let builtin = dirs::home_dir().map(|user_home| Harness::Claude.default_home(&user_home));
     (builtin.as_deref() != Some(home)).then(|| home.to_path_buf())
+}
+
+pub(super) fn open_session_ids(home: &Path) -> HashSet<String> {
+    let Ok(entries) = fs::read_dir(home.join("sessions")) else {
+        return HashSet::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .filter_map(|path| path.file_stem()?.to_str()?.parse::<i32>().ok())
+        .filter(|pid| *pid > 0)
+        .filter_map(|pid| Some((pid.unsigned_abs(), read_record(home, pid)?)))
+        .filter(|(pid, record)| record.held_by(*pid))
+        .map(|(_, record)| record.session_id)
+        .filter(|session_id| !session_id.is_empty())
+        .collect()
 }
 
 fn read_record(home: &Path, pid: i32) -> Option<ClaudeSessionRecord> {
@@ -75,9 +95,19 @@ struct ClaudeSessionRecord {
     bridge_session_id: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    #[serde(rename = "procStart", default)]
+    process_start: Option<String>,
 }
 
 impl ClaudeSessionRecord {
+    fn held_by(&self, pid: u32) -> bool {
+        qol_process::is_pid_alive(pid)
+            && self.process_start.as_ref().is_none_or(|recorded| {
+                qol_process::process_start_time(pid)
+                    .is_some_and(|started| started.to_string() == *recorded)
+            })
+    }
+
     fn busy(&self) -> bool {
         self.status
             .as_deref()

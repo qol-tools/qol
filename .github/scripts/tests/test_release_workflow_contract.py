@@ -307,21 +307,59 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("rust-setup", supersede)
         self.assertNotIn("cargo", supersede)
 
-    def test_only_a_pass_verdict_satisfies_the_review_check(self):
+    def test_only_a_pass_verdict_or_an_owner_override_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         self.assertIn("  merge_group:\n", workflow.split("jobs:\n", 1)[0])
-        verdict = workflow.split("  verdict:\n", 1)[1]
+        verdict = workflow.split("  verdict:\n", 1)[1].split("\n  follow:\n", 1)[0]
         for contract in [
             "name: claude review",
             "needs: [review, publish]",
             "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
-            '[ "$EVENT" = merge_group ] || [ "$BOT" = true ] || [ "$VERDICT" = pass ]',
+            "run: python3 .github/scripts/review_gate.py verdict",
+            "VERDICT: ${{ needs.review.outputs.verdict }}",
             "github.event.pull_request.user.login == 'dependabot[bot]'",
             "github.event.pull_request.head.repo.full_name == github.repository",
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, verdict)
         self.assertIn("verdict: ${{ steps.verdict.outputs.verdict }}", workflow)
+        superseded = named_step(verdict, "End a run a newer review replaced", "      ")
+        self.assertIn("if: github.event_name == 'pull_request' && needs.review.result == 'cancelled'", superseded)
+        self.assertIn("run: python3 .github/scripts/review_gate.py superseded", superseded)
+        publish = workflow.split("  publish:\n", 1)[1].split("    runs-on:", 1)[0]
+        self.assertIn("needs.review.result != 'cancelled'", publish)
+
+    def test_only_the_owner_overrides_the_review_and_only_for_the_labelled_head(self):
+        workflow = (ROOT / ".github/workflows/review-override.yml").read_text()
+        self.assertIn("  pull_request:\n    types: [labeled]\n", workflow.split("jobs:\n", 1)[0])
+        override = workflow.split("jobs:\n", 1)[1]
+        for contract in [
+            "github.event.label.name == 'review-override'",
+            "github.event.sender.login == 'KMRH47'",
+            "github.triggering_actor == 'KMRH47'",
+            "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+            "run: python3 .github/scripts/review_gate.py override",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, override)
+        self.assertNotIn("name: claude review", override)
+        self.assertNotIn("cargo", override)
+
+    def test_a_new_review_run_reruns_the_checks_its_old_verdict_stopped(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        follow = workflow.split("\n  follow:\n", 1)[1]
+        self.assertNotIn("needs:", follow.split("    steps:", 1)[0])
+        self.assertIn("if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository", follow)
+        self.assertIn("run: python3 .github/scripts/review_gate.py rerun-waits", follow)
+        self.assertNotIn("cargo", follow)
+
+    def test_the_review_reads_the_live_conversation(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        conversation = named_step(workflow, "Read the conversation", "      ")
+        self.assertIn('node "$NODE" conversation --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --owner KMRH47 --out "$OUT"', conversation)
+        review = named_step(workflow, "Review", "      ")
+        self.assertIn('--conversation "$OUT/conversation.md"', review)
+        self.assertNotIn("github.event.pull_request.body", workflow)
 
     def test_no_workflow_wraps_the_compiler(self):
         sources = [ROOT / ".github/actions/rust-setup/action.yml"]

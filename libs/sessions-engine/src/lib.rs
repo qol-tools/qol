@@ -24,6 +24,7 @@ mod close;
 mod contract;
 mod export;
 mod fork;
+mod history;
 pub mod knocks;
 mod last_send;
 mod launch;
@@ -336,12 +337,15 @@ Details:
   launch prompt, so the user types its first message.
   switchboard opens the one control chat per machine, or focuses the live
   one; qol sessions switchboard help lists its flags. It lists the sessions
-  the CLI Sessions daemon saw close in the last 14 days with sessions_closed
-  and brings one back in a new tab with session_reopen. sessions_closed
-  returns the newest 20 by default (`limit` takes 1 to 100), filters them
-  with `query`, and leaves out lanes unless `include_lanes` is true, along
-  with conversations a live session holds, ones a park still waits on and
-  ones whose cwd is gone, counting what it left out. session_reopen resumes
+  closed in the last 14 days with sessions_closed, from the CLI Sessions
+  daemon's record of closes and the tool's own conversation history (Claude
+  Code transcripts), and brings one back in a new tab with session_reopen.
+  sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
+  filters them with `query` (title, cwd, key, tool, id or a linked pull
+  request URL), and leaves out lanes unless `include_lanes` is true, along
+  with conversations a live session or running tool process holds, ones a
+  park still waits on and ones whose cwd is gone, counting what it left
+  out. session_reopen resumes
   with the recorded permission mode, model, effort and account, and clears
   the record only once the new tab reports the conversation.
   Sessions message each other only through the session_send, session_inbox

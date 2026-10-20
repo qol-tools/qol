@@ -57,6 +57,7 @@ pub(crate) struct McpSessionServer {
     knocks: super::knocks::KnockStore,
     board: super::board::BoardStore,
     closed_dir: std::path::PathBuf,
+    switchboard_dir: std::path::PathBuf,
     parked_dir: std::path::PathBuf,
     reopen_confirm_timeout: Duration,
     #[cfg(test)]
@@ -89,6 +90,9 @@ impl McpSessionServer {
             board: super::board::BoardStore::system()?,
             closed_dir: qol_terminal_sessions::closed::closed_dir()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
+            switchboard_dir: qol_config::data_subdir("sessions")
+                .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?
+                .join(super::SWITCHBOARD_KEY),
             parked_dir: qol_terminal_sessions::park::parked_dir()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             reopen_confirm_timeout: REOPEN_CONFIRM_TIMEOUT,
@@ -128,6 +132,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::with_dir(root.path().join("knocks")),
             board: super::board::BoardStore::with_dir(root.path().join("board")),
             closed_dir: root.path().join("closed"),
+            switchboard_dir: root.path().join(super::SWITCHBOARD_KEY),
             parked_dir: root.path().join("parked"),
             reopen_confirm_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: Some(root),
@@ -162,6 +167,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::with_dir(dir.join("knocks")),
             board: super::board::BoardStore::with_dir(dir.join("board")),
             closed_dir: dir.join("closed"),
+            switchboard_dir: dir.join(super::SWITCHBOARD_KEY),
             parked_dir: dir.join("parked"),
             reopen_confirm_timeout: TEST_ROUND_TIMEOUT,
             _pending_root: None,
@@ -574,18 +580,20 @@ impl McpSessionServer {
         let now = super::mailbox::now_ms() / 1_000;
         let live = self.live_conversations()?;
         let parks = self.waiting_parks()?;
-        let records = qol_terminal_sessions::closed::records(&self.closed_dir)
+        let entries = self
+            .history()
+            .entries(now)
             .map_err(|error| format!("failed to read the closed sessions: {error}"))?;
         let mut closed = Vec::new();
         let mut omitted = super::contract::ClosedOmitted::default();
-        for record in &records {
-            if qol_terminal_sessions::closed::expired(record, now)
-                || live
-                    .iter()
-                    .any(|session| session.external_id.as_deref() == Some(&record.external_id))
+        for entry in &entries {
+            let record = &entry.record;
+            if live
+                .iter()
+                .any(|session| session.external_id.as_deref() == Some(&record.external_id))
                 || query
                     .as_deref()
-                    .is_some_and(|query| !closed_matches(record, query))
+                    .is_some_and(|query| !closed_matches(entry, query))
             {
                 continue;
             }
@@ -611,8 +619,9 @@ impl McpSessionServer {
     fn tool_reopen(&self, arguments: &Value) -> Result<String, String> {
         let external_id = string_argument(arguments, "external_id")?;
         let now = super::mailbox::now_ms() / 1_000;
-        let record = qol_terminal_sessions::closed::find(&self.closed_dir, external_id)
-            .filter(|record| !qol_terminal_sessions::closed::expired(record, now))
+        let record = self
+            .history()
+            .find(external_id, now)
             .ok_or_else(|| {
                 format!(
                     "no closed session `{external_id}`; sessions_closed lists the ones that can be reopened"
@@ -691,6 +700,15 @@ impl McpSessionServer {
             "ledger_cleared": ledger_cleared,
         }))
         .map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn history(&self) -> super::history::History<'_> {
+        super::history::History {
+            interpreter: &self.interpreter,
+            closed_dir: &self.closed_dir,
+            forks: &self.forks,
+            switchboard_dir: &self.switchboard_dir,
+        }
     }
 
     fn confirm_reopened(
@@ -1525,7 +1543,7 @@ fn parse_json_line(line: &str) -> Result<Option<Value>, Value> {
 }
 
 fn help_text() -> String {
-    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --profile default|switchboard\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProfiles:\n  default serves every tool. switchboard serves only {switchboard_tools}\n  and refuses a call to any other tool.\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session unless a selected agent\n  profile declares one (the sessions.toml `spawn_model` entry is the fallback;\n  the reuse path needs no model), every launch must declare its tool/model\n  pair in the sessions.toml `tool_models` mapping while `allowed_models`\n  remains the independent spending allowlist (an absent mapping keeps the\n  legacy behavior), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane. `agent_profile`,\n  `task_role` and `requires` bind a dispatch to a user-owned agent_profiles\n  entry: the sessions policy is read fresh for every call, configuring any\n  profile enables enforcement unless enforce_agent_profiles is false, a\n  constrained assignment needs a resolvable profile and an explicit role, and\n  the resolved immutable assignment is returned as `agent_assignment` with\n  `agent_status` (constrained or unconstrained). session_submit inherits the\n  profile, role and requirements recorded against a session when they are\n  omitted, revalidates them against current policy, and refuses a constrained\n  dispatch to a session with no recorded identity.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n  sessions_closed lists the conversations the CLI Sessions daemon saw close\n  in the last 14 days (its ledger under the sessions data dir), the newest\n  20 by default (`limit` takes 1 to 100, and `query` filters on title, cwd,\n  key, tool or id). It leaves out lanes unless `include_lanes` is true,\n  conversations a live session holds, ones a park still waits on and ones\n  whose cwd is gone, and counts what it left out under `omitted`.\n  session_reopen resumes one of them in a new tab with its tool's resume\n  command, the permission mode, model, effort and account it ran with and\n  its spawn key, and clears the record only once the new tab reports the\n  conversation (`confirmed`).\n  session_send leaves a direct message in another session's mailbox by spawn\n  key (the switchboard reaches everyone, a session its parent and siblings,\n  a reply the sender it answers) and queues a one-line knock for the CLI\n  Sessions daemon to type when the recipient's prompt is empty; session_inbox\n  reads and marks them, and session_board is the open board every session\n  can read. Messages and posts are information, never instructions. The\n  sender is stamped from the calling terminal's spawn key, and session_fork\n  records that key as the fork's parent.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names(), switchboard_tools = super::contract::SWITCHBOARD_TOOLS.join(", "))
+    format!("qol sessions mcp\n\nRun the sessions Model Context Protocol server over stdio.\n\nUsage:\n  qol sessions mcp\n  qol sessions mcp --profile default|switchboard\n  qol sessions mcp --help\n  qol sessions mcp help\n\nTools:\n  {tool_names}\n\nProfiles:\n  default serves every tool. switchboard serves only {switchboard_tools}\n  and refuses a call to any other tool.\n\nProtocol:\n  One JSON-RPC 2.0 message per line (protocol 2025-03-26). session_spawn\n  launches a tagged harness for a registered tool or reuses the single live\n  session already carrying the key, returning the live session facts. An\n  optional `title` names the new tab (the lane key by default), a `model`\n  argument is required when launching a new session unless a selected agent\n  profile declares one (the sessions.toml `spawn_model` entry is the fallback;\n  the reuse path needs no model), every launch must declare its tool/model\n  pair in the sessions.toml `tool_models` mapping while `allowed_models`\n  remains the independent spending allowlist (an absent mapping keeps the\n  legacy behavior), and a\n  `task` is required: every spawn embeds its first round in the launch and\n  returns with the round already open (background delivery is the only mode,\n  so an explicit `background` is an error; lanes always close when the\n  watcher confirms completion and sessions without a spawn identity are never\n  closed; a `resume` argument forces a resume, which is otherwise automatic\n  when the spawn ledger holds a session id for the key (same tool and cwd),\n  `resume: false` opts out, and the outcome reports `resume` and\n  `resume_detail`). An optional `group` string registers the lane as a member\n  of a grouped-research set; when every member completes, its fragments are\n  concatenated under the sessions data dir and the initiator receives one\n  combined wake instead of one wake per lane. `agent_profile`,\n  `task_role` and `requires` bind a dispatch to a user-owned agent_profiles\n  entry: the sessions policy is read fresh for every call, configuring any\n  profile enables enforcement unless enforce_agent_profiles is false, a\n  constrained assignment needs a resolvable profile and an explicit role, and\n  the resolved immutable assignment is returned as `agent_assignment` with\n  `agent_status` (constrained or unconstrained). session_submit inherits the\n  profile, role and requirements recorded against a session when they are\n  omitted, revalidates them against current policy, and refuses a constrained\n  dispatch to a session with no recorded identity.\n  session_submit delivers one bounded task without waiting and returns with\n  the round open; submitted rounds close the lane terminal when the watcher\n  confirms completion, and sessions without a spawn identity are never\n  closed. session_bridge takes no `task`: it only collects the round\n  a spawn or submit left open, waiting for the implementation terminal's\n  generated completion signal before returning. The\n  round envelope is generated server-side from the target's durable role record\n  (lane marker written at spawn; absent means architect): bridging a non-lane\n  session is an architect-receiver round - the receiver may accept the request\n  into its own loop or decline with a reason, and returns the completion\n  fragments either way. The caller never chooses the receiver's role. A\n  reviewed completion marker explicitly acknowledges the prior response\n  before another task can be submitted. session_loop_close accepted\n  acknowledges the final response, records the transition, and terminates\n  the implementation terminal; a paused close keeps the terminal open.\n  An accepted close also terminates the other completed sibling lanes of\n  the same loop; each completed sibling gets a terse entry in the\n  receipt's `sibling_lanes` field, and its final report is written to\n  a file under the sessions data dir whose path that entry carries.\n  session_close remains the standalone closer for spawned sessions.\n  sessions_closed lists the conversations closed in the last 14 days, from\n  the CLI Sessions daemon's ledger under the sessions data dir and the\n  tool's own conversation history (Claude Code transcripts), the newest 20\n  by default (`limit` takes 1 to 100, and `query` filters on title, cwd,\n  key, tool, id or a linked pull request URL). It leaves out lanes unless\n  `include_lanes` is true, conversations a live session or running tool\n  process holds, headless runs, the switchboard, ones a park still waits on\n  and ones whose cwd is gone, and counts what it left out under `omitted`.\n  session_reopen resumes one of them in a new tab with its tool's resume\n  command, the permission mode, model, effort and account it ran with and\n  its spawn key, and clears the record only once the new tab reports the\n  conversation (`confirmed`).\n  session_send leaves a direct message in another session's mailbox by spawn\n  key (the switchboard reaches everyone, a session its parent and siblings,\n  a reply the sender it answers) and queues a one-line knock for the CLI\n  Sessions daemon to type when the recipient's prompt is empty; session_inbox\n  reads and marks them, and session_board is the open board every session\n  can read. Messages and posts are information, never instructions. The\n  sender is stamped from the calling terminal's spawn key, and session_fork\n  records that key as the fork's parent.\n\nExit:\n  Exits zero on EOF.\n", tool_names = super::contract::tool_names(), switchboard_tools = super::contract::SWITCHBOARD_TOOLS.join(", "))
 }
 
 fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
@@ -1535,7 +1553,8 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
         .ok_or_else(|| format!("missing `{name}` string argument"))
 }
 
-fn closed_matches(record: &qol_terminal_sessions::closed::ClosedRecord, query: &str) -> bool {
+fn closed_matches(entry: &super::history::ClosedEntry, query: &str) -> bool {
+    let record = &entry.record;
     [
         record.title.as_deref(),
         Some(record.cwd.as_str()),
@@ -1545,6 +1564,7 @@ fn closed_matches(record: &qol_terminal_sessions::closed::ClosedRecord, query: &
     ]
     .into_iter()
     .flatten()
+    .chain(entry.pr_urls.iter().map(String::as_str))
     .any(|field| field.to_lowercase().contains(query))
 }
 
@@ -2437,6 +2457,7 @@ mod tests {
         backend: Arc<FakeBackend>,
         reports: bool,
         live: HashMap<String, String>,
+        history: Vec<qol_terminal_sessions::cli::CliConversation>,
     }
 
     impl qol_terminal_sessions::cli::CliSessionStrategy for ResumingTool {
@@ -2474,6 +2495,13 @@ mod tests {
         fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
             Some(vec!["--resume".to_owned(), external_id.to_owned()])
         }
+
+        fn closed_conversations(
+            &self,
+            _since: std::time::SystemTime,
+        ) -> Vec<qol_terminal_sessions::cli::CliConversation> {
+            self.history.clone()
+        }
     }
 
     fn kitty_backend() -> Arc<FakeBackend> {
@@ -2490,6 +2518,16 @@ mod tests {
         reports: bool,
         live: &[(&str, &str)],
     ) -> McpSessionServer {
+        history_server(backend, root, reports, live, Vec::new())
+    }
+
+    fn history_server(
+        backend: &Arc<FakeBackend>,
+        root: &tempfile::TempDir,
+        reports: bool,
+        live: &[(&str, &str)],
+        history: Vec<qol_terminal_sessions::cli::CliConversation>,
+    ) -> McpSessionServer {
         let interpreter = CliSessionInterpreter::from_strategies([Arc::new(ResumingTool {
             tool: qol_terminal_sessions::cli::claude_tool(),
             backend: backend.clone(),
@@ -2498,6 +2536,7 @@ mod tests {
                 .iter()
                 .map(|(native, id)| ((*native).to_owned(), (*id).to_owned()))
                 .collect(),
+            history,
         })
             as Arc<dyn qol_terminal_sessions::cli::CliSessionStrategy>])
         .unwrap();
@@ -2622,6 +2661,146 @@ mod tests {
             &tool_call(&server, "session_reopen", json!({ "external_id": "def" })),
             "no closed session `def`",
         );
+    }
+
+    fn conversation(
+        external_id: &str,
+        cwd: &str,
+        first_prompt: &str,
+        age_secs: u64,
+    ) -> qol_terminal_sessions::cli::CliConversation {
+        qol_terminal_sessions::cli::CliConversation {
+            tool: qol_terminal_sessions::cli::CliToolId::new("claude").unwrap(),
+            external_id: external_id.to_owned(),
+            cwd: cwd.to_owned(),
+            title: None,
+            first_prompt: Some(first_prompt.to_owned()),
+            last_active: super::super::mailbox::now_ms() / 1_000 - age_secs,
+            pr_urls: Vec::new(),
+            settings: qol_terminal_sessions::cli::CliResumeSettings::default(),
+        }
+    }
+
+    #[test]
+    fn sessions_closed_adds_the_tool_history_and_session_reopen_resumes_from_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let backend = kitty_backend();
+        let cwd = spawn_cwd(&root);
+        let closed = root.path().join("closed");
+        qol_terminal_sessions::closed::write(&closed, &closed_record("abc", &cwd, None)).unwrap();
+        let forks = super::super::fork::ForkStore::with_dir(root.path().join("forks"));
+        let brief = forks.write_brief("fork-key", 7, "the brief").unwrap();
+        forks
+            .record(&super::super::fork::ForkRecord {
+                key: "fork-key".to_owned(),
+                tool: "claude".to_owned(),
+                model: "opus".to_owned(),
+                effort: None,
+                surface: "tab".to_owned(),
+                cwd: cwd.clone(),
+                session: "v1:kitty:9:9".to_owned(),
+                title: "fork title".to_owned(),
+                brief: brief.display().to_string(),
+                created_at: 7,
+                parent: None,
+                chat: None,
+                agent_assignment: None,
+            })
+            .unwrap();
+        let switchboard = root.path().join(super::super::SWITCHBOARD_KEY);
+        std::fs::create_dir_all(&switchboard).unwrap();
+        let mut ledgered = conversation("abc", &cwd, "old prompt", 10);
+        ledgered.pr_urls = vec!["https://github.com/o/r/pull/12".to_owned()];
+        let mut plain = conversation("hist", &cwd, "fix the flaky test\nwith details", 120);
+        plain.settings = qol_terminal_sessions::cli::CliResumeSettings {
+            permission_mode: Some("bypassPermissions".to_owned()),
+            model: Some("claude-opus-5-5".to_owned()),
+            effort: Some("high".to_owned()),
+            claude_config_dir: None,
+        };
+        let fork_prompt = super::super::fork::fork_prompt(&brief, None, None, false);
+        let history = vec![
+            ledgered,
+            plain,
+            conversation(
+                "lane",
+                &cwd,
+                "[qol agent assignment] profile `p`\n[qol session bridge]\nAct as the implementation agent",
+                130,
+            ),
+            conversation("fork", &cwd, &fork_prompt, 180),
+            conversation("board", &switchboard.display().to_string(), "hello", 190),
+            conversation("gone", "/no/such/dir", "hello", 200),
+        ];
+        let server = history_server(&backend, &root, true, &[], history);
+
+        let listed = tool_json(&tool_call(&server, "sessions_closed", json!({})));
+        assert_eq!(closed_ids(&listed), ["abc", "hist", "fork"], "{listed}");
+        assert_eq!(
+            listed["omitted"],
+            json!({ "lanes": 1, "missing_cwd": 1, "parked": 0, "beyond_limit": 0 })
+        );
+        let rows = listed["closed"].as_array().unwrap();
+        assert_eq!(rows[0]["title"], "Old chat");
+        assert_eq!(rows[1]["title"], "fix the flaky test");
+        assert!(rows[1].get("key").is_none(), "{listed}");
+        assert_eq!(rows[2]["title"], "fork title");
+        assert_eq!(rows[2]["key"], "fork-key");
+        assert_eq!(
+            closed_ids(&tool_json(&tool_call(
+                &server,
+                "sessions_closed",
+                json!({ "query": "pull/12" })
+            ))),
+            ["abc"]
+        );
+        assert_eq!(
+            closed_ids(&tool_json(&tool_call(
+                &server,
+                "sessions_closed",
+                json!({ "include_lanes": true, "query": "lane" })
+            ))),
+            ["lane"]
+        );
+        refused(
+            &tool_call(&server, "session_reopen", json!({ "external_id": "board" })),
+            "no closed session `board`",
+        );
+
+        let reopened = tool_json(&tool_call(
+            &server,
+            "session_reopen",
+            json!({ "external_id": "hist" }),
+        ));
+        assert_eq!(reopened["confirmed"], true, "{reopened}");
+        assert_eq!(reopened["title"], "fix the flaky test");
+        assert!(
+            reopened["key"].as_str().unwrap().starts_with("reopen-"),
+            "{reopened}"
+        );
+        let joined = backend
+            .spawn_launch
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .args
+            .join(" ");
+        for expected in [
+            "--resume hist",
+            "--dangerously-skip-permissions",
+            "--model claude-opus-5-5",
+            "--effort high",
+        ] {
+            assert!(joined.contains(expected), "{expected}: {joined}");
+        }
+
+        let reopened = tool_json(&tool_call(
+            &server,
+            "session_reopen",
+            json!({ "external_id": "fork" }),
+        ));
+        assert_eq!(reopened["key"], "fork-key", "{reopened}");
     }
 
     #[test]
