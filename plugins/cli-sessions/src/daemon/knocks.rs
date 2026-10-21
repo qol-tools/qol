@@ -27,7 +27,6 @@ impl Recipient {
         let key = pane.spawn_identity.as_ref()?.key.as_str().to_owned();
         let binding = pane.binding().ok()?;
         let settled = !is_generic(tool)
-            && status != Status::Parked
             && matches!(
                 runtime_status.unwrap_or(status),
                 Status::YourTurn | Status::Acknowledged | Status::Unknown
@@ -311,6 +310,13 @@ pub(crate) mod tests {
                 claude_tool(),
                 Status::Parked,
                 Some(Status::YourTurn),
+                Some(true),
+            ),
+            (
+                Some("lane"),
+                claude_tool(),
+                Status::Parked,
+                Some(Status::Working),
                 Some(false),
             ),
             (

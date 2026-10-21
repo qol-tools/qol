@@ -149,6 +149,7 @@ def skip_all(reason):
     emit(
         {
             "full": False,
+            "crates": "",
             "windows_process": False,
             "windows_dev_build": False,
             "ubuntu_clippy": "",
@@ -305,6 +306,33 @@ def args(packages, all_targets):
     return f"{flags}{feature_flags(packages)}"
 
 
+def affected_outputs(affected, pkgs):
+    macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
+    ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
+    windows = sorted(a for a in affected if a not in WINDOWS_EXCLUDE)
+    return {
+        "full": False,
+        "crates": " ".join(sorted(affected)),
+        "windows_process": "qol-process" in affected,
+        "windows_dev_build": "qol-dev-build" in affected,
+        "ubuntu_clippy": args(ubuntu, True),
+        "ubuntu_build": args(ubuntu, False),
+        "ubuntu_test": args(ubuntu, False),
+        "ubuntu_doctest": any(pkgs[name]["doctest"] for name in ubuntu),
+        "ubuntu_skip": not ubuntu,
+        "macos_clippy": args(macos, True),
+        "macos_build": args(macos, False),
+        "macos_test": args(macos, False),
+        "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
+        "macos_skip": not macos,
+        "windows_clippy": args(windows, True),
+        "windows_build": args(windows, False),
+        "windows_test": args(windows, False),
+        "windows_doctest": any(pkgs[name]["doctest"] for name in windows),
+        "windows_skip": not windows,
+    }
+
+
 def main():
     base = os.environ.get("BASE_SHA", "").strip()
     head = os.environ.get("HEAD_SHA", "").strip() or "HEAD"
@@ -354,32 +382,8 @@ def main():
         return skip_all("no crate-owning changes (docs/non-build files only)")
 
     affected = dependents_closure(seeds, pkgs)
-    macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
-    ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
-    windows = sorted(a for a in affected if a not in WINDOWS_EXCLUDE)
-    sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={macos}\n")
-    emit(
-        {
-            "full": False,
-            "windows_process": "qol-process" in affected,
-            "windows_dev_build": "qol-dev-build" in affected,
-            "ubuntu_clippy": args(ubuntu, True),
-            "ubuntu_build": args(ubuntu, False),
-            "ubuntu_test": args(ubuntu, False),
-            "ubuntu_doctest": any(pkgs[name]["doctest"] for name in ubuntu),
-            "ubuntu_skip": not ubuntu,
-            "macos_clippy": args(macos, True),
-            "macos_build": args(macos, False),
-            "macos_test": args(macos, False),
-            "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
-            "macos_skip": not macos,
-            "windows_clippy": args(windows, True),
-            "windows_build": args(windows, False),
-            "windows_test": args(windows, False),
-            "windows_doctest": any(pkgs[name]["doctest"] for name in windows),
-            "windows_skip": not windows,
-        }
-    )
+    sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={sorted(affected)}\n")
+    emit(affected_outputs(affected, pkgs))
 
 
 if __name__ == "__main__":
