@@ -90,19 +90,23 @@ mod tests {
     #[test]
     fn every_kind_has_its_word() {
         let cases = [
-            ("thing", EntryKind::Folder, "Folder"),
-            ("budget.ods", EntryKind::File, "Spreadsheet"),
-            ("install.sh", EntryKind::File, "Shell script"),
-            ("firmware", EntryKind::File, "Program"),
-            ("mystery.xyz", EntryKind::File, "Anything else"),
-            ("budget.ods", EntryKind::Link, "Link"),
-            ("thing", EntryKind::BrokenLink, "Broken link"),
-            ("thing", EntryKind::Pipe, "Pipe"),
-            ("thing", EntryKind::Socket, "Socket"),
-            ("thing", EntryKind::Device, "Device"),
+            ("thing", EntryKind::Folder, false, "Folder"),
+            ("budget.ods", EntryKind::File, false, "Spreadsheet"),
+            ("install.sh", EntryKind::File, false, "Shell script"),
+            ("firmware", EntryKind::File, true, "Program"),
+            ("README", EntryKind::File, false, "Anything else"),
+            ("mystery.xyz", EntryKind::File, false, "Anything else"),
+            ("budget.ods", EntryKind::Link, false, "Link"),
+            ("thing", EntryKind::BrokenLink, false, "Broken link"),
+            ("thing", EntryKind::Pipe, false, "Pipe"),
+            ("thing", EntryKind::Socket, false, "Socket"),
+            ("thing", EntryKind::Device, false, "Device"),
         ];
-        for (display, kind, word) in cases {
-            let entry = named(display, kind, Size::Blank, kind == EntryKind::Folder);
+        for (display, kind, executable, word) in cases {
+            let entry = Entry {
+                executable,
+                ..named(display, kind, Size::Blank, kind == EntryKind::Folder)
+            };
             assert_eq!(kind_label(&entry), word, "{display} {kind:?}");
         }
     }

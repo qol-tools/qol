@@ -218,7 +218,8 @@ mod tests {
         let cases = [
             (Stop::List, 838.0, 1),
             (Stop::Icons, 838.0, 6),
-            (Stop::BigIcons, 838.0, 5),
+            (Stop::BigIcons, 838.0, 4),
+            (Stop::BigIcons, 840.0, 5),
             (Stop::Icons, 100.0, 1),
             (Stop::BigIcons, 0.0, 1),
         ];
