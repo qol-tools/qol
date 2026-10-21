@@ -6530,7 +6530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.109.5"
+version = "0.110.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6730,7 +6730,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.5.5"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
