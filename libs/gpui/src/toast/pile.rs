@@ -705,6 +705,7 @@ mod tests {
 
     #[test]
     fn a_tween_settles_on_its_target_and_restarts_from_where_it_is() {
+        crate::motion::pin(true);
         let start = Instant::now();
         let mut tween = Tween::at(0.0);
         tween.toward(1.0, start);

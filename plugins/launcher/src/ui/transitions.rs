@@ -117,6 +117,7 @@ mod tests {
 
     #[test]
     fn a_new_value_settles_at_once_and_a_change_eases_from_where_it_is() {
+        qol_gpui::motion::pin(true);
         let start = Instant::now();
         let mut transitions = Transitions::default();
         assert_eq!(
@@ -144,6 +145,7 @@ mod tests {
 
     #[test]
     fn entering_rows_start_where_they_are_told() {
+        qol_gpui::motion::pin(true);
         let start = Instant::now();
         let mut transitions = Transitions::default();
         assert_eq!(

@@ -339,6 +339,7 @@ mod tests {
 
     #[test]
     fn position_at_starts_at_from_ends_at_to_and_is_strictly_between_halfway() {
+        crate::motion::pin(true);
         assert_eq!(position_at(0.0, 4, 0), 0.0);
         let travel_ms = Motion::TRAVEL.duration.as_millis() as u64;
         assert_eq!(position_at(0.0, 4, travel_ms), 4.0);

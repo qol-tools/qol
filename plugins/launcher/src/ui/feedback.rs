@@ -290,6 +290,7 @@ mod tests {
 
     #[test]
     fn holds_fade_after_their_time() {
+        qol_gpui::motion::pin(true);
         assert_eq!(hold_then_fade(BADGE_HOLD, 0.0), 1.0);
         assert_eq!(hold_then_fade(BADGE_HOLD, 0.5), 1.0);
         assert!(hold_then_fade(BADGE_HOLD, 1.0) < 1e-6);

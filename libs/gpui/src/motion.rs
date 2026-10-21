@@ -1,10 +1,12 @@
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use gpui::Animation;
 use qol_theme::{Animations, Motion};
 
 pub const RECHECK: Duration = Duration::from_secs(2);
+
+static PINNED: OnceLock<bool> = OnceLock::new();
 
 pub fn animation(motion: Motion) -> Animation {
     Animation::new(motion.duration).with_easing(move |delta| ease(motion, delta))
@@ -33,7 +35,14 @@ pub fn ease_when(motion: Motion, delta: f32, moving: bool) -> f32 {
     }
 }
 
+pub fn pin(moving: bool) {
+    let _ = PINNED.set(moving);
+}
+
 pub fn moving() -> bool {
+    if let Some(&moving) = PINNED.get() {
+        return moving;
+    }
     static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
     let Ok(mut cache) = CACHE.lock() else {
         return true;

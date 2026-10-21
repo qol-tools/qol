@@ -578,6 +578,7 @@ mod tests {
 
     #[test]
     fn a_message_fades_in_and_rises_away() {
+        crate::motion::pin(true);
         let start = Instant::now();
         let at = |millis: u64| start + Duration::from_millis(millis);
         let leave = |millis: u64| Some(at(millis));
