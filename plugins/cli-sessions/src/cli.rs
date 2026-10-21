@@ -254,7 +254,7 @@ where
                 .detail("The daemon reopens a closed park on its own when a message or board knock targets a key with no live terminal. The switchboard is never woken.")
                 .detail("The user runs it as `qols wake <spawn-key>`, or with w on a selected row of the CLI Sessions panel.")
                 .output("A confirmation line on stdout; diagnostics on stderr.")
-                .exit_behavior("Exits non-zero when the session is mid-turn or holds a draft, the key has neither a live terminal nor a closed park, more than one terminal carries it, or the resume fails.")
+                .exit_behavior("Exits non-zero when the session is mid-turn or holds a draft, the daemon is knocking it at that moment, the note was typed but left unsent, the key has neither a live terminal nor a closed park, more than one terminal carries it, or the resume fails.")
                 .run_plain_text(|context| {
                     let [key] = context.args() else {
                         anyhow::bail!("expected one spawn key like audio-input");

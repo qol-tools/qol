@@ -66,6 +66,9 @@ fn knock_live(
     binding: &SessionBinding,
 ) -> Result<String> {
     let interpreter = CliSessionInterpreter::system();
+    let Some(_delivery) = knocks::lock_delivery(key)? else {
+        bail!("`{key}` is being knocked by another delivery right now");
+    };
     if !super::prompt_free(terminals, &interpreter, binding) {
         bail!("`{key}` is mid-turn or holds a draft in `{binding}`; its messages reach it once its prompt is free");
     }
@@ -75,27 +78,31 @@ fn knock_live(
         .map_or_else(|| UNKNOCKED_WAKE.to_owned(), knocks::ClaimedKnock::text);
     let typed =
         ComposerGuard::default().type_text(terminals, &interpreter, Typing::submit(binding, &text));
+    let put_back = || {
+        if let Some(claimed) = claimed.as_ref() {
+            if let Err(restore_error) = knocks::restore(claimed) {
+                log::warn!("[cli-sessions] knock for {key} not put back: {restore_error}");
+            }
+        }
+    };
     match typed {
-        Ok(typed) if typed.landed() => {
+        Ok(Typed::Submitted | Typed::Inserted) => {
             qol_runtime::probe!(
                 "CLI_SESSIONS_KNOCK",
                 "event=woken key={key} session={binding}"
             );
             Ok(format!("woke {key} in {binding}"))
         }
-        outcome => {
-            if let Some(claimed) = claimed.as_ref() {
-                if let Err(restore_error) = knocks::restore(claimed) {
-                    log::warn!("[cli-sessions] knock for {key} not put back: {restore_error}");
-                }
-            }
-            match outcome {
-                Ok(Typed::Held(hold)) => bail!("`{key}` was not woken: {hold}"),
-                Ok(_) => bail!(
-                    "`{key}` was not woken, because its input box changed while the note was typed"
-                ),
-                Err(error) => Err(error.into()),
-            }
+        Ok(Typed::Unsubmitted) => bail!(
+            "`{key}` was not woken: the note sits unsent in its input box, because the box changed while it was typed"
+        ),
+        Ok(Typed::Held(hold)) => {
+            put_back();
+            bail!("`{key}` was not woken: {hold}")
+        }
+        Err(error) => {
+            put_back();
+            Err(error.into())
         }
     }
 }
