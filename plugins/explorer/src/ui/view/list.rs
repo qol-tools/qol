@@ -15,7 +15,7 @@ use qol_gpui::Icon;
 
 use super::{ExplorerView, HEAD, ICON, ROW};
 use crate::listing::ListingState;
-use crate::ui::columns::{kind_label, size_label, typed_split};
+use crate::ui::columns::{kind_label, left_to_right, size_label, typed_split};
 
 const KIND_WIDTH: f32 = 100.0;
 const SIZE_WIDTH: f32 = 100.0;
@@ -199,7 +199,7 @@ fn name_cell(name: &str, typed: Option<usize>, ground: Ground, window: &mut Wind
                 .top(px(-rise))
                 .text(TextStyle::Title)
                 .text_color(rgb(ground.mark))
-                .child(prefix.to_string()),
+                .child(left_to_right(prefix)),
         )
         .child(name_text(rest, ground.ink))
 }
@@ -209,7 +209,7 @@ fn name_text(name: &str, ink: u32) -> Div {
         .min_w_0()
         .text(TextStyle::ListName)
         .text_color(rgb(ink))
-        .child(name.to_string())
+        .child(left_to_right(name))
 }
 
 fn reading_line(view: &ExplorerView, kit: Kit) -> impl IntoElement {

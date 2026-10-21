@@ -3,6 +3,7 @@ use unicode_normalization::char::is_combining_mark;
 use crate::listing::{Entry, EntryKind, ItemCount, Size};
 
 const UNREADABLE: &str = "unreadable";
+const LEFT_TO_RIGHT_MARK: char = '\u{200E}';
 
 pub fn kind_label(kind: EntryKind) -> &'static str {
     match kind {
@@ -48,6 +49,13 @@ pub fn typed_split(name: &str, run: &str) -> Option<usize> {
         seen += crate::nav::letter_count(letter.encode_utf8(&mut [0; 4]));
     }
     Some(name.len())
+}
+
+pub fn left_to_right(name: &str) -> String {
+    let mut shown = String::with_capacity(LEFT_TO_RIGHT_MARK.len_utf8() + name.len());
+    shown.push(LEFT_TO_RIGHT_MARK);
+    shown.push_str(name);
+    shown
 }
 
 #[cfg(test)]

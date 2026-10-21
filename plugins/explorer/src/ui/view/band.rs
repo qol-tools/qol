@@ -12,6 +12,7 @@ use qol_gpui::CrumbTrail;
 use super::{ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
+use crate::ui::columns::left_to_right;
 
 const FAILURE_MAX_WIDTH: f32 = 380.0;
 
@@ -51,7 +52,7 @@ pub(super) fn render(
     let width = f32::from(window.viewport_size().width) - 2.0 * (LINE + SPACE_GUTTER) - note_room;
     let mut crumb_trail = CrumbTrail::new(
         "explorer-trail",
-        crumbs.into_iter().map(|crumb| crumb.label),
+        crumbs.iter().map(|crumb| left_to_right(&crumb.label)),
         kit,
     )
     .fit(width)
