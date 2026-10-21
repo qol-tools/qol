@@ -7435,6 +7435,7 @@ dependencies = [
  "qol-fs",
  "qol-headless",
  "qol-mcp",
+ "qol-platform",
  "qol-plugin-daemon",
  "qol-process",
  "qol-runtime",
