@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -46,6 +47,8 @@ QUEUE_BUILD_CI_JOBS = {
 }
 BATCH_CI_JOB = "batch role"
 BATCH_BUILD_CHECK = "batch release build"
+GPUI_FONT_LICENSE = "libs/gpui/assets/fonts/OFL.txt"
+UPLOAD_SLOTS = 32
 
 
 @dataclass(frozen=True)
@@ -117,7 +120,7 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
     host_tag = host_tags[0].value if host_tags else ""
     return {
         "tags": [tag.value for tag in tags],
-        "plugin_matrix": {"include": plugin_entries},
+        "plugin_matrix": {"include": plugin_matrix.group_by_target(plugin_entries)},
         "has_plugins": bool(plugin_entries),
         "has_qol_tray": bool(host_tags),
         "qol_tray_tag": host_tag,
@@ -126,8 +129,9 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
 
 def planned_builds(plan: dict) -> set[tuple[str, str | None, str | None]]:
     builds = {
-        ("plugin", entry["package"], entry["target"])
-        for entry in plan["plugin_matrix"]["include"]
+        ("plugin", plugin["package"], row["target"])
+        for row in plan["plugin_matrix"]["include"]
+        for plugin in row["plugins"]
     }
     if plan["has_qol_tray"]:
         builds.update((kind, None, None) for kind in HOST_BUILD_KINDS)
@@ -667,6 +671,73 @@ def execute_build(
     write_json(report_path, report)
 
 
+def target_plugins(plan: dict, target: str) -> list[dict]:
+    for row in plan["plugin_matrix"]["include"]:
+        if row["target"] == target:
+            return row["plugins"]
+    raise ValueError(f"no plugin candidate builds for {target}")
+
+
+def uses_gpui(root: Path, package: str, target: str) -> bool:
+    result = subprocess.run(
+        ["cargo", "tree", "-p", package, "--target", target, "-e", "normal", "--prefix", "none"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"cargo tree -p {package} failed: {result.stderr.strip()}")
+    return any(line.startswith("qol-gpui v") for line in result.stdout.splitlines())
+
+
+def stage_plugin_files(root: Path, plugin: dict, target: str, dist_dir: Path) -> Path:
+    files = dist_dir / plugin["tag"]
+    files.mkdir(parents=True, exist_ok=True)
+    binary = root / "target" / target / "release" / f"{plugin['bin_name']}{plugin['ext']}"
+    shutil.copy(binary, files / f"{plugin['artifact_name']}{plugin['ext']}")
+    if uses_gpui(root, plugin["package"], target):
+        shutil.copy(root / GPUI_FONT_LICENSE, files / "IBM-Plex-OFL.txt")
+    return files
+
+
+def build_plugins(
+    root: Path,
+    tags: list[ReleaseTag],
+    target: str,
+    report_dir: Path,
+    dist_dir: Path,
+    github_output: str | None,
+) -> None:
+    plugins = target_plugins(candidate_plan(root, tags), target)
+    if len(plugins) > UPLOAD_SLOTS:
+        raise RuntimeError(
+            f"{len(plugins)} plugins build for {target}, but plugin_candidate "
+            f"has {UPLOAD_SLOTS} upload slots"
+        )
+    outputs = {}
+    failed = []
+    for plugin in plugins:
+        try:
+            execute_build(
+                root,
+                "plugin",
+                plugin["package"],
+                target,
+                str(report_dir / f"{plugin['tag']}.json"),
+            )
+            files = stage_plugin_files(root, plugin, target, dist_dir)
+        except (OSError, RuntimeError, ValueError) as error:
+            failed.append(plugin["tag"])
+            print(f"::error::{plugin['tag']} ({target}) failed: {error}", file=sys.stderr)
+            continue
+        slot = len(outputs) // 2
+        outputs[f"dist_name_{slot}"] = f"dist-{plugin['tag']}-{target}"
+        outputs[f"dist_path_{slot}"] = str(files)
+        print(f"{plugin['tag']} ({target}) passed")
+    emit_github_output(github_output, {**outputs, "failed": " ".join(failed)})
+
+
 def plan_command(args: argparse.Namespace) -> None:
     started_at = utc_now()
     tags = parse_release_tags(args.tags)
@@ -863,6 +934,24 @@ def build_parser() -> argparse.ArgumentParser:
             args.package,
             args.target,
             args.report,
+        )
+    )
+
+    plugins = commands.add_parser("build-plugins")
+    plugins.add_argument("--root", default=".")
+    plugins.add_argument("--tags", required=True)
+    plugins.add_argument("--target", required=True)
+    plugins.add_argument("--report-dir", required=True)
+    plugins.add_argument("--dist-dir", required=True)
+    plugins.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    plugins.set_defaults(
+        handler=lambda args: build_plugins(
+            Path(args.root).resolve(),
+            parse_release_tags(args.tags),
+            args.target,
+            Path(args.report_dir),
+            Path(args.dist_dir),
+            args.github_output,
         )
     )
     return parser

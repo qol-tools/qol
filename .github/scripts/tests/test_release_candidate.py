@@ -95,22 +95,49 @@ class CandidatePlanTests(unittest.TestCase):
         self.assertEqual(plan["qol_tray_tag"], "qol-tray-v3.41.1")
         matrix = plan["plugin_matrix"]["include"]
         self.assertEqual(
-            {(entry["os"], entry["target"]) for entry in matrix},
-            {
+            [(row["os"], row["target"]) for row in matrix],
+            [
                 ("ubuntu-latest", "x86_64-unknown-linux-gnu"),
                 ("macos-latest", "aarch64-apple-darwin"),
                 ("macos-latest", "x86_64-apple-darwin"),
-            },
+            ],
+        )
+        plugins = [plugin for row in matrix for plugin in row["plugins"]]
+        self.assertEqual(len(plugins), 3)
+        self.assertEqual(
+            {plugin["package"] for plugin in plugins}, {"fixture-package"}
         )
         self.assertEqual(
-            {entry["package"] for entry in matrix}, {"fixture-package"}
+            {plugin["tag"] for plugin in plugins}, {"plugin-fixture-v1.2.3"}
         )
         self.assertEqual(
-            {entry["tag"] for entry in matrix}, {"plugin-fixture-v1.2.3"}
+            {plugin["bin_name"] for plugin in plugins}, {"fixture-package"}
+        )
+
+    def test_plugins_of_one_target_share_one_build_row(self):
+        write_plugin(self.root, "first", "plugin-first", "1.0.0", ["linux", "macos"])
+        write_plugin(self.root, "second", "plugin-second", "2.0.0", ["linux"])
+        tags = rc.parse_release_tags("plugin-first-v1.0.0 plugin-second-v2.0.0")
+
+        matrix = rc.candidate_plan(self.root, tags)["plugin_matrix"]["include"]
+
+        self.assertEqual(
+            [
+                (row["target"], [plugin["tag"] for plugin in row["plugins"]])
+                for row in matrix
+            ],
+            [
+                ("x86_64-unknown-linux-gnu", ["plugin-first-v1.0.0", "plugin-second-v2.0.0"]),
+                ("aarch64-apple-darwin", ["plugin-first-v1.0.0"]),
+                ("x86_64-apple-darwin", ["plugin-first-v1.0.0"]),
+            ],
         )
         self.assertEqual(
-            {entry["bin_name"] for entry in matrix}, {"fixture-package"}
+            rc.target_plugins({"plugin_matrix": {"include": matrix}}, "aarch64-apple-darwin"),
+            matrix[1]["plugins"],
         )
+        with self.assertRaisesRegex(ValueError, "no plugin candidate builds"):
+            rc.target_plugins({"plugin_matrix": {"include": matrix}}, "x86_64-pc-windows-msvc")
 
     def test_rejects_host_manifest_version_mismatch(self):
         write_host(self.root, "3.41.0")
@@ -978,6 +1005,106 @@ class BuildNodeTests(unittest.TestCase):
                 self.assertEqual(
                     rc.build_commands(root, kind, package, target), expected
                 )
+
+
+class TargetBuildTests(unittest.TestCase):
+    target = "x86_64-unknown-linux-gnu"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        write_plugin(self.root, "first", "plugin-first", "1.0.0", ["linux"])
+        write_plugin(self.root, "second", "plugin-second", "2.0.0", ["linux"])
+        write_plugin(self.root, "third", "plugin-third", "3.0.0", ["linux"])
+        release = self.root / "target" / self.target / "release"
+        release.mkdir(parents=True)
+        for name in ["first", "third"]:
+            (release / f"{name}-package").write_bytes(name.encode())
+        font = self.root / rc.GPUI_FONT_LICENSE
+        font.parent.mkdir(parents=True)
+        font.write_text("OFL")
+        self.tags = rc.parse_release_tags(
+            "plugin-first-v1.0.0 plugin-second-v2.0.0 plugin-third-v3.0.0"
+        )
+        self.reports = self.root / "reports"
+        self.dist = self.root / "dist"
+        self.output = self.root / "output"
+        self.output.write_text("")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def build(self):
+        def execute_build(root, kind, package, target, report_path):
+            if package == "second-package":
+                raise RuntimeError("cargo build failed")
+
+        with patch.object(rc, "execute_build", side_effect=execute_build) as build, patch.object(
+            rc, "uses_gpui", side_effect=lambda root, package, target: package == "first-package"
+        ):
+            rc.build_plugins(
+                self.root, self.tags, self.target, self.reports, self.dist, str(self.output)
+            )
+        return build
+
+    def test_each_plugin_builds_alone_and_one_failure_spares_the_rest(self):
+        build = self.build()
+
+        self.assertEqual(
+            [call.args for call in build.call_args_list],
+            [
+                (self.root, "plugin", f"{name}-package", self.target, str(self.reports / f"plugin-{name}-v{version}.json"))
+                for name, version in [("first", "1.0.0"), ("second", "2.0.0"), ("third", "3.0.0")]
+            ],
+        )
+        self.assertEqual(
+            self.output.read_text(),
+            f"dist_name_0=dist-plugin-first-v1.0.0-{self.target}\n"
+            f"dist_path_0={self.dist / 'plugin-first-v1.0.0'}\n"
+            f"dist_name_1=dist-plugin-third-v3.0.0-{self.target}\n"
+            f"dist_path_1={self.dist / 'plugin-third-v3.0.0'}\n"
+            "failed=plugin-second-v2.0.0\n",
+        )
+        self.assertEqual(
+            sorted(path.name for path in (self.dist / "plugin-first-v1.0.0").iterdir()),
+            ["IBM-Plex-OFL.txt", "plugin-first-linux-x86_64"],
+        )
+        self.assertEqual(
+            [path.name for path in (self.dist / "plugin-third-v3.0.0").iterdir()],
+            ["plugin-third-linux-x86_64"],
+        )
+        self.assertEqual(
+            (self.dist / "plugin-third-v3.0.0" / "plugin-third-linux-x86_64").read_bytes(),
+            b"third",
+        )
+
+    def test_more_plugins_than_upload_slots_build_nothing(self):
+        with patch.object(rc, "UPLOAD_SLOTS", 2), patch.object(rc, "execute_build") as build:
+            with self.assertRaisesRegex(RuntimeError, "3 plugins build for .*, but plugin_candidate has 2 upload slots"):
+                rc.build_plugins(
+                    self.root, self.tags, self.target, self.reports, self.dist, str(self.output)
+                )
+        build.assert_not_called()
+        self.assertEqual(self.output.read_text(), "")
+
+    def test_font_license_follows_a_gpui_dependency(self):
+        cases = [
+            ("qol-gpui v0.1.0 (/repo/libs/gpui)\nserde v1.0.0\n", True),
+            ("serde v1.0.0\nmy-qol-gpui v1.0.0\n", False),
+        ]
+        for stdout, expected in cases:
+            with self.subTest(expected=expected):
+                result = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+                with patch.object(rc.subprocess, "run", return_value=result) as run:
+                    self.assertEqual(rc.uses_gpui(self.root, "first-package", self.target), expected)
+                self.assertEqual(
+                    run.call_args.args[0],
+                    ["cargo", "tree", "-p", "first-package", "--target", self.target, "-e", "normal", "--prefix", "none"],
+                )
+        failed = subprocess.CompletedProcess([], 101, stdout="", stderr="no such package")
+        with patch.object(rc.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, "no such package"):
+                rc.uses_gpui(self.root, "first-package", self.target)
 
 
 if __name__ == "__main__":

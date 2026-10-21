@@ -1,11 +1,15 @@
 import os
 import re
 import subprocess
+import sys
 import textwrap
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / ".github/scripts"))
+
+import release_candidate as rc
 CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check|nextest run)\b")
 
 
@@ -404,15 +408,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         self.assertNotIn("probe", workflow)
         self.assertFalse((ROOT / ".github/scripts/release_probe.py").exists())
-        plugin = workflow.split("  plugin_candidate:\n", 1)[1].split("  qol_tray_linux_candidate:\n", 1)[0]
-        upload = named_step(plugin, "Upload release files", "      ")
-        for contract in [
-            "name: dist-${{ matrix.tag }}-${{ matrix.target }}",
-            "retention-days: 90",
-            "if-no-files-found: error",
-        ]:
-            with self.subTest(contract=contract):
-                self.assertIn(contract, upload)
         for platform in ["linux", "macos", "windows"]:
             with self.subTest(platform=platform):
                 job = workflow.split(f"  qol_tray_{platform}_candidate:\n", 1)[1].split("\n  qol_tray_", 1)[0].split("\n  tag_and_dispatch:", 1)[0]
@@ -432,6 +427,54 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn("candidate_run: ${{ steps.verify.outputs.run_id }}", release)
                 self.assertIn("actions: read", release)
                 self.assertNotIn("actions: write", release.split("  index:\n", 1)[0])
+
+    def test_versioning_builds_every_plugin_of_a_target_in_one_job(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        plugin = workflow.split("  plugin_candidate:\n", 1)[1].split("  qol_tray_linux_candidate:\n", 1)[0]
+        self.assertIn("name: Candidate plugins (${{ matrix.target }})", plugin)
+        self.assertIn("matrix: ${{ fromJSON(needs.prepare.outputs.plugin_matrix) }}", plugin)
+        build = named_step(plugin, "Build exact plugin candidates", "      ")
+        for contract in [
+            "RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}",
+            "release_candidate.py build-plugins",
+            '--target "${TARGET}"',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, build)
+        self.assertNotIn("matrix.package", plugin)
+        self.assertIn("id: candidates", build)
+        self.assertNotIn("upload-next-dist", plugin)
+        plugins = len(list(ROOT.glob("plugins/*/plugin.toml")))
+        self.assertGreaterEqual(
+            rc.UPLOAD_SLOTS,
+            plugins,
+            "raise UPLOAD_SLOTS and add upload slots to plugin_candidate: one target can build every plugin",
+        )
+        self.assertEqual(plugin.count("      - name: Upload release files "), rc.UPLOAD_SLOTS)
+        for slot in range(rc.UPLOAD_SLOTS):
+            with self.subTest(slot=slot):
+                upload = named_step(plugin, f"Upload release files {slot}", "      ")
+                for contract in [
+                    f"if: steps.candidates.outputs.dist_name_{slot} != ''",
+                    "uses: actions/upload-artifact@",
+                    f"name: ${{{{ steps.candidates.outputs.dist_name_{slot} }}}}",
+                    f"path: ${{{{ steps.candidates.outputs.dist_path_{slot} }}}}",
+                    "retention-days: 90",
+                    "if-no-files-found: error",
+                ]:
+                    self.assertIn(contract, upload)
+                self.assertLess(
+                    plugin.index(f"- name: Upload release files {slot}\n"),
+                    plugin.index("- name: Require every plugin candidate"),
+                )
+        require = named_step(plugin, "Require every plugin candidate", "      ")
+        self.assertIn("if: steps.candidates.outputs.failed != ''", require)
+        self.assertIn("FAILED: ${{ steps.candidates.outputs.failed }}", require)
+        self.assertIn("exit 1", require)
+        reports = named_step(plugin, "Upload build reports", "      ")
+        self.assertIn("if: always()", reports)
+        self.assertIn("name: candidate-plugins-${{ matrix.target }}", reports)
+        self.assertIn("path: ${{ runner.temp }}/release-build-reports", reports)
 
     def test_release_workflows_verify_exact_candidate(self):
         for name in ["release.yml", "qol-tray-release.yml"]:
@@ -605,7 +648,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                         self.assertIn("-D warnings", line)
 
     def test_windows_release_jobs_get_a_longer_timeout(self):
-        conditional = "timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}"
+        conditional = "timeout-minutes: ${{ matrix.os == 'windows-latest' && 180 || 120 }}"
         cases = [
             ("plugin-version.yml", "  plugin_candidate:\n", "  qol_tray_linux_candidate:\n", conditional),
             ("plugin-version.yml", "  qol_tray_windows_candidate:\n", "    steps:\n", "timeout-minutes: 75"),
