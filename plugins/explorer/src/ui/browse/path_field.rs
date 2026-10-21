@@ -3,6 +3,7 @@ use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
 
 use futures::channel::mpsc::UnboundedSender;
 use gpui::Keystroke;
+use qol_gpui::crumb_trail::SUGGESTION_ROWS;
 use qol_gpui::text_edit::marked;
 use qol_gpui::{PathEdit, PathKey};
 
@@ -62,6 +63,10 @@ impl PathField {
 
     pub(super) fn pick(&mut self, index: usize) -> bool {
         self.edit.pick(index)
+    }
+
+    pub(super) fn wheel(&mut self, rows: isize) -> bool {
+        self.edit.wheel(rows, SUGGESTION_ROWS)
     }
 
     pub(super) fn target(&self, home: &Path) -> PathBuf {

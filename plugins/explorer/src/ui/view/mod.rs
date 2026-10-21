@@ -277,6 +277,12 @@ impl ExplorerView {
         }
     }
 
+    fn wheel_suggestions(&mut self, rows: isize, cx: &mut Context<Self>) {
+        if self.browser.wheel_suggestions(rows) {
+            cx.notify();
+        }
+    }
+
     fn stepped(&self, step: PathStep) -> bool {
         match step {
             PathStep::Stay { changed } => changed,

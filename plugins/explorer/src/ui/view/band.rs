@@ -35,6 +35,7 @@ pub(super) fn render(
     let on_crumb = cx.entity().downgrade();
     let on_edit = on_crumb.clone();
     let on_suggestion = on_crumb.clone();
+    let on_wheel = on_crumb.clone();
     let note_room = if shows_note {
         NOTE_WIDTH + SPACE_GUTTER
     } else {
@@ -58,6 +59,9 @@ pub(super) fn render(
     })
     .on_suggestion(move |index, _window, cx| {
         let _ = on_suggestion.update(cx, |view, cx| view.pick_suggestion(index, cx));
+    })
+    .on_suggestion_wheel(move |rows, _window, cx| {
+        let _ = on_wheel.update(cx, |view, cx| view.wheel_suggestions(rows, cx));
     });
     if let Some(edit) = editing {
         crumb_trail = crumb_trail.editing(edit, width);
