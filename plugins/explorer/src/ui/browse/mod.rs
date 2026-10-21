@@ -197,6 +197,11 @@ impl Browser {
         self.watch.follows_links()
     }
 
+    #[cfg(all(test, unix))]
+    pub fn follows_link_to(&self, file: &Path) -> bool {
+        self.watch.follows_link_to(file)
+    }
+
     pub fn show_rows(&mut self, rows: Range<usize>) {
         self.shown = rows;
         if self.arriving.is_none()

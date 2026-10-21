@@ -98,6 +98,13 @@ impl FolderWatch {
         lock(&self.links).is_some()
     }
 
+    #[cfg(all(test, unix))]
+    pub(super) fn follows_link_to(&self, file: &Path) -> bool {
+        lock(&self.links)
+            .as_ref()
+            .is_some_and(|followed| followed.targets.values().any(|files| files.contains(file)))
+    }
+
     fn watch_nearest(
         &mut self,
         folder: &Path,

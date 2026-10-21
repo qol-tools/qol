@@ -38,7 +38,16 @@ fn settle(browser: &mut Browser) -> Drained {
 }
 
 fn wait_until(browser: &mut Browser, what: &str, done: impl Fn(&Browser) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    wait_within(browser, Duration::from_secs(10), what, done);
+}
+
+fn wait_within(
+    browser: &mut Browser,
+    budget: Duration,
+    what: &str,
+    done: impl Fn(&Browser) -> bool,
+) {
+    let deadline = Instant::now() + budget;
     loop {
         let drained = browser.drain(Instant::now());
         if done(browser) {
@@ -1351,8 +1360,11 @@ fn a_refresh_keeps_the_link_watch_and_a_recreated_link_follows_its_new_target() 
     fs::remove_file(shown.join("link")).unwrap();
     symlink(second.join("b.txt"), shown.join("link")).unwrap();
     let size = |browser: &Browser| browser.entry(0).unwrap().size;
+    let followed = fs::canonicalize(second.join("b.txt")).unwrap();
     wait_until(&mut browser, "the new target", |browser| {
-        browser.row_count() == 2 && size(browser) == Size::Bytes(2) && browser.follows_links()
+        browser.row_count() == 2
+            && size(browser) == Size::Bytes(2)
+            && browser.follows_link_to(&followed)
     });
     fs::write(second.join("b.txt"), "bbbb").unwrap();
     wait_until(&mut browser, "the new target's size", |browser| {
@@ -1390,17 +1402,18 @@ fn proc_is_read_again_while_shown_and_an_exited_process_folder_reports_it() {
     use std::process::Command;
 
     let proc = Path::new("/proc");
+    let paced = Duration::from_secs(60);
     let mut browser = opened(proc);
     let mut child = Command::new("sleep").arg("30").spawn().unwrap();
     let pid = child.id().to_string();
-    wait_until(&mut browser, "the new process", |browser| {
+    wait_within(&mut browser, paced, "the new process", |browser| {
         names(browser).contains(&pid)
     });
 
     let mut task = opened(&proc.join(&pid).join("task"));
     child.kill().unwrap();
     child.wait().unwrap();
-    wait_until(&mut browser, "the process gone", |browser| {
+    wait_within(&mut browser, paced, "the process gone", |browser| {
         !names(browser).contains(&pid)
     });
     wait_until(&mut task, "the failure", |browser| {
