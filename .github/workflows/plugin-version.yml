@@ -174,11 +174,11 @@ jobs:
           if-no-files-found: error
 
   plugin_candidate:
-    name: Candidate ${{ matrix.tag }} (${{ matrix.target }})
+    name: Candidate plugins (${{ matrix.target }})
     needs: prepare
     if: needs.prepare.outputs.has_plugins == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 180 || 120 }}
     permissions:
       contents: read
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
@@ -213,43 +213,124 @@ jobs:
       - name: Export production artifact identity
         run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
-      - name: Build exact plugin candidate
-        run: >
-          python .github/scripts/release_candidate.py build
-          --kind plugin
-          --package "${{ matrix.package }}"
-          --target "${{ matrix.target }}"
-          --report "${{ runner.temp }}/release-build-report.json"
-
-      - name: Stage release files
+      - name: Build exact plugin candidates
         env:
+          RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}
           TARGET: ${{ matrix.target }}
-          BIN_NAME: ${{ matrix.bin_name }}
-          EXT: ${{ matrix.ext }}
-          ARTIFACT_NAME: ${{ matrix.artifact_name }}
-          PACKAGE: ${{ matrix.package }}
-        run: |
-          cp "target/$TARGET/release/$BIN_NAME$EXT" "$ARTIFACT_NAME$EXT"
-          if cargo tree -p "$PACKAGE" --target "$TARGET" -e normal --prefix none | grep -q '^qol-gpui v'; then
-            cp libs/gpui/assets/fonts/OFL.txt IBM-Plex-OFL.txt
-          fi
+        run: >
+          python .github/scripts/release_candidate.py build-plugins
+          --tags "${RELEASE_TAGS}"
+          --target "${TARGET}"
+          --report-dir "${RUNNER_TEMP}/release-build-reports"
+          --dist-dir "${RUNNER_TEMP}/release-files"
+          --queue "${RUNNER_TEMP}/release-files.json"
 
-      - name: Upload release files
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: ./.github/actions/upload-next-dist
         with:
-          name: dist-${{ matrix.tag }}-${{ matrix.target }}
-          path: |
-            ${{ matrix.artifact_name }}*
-            IBM-Plex-OFL.txt
-          retention-days: 90
-          if-no-files-found: error
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
+      - uses: ./.github/actions/upload-next-dist
+        with:
+          queue: ${{ runner.temp }}/release-files.json
 
-      - name: Upload build report
+      - name: Require every plugin candidate
+        run: python .github/scripts/release_candidate.py finish-dists --queue "${RUNNER_TEMP}/release-files.json"
+
+      - name: Upload build reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: candidate-${{ matrix.tag }}-${{ matrix.target }}
-          path: ${{ runner.temp }}/release-build-report.json
+          name: candidate-plugins-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-build-reports
           if-no-files-found: error
 
   qol_tray_linux_candidate:

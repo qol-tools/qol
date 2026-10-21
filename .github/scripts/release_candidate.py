@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -46,6 +47,7 @@ QUEUE_BUILD_CI_JOBS = {
 }
 BATCH_CI_JOB = "batch role"
 BATCH_BUILD_CHECK = "batch release build"
+GPUI_FONT_LICENSE = "libs/gpui/assets/fonts/OFL.txt"
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,7 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
     host_tag = host_tags[0].value if host_tags else ""
     return {
         "tags": [tag.value for tag in tags],
-        "plugin_matrix": {"include": plugin_entries},
+        "plugin_matrix": {"include": plugin_matrix.group_by_target(plugin_entries)},
         "has_plugins": bool(plugin_entries),
         "has_qol_tray": bool(host_tags),
         "qol_tray_tag": host_tag,
@@ -126,8 +128,9 @@ def candidate_plan(root: Path, tags: list[ReleaseTag]) -> dict:
 
 def planned_builds(plan: dict) -> set[tuple[str, str | None, str | None]]:
     builds = {
-        ("plugin", entry["package"], entry["target"])
-        for entry in plan["plugin_matrix"]["include"]
+        ("plugin", plugin["package"], row["target"])
+        for row in plan["plugin_matrix"]["include"]
+        for plugin in row["plugins"]
     }
     if plan["has_qol_tray"]:
         builds.update((kind, None, None) for kind in HOST_BUILD_KINDS)
@@ -667,6 +670,88 @@ def execute_build(
     write_json(report_path, report)
 
 
+def target_plugins(plan: dict, target: str) -> list[dict]:
+    for row in plan["plugin_matrix"]["include"]:
+        if row["target"] == target:
+            return row["plugins"]
+    raise ValueError(f"no plugin candidate builds for {target}")
+
+
+def uses_gpui(root: Path, package: str, target: str) -> bool:
+    result = subprocess.run(
+        ["cargo", "tree", "-p", package, "--target", target, "-e", "normal", "--prefix", "none"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"cargo tree -p {package} failed: {result.stderr.strip()}")
+    return any(line.startswith("qol-gpui v") for line in result.stdout.splitlines())
+
+
+def stage_plugin_files(root: Path, plugin: dict, target: str, dist_dir: Path) -> Path:
+    files = dist_dir / plugin["tag"]
+    files.mkdir(parents=True, exist_ok=True)
+    binary = root / "target" / target / "release" / f"{plugin['bin_name']}{plugin['ext']}"
+    shutil.copy(binary, files / f"{plugin['artifact_name']}{plugin['ext']}")
+    if uses_gpui(root, plugin["package"], target):
+        shutil.copy(root / GPUI_FONT_LICENSE, files / "IBM-Plex-OFL.txt")
+    return files
+
+
+def build_plugins(
+    root: Path,
+    tags: list[ReleaseTag],
+    target: str,
+    report_dir: Path,
+    dist_dir: Path,
+    queue_path: str,
+) -> None:
+    plan = candidate_plan(root, tags)
+    dists = []
+    failed = []
+    for plugin in target_plugins(plan, target):
+        try:
+            execute_build(
+                root,
+                "plugin",
+                plugin["package"],
+                target,
+                str(report_dir / f"{plugin['tag']}.json"),
+            )
+            files = stage_plugin_files(root, plugin, target, dist_dir)
+        except (OSError, RuntimeError, ValueError) as error:
+            failed.append(plugin["tag"])
+            print(f"::error::{plugin['tag']} ({target}) failed: {error}", file=sys.stderr)
+            continue
+        dists.append({"name": f"dist-{plugin['tag']}-{target}", "path": str(files)})
+        print(f"{plugin['tag']} ({target}) passed")
+    write_json(queue_path, {"target": target, "dists": dists, "failed": failed})
+
+
+def next_dist(queue_path: str, github_output: str | None) -> None:
+    path = Path(queue_path)
+    if not path.is_file():
+        return
+    queue = json.loads(path.read_text())
+    if not queue["dists"]:
+        return
+    write_json(queue_path, {**queue, "dists": queue["dists"][1:]})
+    emit_github_output(github_output, queue["dists"][0])
+
+
+def finish_dists(queue_path: str) -> None:
+    queue = json.loads(Path(queue_path).read_text())
+    if queue["dists"]:
+        names = ", ".join(dist["name"] for dist in queue["dists"])
+        raise RuntimeError(f"no upload slot was left for: {names}")
+    if queue["failed"]:
+        raise RuntimeError(
+            f"candidate builds failed for {queue['target']}: {', '.join(queue['failed'])}"
+        )
+
+
 def plan_command(args: argparse.Namespace) -> None:
     started_at = utc_now()
     tags = parse_release_tags(args.tags)
@@ -865,6 +950,37 @@ def build_parser() -> argparse.ArgumentParser:
             args.report,
         )
     )
+
+    plugins = commands.add_parser("build-plugins")
+    plugins.add_argument("--root", default=".")
+    plugins.add_argument("--tags", required=True)
+    plugins.add_argument("--target", required=True)
+    plugins.add_argument("--report-dir", required=True)
+    plugins.add_argument("--dist-dir", required=True)
+    plugins.add_argument("--queue", required=True)
+    plugins.set_defaults(
+        handler=lambda args: build_plugins(
+            Path(args.root).resolve(),
+            parse_release_tags(args.tags),
+            args.target,
+            Path(args.report_dir),
+            Path(args.dist_dir),
+            args.queue,
+        )
+    )
+
+    next_upload = commands.add_parser("next-dist")
+    next_upload.add_argument("--queue", required=True)
+    next_upload.add_argument(
+        "--github-output", default=os.environ.get("GITHUB_OUTPUT")
+    )
+    next_upload.set_defaults(
+        handler=lambda args: next_dist(args.queue, args.github_output)
+    )
+
+    finish = commands.add_parser("finish-dists")
+    finish.add_argument("--queue", required=True)
+    finish.set_defaults(handler=lambda args: finish_dists(args.queue))
     return parser
 
 
