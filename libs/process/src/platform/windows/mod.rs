@@ -681,6 +681,12 @@ pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<Pro
     Ok((child, Some(guard)))
 }
 
+pub(crate) fn spawn_owned_session(
+    command: Command,
+) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    spawn_owned(command)
+}
+
 fn prepared_spawn_error(guard: &ProcessTreeGuard, error: PlatformSpawnFailure) -> io::Error {
     let PlatformSpawnFailure { source, cleanup } = error;
     if cleanup != PreparedSpawnCleanup::RecoveryPending {

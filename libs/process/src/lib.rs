@@ -252,15 +252,26 @@ impl CurrentProcessTreeGuard {
 }
 
 pub fn spawn_owned(command: Command) -> io::Result<(Child, OwnedProcessTree)> {
-    let (child, guard) = platform::spawn_owned(command)?;
+    Ok(owned_tree(platform::spawn_owned(command)?))
+}
+
+/// Spawns like [`spawn_owned`], but in a new session with no controlling terminal, so the
+/// child can never be stopped for touching the caller's terminal from a background group.
+pub(crate) fn spawn_owned_session(command: Command) -> io::Result<(Child, OwnedProcessTree)> {
+    Ok(owned_tree(platform::spawn_owned_session(command)?))
+}
+
+fn owned_tree(
+    (child, guard): (Child, Option<platform::ProcessTreeGuard>),
+) -> (Child, OwnedProcessTree) {
     let root_pid = child.id();
-    Ok((
+    (
         child,
         OwnedProcessTree {
             root_pid,
             guard: guard.map(|_inner| ProcessTreeGuard { _inner }),
         },
-    ))
+    )
 }
 
 impl OwnedProcessTree {

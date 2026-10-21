@@ -24,9 +24,9 @@ pub(crate) use fallback::{
     process_identity_matches, process_image_path, process_start_time,
     process_tree_containment_support, processes, release_host_lifetime, reload_group,
     request_stop_if_identity, run_process_tree_guardian_entry, signal_term_group, signal_term_pid,
-    spawn_detached, spawn_owned, system_program_path, terminate_group, terminate_owned,
-    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
-    PreparedSpawn, ProcessTreeGuard,
+    spawn_detached, spawn_owned, spawn_owned_session, system_program_path, terminate_group,
+    terminate_owned, terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid,
+    CurrentProcessTreeGuard, PreparedSpawn, ProcessTreeGuard,
 };
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
@@ -37,9 +37,9 @@ pub(crate) use linux::{
     process_identity_matches, process_image_path, process_start_time,
     process_tree_containment_support, processes, release_host_lifetime, reload_group,
     request_stop_if_identity, run_process_tree_guardian_entry, signal_term_group, signal_term_pid,
-    spawn_detached, spawn_owned, system_program_path, terminate_group, terminate_owned,
-    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
-    PreparedSpawn, ProcessTreeGuard,
+    spawn_detached, spawn_owned, spawn_owned_session, system_program_path, terminate_group,
+    terminate_owned, terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid,
+    CurrentProcessTreeGuard, PreparedSpawn, ProcessTreeGuard,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
@@ -50,9 +50,9 @@ pub(crate) use macos::{
     process_identity_matches, process_image_path, process_start_time,
     process_tree_containment_support, processes, release_host_lifetime, reload_group,
     request_stop_if_identity, run_process_tree_guardian_entry, signal_term_group, signal_term_pid,
-    spawn_detached, spawn_owned, system_program_path, terminate_group, terminate_owned,
-    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
-    PreparedSpawn, ProcessTreeGuard,
+    spawn_detached, spawn_owned, spawn_owned_session, system_program_path, terminate_group,
+    terminate_owned, terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid,
+    CurrentProcessTreeGuard, PreparedSpawn, ProcessTreeGuard,
 };
 #[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::{
@@ -63,9 +63,9 @@ pub(crate) use unsupported::{
     process_identity_matches, process_image_path, process_start_time,
     process_tree_containment_support, processes, release_host_lifetime, reload_group,
     request_stop_if_identity, run_process_tree_guardian_entry, signal_term_group, signal_term_pid,
-    spawn_detached, spawn_owned, system_program_path, terminate_group, terminate_owned,
-    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
-    PreparedSpawn, ProcessTreeGuard,
+    spawn_detached, spawn_owned, spawn_owned_session, system_program_path, terminate_group,
+    terminate_owned, terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid,
+    CurrentProcessTreeGuard, PreparedSpawn, ProcessTreeGuard,
 };
 #[cfg(windows)]
 pub(crate) use windows::{
@@ -76,7 +76,7 @@ pub(crate) use windows::{
     process_identity_matches, process_image_path, process_start_time,
     process_tree_containment_support, processes, release_host_lifetime, reload_group,
     request_stop_if_identity, run_process_tree_guardian_entry, signal_term_group, signal_term_pid,
-    spawn_detached, spawn_owned, system_program_path, terminate_group, terminate_owned,
-    terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid, CurrentProcessTreeGuard,
-    PreparedSpawn, ProcessTreeGuard,
+    spawn_detached, spawn_owned, spawn_owned_session, system_program_path, terminate_group,
+    terminate_owned, terminate_pid, try_wait_pid, wait_for_stop_request, wait_pid,
+    CurrentProcessTreeGuard, PreparedSpawn, ProcessTreeGuard,
 };
