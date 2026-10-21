@@ -95,7 +95,8 @@ fn compute_cache(
 
 fn cargo_incremental_dir(root: &Path) -> PathBuf {
     let build_dir = cargo_cache_dirs(root)
-        .pop()
+        .ok()
+        .and_then(|mut dirs| dirs.pop())
         .unwrap_or_else(|| root.join("target"));
     build_dir.join("debug").join("incremental")
 }

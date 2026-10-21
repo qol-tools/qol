@@ -482,7 +482,11 @@ fn cleanup_disk_usage_in(
         }
     }
     set_progress(progress, "stale caches");
-    for target in cargo_cache_dirs(running) {
+    let targets = cargo_cache_dirs(running).unwrap_or_else(|error| {
+        failures.push(format!("stale caches: {error}"));
+        vec![running.join("target")]
+    });
+    for target in targets {
         if !target.exists() {
             continue;
         }
@@ -507,6 +511,7 @@ fn cleanup_disk_usage_in(
 
 fn prunable_cache_bytes(running: &Path) -> u64 {
     cargo_cache_dirs(running)
+        .unwrap_or_else(|_| vec![running.join("target")])
         .iter()
         .filter(|dir| dir.exists())
         .map(|dir| prunable_target_bytes(dir))

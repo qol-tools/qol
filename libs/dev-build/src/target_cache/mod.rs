@@ -168,15 +168,15 @@ pub fn is_protected_target_root(name: &str) -> bool {
     name.starts_with('.') || name == "CACHEDIR.TAG" || PROTECTED_TARGET_ROOTS.contains(&name)
 }
 
-pub fn cargo_cache_dirs(root: &Path) -> Vec<PathBuf> {
+pub fn cargo_cache_dirs(root: &Path) -> Result<Vec<PathBuf>, String> {
     let target = root.join("target");
-    match cargo_metadata(root).and_then(|metadata| separate_build_dir(&metadata)) {
+    Ok(match separate_build_dir(&cargo_metadata(root)?) {
         Some(build_dir) => vec![target, build_dir],
         None => vec![target],
-    }
+    })
 }
 
-fn cargo_metadata(root: &Path) -> Option<serde_json::Value> {
+fn cargo_metadata(root: &Path) -> Result<serde_json::Value, String> {
     let output = Command::new("cargo")
         .args([
             "metadata",
@@ -186,13 +186,19 @@ fn cargo_metadata(root: &Path) -> Option<serde_json::Value> {
             "1",
         ])
         .current_dir(root)
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .output()
-        .ok()?;
+        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
     if !output.status.success() {
-        return None;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr.lines().next().unwrap_or("no output");
+        return Err(format!(
+            "cargo metadata failed in {}, so its build dir is unknown: {reason}",
+            root.display()
+        ));
     }
-    serde_json::from_slice(&output.stdout).ok()
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("cargo metadata printed invalid JSON: {error}"))
 }
 
 fn separate_build_dir(metadata: &serde_json::Value) -> Option<PathBuf> {
@@ -551,6 +557,21 @@ mod tests {
         for (metadata, expected) in cases {
             assert_eq!(separate_build_dir(&metadata), expected, "{metadata}");
         }
+    }
+
+    #[test]
+    fn cache_dirs_fail_when_cargo_cannot_load_the_workspace() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"plugins/*\"]\n",
+        )
+        .expect("manifest");
+        fs::create_dir_all(root.path().join("plugins").join("leftover")).expect("member dir");
+
+        let error = cargo_cache_dirs(root.path()).expect_err("broken workspace");
+
+        assert!(error.contains("build dir is unknown"), "{error}");
     }
 
     #[test]
