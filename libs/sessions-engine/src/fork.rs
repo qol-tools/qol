@@ -440,9 +440,20 @@ pub(super) fn fork_linked(
         }
         _ => None,
     };
+    let resolved_cwd = super::spawn::canonicalize_cwd(cwd)?;
+    let resolved_cwd = resolved_cwd.to_string_lossy();
     let prompt = brief_path
         .as_deref()
-        .map(|path| fork_prompt(key, cwd, path, parent, chat_path.as_deref(), report))
+        .map(|path| {
+            fork_prompt(
+                key,
+                &resolved_cwd,
+                path,
+                parent,
+                chat_path.as_deref(),
+                report,
+            )
+        })
         .unwrap_or_default();
     let mut record = ForkRecord {
         key: key.to_owned(),
@@ -945,6 +956,19 @@ mod tests {
                 "{cwd}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_into_a_qol_repo_keeps_the_pull_request_delivery() {
+        let root = tempfile::TempDir::new().unwrap();
+        let repo = root.path().join("qol-monorepo");
+        std::fs::create_dir(&repo).unwrap();
+        let link = root.path().join("checkout");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let resolved = super::super::spawn::canonicalize_cwd(&link.to_string_lossy()).unwrap();
+        assert!(delivery_line("chase", &resolved.to_string_lossy()).contains("gh pr merge --auto"));
+        assert!(!delivery_line("chase", &link.to_string_lossy()).contains("gh pr merge --auto"));
     }
 
     #[test]

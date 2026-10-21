@@ -735,7 +735,7 @@ fn generated_group(lanes: &[LaneSpec]) -> String {
     format!("set-{}-{}", lanes.len(), &digest[..8])
 }
 
-fn canonicalize_cwd(requested: &str) -> Result<PathBuf> {
+pub(super) fn canonicalize_cwd(requested: &str) -> Result<PathBuf> {
     let process_cwd =
         std::env::current_dir().context("cannot resolve the current working directory")?;
     canonicalize_cwd_at(&process_cwd, requested)
