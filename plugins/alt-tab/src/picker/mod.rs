@@ -56,6 +56,9 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
 
     crate::actions::cancel_pending_activation();
     let is_visible = PICKER_VISIBLE.load(Ordering::Relaxed);
+    if !is_visible {
+        qol_gpui::popup_window::capture_focus_return();
+    }
     let placement = resolve_placement(req.tracker, req.current, is_visible);
     let rendering = RenderingFlow::current();
     monitor_listener::store_flow_fill(rendering.captures_preview_fill());

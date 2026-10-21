@@ -41,7 +41,8 @@ pub use imp::{
     work_area_within, EscapeGrab, WindowGeometrySession,
 };
 pub use imp::{
-    hold_input, input_held, register_native_display, release_input, watch_input, InputWatch,
+    grab_keyboard, hold_input, input_held, register_native_display, release_input,
+    release_keyboard, watch_input, InputWatch,
 };
 
 pub fn present_topmost(title: &str) {

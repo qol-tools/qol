@@ -1003,6 +1003,12 @@ fn reassert_focus_on_main(title: &str) {
 
 pub fn register_native_display(_window: &gpui::Window) {}
 
+pub fn grab_keyboard(_window: &gpui::Window) -> bool {
+    false
+}
+
+pub fn release_keyboard(_window: &gpui::Window) {}
+
 static INPUT_HELD: AtomicBool = AtomicBool::new(false);
 static HOLD_REASSERTS: AtomicU8 = AtomicU8::new(0);
 static HELD_TITLE: Mutex<Option<String>> = Mutex::new(None);

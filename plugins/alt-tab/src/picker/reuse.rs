@@ -89,6 +89,7 @@ pub(super) fn try_reuse(req: &ReuseRequest, cx: &mut App) -> bool {
                 title
             );
             view.focus_for_keys("reuse-after-show", Some(req.show_id), window);
+            view.sync_keyboard(window);
             let painted = Arc::new(AtomicBool::new(false));
             let painted_for_frame = painted.clone();
             #[cfg(debug_assertions)]

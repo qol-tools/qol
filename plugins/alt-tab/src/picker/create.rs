@@ -324,7 +324,8 @@ impl PostCreateData {
             super::platform::disable_window_shadow(&self.title);
         }
         super::platform::configure_picker_window(&self.title);
-        let _ = handle.update(cx, |view, _window, cx| {
+        let _ = handle.update(cx, |view, window, cx| {
+            view.sync_keyboard(window);
             view.ensure_live_preview(cx);
         });
         let icon_req = super::IconFillRequest {
