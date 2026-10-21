@@ -1,17 +1,18 @@
+use std::cell::Cell;
 use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    anchored, deferred, div, font, px, rgb, rgba, AnyElement, App, Div, ElementId, FontWeight,
-    Rgba, SharedString, Window,
+    anchored, canvas, deferred, div, font, px, rgb, rgba, AnyElement, App, Bounds, Div, ElementId,
+    Font, MouseButton, Pixels, Rgba, SharedString, Window,
 };
 use qol_theme::{translucent, Alpha, TextStyle};
 
 use crate::kit::{float_shadow, Kit};
 use crate::scroll_list::wheel_rows;
 use crate::scrollbar::ScrollSource;
-use crate::text::{shaped_width, TextStyled};
+use crate::text::{laid_out_width, shaped_width, TextStyled};
 use crate::text_edit::{visible_char_count, CaretStyle, TextFieldElement};
 
 mod path_edit;
@@ -41,6 +42,7 @@ pub struct CrumbTrail {
     on_edit: Option<EditRequest>,
     on_suggestion: Option<CrumbClick>,
     on_suggestion_wheel: Option<SuggestionWheel>,
+    on_caret: Option<CrumbClick>,
     kit: Kit,
 }
 
@@ -59,6 +61,7 @@ impl CrumbTrail {
             on_edit: None,
             on_suggestion: None,
             on_suggestion_wheel: None,
+            on_caret: None,
             kit,
         }
     }
@@ -89,6 +92,11 @@ impl CrumbTrail {
         self
     }
 
+    pub fn on_caret(mut self, on_caret: impl Fn(usize, &mut Window, &mut App) + 'static) -> Self {
+        self.on_caret = Some(Rc::new(on_caret));
+        self
+    }
+
     pub fn fit(mut self, width: f32) -> Self {
         self.fit = Some(width);
         self
@@ -114,14 +122,18 @@ impl RenderOnce for CrumbTrail {
             on_edit,
             on_suggestion,
             on_suggestion_wheel,
+            on_caret,
             kit,
         } = self;
         match editing {
             Some(Editing { edit, width }) => path_field(
                 &edit,
                 width,
-                on_suggestion,
-                on_suggestion_wheel,
+                Handlers {
+                    on_suggestion,
+                    on_wheel: on_suggestion_wheel,
+                    on_caret,
+                },
                 kit,
                 window,
             ),
@@ -134,10 +146,7 @@ impl RenderOnce for CrumbTrail {
 }
 
 fn folded_run(crumbs: &[SharedString], width: f32, window: &mut Window) -> Range<usize> {
-    let spec = TextStyle::Heading.spec();
-    let mut face = font(spec.face.family());
-    face.weight = FontWeight(f32::from(spec.weight));
-    let mut measure = |text: &str| shaped_width(window, text, face.clone(), spec.size);
+    let mut measure = |text: &str| laid_out_width(window, text, TextStyle::Heading);
     let separator = measure("/") + 2.0 * qol_theme::SPACE_TIGHT;
     let last = crumbs.len().saturating_sub(1);
     let widths: Vec<f32> = crumbs
@@ -212,7 +221,10 @@ fn read_only(
         let crumb = if index == last {
             div().min_w_0().text_color(rgb(kit.grounds.pane.ink))
         } else {
-            div().max_w(px(CRUMB_MAX_WIDTH)).text_color(faint)
+            div()
+                .flex_none()
+                .max_w(px(CRUMB_MAX_WIDTH))
+                .text_color(faint)
         };
         let crumb = crumb.child(label);
         children.push(match &on_crumb {
@@ -246,19 +258,25 @@ fn clickable_crumb(crumb: Div, index: usize, on_crumb: CrumbClick) -> AnyElement
         .into_any_element()
 }
 
+struct Handlers {
+    on_suggestion: Option<CrumbClick>,
+    on_wheel: Option<SuggestionWheel>,
+    on_caret: Option<CrumbClick>,
+}
+
 fn path_field(
     edit: &PathEdit,
     width: f32,
-    on_suggestion: Option<CrumbClick>,
-    on_wheel: Option<SuggestionWheel>,
+    handlers: Handlers,
     kit: Kit,
     window: &mut Window,
 ) -> AnyElement {
     let pane = kit.grounds.pane;
     let size = TextStyle::Code.spec().size;
-    let advance = shaped_width(window, "0", font(qol_theme::font_mono()), size);
+    let mono = font(qol_theme::font_mono());
+    let advance = shaped_width(window, "0", mono.clone(), size);
     let visible = visible_char_count(width - 2.0 * qol_theme::SPACE_CELL - CARET_WIDTH, advance);
-    let text = TextFieldElement::new(edit.field(), visible, advance)
+    let mut text = TextFieldElement::new(edit.field(), visible, advance)
         .with_marks()
         .measure(|shown| shaped_width(window, shown, font(qol_theme::font_mono()), size))
         .selection(rgb(kit.grounds.band.bg).into(), Some(rgb(pane.ink).into()))
@@ -268,8 +286,19 @@ fn path_field(
             height: 16.0,
             top: 1.0,
             radius: 1.0,
-        })
-        .render();
+        });
+    let (start, shown) = text.shown_window();
+    let text = text.render();
+    let text_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+    let measured = text_bounds.clone();
+    let text = div().relative().flex_1().min_w_0().child(text).child(
+        canvas(
+            move |bounds, _, _| measured.set(Some(bounds)),
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0(),
+    );
     let field = div()
         .flex()
         .items_center()
@@ -282,14 +311,27 @@ fn path_field(
         .text(TextStyle::Code)
         .text_color(rgb(pane.ink))
         .overflow_hidden()
-        .child(div().flex_1().min_w_0().child(text));
+        .child(text)
+        .when_some(handlers.on_caret, |field, on_caret| {
+            field
+                .cursor_text()
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    let Some(bounds) = text_bounds.get() else {
+                        return;
+                    };
+                    cx.stop_propagation();
+                    let x = f32::from(event.position.x - bounds.origin.x);
+                    let offset = char_at(window, &shown, x, mono.clone(), size);
+                    on_caret(start + offset, window, cx);
+                })
+        });
     div()
         .relative()
         .flex_none()
         .w(px(width))
         .child(field)
         .when_some(
-            suggestion_menu(edit, width, on_suggestion, on_wheel, kit),
+            suggestion_menu(edit, width, handlers.on_suggestion, handlers.on_wheel, kit),
             |slot, menu| {
                 slot.child(
                     div()
@@ -301,6 +343,23 @@ fn path_field(
             },
         )
         .into_any_element()
+}
+
+fn char_at(window: &mut Window, shown: &str, x: f32, mono: Font, size: f32) -> usize {
+    let mut before = 0.0;
+    for (offset, (index, letter)) in shown.char_indices().enumerate() {
+        let after = shaped_width(
+            window,
+            &shown[..index + letter.len_utf8()],
+            mono.clone(),
+            size,
+        );
+        if x < (before + after) / 2.0 {
+            return offset;
+        }
+        before = after;
+    }
+    shown.chars().count()
 }
 
 fn suggestion_menu(
