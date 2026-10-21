@@ -242,6 +242,9 @@ impl ExplorerView {
                 self.expire_run(cx);
                 true
             }
+            Action::Pick if self.browser.run_takes(' ', Instant::now()) => {
+                self.apply(Action::Jump(' '), keystroke, cx)
+            }
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
             Action::Unpick => self.browser.dismiss(),

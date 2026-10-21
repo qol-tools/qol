@@ -248,12 +248,58 @@ fn the_run_resets_after_one_second_without_typing() {
 }
 
 #[test]
-fn a_mixed_run_without_a_match_keeps_the_cursor() {
+fn a_letter_that_matches_nothing_is_left_out_of_the_run() {
     let mut jump = Jump::new();
     let start = Instant::now();
     assert_eq!(jump.type_char('b', start, &NAMES, 0, |name| *name), Some(2));
     assert_eq!(jump.type_char('x', start, &NAMES, 2, |name| *name), None);
-    assert_eq!(jump.run(start), "bx");
+    assert_eq!(jump.run(start), "b");
+
+    let mut jump = Jump::new();
+    let mut cursor = 3;
+    assert_eq!(type_run(&mut jump, "xa", start, &mut cursor), [3, 0]);
+    assert_eq!(type_run(&mut jump, "v", start, &mut cursor), [1]);
+}
+
+#[test]
+fn a_space_continues_a_run_only_when_a_name_continues_with_it() {
+    let names = ["my file", "my other", "notes"];
+    let mut jump = Jump::new();
+    let now = Instant::now();
+    assert!(!jump.continues(' ', now, &names, |name| *name));
+    for typed in "my".chars() {
+        jump.type_char(typed, now, &names, 0, |name| *name);
+    }
+    assert!(jump.continues(' ', now, &names, |name| *name));
+    assert_eq!(jump.type_char(' ', now, &names, 0, |name| *name), Some(0));
+    assert_eq!(jump.type_char('o', now, &names, 0, |name| *name), Some(1));
+    assert!(!jump.continues(' ', now, &names, |name| *name));
+    assert!(!jump.continues(' ', now + RUN_RESET, &names, |name| *name));
+}
+
+#[test]
+fn a_typed_accent_matches_only_that_accent() {
+    let names = ["alpha", "\u{c4}pfel", "\u{e4}rger.txt", "apple.txt"];
+    let cases = [
+        ("\u{e4}", 1),
+        ("a\u{308}", 1),
+        ("a", 0),
+        ("ar", 2),
+        ("\u{e4}p", 1),
+        ("ap", 1),
+        ("app", 3),
+    ];
+    for (typed, expected) in cases {
+        let mut jump = Jump::new();
+        let now = Instant::now();
+        let mut found = None;
+        for letter in typed.chars() {
+            found = jump
+                .type_char(letter, now, &names, 0, |name| *name)
+                .or(found);
+        }
+        assert_eq!(found, Some(expected), "typed: {typed}");
+    }
 }
 
 #[test]

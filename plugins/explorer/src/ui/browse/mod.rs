@@ -374,6 +374,12 @@ impl Browser {
         true
     }
 
+    pub fn run_takes(&self, typed: char, now: Instant) -> bool {
+        let rows = self.listing.visible(self.show_hidden);
+        self.jump
+            .continues(typed, now, &rows, |entry| entry.display.as_str())
+    }
+
     pub fn edit_path(&mut self) -> bool {
         if self.path.is_some() {
             return false;

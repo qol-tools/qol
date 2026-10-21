@@ -33,13 +33,13 @@ pub fn typed_split(name: &str, run: &str) -> Option<usize> {
     if run.is_empty() || !crate::nav::starts_with_ignoring_case(name, run) {
         return None;
     }
-    let wanted = crate::nav::folded(run).count();
+    let wanted = crate::nav::letter_count(run);
     let mut seen = 0;
     for (index, letter) in name.char_indices() {
         if seen >= wanted && !is_combining_mark(letter) {
             return Some(index);
         }
-        seen += crate::nav::folded(letter.encode_utf8(&mut [0; 4])).count();
+        seen += crate::nav::letter_count(letter.encode_utf8(&mut [0; 4]));
     }
     Some(name.len())
 }
@@ -127,6 +127,9 @@ mod tests {
             ("éclair.txt", "ec", Some("éc".len())),
             ("E\u{301}mile", "em", Some("E\u{301}m".len())),
             ("E\u{301}mile", "e", Some("E\u{301}".len())),
+            ("my other", "my o", Some(4)),
+            ("Äpfel", "äp", Some("Äp".len())),
+            ("apple", "äp", None),
         ];
         for (name, run, expected) in cases {
             assert_eq!(typed_split(name, run), expected, "{name} {run}");

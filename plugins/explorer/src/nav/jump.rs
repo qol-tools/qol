@@ -39,29 +39,50 @@ impl Jump {
             self.run.clear();
         }
         self.last = Some(now);
-        self.run.extend(typed.to_lowercase());
-        if let Some(index) = rows
-            .iter()
-            .position(|row| starts_with_ignoring_case(name(row), &self.run))
-        {
+        let run = self.extended(typed);
+        if let Some(index) = first_starting_with(rows, &run, &name) {
+            self.run = run;
             return Some(index);
         }
-        let letter = self.repeated_letter()?;
+        let letter = repeated_letter(&run)?;
+        self.run = run;
         next_starting_with(rows, cursor, letter, name)
+    }
+
+    pub fn continues<T>(
+        &self,
+        typed: char,
+        now: Instant,
+        rows: &[T],
+        name: impl Fn(&T) -> &str,
+    ) -> bool {
+        !self.run(now).is_empty()
+            && first_starting_with(rows, &self.extended(typed), &name).is_some()
+    }
+
+    fn extended(&self, typed: char) -> String {
+        let mut run = self.run.clone();
+        run.extend(typed.to_lowercase());
+        run
     }
 
     fn expired(&self, now: Instant) -> bool {
         self.last
             .is_some_and(|last| now.saturating_duration_since(last) >= RUN_RESET)
     }
+}
 
-    fn repeated_letter(&self) -> Option<char> {
-        let mut letters = self.run.chars();
-        let first = letters.next()?;
-        let mut rest = letters.peekable();
-        rest.peek()?;
-        rest.all(|letter| letter == first).then_some(first)
-    }
+fn repeated_letter(run: &str) -> Option<char> {
+    let mut letters = run.chars();
+    let first = letters.next()?;
+    let mut rest = letters.peekable();
+    rest.peek()?;
+    rest.all(|letter| letter == first).then_some(first)
+}
+
+fn first_starting_with<T>(rows: &[T], run: &str, name: impl Fn(&T) -> &str) -> Option<usize> {
+    rows.iter()
+        .position(|row| starts_with_ignoring_case(name(row), run))
 }
 
 fn next_starting_with<T>(
