@@ -617,20 +617,15 @@ jobs:
           path: ${{ runner.temp }}/release-attestation-report.json
           if-no-files-found: error
 
-  # Each OS's tray build reaches the registry and the signed index as soon as
-  # that build finishes, before the tags and the GitHub Release.
-
   qol_tray_linux_publish:
     name: Publish qol-tray (linux) to the plugin index
     needs:
       - prepare
-      - qol_tray_linux_candidate
+      - tag_and_dispatch
     if: >-
       ${{
-        needs.prepare.outputs.should_release == 'true' &&
-        needs.prepare.outputs.superseded != 'true' &&
-        needs.prepare.outputs.qol_tray_tag != '' &&
-        needs.qol_tray_linux_candidate.result == 'success'
+        needs.tag_and_dispatch.result == 'success' &&
+        needs.prepare.outputs.qol_tray_tag != ''
       }}
     permissions:
       contents: read
@@ -649,13 +644,11 @@ jobs:
     name: Publish qol-tray (macos) to the plugin index
     needs:
       - prepare
-      - qol_tray_macos_candidate
+      - tag_and_dispatch
     if: >-
       ${{
-        needs.prepare.outputs.should_release == 'true' &&
-        needs.prepare.outputs.superseded != 'true' &&
-        needs.prepare.outputs.qol_tray_tag != '' &&
-        needs.qol_tray_macos_candidate.result == 'success'
+        needs.tag_and_dispatch.result == 'success' &&
+        needs.prepare.outputs.qol_tray_tag != ''
       }}
     permissions:
       contents: read
@@ -674,13 +667,11 @@ jobs:
     name: Publish qol-tray (windows) to the plugin index
     needs:
       - prepare
-      - qol_tray_windows_candidate
+      - tag_and_dispatch
     if: >-
       ${{
-        needs.prepare.outputs.should_release == 'true' &&
-        needs.prepare.outputs.superseded != 'true' &&
-        needs.prepare.outputs.qol_tray_tag != '' &&
-        needs.qol_tray_windows_candidate.result == 'success'
+        needs.tag_and_dispatch.result == 'success' &&
+        needs.prepare.outputs.qol_tray_tag != ''
       }}
     permissions:
       contents: read
