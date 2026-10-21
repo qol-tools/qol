@@ -8,10 +8,10 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliConversation, CliDraftStash, CliLaunchProgram, CliResumeSettings, CliRuntimeState,
-    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
-    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool,
-    CliViewportState,
+    ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram, CliResumeSettings,
+    CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
+    CliSessionEvidence, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
+    CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -109,6 +109,10 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn ui_rendered(&self, screen: &str) -> bool {
         crate::cli::screen::claude_working(screen) || crate::cli::screen::has_done_marker(screen)
+    }
+
+    fn composer(&self, screen: &str) -> Option<CliComposer> {
+        Some(crate::cli::composer::claude(screen))
     }
 
     fn launch(&self) -> Option<CliLaunchProgram> {

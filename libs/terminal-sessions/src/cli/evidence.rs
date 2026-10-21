@@ -54,6 +54,29 @@ pub struct CliDraftStash {
     pub indicator: &'static str,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CliComposer {
+    Empty,
+    Draft { text: String, pastes: usize },
+    Unreadable,
+}
+
+impl CliComposer {
+    pub fn holds_only(&self, sent: &str) -> bool {
+        let Self::Draft { text, pastes } = self else {
+            return false;
+        };
+        let shown = squashed(text);
+        (*pastes > 0 || !shown.is_empty()) && squashed(sent).ends_with(&shown)
+    }
+}
+
+fn squashed(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CliLaunchProgram {
     pub program: String,

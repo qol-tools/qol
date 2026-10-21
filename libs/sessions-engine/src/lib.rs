@@ -6,7 +6,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typing};
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
     TerminalSessionService, TextInput,
@@ -38,6 +38,7 @@ pub mod resume;
 mod spawn;
 mod status;
 pub mod switchboard;
+mod typing;
 mod watch;
 mod watch_owner;
 
@@ -394,6 +395,14 @@ Details:
   one a qol-cli-sessions park command names. CLI Sessions starts the tab
   title of each session with a spawn key and prs with their numbers, as
   `#237,#240 ci-speed`; the switchboard's tab keeps its name.
+  Every text qol types into a session (send, a knock, a park or wake
+  delivery, a bridge or submit round) waits until the harness's input box is
+  empty on screen and, while its terminal has focus, unchanged for 3 seconds.
+  A draft, a shell-mode command, a pasted-text chip or an input box that is
+  not on screen holds the text. On claude, codex, pi and kimi the text is
+  pasted first and Enter is pressed only when the input box holds nothing
+  else, so a draft is never submitted. send waits up to 60 seconds and then
+  fails with nothing typed.
   The MCP and generated agent surfaces expose {tool_names}. The remaining
   commands are human diagnostics.
 
@@ -474,9 +483,17 @@ fn send(args: &[OsString]) -> Result<()> {
     } else {
         DeliveryMode::Insert
     };
-    service()?
-        .send_text(&binding, &text, mode)
-        .context("text delivery failed")?;
+    typing::type_into(
+        &service()?,
+        &CliSessionInterpreter::system(),
+        &mut ComposerGuard::default(),
+        Typing {
+            binding: &binding,
+            text: &text,
+            mode,
+        },
+    )
+    .context("text delivery failed")?;
     if let Some(store) = last_send::LastSendStore::system() {
         store.record(&binding, &text);
     }

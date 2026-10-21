@@ -9,9 +9,10 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliConversation, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliResumeSettings,
-    CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
-    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliToolId,
+    ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram, CliModelCatalog,
+    CliResumeSettings, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
+    CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
+    CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -245,6 +246,10 @@ impl CliSessionInterpreter {
     ) -> Result<Option<CliDraftStash>, TerminalError> {
         Ok(Self::facts_for(terminals, binding)?
             .and_then(|facts| self.strategy_for(&facts).draft_stash()))
+    }
+
+    pub fn composer(&self, session: &SessionFacts, screen: &str) -> Option<CliComposer> {
+        self.strategy_for(session).composer(screen)
     }
 
     fn facts_for(
