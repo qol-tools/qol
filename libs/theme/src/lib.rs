@@ -260,6 +260,7 @@ pub struct ReferencePalette {
     pub solid_fill: u32,
     pub solid_ink: u32,
     pub warning_ink: u32,
+    pub danger_ink: u32,
 }
 
 pub const DARK_REFERENCE: ReferencePalette = ReferencePalette {
@@ -292,6 +293,7 @@ pub const DARK_REFERENCE: ReferencePalette = ReferencePalette {
     solid_fill: 0xf2f0eb,
     solid_ink: 0x16171a,
     warning_ink: 0xeb9d55,
+    danger_ink: 0xff6b6b,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -318,6 +320,7 @@ pub struct SystemPalette {
     pub solid_fill: u32,
     pub solid_ink: u32,
     pub warning_ink: u32,
+    pub danger_ink: u32,
 }
 
 impl SystemPalette {
@@ -349,6 +352,7 @@ impl SystemPalette {
             solid_fill: reference.solid_fill,
             solid_ink: reference.solid_ink,
             warning_ink: reference.warning_ink,
+            danger_ink: reference.danger_ink,
         }
     }
 
@@ -474,6 +478,7 @@ pub const LIGHT_REFERENCE: ReferencePalette = ReferencePalette {
     solid_fill: 0x201d18,
     solid_ink: 0xfbf9f4,
     warning_ink: 0x9e5510,
+    danger_ink: 0xb5432f,
 };
 
 pub const LIGHT_SYSTEM: SystemPalette = SystemPalette::from_reference(LIGHT_REFERENCE);
@@ -770,6 +775,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             solid_fill: DARK_REFERENCE.slate_100,
             solid_ink: 0x151a23,
             warning_ink: DARK_REFERENCE.amber_500,
+            danger_ink: DARK_REFERENCE.danger_ink,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x12161e,
@@ -812,6 +818,7 @@ pub const TRAY_THEME_PRESETS: [TrayThemePreset; 2] = [
             solid_fill: 0xe5e7f4,
             solid_ink: 0x141626,
             warning_ink: DARK_REFERENCE.amber_500,
+            danger_ink: DARK_REFERENCE.danger_ink,
         },
         overlay: OverlayPalette {
             surface_rgb: 0x0f1121,

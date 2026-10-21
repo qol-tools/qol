@@ -54,6 +54,7 @@ pub struct ExplorerView {
     title: String,
     dismisser: SurfaceDismisser,
     wake_at: Option<Instant>,
+    folds_open: bool,
 }
 
 impl ExplorerView {
@@ -77,6 +78,7 @@ impl ExplorerView {
             title: WINDOW_TITLE.to_string(),
             dismisser,
             wake_at: None,
+            folds_open: false,
         };
         view.listen(cx);
         view
@@ -148,6 +150,11 @@ impl ExplorerView {
         }
     }
 
+    fn seek_rows(&mut self, at: f32, cx: &mut Context<Self>) {
+        self.set_scroll(at * self.max_scroll());
+        cx.notify();
+    }
+
     fn max_scroll(&self) -> f32 {
         (self.browser.row_count() as f32 * ROW - self.list_height()).max(0.0)
     }
@@ -216,6 +223,13 @@ impl ExplorerView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.folds_open {
+            self.show_folds(false, cx);
+            if event.keystroke.key == "escape" {
+                cx.stop_propagation();
+                return;
+            }
+        }
         let action = keys::action(&event.keystroke, self.browser.path_open());
         let stalled = self.browser.stalled(Instant::now());
         if keys::waits(
@@ -397,6 +411,13 @@ impl ExplorerView {
         self.browser.end_range();
         let scroll = self.scroll_offset();
         if self.arrived(|browser| browser.go(folder, scroll)) {
+            cx.notify();
+        }
+    }
+
+    fn show_folds(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.folds_open != open {
+            self.folds_open = open;
             cx.notify();
         }
     }

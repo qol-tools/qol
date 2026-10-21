@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use gpui::prelude::*;
 use gpui::{
-    anchored, canvas, deferred, div, font, px, rgb, rgba, AnyElement, App, Bounds, Div, ElementId,
-    Font, MouseButton, Pixels, Rgba, SharedString, Window,
+    anchored, canvas, deferred, div, font, px, relative, rgb, rgba, AnyElement, App, Bounds, Div,
+    ElementId, Entity, Font, MouseButton, Pixels, Rgba, SharedString, Window,
 };
 use qol_theme::{translucent, Alpha, TextStyle};
 
@@ -26,6 +26,10 @@ const CARET_WIDTH: f32 = 2.0;
 pub type CrumbClick = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type EditRequest = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type SuggestionWheel = Rc<dyn Fn(isize, &mut Window, &mut App)>;
+pub type FoldToggle = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
+const FOLD_MENU_WIDTH: f32 =
+    CRUMB_MAX_WIDTH + 2.0 * (qol_theme::SPACE_INSET + qol_theme::SPACE_TIGHT);
 
 struct Editing {
     edit: PathEdit,
@@ -43,7 +47,13 @@ pub struct CrumbTrail {
     on_suggestion: Option<CrumbClick>,
     on_suggestion_wheel: Option<SuggestionWheel>,
     on_caret: Option<CrumbClick>,
+    folds: Option<Folds>,
     kit: Kit,
+}
+
+struct Folds {
+    open: bool,
+    on_toggle: FoldToggle,
 }
 
 impl CrumbTrail {
@@ -62,6 +72,7 @@ impl CrumbTrail {
             on_suggestion: None,
             on_suggestion_wheel: None,
             on_caret: None,
+            folds: None,
             kit,
         }
     }
@@ -97,6 +108,18 @@ impl CrumbTrail {
         self
     }
 
+    pub fn folds(
+        mut self,
+        open: bool,
+        on_toggle: impl Fn(bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.folds = Some(Folds {
+            open,
+            on_toggle: Rc::new(on_toggle),
+        });
+        self
+    }
+
     pub fn fit(mut self, width: f32) -> Self {
         self.fit = Some(width);
         self
@@ -112,7 +135,7 @@ impl CrumbTrail {
 }
 
 impl RenderOnce for CrumbTrail {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let CrumbTrail {
             id,
             crumbs,
@@ -123,6 +146,7 @@ impl RenderOnce for CrumbTrail {
             on_suggestion,
             on_suggestion_wheel,
             on_caret,
+            folds,
             kit,
         } = self;
         match editing {
@@ -139,7 +163,12 @@ impl RenderOnce for CrumbTrail {
             ),
             None => {
                 let folded = fit.map_or(0..0, |width| folded_run(&crumbs, width, window));
-                read_only(id, crumbs, folded, on_crumb, on_edit, kit)
+                let hidden: Vec<(usize, SharedString)> = folded
+                    .clone()
+                    .filter_map(|index| Some((index, crumbs.get(index)?.clone())))
+                    .collect();
+                let mark = fold_mark(&id, hidden, on_crumb.clone(), folds, kit, window, cx);
+                read_only(id, crumbs, folded, mark, on_crumb, on_edit, kit)
             }
         }
     }
@@ -193,6 +222,7 @@ fn read_only(
     id: ElementId,
     crumbs: Vec<SharedString>,
     folded: Range<usize>,
+    mark: AnyElement,
     on_crumb: Option<CrumbClick>,
     on_edit: Option<EditRequest>,
     kit: Kit,
@@ -201,17 +231,12 @@ fn read_only(
     let divider = rgba(translucent(kit.grounds.pane.faint, Alpha::Veil));
     let mut children = Vec::with_capacity(crumbs.len() * 2);
     let faint = rgb(kit.grounds.pane.faint);
+    let mut mark = Some(mark);
     for (index, label) in crumbs.into_iter().enumerate() {
         if folded.contains(&index) {
-            if index == folded.start {
+            if let Some(mark) = mark.take() {
                 children.push(separator(divider));
-                children.push(
-                    div()
-                        .flex_none()
-                        .text_color(faint)
-                        .child("…")
-                        .into_any_element(),
-                );
+                children.push(mark);
             }
             continue;
         }
@@ -245,6 +270,130 @@ fn read_only(
             .into_any_element(),
         None => trail.into_any_element(),
     }
+}
+
+fn fold_mark(
+    id: &ElementId,
+    hidden: Vec<(usize, SharedString)>,
+    on_crumb: Option<CrumbClick>,
+    folds: Option<Folds>,
+    kit: Kit,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let mark = div()
+        .relative()
+        .flex_none()
+        .text_color(rgb(kit.grounds.pane.faint))
+        .child("…");
+    let (Some(Folds { open, on_toggle }), Some(on_crumb)) = (folds, on_crumb) else {
+        return mark.into_any_element();
+    };
+    let first = window.use_keyed_state(
+        ElementId::NamedChild(Box::new(id.clone()), "folds".into()),
+        cx,
+        |_, _| 0usize,
+    );
+    let mark_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+    let measured = mark_bounds.clone();
+    let toggle = on_toggle.clone();
+    let reset = first.clone();
+    let menu = open.then(|| {
+        let pick: CrumbClick = Rc::new(move |index, window, cx| {
+            on_toggle(false, window, cx);
+            on_crumb(index, window, cx);
+        });
+        fold_menu(hidden, first, mark_bounds, toggle.clone(), pick, kit, cx)
+    });
+    mark.id("folds")
+        .cursor_pointer()
+        .child(
+            canvas(
+                move |bounds, _, _| measured.set(Some(bounds)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            if !open {
+                reset.update(cx, |first, _| *first = 0);
+            }
+            toggle(!open, window, cx);
+        })
+        .when_some(menu, |mark, menu| {
+            mark.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(relative(1.0))
+                    .pt(px(qol_theme::SPACE_TIGHT))
+                    .child(deferred(anchored().child(menu))),
+            )
+        })
+        .into_any_element()
+}
+
+fn fold_menu(
+    hidden: Vec<(usize, SharedString)>,
+    first: Entity<usize>,
+    mark_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    on_toggle: FoldToggle,
+    pick: CrumbClick,
+    kit: Kit,
+    cx: &mut App,
+) -> Div {
+    let total = hidden.len();
+    let top = (*first.read(cx)).min(total.saturating_sub(SUGGESTION_ROWS));
+    let rows: Vec<AnyElement> = hidden
+        .iter()
+        .skip(top)
+        .take(SUGGESTION_ROWS)
+        .map(|(index, label)| {
+            menu_row(
+                ("fold", *index).into(),
+                label,
+                *index,
+                false,
+                Some(pick.clone()),
+                kit,
+            )
+        })
+        .collect();
+    let shown = rows.len();
+    menu_frame(FOLD_MENU_WIDTH, kit)
+        .children(rows)
+        .child(kit.scroll_cue(
+            ScrollSource::Window {
+                first: top,
+                shown,
+                total,
+            },
+            kit.grounds.menu,
+        ))
+        .on_scroll_wheel(move |event, _, cx| {
+            cx.stop_propagation();
+            let rows = wheel_rows(&event.delta, qol_theme::HEIGHT_INLINE);
+            let moved = top
+                .saturating_add_signed(rows)
+                .min(total.saturating_sub(SUGGESTION_ROWS));
+            if moved != top {
+                first.update(cx, |first, cx| {
+                    *first = moved;
+                    cx.notify();
+                });
+            }
+        })
+        .on_mouse_down_out(move |event, window, cx| {
+            if mark_bounds
+                .get()
+                .is_some_and(|bounds| bounds.contains(&event.position))
+            {
+                return;
+            }
+            on_toggle(false, window, cx);
+        })
 }
 
 fn clickable_crumb(crumb: Div, index: usize, on_crumb: CrumbClick) -> AnyElement {
@@ -381,7 +530,8 @@ fn suggestion_menu(
         .enumerate()
         .map(|(offset, name)| {
             let index = first + offset;
-            suggestion_row(
+            menu_row(
+                ("suggestion", index).into(),
                 name,
                 index,
                 selected == Some(index),
@@ -390,17 +540,7 @@ fn suggestion_menu(
             )
         });
     Some(
-        div()
-            .occlude()
-            .relative()
-            .w(px(width))
-            .p(px(qol_theme::SPACE_TIGHT))
-            .border(px(qol_theme::LINE))
-            .border_color(rgba(kit.washes.hairline_strong.packed()))
-            .bg(rgb(kit.grounds.menu.bg))
-            .shadow(float_shadow(kit.washes.cast.rgb))
-            .flex()
-            .flex_col()
+        menu_frame(width, kit)
             .children(rows)
             .child(kit.scroll_cue(
                 ScrollSource::Window {
@@ -422,7 +562,22 @@ fn suggestion_menu(
     )
 }
 
-fn suggestion_row(
+fn menu_frame(width: f32, kit: Kit) -> Div {
+    div()
+        .occlude()
+        .relative()
+        .w(px(width))
+        .p(px(qol_theme::SPACE_TIGHT))
+        .border(px(qol_theme::LINE))
+        .border_color(rgba(kit.washes.hairline_strong.packed()))
+        .bg(rgb(kit.grounds.menu.bg))
+        .shadow(float_shadow(kit.washes.cast.rgb))
+        .flex()
+        .flex_col()
+}
+
+fn menu_row(
+    id: ElementId,
     name: &str,
     index: usize,
     selected: bool,
@@ -430,7 +585,7 @@ fn suggestion_row(
     kit: Kit,
 ) -> AnyElement {
     let row = div()
-        .id(("suggestion", index))
+        .id(id)
         .h(px(qol_theme::HEIGHT_INLINE))
         .px(px(qol_theme::SPACE_INSET))
         .flex()
