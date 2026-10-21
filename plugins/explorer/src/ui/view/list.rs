@@ -3,22 +3,26 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, Div, InteractiveElement,
-    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Window,
+    canvas, div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, DispatchPhase, Div,
+    InteractiveElement, IntoElement, ParentElement, ScrollWheelEvent, StatefulInteractiveElement,
+    Styled, Window,
 };
-use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::scrollbar::ScrollSource;
-use qol_gpui::text::{baseline, cased, line_height, TextStyled};
-use qol_gpui::theme::{Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET};
-use qol_gpui::Icon;
+use qol_gpui::text::{baseline, line_height, TextStyled};
+use qol_gpui::theme::{
+    Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_CELL, SPACE_GUTTER, SPACE_INSET, SPACE_STACK,
+};
 
-use super::{ExplorerView, HEAD, ICON, ROW};
-use crate::listing::ListingState;
+use super::grid::{Layout, ACROSS};
+use super::pictogram::entry_pictogram;
+use super::{ExplorerView, HEAD, ICON};
+use crate::listing::{Entry, ListingState};
 use crate::ui::columns::{kind_label, left_to_right, size_label, typed_split};
 
-const KIND_WIDTH: f32 = 100.0;
-const SIZE_WIDTH: f32 = 100.0;
+const KIND_WIDTH: f32 = 110.0;
+const SIZE_WIDTH: f32 = 90.0;
+const SECOND_LINE_JOIN: &str = "  ·  ";
 
 pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> impl IntoElement {
     let kit = kit();
@@ -32,24 +36,26 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         ListingState::Done | ListingState::Loading => rows(view, kit, cx),
     };
     div()
+        .relative()
         .flex_1()
         .min_w_0()
         .h_full()
         .flex()
         .flex_col()
         .bg(rgb(kit.grounds.pane.bg))
-        .child(header(kit))
+        .when(view.stop.shows_columns(), |list| list.child(header(kit)))
         .child(body)
         .when(loading, |list| list.child(reading_line(view, kit)))
+        .child(wheel_resize(cx))
 }
 
 fn header(kit: Kit) -> impl IntoElement {
     let faint = kit.grounds.pane.faint;
-    let label = |text: &str| {
+    let label = |text: &'static str| {
         div()
             .text(TextStyle::Label)
             .text_color(rgb(faint))
-            .child(cased(TextStyle::Label, text))
+            .child(text)
     };
     div()
         .flex_none()
@@ -57,28 +63,52 @@ fn header(kit: Kit) -> impl IntoElement {
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(SPACE_INSET))
+        .gap(px(SPACE_CELL))
         .px(px(SPACE_GUTTER))
         .border_b(px(LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(div().flex_none().w(px(ICON)))
-        .child(label("Name").flex_1().min_w_0())
-        .child(label("Kind").flex_none().w(px(KIND_WIDTH)))
+        .child(label("name").flex_1().min_w_0())
+        .child(label("kind").flex_none().w(px(KIND_WIDTH)))
         .child(
             div()
                 .flex_none()
                 .w(px(SIZE_WIDTH))
                 .flex()
                 .justify_end()
-                .child(label("Size")),
+                .child(label("size")),
         )
 }
 
+fn wheel_resize(cx: &mut Context<ExplorerView>) -> impl IntoElement {
+    let view = cx.weak_entity();
+    canvas(
+        |_, _, _| {},
+        move |area, _, window, _| {
+            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _window, cx| {
+                if phase != DispatchPhase::Capture
+                    || !event.modifiers.secondary()
+                    || !area.contains(&event.position)
+                {
+                    return;
+                }
+                cx.stop_propagation();
+                let _ = view.update(cx, |view, cx| view.wheel_resize(event.delta, cx));
+            });
+        },
+    )
+    .absolute()
+    .inset_0()
+}
+
 fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
-    let total = view.browser.row_count();
+    let layout = view.layout();
+    let total = layout.lines(view.browser.row_count());
     let scroll = view.scroll_offset();
-    let first = ((scroll - 0.5) / ROW).ceil().max(0.0) as usize;
-    let end = ((scroll + view.list_height() + 0.5) / ROW).floor().max(0.0) as usize;
+    let first = ((scroll - 0.5) / layout.pitch).ceil().max(0.0) as usize;
+    let end = ((scroll + view.list_height() + 0.5) / layout.pitch)
+        .floor()
+        .max(0.0) as usize;
     let shown = end.min(total).saturating_sub(first);
     div()
         .flex_1()
@@ -88,11 +118,18 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             uniform_list(
                 "explorer-rows",
                 total,
-                cx.processor(|view, range: Range<usize>, window, cx| {
-                    view.browser.show_rows(range.clone());
+                cx.processor(|view, lines: Range<usize>, window, cx| {
+                    let layout = view.layout();
+                    let entries = layout.entries(lines.clone(), view.browser.row_count());
+                    view.browser.show_rows(entries);
                     let now = Instant::now();
-                    range
-                        .filter_map(|row| render_row(view, row, now, window, cx))
+                    if layout.stop.is_grid() {
+                        return lines
+                            .map(|line| render_line(view, line, layout, now, window, cx))
+                            .collect::<Vec<_>>();
+                    }
+                    lines
+                        .filter_map(|row| render_row(view, row, layout, now, window, cx))
                         .collect::<Vec<_>>()
                 }),
             )
@@ -110,24 +147,20 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
         .into_any_element()
 }
 
-fn render_row(
-    view: &ExplorerView,
-    row: usize,
-    now: Instant,
-    window: &mut Window,
-    cx: &mut Context<ExplorerView>,
-) -> Option<AnyElement> {
-    let kit = kit();
+struct Shown<'a> {
+    entry: &'a Entry,
+    picked: bool,
+    cursor: bool,
+    ground: Ground,
+    typed: Option<usize>,
+    size: String,
+}
+
+fn shown(view: &ExplorerView, row: usize, now: Instant) -> Option<Shown<'_>> {
     let browser = &view.browser;
     let entry = browser.entry(row)?;
-    let path = entry.path.clone();
     let picked = browser.is_picked(entry);
     let cursor = row == browser.cursor();
-    let ground = if picked {
-        kit.grounds.band
-    } else {
-        kit.grounds.pane
-    };
     let typed = cursor
         .then(|| typed_split(&entry.display, browser.jump_run(now)))
         .flatten();
@@ -136,61 +169,216 @@ fn render_row(
         browser.listing().item_count(&entry.path),
         browser.shows_hidden(),
     );
+    Some(Shown {
+        entry,
+        picked,
+        cursor,
+        ground: kit().highlight_ground(picked),
+        typed,
+        size,
+    })
+}
+
+fn render_row(
+    view: &ExplorerView,
+    row: usize,
+    layout: Layout,
+    now: Instant,
+    window: &mut Window,
+    cx: &mut Context<ExplorerView>,
+) -> Option<AnyElement> {
+    let kit = kit();
+    let stop = layout.stop;
+    let shown = shown(view, row, now)?;
+    let entry = shown.entry;
+    let ground = shown.ground;
+    let path = entry.path.clone();
+    let name = name_cell(
+        &entry.display,
+        shown.typed,
+        ground,
+        stop.name_style(),
+        false,
+        window,
+    );
     let element = div()
         .id(("explorer-row", row))
         .relative()
         .w_full()
-        .h(px(ROW))
+        .h(px(layout.pitch))
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(SPACE_INSET))
+        .gap(px(SPACE_CELL))
         .px(px(SPACE_GUTTER))
-        .when(cursor, |element| {
+        .when(shown.cursor, |element| {
             element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
         })
-        .child(div().flex_none().w(px(ICON)).child(icon(
-            if entry.opens_as_folder {
-                Icon::Folder
-            } else {
-                Icon::File
-            },
-            ICON,
-            ground.soft,
+        .child(div().flex_none().w(px(ICON)).child(entry_pictogram(
+            &entry.display,
+            entry.opens_as_folder,
+            stop.pictogram(),
+            shown.picked,
         )))
-        .child(name_cell(&entry.display, typed, ground, window))
+        .map(|element| {
+            if !stop.two_lines() {
+                return element.child(name);
+            }
+            element.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SPACE_STACK))
+                    .child(div().flex().flex_row().child(name))
+                    .child(detail_text(second_line(entry, &shown.size), ground)),
+            )
+        })
+        .when(stop.shows_columns(), |element| {
+            element
+                .child(
+                    detail_text(kind_text(entry).to_string(), ground)
+                        .flex_none()
+                        .w(px(KIND_WIDTH)),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(SIZE_WIDTH))
+                        .flex()
+                        .justify_end()
+                        .child(detail_text(shown.size, ground)),
+                )
+        })
+        .on_click(cx.listener(move |view, event: &ClickEvent, _window, cx| {
+            view.click_row(&path, event, cx);
+        }));
+    Some(kit.highlight(element, shown.picked).into_any_element())
+}
+
+fn render_line(
+    view: &ExplorerView,
+    line: usize,
+    layout: Layout,
+    now: Instant,
+    window: &mut Window,
+    cx: &mut Context<ExplorerView>,
+) -> AnyElement {
+    let entries = layout.entries(line..line + 1, view.browser.row_count());
+    div()
+        .id(("explorer-line", line))
+        .w_full()
+        .h(px(layout.pitch))
+        .flex()
+        .flex_row()
+        .pt(px(SPACE_INSET))
+        .px(px(SPACE_GUTTER))
+        .gap(px(ACROSS))
+        .children(entries.filter_map(|row| render_cell(view, row, layout, now, window, cx)))
+        .into_any_element()
+}
+
+fn render_cell(
+    view: &ExplorerView,
+    row: usize,
+    layout: Layout,
+    now: Instant,
+    window: &mut Window,
+    cx: &mut Context<ExplorerView>,
+) -> Option<AnyElement> {
+    let kit = kit();
+    let stop = layout.stop;
+    let (width, height) = stop.cell()?;
+    let shown = shown(view, row, now)?;
+    let entry = shown.entry;
+    let ground = shown.ground;
+    let path = entry.path.clone();
+    let name = name_cell(
+        &entry.display,
+        shown.typed,
+        ground,
+        stop.name_style(),
+        true,
+        window,
+    );
+    let element = div()
+        .id(("explorer-cell", row))
+        .relative()
+        .flex_none()
+        .w(px(width))
+        .h(px(height))
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(SPACE_INSET))
+        .p(px(SPACE_INSET))
+        .when(shown.cursor, |element| {
+            element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
+        })
+        .child(entry_pictogram(
+            &entry.display,
+            entry.opens_as_folder,
+            stop.pictogram(),
+            shown.picked,
+        ))
         .child(
             div()
-                .flex_none()
-                .w(px(KIND_WIDTH))
-                .text(TextStyle::Detail)
-                .text_color(rgb(ground.soft))
-                .child(kind_label(entry.kind)),
-        )
-        .child(
-            div()
-                .flex_none()
-                .w(px(SIZE_WIDTH))
+                .w_full()
                 .flex()
-                .justify_end()
-                .text(TextStyle::Detail)
-                .text_color(rgb(ground.soft))
-                .child(size),
+                .flex_col()
+                .items_center()
+                .gap(px(SPACE_STACK))
+                .child(div().w_full().flex().flex_row().child(name))
+                .child(detail_text(shown.size, ground)),
         )
         .on_click(cx.listener(move |view, event: &ClickEvent, _window, cx| {
             view.click_row(&path, event, cx);
         }));
-    Some(kit.highlight(element, picked).into_any_element())
+    Some(kit.highlight(element, shown.picked).into_any_element())
 }
 
-fn name_cell(name: &str, typed: Option<usize>, ground: Ground, window: &mut Window) -> Div {
-    let cell = div().flex_1().min_w_0().flex().flex_row();
+fn kind_text(entry: &Entry) -> &'static str {
+    kind_label(entry)
+}
+
+fn second_line(entry: &Entry, size: &str) -> String {
+    let kind: Option<&str> = (!entry.opens_as_folder).then(|| kind_text(entry));
+    kind.into_iter()
+        .chain((!size.is_empty()).then_some(size))
+        .collect::<Vec<_>>()
+        .join(SECOND_LINE_JOIN)
+}
+
+fn detail_text(text: String, ground: Ground) -> Div {
+    div()
+        .min_w_0()
+        .text(TextStyle::Detail)
+        .text_color(rgb(ground.soft))
+        .child(text)
+}
+
+fn name_cell(
+    name: &str,
+    typed: Option<usize>,
+    ground: Ground,
+    style: TextStyle,
+    centred: bool,
+    window: &mut Window,
+) -> Div {
+    let cell = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .when(centred, |cell| cell.justify_center());
     let Some(split) = typed else {
-        return cell.child(name_text(name, ground.ink));
+        return cell.child(name_text(name, style, ground.ink));
     };
     let (prefix, rest) = name.split_at(split);
-    let rise = baseline(window, TextStyle::Title) - baseline(window, TextStyle::ListName);
-    cell.h(px(line_height(TextStyle::ListName)))
+    let rise = baseline(window, TextStyle::Title) - baseline(window, style);
+    cell.h(px(line_height(style)))
         .items_start()
         .child(
             div()
@@ -201,13 +389,13 @@ fn name_cell(name: &str, typed: Option<usize>, ground: Ground, window: &mut Wind
                 .text_color(rgb(ground.mark))
                 .child(left_to_right(prefix)),
         )
-        .child(name_text(rest, ground.ink))
+        .child(name_text(rest, style, ground.ink))
 }
 
-fn name_text(name: &str, ink: u32) -> Div {
+fn name_text(name: &str, style: TextStyle, ink: u32) -> Div {
     div()
         .min_w_0()
-        .text(TextStyle::ListName)
+        .text(style)
         .text_color(rgb(ink))
         .child(left_to_right(name))
 }
@@ -223,9 +411,54 @@ fn reading_line(view: &ExplorerView, kit: Kit) -> impl IntoElement {
         .h(px(HEIGHT_INLINE))
         .flex()
         .items_center()
-        .pl(px(SPACE_GUTTER + ICON + SPACE_INSET))
+        .pl(px(SPACE_GUTTER + ICON + SPACE_CELL))
         .pr(px(SPACE_GUTTER))
         .text(TextStyle::Detail)
         .text_color(rgb(kit.grounds.pane.faint))
         .child(format!("Reading {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{kind_text, second_line};
+    use crate::listing::{Entry, EntryKind, Size, SortKey};
+
+    fn entry(name: &str, kind: EntryKind, opens_as_folder: bool) -> Entry {
+        let os = OsString::from(name);
+        Entry {
+            display: name.to_string(),
+            sort_key: SortKey::new(&os, opens_as_folder),
+            name: os,
+            path: PathBuf::from("/").join(name),
+            id: None,
+            kind,
+            size: Size::Blank,
+            hidden: false,
+            opens_as_folder,
+        }
+    }
+
+    #[test]
+    fn the_roomy_second_line_reads_kind_then_size_and_drops_what_is_missing() {
+        let file = entry("notes.txt", EntryKind::File, false);
+        let folder = entry("Music", EntryKind::Folder, true);
+        let file_kind = kind_text(&file);
+        let cases = [
+            (&file, "4.2 KB", format!("{file_kind}  ·  4.2 KB")),
+            (&file, "", file_kind.to_string()),
+            (&folder, "3 items", "3 items".to_string()),
+            (&folder, "", String::new()),
+        ];
+        for (entry, size, expected) in cases {
+            assert_eq!(
+                second_line(entry, size),
+                expected,
+                "{} {size}",
+                entry.display
+            );
+        }
+    }
 }

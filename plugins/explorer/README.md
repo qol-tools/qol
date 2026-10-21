@@ -37,6 +37,10 @@ Picks stay picked when you move to another folder, and the note beside the crumb
 | Esc | Drop the picks and the red note |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
 | Ctrl+G | Edit the path, selected so typing replaces it; Up and Down cycle through the suggested folders, Tab completes one, Enter or a click goes there |
+| Ctrl+= or Ctrl++, Ctrl+- | Make the rows or icons one size bigger or smaller; the slider in the title bar does the same |
+| Ctrl+1 to Ctrl+5 | Pick a size: compact, list, roomy, icons, big icons |
+| Ctrl+wheel | Step the size up or down |
+| Left, Right | In the icon sizes, move the cursor one icon; Up and Down move a whole row |
 | Letters | Jump to the first name that starts with what you typed; a plain letter also matches its accented forms, an accented one only itself, and a letter that matches nothing is left out |
 
 ## License

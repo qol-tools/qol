@@ -9,7 +9,7 @@ use qol_gpui::text::{laid_out_width, TextStyled};
 use qol_gpui::theme::{TextStyle, LINE, SPACE_GUTTER};
 use qol_gpui::CrumbTrail;
 
-use super::{ExplorerView, BAND};
+use super::{slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
 use crate::ui::columns::left_to_right;
@@ -49,7 +49,11 @@ pub(super) fn render(
     } else {
         0.0
     };
-    let width = f32::from(window.viewport_size().width) - 2.0 * (LINE + SPACE_GUTTER) - note_room;
+    let slider_room = slider::WIDTH + SPACE_GUTTER;
+    let width = f32::from(window.viewport_size().width)
+        - 2.0 * (LINE + SPACE_GUTTER)
+        - note_room
+        - slider_room;
     let mut crumb_trail = CrumbTrail::new(
         "explorer-trail",
         crumbs.iter().map(|crumb| left_to_right(&crumb.label)),
@@ -90,6 +94,7 @@ pub(super) fn render(
     };
     band.child(div().flex_1().min_w_0().child(crumb_trail))
         .when(note_width > 0.0, |band| band.child(note))
+        .child(slider::render(view, cx))
 }
 
 #[derive(Clone, Copy)]

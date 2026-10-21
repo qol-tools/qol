@@ -1,14 +1,15 @@
 use unicode_normalization::char::is_combining_mark;
 
+use super::kind::kind_of;
 use crate::listing::{Entry, EntryKind, ItemCount, Size};
 
 const UNREADABLE: &str = "unreadable";
 const LEFT_TO_RIGHT_MARK: char = '\u{200E}';
 
-pub fn kind_label(kind: EntryKind) -> &'static str {
-    match kind {
+pub fn kind_label(entry: &Entry) -> &'static str {
+    match entry.kind {
         EntryKind::Folder => "Folder",
-        EntryKind::File => "File",
+        EntryKind::File => kind_of(&entry.display).label(),
         EntryKind::Link => "Link",
         EntryKind::BrokenLink => "Broken link",
         EntryKind::Pipe => "Pipe",
@@ -67,12 +68,16 @@ mod tests {
     use crate::listing::{Entry, EntryKind, ItemCount, Size, SortKey};
 
     fn entry(kind: EntryKind, size: Size, opens_as_folder: bool) -> Entry {
-        let name = OsString::from("thing");
+        named("thing", kind, size, opens_as_folder)
+    }
+
+    fn named(display: &str, kind: EntryKind, size: Size, opens_as_folder: bool) -> Entry {
+        let name = OsString::from(display);
         Entry {
-            display: "thing".to_string(),
+            display: display.to_string(),
             sort_key: SortKey::new(&name, opens_as_folder),
             name,
-            path: PathBuf::from("/thing"),
+            path: PathBuf::from("/").join(display),
             id: None,
             kind,
             size,
@@ -84,16 +89,20 @@ mod tests {
     #[test]
     fn every_kind_has_its_word() {
         let cases = [
-            (EntryKind::Folder, "Folder"),
-            (EntryKind::File, "File"),
-            (EntryKind::Link, "Link"),
-            (EntryKind::BrokenLink, "Broken link"),
-            (EntryKind::Pipe, "Pipe"),
-            (EntryKind::Socket, "Socket"),
-            (EntryKind::Device, "Device"),
+            ("thing", EntryKind::Folder, "Folder"),
+            ("budget.ods", EntryKind::File, "Spreadsheet"),
+            ("install.sh", EntryKind::File, "Shell script"),
+            ("firmware", EntryKind::File, "Program"),
+            ("mystery.xyz", EntryKind::File, "Anything else"),
+            ("budget.ods", EntryKind::Link, "Link"),
+            ("thing", EntryKind::BrokenLink, "Broken link"),
+            ("thing", EntryKind::Pipe, "Pipe"),
+            ("thing", EntryKind::Socket, "Socket"),
+            ("thing", EntryKind::Device, "Device"),
         ];
-        for (kind, word) in cases {
-            assert_eq!(kind_label(kind), word);
+        for (display, kind, word) in cases {
+            let entry = named(display, kind, Size::Blank, kind == EntryKind::Folder);
+            assert_eq!(kind_label(&entry), word, "{display} {kind:?}");
         }
     }
 

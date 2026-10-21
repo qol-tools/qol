@@ -1,6 +1,9 @@
 mod band;
+mod grid;
 mod list;
+mod pictogram;
 mod rail;
+mod slider;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -13,21 +16,21 @@ use std::time::{Duration, Instant};
 use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
-    div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement, Point, Render,
-    ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
+    div, point, px, AsyncApp, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, KeyDownEvent, Keystroke, ParentElement, Render, ScrollDelta, ScrollHandle, Styled,
+    UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
-use qol_gpui::scroll_list::follow_offset_y;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
-use qol_gpui::theme::{HEIGHT_INLINE, LINE};
+use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
-use super::keys::{self, Action, Click};
+use super::keys::{self, Action, Click, Resize};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
+use grid::{Layout, Stop};
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
@@ -35,11 +38,11 @@ pub const WINDOW_HEIGHT: f32 = 640.0;
 
 const BAND: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 const HEAD: f32 = qol_gpui::theme::HEIGHT_INLINE;
-const ROW: f32 = qol_gpui::theme::HEIGHT_CONTROL;
 const RAIL: f32 = 200.0;
 const ICON: f32 = 16.0;
 const PUMP: Duration = Duration::from_millis(16);
 const DRAG_THRESHOLD: f32 = 4.0;
+const WHEEL_STEP: f32 = HEIGHT_CONTROL;
 
 pub struct ExplorerView {
     browser: Browser,
@@ -48,7 +51,12 @@ pub struct ExplorerView {
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
-    body_height: f32,
+    frame_height: f32,
+    list_width: f32,
+    stop: Stop,
+    wheeled: f32,
+    slider_hovered: bool,
+    slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
     drag_gesture: Rc<RefCell<DragGestureState>>,
     title: String,
@@ -71,7 +79,12 @@ impl ExplorerView {
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
-            body_height: 0.0,
+            frame_height: 0.0,
+            list_width: 0.0,
+            stop: Stop::default(),
+            wheeled: 0.0,
+            slider_hovered: false,
+            slider_dragging: false,
             waiting: VecDeque::new(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
             title: WINDOW_TITLE.to_string(),
@@ -116,13 +129,18 @@ impl ExplorerView {
             .set_offset(point(px(0.0), px(-scroll)));
     }
 
+    fn layout(&self) -> Layout {
+        Layout::new(self.stop, self.list_width)
+    }
+
     pub(super) fn list_height(&self) -> f32 {
         let reading = if *self.browser.listing().state() == ListingState::Loading {
             HEIGHT_INLINE
         } else {
             0.0
         };
-        self.body_height - reading
+        let head = if self.stop.shows_columns() { HEAD } else { 0.0 };
+        self.frame_height - head - reading
     }
 
     fn reveal_cursor(&self) {
@@ -130,18 +148,25 @@ impl ExplorerView {
         if height <= 0.0 {
             return;
         }
-        let viewport = Bounds::new(Point::default(), size(px(0.0), px(height)));
-        let top = px(self.browser.cursor() as f32 * ROW);
-        let row = Bounds::new(point(px(0.0), top), size(px(0.0), px(ROW)));
-        let followed = follow_offset_y(viewport, row, px(-self.scroll_offset()), px(ROW));
-        self.set_scroll((-f32::from(followed)).clamp(0.0, self.max_scroll()));
+        self.set_scroll(self.layout().revealed(
+            self.browser.cursor(),
+            self.scroll_offset(),
+            height,
+            self.browser.row_count(),
+        ));
     }
 
     fn follow_rows(&self, cursor_shift: isize) {
+        let layout = self.layout();
         let scroll = self.scroll_offset();
-        let was = (self.browser.cursor() as isize - cursor_shift) as f32 * ROW;
-        let seen = was + ROW > scroll && was < scroll + self.list_height();
-        let shift = if seen { cursor_shift as f32 * ROW } else { 0.0 };
+        let cursor = self.browser.cursor();
+        let was = layout.top(cursor.saturating_add_signed(-cursor_shift));
+        let seen = was + layout.pitch > scroll && was < scroll + self.list_height();
+        let shift = if seen {
+            layout.shift(cursor, cursor_shift)
+        } else {
+            0.0
+        };
         self.set_scroll((scroll + shift).clamp(0.0, self.max_scroll()));
         if seen {
             self.reveal_cursor();
@@ -149,11 +174,39 @@ impl ExplorerView {
     }
 
     fn max_scroll(&self) -> f32 {
-        (self.browser.row_count() as f32 * ROW - self.list_height()).max(0.0)
+        self.layout()
+            .max_scroll(self.browser.row_count(), self.list_height())
     }
 
-    fn page_rows(&self) -> usize {
-        ((self.list_height() / ROW) as usize).max(1)
+    fn page_lines(&self) -> usize {
+        ((self.list_height() / self.layout().pitch) as usize).max(1)
+    }
+
+    fn resize(&mut self, stop: Stop) -> bool {
+        if stop == self.stop {
+            return false;
+        }
+        self.stop = stop;
+        self.reveal_cursor();
+        true
+    }
+
+    pub(super) fn wheel_resize(&mut self, delta: ScrollDelta, cx: &mut Context<Self>) {
+        self.wheeled += f32::from(delta.pixel_delta(px(WHEEL_STEP)).y);
+        let steps = (self.wheeled / WHEEL_STEP).trunc();
+        if steps == 0.0 {
+            return;
+        }
+        self.wheeled -= steps * WHEEL_STEP;
+        let resize = if steps > 0.0 {
+            Resize::Bigger
+        } else {
+            Resize::Smaller
+        };
+        let stop = (0..steps.abs() as usize).fold(self.stop, |stop, _| stop.resized(resize));
+        if self.resize(stop) {
+            cx.notify();
+        }
     }
 
     fn wake_at(&mut self, at: Instant, now: Instant, cx: &mut Context<Self>) {
@@ -193,7 +246,10 @@ impl ExplorerView {
         let now = Instant::now();
         let drained = self.browser.drain(now);
         if let Some(scroll) = drained.scroll {
-            self.set_scroll((scroll + drained.cursor_shift as f32 * ROW).max(0.0));
+            let shift = self
+                .layout()
+                .shift(self.browser.cursor(), drained.cursor_shift);
+            self.set_scroll((scroll + shift).max(0.0));
             self.reveal_cursor();
             self.replay(cx);
         } else if drained.changed {
@@ -260,10 +316,15 @@ impl ExplorerView {
 
     fn apply(&mut self, action: Action, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
-        let page = self.page_rows();
+        let page = self.page_lines();
+        let columns = self.layout().columns;
         match action {
-            Action::Cursor(step) => self.revealed(|browser| browser.move_cursor(step, page)),
-            Action::Range(step) => self.revealed(|browser| browser.extend_range(step, page)),
+            Action::Cursor(step) => {
+                self.revealed(|browser| browser.move_cursor(step, page, columns))
+            }
+            Action::Range(step) => {
+                self.revealed(|browser| browser.extend_range(step, page, columns))
+            }
             Action::Open => self.open(cx),
             Action::Up => self.arrived(|browser| browser.up(scroll)),
             Action::Back => self.arrived(|browser| browser.back(scroll)),
@@ -282,6 +343,7 @@ impl ExplorerView {
             Action::ToggleHidden => self.revealed(Browser::toggle_hidden),
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
+            Action::Resize(resize) => self.resize(self.stop.resized(resize)),
             Action::Nothing => false,
         }
     }
@@ -440,7 +502,9 @@ impl Focusable for ExplorerView {
 
 impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.body_height = f32::from(window.viewport_size().height) - 2.0 * LINE - BAND - HEAD;
+        let viewport = window.viewport_size();
+        self.frame_height = f32::from(viewport.height) - 2.0 * LINE - BAND;
+        self.list_width = f32::from(viewport.width) - 2.0 * LINE - RAIL;
         self.follow_title(window);
         let kit = kit();
         kit.window()

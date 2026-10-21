@@ -365,13 +365,13 @@ impl Browser {
         true
     }
 
-    pub fn move_cursor(&mut self, step: Step, page: usize) -> bool {
+    pub fn move_cursor(&mut self, step: Step, page: usize, columns: usize) -> bool {
         self.jump.reset();
-        self.set_cursor(self.stepped(step, page))
+        self.set_cursor(self.stepped(step, page, columns))
     }
 
-    pub fn extend_range(&mut self, step: Step, page: usize) -> bool {
-        self.range_to(self.stepped(step, page))
+    pub fn extend_range(&mut self, step: Step, page: usize, columns: usize) -> bool {
+        self.range_to(self.stepped(step, page, columns))
     }
 
     pub fn range_to(&mut self, row: usize) -> bool {
@@ -804,13 +804,18 @@ impl Browser {
         })
     }
 
-    fn stepped(&self, step: Step, page: usize) -> usize {
+    fn stepped(&self, step: Step, page: usize, columns: usize) -> usize {
         let last = self.rows.len().saturating_sub(1);
+        let columns = columns.max(1);
+        let across = columns > 1;
         match step {
-            Step::Up => self.cursor.saturating_sub(1),
-            Step::Down => (self.cursor + 1).min(last),
-            Step::PageUp => self.cursor.saturating_sub(page),
-            Step::PageDown => (self.cursor + page).min(last),
+            Step::Up => self.cursor.saturating_sub(columns),
+            Step::Down => (self.cursor + columns).min(last),
+            Step::Left if across => self.cursor.saturating_sub(1),
+            Step::Right if across => (self.cursor + 1).min(last),
+            Step::Left | Step::Right => self.cursor,
+            Step::PageUp => self.cursor.saturating_sub(page * columns),
+            Step::PageDown => (self.cursor + page * columns).min(last),
             Step::Home => 0,
             Step::End => last,
         }
