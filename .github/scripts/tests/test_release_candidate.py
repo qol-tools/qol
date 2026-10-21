@@ -524,11 +524,27 @@ class SourceCiTests(unittest.TestCase):
             {"name": "batch role", "conclusion": "success"},
             {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
         ]
+        trusted_plan = {
+            "name": "Plan affected crates",
+            "conclusion": "success",
+            "steps": [{"name": rc.TRUSTED_PLAN_STEP, "conclusion": "success"}],
+        }
         reused_jobs = [
-            {"name": "Plan affected crates", "conclusion": "success"},
+            trusted_plan,
             {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"},
             {"name": "batch role", "conclusion": "success"},
             {"name": "release build (${{ matrix.os }})", "conclusion": "skipped"},
+        ]
+        untrusted_jobs = [
+            {"name": "Plan affected crates", "conclusion": "success"},
+            *reused_jobs[1:],
+        ]
+        skipped_trust_jobs = [
+            {
+                **trusted_plan,
+                "steps": [{"name": rc.TRUSTED_PLAN_STEP, "conclusion": "skipped"}],
+            },
+            *reused_jobs[1:],
         ]
         cases = [
             (queue_jobs, [{"conclusion": "success"}], None),
@@ -536,6 +552,8 @@ class SourceCiTests(unittest.TestCase):
             (queue_jobs, [{"conclusion": "failure"}], "no batch release build covered"),
             (queue_jobs, [], "no batch release build covered"),
             (reused_jobs, [], "no batch release build covered"),
+            (untrusted_jobs, [{"conclusion": "success"}], "without trusting a pull request run"),
+            (skipped_trust_jobs, [{"conclusion": "success"}], "without trusting a pull request run"),
         ]
         for jobs, checks, message in cases:
             with self.subTest(jobs=len(jobs), checks=checks):

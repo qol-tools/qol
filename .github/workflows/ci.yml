@@ -33,23 +33,24 @@ jobs:
       pull-requests: read
     outputs:
       reused: ${{ steps.verdict.outputs.reused }}
-      ubuntu_clippy: ${{ steps.affected.outputs.ubuntu_clippy }}
-      ubuntu_build: ${{ steps.affected.outputs.ubuntu_build }}
-      ubuntu_test: ${{ steps.affected.outputs.ubuntu_test }}
-      ubuntu_doctest: ${{ steps.affected.outputs.ubuntu_doctest }}
-      ubuntu_skip: ${{ steps.affected.outputs.ubuntu_skip }}
-      macos_clippy: ${{ steps.affected.outputs.macos_clippy }}
-      macos_build: ${{ steps.affected.outputs.macos_build }}
-      macos_test: ${{ steps.affected.outputs.macos_test }}
-      macos_doctest: ${{ steps.affected.outputs.macos_doctest }}
-      macos_skip: ${{ steps.affected.outputs.macos_skip }}
-      windows_clippy: ${{ steps.affected.outputs.windows_clippy }}
-      windows_build: ${{ steps.affected.outputs.windows_build }}
-      windows_test: ${{ steps.affected.outputs.windows_test }}
-      windows_doctest: ${{ steps.affected.outputs.windows_doctest }}
-      windows_skip: ${{ steps.affected.outputs.windows_skip }}
-      windows_process: ${{ steps.affected.outputs.windows_process }}
-      windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}
+      trusted: ${{ steps.trust.outputs.trusted }}
+      ubuntu_clippy: ${{ steps.trust.outputs.ubuntu_clippy || steps.affected.outputs.ubuntu_clippy }}
+      ubuntu_build: ${{ steps.trust.outputs.ubuntu_build || steps.affected.outputs.ubuntu_build }}
+      ubuntu_test: ${{ steps.trust.outputs.ubuntu_test || steps.affected.outputs.ubuntu_test }}
+      ubuntu_doctest: ${{ steps.trust.outputs.ubuntu_doctest || steps.affected.outputs.ubuntu_doctest }}
+      ubuntu_skip: ${{ steps.trust.outputs.ubuntu_skip || steps.affected.outputs.ubuntu_skip }}
+      macos_clippy: ${{ steps.trust.outputs.macos_clippy || steps.affected.outputs.macos_clippy }}
+      macos_build: ${{ steps.trust.outputs.macos_build || steps.affected.outputs.macos_build }}
+      macos_test: ${{ steps.trust.outputs.macos_test || steps.affected.outputs.macos_test }}
+      macos_doctest: ${{ steps.trust.outputs.macos_doctest || steps.affected.outputs.macos_doctest }}
+      macos_skip: ${{ steps.trust.outputs.macos_skip || steps.affected.outputs.macos_skip }}
+      windows_clippy: ${{ steps.trust.outputs.windows_clippy || steps.affected.outputs.windows_clippy }}
+      windows_build: ${{ steps.trust.outputs.windows_build || steps.affected.outputs.windows_build }}
+      windows_test: ${{ steps.trust.outputs.windows_test || steps.affected.outputs.windows_test }}
+      windows_doctest: ${{ steps.trust.outputs.windows_doctest || steps.affected.outputs.windows_doctest }}
+      windows_skip: ${{ steps.trust.outputs.windows_skip || steps.affected.outputs.windows_skip }}
+      windows_process: ${{ steps.trust.outputs.windows_process || steps.affected.outputs.windows_process }}
+      windows_dev_build: ${{ steps.trust.outputs.windows_dev_build || steps.affected.outputs.windows_dev_build }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -128,10 +129,43 @@ jobs:
 
       - name: Compute affected crates
         id: affected
+        if: github.event_name != 'merge_group'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.sha }}
+          QOL_AFFECTED_OUTPUT: ${{ runner.temp }}/affected.json
         run: python3 .github/scripts/affected_crates.py
+
+      - name: Record what this run tests
+        if: github.event_name == 'pull_request'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 .github/scripts/queue_trust.py record "$PR_HEAD_SHA" "$(git rev-parse HEAD^1)" \
+            "$RUNNER_TEMP/affected.json" "$RUNNER_TEMP/tested-base/tested-base.json"
+
+      - name: Upload the tested base
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-base
+          path: ${{ runner.temp }}/tested-base/tested-base.json
+          retention-days: 7
+          overwrite: true
+
+      - name: Trust the pull request run
+        id: trust
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/queue_trust.py
+
+      - name: Pull request results cover this entry
+        if: steps.trust.outputs.trusted == 'true'
+        run: echo "nothing that landed since the pull request run reaches its crates"
 
   check:
     name: lint + test (${{ matrix.os }})
@@ -140,7 +174,7 @@ jobs:
     # binaries build in the release build job below, beside this one. The
     # version bump push skips the plan, and a skipped ancestor skips every
     # job below it unless the job tests plan's result itself.
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' }}
     # RUSTFLAGS env overrides the repo's [target.*] rustflags, so the lld
     # link-arg must be restated here (ubuntu-only: -fuse-ld=lld is invalid on macOS).
     # Windows links with the toolchain's rust-lld in CI only; link.exe spent
@@ -195,7 +229,7 @@ jobs:
           tool: cargo-hakari
 
       - name: Install cargo-nextest
-        if: matrix.skip != 'true' && github.event_name != 'pull_request'
+        if: matrix.skip != 'true'
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
         with:
           tool: cargo-nextest@0.9.143
@@ -245,11 +279,8 @@ jobs:
           RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
         run: cargo check --release --locked $BUILD_ARGS
 
-      # The merge queue runs the tests on the tree that lands, so a pull
-      # request run stops at clippy and the release check instead of running
-      # every test twice.
       - name: Test
-        if: runner.os == 'Linux' && matrix.skip != 'true' && github.event_name != 'pull_request'
+        if: runner.os == 'Linux' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -315,7 +346,7 @@ jobs:
           fi
 
       - name: Test
-        if: runner.os != 'Linux' && matrix.skip != 'true' && github.event_name != 'pull_request'
+        if: runner.os != 'Linux' && matrix.skip != 'true'
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
@@ -329,7 +360,7 @@ jobs:
     name: sandbox lifecycle (windows)
     needs: plan
     if: >-
-      ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && (
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' && (
       fromJSON(needs.plan.outputs.windows_process || 'false') ||
       fromJSON(needs.plan.outputs.windows_dev_build || 'false')) }}
     runs-on: windows-latest
@@ -357,6 +388,7 @@ jobs:
   # run's merge_group base. queue_batch.py explains the rest of the batch.
   batch:
     name: batch role
+    needs: plan
     if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -385,8 +417,15 @@ jobs:
       - name: Plan the batch release build against main
         id: affected
         if: steps.role.outputs.role == 'tail'
+        env:
+          TRUSTED: ${{ needs.plan.outputs.trusted }}
+          AHEAD_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
-          BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$GITHUB_SHA" python3 .github/scripts/affected_crates.py
+          head="$GITHUB_SHA"
+          if [[ "$TRUSTED" == true ]]; then
+            head="$AHEAD_SHA"
+          fi
+          BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$head" python3 .github/scripts/affected_crates.py
 
   # Pull requests only check the release profile. The queue's tail builds it
   # here in parallel with lint + test, so the build no longer waits behind
@@ -396,7 +435,10 @@ jobs:
   release-build:
     name: release build (${{ matrix.os }})
     needs: [plan, batch]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}
+    if: >-
+      ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' &&
+      !(needs.plan.outputs.trusted == 'true' && needs.batch.outputs.ubuntu_skip == 'true' &&
+      needs.batch.outputs.macos_skip == 'true' && needs.batch.outputs.windows_skip == 'true') }}
     env:
       RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 75 || 45 }}
@@ -439,7 +481,7 @@ jobs:
   registry-tool:
     name: registry tool build
     needs: plan
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.ubuntu_skip != 'true' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.ubuntu_skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -513,6 +555,7 @@ jobs:
         env:
           PLAN: ${{ needs.plan.result }}
           REUSED: ${{ needs.plan.outputs.reused }}
+          TRUSTED: ${{ needs.plan.outputs.trusted }}
           CHECK: ${{ needs.check.result }}
           BATCH: ${{ needs.batch.result }}
           ROLE: ${{ needs.batch.outputs.role }}
@@ -525,8 +568,8 @@ jobs:
           [ "$PLAN" = success ] || exit 1
           if [ "$GITHUB_EVENT_NAME" = merge_group ]; then
             [ "$BATCH" = success ] || exit 1
-            [ "$ROLE" != tail ] || [ "$BUILD" = success ] || exit 1
-            [ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1
+            [ "$ROLE" != tail ] || [ "$BUILD" = success ] || { [ "$TRUSTED" = true ] && [ "$BUILD" = skipped ]; } || exit 1
+            [ "$REUSED" = true ] || [ "$TRUSTED" = true ] || [ "$CHECK" = success ] || exit 1
           fi
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;

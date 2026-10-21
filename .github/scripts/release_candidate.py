@@ -46,6 +46,7 @@ QUEUE_BUILD_CI_JOBS = {
     "release build (windows-latest)",
 }
 BATCH_CI_JOB = "batch role"
+TRUSTED_PLAN_STEP = "Pull request results cover this entry"
 BATCH_BUILD_CHECK = "batch release build"
 GPUI_FONT_LICENSE = "libs/gpui/assets/fonts/OFL.txt"
 UPLOAD_SLOTS = 32
@@ -238,6 +239,14 @@ def reused_queue_verdict(jobs: list[dict]) -> bool:
         conclusions.get(PLAN_CI_JOB) == "success"
         and bool(checks)
         and all(conclusion == "skipped" for conclusion in checks)
+    )
+
+
+def trusted_queue_plan(jobs: list[dict]) -> bool:
+    plan = next((job for job in jobs if job.get("name") == PLAN_CI_JOB), {})
+    return any(
+        step.get("name") == TRUSTED_PLAN_STEP and step.get("conclusion") == "success"
+        for step in plan.get("steps") or []
     )
 
 
@@ -525,6 +534,11 @@ def queue_ci_evidence(repo: str, sha: str, landed_run: dict) -> dict:
     jobs = ci_run_jobs(repo, run["id"])
     reused = reused_queue_verdict(jobs)
     batched = any(job.get("name") == BATCH_CI_JOB for job in jobs)
+    if reused and batched and not trusted_queue_plan(jobs):
+        raise RuntimeError(
+            f"merge queue run {run.get('id')} skipped its checks without "
+            f"trusting a pull request run"
+        )
     if not reused:
         required = REQUIRED_CI_JOBS
     elif batched:
