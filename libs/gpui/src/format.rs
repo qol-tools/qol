@@ -1,12 +1,16 @@
+const TB: f64 = 1_000_000_000_000.0;
 const GB: f64 = 1_000_000_000.0;
 const MB: f64 = 1_000_000.0;
 const KB: f64 = 1_000.0;
 
 pub fn format_bytes(bytes: u64) -> String {
+    let tb = bytes as f64 / TB;
     let gb = bytes as f64 / GB;
     let mb = bytes as f64 / MB;
     let kb = bytes as f64 / KB;
-    if gb >= 1.0 || mb >= 999.95 {
+    if tb >= 1.0 || gb >= 999.95 {
+        format!("{tb:.1} TB")
+    } else if gb >= 1.0 || mb >= 999.95 {
         format!("{gb:.1} GB")
     } else if mb >= 1.0 || kb >= 999.5 {
         format!("{mb:.1} MB")
@@ -46,6 +50,10 @@ mod tests {
             (999_999_999, "1.0 GB"),
             (1_000_000_000, "1.0 GB"),
             (2_500_000_000, "2.5 GB"),
+            (999_949_999_999, "999.9 GB"),
+            (999_999_999_999, "1.0 TB"),
+            (3_298_534_883_328, "3.3 TB"),
+            (140_737_488_355_328, "140.7 TB"),
         ];
         for (bytes, expected) in cases {
             assert_eq!(format_bytes(bytes), expected, "bytes: {bytes}");
