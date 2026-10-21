@@ -208,6 +208,9 @@ fn run_command(
 ) -> Result<bool> {
     let exit = match start_command(record, log_path) {
         Ok(mut child) => {
+            record.command_pid = Some(child.id());
+            record.command_identity = qol_process::process_identity(child.id()).ok();
+            let _ = store.record(record);
             let mut gate = CloseGate::default();
             loop {
                 if store.is_claimed(&record.id) {
@@ -253,6 +256,8 @@ fn run_command(
         Err(error) => Err(error),
     };
     record.exit_code = exit.as_ref().ok().and_then(ExitStatus::code);
+    record.command_pid = None;
+    record.command_identity = None;
     let tail = read_tail(log_path);
     record.wake = Some(wake_section(record, &exit, &tail, log_path));
     record.state = ParkState::Exited;

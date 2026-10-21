@@ -41,6 +41,10 @@ pub struct ParkRecord {
     pub runner_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_identity: Option<String>,
     #[serde(default)]
     pub closes_terminal: bool,
     #[serde(default)]
@@ -116,7 +120,7 @@ pub const RUNNER_RESTARTS: u32 = 3;
 
 pub fn relaunch_stale(
     dir: &Path,
-    runner_alive: impl Fn(u32, Option<&str>) -> bool,
+    alive: impl Fn(u32, Option<&str>) -> bool,
     relaunch: impl Fn(&ParkRecord) -> bool,
 ) -> Vec<String> {
     records(dir)
@@ -126,7 +130,10 @@ pub fn relaunch_stale(
         .filter(|record| {
             record
                 .runner_pid
-                .is_some_and(|pid| !runner_alive(pid, record.runner_identity.as_deref()))
+                .is_some_and(|pid| !alive(pid, record.runner_identity.as_deref()))
+                && !record
+                    .command_pid
+                    .is_some_and(|pid| alive(pid, record.command_identity.as_deref()))
         })
         .filter_map(|record| {
             if record.restarts < RUNNER_RESTARTS {
@@ -134,6 +141,8 @@ pub fn relaunch_stale(
                     restarts: record.restarts + 1,
                     runner_pid: None,
                     runner_identity: None,
+                    command_pid: None,
+                    command_identity: None,
                     ..record.clone()
                 };
                 if replace(dir, &relaunched).is_some() && relaunch(&relaunched) {
@@ -230,6 +239,8 @@ mod tests {
             state,
             runner_pid: Some(7),
             runner_identity: None,
+            command_pid: None,
+            command_identity: None,
             closes_terminal: false,
             caller_closed: false,
             restarts: 0,
@@ -337,8 +348,15 @@ mod tests {
                 ..record("starting", 1, ParkState::Waiting)
             },
         );
+        write(
+            root.path(),
+            &ParkRecord {
+                command_pid: Some(9),
+                ..record("orphaned", 1, ParkState::Waiting)
+            },
+        );
         write(root.path(), &record("done", 1, ParkState::Delivered));
-        let alive = |pid: u32, _: Option<&str>| pid == 8;
+        let alive = |pid: u32, _: Option<&str>| pid == 8 || pid == 9;
         let launched = std::cell::RefCell::new(Vec::new());
         let relaunch = |record: &ParkRecord| {
             launched
@@ -363,7 +381,15 @@ mod tests {
             .into_iter()
             .map(|record| record.id)
             .collect();
-        assert_eq!(ids, ["alive", "dead", "starting"]);
+        assert_eq!(ids, ["alive", "dead", "orphaned", "starting"]);
+        let command_done = |pid: u32, _: Option<&str>| pid == 8;
+        let launched = std::cell::RefCell::new(Vec::new());
+        let relaunch = |record: &ParkRecord| {
+            launched.borrow_mut().push(record.id.clone());
+            true
+        };
+        assert!(relaunch_stale(root.path(), command_done, relaunch).is_empty());
+        assert_eq!(launched.into_inner(), ["orphaned"]);
         let spent = records(root.path())
             .unwrap()
             .into_iter()
