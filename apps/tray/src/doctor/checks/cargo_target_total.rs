@@ -37,7 +37,7 @@ impl DoctorCheck for CargoTargetTotalCheck {
             return CheckReport::ok("workspace root not found; skipping cargo target directory");
         };
         let (size, prunable, targets) = self.sizes.get_or_compute(CACHE_TTL, || {
-            let targets = cargo_cache_dirs(&root);
+            let targets = cargo_cache_dirs(&root).unwrap_or_else(|_| vec![root.join("target")]);
             let (size, prunable) = compute_total(&root, &targets, dir_size, prunable_target_bytes);
             (size, prunable, targets)
         });

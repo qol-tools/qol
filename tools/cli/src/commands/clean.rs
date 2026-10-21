@@ -120,6 +120,7 @@ type Outcome = (PathBuf, Result<SweepReport, String>);
 fn sweep_all(prune: &PruneArgs) -> Result<Vec<Outcome>> {
     let dirs = if prune.dirs.is_empty() {
         cargo_cache_dirs(&repo_root()?)
+            .map_err(|error| anyhow!(error))?
             .into_iter()
             .filter(|dir| dir.exists())
             .collect()
