@@ -156,6 +156,8 @@ pub struct FieldSpec {
     #[serde(default)]
     pub tone_map: Option<IndexMap<String, String>>,
     #[serde(default)]
+    pub hide_values: Option<Vec<String>>,
+    #[serde(default)]
     pub align: Option<FieldAlign>,
     #[serde(default)]
     pub span: Option<u8>,

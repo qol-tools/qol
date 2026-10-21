@@ -106,6 +106,8 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tone_map: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_values: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<FieldAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span: Option<u8>,
@@ -216,6 +218,7 @@ pub fn resolve_config(
             value_from: field.value_from.clone(),
             label_map: field.label_map.clone(),
             tone_map: field.tone_map.clone(),
+            hide_values: field.hide_values.clone(),
             align: field.align,
             span: field.span,
         };
