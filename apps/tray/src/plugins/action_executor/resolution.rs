@@ -107,8 +107,7 @@ fn ensure_execution_target(
 }
 
 fn is_hosted_settings_action(plugin: &Plugin, action_id: &str) -> bool {
-    plugin.manifest.capabilities.gpui
-        && plugin.path.join("qol-config.toml").is_file()
+    plugin.path.join("qol-config.toml").is_file()
         && plugin.manifest.executable_actions().iter().any(|action| {
             action.id == action_id && action.kind == crate::plugins::ActionType::Settings
         })
