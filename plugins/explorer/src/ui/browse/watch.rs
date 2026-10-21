@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +21,7 @@ pub(super) struct FolderWatch {
 }
 
 struct FollowedLinks {
-    targets: BTreeMap<PathBuf, Vec<PathBuf>>,
+    targets: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
     _watch: Watch,
 }
 
@@ -88,6 +88,7 @@ impl FolderWatch {
                 }
             });
         if let Err(error) = spawned {
+            *lock(&self.links) = None;
             log::warn!("linked files will not be followed: {error}");
         }
     }
@@ -175,7 +176,7 @@ impl FolderWatch {
 }
 
 fn watch_links(
-    targets: BTreeMap<PathBuf, Vec<PathBuf>>,
+    targets: BTreeMap<PathBuf, BTreeSet<PathBuf>>,
     mark: impl Fn(bool) + Send + 'static,
 ) -> Option<FollowedLinks> {
     if targets.is_empty() {
@@ -202,8 +203,8 @@ fn watch_links(
     }
 }
 
-fn link_targets(folder: &Path, links: &[PathBuf]) -> BTreeMap<PathBuf, Vec<PathBuf>> {
-    let mut targets: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+fn link_targets(folder: &Path, links: &[PathBuf]) -> BTreeMap<PathBuf, BTreeSet<PathBuf>> {
+    let mut targets: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
     for link in links {
         let Some(target) = link_target(link) else {
             continue;
@@ -219,7 +220,7 @@ fn link_targets(folder: &Path, links: &[PathBuf]) -> BTreeMap<PathBuf, Vec<PathB
         targets
             .entry(parent.to_path_buf())
             .or_default()
-            .push(parent.join(name));
+            .insert(parent.join(name));
     }
     targets
 }
