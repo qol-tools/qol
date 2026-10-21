@@ -649,13 +649,12 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
     let step = browser.path_key(&key("enter", None), || None, 0.0);
     assert_eq!(step, PathStep::Stay { changed: true });
     assert!(browser.path_open());
-    let failure = browser.note().failure.unwrap();
-    assert!(failure.ends_with("is not a folder"), "{failure}");
+    assert_eq!(browser.note().failure.as_deref(), Some("Not a folder"));
 
     type_text(&mut browser, "x");
     assert_eq!(browser.note().failure, None);
     browser.path_key(&key("enter", None), || None, 0.0);
-    assert!(browser.note().failure.unwrap().ends_with("does not exist"));
+    assert_eq!(browser.note().failure.as_deref(), Some("Does not exist"));
 
     for _ in 0.."file.txtx".len() {
         browser.path_key(&key("backspace", None), || None, 0.0);
@@ -665,6 +664,63 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
     assert_eq!(step, PathStep::Arrived);
     assert!(!browser.path_open());
     assert_eq!(browser.folder(), inner);
+}
+
+#[test]
+fn the_path_field_opens_selected_so_typing_replaces_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.go(inner, 0.0);
+    settle(&mut browser);
+
+    browser.edit_path();
+    type_text(&mut browser, &temp.path().display().to_string());
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        temp.path().display().to_string()
+    );
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Arrived);
+    assert_eq!(browser.folder(), temp.path());
+}
+
+#[test]
+fn a_path_with_stray_spaces_around_it_still_goes_there() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    make_folder(temp.path(), " spaced ");
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(&mut browser, " inner ");
+    assert_eq!(
+        browser.path_key(&key("enter", None), || None, 0.0),
+        PathStep::Arrived
+    );
+    assert_eq!(browser.folder(), inner);
+
+    browser.edit_path();
+    type_text(&mut browser, &format!("..{MAIN_SEPARATOR} spaced "));
+    assert_eq!(
+        browser.path_key(&key("enter", None), || None, 0.0),
+        PathStep::Arrived
+    );
+    assert_eq!(browser.folder(), temp.path().join(" spaced "));
+}
+
+#[test]
+fn a_click_in_the_path_field_puts_the_caret_there() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert!(!browser.place_caret(1));
+    browser.edit_path();
+    assert!(browser.place_caret(1));
+    type_text(&mut browser, "x");
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        format!("~x{MAIN_SEPARATOR}")
+    );
 }
 
 #[test]
@@ -680,6 +736,7 @@ fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
         browser.path_edit().unwrap().text(),
         format!("~{MAIN_SEPARATOR}inner{MAIN_SEPARATOR}")
     );
+    browser.path_key(&key("end", None), || None, 0.0);
     browser.path_key(&key("backspace", None), || None, 0.0);
     settle(&mut browser);
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);

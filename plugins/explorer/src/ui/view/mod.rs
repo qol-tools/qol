@@ -20,7 +20,7 @@ use gpui::{
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
 use qol_gpui::surface::DragGestureState;
-use qol_gpui::theme::HEIGHT_INLINE;
+use qol_gpui::theme::{HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click};
@@ -275,6 +275,12 @@ impl ExplorerView {
         }
     }
 
+    fn place_caret(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.browser.place_caret(index) {
+            cx.notify();
+        }
+    }
+
     fn wheel_suggestions(&mut self, rows: isize, cx: &mut Context<Self>) {
         if self.browser.wheel_suggestions(rows) {
             cx.notify();
@@ -392,7 +398,7 @@ impl Focusable for ExplorerView {
 
 impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.body_height = f32::from(window.viewport_size().height) - BAND - HEAD;
+        self.body_height = f32::from(window.viewport_size().height) - 2.0 * LINE - BAND - HEAD;
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)

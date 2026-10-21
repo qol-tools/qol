@@ -413,6 +413,19 @@ fn errors_say_why_the_folder_cannot_be_read() {
     }
 }
 
+#[test]
+fn a_reason_reads_on_its_own_beside_the_typed_path() {
+    let cases = [
+        (FailureReason::Permission, "No permission"),
+        (FailureReason::Missing, "Does not exist"),
+        (FailureReason::NotAFolder, "Not a folder"),
+        (FailureReason::Other("busy".into()), "Could not read: busy"),
+    ];
+    for (reason, message) in cases {
+        assert_eq!(reason.to_string(), message);
+    }
+}
+
 fn run_in_background(folder: &Path, cancel: &CancelToken) -> mpsc::Receiver<ListingEvent> {
     let (sender, events) = mpsc::channel();
     let folder = folder.to_path_buf();

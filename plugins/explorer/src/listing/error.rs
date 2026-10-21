@@ -28,6 +28,17 @@ impl ListingError {
     }
 }
 
+impl fmt::Display for FailureReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Permission => f.write_str("No permission"),
+            Self::Missing => f.write_str("Does not exist"),
+            Self::NotAFolder => f.write_str("Not a folder"),
+            Self::Other(message) => write!(f, "Could not read: {message}"),
+        }
+    }
+}
+
 impl fmt::Display for ListingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let folder = super::display_name(self.folder.as_os_str());

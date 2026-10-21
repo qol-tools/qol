@@ -424,6 +424,7 @@ impl Browser {
         let mut field = PathField::open(self.folder(), &self.home, self.wake.clone());
         field.refresh(&self.home, self.show_hidden);
         self.path = Some(field);
+        self.failure = None;
         true
     }
 
@@ -474,14 +475,25 @@ impl Browser {
         self.submit_path(scroll)
     }
 
+    pub fn place_caret(&mut self, index: usize) -> bool {
+        let Some(field) = self.path.as_mut() else {
+            return false;
+        };
+        field.place_caret(index);
+        true
+    }
+
     fn submit_path(&mut self, scroll: f32) -> PathStep {
-        let Some(target) = self.path.as_ref().map(|field| field.target(&self.home)) else {
+        let Some(folder) = self.path.as_ref().map(|field| field.folder(&self.home)) else {
             return PathStep::Closed;
         };
-        if let Err(error) = path_field::folder_at(&target) {
-            self.failure = Some(error.to_string());
-            return PathStep::Stay { changed: true };
-        }
+        let target = match folder {
+            Ok(target) => target,
+            Err(error) => {
+                self.failure = Some(error.reason.to_string());
+                return PathStep::Stay { changed: true };
+            }
+        };
         self.path = None;
         if self.go(target, scroll) {
             return PathStep::Arrived;
