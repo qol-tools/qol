@@ -32,11 +32,19 @@ where
                 .usage(format!("{PLUGIN_ID} {OPEN_COMMAND} [path]"))
                 .detail("Without a path the window opens on the home folder.")
                 .detail("A path may start with ~ for the home folder.")
+                .detail("A path that starts with - is read as a flag, so write ./-name for such a folder.")
                 .output("No stdout on success.")
-                .exit_behavior("Exits non-zero if the window cannot be opened.")
+                .exit_behavior(
+                    "Exits 64 on an unknown flag or a second path; non-zero if the window cannot be opened.",
+                )
                 .run_result(move |context| {
                     let start = match context.args() {
                         [] => home_folder(home)?,
+                        [flag, ..] if flag.starts_with('-') => {
+                            return Ok(CommandResult::usage(format!(
+                                "{PLUGIN_ID}: unknown flag {flag:?}"
+                            )))
+                        }
                         [input] => path::resolve(
                             input,
                             &home_folder(home)?,
@@ -143,6 +151,24 @@ mod tests {
         assert_eq!(execution.exit_code, EXIT_USAGE);
         assert!(execution.stderr.contains("unexpected argument \"/b\""));
         assert!(opened.is_empty());
+    }
+
+    #[test]
+    fn open_rejects_a_flag_it_does_not_know() {
+        for flag in ["--bogus", "-h"] {
+            let (execution, opened) = run(&["open", flag]);
+            assert_eq!(execution.exit_code, EXIT_USAGE, "flag: {flag}");
+            assert!(
+                execution.stderr.contains(&format!("unknown flag {flag:?}")),
+                "flag: {flag}, stderr: {}",
+                execution.stderr
+            );
+            assert!(opened.is_empty(), "flag: {flag}");
+        }
+        let (execution, opened) = run(&["open", "./-name"]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        assert_eq!(opened.len(), 1);
+        assert!(opened[0].ends_with("-name"), "{opened:?}");
     }
 
     #[test]
