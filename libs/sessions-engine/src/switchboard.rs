@@ -347,8 +347,12 @@ fn start_kitty_args(exe: &Path, profile: &Profile) -> Vec<OsString> {
 fn start_kitty(profile: &Profile) -> Result<Opened> {
     let exe = std::env::current_exe().context("cannot resolve this executable for kitty")?;
     let program = kitty_program();
-    Command::new(&program)
-        .args(start_kitty_args(&exe, profile))
+    let mut command = Command::new(&program);
+    command.args(start_kitty_args(&exe, profile));
+    if let Some(dir) = qol_platform::launch_working_dir() {
+        command.current_dir(dir);
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
