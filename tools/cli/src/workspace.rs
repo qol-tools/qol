@@ -397,7 +397,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cases = [
             ("alt-tab", "qol-alt-tab"),
-            ("ide-checkout", "qol-ide-checkout"),
             ("pointz", "qol-pointz"),
             ("keyremap", "qol-keyremap"),
             ("lights", "qol-lights"),

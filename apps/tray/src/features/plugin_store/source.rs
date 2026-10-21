@@ -442,7 +442,6 @@ mod tests {
         let cases: &[(&str, Option<&str>)] = &[
             ("plugins/alt-tab/plugin.toml", Some("alt-tab")),
             ("plugins/launcher/plugin.toml", Some("launcher")),
-            ("plugins/ide-checkout/plugin.toml", Some("ide-checkout")),
             ("plugins/p/plugin.toml", Some("p")),
             ("plugins/alt-tab/src/plugin.toml", None),
             ("plugins/alt-tab/Cargo.toml", None),

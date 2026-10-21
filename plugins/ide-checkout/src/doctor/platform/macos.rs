@@ -1,8 +1,0 @@
-use qol_headless::DoctorCheckResult;
-
-pub(in crate::doctor) fn platform_supported_check() -> DoctorCheckResult {
-    DoctorCheckResult::ok(
-        "platform_supported",
-        "macOS is declared and supported by IDE Checkout",
-    )
-}
