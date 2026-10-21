@@ -109,13 +109,13 @@ fn tonight(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
     let at = planned_at(session, now);
     let run_at = session.run_at();
     let detail = if set && session.moved() {
-        "Set. Moved after your update hours. Switch off to cancel.".to_string()
+        "Moved after your update hours. Switch off to cancel.".to_string()
     } else if set {
         format!(
-            "Set.{} Switch off to cancel.",
+            "{}Switch off to cancel.",
             run_at
                 .as_deref()
-                .map(|run| format!(" After {run} ends."))
+                .map(|run| format!("After {run} ends. "))
                 .unwrap_or_default()
         )
     } else if session.locked() {

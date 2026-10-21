@@ -16,7 +16,7 @@ pub(super) fn hours_value(session: &Session) -> String {
 }
 
 fn could_not(row: Row, refusal: &impl std::fmt::Display) -> Row {
-    row.detail(format!("Could not hold: {refusal}."))
+    row.detail(format!("{}.", cap(&refusal.to_string())))
         .value("could not hold")
         .tone(Tone::Attention)
         .attention(true)
@@ -49,9 +49,7 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
             .toggle(true)
             .busy(asking),
         _ if session.locked() => row.detail(LOCKED).toggle(false),
-        _ => row
-            .detail("Off. Updates install at their time")
-            .toggle(false),
+        _ => row.detail("Updates install at their time").toggle(false),
     };
     sheet.press(row, Act::Guard);
     let row = Row::new("hold", "Hold all updates");
@@ -177,7 +175,7 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
         .detail(if hours.startup {
             like.unwrap_or_else(|| "Mint's default".to_string())
         } else {
-            "Off. A missed night waits for the next.".to_string()
+            "A missed night waits for the next.".to_string()
         })
         .toggle(hours.startup)
         .busy(busy);
@@ -286,7 +284,7 @@ fn auto(session: &Session) -> Sheet {
             AutoKey::Packages if on => {
                 "Mint's automatic upgrades: every package, in the update hours"
             }
-            AutoKey::Packages => "Off. Packages install when you say",
+            AutoKey::Packages => "Packages install when you say",
             AutoKey::Spices => {
                 "Mint's switch: they update when you log in; Cinnamon restarts if any did"
             }
