@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -259,15 +258,36 @@ class LocalPlannerContract(unittest.TestCase):
             ac.args(["qol-alt-tab"], False),
         )
 
-    def test_no_workspace_source_embeds_markdown(self):
-        embed = re.compile(r'include_(?:str|bytes)!\s*\(\s*[^)]*\.md"')
-        offenders = [
-            str(source.relative_to(ac.REPO_ROOT))
-            for top in ["apps", "libs", "plugins", "tools"]
-            for source in sorted((ac.REPO_ROOT / top).rglob("*.rs"))
-            if embed.search(source.read_text(errors="ignore"))
-        ]
-        self.assertEqual(offenders, [])
+    def test_markdown_a_source_file_embeds_is_found(self):
+        embedded = ac.embedded_markdown()
+        self.assertIn("vendor/gpui/README.md", embedded)
+        self.assertNotIn("vendor/gpui/MODIFICATIONS.md", embedded)
+
+    @patch.object(ac, "embedded_markdown")
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_embedded_markdown_counts_as_source(
+        self, changed_files, graph, full_workspace, embedded_markdown
+    ):
+        changed_files.return_value = ["vendor/gpui/README.md"]
+        embedded_markdown.return_value = {"vendor/gpui/README.md"}
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+        full_workspace.assert_called_once_with("global file changed: vendor/gpui/README.md")
+
+    @patch.object(ac, "embedded_markdown")
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_unknown_embeds_keep_markdown(
+        self, changed_files, graph, full_workspace, embedded_markdown
+    ):
+        changed_files.return_value = ["vendor/gpui/MODIFICATIONS.md"]
+        embedded_markdown.return_value = None
+        with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
+            ac.main()
+        full_workspace.assert_called_once_with("global file changed: vendor/gpui/MODIFICATIONS.md")
 
     @patch.object(ac, "emit")
     @patch.object(ac, "lock_changed_packages")

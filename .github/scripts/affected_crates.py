@@ -10,6 +10,7 @@ something that should run.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -36,6 +37,7 @@ GLOBAL_FILES = {
     ".github/scripts/cleanup_cgroup_journal.py",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
+EMBEDDED_MARKDOWN = re.compile(r'^(.*?):\d+:.*include_(?:str|bytes)!\s*\(\s*"([^"]+\.md)"')
 WORKTREE_HEAD = "WORKTREE"
 
 
@@ -191,6 +193,20 @@ def with_untracked(files, head):
     return sorted(set(files) | set(untracked.stdout.splitlines()))
 
 
+def embedded_markdown():
+    found = run([
+        "git", "-C", str(REPO_ROOT), "grep", "-n", "-E",
+        r'include_(str|bytes)![[:space:]]*\([[:space:]]*"[^"]+\.md"', "--", "*.rs",
+    ])
+    if found.returncode not in (0, 1):
+        return None
+    return {
+        os.path.normpath(os.path.join(os.path.dirname(match[1]), match[2]))
+        for match in map(EMBEDDED_MARKDOWN.match, found.stdout.splitlines())
+        if match
+    }
+
+
 def lock_entries(text):
     return {
         (entry.get("name"), entry.get("version")): entry
@@ -301,7 +317,10 @@ def main():
     files = [f for f in files if f.strip()]
     if not files:
         return skip_all("empty diff")
-    files = [f for f in files if not f.endswith(".md")]
+    if any(f.endswith(".md") for f in files):
+        embedded = embedded_markdown()
+        if embedded is not None:
+            files = [f for f in files if not f.endswith(".md") or f in embedded]
     if not files:
         return skip_all("markdown-only diff")
 
