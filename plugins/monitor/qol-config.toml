@@ -31,6 +31,7 @@ query = "night_mode"
 value_from = "state"
 label_map = { active = "Night mode on", capped = "Night mode on, as warm as the system allows", inactive = "Night mode off", unsupported = "Night mode is not available on this computer", conflict = "Another night light is in the way", failed = "Night mode could not be applied", invalid_schedule = "Schedule times are invalid", controlled = "Night mode is working", limited = "Another program keeps changing the tint", uncontrolled = "This display's color profile blocks night mode" }
 tone_map = { active = "success", capped = "warning", inactive = "neutral", unsupported = "warning", conflict = "danger", failed = "danger", invalid_schedule = "danger" }
+hide_values = ["active", "inactive"]
 
 [field.night_toggle]
 type = "action"

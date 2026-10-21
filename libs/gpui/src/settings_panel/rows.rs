@@ -228,8 +228,10 @@ pub(super) enum RowControl {
         value_from: Option<String>,
         label_map: std::collections::BTreeMap<String, String>,
         tone_map: std::collections::BTreeMap<String, String>,
+        hide_values: std::collections::BTreeSet<String>,
         label: Option<String>,
         tone: StatusTone,
+        hidden: bool,
         error: Option<String>,
     },
     QrCode {
@@ -482,6 +484,9 @@ pub(super) fn stream_gated(rows: &[Row]) -> bool {
 }
 
 pub(super) fn row_is_visible(rows: &[Row], index: usize) -> bool {
+    if let Some(RowControl::Status { hidden: true, .. }) = rows.get(index).map(|row| &row.control) {
+        return false;
+    }
     let Some(visibility) = rows.get(index).and_then(|row| row.visibility.as_ref()) else {
         return true;
     };
@@ -613,8 +618,18 @@ fn control_for(field: &ResolvedField) -> RowControl {
                     .unwrap_or_default()
                     .into_iter()
                     .collect(),
+                hide_values: field
+                    .hide_values
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
                 label: None,
                 tone: StatusTone::Muted,
+                hidden: field
+                    .hide_values
+                    .as_ref()
+                    .is_some_and(|values| !values.is_empty()),
                 error: None,
             },
             None => RowControl::Unsupported {
@@ -1169,8 +1184,10 @@ pub(super) fn apply_runtime_query(
                 value_from,
                 label_map,
                 tone_map,
+                hide_values,
                 label,
                 tone,
+                hidden,
                 error,
             } if row_query == query => match &result {
                 Ok(value) => {
@@ -1185,9 +1202,15 @@ pub(super) fn apply_runtime_query(
                         .and_then(|value| tone_map.get(value))
                         .map(|value| status_tone(value))
                         .unwrap_or(StatusTone::Muted);
+                    *hidden = raw
+                        .as_ref()
+                        .is_some_and(|value| hide_values.contains(value));
                     *error = None;
                 }
-                Err(message) => *error = Some(message.clone()),
+                Err(message) => {
+                    *hidden = false;
+                    *error = Some(message.clone());
+                }
             },
             RowControl::List {
                 query: row_query,
@@ -3229,6 +3252,48 @@ input = { id = "{id}", value = "{value}" }
     }
 
     #[test]
+    fn status_rows_hide_while_the_value_is_listed_in_hide_values() {
+        const STATUS_SPEC: &str = r#"
+schema_version = 1
+
+[field.night]
+type = "status"
+query = "night_mode"
+value_from = "state"
+hide_values = ["active", "inactive"]
+"#;
+        let spec = qol_config::contract::parse_spec_str(STATUS_SPEC).unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        assert!(!row_is_visible(&rows, 0));
+
+        apply_query(
+            &mut rows,
+            "night_mode",
+            Ok(serde_json::json!({ "state": "inactive" })),
+        );
+        assert!(!row_is_visible(&rows, 0));
+
+        apply_query(
+            &mut rows,
+            "night_mode",
+            Ok(serde_json::json!({ "state": "conflict" })),
+        );
+        assert!(row_is_visible(&rows, 0));
+
+        apply_query(
+            &mut rows,
+            "night_mode",
+            Ok(serde_json::json!({ "state": "active" })),
+        );
+        assert!(!row_is_visible(&rows, 0));
+
+        apply_query(&mut rows, "night_mode", Err("unavailable".into()));
+        assert!(row_is_visible(&rows, 0));
+    }
+
+    #[test]
     fn runtime_status_rows_map_labels_and_tones() {
         const STATUS_SPEC: &str = r#"
 schema_version = 1
@@ -3824,8 +3889,10 @@ default = 5
                     value_from: None,
                     label_map: std::collections::BTreeMap::new(),
                     tone_map: std::collections::BTreeMap::new(),
+                    hide_values: std::collections::BTreeSet::new(),
                     label: None,
                     tone,
+                    hidden: false,
                     error: error.map(str::to_string),
                 },
             }
