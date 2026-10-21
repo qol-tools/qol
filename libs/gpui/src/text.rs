@@ -27,6 +27,34 @@ pub fn laid_out_width(window: &mut Window, text: &str, style: qol_theme::TextSty
     shaped_width(window, text, face, spec.size).ceil()
 }
 
+pub fn line_height(style: qol_theme::TextStyle) -> f32 {
+    let spec = style.spec();
+    (spec.size * spec.line_height).round()
+}
+
+pub fn baseline(window: &mut Window, style: qol_theme::TextStyle) -> f32 {
+    let spec = style.spec();
+    let mut face = font(spec.face.family());
+    face.weight = FontWeight(f32::from(spec.weight));
+    let line = window.text_system().shape_line(
+        SharedString::from("x"),
+        px(spec.size),
+        &[TextRun {
+            len: 1,
+            font: face,
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }],
+        None,
+    );
+    let ascent = f32::from(line.ascent);
+    let exact = (line_height(style) - ascent - f32::from(line.descent)) / 2.0 + ascent;
+    let steps = window.scale_factor() * crate::platform::GLYPH_STEPS_PER_PIXEL;
+    (exact * steps).floor() / steps
+}
+
 pub fn wrapped_line_count(
     window: &mut Window,
     text: &str,

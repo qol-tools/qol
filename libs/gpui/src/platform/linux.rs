@@ -246,6 +246,8 @@ pub(crate) fn readback_matches(
     }
 }
 
+pub(crate) const GLYPH_STEPS_PER_PIXEL: f32 = 1.0;
+
 pub(crate) fn display_scale_factor(_display: gpui::DisplayId) -> f32 {
     1.0
 }

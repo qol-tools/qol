@@ -3,14 +3,14 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, InteractiveElement,
-    IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+    div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, Div, InteractiveElement,
+    IntoElement, ParentElement, StatefulInteractiveElement, Styled, Window,
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::scrollbar::ScrollSource;
-use qol_gpui::text::{cased, TextStyled};
-use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET};
+use qol_gpui::text::{baseline, cased, line_height, TextStyled};
+use qol_gpui::theme::{Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET};
 use qol_gpui::Icon;
 
 use super::{ExplorerView, HEAD, ICON, ROW};
@@ -88,11 +88,11 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             uniform_list(
                 "explorer-rows",
                 total,
-                cx.processor(|view, range: Range<usize>, _window, cx| {
+                cx.processor(|view, range: Range<usize>, window, cx| {
                     view.browser.show_rows(range.clone());
                     let now = Instant::now();
                     range
-                        .filter_map(|row| render_row(view, row, now, cx))
+                        .filter_map(|row| render_row(view, row, now, window, cx))
                         .collect::<Vec<_>>()
                 }),
             )
@@ -114,6 +114,7 @@ fn render_row(
     view: &ExplorerView,
     row: usize,
     now: Instant,
+    window: &mut Window,
     cx: &mut Context<ExplorerView>,
 ) -> Option<AnyElement> {
     let kit = kit();
@@ -157,7 +158,7 @@ fn render_row(
             ICON,
             ground.soft,
         )))
-        .child(name_cell(&entry.display, typed, ground.ink, ground.mark))
+        .child(name_cell(&entry.display, typed, ground, window))
         .child(
             div()
                 .flex_none()
@@ -182,32 +183,33 @@ fn render_row(
     Some(kit.highlight(element, picked).into_any_element())
 }
 
-fn name_cell(name: &str, typed: Option<usize>, ink: u32, mark: u32) -> impl IntoElement {
-    let cell = div().flex_1().min_w_0().flex().flex_row().items_baseline();
+fn name_cell(name: &str, typed: Option<usize>, ground: Ground, window: &mut Window) -> Div {
+    let cell = div().flex_1().min_w_0().flex().flex_row();
     let Some(split) = typed else {
-        return cell.child(
-            div()
-                .min_w_0()
-                .text(TextStyle::ListName)
-                .text_color(rgb(ink))
-                .child(name.to_string()),
-        );
+        return cell.child(name_text(name, ground.ink));
     };
     let (prefix, rest) = name.split_at(split);
-    cell.child(
-        div()
-            .flex_none()
-            .text(TextStyle::Title)
-            .text_color(rgb(mark))
-            .child(prefix.to_string()),
-    )
-    .child(
-        div()
-            .min_w_0()
-            .text(TextStyle::ListName)
-            .text_color(rgb(ink))
-            .child(rest.to_string()),
-    )
+    let rise = baseline(window, TextStyle::Title) - baseline(window, TextStyle::ListName);
+    cell.h(px(line_height(TextStyle::ListName)))
+        .items_start()
+        .child(
+            div()
+                .flex_none()
+                .relative()
+                .top(px(-rise))
+                .text(TextStyle::Title)
+                .text_color(rgb(ground.mark))
+                .child(prefix.to_string()),
+        )
+        .child(name_text(rest, ground.ink))
+}
+
+fn name_text(name: &str, ink: u32) -> Div {
+    div()
+        .min_w_0()
+        .text(TextStyle::ListName)
+        .text_color(rgb(ink))
+        .child(name.to_string())
 }
 
 fn reading_line(view: &ExplorerView, kit: Kit) -> impl IntoElement {
