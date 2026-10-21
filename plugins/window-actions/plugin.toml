@@ -4,7 +4,7 @@ uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
 icon = "window-actions"
 description = "Snap, center and move windows across displays"
-version = "2.70.4"
+version = "2.71.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 

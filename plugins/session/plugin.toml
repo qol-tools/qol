@@ -4,7 +4,7 @@ uid = "d34dabdb-bb86-455d-823a-e5fba384d138"
 name = "Session"
 icon = "session"
 description = "Lock the screen from a hotkey on every platform"
-version = "0.1.2"
+version = "0.2.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
