@@ -285,14 +285,14 @@ fn deliver(
                 match holder(terminals, interpreter, store, record, caller) {
                     Holder::Live(binding) => {
                         unknown = 0;
-                        if prompt_free(terminals, interpreter, &binding)
+                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready
                             && guard
                                 .type_text(
                                     terminals,
                                     interpreter,
                                     Typing::submit(&binding, &prompt),
                                 )
-                                .is_ok_and(|typed| !matches!(typed, Typed::Held(_)))
+                                .is_ok_and(Typed::landed)
                         {
                             settle_batch(store, &batch, ParkState::Delivered, &binding, None);
                             qol_runtime::probe!(

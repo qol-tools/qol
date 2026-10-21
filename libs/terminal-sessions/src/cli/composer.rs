@@ -273,10 +273,15 @@ mod tests {
     #[test]
     fn a_draft_holds_only_what_was_sent_when_nothing_else_is_in_it() {
         let sent = "line 0 of a prompt\nline 1 of a prompt\nline 2 of a prompt";
-        assert!(draft("line 0 of a prompt line 1 of a prompt", 0).holds_only(sent));
+        assert!(draft(sent, 0).holds_only(sent));
         assert!(draft("line 2 of a\n   prompt", 0).holds_only(sent));
         assert!(draft("", 1).holds_only(sent));
+        assert!(draft("line 2 of a prompt", 1).holds_only(sent));
+        assert!(!draft("line 0 of a prompt line 1 of a prompt", 0).holds_only(sent));
         assert!(!draft("x", 1).holds_only(sent));
+        assert!(!draft("p", 1).holds_only(sent));
+        assert!(!draft("p", 0).holds_only(sent));
+        assert!(!draft("line 2 of a promptp", 1).holds_only(sent));
         assert!(!draft("xline 0 of a prompt", 0).holds_only(sent));
         assert!(!draft("line 2 of a prompty", 0).holds_only(sent));
         assert!(!draft("", 0).holds_only(sent));

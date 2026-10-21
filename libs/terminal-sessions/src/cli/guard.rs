@@ -107,7 +107,7 @@ impl ComposerGuard {
             if self.typed.get(binding).is_some_and(|typed| typed == text)
                 && composer.holds_only(text)
             {
-                return submit(terminals, binding, mode);
+                return self.submit(terminals, binding, mode);
             }
         }
         let now = Instant::now();
@@ -125,7 +125,7 @@ impl ComposerGuard {
         if !echoed(terminals, interpreter, &facts, binding, text) {
             return Ok(Typed::Unsubmitted);
         }
-        submit(terminals, binding, mode)
+        self.submit(terminals, binding, mode)
     }
 
     pub fn type_text_within(
@@ -161,6 +161,19 @@ impl ComposerGuard {
                 now
             }
         }
+    }
+
+    fn submit(
+        &mut self,
+        terminals: &TerminalSessionService,
+        binding: &SessionBinding,
+        mode: DeliveryMode,
+    ) -> Result<Typed, TerminalError> {
+        if mode == DeliveryMode::Submit {
+            terminals.send_key(binding, SUBMIT_KEY)?;
+        }
+        self.typed.remove(binding);
+        Ok(landed(mode))
     }
 }
 
@@ -230,8 +243,8 @@ fn echoed(
     let started = Instant::now();
     loop {
         if let Ok(Reading::Modeled(composer)) = read(terminals, interpreter, facts, binding) {
-            if composer != CliComposer::Empty {
-                return composer.holds_only(text);
+            if composer.holds_only(text) {
+                return true;
             }
         }
         if started.elapsed() >= ECHO_WINDOW {
@@ -239,17 +252,6 @@ fn echoed(
         }
         std::thread::sleep(ECHO_POLL);
     }
-}
-
-fn submit(
-    terminals: &TerminalSessionService,
-    binding: &SessionBinding,
-    mode: DeliveryMode,
-) -> Result<Typed, TerminalError> {
-    if mode == DeliveryMode::Submit {
-        terminals.send_key(binding, SUBMIT_KEY)?;
-    }
-    Ok(landed(mode))
 }
 
 fn landed(mode: DeliveryMode) -> Typed {
@@ -261,11 +263,130 @@ fn landed(mode: DeliveryMode) -> Typed {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    use super::{clearance, ComposerGuard, Hold, Reading, QUIET};
-    use crate::cli::CliComposer;
-    use crate::{BackendId, SessionBinding, SessionId};
+    use super::{clearance, ComposerGuard, Hold, Reading, Typed, Typing, QUIET};
+    use crate::cli::{CliComposer, CliSessionInterpreter};
+    use crate::{
+        BackendId, DeliveryMode, ScreenReader, SessionBinding, SessionCapabilities, SessionFacts,
+        SessionFocus, SessionId, SessionInventory, TerminalBackend, TerminalError,
+        TerminalSessionService, TerminalSnapshot, TextInput,
+    };
+
+    struct ClaudePane {
+        facts: SessionFacts,
+        screens: Mutex<VecDeque<String>>,
+        keys: Mutex<Vec<String>>,
+    }
+
+    impl ClaudePane {
+        fn showing(inputs: &[&str]) -> Arc<Self> {
+            let rule = "\u{2500}".repeat(40);
+            Arc::new(Self {
+                facts: SessionFacts {
+                    id: SessionId::new(BackendId::new("fake").unwrap(), "1").unwrap(),
+                    root_pid: 7,
+                    cwd: "/work".to_owned(),
+                    title: "claude".to_owned(),
+                    at_prompt: true,
+                    focused: false,
+                    reported_cmd: None,
+                    foreground_basenames: vec!["claude".to_owned()],
+                    foreground_pids: Vec::new(),
+                    capabilities: SessionCapabilities::ALL,
+                    spawn_identity: None,
+                },
+                screens: Mutex::new(
+                    inputs
+                        .iter()
+                        .map(|input| format!("{rule}\n\u{276F} {input}\n{rule}\n  /work"))
+                        .collect(),
+                ),
+                keys: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    impl SessionInventory for ClaudePane {
+        fn discover(&self) -> Result<Vec<SessionFacts>, TerminalError> {
+            Ok(vec![self.facts.clone()])
+        }
+    }
+
+    impl ScreenReader for ClaudePane {
+        fn read_screen(&self, _target: &SessionBinding) -> Result<String, TerminalError> {
+            let mut screens = self.screens.lock().unwrap();
+            if screens.len() > 1 {
+                return Ok(screens.pop_front().unwrap());
+            }
+            Ok(screens.front().cloned().unwrap_or_default())
+        }
+
+        fn read_screen_styled(&self, target: &SessionBinding) -> Result<String, TerminalError> {
+            self.read_screen(target)
+        }
+    }
+
+    impl SessionFocus for ClaudePane {
+        fn focus(&self, _target: &SessionBinding) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
+    impl TextInput for ClaudePane {
+        fn send_text(
+            &self,
+            _target: &SessionBinding,
+            _text: &str,
+            _mode: DeliveryMode,
+        ) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn send_key(&self, _target: &SessionBinding, key: &str) -> Result<(), TerminalError> {
+            self.keys.lock().unwrap().push(key.to_owned());
+            Ok(())
+        }
+    }
+
+    impl TerminalBackend for ClaudePane {
+        fn read_screen_from_snapshot(
+            &self,
+            _snapshot: &TerminalSnapshot,
+            target: &SessionBinding,
+        ) -> Result<String, TerminalError> {
+            self.read_screen(target)
+        }
+
+        fn id(&self) -> &BackendId {
+            self.facts.id.backend()
+        }
+    }
+
+    #[test]
+    fn a_submitted_text_never_submits_a_later_draft_that_ends_like_it() {
+        let knock = "you have a message";
+        let pane = ClaudePane::showing(&["", knock, "message"]);
+        let terminals =
+            TerminalSessionService::from_backends([Arc::clone(&pane) as Arc<dyn TerminalBackend>])
+                .unwrap();
+        let interpreter = CliSessionInterpreter::system();
+        let binding = pane.facts.binding().unwrap();
+        let mut guard = ComposerGuard::default();
+        let typing = Typing::submit(&binding, knock);
+
+        assert_eq!(
+            guard.type_text(&terminals, &interpreter, typing).unwrap(),
+            Typed::Submitted
+        );
+        assert_eq!(
+            guard.type_text(&terminals, &interpreter, typing).unwrap(),
+            Typed::Held(Hold::Draft)
+        );
+        assert_eq!(*pane.keys.lock().unwrap(), ["enter"]);
+    }
 
     #[test]
     fn a_draft_or_an_unreadable_box_always_holds_the_text() {

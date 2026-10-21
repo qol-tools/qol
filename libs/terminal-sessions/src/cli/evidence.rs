@@ -67,7 +67,7 @@ impl CliComposer {
             return false;
         };
         let shown = squashed(text);
-        (*pastes > 0 || !shown.is_empty()) && squashed(sent).contains(&shown)
+        (*pastes > 0 || !shown.is_empty()) && squashed(sent).ends_with(&shown)
     }
 }
 
