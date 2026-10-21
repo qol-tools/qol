@@ -616,14 +616,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 job = workflow.split(start, 1)[1].split(end, 1)[0]
                 self.assertIn(timeout, job)
 
-    def test_each_tray_build_publishes_to_the_index_without_waiting_for_the_others(self):
+    def test_tray_builds_reach_the_index_only_after_the_release_is_tagged(self):
         versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         publish = (ROOT / ".github/workflows/qol-tray-host-publish.yml").read_text()
+        self.assertLess(versioning.index("  tag_and_dispatch:\n"), versioning.index("  qol_tray_linux_publish:\n"))
         for platform in ["linux", "macos", "windows"]:
             with self.subTest(platform=platform):
                 job = versioning.split(f"  qol_tray_{platform}_publish:\n", 1)[1].split("\n  qol_tray_", 1)[0]
                 needs = job.split("    needs:\n", 1)[1].split("    if:", 1)[0]
-                self.assertEqual(needs.split(), ["-", "prepare", "-", f"qol_tray_{platform}_candidate"])
+                self.assertEqual(needs.split(), ["-", "prepare", "-", "tag_and_dispatch"])
+                self.assertIn("needs.tag_and_dispatch.result == 'success'", job)
                 self.assertIn("uses: ./.github/workflows/qol-tray-host-publish.yml", job)
                 self.assertIn(f"os: {platform}", job)
         attest = publish.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
