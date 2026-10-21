@@ -89,7 +89,7 @@ def fallback(reason: str, base: str, head: str) -> dict:
     return {**affected_plan(base, head), "trusted": False}
 
 
-def trusted_plan(repo: str, head_ref: str, queue_base: str) -> dict:
+def covered_plan(repo: str, head_ref: str, queue_base: str) -> dict:
     number = queued_pull(head_ref)
     if number is None:
         raise Untrusted(f"{head_ref} names no pull request")
@@ -124,7 +124,7 @@ def trusted_plan(repo: str, head_ref: str, queue_base: str) -> dict:
 
 def decide(repo: str, head_ref: str, queue_base: str, queue_head: str) -> dict:
     try:
-        return trusted_plan(repo, head_ref, queue_base)
+        return covered_plan(repo, head_ref, queue_base)
     except Untrusted as reason:
         return fallback(str(reason), queue_base, queue_head)
     except (RuntimeError, KeyError, TypeError, ValueError, AttributeError) as error:
