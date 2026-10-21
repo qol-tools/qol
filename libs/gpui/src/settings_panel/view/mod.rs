@@ -4398,7 +4398,7 @@ impl SettingsPanelView {
                 div()
                     .absolute()
                     .left_0()
-                    .top(self.rail_scroll.handle().offset().y)
+                    .top(self.rail_scroll.painted_offset_y())
                     .h_full()
                     .flex()
                     .flex_col()
