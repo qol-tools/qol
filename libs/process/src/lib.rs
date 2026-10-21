@@ -1,4 +1,5 @@
 mod bounded_output;
+pub mod detached;
 mod observation;
 mod platform;
 mod tcp_table;

@@ -859,7 +859,11 @@ pub fn live_parks(
 
 fn live_parked_sessions(dir: Option<&std::path::Path>) -> Vec<LivePark> {
     if let Some(dir) = dir {
-        for id in qol_terminal_sessions::park::fail_stale(dir, park_runner_alive) {
+        for id in qol_terminal_sessions::park::relaunch_stale(
+            dir,
+            park_runner_alive,
+            relaunch_park_runner,
+        ) {
             log::warn!("[cli-sessions] park {id} lost its runner before delivering");
         }
     }
@@ -873,6 +877,30 @@ fn park_runner_alive(pid: u32, identity: Option<&str>) -> bool {
     match identity {
         Some(identity) => qol_process::process_identity_matches(pid, identity),
         None => qol_process::is_pid_alive(pid),
+    }
+}
+
+fn relaunch_park_runner(record: &ParkRecord) -> bool {
+    let spawned = std::env::current_exe()
+        .map_err(anyhow::Error::from)
+        .and_then(|executable| crate::park::spawn_runner(&executable, record));
+    match spawned {
+        Ok(()) => {
+            log::warn!(
+                "[cli-sessions] park {} lost its runner, relaunched it (restart {} of {})",
+                record.id,
+                record.restarts,
+                qol_terminal_sessions::park::RUNNER_RESTARTS
+            );
+            true
+        }
+        Err(error) => {
+            log::warn!(
+                "[cli-sessions] park {} lost its runner and could not relaunch it: {error:#}",
+                record.id
+            );
+            false
+        }
     }
 }
 

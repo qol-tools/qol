@@ -2,7 +2,11 @@ use super::ManagedProcess;
 use std::collections::HashSet;
 
 pub fn managed_processes() -> Vec<ManagedProcess> {
-    without_host_binaries(super::platform::managed_processes())
+    let detached = qol_process::detached::registered(&crate::paths::runtime_dir());
+    without_detached(
+        without_host_binaries(super::platform::managed_processes()),
+        &detached,
+    )
 }
 
 pub fn leaked_processes() -> Vec<ManagedProcess> {
@@ -24,6 +28,16 @@ fn untracked_managed_processes(
     processes
         .into_iter()
         .filter(|process| !tracked.contains(&process.pid))
+        .collect()
+}
+
+fn without_detached(
+    processes: Vec<ManagedProcess>,
+    detached: &HashSet<u32>,
+) -> Vec<ManagedProcess> {
+    processes
+        .into_iter()
+        .filter(|process| !u32::try_from(process.pid).is_ok_and(|pid| detached.contains(&pid)))
         .collect()
 }
 
@@ -52,6 +66,30 @@ mod tests {
                 pid: 10,
                 executable: PathBuf::from("/plugins/a"),
             }]
+        );
+    }
+
+    #[test]
+    fn without_detached_keeps_the_processes_that_did_not_register_as_detached() {
+        let processes = vec![
+            ManagedProcess {
+                pid: 10,
+                executable: PathBuf::from("/plugins/a"),
+            },
+            ManagedProcess {
+                pid: 20,
+                executable: PathBuf::from("/plugins/qol-cli-sessions"),
+            },
+        ];
+        let detached = HashSet::from([20u32]);
+
+        assert_eq!(
+            without_detached(processes, &detached),
+            vec![ManagedProcess {
+                pid: 10,
+                executable: PathBuf::from("/plugins/a"),
+            }],
+            "a park runner that registered as detached outlives the tray",
         );
     }
 

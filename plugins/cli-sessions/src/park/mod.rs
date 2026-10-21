@@ -5,6 +5,7 @@ mod runner;
 pub(crate) mod store;
 mod wake;
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -58,11 +59,13 @@ pub fn run(args: &[String]) -> Result<Invocation> {
     }
     let store = ParkStore::system()?;
     if let Some(id) = parsed.run.as_deref() {
+        let _detached = Detached::register();
         runner::run_parked(&store, id)?;
         return Ok(Invocation::Ran);
     }
     let terminals = TerminalSessionService::system();
     if let Some(token) = parsed.watch.as_deref() {
+        let _detached = Detached::register();
         watch_launch(
             &terminals,
             &CliSessionInterpreter::system(),
@@ -161,6 +164,7 @@ fn park(
         runner_identity: None,
         closes_terminal,
         caller_closed: false,
+        restarts: 0,
         exit_code: None,
         wake: None,
         resumed_session: None,
@@ -176,9 +180,7 @@ fn park(
     if let Some(identity) = facts.spawn_identity.as_ref() {
         record_pull_requests(&record, identity.key.as_str());
     }
-    let mut runner = Command::new(executable);
-    runner.args([PARK, "--run", &id]).current_dir(&record.cwd);
-    qol_process::spawn_detached(&mut runner).context("failed to start the park runner")?;
+    spawn_runner(&executable, &record)?;
     qol_runtime::probe!(
         "CLI_SESSION_PARK",
         "event=parked id={} tool={} session={} external_id={}",
@@ -197,6 +199,45 @@ fn park(
         command: record.command,
         instruction,
     })
+}
+
+pub(crate) fn spawn_runner(executable: &Path, record: &ParkRecord) -> Result<()> {
+    let mut runner = Command::new(executable);
+    runner
+        .args([PARK, "--run", &record.id])
+        .current_dir(&record.cwd);
+    qol_process::spawn_detached(&mut runner).context("failed to start the park runner")
+}
+
+struct Detached(Option<PathBuf>);
+
+impl Detached {
+    fn register() -> Self {
+        let runtime_dir = qol_config::runtime_dir();
+        let registered = runtime_dir
+            .as_deref()
+            .ok_or_else(|| anyhow!("no runtime directory"))
+            .and_then(|dir| {
+                qol_process::detached::register(dir, std::process::id()).map_err(Into::into)
+            });
+        match registered {
+            Ok(()) => Self(runtime_dir),
+            Err(error) => {
+                log::warn!(
+                    "[cli-sessions] park runner not registered as detached, so a tray restart may stop it: {error:#}"
+                );
+                Self(None)
+            }
+        }
+    }
+}
+
+impl Drop for Detached {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            qol_process::detached::unregister(dir, std::process::id());
+        }
+    }
 }
 
 fn record_pull_requests(record: &ParkRecord, key: &str) {
@@ -258,6 +299,7 @@ fn watch_launch(
         runner_identity: qol_process::process_identity(std::process::id()).ok(),
         closes_terminal: true,
         caller_closed: false,
+        restarts: 0,
         exit_code: None,
         wake: None,
         resumed_session: Some(token.to_owned()),
@@ -491,6 +533,7 @@ pub(crate) mod tests {
             runner_identity: None,
             closes_terminal: false,
             caller_closed: false,
+            restarts: 0,
             exit_code: None,
             wake: None,
             resumed_session: None,

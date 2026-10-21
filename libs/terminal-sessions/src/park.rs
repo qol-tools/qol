@@ -45,6 +45,8 @@ pub struct ParkRecord {
     pub closes_terminal: bool,
     #[serde(default)]
     pub caller_closed: bool,
+    #[serde(default)]
+    pub restarts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     /// What the conversation is told about the finished command, kept until it is delivered.
@@ -110,10 +112,13 @@ pub fn exited(dir: &Path, external_id: &str) -> Vec<ParkRecord> {
 }
 
 pub const STALE_DETAIL: &str = "the park runner stopped before it delivered the command's result";
+pub const RUNNER_RESTARTS: u32 = 3;
 
-/// Marks parks whose runner died before delivering as failed, so they stop showing as
-/// waiting and are announced once. Returns the ids it failed.
-pub fn fail_stale(dir: &Path, runner_alive: impl Fn(u32, Option<&str>) -> bool) -> Vec<String> {
+pub fn relaunch_stale(
+    dir: &Path,
+    runner_alive: impl Fn(u32, Option<&str>) -> bool,
+    relaunch: impl Fn(&ParkRecord) -> bool,
+) -> Vec<String> {
     records(dir)
         .unwrap_or_default()
         .into_iter()
@@ -124,19 +129,33 @@ pub fn fail_stale(dir: &Path, runner_alive: impl Fn(u32, Option<&str>) -> bool) 
                 .is_some_and(|pid| !runner_alive(pid, record.runner_identity.as_deref()))
         })
         .filter_map(|record| {
-            let id = record.id.clone();
+            if record.restarts < RUNNER_RESTARTS {
+                let relaunched = ParkRecord {
+                    restarts: record.restarts + 1,
+                    runner_pid: None,
+                    runner_identity: None,
+                    ..record.clone()
+                };
+                if replace(dir, &relaunched).is_some() && relaunch(&relaunched) {
+                    return None;
+                }
+            }
             let failed = ParkRecord {
                 state: ParkState::Failed,
                 runner_pid: None,
                 detail: Some(STALE_DETAIL.to_owned()),
                 ..record
             };
-            let staging = dir.join(format!("{id}.json.stale"));
-            fs::write(&staging, serde_json::to_string(&failed).ok()?).ok()?;
-            fs::rename(staging, dir.join(format!("{id}.json"))).ok()?;
-            Some(id)
+            replace(dir, &failed)?;
+            Some(failed.id)
         })
         .collect()
+}
+
+fn replace(dir: &Path, record: &ParkRecord) -> Option<()> {
+    let staging = dir.join(format!("{}.json.stale", record.id));
+    fs::write(&staging, serde_json::to_string(record).ok()?).ok()?;
+    fs::rename(staging, dir.join(format!("{}.json", record.id))).ok()
 }
 
 /// Resumed parks whose runner still watches the woken session, to close it when its turn ends.
@@ -213,6 +232,7 @@ mod tests {
             runner_identity: None,
             closes_terminal: false,
             caller_closed: false,
+            restarts: 0,
             exit_code: None,
             wake: None,
             resumed_session: None,
@@ -292,10 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn parks_whose_runner_died_fail_once_and_are_announced() {
+    fn parks_whose_runner_died_are_relaunched_until_their_restarts_run_out() {
         let root = tempfile::tempdir().unwrap();
         write(root.path(), &record("dead", 1, ParkState::Waiting));
         write(root.path(), &record("undelivered", 1, ParkState::Exited));
+        write(
+            root.path(),
+            &ParkRecord {
+                restarts: RUNNER_RESTARTS,
+                ..record("spent", 1, ParkState::Waiting)
+            },
+        );
         write(
             root.path(),
             &ParkRecord {
@@ -312,25 +339,55 @@ mod tests {
         );
         write(root.path(), &record("done", 1, ParkState::Delivered));
         let alive = |pid: u32, _: Option<&str>| pid == 8;
-        let mut failed = fail_stale(root.path(), alive);
-        failed.sort();
-        assert_eq!(failed, ["dead", "undelivered"]);
-        assert!(fail_stale(root.path(), alive).is_empty());
+        let launched = std::cell::RefCell::new(Vec::new());
+        let relaunch = |record: &ParkRecord| {
+            launched
+                .borrow_mut()
+                .push((record.id.clone(), record.restarts, record.runner_pid));
+            true
+        };
+        assert_eq!(relaunch_stale(root.path(), alive, relaunch), ["spent"]);
+        let mut launched = launched.into_inner();
+        launched.sort();
+        assert_eq!(
+            launched,
+            [
+                ("dead".to_owned(), 1, None),
+                ("undelivered".to_owned(), 1, None)
+            ]
+        );
+        let never =
+            |_: &ParkRecord| -> bool { panic!("a relaunched park waits for its new runner") };
+        assert!(relaunch_stale(root.path(), alive, never).is_empty());
         let ids: Vec<String> = waiting(root.path())
             .into_iter()
             .map(|record| record.id)
             .collect();
-        assert_eq!(ids, ["alive", "starting"]);
+        assert_eq!(ids, ["alive", "dead", "starting"]);
+        let spent = records(root.path())
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == "spent")
+            .unwrap();
+        assert_eq!(spent.state, ParkState::Failed);
+        assert_eq!(spent.detail.as_deref(), Some(STALE_DETAIL));
         let announced: Vec<String> = unnotified(root.path())
             .into_iter()
             .map(|record| record.id)
             .collect();
-        assert_eq!(announced.len(), 2);
-        assert!(records(root.path())
-            .unwrap()
-            .iter()
-            .filter(|record| record.state == ParkState::Failed)
-            .all(|record| record.detail.as_deref() == Some(STALE_DETAIL)));
+        assert_eq!(announced, ["spent"]);
+    }
+
+    #[test]
+    fn a_park_whose_relaunch_fails_is_failed_with_its_restarts_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        write(root.path(), &record("dead", 1, ParkState::Waiting));
+        let dead = |_: u32, _: Option<&str>| false;
+        assert_eq!(relaunch_stale(root.path(), dead, |_| false), ["dead"]);
+        let failed = records(root.path()).unwrap().remove(0);
+        assert_eq!(failed.state, ParkState::Failed);
+        assert_eq!(failed.restarts, 0);
+        assert_eq!(failed.detail.as_deref(), Some(STALE_DETAIL));
     }
 
     #[test]

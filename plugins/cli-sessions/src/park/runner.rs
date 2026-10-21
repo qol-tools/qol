@@ -180,14 +180,40 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid parked session token: {error}"))?;
     let log_path = store.log_path(id);
-    let exit = match start_command(&record, &log_path) {
+    if record.state != ParkState::Exited
+        && !run_command(
+            store,
+            &mut record,
+            &log_path,
+            &terminals,
+            &interpreter,
+            &caller,
+        )?
+    {
+        return Ok(());
+    }
+    if deliver(&terminals, &interpreter, store, &mut record, &caller)? {
+        watch_woken(&terminals, &interpreter, store, &mut record, None)?;
+    }
+    Ok(())
+}
+
+fn run_command(
+    store: &ParkStore,
+    record: &mut ParkRecord,
+    log_path: &Path,
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    caller: &SessionBinding,
+) -> Result<bool> {
+    let exit = match start_command(record, log_path) {
         Ok(mut child) => {
             let mut gate = CloseGate::default();
             loop {
-                if store.is_claimed(id) {
+                if store.is_claimed(&record.id) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Ok(());
+                    return Ok(false);
                 }
                 match child.try_wait() {
                     Ok(Some(status)) => break Ok(status),
@@ -199,22 +225,26 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
                     }
                 }
                 if !record.caller_closed {
-                    let state = caller_state(&terminals, &interpreter, &caller);
+                    let state = caller_state(terminals, interpreter, caller);
                     if state == CallerState::Gone {
                         record.caller_closed = true;
-                        let _ = store.record(&record);
+                        let _ = store.record(record);
                     } else if gate.observe(&state)
-                        && parking_on(&record)
+                        && parking_on(record)
                         && matches!(
-                            interpreter.keep_open_reason_for(&terminals, &caller),
+                            interpreter.keep_open_reason_for(terminals, caller),
                             Ok(None)
                         )
-                        && matches!(interpreter.harness_busy_for(&terminals, &caller), Ok(false))
+                        && matches!(interpreter.harness_busy_for(terminals, caller), Ok(false))
                     {
-                        let _ = terminals.close(&caller);
+                        let _ = terminals.close(caller);
                         record.caller_closed = true;
-                        let _ = store.record(&record);
-                        qol_runtime::probe!("CLI_SESSION_PARK", "event=caller_closed id={}", id);
+                        let _ = store.record(record);
+                        qol_runtime::probe!(
+                            "CLI_SESSION_PARK",
+                            "event=caller_closed id={}",
+                            record.id
+                        );
                     }
                 }
                 thread::sleep(POLL);
@@ -223,14 +253,11 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
         Err(error) => Err(error),
     };
     record.exit_code = exit.as_ref().ok().and_then(ExitStatus::code);
-    let tail = read_tail(&log_path);
-    record.wake = Some(wake_section(&record, &exit, &tail, &log_path));
+    let tail = read_tail(log_path);
+    record.wake = Some(wake_section(record, &exit, &tail, log_path));
     record.state = ParkState::Exited;
-    store.record(&record)?;
-    if deliver(&terminals, &interpreter, store, &mut record, &caller)? {
-        watch_woken(&terminals, &interpreter, store, &mut record, None)?;
-    }
-    Ok(())
+    store.record(record)?;
+    Ok(true)
 }
 
 fn parking_on(record: &ParkRecord) -> bool {
