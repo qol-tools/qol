@@ -17,7 +17,7 @@ permissions:
 # A newer push to the same ref replaces the analysis of the commit it buried,
 # so a burst of merges analyzes main once, from the commit that lands last.
 concurrency:
-  group: codeql-${{ github.event_name }}-${{ github.ref }}
+  group: "${{ startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') && format('codeql-bump-{0}', github.sha) || format('codeql-{0}-{1}', github.event_name, github.ref) }}"
   cancel-in-progress: true
 
 jobs:
