@@ -55,12 +55,17 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_release_build_runs_beside_lint_and_test(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
-        self.assertIn("if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' }}", check)
+        self.assertIn(
+            "if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' }}",
+            check,
+        )
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
             "needs: [plan, batch]",
-            "if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
+            "${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' &&\n",
+            "!(needs.plan.outputs.trusted == 'true' && needs.batch.outputs.ubuntu_skip == 'true' &&\n",
+            "needs.batch.outputs.macos_skip == 'true' && needs.batch.outputs.windows_skip == 'true') }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -104,14 +109,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_only_the_queue_tail_plans_a_release_build_against_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         batch = workflow.split("  batch:\n", 1)[1].split("  release-build:\n", 1)[0]
-        self.assertNotIn("needs:", batch)
+        self.assertIn("    needs: plan\n", batch)
         for contract in [
             "name: batch role",
             "if: github.event_name == 'merge_group'",
             "fetch-depth: 0",
             "run: python3 .github/scripts/queue_batch.py role",
             "if: steps.role.outputs.role == 'tail'",
-            'BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$GITHUB_SHA" python3 .github/scripts/affected_crates.py',
+            "TRUSTED: ${{ needs.plan.outputs.trusted }}",
+            "AHEAD_SHA: ${{ github.event.merge_group.base_sha }}",
+            'head="$GITHUB_SHA"',
+            'if [[ "$TRUSTED" == true ]]; then\n            head="$AHEAD_SHA"\n          fi',
+            'BASE_SHA="$(git merge-base origin/main HEAD)" HEAD_SHA="$head" python3 .github/scripts/affected_crates.py',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, batch)
@@ -164,8 +173,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "run: python3 .github/scripts/queue_batch.py gate",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
-            '[ "$BUILD" = success ] || exit 1',
-            '[ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1',
+            'TRUSTED: ${{ needs.plan.outputs.trusted }}',
+            '[ "$ROLE" != tail ] || [ "$BUILD" = success ] || { [ "$TRUSTED" = true ] && [ "$BUILD" = skipped ]; } || exit 1',
+            '[ "$REUSED" = true ] || [ "$TRUSTED" = true ] || [ "$CHECK" = success ] || exit 1',
             '*" failure "*|*" cancelled "*) exit 1 ;;',
         ]:
             with self.subTest(contract=contract):
@@ -252,6 +262,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                         "GITHUB_EVENT_NAME": "merge_group",
                         "PLAN": "success",
                         "REUSED": "false",
+                        "TRUSTED": "false",
                         "CHECK": "success",
                         "BATCH": batch,
                         "ROLE": role,
@@ -260,6 +271,118 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+
+    def test_queue_gate_treats_a_trusted_plan_like_a_reused_verdict(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        gate = workflow.split("  gate:\n", 1)[1].split("  supersede:\n", 1)[0]
+        step = named_step(gate, "Every job passed or was skipped", "      ")
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n", 1)[0])
+        cases = [
+            ("true", "skipped", "tail", "skipped", True),
+            ("true", "skipped", "tail", "success", True),
+            ("true", "skipped", "tail", "failure", False),
+            ("true", "skipped", "ahead", "skipped", True),
+            ("false", "skipped", "tail", "success", False),
+            ("false", "success", "tail", "skipped", False),
+            ("", "skipped", "ahead", "skipped", False),
+        ]
+        for trusted, check, role, build, passes in cases:
+            with self.subTest(trusted=trusted, check=check, role=role, build=build):
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "GITHUB_EVENT_NAME": "merge_group",
+                        "PLAN": "success",
+                        "REUSED": "false",
+                        "TRUSTED": trusted,
+                        "CHECK": check,
+                        "BATCH": "success",
+                        "ROLE": role,
+                        "BUILD": build,
+                        "RESULTS": f"success {check} success {build} skipped skipped skipped skipped",
+                    },
+                )
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+
+    def test_pull_request_runs_record_what_they_tested(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  check:\n", 1)[0]
+        affected = named_step(plan, "Compute affected crates", "      ")
+        for contract in [
+            "if: github.event_name != 'merge_group'",
+            "QOL_AFFECTED_OUTPUT: ${{ runner.temp }}/affected.json",
+            "run: python3 .github/scripts/affected_crates.py",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, affected)
+        record = named_step(plan, "Record what this run tests", "      ")
+        for contract in [
+            "if: github.event_name == 'pull_request'",
+            "PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+            'python3 .github/scripts/queue_trust.py record "$PR_HEAD_SHA" "$(git rev-parse HEAD^1)"',
+            '"$RUNNER_TEMP/affected.json" "$RUNNER_TEMP/tested-base/tested-base.json"',
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, record)
+        upload = named_step(plan, "Upload the tested base", "      ")
+        for contract in [
+            "if: github.event_name == 'pull_request'",
+            "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
+            "name: tested-base",
+            "path: ${{ runner.temp }}/tested-base/tested-base.json",
+            "retention-days: 7",
+            "overwrite: true",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, upload)
+        self.assertEqual(plan.count("queue_trust.py"), 2)
+        self.assertIn("actions: read", plan.split("    steps:", 1)[0])
+
+    def test_the_queue_plans_from_the_pull_request_run_it_trusts(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        plan = workflow.split("  plan:\n", 1)[1].split("  check:\n", 1)[0]
+        outputs = plan.split("    outputs:\n", 1)[1].split("    steps:\n", 1)[0]
+        self.assertIn("trusted: ${{ steps.trust.outputs.trusted }}", outputs)
+        for system in ["ubuntu", "macos", "windows"]:
+            for key in ["clippy", "build", "test", "doctest", "skip"]:
+                name = f"{system}_{key}"
+                with self.subTest(output=name):
+                    self.assertIn(
+                        f"{name}: ${{{{ steps.trust.outputs.{name} || steps.affected.outputs.{name} }}}}",
+                        outputs,
+                    )
+        trust = named_step(plan, "Trust the pull request run", "      ")
+        for contract in [
+            "id: trust",
+            "if: github.event_name == 'merge_group'",
+            "GH_TOKEN: ${{ github.token }}",
+            "HEAD_REF: ${{ github.event.merge_group.head_ref }}",
+            "BASE_SHA: ${{ github.event.merge_group.base_sha }}",
+            "HEAD_SHA: ${{ github.sha }}",
+            "run: python3 .github/scripts/queue_trust.py\n",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, trust)
+        covered = named_step(plan, "Pull request results cover this entry", "      ")
+        self.assertIn("if: steps.trust.outputs.trusted == 'true'", covered)
+        for job in ["check", "process-windows", "registry-tool"]:
+            with self.subTest(job=job):
+                condition = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
+                self.assertIn("needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true'", condition)
+
+    def test_pull_request_runs_test_what_the_queue_trusts(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        test_steps = re.findall(r"      - name: Test\n(.*?)(?=\n      - name:|\Z)", check, re.S)
+        self.assertEqual(len(test_steps), 2)
+        for step in [*test_steps, named_step(check, "Install cargo-nextest", "      ")]:
+            with self.subTest(step=step.splitlines()[0]):
+                self.assertNotIn("pull_request", step)
+        self.assertIn("if: runner.os == 'Linux' && matrix.skip != 'true'\n", check)
+        self.assertIn("if: runner.os != 'Linux' && matrix.skip != 'true'\n", check)
 
     def test_no_run_waits_for_the_review_or_watches_for_failures(self):
         scripts = {path.name for path in (ROOT / ".github/scripts").glob("*.py")}
@@ -486,7 +609,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(len(test_steps), 2)
         self.assertRegex(check_job, r"tool: cargo-nextest@\d+\.\d+\.\d+")
         install = named_step(check_job, "Install cargo-nextest", "      ")
-        self.assertIn("if: matrix.skip != 'true' && github.event_name != 'pull_request'", install)
+        self.assertIn("        if: matrix.skip != 'true'\n", install)
         for step in test_steps:
             with self.subTest(step=step.splitlines()[0]):
                 self.assertIn("TEST_ARGS: ${{ matrix.test_args }}", step)
@@ -503,7 +626,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 
         for contract in [
-            "windows_dev_build: ${{ steps.affected.outputs.windows_dev_build }}",
+            "windows_dev_build: ${{ steps.trust.outputs.windows_dev_build || steps.affected.outputs.windows_dev_build }}",
             "fromJSON(needs.plan.outputs.windows_dev_build || 'false')",
             "if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}",
             "run: cargo test --locked -p qol-dev-build --all-targets",
@@ -516,7 +639,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for key in ["clippy", "build", "test", "doctest", "skip"]:
             with self.subTest(key=key):
                 self.assertIn(
-                    f"windows_{key}: ${{{{ steps.affected.outputs.windows_{key} }}}}",
+                    f"windows_{key}: ${{{{ steps.trust.outputs.windows_{key} || steps.affected.outputs.windows_{key} }}}}",
                     workflow,
                 )
         for contract in [
@@ -527,7 +650,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "doctest: ${{ needs.plan.outputs.windows_doctest }}",
             "skip: ${{ needs.plan.outputs.windows_skip }}",
             "    defaults:\n      run:\n        shell: bash\n",
-            "if: runner.os != 'Linux' && matrix.skip != 'true' && github.event_name != 'pull_request'",
+            "if: runner.os != 'Linux' && matrix.skip != 'true'\n",
             "cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings",
         ]:
             with self.subTest(contract=contract):
