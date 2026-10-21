@@ -200,7 +200,7 @@ impl Courier {
     }
 }
 
-fn spawn_wake(key: &str) {
+pub(crate) fn spawn_wake(key: &str) {
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
         Err(error) => {

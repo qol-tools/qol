@@ -247,12 +247,14 @@ where
         )
         .command(
             Command::new(crate::park::WAKE)
-                .about("Reopen a closed or parked session so it reads the message waiting for it.")
+                .about("Wake a session so it reads the messages waiting for it.")
                 .usage(format!("{PLUGIN_ID} {} <spawn-key>", crate::park::WAKE))
-                .detail("Resumes the newest park recorded for the spawn key in a new tab and types its knock as the first prompt, or a note to read session_inbox when no knock waits. A park still waiting on its command keeps waiting, and its result is submitted into the reopened tab.")
-                .detail("The daemon runs this on its own when a message or board knock targets a key with no live terminal. It never reopens the switchboard, a conversation that is already open, or a park whose terminal is still open.")
+                .detail("With a live terminal carrying the spawn key, types its knock, or a note to read session_inbox when no knock waits, into that terminal and submits it, even while it is parked on a watcher. A session mid-turn or holding a draft is left alone.")
+                .detail("With no live terminal, resumes the newest park recorded for the spawn key in a new tab with the same note as its first prompt. A park still waiting on its command keeps waiting, and its result is submitted into the reopened tab.")
+                .detail("The daemon reopens a closed park on its own when a message or board knock targets a key with no live terminal. The switchboard is never woken.")
+                .detail("The user runs it as `qols wake <spawn-key>`, or with w on a selected row of the CLI Sessions panel.")
                 .output("A confirmation line on stdout; diagnostics on stderr.")
-                .exit_behavior("Exits non-zero when the key has no closed park, the conversation is already open, or the resume fails.")
+                .exit_behavior("Exits non-zero when the session is mid-turn or holds a draft, the key has neither a live terminal nor a closed park, more than one terminal carries it, or the resume fails.")
                 .run_plain_text(|context| {
                     let [key] = context.args() else {
                         anyhow::bail!("expected one spawn key like audio-input");

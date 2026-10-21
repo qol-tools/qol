@@ -202,6 +202,7 @@ fn footer() -> impl IntoElement {
     kit.hint_bar()
         .child(kit.hint(Key::ENTER, "focus"))
         .child(kit.hint(Key::letter('a'), "acknowledge"))
+        .child(kit.hint(Key::letter('w'), "wake"))
         .child(kit.hint(Key::letter('s').alt(), "collapse"))
 }
 
@@ -502,6 +503,13 @@ impl SessionsView {
                     }
                     "w" if ev.keystroke.modifiers.platform => {
                         this.dismiss_with_reason(CLOSE_KEY_REASON, cx);
+                    }
+                    "w" => {
+                        if ev.keystroke.modifiers == Modifiers::default()
+                            && this.key_repeat_guard("w")
+                        {
+                            this.wake_selected();
+                        }
                     }
                     "s" if ev.keystroke.modifiers.alt => {
                         this.collapse_panel(window, cx);

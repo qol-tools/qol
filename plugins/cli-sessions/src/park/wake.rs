@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Result};
 use qol_sessions_engine::knocks;
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typed, Typing};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
-use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
+use qol_terminal_sessions::{SessionBinding, SessionFacts, TerminalSessionService};
 
 use super::prompt::{message_wake_prompt, UNKNOCKED_WAKE};
 use super::resume::resume;
@@ -36,6 +36,71 @@ fn lets_go(record: &ParkRecord) -> bool {
 }
 
 pub fn wake(key: &str) -> Result<String> {
+    if key == qol_sessions_engine::switchboard::SWITCHBOARD_KEY {
+        bail!("the switchboard is never woken; write in it");
+    }
+    let terminals = TerminalSessionService::system();
+    let snapshot = terminals.snapshot()?;
+    match live_holders(snapshot.sessions(), key).as_slice() {
+        [] => reopen(key),
+        [facts] => knock_live(&terminals, key, &facts.binding()?),
+        _ => bail!("more than one live terminal carries `{key}`; close the extra one first"),
+    }
+}
+
+fn live_holders<'a>(sessions: &'a [SessionFacts], key: &str) -> Vec<&'a SessionFacts> {
+    sessions
+        .iter()
+        .filter(|facts| {
+            facts
+                .spawn_identity
+                .as_ref()
+                .is_some_and(|identity| identity.key.as_str() == key)
+        })
+        .collect()
+}
+
+fn knock_live(
+    terminals: &TerminalSessionService,
+    key: &str,
+    binding: &SessionBinding,
+) -> Result<String> {
+    let interpreter = CliSessionInterpreter::system();
+    if !super::prompt_free(terminals, &interpreter, binding) {
+        bail!("`{key}` is mid-turn or holds a draft in `{binding}`; its messages reach it once its prompt is free");
+    }
+    let claimed = knocks::claim(key)?;
+    let text = claimed
+        .as_ref()
+        .map_or_else(|| UNKNOCKED_WAKE.to_owned(), knocks::ClaimedKnock::text);
+    let typed =
+        ComposerGuard::default().type_text(terminals, &interpreter, Typing::submit(binding, &text));
+    match typed {
+        Ok(typed) if typed.landed() => {
+            qol_runtime::probe!(
+                "CLI_SESSIONS_KNOCK",
+                "event=woken key={key} session={binding}"
+            );
+            Ok(format!("woke {key} in {binding}"))
+        }
+        outcome => {
+            if let Some(claimed) = claimed.as_ref() {
+                if let Err(restore_error) = knocks::restore(claimed) {
+                    log::warn!("[cli-sessions] knock for {key} not put back: {restore_error}");
+                }
+            }
+            match outcome {
+                Ok(Typed::Held(hold)) => bail!("`{key}` was not woken: {hold}"),
+                Ok(_) => bail!(
+                    "`{key}` was not woken, because its input box changed while the note was typed"
+                ),
+                Err(error) => Err(error.into()),
+            }
+        }
+    }
+}
+
+fn reopen(key: &str) -> Result<String> {
     let store = ParkStore::system()?;
     let record = wakeable(&store, key)
         .ok_or_else(|| anyhow!("`{key}` has no closed parked session to reopen"))?;
