@@ -1838,11 +1838,12 @@ fn web_theme_previews_match_the_locked_pictures() {
 
 const MOTION_OWNER: &str = "libs/gpui/src/motion.rs";
 
-const HAND_MOTION: [&str; 4] = [
+const HAND_MOTION: [&str; 5] = [
     "Animation::new(",
     ".with_easing(",
     "ease_out_quint",
     "ease_in_out",
+    ".curve",
 ];
 
 fn writes_hand_motion(line: &str, pattern: &str) -> bool {
@@ -1873,7 +1874,7 @@ fn every_animation_takes_a_theme_motion() {
     }
     assert!(
         problems.is_empty(),
-        "Every animation is qol_gpui::motion::animation(Motion::*), so its time and curve come from the theme.\n{}",
+        "Every animation is qol_gpui::motion::animation(Motion::*) and every eased value is qol_gpui::motion::progress or ease, so its time and curve come from the theme and the Animations setting can hold it still.\n{}",
         problems.join("\n")
     );
 }
@@ -1881,9 +1882,9 @@ fn every_animation_takes_a_theme_motion() {
 #[test]
 fn motion_curves_start_at_rest_and_arrive_exactly() {
     for motion in Motion::ALL {
-        assert_eq!(motion.progress(Duration::ZERO), 0.0, "{motion:?}");
-        assert_eq!(motion.progress(motion.duration), 1.0, "{motion:?}");
-        assert_eq!(motion.progress(motion.duration * 3), 1.0, "{motion:?}");
+        assert_eq!(motion.curve.at(0.0), 0.0, "{motion:?}");
+        assert_eq!(motion.curve.at(1.0), 1.0, "{motion:?}");
+        assert_eq!(motion.curve.at(3.0), 1.0, "{motion:?}");
     }
     assert_eq!(Curve::Travel.at(0.5), 0.5);
     assert!(Curve::Settle.at(0.5) > 0.96);

@@ -104,7 +104,7 @@ pub fn fill(phase: Phase, delta: f32) -> f32 {
 pub fn position_at(from: f32, to: usize, elapsed_ms: u64) -> f32 {
     let elapsed = Duration::from_millis(elapsed_ms);
     if elapsed < Motion::TRAVEL.duration {
-        from + (to as f32 - from) * Motion::TRAVEL.progress(elapsed)
+        from + (to as f32 - from) * crate::motion::progress(Motion::TRAVEL, elapsed)
     } else {
         to as f32
     }
@@ -339,6 +339,7 @@ mod tests {
 
     #[test]
     fn position_at_starts_at_from_ends_at_to_and_is_strictly_between_halfway() {
+        crate::motion::pin(true);
         assert_eq!(position_at(0.0, 4, 0), 0.0);
         let travel_ms = Motion::TRAVEL.duration.as_millis() as u64;
         assert_eq!(position_at(0.0, 4, travel_ms), 4.0);

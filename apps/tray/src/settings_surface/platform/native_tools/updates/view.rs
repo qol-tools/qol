@@ -208,7 +208,7 @@ impl UpdatesView {
         let Some(Some(since)) = self.visited.get(id) else {
             return 1.0;
         };
-        fade_opacity(since.elapsed())
+        fade_opacity(since.elapsed(), qol_gpui::motion::moving())
     }
 
     fn page_rows(&self) -> (Vec<PageRow>, Option<String>) {
@@ -696,8 +696,17 @@ impl Render for UpdatesView {
     }
 }
 
-fn fade_opacity(elapsed: Duration) -> f32 {
-    1.0 - qol_theme::Motion::FADE.progress(elapsed.saturating_sub(qol_theme::STAY_BRIEF))
+fn fade_opacity(elapsed: Duration, moving: bool) -> f32 {
+    if elapsed <= qol_theme::STAY_BRIEF {
+        return 1.0;
+    }
+    let fade = qol_theme::Motion::FADE;
+    let fading = elapsed - qol_theme::STAY_BRIEF;
+    1.0 - qol_gpui::motion::ease_when(
+        fade,
+        fading.as_secs_f32() / fade.duration.as_secs_f32(),
+        moving,
+    )
 }
 
 fn finished(state: TargetState) -> bool {
@@ -809,11 +818,20 @@ mod tests {
             (9000, 0.0),
         ];
         for (millis, expected) in cases {
-            let opacity = fade_opacity(Duration::from_millis(millis));
+            let opacity = fade_opacity(Duration::from_millis(millis), true);
             assert!(
                 (opacity - expected).abs() < 0.001,
                 "{millis} ms gave {opacity}"
             );
+        }
+    }
+
+    #[test]
+    fn finished_row_holds_then_vanishes_without_motion() {
+        let cases = [(0, 1.0), (4000, 1.0), (4001, 0.0), (9000, 0.0)];
+        for (millis, expected) in cases {
+            let opacity = fade_opacity(Duration::from_millis(millis), false);
+            assert_eq!(opacity, expected, "{millis} ms");
         }
     }
 

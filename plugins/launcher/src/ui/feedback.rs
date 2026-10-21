@@ -181,18 +181,17 @@ pub fn hold_then_fade(hold: Duration, delta: f32) -> f32 {
     if at <= hold {
         1.0
     } else {
-        1.0 - Motion::QUICK
-            .curve
-            .at((at - hold) / Motion::QUICK.duration.as_secs_f32())
+        1.0 - qol_gpui::motion::ease(
+            Motion::QUICK,
+            (at - hold) / Motion::QUICK.duration.as_secs_f32(),
+        )
     }
 }
 
 pub fn fade_in_hold_fade(hold: Duration, delta: f32) -> f32 {
     let total = (hold + Motion::QUICK.duration).as_secs_f32();
     let at = delta * total;
-    let rise = Motion::QUICK
-        .curve
-        .at(at / Motion::QUICK.duration.as_secs_f32());
+    let rise = qol_gpui::motion::ease(Motion::QUICK, at / Motion::QUICK.duration.as_secs_f32());
     rise.min(hold_then_fade(hold, delta))
 }
 
@@ -205,9 +204,10 @@ pub fn ghost(delta: f32) -> f32 {
     } else {
         GHOST_OPACITY
             * (1.0
-                - Motion::FADE
-                    .curve
-                    .at((at - hold) / Motion::FADE.duration.as_secs_f32()))
+                - qol_gpui::motion::ease(
+                    Motion::FADE,
+                    (at - hold) / Motion::FADE.duration.as_secs_f32(),
+                ))
     }
 }
 
@@ -216,14 +216,21 @@ pub fn ghost_animation() -> Animation {
 }
 
 pub fn nudge(delta: f32) -> f32 {
+    nudge_offset(delta, qol_gpui::motion::moving())
+}
+
+fn nudge_offset(delta: f32, moving: bool) -> f32 {
+    if !moving {
+        return 0.0;
+    }
     let quick = Motion::QUICK.duration.as_secs_f32();
     let total = NUDGE_HOLD.as_secs_f32() + quick;
     let at = delta * total;
     let hold = NUDGE_HOLD.as_secs_f32();
     if at <= hold {
-        NUDGE * Motion::QUICK.curve.at(at / quick)
+        NUDGE * qol_gpui::motion::ease_when(Motion::QUICK, at / quick, moving)
     } else {
-        NUDGE * (1.0 - Motion::QUICK.curve.at((at - hold) / quick))
+        NUDGE * (1.0 - qol_gpui::motion::ease_when(Motion::QUICK, (at - hold) / quick, moving))
     }
 }
 
@@ -283,6 +290,7 @@ mod tests {
 
     #[test]
     fn holds_fade_after_their_time() {
+        qol_gpui::motion::pin(true);
         assert_eq!(hold_then_fade(BADGE_HOLD, 0.0), 1.0);
         assert_eq!(hold_then_fade(BADGE_HOLD, 0.5), 1.0);
         assert!(hold_then_fade(BADGE_HOLD, 1.0) < 1e-6);
@@ -290,8 +298,11 @@ mod tests {
         assert_eq!(fade_in_hold_fade(LINE_HOLD, 0.5), 1.0);
         assert_eq!(ghost(0.0), GHOST_OPACITY);
         assert!(ghost(1.0) < 1e-6);
-        assert!(nudge(0.0).abs() < 1e-6);
-        assert!(nudge(1.0).abs() < 1e-6);
-        assert!((nudge(0.45) - NUDGE).abs() < 0.2);
+        assert!(nudge_offset(0.0, true).abs() < 1e-6);
+        assert!(nudge_offset(1.0, true).abs() < 1e-6);
+        assert!((nudge_offset(0.45, true) - NUDGE).abs() < 0.2);
+        for delta in [0.0, 0.45, 1.0] {
+            assert_eq!(nudge_offset(delta, false), 0.0);
+        }
     }
 }
