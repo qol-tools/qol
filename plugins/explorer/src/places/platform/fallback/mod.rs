@@ -1,7 +1,8 @@
 use std::ffi::OsStr;
-use std::fs::{DirEntry, Metadata};
+use std::fs::{DirEntry, FileType, Metadata};
 use std::path::{Path, PathBuf};
 
+use crate::listing::EntryKind;
 use crate::places::{Mount, PlaceKind};
 
 pub(crate) fn user_folders(_home: &Path) -> Vec<(PlaceKind, PathBuf)> {
@@ -27,4 +28,12 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
 
 pub(crate) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
     None
+}
+
+pub(crate) fn special_kind(_file_type: &FileType) -> Option<EntryKind> {
+    None
+}
+
+pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
+    false
 }

@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{DirEntry, Metadata};
+use std::fs::{DirEntry, FileType, Metadata};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +8,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
 
+use crate::listing::EntryKind;
 use crate::places::{Mount, PlaceKind};
 
 const SYSTEM_DRIVE: &str = "SystemDrive";
@@ -53,6 +54,14 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
 
 pub(crate) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
     None
+}
+
+pub(crate) fn special_kind(_file_type: &FileType) -> Option<EntryKind> {
+    None
+}
+
+pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
+    false
 }
 
 fn drive(letter: char) -> Option<Mount> {

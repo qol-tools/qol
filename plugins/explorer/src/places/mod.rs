@@ -3,8 +3,10 @@ mod platform;
 mod tests;
 
 use std::ffi::OsStr;
-use std::fs::{DirEntry, Metadata};
+use std::fs::{DirEntry, FileType, Metadata};
 use std::path::{Path, PathBuf};
+
+use crate::listing::EntryKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceKind {
@@ -120,6 +122,14 @@ pub fn is_hidden_item(item: &DirEntry) -> bool {
 
 pub fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
     platform::file_id(metadata)
+}
+
+pub fn special_kind(file_type: &FileType) -> Option<EntryKind> {
+    platform::special_kind(file_type)
+}
+
+pub fn is_pseudo_fs(folder: &Path) -> bool {
+    platform::is_pseudo_fs(folder)
 }
 
 fn user_folder(kind: PlaceKind, known: &[(PlaceKind, PathBuf)], home: &Path) -> PathBuf {

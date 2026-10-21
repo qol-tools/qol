@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{mountinfo, user_dirs};
+use super::{is_pseudo_fs, mountinfo, user_dirs};
 use crate::places::{Mount, PlaceKind};
 
 #[test]
@@ -99,4 +99,12 @@ fn mountinfo_unescapes_octal_and_keeps_stray_backslashes() {
             mount("odd\\9x", "/media/me/odd\\9x"),
         ]
     );
+}
+
+#[test]
+fn proc_and_sys_are_pseudo_filesystems_and_a_temp_folder_is_not() {
+    assert!(is_pseudo_fs(Path::new("/proc")));
+    assert!(is_pseudo_fs(Path::new("/sys")));
+    assert!(!is_pseudo_fs(&std::env::temp_dir()));
+    assert!(!is_pseudo_fs(Path::new("/no/such/folder")));
 }

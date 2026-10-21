@@ -1,6 +1,6 @@
 use unicode_normalization::char::is_combining_mark;
 
-use crate::listing::{Entry, EntryKind, ItemCount};
+use crate::listing::{Entry, EntryKind, ItemCount, Size};
 
 const UNREADABLE: &str = "unreadable";
 
@@ -9,14 +9,20 @@ pub fn kind_label(kind: EntryKind) -> &'static str {
         EntryKind::Folder => "Folder",
         EntryKind::File => "File",
         EntryKind::Link => "Link",
+        EntryKind::BrokenLink => "Broken link",
+        EntryKind::Pipe => "Pipe",
+        EntryKind::Socket => "Socket",
+        EntryKind::Device => "Device",
     }
 }
 
 pub fn size_label(entry: &Entry, count: Option<ItemCount>, show_hidden: bool) -> String {
     if !entry.opens_as_folder {
-        return entry
-            .size
-            .map_or_else(|| UNREADABLE.to_string(), qol_gpui::format_bytes);
+        return match entry.size {
+            Size::Bytes(bytes) => qol_gpui::format_bytes(bytes),
+            Size::Blank => String::new(),
+            Size::Unreadable => UNREADABLE.to_string(),
+        };
     }
     match count {
         Some(ItemCount::Items { all, shown }) => qol_gpui::plural(
@@ -50,9 +56,9 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{kind_label, size_label, typed_split};
-    use crate::listing::{Entry, EntryKind, ItemCount, SortKey};
+    use crate::listing::{Entry, EntryKind, ItemCount, Size, SortKey};
 
-    fn entry(kind: EntryKind, size: u64, opens_as_folder: bool) -> Entry {
+    fn entry(kind: EntryKind, size: Size, opens_as_folder: bool) -> Entry {
         let name = OsString::from("thing");
         Entry {
             display: "thing".to_string(),
@@ -61,7 +67,7 @@ mod tests {
             path: PathBuf::from("/thing"),
             id: None,
             kind,
-            size: Some(size),
+            size,
             hidden: false,
             opens_as_folder,
         }
@@ -69,24 +75,32 @@ mod tests {
 
     #[test]
     fn every_kind_has_its_word() {
-        assert_eq!(kind_label(EntryKind::Folder), "Folder");
-        assert_eq!(kind_label(EntryKind::File), "File");
-        assert_eq!(kind_label(EntryKind::Link), "Link");
+        let cases = [
+            (EntryKind::Folder, "Folder"),
+            (EntryKind::File, "File"),
+            (EntryKind::Link, "Link"),
+            (EntryKind::BrokenLink, "Broken link"),
+            (EntryKind::Pipe, "Pipe"),
+            (EntryKind::Socket, "Socket"),
+            (EntryKind::Device, "Device"),
+        ];
+        for (kind, word) in cases {
+            assert_eq!(kind_label(kind), word);
+        }
     }
 
     #[test]
     fn files_show_bytes_and_folders_show_their_count_once_it_arrives() {
-        let file = entry(EntryKind::File, 2048, false);
-        let folder = entry(EntryKind::Folder, 0, true);
-        let linked_folder = entry(EntryKind::Link, 0, true);
-        let unread = Entry {
-            size: None,
-            ..entry(EntryKind::File, 0, false)
-        };
+        let file = entry(EntryKind::File, Size::Bytes(2048), false);
+        let folder = entry(EntryKind::Folder, Size::Blank, true);
+        let linked_folder = entry(EntryKind::Link, Size::Blank, true);
+        let unread = entry(EntryKind::File, Size::Unreadable, false);
+        let pipe = entry(EntryKind::Pipe, Size::Blank, false);
         let items = |all, shown| Some(ItemCount::Items { all, shown });
         let cases = [
             (&file, None, qol_gpui::format_bytes(2048)),
             (&unread, None, "unreadable".to_string()),
+            (&pipe, None, String::new()),
             (&folder, None, String::new()),
             (&folder, items(1, 1), "1 item".to_string()),
             (&folder, items(12, 12), "12 items".to_string()),
@@ -109,7 +123,7 @@ mod tests {
 
     #[test]
     fn folder_counts_leave_out_hidden_items_while_they_are_hidden() {
-        let folder = entry(EntryKind::Folder, 0, true);
+        let folder = entry(EntryKind::Folder, Size::Blank, true);
         let count = Some(ItemCount::Items { all: 5, shown: 3 });
         assert_eq!(size_label(&folder, count, false), "3 items");
         assert_eq!(size_label(&folder, count, true), "5 items");

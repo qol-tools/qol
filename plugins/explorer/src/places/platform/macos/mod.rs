@@ -1,8 +1,10 @@
 use std::ffi::OsStr;
-use std::fs::{self, DirEntry, Metadata};
+use std::fs::{self, DirEntry, FileType, Metadata};
 use std::os::macos::fs::MetadataExt;
+use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 
+use crate::listing::EntryKind;
 use crate::places::{Mount, PlaceKind};
 
 const VOLUMES: &str = "/Volumes";
@@ -51,4 +53,20 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
 
 pub(crate) fn file_id(metadata: &Metadata) -> Option<(u64, u64)> {
     Some((metadata.st_dev(), metadata.st_ino()))
+}
+
+pub(crate) fn special_kind(file_type: &FileType) -> Option<EntryKind> {
+    if file_type.is_fifo() {
+        Some(EntryKind::Pipe)
+    } else if file_type.is_socket() {
+        Some(EntryKind::Socket)
+    } else if file_type.is_block_device() || file_type.is_char_device() {
+        Some(EntryKind::Device)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
+    false
 }

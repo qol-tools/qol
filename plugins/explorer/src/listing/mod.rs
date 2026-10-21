@@ -6,7 +6,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub use entry::{display_name, Entry, EntryKind};
+pub use entry::{display_name, Entry, EntryKind, Size};
 pub use error::{FailureReason, ListingError};
 pub use read::{
     recount, start, CancelToken, FolderCount, ItemCount, ListingEvent, ListingRead, Pass,

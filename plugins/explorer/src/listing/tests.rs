@@ -112,7 +112,7 @@ fn a_read_folder_lists_folders_first_in_natural_order() {
     );
     let file = &listing.entries()[3];
     assert_eq!(file.kind, EntryKind::File);
-    assert_eq!(file.size, Some("file2".len() as u64));
+    assert_eq!(file.size, Size::Bytes("file2".len() as u64));
     assert_eq!(file.path, temp.path().join("file2"));
     assert_eq!(listing.entries()[0].kind, EntryKind::Folder);
 }
@@ -520,6 +520,59 @@ fn a_count_pass_waiting_on_a_held_subfolder_ends_when_cancelled() {
     ));
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn pipes_sockets_devices_and_broken_links_have_their_own_kind_and_no_size() {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fifo = CString::new(temp.path().join("fifo").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+    let _socket = UnixListener::bind(temp.path().join("socket")).unwrap();
+    symlink(temp.path().join("nowhere"), temp.path().join("broken")).unwrap();
+    symlink(temp.path().join("looped"), temp.path().join("looped")).unwrap();
+    symlink("/dev/null", temp.path().join("null")).unwrap();
+
+    let listing = listing_of(temp.path());
+    let kinds: Vec<(&str, EntryKind, Size)> = listing
+        .entries()
+        .iter()
+        .map(|entry| (entry.display.as_str(), entry.kind, entry.size))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("broken", EntryKind::BrokenLink, Size::Blank),
+            ("fifo", EntryKind::Pipe, Size::Blank),
+            ("looped", EntryKind::BrokenLink, Size::Blank),
+            ("null", EntryKind::Link, Size::Blank),
+            ("socket", EntryKind::Socket, Size::Blank),
+        ]
+    );
+    let devices = listing_of(Path::new("/dev"));
+    let null = devices
+        .entries()
+        .iter()
+        .find(|entry| entry.display == "null")
+        .unwrap();
+    assert_eq!((null.kind, null.size), (EntryKind::Device, Size::Blank));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn files_on_proc_list_without_a_size() {
+    let listing = listing_of(Path::new("/proc/self"));
+    let status = listing
+        .entries()
+        .iter()
+        .find(|entry| entry.display == "status")
+        .unwrap();
+    assert_eq!((status.kind, status.size), (EntryKind::File, Size::Blank));
+}
+
 #[cfg(unix)]
 #[test]
 fn entries_of_a_folder_that_cannot_be_searched_are_listed_without_a_size() {
@@ -544,7 +597,7 @@ fn entries_of_a_folder_that_cannot_be_searched_are_listed_without_a_size() {
     let sub = &listing.entries()[0];
     assert_eq!(
         (sub.kind, sub.size, sub.opens_as_folder),
-        (EntryKind::Folder, None, true)
+        (EntryKind::Folder, Size::Unreadable, true)
     );
     assert_eq!(
         listing.item_count(&blind.join("sub")),
@@ -553,7 +606,7 @@ fn entries_of_a_folder_that_cannot_be_searched_are_listed_without_a_size() {
     let file = &listing.entries()[1];
     assert_eq!(
         (file.kind, file.size, file.opens_as_folder),
-        (EntryKind::File, None, false)
+        (EntryKind::File, Size::Unreadable, false)
     );
 }
 
