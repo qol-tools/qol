@@ -18,12 +18,14 @@ jobs:
       (github.event.action != 'edited' || github.event.changes.base != null)
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Enable auto-merge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::AUTO_MERGE_TOKEN is not set. Auto-merge armed by the workflow token never enters the merge queue, so this pull request was left for its session to arm."
+            exit 0
+          fi
+          gh pr merge --auto --squash "$PR_URL"
