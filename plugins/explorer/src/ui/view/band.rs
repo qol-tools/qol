@@ -4,6 +4,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{div, px, rgb, Context, IntoElement, ParentElement, Styled, Window};
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
+use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{TextStyle, SPACE_GUTTER, SPACE_SNUG};
 use qol_gpui::CrumbTrail;
@@ -36,6 +37,8 @@ pub(super) fn render(
     let on_edit = on_crumb.clone();
     let on_suggestion = on_crumb.clone();
     let on_wheel = on_crumb.clone();
+    let crumb_gesture = view.drag_gesture.clone();
+    let edit_gesture = view.drag_gesture.clone();
     let note_room = if shows_note {
         NOTE_WIDTH + SPACE_GUTTER
     } else {
@@ -49,12 +52,18 @@ pub(super) fn render(
     )
     .fit(width)
     .on_crumb(move |index, _window, cx| {
+        if crumb_gesture.borrow().is_moving() {
+            return;
+        }
         let Some(folder) = paths.get(index).cloned() else {
             return;
         };
         let _ = on_crumb.update(cx, |view, cx| view.navigate(folder, cx));
     })
     .on_edit(move |_window, cx| {
+        if edit_gesture.borrow().is_moving() {
+            return;
+        }
         let _ = on_edit.update(cx, |view, cx| view.edit_path(cx));
     })
     .on_suggestion(move |index, _window, cx| {
@@ -63,11 +72,15 @@ pub(super) fn render(
     .on_suggestion_wheel(move |rows, _window, cx| {
         let _ = on_wheel.update(cx, |view, cx| view.wheel_suggestions(rows, cx));
     });
-    if let Some(edit) = editing {
-        crumb_trail = crumb_trail.editing(edit, width);
-    }
-    settings_band_bar(BAND, kit)
-        .child(div().flex_1().min_w_0().child(crumb_trail))
+    let band = settings_band_bar(BAND, kit);
+    let band = match editing {
+        Some(edit) => {
+            crumb_trail = crumb_trail.editing(edit, width);
+            band
+        }
+        None => band.panel_drag_after(&view.drag_gesture),
+    };
+    band.child(div().flex_1().min_w_0().child(crumb_trail))
         .when(shows_note, |band| band.child(render_note(note, kit)))
 }
 
