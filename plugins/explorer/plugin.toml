@@ -22,6 +22,12 @@ doctor = true
 label = "Explorer"
 items = []
 
+[[shortcuts]]
+id = "open"
+name = "Explorer"
+action = "open"
+export_to_launcher = true
+
 [[dependencies.binaries]]
 name = "qol-explorer"
 repo = "qol-tools/qol-explorer"
