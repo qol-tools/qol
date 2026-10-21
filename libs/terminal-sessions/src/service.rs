@@ -45,6 +45,10 @@ pub trait SessionCloser {
     fn close(&self, target: &SessionBinding) -> Result<(), TerminalError>;
 }
 
+pub trait TabTitler {
+    fn set_tab_title(&self, target: &SessionBinding, title: &str) -> Result<(), TerminalError>;
+}
+
 pub trait TextInput {
     fn send_text(
         &self,
@@ -76,6 +80,10 @@ pub trait TerminalBackend:
     }
 
     fn closer(&self) -> Option<&dyn SessionCloser> {
+        None
+    }
+
+    fn tab_titler(&self) -> Option<&dyn TabTitler> {
         None
     }
 }
@@ -250,6 +258,17 @@ impl TerminalSessionService {
             capability: "close",
         })?;
         closer.close(target)
+    }
+
+    pub fn set_tab_title(&self, target: &SessionBinding, title: &str) -> Result<(), TerminalError> {
+        let backend = self.backend_for(target.session_id())?;
+        let titler = backend
+            .tab_titler()
+            .ok_or_else(|| TerminalError::Unsupported {
+                target: target.session_id().clone(),
+                capability: "tab title",
+            })?;
+        titler.set_tab_title(target, title)
     }
 
     pub fn is_current(&self, target: &SessionBinding) -> Result<bool, TerminalError> {

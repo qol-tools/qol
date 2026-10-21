@@ -32,6 +32,7 @@ GLOBAL_FILES = {
     ".gitattributes",
     ".gitmodules",
     ".config/hakari.toml",
+    ".config/nextest.toml",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"

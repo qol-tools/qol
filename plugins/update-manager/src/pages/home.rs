@@ -45,9 +45,9 @@ fn notes(sheet: &mut Sheet, session: &Session) {
     sheet.group("right now", "what is different on this computer.");
     if session.borrowed {
         sheet.row(
-            Row::info("borrowed", "Not your computer")
+            Row::info("borrowed", "Changes ask first")
                 .detail(
-                    "qol changes nothing here unless you ask. What you hold ends when qol stops.",
+                    "Keep settings in place is off in General, so qol changes nothing here unless you ask.",
                 )
                 .attention(true),
         );

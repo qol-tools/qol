@@ -2,11 +2,11 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliSessionInterpreter, CliToolId};
-use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
+use qol_terminal_sessions::{SessionBinding, SessionInventory, TerminalSessionService};
 use serde::{Deserialize, Serialize};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
@@ -17,12 +17,13 @@ use super::spawn::{
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
+const REMOTE_CONTROL_URL_WAIT: Duration = Duration::from_secs(5);
+const REMOTE_CONTROL_URL_POLL: Duration = Duration::from_millis(250);
 pub const FORK_HEADER: &str = "[qol session fork]";
 const BRIEF_LEAD: &str = "Your brief is written to ";
 const BRIEF_END: &str = ". Read it first";
 pub(super) const REPORT_LINE: &str =
     "When you finish or get blocked, tell your parent with session_send kind report.";
-const DELIVERY_LINE: &str = "When your work leaves commits on a branch, push the branch and open a draft pull request without asking, unless your brief says otherwise; never merge it, mark it ready or force-push it on your own.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct ForkRecord {
@@ -43,6 +44,8 @@ pub(super) struct ForkRecord {
     pub(super) chat: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) prs: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +66,8 @@ pub(super) struct ForkOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) chat: Option<String>,
     pub(super) elapsed_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) remote_control_url: Option<String>,
     pub(super) instruction: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) agent_assignment: Option<AgentAssignment>,
@@ -209,7 +214,12 @@ pub(super) fn validate_brief(brief: &str) -> Result<()> {
     Ok(())
 }
 
+fn delivery_line(key: &str) -> String {
+    format!("When your work leaves commits on a branch, push the branch and open a pull request without asking, then arm auto-merge with `gh pr merge --auto`, unless the change involves design (UI, or architecture such as a new command, a file format or a large refactor): open that as a draft and report that it waits for the user's approval. Put `Session: {key}` as the last line of the pull request body. Never force-push, and never mark a draft ready yourself. When your pull request has merged, or nothing is left that anyone must do, send one line to your parent with session_send kind report and done true, then end your turn; your tab closes when that turn ends. When only the user can decide something, send it to your parent with session_send kind ask instead of asking in your own terminal; the answer comes back as a message. When a check fails and you cannot fix it, report the pull request and what broke to your parent.")
+}
+
 pub(super) fn fork_prompt(
+    key: &str,
     brief_path: &Path,
     parent: Option<&str>,
     chat_path: Option<&Path>,
@@ -234,8 +244,9 @@ pub(super) fn fork_prompt(
         "Do not try to report back to it and do not bridge to it."
     };
     format!(
-        "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\n{BRIEF_LEAD}{}{BRIEF_END}, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.\n\n{DELIVERY_LINE}",
-        brief_path.display()
+        "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\n{BRIEF_LEAD}{}{BRIEF_END}, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.\n\n{}",
+        brief_path.display(),
+        delivery_line(key)
     )
 }
 
@@ -326,6 +337,7 @@ pub(super) fn fork(
         surface,
         model,
         effort,
+        false,
         title,
         brief,
         parent,
@@ -351,6 +363,7 @@ pub(super) fn fork_linked(
     surface: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
+    remote_control: bool,
     title: Option<&str>,
     brief: Option<&str>,
     parent: Option<&str>,
@@ -384,6 +397,10 @@ pub(super) fn fork_linked(
     let tool_id =
         CliToolId::new(tool.clone()).map_err(|error| anyhow!("invalid tool `{tool}`: {error}"))?;
     super::launch_flags::launch_flags(&tool_id, None, effort)?;
+    let remote_control_args = match remote_control {
+        true => super::launch_flags::remote_control_flags(&tool_id, key)?,
+        false => Vec::new(),
+    };
     let admission = dispatch.admit_launch(&tool, model)?;
     let Some(model) = admission.model.as_deref() else {
         bail!(
@@ -403,7 +420,7 @@ pub(super) fn fork_linked(
     };
     let prompt = brief_path
         .as_deref()
-        .map(|path| fork_prompt(path, parent, chat_path.as_deref(), report))
+        .map(|path| fork_prompt(key, path, parent, chat_path.as_deref(), report))
         .unwrap_or_default();
     let mut record = ForkRecord {
         key: key.to_owned(),
@@ -422,6 +439,7 @@ pub(super) fn fork_linked(
         parent: parent.map(str::to_owned),
         chat: chat_path.as_ref().map(|path| path.display().to_string()),
         agent_assignment: admission.assignment.clone(),
+        prs: Vec::new(),
     };
     forks.record(&record)?;
     let launched = spawn_detached(
@@ -438,7 +456,7 @@ pub(super) fn fork_linked(
         title,
         config_surface()?,
         cap,
-        &[],
+        &remote_control_args,
         &prompt,
         dry_run,
         admission.assignment.as_ref(),
@@ -467,6 +485,10 @@ pub(super) fn fork_linked(
         }
         _ => None,
     };
+    let remote_control_url = match remote_control && !dry_run {
+        true => await_remote_control_url(terminals, interpreter, &record.session),
+        false => None,
+    };
     qol_runtime::probe!(
         "CLI_SESSION_FORK",
         "event=forked key={} tool={} model={} effort={} session={}",
@@ -490,6 +512,7 @@ pub(super) fn fork_linked(
         parent: record.parent.clone(),
         chat: record.chat.clone(),
         elapsed_ms: launched.elapsed_ms,
+        remote_control_url,
         instruction: format!(
             "{}{}",
             match report {
@@ -501,6 +524,24 @@ pub(super) fn fork_linked(
         agent_assignment: record.agent_assignment.clone(),
         agent_status: AgentStatus::of(record.agent_assignment.as_ref()),
     })
+}
+
+fn await_remote_control_url(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    session: &str,
+) -> Option<String> {
+    let binding = session.parse::<SessionBinding>().ok()?;
+    let deadline = Instant::now() + REMOTE_CONTROL_URL_WAIT;
+    loop {
+        let url = super::bridge::resolve_target(terminals, &binding)
+            .ok()
+            .and_then(|facts| interpreter.remote_control_url(&facts));
+        if url.is_some() || Instant::now() >= deadline {
+            return url;
+        }
+        std::thread::sleep(REMOTE_CONTROL_URL_POLL);
+    }
 }
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
@@ -541,6 +582,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         model: parsed.model.clone(),
         effort: parsed.effort.clone(),
         surface: parsed.surface.clone(),
+        remote_control: parsed.remote_control.then_some(true),
     };
     super::launch::inherit_model(
         &mut choice,
@@ -568,6 +610,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         launch.surface.as_deref(),
         launch.model.as_deref(),
         launch.effort.as_deref(),
+        launch.remote_control,
         parsed.title.as_deref(),
         brief.as_deref(),
         parent.as_deref(),
@@ -592,6 +635,16 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
         crate::cli::line(format_args!("no detached forks recorded"));
         return Ok(());
     }
+    let interpreter = CliSessionInterpreter::system();
+    let live = super::service()?
+        .discover()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|session| {
+            let token = session.binding().ok()?.token();
+            Some((token, interpreter.remote_control_url(session)))
+        })
+        .collect::<Vec<_>>();
     for record in records {
         let brief = if record.brief.is_empty() {
             "blank"
@@ -606,9 +659,18 @@ pub(super) fn run_list(_args: &[OsString]) -> Result<()> {
             record.session,
             brief
         );
-        if let Some(chat) = &record.chat {
+        let remote_control_url = live
+            .iter()
+            .find(|(token, _)| *token == record.session)
+            .and_then(|(_, url)| url.as_deref());
+        let prs = record.prs.join(",");
+        for column in [
+            record.chat.as_deref(),
+            remote_control_url,
+            Some(prs.as_str()).filter(|prs| !prs.is_empty()),
+        ] {
             row.push('\t');
-            row.push_str(chat);
+            row.push_str(column.unwrap_or("-"));
         }
         crate::cli::line(row);
     }
@@ -632,6 +694,7 @@ pub(super) struct ForkArgs {
     pub(super) blank: bool,
     pub(super) dry_run: bool,
     pub(super) park: bool,
+    pub(super) remote_control: bool,
     pub(super) agent_profile: Option<String>,
     pub(super) task_role: Option<super::agent_policy::AgentRole>,
     pub(super) requires: Option<Vec<super::agent_policy::AgentRequirement>>,
@@ -648,7 +711,7 @@ impl ForkArgs {
 }
 
 pub(super) fn help() -> String {
-    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it (never the switchboard's own control-chat model), then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--blank launches a fresh session with no brief, no chat copy and no launch prompt, so you type its first message; it refuses --brief and --brief-file.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends. A fork with a brief whose tool can resume conversations is also watched from launch: its tab closes once its turn ends, unless the user writes in it or it parks, and its final message is shown in a CLI Sessions notification that reopens the conversation when clicked. Without --park, a fork stays open and a parked fork waits in its own terminal.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none or the fork is blank; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
+    "qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--title TITLE] [--surface tab|os-window] [--parent SESSION] [--no-chat] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--remote-control] [--dry-run]\n\nLaunch a detached architect: a new terminal that owns the brief end to end and never reports back. No round is opened on it, no completion marker is embedded, and session_bridge refuses it. The brief is written to a file under the sessions data dir and the launch points the new architect at that path, so a long problem statement survives argv limits and stays readable after the screen scrolls.\n\nUse it when a second problem surfaces mid-session and chasing it would cost you the thread you are already holding: fork it away at a tier that can finish it, and carry on.\n\n--tool is optional: an explicit value wins, otherwise a selected agent profile supplies its declared tool, or an unconstrained fork resolves the harness that tool_models declares for the chosen model. A model not declared for the resolved tool is refused.\n--model is optional: an explicit value wins, then the selected profile's declared model, then the model the parent session is running when tool_models and allowed_models admit it (never the switchboard's own control-chat model), then fork_model, then spawn_model in sessions.toml. A value that conflicts with the selected profile is refused, and allowed_models still governs spending, because tiers are billed per token and only the person paying picks one.\n--effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking.\nA claude fork starts with --dangerously-skip-permissions.\nWhen --parent names a live session, that session's chat is copied beside the brief and the path is added to the launch prompt; --no-chat skips the copy.\n--blank launches a fresh session with no brief, no chat copy and no launch prompt, so you type its first message; it refuses --brief and --brief-file.\n--agent-profile selects a named agent_profiles entry; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review, and an empty value means no requirements while an omitted flag means none were declared. The resolved assignment is recorded with the fork.\n--tool, --model, --effort and --surface values pass through [aliases] in sessions.toml (cc = \"claude\"), and fork_model, fork_effort and fork_surface fill what is left out.\n--park lets the fork close its terminal while it is parked on a long wait (qol-cli-sessions park) and reopen in a new tab when the wait ends. A fork with a brief whose tool can resume conversations is also watched from launch: its tab closes once its turn ends, unless the user writes in it or it parks, and its final message is shown in a CLI Sessions notification that reopens the conversation when clicked. Without --park, a fork stays open and a parked fork waits in its own terminal.\n--remote-control starts a claude fork with Remote Control on, named after its key, so the user can follow it from claude.ai; the printed outcome carries its remote_control_url when the session shows it within 5 seconds. fork_remote_control in sessions.toml turns it on for every claude fork, and a tool without Remote Control refuses the flag.\n--dry-run launches the harness with no prompt and types the prompt into its input without submitting, so a launch can be checked without spending tokens.\n--key defaults to the brief's first content words plus a short id, or fork-<id> when the brief has none or the fork is blank; --parent defaults to the calling terminal.\nqol sessions forks lists what has been forked.".to_owned()
 }
 
 fn default_key(brief: &str) -> String {
@@ -684,6 +747,7 @@ pub(super) fn parse_args(args: &[OsString]) -> Result<ForkArgs> {
             "--blank" => parsed.blank = true,
             "--dry-run" => parsed.dry_run = true,
             "--park" => parsed.park = true,
+            "--remote-control" => parsed.remote_control = true,
             "--agent-profile" => {
                 parsed.agent_profile = Some(flag_value(args, &mut index, "--agent-profile")?)
             }
@@ -794,6 +858,7 @@ mod tests {
     #[test]
     fn the_fork_prompt_points_at_the_brief_and_forbids_reporting_back() {
         let prompt = fork_prompt(
+            "chase",
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
@@ -805,9 +870,12 @@ mod tests {
         assert!(prompt.contains("no completion marker"));
         assert!(prompt.contains("v1:kitty:7:100"));
         assert!(
-            prompt.ends_with(DELIVERY_LINE),
-            "a fork opens its own draft pull request instead of asking: {prompt}"
+            prompt.ends_with(&delivery_line("chase")),
+            "a fork delivers its own pull request instead of asking: {prompt}"
         );
+        assert!(prompt.contains("arm auto-merge with `gh pr merge --auto`"));
+        assert!(prompt.contains("Put `Session: chase` as the last line"));
+        assert!(prompt.contains("kind report and done true"));
         assert!(
             !prompt.contains("Completion fragments"),
             "a fork never carries a completion marker: {prompt}"
@@ -821,6 +889,7 @@ mod tests {
     #[test]
     fn a_reporting_fork_prompt_points_at_session_send_instead_of_forbidding_contact() {
         let prompt = fork_prompt(
+            "chase",
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
@@ -834,6 +903,7 @@ mod tests {
     #[test]
     fn the_fork_prompt_names_the_chat_copy_when_one_exists() {
         let prompt = fork_prompt(
+            "chase",
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             Some(Path::new("/data/forks/chase-1.chat.md")),
@@ -893,6 +963,7 @@ mod tests {
             parent: None,
             chat: None,
             agent_assignment: None,
+            prs: Vec::new(),
         }
     }
 
@@ -903,7 +974,7 @@ mod tests {
         let brief = store.write_brief("chase", 7, "the brief").unwrap();
         store.record(&fork_record("chase", &brief)).unwrap();
         for chat in [None, Some(Path::new("/data/forks/chase-7.chat.md"))] {
-            let prompt = fork_prompt(&brief, Some("parent"), chat, true);
+            let prompt = fork_prompt("chase", &brief, Some("parent"), chat, true);
             assert_eq!(
                 brief_in_prompt(&prompt),
                 Some(brief.display().to_string().as_str())
@@ -963,6 +1034,7 @@ mod tests {
                     parent: None,
                     chat: None,
                     agent_assignment: None,
+                    prs: Vec::new(),
                 })
                 .unwrap();
         }

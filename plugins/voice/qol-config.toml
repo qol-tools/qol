@@ -39,7 +39,7 @@ empty_message = "Speak while Voice is listening to see your transcript."
 card_description = "What the session hears right now."
 
 [section.audio]
-label = "Microphone"
+label = "Audio"
 description = "Which microphone the session listens to."
 
 [field.input_device]

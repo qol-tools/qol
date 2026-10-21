@@ -19,6 +19,6 @@ pub use model::{
 };
 pub use service::{
     screen_contains_ignoring_whitespace, ScreenReader, SessionCloser, SessionFocus,
-    SessionInventory, TerminalBackend, TerminalSessionService, TextInput, WaitOutcome,
+    SessionInventory, TabTitler, TerminalBackend, TerminalSessionService, TextInput, WaitOutcome,
 };
 pub use spawn::{SessionSpawner, SpawnIdentity, SpawnKey, SpawnRequest, SpawnSurface};

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::process::Command;
 
 use qol_sessions_engine::knocks::{self, PendingKnock};
-use qol_terminal_sessions::cli::CliSessionInterpreter;
-use qol_terminal_sessions::{DeliveryMode, SessionBinding, TerminalSessionService, TextInput};
+use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typed, Typing};
+use qol_terminal_sessions::{SessionBinding, TerminalSessionService};
 
 use crate::host::Pane;
 use crate::session::registry::Registry;
@@ -99,6 +99,7 @@ fn has_terminal(panes: &[Pane], key: &str) -> bool {
 
 pub struct Courier {
     terminals: TerminalSessionService,
+    guard: ComposerGuard,
     tried: HashMap<String, String>,
 }
 
@@ -106,6 +107,7 @@ impl Courier {
     pub fn system() -> Self {
         Self {
             terminals: TerminalSessionService::system(),
+            guard: ComposerGuard::default(),
             tried: HashMap::new(),
         }
     }
@@ -134,27 +136,43 @@ impl Courier {
                 return;
             }
         };
-        if let Err(error) =
-            self.terminals
-                .send_text(&binding, &claimed.text(), DeliveryMode::Submit)
-        {
-            log::warn!(
-                "[cli-sessions] knock for {} not typed into {binding}: {error}",
-                knock.recipient_key
-            );
-            if let Err(error) = knocks::restore(&claimed) {
-                log::warn!(
-                    "[cli-sessions] knock for {} not put back: {error}",
+        let text = claimed.text();
+        match self.guard.type_text(
+            &self.terminals,
+            interpreter,
+            Typing::submit(&binding, &text),
+        ) {
+            Ok(Typed::Held(hold)) => {
+                qol_runtime::probe!(
+                    "CLI_SESSIONS_KNOCK",
+                    "event=deferred key={} session={binding} reason={hold}",
                     knock.recipient_key
                 );
+                put_back(&claimed, &knock.recipient_key);
             }
-            return;
+            Ok(Typed::Unsubmitted) => log::warn!(
+                "[cli-sessions] knock for {} typed into {binding} but not submitted, because its input box changed while it was typed",
+                knock.recipient_key
+            ),
+            Ok(_) => qol_runtime::probe!(
+                "CLI_SESSIONS_KNOCK",
+                "event=delivered key={} session={binding}",
+                knock.recipient_key
+            ),
+            Err(error) => {
+                log::warn!(
+                    "[cli-sessions] knock for {} not typed into {binding}: {error}",
+                    knock.recipient_key
+                );
+                put_back(&claimed, &knock.recipient_key);
+            }
         }
-        qol_runtime::probe!(
-            "CLI_SESSIONS_KNOCK",
-            "event=delivered key={} session={binding}",
-            knock.recipient_key
-        );
+    }
+}
+
+fn put_back(claimed: &knocks::ClaimedKnock, key: &str) {
+    if let Err(error) = knocks::restore(claimed) {
+        log::warn!("[cli-sessions] knock for {key} not put back: {error}");
     }
 }
 
@@ -200,12 +218,12 @@ fn spawn_wake(key: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use qol_terminal_sessions::cli::{claude_tool, generic_tool};
     use qol_terminal_sessions::{SpawnIdentity, SpawnKey, SpawnSurface};
 
-    fn pane(window: u64, key: Option<&str>) -> Pane {
+    pub(crate) fn pane(window: u64, key: Option<&str>) -> Pane {
         Pane {
             id: crate::host::kitty_session_id(window),
             root_pid: i32::try_from(window).unwrap(),

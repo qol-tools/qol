@@ -15,6 +15,7 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 use super::closed::ClosedLedger;
 use super::knocks;
 use super::screen_analysis::ScreenAnalysis;
+use super::tab_titles::TabTitles;
 use crate::attention::{reduce_with_policy, Attention, Evidence, Reason, Reduction};
 use crate::host::{project_of, Pane, TerminalHost};
 use crate::session::git;
@@ -58,6 +59,7 @@ impl ReconcileCaches {
     pub fn with_messaging(mut self) -> Self {
         self.messaging = Some(Messaging {
             courier: knocks::Courier::system(),
+            titles: TabTitles::system(),
             attention: None,
         });
         self
@@ -66,6 +68,7 @@ impl ReconcileCaches {
 
 struct Messaging {
     courier: knocks::Courier,
+    titles: TabTitles,
     attention: Option<(Vec<AttentionRow>, u64)>,
 }
 
@@ -103,6 +106,7 @@ impl Messaging {
             }
         }
         self.courier.deliver(cli_interpreter, &recipients, panes);
+        self.titles.apply(panes);
     }
 }
 

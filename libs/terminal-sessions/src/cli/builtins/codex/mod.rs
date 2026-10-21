@@ -7,9 +7,9 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliLaunchProgram, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliViewportState,
+    ChatTurn, CliComposer, CliLaunchProgram, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -113,6 +113,10 @@ impl CliSessionStrategy for CodexStrategy {
                 screen,
                 &["OpenAI Codex (v", "Tip: Try the Codex App"],
             )
+    }
+
+    fn composer(&self, screen: &str) -> Option<CliComposer> {
+        Some(crate::cli::composer::codex(screen))
     }
 
     fn launch(&self) -> Option<CliLaunchProgram> {

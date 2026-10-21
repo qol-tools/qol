@@ -22,7 +22,7 @@ use args::ParkArgs;
 pub use args::HELP;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
-use runner::{caller_state, holder, watch_woken, CallerState, Holder};
+use runner::{caller_state, holder, turn_in_progress, watch_woken, CallerState, Holder};
 pub(crate) use runner::{prompt_free, target, Target};
 use store::ParkStore;
 pub use wake::{wake, wakeable};
@@ -173,6 +173,9 @@ fn park(
         store.record_spawn_key(&id, &identity.key)?;
     }
     store.record(&record)?;
+    if let Some(identity) = facts.spawn_identity.as_ref() {
+        record_pull_requests(&record, identity.key.as_str());
+    }
     let mut runner = Command::new(executable);
     runner.args([PARK, "--run", &id]).current_dir(&record.cwd);
     qol_process::spawn_detached(&mut runner).context("failed to start the park runner")?;
@@ -196,6 +199,17 @@ fn park(
     })
 }
 
+fn record_pull_requests(record: &ParkRecord, key: &str) {
+    if let Err(error) =
+        qol_sessions_engine::record_pull_requests(&record.session, key, &record.command.join(" "))
+    {
+        log::warn!(
+            "[cli-sessions] pull requests of park {} not recorded: {error:#}",
+            record.id
+        );
+    }
+}
+
 fn watch_launch(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
@@ -206,6 +220,13 @@ fn watch_launch(
     let binding = token
         .parse::<SessionBinding>()
         .map_err(|error| anyhow!("invalid session token `{token}`: {error}"))?;
+    let final_turn =
+        match parsed.final_turn {
+            true => Some(turn_in_progress(terminals, interpreter, &binding).context(
+                "the session's transcript shows no turn to watch, so its tab stays open",
+            )?),
+            false => None,
+        };
     if let Some(ready) = parsed.ready.as_deref() {
         std::fs::write(ready, "")
             .with_context(|| format!("failed to confirm the watch at {ready}"))?;
@@ -255,7 +276,7 @@ fn watch_launch(
         record.id,
         token
     );
-    watch_woken(terminals, interpreter, store, &mut record)
+    watch_woken(terminals, interpreter, store, &mut record, final_turn)
 }
 
 fn launched_conversation(

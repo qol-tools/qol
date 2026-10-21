@@ -9,7 +9,7 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
+    ChatTurn, CliComposer, CliLaunchProgram, CliModelCatalog, CliRuntimeState, CliScreenEvidence,
     CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
     CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
@@ -172,6 +172,10 @@ impl CliSessionStrategy for PiStrategy {
 
     fn ui_rendered(&self, screen: &str) -> bool {
         crate::cli::screen::pi_live(screen)
+    }
+
+    fn composer(&self, screen: &str) -> Option<CliComposer> {
+        Some(crate::cli::composer::pi(screen))
     }
 
     fn launch(&self) -> Option<CliLaunchProgram> {

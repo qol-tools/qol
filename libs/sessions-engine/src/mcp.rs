@@ -308,6 +308,10 @@ impl McpSessionServer {
         })
     }
 
+    fn prs(&self) -> super::prs::PrStore {
+        super::prs::PrStore::with_dir(self.reports_dir.join("prs"))
+    }
+
     fn messaging(&self) -> super::mailbox::Messaging<'_> {
         super::mailbox::Messaging {
             mail: &self.mail,
@@ -338,6 +342,14 @@ impl McpSessionServer {
             format!("unknown kind `{kind_token}`; expected note, ask, reply or report")
         })?;
         let reply_to = optional_string(arguments, "reply_to", "session_send")?;
+        let done = optional_bool(arguments, "done", "session_send")?.unwrap_or(false);
+        let as_user = optional_bool(arguments, "as_user", "session_send")?.unwrap_or(false);
+        if done && kind != super::mailbox::MessageKind::Report {
+            return Err(
+                "done goes only with kind report: it closes your tab once this turn ends"
+                    .to_owned(),
+            );
+        }
         let live_keys = self.live_keys()?;
         let message = self
             .messaging()
@@ -349,9 +361,15 @@ impl McpSessionServer {
                     kind,
                     text,
                     reply_to: reply_to.as_deref(),
+                    as_user,
                 },
             )
             .map_err(|error| error.to_string())?;
+        let caller = super::bridge::driver_token(self.terminals.as_ref());
+        let prs = match as_user {
+            true => Ok(Vec::new()),
+            false => self.prs().record(&self.forks, &caller, &from, text),
+        };
         let live = live_keys.contains(&message.to);
         let mut sent = json!({
             "sent": true,
@@ -368,7 +386,47 @@ impl McpSessionServer {
                 message.to
             ));
         }
+        if let Some(via) = &message.via {
+            sent["via"] = json!(via);
+        }
+        match prs {
+            Ok(prs) if !prs.is_empty() => sent["prs"] = json!(prs),
+            Ok(_) => {}
+            Err(error) => sent["prs_error"] = json!(format!("{error:#}")),
+        }
+        if done {
+            sent["done"] = json!(match self.close_at_turn_end(&caller, &from) {
+                Ok(()) => "Your tab closes when this turn ends, unless the user writes in it first, and your final message reaches the user as a notification. End your turn now.".to_owned(),
+                Err(error) => format!("CLI Sessions could not start watching this tab ({error:#}), so it stays open when this turn ends."),
+            });
+        }
         serde_json::to_string(&sent).map_err(|error| format!("serialization failed: {error}"))
+    }
+
+    fn close_at_turn_end(&self, session: &str, key: &str) -> Result<()> {
+        if session.is_empty() {
+            bail!("the calling terminal has no session token");
+        }
+        let record = self.forks.find_session(session)?;
+        let model = match &record {
+            Some(record) => Some(record.model.clone()),
+            None => session
+                .parse::<SessionBinding>()
+                .ok()
+                .and_then(|binding| {
+                    super::bridge::resolve_target(self.terminals.as_ref(), &binding).ok()
+                })
+                .and_then(|facts| self.interpreter.current_model(&facts)),
+        };
+        let dir = self.reports_dir.join("done");
+        std::fs::create_dir_all(&dir)?;
+        super::park::watch_final(
+            session,
+            model.as_deref(),
+            record.as_ref().and_then(|record| record.effort.as_deref()),
+            record.as_ref().map_or(key, |record| record.title.as_str()),
+            &dir.join(format!("{key}-{}.watching", super::mailbox::now_ms())),
+        )
     }
 
     fn tool_inbox(&self, arguments: &Value) -> Result<String, String> {
@@ -491,6 +549,8 @@ impl McpSessionServer {
         let mut rows = Vec::with_capacity(facts.len());
         let attention = super::attention::read();
         let now_ms = super::mailbox::now_ms();
+        let forks = self.forks.list().unwrap_or_default();
+        let prs = self.prs();
         for session in &facts {
             let Ok(binding) = session.binding() else {
                 continue;
@@ -502,6 +562,8 @@ impl McpSessionServer {
                 )?;
             let row =
                 super::contract::session_row(session, &binding, &descriptor, assignment.as_ref());
+            let linked = prs.of(&forks, &row.session, row.key.as_deref());
+            let row = row.with_links(self.interpreter.remote_control_url(session), linked);
             let (parent, counts) = match row.key.as_deref() {
                 Some(key) => (
                     self.lineage
@@ -815,6 +877,7 @@ impl McpSessionServer {
             launch.surface.as_deref(),
             launch.model.as_deref(),
             launch.effort.as_deref(),
+            launch.remote_control,
             title.as_deref(),
             self.spawn_surface,
             self.spawn_cap.as_ref(),
@@ -886,6 +949,7 @@ impl McpSessionServer {
             launch.surface.as_deref(),
             launch.model.as_deref(),
             launch.effort.as_deref(),
+            launch.remote_control,
             self.spawn_surface,
             self.spawn_cap.as_ref(),
             &self.locks,
@@ -1012,6 +1076,7 @@ impl McpSessionServer {
             launch.surface.as_deref(),
             launch.model.as_deref(),
             launch.effort.as_deref(),
+            launch.remote_control,
             title.as_deref(),
             brief,
             parent.as_deref(),
@@ -1124,11 +1189,13 @@ impl McpSessionServer {
 
     fn tool_close(&self, arguments: Value) -> Result<String, String> {
         let binding = binding_argument(&arguments, "session")?;
+        let force = optional_bool(&arguments, "force", "session_close")?.unwrap_or(false);
         let outcome = super::close::execute(
             self.terminals.as_ref(),
             &self.pending,
             &self.reports_dir,
             &binding,
+            force,
         )
         .map_err(|error| error.to_string())?;
         serde_json::to_string(&outcome).map_err(|error| format!("serialization failed: {error}"))
@@ -1239,7 +1306,7 @@ pub(super) fn execute_loop_close(
     }
     pending.acknowledge(command.binding, command.completion_marker, command.accepted)?;
     if command.accepted {
-        let close = super::close::close_spawned_terminal(terminals, command.binding)?;
+        let close = super::close::close_spawned_terminal(terminals, command.binding, false)?;
         receipt["terminal_closed"] = json!(close.closed);
         receipt["terminal_state"] = json!(close.terminal_state);
         if let Some(detail) = close.close_detail {
@@ -1574,7 +1641,19 @@ fn launch_arguments(arguments: &Value, tool: &str) -> Result<LaunchChoice, Strin
         model: optional_string(arguments, "model", tool)?,
         effort: optional_string(arguments, "effort", tool)?,
         surface: optional_string(arguments, "surface", tool)?,
+        remote_control: optional_bool(arguments, "remote_control", tool)?,
     })
+}
+
+fn optional_bool(arguments: &Value, name: &str, tool: &str) -> Result<Option<bool>, String> {
+    arguments
+        .get(name)
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| format!("{tool} `{name}` must be a boolean"))
+        })
+        .transpose()
 }
 
 fn optional_string(arguments: &Value, name: &str, tool: &str) -> Result<Option<String>, String> {
@@ -2705,6 +2784,7 @@ mod tests {
                 parent: None,
                 chat: None,
                 agent_assignment: None,
+                prs: Vec::new(),
             })
             .unwrap();
         let switchboard = root.path().join(super::super::SWITCHBOARD_KEY);
@@ -2718,7 +2798,7 @@ mod tests {
             effort: Some("high".to_owned()),
             claude_config_dir: None,
         };
-        let fork_prompt = super::super::fork::fork_prompt(&brief, None, None, false);
+        let fork_prompt = super::super::fork::fork_prompt("lane", &brief, None, None, false);
         let history = vec![
             ledgered,
             plain,
@@ -6452,6 +6532,79 @@ mod tests {
             json!({"state": "unread"}),
         ));
         assert_eq!(again["messages"], json!([]));
+    }
+
+    #[test]
+    fn a_done_report_watches_the_senders_tab_and_its_pull_requests_land_on_its_row() {
+        let (server, backend, _root) = keyed_server(&["architect", "child"]);
+        server.lineage.record("child", Some("architect")).unwrap();
+        act_as(&backend, "child");
+        let watchers =
+            || super::super::park::STARTED_WATCHERS.with(|started| started.borrow().clone());
+        super::super::park::STARTED_WATCHERS.with(|started| started.borrow_mut().clear());
+        refused(
+            &tool_call(
+                &server,
+                "session_send",
+                json!({"to": "parent", "text": "x", "kind": "note", "done": true}),
+            ),
+            "done goes only with kind report",
+        );
+        assert!(watchers().is_empty());
+
+        let pr = "https://github.com/qol-tools/qol-monorepo/pull/240";
+        let sent = tool_json(&tool_call(
+            &server,
+            "session_send",
+            json!({"to": "parent", "text": format!("merged {pr}"), "kind": "report", "done": true}),
+        ));
+        assert_eq!(sent["prs"], json!([pr]), "{sent}");
+        assert!(
+            sent["done"]
+                .as_str()
+                .unwrap()
+                .contains("closes when this turn ends"),
+            "{sent}"
+        );
+        let started = watchers();
+        assert_eq!(started.len(), 1, "{started:?}");
+        let token = lane_facts("child", "/work").binding().unwrap().token();
+        assert_eq!(started[0][..3], ["park", "--watch", token.as_str()]);
+        assert_eq!(started[0].last().map(String::as_str), Some("--final"));
+        assert!(started[0].contains(&"child".to_owned()), "{started:?}");
+
+        let rows: Vec<Value> =
+            serde_json::from_str(tool_text(&tool_call(&server, "sessions_list", json!({}))))
+                .unwrap();
+        let child = rows.iter().find(|row| row["key"] == "child").unwrap();
+        assert_eq!(child["prs"], json!([pr]));
+        let architect = rows.iter().find(|row| row["key"] == "architect").unwrap();
+        assert!(architect.get("prs").is_none(), "{architect}");
+    }
+
+    #[test]
+    fn the_switchboard_relays_the_users_words_as_user() {
+        let (server, backend, _root) = keyed_server(&["switchboard", "lane"]);
+        act_as(&backend, "switchboard");
+        let sent = tool_json(&tool_call(
+            &server,
+            "session_send",
+            json!({"to": "lane", "text": "ship it", "kind": "note", "as_user": true}),
+        ));
+        assert_eq!(sent["from"], "user", "{sent}");
+        assert_eq!(sent["via"], "switchboard", "{sent}");
+        act_as(&backend, "lane");
+        let inbox = tool_json(&tool_call(&server, "session_inbox", json!({})));
+        assert_eq!(inbox["messages"][0]["from"], "user");
+        assert_eq!(inbox["messages"][0]["via"], "switchboard");
+        refused(
+            &tool_call(
+                &server,
+                "session_send",
+                json!({"to": "switchboard", "text": "x", "kind": "note", "as_user": true}),
+            ),
+            "only the switchboard",
+        );
     }
 
     #[test]

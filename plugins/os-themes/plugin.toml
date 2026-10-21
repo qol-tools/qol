@@ -4,9 +4,23 @@ uid = "c0b6aa8d-2b51-4b03-a478-6ce3db8883eb"
 name = "OS Themes"
 icon = "os-themes"
 description = "Cursor effects and light or dark theme switching."
-version = "0.75.1"
+version = "0.75.3"
 author = "KMRH47"
 platforms = ["linux", "windows"]
+
+[config.scope]
+enabled = "core"
+pause_in_games = "core"
+pause_in_fullscreen = "core"
+shake_strictness = "core"
+regrow_strictness = "core"
+regrow_min_extent_px = "core"
+shake_min_extent_px = "core"
+shake_window_ms = "core"
+scale_factor = "core"
+calm_duration_ms = "core"
+grow_ms = "core"
+shrink_ms = "core"
 
 [runtime]
 command = "qol-os-themes"

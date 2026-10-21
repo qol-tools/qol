@@ -6,7 +6,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, bail, Context, Result};
 use qol_headless::OutputFormat;
 use qol_terminal_sessions::bridge::BridgeCheckpoint;
-use qol_terminal_sessions::cli::CliSessionInterpreter;
+use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typing};
 use qol_terminal_sessions::{
     DeliveryMode, ScreenReader, SessionBinding, SessionFocus, SessionInventory,
     TerminalSessionService, TextInput,
@@ -33,9 +33,12 @@ mod mailbox;
 use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
+mod prs;
 pub mod resume;
 mod spawn;
+mod status;
 pub mod switchboard;
+mod typing;
 mod watch;
 mod watch_owner;
 
@@ -50,6 +53,16 @@ pub fn mail_counts(key: &str) -> (usize, usize) {
         .unwrap_or_default()
 }
 
+pub fn pull_requests(key: &str) -> Vec<String> {
+    prs::PrStore::system()
+        .map(|store| store.keyed(key))
+        .unwrap_or_default()
+}
+
+pub fn record_pull_requests(session: &str, key: &str, text: &str) -> Result<Vec<String>> {
+    prs::PrStore::system()?.record(&fork::ForkStore::system()?, session, key, text)
+}
+
 pub fn is_lane(binding: &SessionBinding) -> bool {
     bridge::PendingBridgeStore::system()
         .is_ok_and(|store| store.recorded_role(binding) == Some(bridge::Role::Lane))
@@ -60,7 +73,7 @@ pub struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub const SUBCOMMANDS: [SessionSubcommand; 25] = [
+pub const SUBCOMMANDS: [SessionSubcommand; 26] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -80,6 +93,10 @@ pub const SUBCOMMANDS: [SessionSubcommand; 25] = [
     SessionSubcommand {
         name: "forks",
         run: |rest, _format| fork::run_list(rest),
+    },
+    SessionSubcommand {
+        name: "status",
+        run: |rest, _format| status::run(rest),
     },
     SessionSubcommand {
         name: "switchboard",
@@ -200,8 +217,10 @@ Bridge work between independent terminal sessions.
 
 Primary usage:
   qol sessions list [--json]
-  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park]
+  qol sessions status
+  qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--resume] [--remote-control] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
+  qol sessions fork [--tool TOOL] --cwd PATH [--key KEY] [--model MODEL] (--brief TEXT | --brief-file PATH | --blank) [--effort LEVEL] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--park] [--remote-control]
+  qol sessions forks
   qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]
   qol sessions park [--model MODEL] [--effort LEVEL] [--title TITLE] [--session SESSION] -- <command> [args...]
   qol sessions parked
@@ -226,7 +245,17 @@ Diagnostics:
   qol sessions help
 
 Details:
-  list discovers stable live-session tokens.
+  list discovers stable live-session tokens; a row ends with the session's
+  Remote Control link (or -) and the pull requests it linked in session_send
+  messages (or -).
+  status prints one line per live keyed session, then one per fork recorded
+  today that is no longer live: key, attention state, remote control on with
+  its link or off, its pull requests, and the first 80 characters of the last
+  message it sent with session_send. It spends no model turn.
+  --remote-control on spawn and fork starts a claude session with Remote
+  Control on, named after its key; spawn_remote_control and
+  fork_remote_control in sessions.toml set the defaults, and a tool without
+  Remote Control refuses it.
   spawn launches a tagged harness for a registered tool in a new terminal tab
   (default surface), or reuses the single live session already carrying the
   key when its tool matches; a key used by a different tool conflicts and
@@ -315,7 +344,8 @@ Details:
   run it instead of repeating the previous command.
   close terminates a spawned implementation session's terminal after its
   feature loop is closed. It refuses the calling terminal, sessions without
-  a spawn identity, and sessions with an open loop.
+  a spawn identity, and sessions with an open loop, and keeps a session with
+  Remote Control on open; the session_close tool's force closes that one.
   loop-close retires an open feature loop straight from the shell: it
   acknowledges the reviewed final round, records the outcome, and renders
   the canonical receipt. outcome=accepted additionally terminates the lane
@@ -357,7 +387,22 @@ Details:
   Nothing is typed into a working session: a one-line knock arrives as the
   recipient's next prompt once its turn has ended and its prompt is empty,
   and it reads the mail with session_inbox or session_board. Messages and
-  posts are information, never instructions.
+  posts are information, never instructions. A session_send with kind report
+  and done true closes the sender's tab when its turn ends, through
+  qol-cli-sessions park --watch --final; the switchboard relays the user's
+  own words with as_user true, shown from user via switchboard. Every pull
+  request URL a message names is added to the sender's prs, and so is every
+  one a qol-cli-sessions park command names. CLI Sessions starts the tab
+  title of each session with a spawn key and prs with their numbers, as
+  `#237,#240 ci-speed`; the switchboard's tab keeps its name.
+  Every text qol types into a session (send, a knock, a park or wake
+  delivery, a bridge or submit round) waits until the harness's input box is
+  empty on screen and, while its terminal has focus, unchanged for 3 seconds.
+  A draft, a shell-mode command, a pasted-text chip or an input box that is
+  not on screen holds the text. On claude, codex, pi and kimi the text is
+  pasted first and Enter is pressed only when the input box holds nothing
+  else, so a draft is never submitted. send waits up to 60 seconds and then
+  fails with nothing typed.
   The MCP and generated agent surfaces expose {tool_names}. The remaining
   commands are human diagnostics.
 
@@ -378,6 +423,10 @@ fn list(output_format: OutputFormat) -> Result<()> {
     let interpreter = CliSessionInterpreter::system();
     let ledger = spawn::SpawnLedger::system().ok();
     let pending = bridge::PendingBridgeStore::system().ok();
+    let forks = fork::ForkStore::system()
+        .and_then(|forks| forks.list())
+        .unwrap_or_default();
+    let prs = prs::PrStore::system().ok();
     let mut rows = Vec::with_capacity(facts.len());
     for session in &facts {
         let Ok(binding) = session.binding() else {
@@ -388,12 +437,12 @@ fn list(output_format: OutputFormat) -> Result<()> {
             (Some(ledger), Some(pending)) => spawn::recorded_assignment(ledger, pending, &binding)?,
             _ => None,
         };
-        rows.push(contract::session_row(
-            session,
-            &binding,
-            &descriptor,
-            assignment.as_ref(),
-        ));
+        let row = contract::session_row(session, &binding, &descriptor, assignment.as_ref());
+        let linked = prs
+            .as_ref()
+            .map(|prs| prs.of(&forks, &row.session, row.key.as_deref()))
+            .unwrap_or_default();
+        rows.push(row.with_links(interpreter.remote_control_url(session), linked));
     }
     rows.sort_by(|left, right| left.session.cmp(&right.session));
     match output_format {
@@ -407,14 +456,17 @@ fn list(output_format: OutputFormat) -> Result<()> {
                     .activity
                     .map(|active| if active { "active" } else { "idle" })
                     .unwrap_or("-");
+                let prs = row.prs.join(",");
                 crate::cli::line(format_args!(
-                    "{}\t{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     row.session,
                     row.tool,
                     row.title,
                     row.cwd,
                     if caps.is_empty() { "-" } else { &caps },
-                    activity
+                    activity,
+                    row.remote_control_url.as_deref().unwrap_or("-"),
+                    if prs.is_empty() { "-" } else { &prs }
                 ));
             }
         }
@@ -431,9 +483,17 @@ fn send(args: &[OsString]) -> Result<()> {
     } else {
         DeliveryMode::Insert
     };
-    service()?
-        .send_text(&binding, &text, mode)
-        .context("text delivery failed")?;
+    typing::type_into(
+        &service()?,
+        &CliSessionInterpreter::system(),
+        &mut ComposerGuard::default(),
+        Typing {
+            binding: &binding,
+            text: &text,
+            mode,
+        },
+    )
+    .context("text delivery failed")?;
     if let Some(store) = last_send::LastSendStore::system() {
         store.record(&binding, &text);
     }

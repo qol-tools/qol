@@ -391,7 +391,7 @@ fn start_update_loop(app_state: &AppState) {
     tokio::spawn(async move {
         let mut shutdown_rx = state.shutdown_tx.subscribe();
         loop {
-            if let Some(check) = update_check::claim(&state, false) {
+            if let Some(check) = update_check::claim(&state) {
                 check.await;
             }
             tokio::select! {

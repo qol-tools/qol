@@ -20,7 +20,7 @@ pub fn run_owned_with_output_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let (mut child, tree) = crate::spawn_owned(command)?;
+    let (mut child, tree) = crate::spawn_owned_session(command)?;
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -200,6 +200,7 @@ mod tests {
                 std::fs::write(root.join("descendant"), descendant.id().to_string()).unwrap();
                 std::mem::forget(descendant);
             }
+            "session" => println!("{} {}", std::process::id(), unsafe { libc::getsid(0) }),
             other => panic!("unknown helper mode: {other}"),
         }
     }
@@ -227,6 +228,31 @@ mod tests {
         assert!(text(&output.stderr).contains("captured stderr"));
         assert!(!output.stdout.is_truncated());
         assert!(!output.stderr.is_truncated());
+    }
+
+    // An interactive login shell probed from a terminal stops on SIGTTIN when it is a
+    // background group of that terminal, so the runner gives the child its own session.
+    #[test]
+    #[cfg(unix)]
+    fn owned_runner_starts_the_child_in_its_own_session() {
+        let output = run_owned_with_output_timeout(
+            helper_command("session"),
+            Duration::from_secs(5),
+            16 * 1024,
+        )
+        .unwrap();
+        let BoundedCommandOutput::Completed(output) = output else {
+            panic!("helper unexpectedly timed out");
+        };
+        let (pid, sid) = text(&output.stdout)
+            .lines()
+            .find_map(|line| {
+                let (pid, sid) = line.split_once(' ')?;
+                Some((pid.parse::<i32>().ok()?, sid.parse::<i32>().ok()?))
+            })
+            .unwrap();
+
+        assert_eq!(pid, sid);
     }
 
     #[test]

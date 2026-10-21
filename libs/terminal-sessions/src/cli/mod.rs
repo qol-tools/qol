@@ -1,7 +1,9 @@
 mod activity;
 mod builtins;
 mod chat;
+mod composer;
 mod evidence;
+mod guard;
 mod interpreter;
 pub mod launch_flags;
 mod model;
@@ -21,14 +23,15 @@ pub use builtins::{
 };
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 pub use evidence::{
-    CliActivityEvidence, CliDraftStash, CliLaunchProgram, CliModelCatalog, CliRuntimeState,
-    CliScreenEvidence, CliSessionEvidence, CliViewportState,
+    CliActivityEvidence, CliComposer, CliDraftStash, CliLaunchProgram, CliModelCatalog,
+    CliRuntimeState, CliScreenEvidence, CliSessionEvidence, CliViewportState,
 };
+pub use guard::{read_composer, ComposerGuard, Hold, Typed, Typing, QUIET};
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
 pub use model::{CliSessionDescriptor, CliTool, CliToolColor, CliToolId};
 pub use screen::{
-    activity_signature, below_composer, composer_busy, composer_draft, composer_holds_draft,
-    composer_screen, editor_draft, provider_error_line, without_faint_text,
+    activity_signature, below_composer, composer_busy, composer_draft, composer_screen,
+    editor_draft, provider_error_line, without_faint_text,
 };
 pub use subscription::{CliSessionSubscription, CliSessionSubscriptionError};
 
@@ -171,11 +174,19 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn remote_control_url(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
+
     fn harness_busy(&self, _session: &SessionFacts) -> bool {
         false
     }
 
     fn draft_stash(&self) -> Option<CliDraftStash> {
+        None
+    }
+
+    fn composer(&self, _screen: &str) -> Option<CliComposer> {
         None
     }
 }

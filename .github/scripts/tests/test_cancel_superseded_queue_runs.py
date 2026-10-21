@@ -49,6 +49,17 @@ class SupersededTests(unittest.TestCase):
         self.assertEqual(csq.superseded(runs, "185", 20), [10, 11])
 
 
+class CancelTests(unittest.TestCase):
+    def test_posts_the_cancel_and_raises_when_it_is_refused(self):
+        ok = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(csq.subprocess, "run", return_value=ok) as run_gh:
+            csq.cancel("o/r", 10)
+        self.assertEqual(run_gh.call_args.args[0], ["gh", "api", "--method", "POST", "repos/o/r/actions/runs/10/cancel"])
+        refused = mock.Mock(returncode=1, stdout="", stderr="HTTP 403")
+        with mock.patch.object(csq.subprocess, "run", return_value=refused), self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            csq.cancel("o/r", 10)
+
+
 class CancelSupersededTests(unittest.TestCase):
     def test_cancels_each_superseded_run(self):
         runs = {"workflow_runs": [run(10, f"gh-readonly-queue/main/pr-185-{OLD_BASE}")]}

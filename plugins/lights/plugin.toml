@@ -4,9 +4,13 @@ uid = "368871df-de60-4a7a-ab7c-8d33fcd22511"
 name = "Lights"
 icon = "lights"
 description = "Control your lights from your computer"
-version = "1.73.1"
+version = "1.73.3"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
+
+[config.scope]
+live_color_hex = "core"
+live_brightness = "core"
 
 [runtime]
 command = "qol-lights"

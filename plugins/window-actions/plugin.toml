@@ -4,9 +4,19 @@ uid = "9fb4b550-714a-4723-b342-7a62c766cf56"
 name = "Window Actions"
 icon = "window-actions"
 description = "Snap, center and move windows across displays"
-version = "2.70.1"
+version = "2.70.4"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
+
+[config.scope]
+center_mode = "core"
+center_width_px = "core"
+center_height_px = "core"
+center_width_percent = "core"
+center_height_percent = "core"
+snap_fraction = "core"
+reveal_taskbar_after_move = "core"
+glide_speed_px_per_second = "core"
 
 [runtime]
 command = "qol-window-actions"

@@ -8,10 +8,10 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliConversation, CliDraftStash, CliLaunchProgram, CliResumeSettings, CliRuntimeState,
-    CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence,
-    CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError, CliTool,
-    CliViewportState,
+    ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram, CliResumeSettings,
+    CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler, CliSessionDescriptor,
+    CliSessionEvidence, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
+    CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -111,6 +111,10 @@ impl CliSessionStrategy for ClaudeStrategy {
         crate::cli::screen::claude_working(screen) || crate::cli::screen::has_done_marker(screen)
     }
 
+    fn composer(&self, screen: &str) -> Option<CliComposer> {
+        Some(crate::cli::composer::claude(screen))
+    }
+
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("claude"))
     }
@@ -129,8 +133,14 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
         self.metadata
-            .remote_controlled(session)
-            .then(|| REMOTE_CONTROL_REASON.to_owned())
+            .remote_control_session(session)
+            .map(|_| REMOTE_CONTROL_REASON.to_owned())
+    }
+
+    fn remote_control_url(&self, session: &SessionFacts) -> Option<String> {
+        self.metadata
+            .remote_control_session(session)
+            .map(|id| format!("{REMOTE_CONTROL_URL}{id}"))
     }
 
     fn harness_busy(&self, session: &SessionFacts) -> bool {
@@ -162,6 +172,7 @@ impl CliSessionStrategy for ClaudeStrategy {
 
 const PLACEHOLDER_TITLE: &str = "Claude Code";
 const REMOTE_CONTROL_REASON: &str = "Claude Code Remote Control is on";
+const REMOTE_CONTROL_URL: &str = "https://claude.ai/code/";
 
 fn clean_title(title: &str) -> Option<String> {
     let stripped = title.trim().trim_start_matches(|character: char| {

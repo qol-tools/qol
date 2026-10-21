@@ -8,6 +8,8 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod native_tools;
+#[cfg(test)]
+mod setting_homes;
 #[cfg(target_os = "windows")]
 mod windows;
 

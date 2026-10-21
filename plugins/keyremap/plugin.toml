@@ -4,9 +4,18 @@ uid = "e1bc6f9b-95e0-46c5-951b-6cc5de5c6d87"
 name = "Key Remap"
 icon = "key-remap"
 description = "Change what keys, mouse clicks and scrolling do."
-version = "1.72.1"
+version = "1.72.4"
 author = "KMRH47"
 platforms = ["macos", "windows"]
+
+[config.scope]
+enabled = "core"
+excluded_apps = "core"
+char_rules = "core"
+key_rules = "core"
+mouse_rules = "core"
+scroll_rules = "core"
+modifier_keys = "core"
 
 [runtime]
 command = "qol-keyremap"

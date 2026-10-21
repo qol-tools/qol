@@ -8,13 +8,12 @@ import sys
 import time
 from collections.abc import Callable
 
+from cancel_superseded_queue_runs import cancel
 from queue_verdict import gh_json
-from stop_on_failure import cancel
-from wait_for_review import review_runs
 
 REVIEW_BOT = "github-actions[bot]"
+REVIEW_WORKFLOW = "claude-review.yml"
 VERDICT_JOB = "claude review"
-WAIT_JOB = "Wait for the review"
 COMMAND = re.compile(r"/review-override ([0-9a-f]{7,40})")
 RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) -->")
 CANCEL_GRACE_SECONDS = 300
@@ -27,6 +26,12 @@ def gh(args: list[str]) -> str:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh api {args[-1]} failed")
     return result.stdout
+
+
+def review_runs(repo: str, head_sha: str) -> list[dict]:
+    return gh_json(
+        [f"repos/{repo}/actions/workflows/{REVIEW_WORKFLOW}/runs?head_sha={head_sha}&event=pull_request&per_page=20"]
+    )["workflow_runs"]
 
 
 def comments(repo: str, pr: str) -> list[dict]:
@@ -84,25 +89,6 @@ def end_if_superseded(repo: str, head_sha: str, run_id: str, sleep: Callable[[fl
     return 1
 
 
-def rerun_waits(repo: str, pr: str, head_sha: str) -> list[str]:
-    if gh_json([f"repos/{repo}/pulls/{pr}"])["head"]["sha"] != head_sha:
-        print(f"the pull request moved past {head_sha[:7]}, so its checks stay as they are")
-        return []
-    latest: dict[int, dict] = {}
-    for run in gh_json([f"repos/{repo}/actions/runs?head_sha={head_sha}&event=pull_request&per_page=100"])["workflow_runs"]:
-        if run["id"] > latest.get(run["workflow_id"], {"id": 0})["id"]:
-            latest[run["workflow_id"]] = run
-    rerun = []
-    for run in latest.values():
-        if run.get("status") != "completed" or run.get("conclusion") == "success":
-            continue
-        jobs = gh_json([f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100"])["jobs"]
-        if any(job["name"] == WAIT_JOB and job.get("conclusion") == "failure" for job in jobs):
-            gh(["--method", "POST", f"repos/{repo}/actions/runs/{run['id']}/rerun-failed-jobs"])
-            rerun.append(run["html_url"])
-    return rerun
-
-
 def rerun_verdict(repo: str, review: dict, sleep: Callable[[float], None]) -> None:
     jobs = gh_json([f"repos/{repo}/actions/runs/{review['id']}/jobs?per_page=100"])["jobs"]
     job = next((job for job in jobs if job["name"] == VERDICT_JOB), None)
@@ -139,8 +125,6 @@ def apply_override(repo: str, pr: str, body: str, actor: str, sleep: Callable[[f
         gh(["--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={record(head_sha, actor)}"])
     print(f"@{actor} overrode the review of {head_sha[:7]}: {review['html_url']}")
     rerun_verdict(repo, review, sleep)
-    for url in rerun_waits(repo, pr, head_sha):
-        print(f"reran {url}")
     return 0
 
 
@@ -154,17 +138,10 @@ def main(argv: list[str]) -> int:
             return end_if_superseded(env["GITHUB_REPOSITORY"], env["HEAD_SHA"], env["GITHUB_RUN_ID"])
         if command == "override":
             return apply_override(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["COMMENT"], env["ACTOR"])
-        if command == "rerun-waits":
-            for url in rerun_waits(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["HEAD_SHA"]):
-                print(f"reran {url}")
-            return 0
     except (RuntimeError, KeyError, json.JSONDecodeError) as error:
-        if command == "rerun-waits":
-            print(f"::warning::the waiting checks were not rerun: {error}")
-            return 0
         print(f"::error::{error}")
         return 1
-    print("usage: review_gate.py verdict|superseded|override|rerun-waits", file=sys.stderr)
+    print("usage: review_gate.py verdict|superseded|override", file=sys.stderr)
     return 2
 
 

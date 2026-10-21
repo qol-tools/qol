@@ -32,11 +32,6 @@ pub(in super::super) async fn get_core_query(
 }
 
 fn get_core_query_inner(query: &str) -> HttpResult<Response> {
-    if query == "profiles" {
-        let names = crate::features::profile::registry::list_profiles().unwrap_or_default();
-        let json = http_json::encode_json(&names, "Failed to serialize profile list")?;
-        return Ok(http_json::json_response(json));
-    }
     let value = match query {
         "theme" => crate::features::theme::current_theme_key(),
         "accent" => crate::features::theme::current_accent_key(),

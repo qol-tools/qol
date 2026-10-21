@@ -8,14 +8,13 @@ use anyhow::{anyhow, Context, Result};
 use qol_sessions_engine::knocks::KNOCK_HEADER;
 use qol_sessions_engine::FORK_HEADER;
 use qol_terminal_sessions::cli::{
-    composer_holds_draft, ChatRole, ChatTurn, CliRuntimeState, CliSessionInterpreter,
-    COMPACTED_SUMMARY_HEADER,
+    read_composer, ChatRole, ChatTurn, CliComposer, CliRuntimeState, CliSessionInterpreter,
+    ComposerGuard, Typed, Typing, COMPACTED_SUMMARY_HEADER,
 };
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::parking::ParkingStore;
 use qol_terminal_sessions::{
-    DeliveryMode, SessionBinding, SessionFacts, TerminalError, TerminalSessionService,
-    TerminalSnapshot, TextInput,
+    SessionBinding, SessionFacts, TerminalError, TerminalSessionService, TerminalSnapshot,
 };
 
 use super::prompt::{read_tail, wake_prompt, wake_section, CLOSE_NOTE, WAKE_HEADER};
@@ -229,7 +228,7 @@ pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     record.state = ParkState::Exited;
     store.record(&record)?;
     if deliver(&terminals, &interpreter, store, &mut record, &caller)? {
-        watch_woken(&terminals, &interpreter, store, &mut record)?;
+        watch_woken(&terminals, &interpreter, store, &mut record, None)?;
     }
     Ok(())
 }
@@ -268,6 +267,7 @@ fn deliver(
     let mut unknown = 0;
     let mut busy = 0;
     let mut settle = SettleGate::default();
+    let mut guard = ComposerGuard::default();
     loop {
         {
             let _turn = store.lock_conversation(&record.external_id)?;
@@ -285,10 +285,14 @@ fn deliver(
                 match holder(terminals, interpreter, store, record, caller) {
                     Holder::Live(binding) => {
                         unknown = 0;
-                        if prompt_free(terminals, interpreter, &binding)
-                            && terminals
-                                .send_text(&binding, &prompt, DeliveryMode::Submit)
-                                .is_ok()
+                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready
+                            && guard
+                                .type_text(
+                                    terminals,
+                                    interpreter,
+                                    Typing::submit(&binding, &prompt),
+                                )
+                                .is_ok_and(Typed::landed)
                         {
                             settle_batch(store, &batch, ParkState::Delivered, &binding, None);
                             qol_runtime::probe!(
@@ -347,8 +351,8 @@ pub fn prompt_free(
     binding: &SessionBinding,
 ) -> bool {
     caller_state(terminals, interpreter, binding) == CallerState::Ready
-        && match composer_holds_draft(terminals, binding) {
-            Ok(draft) => !draft,
+        && match read_composer(terminals, interpreter, binding) {
+            Ok(composer) => composer == CliComposer::Empty,
             Err(TerminalError::Unsupported { .. }) => true,
             Err(_) => false,
         }
@@ -436,11 +440,50 @@ fn written_by_the_user(turn: &ChatTurn) -> bool {
         && !turn.text.starts_with(COMPACTED_SUMMARY_HEADER)
 }
 
-fn woken_turn(turns: &[ChatTurn]) -> WokenTurn {
-    let Some(start) = turns.iter().rposition(opens_watched_turn) else {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenTurn {
+    index: usize,
+    text: String,
+}
+
+impl OpenTurn {
+    fn find(turns: &[ChatTurn]) -> Option<Self> {
+        let index = turns.iter().rposition(|turn| turn.role == ChatRole::User)?;
+        Some(Self {
+            index,
+            text: turns[index].text.clone(),
+        })
+    }
+
+    fn opens(&self, turn: &ChatTurn) -> bool {
+        turn.role == ChatRole::User && turn.text == self.text
+    }
+
+    fn position(&self, turns: &[ChatTurn]) -> Option<usize> {
+        match turns.get(self.index) {
+            Some(turn) if self.opens(turn) => Some(self.index),
+            _ => turns.iter().rposition(|turn| self.opens(turn)),
+        }
+    }
+}
+
+pub fn turn_in_progress(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    session: &SessionBinding,
+) -> Option<OpenTurn> {
+    OpenTurn::find(&woken_turns(terminals, interpreter, session))
+}
+
+fn woken_turn(turns: &[ChatTurn], final_turn: Option<&OpenTurn>) -> WokenTurn {
+    let start = match final_turn {
+        Some(open) => open.position(turns),
+        None => turns.iter().rposition(opens_watched_turn),
+    };
+    let Some(start) = start else {
         return WokenTurn::Working;
     };
-    let after = &turns[start + 1..];
+    let after = turns.get(start + 1..).unwrap_or_default();
     if after.iter().any(written_by_the_user) {
         return WokenTurn::Engaged;
     }
@@ -457,6 +500,7 @@ pub fn watch_woken(
     interpreter: &CliSessionInterpreter,
     store: &ParkStore,
     record: &mut ParkRecord,
+    final_turn: Option<OpenTurn>,
 ) -> Result<()> {
     let Some(token) = record.resumed_session.clone() else {
         return Ok(());
@@ -479,7 +523,10 @@ pub fn watch_woken(
             continue;
         }
         let delivered = store.delivered_into(&token);
-        match woken_turn(&woken_turns(terminals, interpreter, &woken)) {
+        match woken_turn(
+            &woken_turns(terminals, interpreter, &woken),
+            final_turn.as_ref(),
+        ) {
             WokenTurn::Working => {
                 unread += 1;
                 if unread >= WOKEN_UNREAD_LIMIT {
@@ -492,13 +539,17 @@ pub fn watch_woken(
             {
                 continue
             }
-            WokenTurn::Finished(report) if !parking_on(record) => {
+            WokenTurn::Finished(report) if final_turn.is_none() && !parking_on(record) => {
                 record.state = ParkState::Finished;
                 record.report = Some(report);
                 break "kept_open";
             }
             WokenTurn::Finished(report) => {
-                match interpreter.keep_open_reason_for(terminals, &woken) {
+                let keep_open = match final_turn {
+                    Some(_) => Ok(None),
+                    None => interpreter.keep_open_reason_for(terminals, &woken),
+                };
+                match keep_open {
                     Err(_) => continue,
                     Ok(Some(_)) => {
                         record.state = ParkState::Finished;
@@ -511,8 +562,10 @@ pub fn watch_woken(
                         };
                         if !store.exited(&record.external_id).is_empty()
                             || store.delivered_into(&token) != delivered
-                            || woken_turn(&woken_turns(terminals, interpreter, &woken))
-                                != WokenTurn::Finished(report.clone())
+                            || woken_turn(
+                                &woken_turns(terminals, interpreter, &woken),
+                                final_turn.as_ref(),
+                            ) != WokenTurn::Finished(report.clone())
                         {
                             continue;
                         }
@@ -591,7 +644,7 @@ mod tests {
             ),
         ];
         for (turns, expected) in cases {
-            assert_eq!(woken_turn(&turns), expected, "{turns:?}");
+            assert_eq!(woken_turn(&turns, None), expected, "{turns:?}");
         }
     }
 
@@ -678,8 +731,67 @@ mod tests {
             ),
         ];
         for (turns, expected) in cases {
-            assert_eq!(woken_turn(&turns), expected, "{turns:?}");
+            assert_eq!(woken_turn(&turns, None), expected, "{turns:?}");
         }
+    }
+
+    #[test]
+    fn a_final_turn_opens_at_the_turn_in_progress_whatever_came_before() {
+        let knock =
+            format!("{KNOCK_HEADER} 1 new message from switchboard. Read it with session_inbox.");
+        let earlier = vec![
+            turn(ChatRole::User, "fix the lockfile"),
+            turn(ChatRole::Assistant, "Opened PR 180."),
+            turn(ChatRole::User, &knock),
+        ];
+        let with = |extra: &[ChatTurn]| {
+            let mut turns = earlier.clone();
+            turns.extend_from_slice(extra);
+            turns
+        };
+        let open = OpenTurn::find(&earlier).unwrap();
+        assert_eq!(open.index, 2);
+        assert_eq!(OpenTurn::find(&[]), None);
+        let cases = [
+            (with(&[]), WokenTurn::Working),
+            (
+                with(&[turn(ChatRole::Assistant, "PR 180 merged.")]),
+                WokenTurn::Finished("PR 180 merged.".to_owned()),
+            ),
+            (
+                with(&[
+                    turn(ChatRole::Assistant, "PR 180 merged."),
+                    turn(ChatRole::User, "wait, one more thing"),
+                ]),
+                WokenTurn::Engaged,
+            ),
+            (
+                with(&[
+                    turn(ChatRole::Assistant, "PR 180 merged."),
+                    turn(ChatRole::User, &knock),
+                    turn(ChatRole::Assistant, "Read it."),
+                ]),
+                WokenTurn::Finished("Read it.".to_owned()),
+            ),
+        ];
+        for (turns, expected) in cases {
+            assert_eq!(woken_turn(&turns, Some(&open)), expected, "{turns:?}");
+        }
+        let shifted = [
+            vec![turn(ChatRole::Assistant, "Resumed.")],
+            with(&[turn(ChatRole::Assistant, "PR 180 merged.")]),
+        ]
+        .concat();
+        assert_eq!(
+            woken_turn(&shifted, Some(&open)),
+            WokenTurn::Finished("PR 180 merged.".to_owned()),
+            "an anchor that moved is found again by its text"
+        );
+        let lost = OpenTurn {
+            index: 9,
+            text: "not in the transcript".to_owned(),
+        };
+        assert_eq!(woken_turn(&earlier, Some(&lost)), WokenTurn::Working);
     }
 
     #[test]

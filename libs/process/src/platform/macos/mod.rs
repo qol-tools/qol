@@ -43,6 +43,13 @@ pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<Pro
     Ok((command.spawn()?, None))
 }
 
+pub(crate) fn spawn_owned_session(
+    mut command: Command,
+) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_session(&mut command)?;
+    Ok((command.spawn()?, None))
+}
+
 fn raw_preexec_error() -> io::Error {
     let code = unsafe { *libc::__error() };
     io::Error::from_raw_os_error(code)
