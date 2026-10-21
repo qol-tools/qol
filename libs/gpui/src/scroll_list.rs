@@ -64,7 +64,11 @@ pub fn nudge_offset_y(
     } else {
         current - step
     };
-    next.clamp(-max, gpui::px(0.))
+    clamp_offset_y(next, max)
+}
+
+pub fn clamp_offset_y(offset: gpui::Pixels, max: gpui::Pixels) -> gpui::Pixels {
+    offset.clamp(-max, gpui::px(0.))
 }
 
 impl SelectionScroll {
@@ -112,6 +116,10 @@ impl SelectionScroll {
         offset.y = next;
         self.handle.set_offset(offset);
         true
+    }
+
+    pub fn painted_offset_y(&self) -> gpui::Pixels {
+        clamp_offset_y(self.handle.offset().y, self.handle.max_offset().height)
     }
 
     pub fn refollow(&self) {
@@ -289,6 +297,19 @@ mod tests {
                 expected,
                 "case: {label}"
             );
+        }
+    }
+
+    #[test]
+    fn a_wheel_offset_past_either_end_paints_at_that_end() {
+        let cases = [
+            ("inside the range", px(-80.), px(200.), px(-80.)),
+            ("past the end", px(-260.), px(200.), px(-200.)),
+            ("above the top", px(40.), px(200.), px(0.)),
+            ("content that fits", px(-40.), px(0.), px(0.)),
+        ];
+        for (label, offset, max, expected) in cases {
+            assert_eq!(clamp_offset_y(offset, max), expected, "case: {label}");
         }
     }
 
