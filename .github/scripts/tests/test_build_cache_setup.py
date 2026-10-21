@@ -75,6 +75,13 @@ class BuildCacheSetupTests(unittest.TestCase):
             self.assertEqual(field(probe, name), field(restore, name))
         self.assertEqual(field(probe, "cache-key"), "ci-${{ matrix.os }}")
 
+    def test_python_setup_leaves_the_compile_environment_alone(self):
+        python = next(step for step in self.warm_steps if "actions/setup-python@" in step)
+        self.assertEqual(field(python, "update-environment"), "false")
+        self.assertEqual(field(python, "id"), "python")
+        workspace = next(step for step in self.warm_steps if step.startswith("name: Workspace arguments"))
+        self.assertIn("${{ steps.python.outputs.python-path }}", field(workspace, "run"))
+
     def test_only_exact_hits_skip_restore_and_every_warming_step(self):
         probe_index = next(i for i, step in enumerate(self.warm_steps) if "id: rust_setup\n" in step)
         following = self.warm_steps[probe_index + 1:]

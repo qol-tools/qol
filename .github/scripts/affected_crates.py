@@ -16,9 +16,7 @@ import tomllib
 from pathlib import Path
 
 GLOBAL_PREFIXES = (
-    ".github/workflows/",
     ".github/actions/",
-    ".github/scripts/",
     ".cargo/",
     "vendor/",
 )
@@ -33,6 +31,9 @@ GLOBAL_FILES = {
     ".gitmodules",
     ".config/hakari.toml",
     ".config/nextest.toml",
+    ".github/workflows/ci.yml",
+    ".github/scripts/affected_crates.py",
+    ".github/scripts/cleanup_cgroup_journal.py",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKTREE_HEAD = "WORKTREE"
@@ -220,6 +221,7 @@ def lock_changed_packages(base, head):
         key[0]
         for key in set(before) | set(after)
         if before.get(key) != after.get(key)
+        and (key in after or "source" in before[key])
     }
 
 
@@ -299,6 +301,9 @@ def main():
     files = [f for f in files if f.strip()]
     if not files:
         return skip_all("empty diff")
+    files = [f for f in files if not f.endswith(".md")]
+    if not files:
+        return skip_all("markdown-only diff")
 
     lock_changed = False
     for path in files:

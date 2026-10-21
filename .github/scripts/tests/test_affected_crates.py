@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -186,6 +187,8 @@ class LocalPlannerContract(unittest.TestCase):
         for path in [
             ".github/workflows/ci.yml",
             ".github/actions/rust-setup/action.yml",
+            ".github/scripts/affected_crates.py",
+            ".github/scripts/cleanup_cgroup_journal.py",
             ".gitattributes",
             ".gitmodules",
             ".config/hakari.toml",
@@ -201,6 +204,70 @@ class LocalPlannerContract(unittest.TestCase):
                     ac.main()
 
                 full_workspace.assert_called_once_with(f"global file changed: {path}")
+
+    @patch.object(ac, "skip_all")
+    @patch.object(ac, "full_workspace")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_non_gate_github_and_markdown_changes_skip_all(
+        self, changed_files, graph, full_workspace, skip_all
+    ):
+        graph.return_value = {
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+        }
+        for path in [
+            ".github/workflows/codeql.yml",
+            ".github/scripts/plugin_version.py",
+            "vendor/gpui/MODIFICATIONS.md",
+            "README.md",
+        ]:
+            with self.subTest(path=path):
+                changed_files.return_value = [path]
+                full_workspace.reset_mock()
+                skip_all.reset_mock()
+                with patch.dict(
+                    os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}
+                ):
+                    ac.main()
+
+                full_workspace.assert_not_called()
+                skip_all.assert_called_once()
+
+    @patch.object(ac, "emit")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_markdown_beside_crate_change_seeds_only_the_crate(
+        self, changed_files, graph, emit
+    ):
+        changed_files.return_value = [
+            "vendor/gpui/MODIFICATIONS.md",
+            "plugins/alt-tab/README.md",
+            "plugins/alt-tab/src/lib.rs",
+        ]
+        graph.return_value = {
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": True},
+            "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
+        }
+        with patch.object(ac, "UBUNTU_EXCLUDE", set()), patch.dict(
+            os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}
+        ):
+            ac.main()
+
+        self.assertIs(emit.call_args.args[0]["full"], False)
+        self.assertEqual(
+            emit.call_args.args[0]["ubuntu_test"],
+            ac.args(["qol-alt-tab"], False),
+        )
+
+    def test_no_workspace_source_embeds_markdown(self):
+        embed = re.compile(r'include_(?:str|bytes)!\s*\(\s*[^)]*\.md"')
+        offenders = [
+            str(source.relative_to(ac.REPO_ROOT))
+            for top in ["apps", "libs", "plugins", "tools"]
+            for source in sorted((ac.REPO_ROOT / top).rglob("*.rs"))
+            if embed.search(source.read_text(errors="ignore"))
+        ]
+        self.assertEqual(offenders, [])
 
     @patch.object(ac, "emit")
     @patch.object(ac, "lock_changed_packages")
@@ -278,6 +345,24 @@ class LocalPlannerContract(unittest.TestCase):
         ]
 
         self.assertEqual(ac.lock_changed_packages("base", "head"), {"qol-alt-tab"})
+
+    @patch.object(ac, "run")
+    def test_removed_path_package_is_not_a_lock_change(self, run):
+        before = (
+            '[[package]]\nname = "qol-ide-checkout"\nversion = "0.3.0"\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        )
+        after = (
+            '[[package]]\nname = "serde"\nversion = "1.0.0"\n'
+            'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
+        )
+        run.side_effect = [
+            subprocess.CompletedProcess([], 0, before, ""),
+            subprocess.CompletedProcess([], 0, after, ""),
+        ]
+
+        self.assertEqual(ac.lock_changed_packages("base", "head"), set())
 
     @patch.object(ac, "run")
     def test_workspace_metadata_is_locked(self, run):
