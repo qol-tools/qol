@@ -92,6 +92,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_REF }}
           path: source
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Write user-facing release notes
@@ -102,9 +103,13 @@ jobs:
           PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
         run: |
           args=(-f tag_name="${RELEASE_TAG}")
-          [[ -n "${PREVIOUS_TAG}" ]] && args+=(-f previous_tag_name="${PREVIOUS_TAG}")
+          filter=(--root source)
+          if [[ -n "${PREVIOUS_TAG}" ]]; then
+            args+=(-f previous_tag_name="${PREVIOUS_TAG}")
+            filter+=(--unit qol-tray --range "${PREVIOUS_TAG}..${RELEASE_TAG}")
+          fi
           gh api "repos/${GH_REPO}/releases/generate-notes" "${args[@]}" --jq .body \
-            | python3 source/.github/scripts/release_notes.py > "${RUNNER_TEMP}/release-notes.md"
+            | python3 source/.github/scripts/release_notes.py "${filter[@]}" > "${RUNNER_TEMP}/release-notes.md"
 
       - name: Create release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

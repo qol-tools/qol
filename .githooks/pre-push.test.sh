@@ -30,7 +30,7 @@ expect() {
 
 expect "a release profile change that re-releases every unit is rejected" rejected \
   "$(push_status refs/heads/main a0294d3dd 9625d7046)"
-expect "a shared lib constant that re-releases every unit is rejected" rejected \
+expect "a tray fix that adds a shared lib constant releases only the tray" passed \
   "$(push_status refs/heads/main a0294d3dd ae2a2ed28)"
 expect "the override lets a wide release through" passed \
   "$(push_status refs/heads/main a0294d3dd 9625d7046 QOL_ALLOW_WIDE_RELEASE=1)"

@@ -585,13 +585,16 @@ class RebuildScopeTests(unittest.TestCase):
         (self.root / "Cargo.toml").write_text(
             '[workspace]\nresolver = "2"\nmembers = ["libs/*", "plugins/*"]\n'
         )
-        shared = self.root / "libs" / "shared"
-        shared.mkdir(parents=True)
-        (shared / "Cargo.toml").write_text('[package]\nname = "shared"\nversion = "0.1.0"\n')
-        for name in ("alpha", "beta"):
+        for lib in ("shared", "extra"):
+            crate = self.root / "libs" / lib
+            crate.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text(f'[package]\nname = "{lib}"\nversion = "0.1.0"\n')
+        for name, libs in (("alpha", ("shared", "extra")), ("beta", ("shared",))):
             crate = write_plugin(self.root / "plugins", name, f"qol-{name}", "0.1.0", f"qol-{name}")
             with (crate / "Cargo.toml").open("a") as manifest:
-                manifest.write('\n[dependencies]\nshared = { path = "../../libs/shared" }\n')
+                manifest.write("\n[dependencies]\n")
+                for lib in libs:
+                    manifest.write(f'{lib} = {{ path = "../../libs/{lib}" }}\n')
         self.commit("feat: baseline")
         git(self.root, "tag", "qol-alpha-v0.1.0")
         git(self.root, "tag", "qol-beta-v0.1.0")
@@ -599,12 +602,12 @@ class RebuildScopeTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def commit(self, subject: str, path: str | None = None) -> str:
-        if path is not None:
+    def commit(self, subject: str, *paths: str, body: str = "") -> str:
+        for path in paths:
             target = self.root / path
             target.write_text(target.read_text() + "\n# edit\n" if target.exists() else "edit\n")
         git(self.root, "add", ".")
-        git(self.root, "commit", "--quiet", "-m", subject)
+        git(self.root, "commit", "--quiet", "-m", subject, *(["-m", body] if body else []))
         return git(self.root, "rev-parse", "HEAD")
 
     def plans(self, selected: str | None = None) -> dict[str, "pv.ReleasePlan"]:
@@ -617,15 +620,88 @@ class RebuildScopeTests(unittest.TestCase):
         self.assertEqual({plan.new_version for plan in plans.values()}, {"0.1.1"})
 
     def test_global_build_config_rebuilds_every_plugin(self):
-        sha = self.commit("fix: toolchain", "rust-toolchain.toml")
-        unit = self.plans()["qol-alpha"].unit
-        packages = pv.load_packages(self.root)
-        changed: dict[str, list[str]] = {}
-        commit = pv.Commit(sha=sha, subject="fix: toolchain", body="")
-        self.assertTrue(pv.commit_rebuilds_unit(self.root, commit, unit, packages, changed, {}))
-        shared = self.commit("fix: shared", "libs/shared/lib.rs")
-        commit = pv.Commit(sha=shared, subject="fix: shared", body="")
-        self.assertFalse(pv.commit_rebuilds_unit(self.root, commit, unit, packages, changed, {}))
+        self.commit("fix: toolchain", "rust-toolchain.toml")
+        self.assertEqual(sorted(self.plans()), ["qol-alpha", "qol-beta"])
+
+    def test_the_scope_picks_which_dependents_of_a_shared_crate_release(self):
+        cases = [
+            ("fix(alpha): shared", ["libs/shared/lib.rs"], "", ["qol-alpha"]),
+            ("fix(qol-beta): shared", ["libs/shared/lib.rs"], "", ["qol-beta"]),
+            ("fix(shared): shared", ["libs/shared/lib.rs"], "", ["qol-alpha", "qol-beta"]),
+            ("fix(alpha,beta): shared", ["libs/shared/lib.rs"], "", ["qol-alpha", "qol-beta"]),
+            ("fix(plugins): shared", ["libs/shared/lib.rs"], "", ["qol-alpha", "qol-beta"]),
+            ("fix: shared", ["libs/shared/lib.rs"], "", ["qol-alpha", "qol-beta"]),
+            ("fix(alpha): toolchain", ["rust-toolchain.toml"], "", ["qol-alpha"]),
+            ("fix(alpha): beta too", ["libs/shared/lib.rs", "plugins/beta/lib.rs"], "", ["qol-alpha", "qol-beta"]),
+            ("fix(beta): extra", ["libs/extra/lib.rs"], "", ["qol-alpha"]),
+            ("fix(alpha): a (#5)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* refactor(shared): b", ["qol-alpha"]),
+            ("fix(alpha): a (#6)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* fix(shared): b", ["qol-alpha", "qol-beta"]),
+            ("fix(alpha): a (#7)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* fix: b", ["qol-alpha", "qol-beta"]),
+        ]
+        for subject, paths, body, released in cases:
+            with self.subTest(subject=subject, body=body):
+                base = git(self.root, "rev-parse", "HEAD")
+                self.commit(subject, *paths, body=body)
+                self.assertEqual(sorted(self.plans()), released)
+                git(self.root, "reset", "--quiet", "--hard", base)
+
+
+class MemberScopeTests(unittest.TestCase):
+    def test_member_scopes_follow_the_commit_hook_vocabulary(self):
+        packages = {
+            name: pv.Package(
+                name=name,
+                directory=Path("/x"),
+                rel_dir=rel_dir,
+                manifest=Path("/x/Cargo.toml"),
+                deps=set(),
+                external_deps=set(),
+            )
+            for name, rel_dir in [
+                ("qol-tray", "apps/tray"),
+                ("qol-gpui", "libs/gpui"),
+                ("qol-color", "libs/qol-color"),
+                ("qol-apps", "libs/apps"),
+                ("qol-workspace", "libs/workspace"),
+                ("plugin-example", "plugins/plugin-example"),
+            ]
+        }
+        self.assertEqual(
+            pv.member_scopes(packages),
+            {
+                "qol-tray": {"qol-tray"},
+                "tray": {"qol-tray"},
+                "qol-gpui": {"qol-gpui"},
+                "gpui": {"qol-gpui"},
+                "qol-color": {"qol-color"},
+                "color": {"qol-color"},
+                "qol-apps": {"qol-apps"},
+                "qol-workspace": {"qol-workspace"},
+                "plugin-example": {"plugin-example"},
+                "example": {"plugin-example"},
+            },
+        )
+
+    def test_the_planner_narrows_on_every_member_scope_the_commit_hook_accepts(self):
+        root = Path(__file__).resolve().parents[3]
+
+        def hook(command: str) -> set[str]:
+            return set(
+                subprocess.run(
+                    ["bash", "-c", f". .githooks/commit-msg-lib.sh && {command}"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.split()
+            )
+
+        accepted = hook('qol_derive_scopes "$PWD"')
+        umbrellas = hook('qol_member_patterns Cargo.toml | sed "s,/.*,," && printf "%s\\n" $QOL_UMBRELLA_EXTRA')
+        scopes = set(pv.member_scopes(pv.load_packages(root)))
+        self.assertEqual(accepted - scopes, umbrellas)
+        self.assertFalse(scopes & umbrellas)
+
 
 if __name__ == "__main__":
     unittest.main()

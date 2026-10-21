@@ -10,25 +10,53 @@ page.
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
+from pathlib import Path
 
 import plugin_version as pv
 
-ENTRY_RE = re.compile(r"^\* (?P<title>.+?) by @\S+ in \S+$")
-SCOPE_RE = re.compile(r"^[a-z0-9_-]+\((?P<scope>[^)]+)\)!?:", re.IGNORECASE)
+ENTRY_RE = re.compile(r"^\* (?P<title>.+?) by @\S+ in (?P<link>\S+)$")
+PULL_LINK_RE = re.compile(r"/pull/(?P<number>[0-9]+)$")
+PULL_SUBJECT_RE = re.compile(r"\(#(?P<number>[0-9]+)\)$")
 INTERNAL_SCOPES = {"ci"}
 EMPTY_NOTE = "* No user-facing changes."
 
 
 def is_user_facing(title: str) -> bool:
-    scope = SCOPE_RE.match(title)
+    scope = pv.SCOPE_RE.match(title)
     if scope is not None and scope.group("scope").lower() in INTERNAL_SCOPES:
         return False
     return pv.is_releasable_commit(pv.Commit(sha="", subject=title, body=""))
 
 
-def filter_notes(body: str) -> str:
+def pull_numbers(commits: list[pv.Commit]) -> set[str]:
+    return {
+        match.group("number")
+        for commit in commits
+        if (match := PULL_SUBJECT_RE.search(commit.subject))
+    }
+
+
+def unit_pulls(root: Path, unit_id: str, rev_range: str) -> set[str]:
+    packages = pv.load_packages(root)
+    [unit] = pv.discover_release_units(root, packages, unit_id)
+    return pull_numbers(
+        pv.relevant_commits(
+            root, pv.load_commits(root, rev_range), unit, packages, {}, {}, {}, {}
+        )
+    )
+
+
+def belongs(link: str, pulls: set[str] | None) -> bool:
+    if pulls is None:
+        return True
+    match = PULL_LINK_RE.search(link)
+    return match is None or match.group("number") in pulls
+
+
+def filter_notes(body: str, pulls: set[str] | None = None) -> str:
     kept: list[str] = []
     header = None
     entries = 0
@@ -41,7 +69,9 @@ def filter_notes(body: str) -> str:
         entry = ENTRY_RE.match(line) if in_changes else None
         if entry is not None:
             entries += 1
-            if not is_user_facing(entry.group("title")):
+            if not is_user_facing(entry.group("title")) or not belongs(
+                entry.group("link"), pulls
+            ):
                 continue
         kept.append(line)
     if header is not None and entries and not any(
@@ -52,7 +82,17 @@ def filter_notes(body: str) -> str:
 
 
 def main() -> int:
-    sys.stdout.write(filter_notes(sys.stdin.read()))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--unit")
+    parser.add_argument("--range", dest="rev_range")
+    args = parser.parse_args()
+    if bool(args.unit) != bool(args.rev_range):
+        parser.error("--unit and --range go together")
+    pulls = (
+        unit_pulls(args.root.resolve(), args.unit, args.rev_range) if args.unit else None
+    )
+    sys.stdout.write(filter_notes(sys.stdin.read(), pulls))
     return 0
 
 
