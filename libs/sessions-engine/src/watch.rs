@@ -5041,14 +5041,14 @@ mod tests {
     fn a_settled_claude_draft_is_stashed_and_the_wake_submits() {
         let held = WAKE_DRAFT_SETTLE_POLLS + 1;
         let screens = completed_then(
-            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held)
+            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held + 1)
                 .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", true)]),
         );
         let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
         let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
 
         assert_eq!(events[0]["delivered"], true, "events: {events:?}");
-        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s"]);
+        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s", "enter"]);
         assert_eq!(backend.sent.lock().unwrap().len(), 1);
         assert_eq!(
             deferrals, held,
@@ -5074,8 +5074,9 @@ mod tests {
         let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
 
         assert_eq!(events[0]["delivered"], true, "events: {events:?}");
-        assert!(
-            backend.keys.lock().unwrap().is_empty(),
+        assert_eq!(
+            *backend.keys.lock().unwrap(),
+            ["enter"],
             "a changing draft is left alone"
         );
         assert_eq!(deferrals, typing);
@@ -5087,7 +5088,7 @@ mod tests {
         let screens = completed_then(
             std::iter::repeat_n(
                 claude_screen("\u{1b}[m\u{276F}\u{a0}typed after stash", true),
-                held,
+                held + 1,
             )
             .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", true)]),
         );
@@ -5095,8 +5096,9 @@ mod tests {
         let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
 
         assert_eq!(events[0]["delivered"], true, "events: {events:?}");
-        assert!(
-            backend.keys.lock().unwrap().is_empty(),
+        assert_eq!(
+            *backend.keys.lock().unwrap(),
+            ["enter"],
             "stashing again would replace the stash the user already holds"
         );
         assert_eq!(deferrals, held);
@@ -5107,14 +5109,14 @@ mod tests {
     fn a_stash_key_that_leaves_the_draft_is_sent_once_and_the_user_is_told() {
         let held = WAKE_DRAFT_NOTIFY_POLLS + 2;
         let screens = completed_then(
-            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held)
+            std::iter::repeat_n(claude_screen(CLAUDE_MULTILINE_DRAFT, false), held + 1)
                 .chain([claude_screen("\u{1b}[m\u{276F}\u{a0}", false)]),
         );
         let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
         let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
 
         assert_eq!(events[0]["delivered"], true, "events: {events:?}");
-        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s"]);
+        assert_eq!(*backend.keys.lock().unwrap(), ["ctrl+s", "enter"]);
         assert_eq!(deferrals, held);
         assert_eq!(HELD_WAKE_NOTICES.with(std::cell::Cell::get), 1);
     }
