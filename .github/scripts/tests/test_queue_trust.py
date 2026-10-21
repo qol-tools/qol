@@ -24,6 +24,7 @@ ac = load("affected_crates")
 qt = load("queue_trust")
 
 REPO = "qol-tools/qol"
+RUN = subprocess.run
 PR_HEAD = "b" * 40
 TESTED_BASE = "c" * 40
 QUEUE_BASE = "d" * 40
@@ -86,6 +87,8 @@ class QueueTrustTests(unittest.TestCase):
             directory = Path(cmd[cmd.index("--dir") + 1])
             (directory / "tested-base.json").write_text(json.dumps(self.record))
             return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[0] == "git":
+            return RUN(cmd, **kwargs)
         with patch.dict(os.environ, kwargs["env"], clear=True):
             ac.main()
         return subprocess.CompletedProcess(cmd, 0, "", "")
