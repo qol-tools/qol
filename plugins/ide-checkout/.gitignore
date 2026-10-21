@@ -1,8 +1,0 @@
-*.log
-.DS_Store
-__pycache__/
-*.pyc
-target/
-qol-ide-checkout
-qol-ide-checkout.new
-.cargo/config.toml

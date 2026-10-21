@@ -698,7 +698,7 @@ mod tests {
             target("qol-launcher", "Launcher", TargetState::UpToDate),
             target("bluetooth", "Bluetooth", TargetState::Failed),
             target("cli", "CLI Sessions", TargetState::Available),
-            target("ides", "IDE Checkout", TargetState::DevLinked),
+            target("os-themes", "OS Themes", TargetState::DevLinked),
             target("lights", "Lights", TargetState::UpToDate),
         ];
         let visited = BTreeSet::from(["qol-launcher".to_string()]);
@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn plugin_rows_never_show_an_unvisited_dev_linked_plugin() {
-        let plugins = vec![target("ides", "IDE Checkout", TargetState::DevLinked)];
+        let plugins = vec![target("os-themes", "OS Themes", TargetState::DevLinked)];
         assert!(plugin_rows(&plugins, &BTreeSet::new()).is_empty());
     }
 

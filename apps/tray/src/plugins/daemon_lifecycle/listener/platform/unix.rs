@@ -304,9 +304,6 @@ items = []
         assert!(bind_for_plugin(&plugin, &daemon_config).is_none());
     }
 
-    // Regression test: qol-ide-checkout declares only a top-level `port`
-    // in plugin.toml, no `socket` at all. bind_for_plugin must not treat the
-    // unix socket as a prerequisite gate for binding anything else.
     #[test]
     fn bind_for_plugin_binds_the_port_even_without_a_socket() {
         let plugin = plugin_with_id("qol-alt-tab");

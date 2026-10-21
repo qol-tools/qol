@@ -147,7 +147,6 @@ const PICKER_LABELS: &[&str] = &[
     "Bluetooth",
     "CLI Sessions",
     "Controllers",
-    "IDE Checkout",
     "Key Remap",
     "Launcher",
     "Lights",
@@ -161,7 +160,7 @@ const PICKER_LABELS: &[&str] = &[
 ];
 
 const PICKER_LETTERS: &[&str] = &[
-    "AT", "B", "CS", "C", "IC", "KR", "L", "Li", "M", "OT", "PZ", "QM", "QS", "QV", "WA",
+    "AT", "B", "CS", "C", "KR", "L", "Li", "M", "OT", "PZ", "QM", "QS", "QV", "WA",
 ];
 
 fn context() -> PictureContext {
