@@ -1327,7 +1327,7 @@ fn a_link_to_a_file_elsewhere_follows_its_size_and_when_it_breaks() {
 
 #[cfg(unix)]
 #[test]
-fn a_refresh_keeps_the_link_watch_and_a_replaced_link_follows_its_new_target() {
+fn a_refresh_keeps_the_link_watch_and_a_recreated_link_follows_its_new_target() {
     use std::os::unix::fs::symlink;
 
     use crate::listing::Size;
@@ -1348,8 +1348,8 @@ fn a_refresh_keeps_the_link_watch_and_a_replaced_link_follows_its_new_target() {
     });
     assert!(browser.follows_links());
 
-    symlink(second.join("b.txt"), shown.join("next")).unwrap();
-    fs::rename(shown.join("next"), shown.join("link")).unwrap();
+    fs::remove_file(shown.join("link")).unwrap();
+    symlink(second.join("b.txt"), shown.join("link")).unwrap();
     let size = |browser: &Browser| browser.entry(0).unwrap().size;
     wait_until(&mut browser, "the new target", |browser| {
         browser.row_count() == 2 && size(browser) == Size::Bytes(2) && browser.follows_links()
@@ -1357,6 +1357,30 @@ fn a_refresh_keeps_the_link_watch_and_a_replaced_link_follows_its_new_target() {
     fs::write(second.join("b.txt"), "bbbb").unwrap();
     wait_until(&mut browser, "the new target's size", |browser| {
         size(browser) == Size::Bytes(4)
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_into_a_folder_made_later_is_followed_once_its_folder_is_read_again() {
+    use std::os::unix::fs::symlink;
+
+    use crate::listing::{EntryKind, Size};
+
+    let temp = tempfile::tempdir().unwrap();
+    let later = temp.path().join("later");
+    let shown = make_folder(temp.path(), "shown");
+    symlink(later.join("a.txt"), shown.join("link")).unwrap();
+    let mut browser = opened(&shown);
+    assert!(!browser.follows_links());
+
+    fs::create_dir(&later).unwrap();
+    touch(&shown, "other.txt");
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+    fs::write(later.join("a.txt"), "made").unwrap();
+    wait_until(&mut browser, "the mended link", |browser| {
+        let entry = browser.entry(0).unwrap();
+        (entry.kind, entry.size) == (EntryKind::Link, Size::Bytes(4))
     });
 }
 

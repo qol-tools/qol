@@ -725,7 +725,7 @@ impl Browser {
                 !entry.opens_as_folder
                     && matches!(entry.kind, EntryKind::Link | EntryKind::BrokenLink)
             })
-            .map(|entry| (entry.path.clone(), entry.id));
+            .map(|entry| entry.path.clone());
         let folder = self.folder().to_path_buf();
         self.watch.follow_links(&folder, links, waker(&self.wake));
     }

@@ -14,11 +14,15 @@ const FOLLOWED_LINKS: usize = 1024;
 pub(super) struct FolderWatch {
     watch: Option<Watch>,
     chain: Option<Watch>,
-    links: Arc<Mutex<Option<Watch>>>,
-    followed: Vec<(PathBuf, Option<(u64, u64)>)>,
+    links: Arc<Mutex<Option<FollowedLinks>>>,
     watched: Option<PathBuf>,
     changed: Arc<AtomicBool>,
     gone: Arc<AtomicBool>,
+}
+
+struct FollowedLinks {
+    targets: BTreeMap<PathBuf, Vec<PathBuf>>,
+    _watch: Watch,
 }
 
 impl FolderWatch {
@@ -29,7 +33,6 @@ impl FolderWatch {
     ) -> Result<(), WatchError> {
         self.changed.store(false, Ordering::Relaxed);
         self.links = Arc::default();
-        self.followed.clear();
         self.watch_nearest(folder, wake)
     }
 
@@ -57,17 +60,13 @@ impl FolderWatch {
     pub(super) fn follow_links(
         &mut self,
         folder: &Path,
-        links: impl IntoIterator<Item = (PathBuf, Option<(u64, u64)>)>,
+        links: impl IntoIterator<Item = PathBuf>,
         wake: impl Fn() + Send + 'static,
     ) {
-        let links: Vec<_> = links.into_iter().take(FOLLOWED_LINKS).collect();
-        if links == self.followed {
-            return;
-        }
-        self.links = Arc::default();
-        let paths: Vec<PathBuf> = links.iter().map(|(path, _)| path.clone()).collect();
-        self.followed = links;
-        if paths.is_empty() {
+        let links: Vec<PathBuf> = links.into_iter().take(FOLLOWED_LINKS).collect();
+        let kept = lock(&self.links).take().filter(|_| !links.is_empty());
+        self.links = Arc::new(Mutex::new(kept));
+        if links.is_empty() {
             return;
         }
         let slot = Arc::downgrade(&self.links);
@@ -76,23 +75,16 @@ impl FolderWatch {
         let spawned = thread::Builder::new()
             .name("qol-explorer-links".into())
             .spawn(move || {
-                let targets = link_targets(&folder, &paths);
-                if targets.is_empty() {
+                let targets = link_targets(&folder, &links);
+                let Some(slot) = slot.upgrade() else {
                     return;
-                }
-                let roots: Vec<WatchRoot> = targets.keys().map(WatchRoot::shallow).collect();
-                let files: HashSet<PathBuf> = targets.into_values().flatten().collect();
-                let watched = qol_watch::watch(&roots, move |notice| {
-                    if let WatchNotice::Changed(paths) = notice {
-                        if paths.iter().any(|path| files.contains(path)) {
-                            mark(false);
-                        }
-                    }
-                });
-                match (watched, slot.upgrade()) {
-                    (Ok(watch), Some(slot)) => *lock(&slot) = Some(watch),
-                    (Err(error), _) => log::debug!("linked files will not be followed: {error}"),
-                    (Ok(_), None) => {}
+                };
+                let kept = lock(&slot)
+                    .as_ref()
+                    .is_some_and(|followed| followed.targets == targets);
+                if !kept {
+                    let followed = watch_links(targets, mark);
+                    *lock(&slot) = followed;
                 }
             });
         if let Err(error) = spawned {
@@ -178,6 +170,34 @@ impl FolderWatch {
             }
             changed.store(true, Ordering::Relaxed);
             wake();
+        }
+    }
+}
+
+fn watch_links(
+    targets: BTreeMap<PathBuf, Vec<PathBuf>>,
+    mark: impl Fn(bool) + Send + 'static,
+) -> Option<FollowedLinks> {
+    if targets.is_empty() {
+        return None;
+    }
+    let roots: Vec<WatchRoot> = targets.keys().map(WatchRoot::shallow).collect();
+    let files: HashSet<PathBuf> = targets.values().flatten().cloned().collect();
+    let watched = qol_watch::watch(&roots, move |notice| {
+        if let WatchNotice::Changed(paths) = notice {
+            if paths.iter().any(|path| files.contains(path)) {
+                mark(false);
+            }
+        }
+    });
+    match watched {
+        Ok(watch) => Some(FollowedLinks {
+            targets,
+            _watch: watch,
+        }),
+        Err(error) => {
+            log::debug!("linked files will not be followed: {error}");
+            None
         }
     }
 }
