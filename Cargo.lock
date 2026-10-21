@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.112.1"
+version = "0.112.2"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6458,7 +6458,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.73.0"
+version = "0.73.1"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6530,7 +6530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.109.1"
+version = "0.109.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6561,7 +6561,7 @@ dependencies = [
 
 [[package]]
 name = "qol-clipboard"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -6621,7 +6621,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.63.0"
+version = "0.63.1"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6730,7 +6730,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -6889,7 +6889,7 @@ dependencies = [
 
 [[package]]
 name = "qol-input"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -6916,7 +6916,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.73.0"
+version = "1.73.1"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -6945,7 +6945,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.103.1"
+version = "1.103.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -6989,7 +6989,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.74.0"
+version = "1.74.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -7039,7 +7039,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.41.0"
+version = "0.41.1"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7091,7 +7091,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.45.0"
+version = "0.45.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7125,7 +7125,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.76.0"
+version = "0.76.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -7277,7 +7277,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.72.0"
+version = "1.72.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7337,7 +7337,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.88.1"
+version = "0.88.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7449,7 +7449,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.101.1"
+version = "1.101.2"
 dependencies = [
  "anyhow",
  "block2",
@@ -7488,7 +7488,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "anyhow",
  "log",
@@ -7561,7 +7561,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.116.1"
+version = "3.116.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -7651,7 +7651,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7675,7 +7675,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.72.0"
+version = "0.72.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -7716,7 +7716,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.71.0"
+version = "2.71.1"
 dependencies = [
  "log",
  "proptest",
