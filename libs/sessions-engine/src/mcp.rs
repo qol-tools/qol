@@ -2798,7 +2798,8 @@ mod tests {
             effort: Some("high".to_owned()),
             claude_config_dir: None,
         };
-        let fork_prompt = super::super::fork::fork_prompt("lane", &brief, None, None, false);
+        let fork_prompt =
+            super::super::fork::fork_prompt("lane", "/repo", &brief, None, None, false);
         let history = vec![
             ledgered,
             plain,
