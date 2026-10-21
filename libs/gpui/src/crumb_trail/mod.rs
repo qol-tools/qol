@@ -289,6 +289,12 @@ fn fold_mark(
     let (Some(Folds { open, on_toggle }), Some(on_crumb)) = (folds, on_crumb) else {
         return mark.into_any_element();
     };
+    if hidden.is_empty() {
+        if open {
+            window.defer(cx, move |window, cx| on_toggle(false, window, cx));
+        }
+        return mark.into_any_element();
+    }
     let first = window.use_keyed_state(
         ElementId::NamedChild(Box::new(id.clone()), "folds".into()),
         cx,
@@ -607,7 +613,46 @@ fn menu_row(
 
 #[cfg(test)]
 mod tests {
-    use super::fold;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::prelude::*;
+    use gpui::{div, Context, TestAppContext, Window};
+    use qol_theme::{ThemeMode, LIGHT_SYSTEM};
+
+    use super::{fold, CrumbTrail};
+    use crate::kit::Kit;
+
+    struct OpenFolds {
+        fit: f32,
+        closed: Rc<Cell<bool>>,
+    }
+
+    impl Render for OpenFolds {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let closed = self.closed.clone();
+            div().child(
+                CrumbTrail::new(
+                    "trail",
+                    ["home", "qol", "deep", "leaf"],
+                    Kit::new(ThemeMode::Light, LIGHT_SYSTEM),
+                )
+                .fit(self.fit)
+                .on_crumb(|_, _, _| {})
+                .folds(true, move |open, _, _| closed.set(!open)),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn an_open_fold_menu_closes_once_nothing_is_folded(cx: &mut TestAppContext) {
+        for (fit, closes) in [(0.0, false), (f32::MAX, true)] {
+            let closed = Rc::new(Cell::new(false));
+            let seen = closed.clone();
+            cx.add_window_view(|_, _| OpenFolds { fit, closed: seen });
+            assert_eq!(closed.get(), closes, "fit {fit}");
+        }
+    }
 
     #[test]
     fn a_trail_that_fits_folds_nothing() {
