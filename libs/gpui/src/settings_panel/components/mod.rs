@@ -353,6 +353,7 @@ pub fn rail_caption(
         .items_center()
         .w_full()
         .h(px(rail_caption_height()))
+        .mb(px(qol_theme::SPACE_INSET))
         .px(px(qol_theme::SPACE_CELL))
         .child(kit.heading_title(
             TextStyle::Masthead,
