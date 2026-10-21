@@ -22,7 +22,11 @@ pub fn progress(motion: Motion, elapsed: Duration) -> f32 {
 }
 
 pub fn ease(motion: Motion, delta: f32) -> f32 {
-    if moving() {
+    ease_when(motion, delta, moving())
+}
+
+pub fn ease_when(motion: Motion, delta: f32, moving: bool) -> f32 {
+    if moving {
         motion.curve.at(delta)
     } else {
         1.0

@@ -700,14 +700,13 @@ fn fade_opacity(elapsed: Duration, moving: bool) -> f32 {
     if elapsed <= qol_theme::STAY_BRIEF {
         return 1.0;
     }
-    if !moving {
-        return 0.0;
-    }
     let fade = qol_theme::Motion::FADE;
     let fading = elapsed - qol_theme::STAY_BRIEF;
-    1.0 - fade
-        .curve
-        .at(fading.as_secs_f32() / fade.duration.as_secs_f32())
+    1.0 - qol_gpui::motion::ease_when(
+        fade,
+        fading.as_secs_f32() / fade.duration.as_secs_f32(),
+        moving,
+    )
 }
 
 fn finished(state: TargetState) -> bool {

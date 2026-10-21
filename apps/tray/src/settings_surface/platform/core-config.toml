@@ -62,6 +62,11 @@ system = "Follow system"
 on = "Always on"
 off = "Off"
 
+[field.animations.option_pictures]
+system = "letters:sys"
+on = "letters:on"
+off = "letters:off"
+
 [section.host]
 label = "When qol stops"
 description = "What qol leaves on this computer."

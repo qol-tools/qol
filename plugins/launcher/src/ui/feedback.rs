@@ -228,9 +228,9 @@ fn nudge_offset(delta: f32, moving: bool) -> f32 {
     let at = delta * total;
     let hold = NUDGE_HOLD.as_secs_f32();
     if at <= hold {
-        NUDGE * Motion::QUICK.curve.at(at / quick)
+        NUDGE * qol_gpui::motion::ease_when(Motion::QUICK, at / quick, moving)
     } else {
-        NUDGE * (1.0 - Motion::QUICK.curve.at((at - hold) / quick))
+        NUDGE * (1.0 - qol_gpui::motion::ease_when(Motion::QUICK, (at - hold) / quick, moving))
     }
 }
 
