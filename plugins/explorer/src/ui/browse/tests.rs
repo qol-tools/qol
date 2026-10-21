@@ -281,19 +281,80 @@ fn picks_of_entries_that_vanish_are_dropped_and_picks_elsewhere_stay() {
     browser.toggle_pick();
     browser.set_cursor(2);
     browser.toggle_pick();
-    assert_eq!(browser.note().count, "3 picked");
+    assert_eq!(browser.note().count, "2 picked, 1 in another folder");
 
     fs::remove_file(temp.path().join("a.txt")).unwrap();
     wait_until(&mut browser, "the removal", |browser| {
         browser.row_count() == 4
     });
     assert_eq!(picked(&browser), ["b.txt"]);
-    assert_eq!(browser.note().count, "2 picked");
+    assert_eq!(browser.note().count, "1 picked, 1 in another folder");
 
     fs::remove_file(inner.join("x.txt")).unwrap();
     assert!(browser.go(inner.clone(), 0.0));
     settle(&mut browser);
+    assert_eq!(browser.note().count, "1 picked in another folder");
+    touch(&inner, "y.txt");
+    touch(&inner, "z.txt");
+    wait_until(&mut browser, "the new files", |browser| {
+        browser.row_count() == 2
+    });
+    browser.pick_all();
+    assert_eq!(browser.note().count, "2 picked, 1 in another folder");
+
+    browser.up(0.0);
+    settle(&mut browser);
+    assert_eq!(browser.note().count, "1 picked, 2 in another folder");
+}
+
+#[test]
+fn hiding_hidden_entries_drops_their_picks() {
+    let temp = abc_folder();
+    touch(temp.path(), ".hidden");
+    let mut browser = opened(temp.path());
+    browser.toggle_hidden();
+    let hidden = names(&browser).iter().position(|name| name == ".hidden");
+    browser.set_cursor(hidden.unwrap());
+    browser.toggle_pick();
+    browser.add_pick(
+        names(&browser)
+            .iter()
+            .position(|name| name == "b.txt")
+            .unwrap(),
+    );
+    assert_eq!(browser.note().count, "2 picked");
+
+    browser.toggle_hidden();
+    assert_eq!(picked(&browser), ["b.txt"]);
     assert_eq!(browser.note().count, "1 picked");
+    browser.pick_all();
+    assert_eq!(browser.note().count, "4 picked");
+}
+
+#[test]
+fn a_shift_click_picks_from_the_cursor_and_the_next_one_moves_the_far_end() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    assert!(browser.range_to(3));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
+    assert_eq!(browser.cursor(), 3);
+    assert!(browser.range_to(0));
+    assert_eq!(picked(&browser), ["a.txt", "b.txt"]);
+    assert!(!browser.range_to(9));
+}
+
+#[test]
+fn a_row_clicked_while_a_folder_loads_keeps_the_cursor_once_it_settles() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    let folder = temp.path().to_path_buf();
+    browser.arriving = Some(crate::nav::Spot::at(folder.clone()));
+    browser.landing = Some(folder.join("a.txt"));
+
+    assert!(browser.place_cursor(2, 40.0));
+    assert_eq!(browser.settle_arrival(), Some((40.0, 0)));
+    assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
 }
 
 #[test]
@@ -459,6 +520,21 @@ fn going_somewhere_closes_the_path_field() {
 
     assert!(browser.go(inner, 0.0));
     assert!(!browser.path_open());
+}
+
+#[test]
+fn closing_the_path_field_drops_its_red_note() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert!(!browser.close_path());
+    browser.edit_path();
+    type_text(&mut browser, "zzz");
+    browser.path_key(&key("enter", None), || None, 0.0);
+    assert!(browser.note().failure.is_some());
+
+    assert!(browser.close_path());
+    assert!(!browser.path_open());
+    assert_eq!(browser.note().failure, None);
 }
 
 #[test]

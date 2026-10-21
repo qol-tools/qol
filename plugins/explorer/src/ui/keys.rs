@@ -31,17 +31,21 @@ pub enum Action {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Click {
     Cursor,
+    Range,
     AddPick,
     Open,
 }
 
 pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
-    if path_open {
-        return Action::PathField;
-    }
     let modifiers = &keystroke.modifiers;
     let secondary = modifiers.secondary();
     let chord = (secondary, modifiers.alt, modifiers.shift);
+    if path_open {
+        return match (keystroke.key.as_str(), chord) {
+            ("h", (true, false, false)) => Action::ToggleHidden,
+            _ => Action::PathField,
+        };
+    }
     match (keystroke.key.as_str(), chord) {
         ("up", (false, false, false)) => Action::Cursor(Step::Up),
         ("down", (false, false, false)) => Action::Cursor(Step::Down),
@@ -97,6 +101,9 @@ pub fn click(modifiers: &Modifiers, clicks: usize) -> Click {
     }
     if clicks >= 2 {
         return Click::Open;
+    }
+    if modifiers.shift {
+        return Click::Range;
     }
     Click::Cursor
 }
@@ -228,16 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn every_key_goes_to_the_path_field_while_it_is_open() {
+    fn every_key_but_ctrl_h_goes_to_the_path_field_while_it_is_open() {
         for keystroke in [
             plain("up"),
             plain("escape"),
             plain("enter"),
             key("a", Modifiers::none(), Some("a")),
+            key("h", Modifiers::none(), Some("h")),
             key("g", Modifiers::secondary_key(), Some("g")),
         ] {
             assert_eq!(action(&keystroke, true), Action::PathField, "{keystroke:?}");
         }
+        assert_eq!(
+            action(&key("h", Modifiers::secondary_key(), Some("h")), true),
+            Action::ToggleHidden
+        );
     }
 
     #[test]
@@ -285,11 +297,12 @@ mod tests {
     }
 
     #[test]
-    fn clicks_move_the_cursor_add_a_pick_or_open() {
+    fn clicks_move_the_cursor_pick_a_range_add_a_pick_or_open() {
         assert_eq!(click(&Modifiers::none(), 1), Click::Cursor);
         assert_eq!(click(&Modifiers::none(), 2), Click::Open);
         assert_eq!(click(&Modifiers::secondary_key(), 1), Click::AddPick);
         assert_eq!(click(&Modifiers::secondary_key(), 2), Click::AddPick);
-        assert_eq!(click(&shift(), 1), Click::Cursor);
+        assert_eq!(click(&shift(), 1), Click::Range);
+        assert_eq!(click(&shift(), 2), Click::Open);
     }
 }

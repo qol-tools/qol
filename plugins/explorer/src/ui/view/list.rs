@@ -118,6 +118,7 @@ fn render_row(
     let kit = kit();
     let browser = &view.browser;
     let entry = browser.entry(row)?;
+    let path = entry.path.clone();
     let picked = browser.is_picked(entry);
     let cursor = row == browser.cursor();
     let ground = if picked {
@@ -175,7 +176,7 @@ fn render_row(
                 .child(size),
         )
         .on_click(cx.listener(move |view, event: &ClickEvent, _window, cx| {
-            view.click_row(row, event, cx);
+            view.click_row(&path, event, cx);
         }));
     Some(kit.highlight(element, picked).into_any_element())
 }

@@ -180,7 +180,7 @@ impl Browser {
 
     pub fn note(&self) -> Note {
         let count = if !self.picks.is_empty() {
-            format!("{} picked", self.picks.len())
+            self.picked_note()
         } else if *self.listing.state() == ListingState::Done {
             qol_gpui::plural(self.rows.len(), "item", "items")
         } else {
@@ -189,6 +189,22 @@ impl Browser {
         Note {
             count,
             failure: self.failure.clone(),
+        }
+    }
+
+    fn picked_note(&self) -> String {
+        let here = self.picks.count_in(self.folder());
+        let elsewhere = self.picks.len() - here;
+        let others = self.picks.folder_count() - usize::from(here > 0);
+        let folders = if others == 1 {
+            "another folder"
+        } else {
+            "other folders"
+        };
+        match (here, elsewhere) {
+            (_, 0) => format!("{here} picked"),
+            (0, _) => format!("{elsewhere} picked in {folders}"),
+            _ => format!("{here} picked, {elsewhere} in {folders}"),
         }
     }
 
@@ -297,20 +313,38 @@ impl Browser {
         true
     }
 
+    pub fn place_cursor(&mut self, row: usize, scroll: f32) -> bool {
+        let Some(entry) = self.entry(row).map(|entry| entry.path.clone()) else {
+            return false;
+        };
+        self.jump.reset();
+        if let Some(spot) = self.arriving.as_mut() {
+            spot.cursor = row;
+            spot.entry = Some(entry);
+            spot.scroll = scroll;
+            self.landing = None;
+        }
+        self.cursor = row;
+        true
+    }
+
     pub fn move_cursor(&mut self, step: Step, page: usize) -> bool {
         self.jump.reset();
         self.set_cursor(self.stepped(step, page))
     }
 
     pub fn extend_range(&mut self, step: Step, page: usize) -> bool {
-        if self.loading() || self.rows.is_empty() {
+        self.range_to(self.stepped(step, page))
+    }
+
+    pub fn range_to(&mut self, row: usize) -> bool {
+        if self.loading() || row >= self.rows.len() {
             return false;
         }
         self.jump.reset();
-        let to = self.stepped(step, page);
         let rows = self.listing.visible(self.show_hidden);
-        self.picks.extend_range(&rows, self.cursor, to);
-        self.cursor = to;
+        self.picks.extend_range(&rows, self.cursor, row);
+        self.cursor = row;
         true
     }
 
@@ -352,6 +386,9 @@ impl Browser {
         self.picks.end_range();
         self.show_hidden = !self.show_hidden;
         self.refresh_rows();
+        if !self.show_hidden {
+            self.forget_vanished_picks();
+        }
         if let Some(row) = at.and_then(|path| self.row_of(&path)) {
             self.cursor = row;
         }
@@ -390,6 +427,14 @@ impl Browser {
         true
     }
 
+    pub fn close_path(&mut self) -> bool {
+        if self.path.take().is_none() {
+            return false;
+        }
+        self.failure = None;
+        true
+    }
+
     pub fn path_key(
         &mut self,
         keystroke: &Keystroke,
@@ -408,8 +453,7 @@ impl Browser {
             PathKey::Handled => PathStep::Stay { changed: true },
             PathKey::Ignored => PathStep::Stay { changed: false },
             PathKey::Cancel => {
-                self.path = None;
-                self.failure = None;
+                self.close_path();
                 PathStep::Closed
             }
             PathKey::Submit => self.submit_path(scroll),
@@ -504,14 +548,13 @@ impl Browser {
 
     fn forget_vanished_picks(&mut self) {
         let folder = &self.history.current().folder;
-        let present: HashSet<&Path> = self
-            .listing
-            .entries()
+        let shown: HashSet<&Path> = self
+            .rows
             .iter()
-            .map(|entry| entry.path.as_path())
+            .map(|&index| self.listing.entries()[index].path.as_path())
             .collect();
         self.picks
-            .retain(|path| path.parent() != Some(folder.as_path()) || present.contains(path));
+            .retain(|path| path.parent() != Some(folder.as_path()) || shown.contains(path));
     }
 
     fn refresh_when_due(&mut self, now: Instant) -> Option<Duration> {
@@ -642,7 +685,7 @@ impl Browser {
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
     }
 
-    fn row_of(&self, path: &Path) -> Option<usize> {
+    pub fn row_of(&self, path: &Path) -> Option<usize> {
         self.rows
             .iter()
             .position(|&index| self.listing.entries()[index].path == path)

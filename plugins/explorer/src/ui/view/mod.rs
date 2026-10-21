@@ -14,8 +14,8 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent, ParentElement,
-    Point, Render, ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement, Point, Render,
+    ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
@@ -216,17 +216,6 @@ impl ExplorerView {
         self.apply(action, keystroke, cx)
     }
 
-    fn on_modifiers(
-        &mut self,
-        event: &ModifiersChangedEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        if !event.modifiers.shift {
-            self.browser.end_range();
-        }
-    }
-
     fn apply(&mut self, action: Action, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
         let page = self.page_rows();
@@ -370,17 +359,26 @@ impl ExplorerView {
         }
     }
 
-    fn click_row(&mut self, row: usize, event: &ClickEvent, cx: &mut Context<Self>) {
-        self.browser.end_range();
-        let changed = match keys::click(&event.modifiers(), event.click_count()) {
-            Click::Cursor => self.browser.set_cursor(row),
-            Click::AddPick => self.browser.add_pick(row),
-            Click::Open => {
-                self.browser.set_cursor(row);
-                self.open(cx)
-            }
+    fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {
+        let click = keys::click(&event.modifiers(), event.click_count());
+        if click != Click::Range {
+            self.browser.end_range();
+        }
+        let closed = self.browser.close_path();
+        let scroll = self.scroll_offset();
+        let changed = match self.browser.row_of(path) {
+            None => false,
+            Some(row) => match click {
+                Click::Cursor => self.browser.place_cursor(row, scroll),
+                Click::Range => self.browser.range_to(row),
+                Click::AddPick => self.browser.add_pick(row),
+                Click::Open => {
+                    self.browser.place_cursor(row, scroll);
+                    self.open(cx)
+                }
+            },
         };
-        if changed {
+        if closed || changed {
             cx.notify();
         }
     }
@@ -399,7 +397,6 @@ impl Render for ExplorerView {
         kit.window()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .flex()
             .flex_col()
             .child(band::render(self, window, cx))

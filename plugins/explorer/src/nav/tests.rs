@@ -149,6 +149,39 @@ fn a_new_range_starts_from_the_current_picks() {
     assert_eq!(picked(&picks, &rows), [true, true, true, true]);
 }
 
+#[test]
+fn picks_are_counted_per_folder_through_every_change() {
+    let rows = folders(&["a", "b", "c"]);
+    let here = rows[0].parent().unwrap();
+    let elsewhere = Path::new("/elsewhere");
+    let mut picks = Picks::new();
+    picks.add(&elsewhere.join("x"));
+    picks.all(&rows);
+    picks.add(&rows[0]);
+    assert_eq!(picks.count_in(here), 3);
+    assert_eq!(picks.count_in(elsewhere), 1);
+
+    assert_eq!(picks.folder_count(), 2);
+
+    picks.toggle(&rows[0]);
+    picks.rename(&rows[1], elsewhere.join("y"));
+    assert_eq!(picks.count_in(here), 1);
+    assert_eq!(picks.count_in(elsewhere), 2);
+    picks.toggle(&rows[2]);
+    assert_eq!(picks.count_in(here), 0);
+    assert_eq!(picks.folder_count(), 1);
+
+    picks.extend_range(&rows, 0, 2);
+    assert_eq!(picks.count_in(here), 3);
+    assert_eq!(picks.folder_count(), 2);
+    picks.retain(|path| path.starts_with(here));
+    assert_eq!(picks.count_in(elsewhere), 0);
+    assert_eq!(picks.folder_count(), 1);
+    picks.clear();
+    assert_eq!(picks.count_in(here), 0);
+    assert_eq!(picks.folder_count(), 0);
+}
+
 fn picked(picks: &Picks, rows: &[PathBuf]) -> Vec<bool> {
     rows.iter().map(|row| picks.is_picked(row)).collect()
 }
