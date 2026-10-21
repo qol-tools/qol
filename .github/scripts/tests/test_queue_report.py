@@ -99,13 +99,31 @@ class ReportTests(unittest.TestCase):
         with mock.patch.object(qr, "gh_json", side_effect=AssertionError("no api call")):
             self.assertEqual(qr.report("o/r", "refs/heads/main", "9", RUN_URL), "no pull request in refs/heads/main")
 
-    def test_a_run_github_rebuilt_posts_nothing(self):
+    def test_a_run_github_rebuilt_or_an_inherited_failure_posts_nothing(self):
         ref = f"refs/heads/gh-readonly-queue/main/pr-40-{SHA}"
-        with mock.patch.object(qr, "gh_json", side_effect=AssertionError("no api call")):
-            self.assertEqual(
-                qr.report("o/r", ref, "9", RUN_URL, live=lambda: False),
-                "#40 has a newer queue commit: this run reports nothing",
-            )
+        cases = [
+            (("gone", None), "#40 has a newer queue commit: this run reports nothing"),
+            (("inherited", {"number": 39}), "#40 inherits the failure of #39 ahead of it: GitHub rebuilds it once that leaves"),
+        ]
+        for cause, expected in cases:
+            with self.subTest(cause=cause[0]), mock.patch.object(qr, "gh_json", side_effect=AssertionError("no api call")):
+                self.assertEqual(qr.report("o/r", ref, "9", RUN_URL, cause), expected)
+
+    def test_names_the_entry_ahead_that_still_runs(self):
+        calls = []
+
+        def gh(args):
+            calls.append(args)
+            if args[0].endswith("/jobs?per_page=100"):
+                return {"jobs": [dict(job("ubuntu", "failure"), id=7)]}
+            if args[0] == "repos/o/r/pulls/40":
+                return {"head": {"sha": SHA}}
+            return []
+
+        ref = f"refs/heads/gh-readonly-queue/main/pr-40-{SHA}"
+        with mock.patch.object(qr, "gh_json", gh):
+            qr.report("o/r", ref, "9", RUN_URL, ("pending", {"number": 39}))
+        self.assertIn("description=Sent back: ubuntu while #39 ahead still runs", calls[3])
 
 
 if __name__ == "__main__":

@@ -166,6 +166,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("ref:", workflow)
         self.assertNotIn("cargo", workflow)
 
+    def test_the_queue_eject_sweep_runs_from_main_after_every_queue_run(self):
+        workflow = (ROOT / ".github/workflows/queue-eject.yml").read_text()
+        for contract in [
+            "workflow_run:\n    workflows: [tests]\n    types: [completed]",
+            "permissions:\n  contents: read",
+            "cancel-in-progress: false",
+            "if: github.event.workflow_run.event == 'merge_group'",
+            "contents: write",
+            "pull-requests: write",
+            "run: python3 .github/scripts/queue_eject.py",
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, workflow)
+        self.assertNotIn("ref:", workflow)
+        report = (ROOT / ".github/workflows/ci.yml").read_text().split("  queue-report:\n", 1)[1]
+        self.assertIn("contents: write", report.split("    steps:", 1)[0])
+
     def test_one_gate_job_carries_the_merge_verdict(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
