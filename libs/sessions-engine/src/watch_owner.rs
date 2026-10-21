@@ -179,14 +179,17 @@ impl ClientWatcher {
         if tokens.is_empty() {
             return;
         }
-        let mut child = match Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args(["sessions", "watch", "--owner", &self.owner_key])
             .args(tokens)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+            .stderr(Stdio::piped());
+        if let Err(error) = qol_process::isolate_owned_session(&mut command) {
+            self.wake_debug_log(&format!("watch session isolation failed: {error}"));
+        }
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 self.wake_debug_log(&format!("watch spawn failed: {error}"));
@@ -364,6 +367,13 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    fn session_id(pid: &str) -> String {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+        let (_, fields) = stat.rsplit_once(") ").unwrap();
+        fields.split_whitespace().nth(3).unwrap().to_owned()
+    }
+
     #[cfg(unix)]
     #[test]
     fn record_leaves_the_watcher_running_after_the_client_is_dropped() {
@@ -392,6 +402,12 @@ mod tests {
             "recording a token must leave the watcher running"
         );
         let pid = spawned_watcher_pid(&root.path().join("wake-debug-owner-durable.log"));
+        #[cfg(target_os = "linux")]
+        assert_ne!(
+            session_id(&pid.to_string()),
+            session_id("self"),
+            "the watcher must run in its own session, so closing the client's terminal does not hang it up"
+        );
         drop(watcher);
         assert!(
             !qol_process::is_pid_gone(pid),
