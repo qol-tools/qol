@@ -124,6 +124,20 @@ impl Courier {
         }) else {
             return;
         };
+        let _delivery = match knocks::lock_delivery(&knock.recipient_key) {
+            Ok(Some(delivery)) => delivery,
+            Ok(None) => return,
+            Err(error) => {
+                log::warn!(
+                    "[cli-sessions] knock for {} not locked for delivery: {error}",
+                    knock.recipient_key
+                );
+                return;
+            }
+        };
+        if !crate::park::prompt_free(&self.terminals, interpreter, &binding) {
+            return;
+        }
         let claimed = match knocks::claim(&knock.recipient_key) {
             Ok(Some(claimed)) => claimed,
             Ok(None) => return,
@@ -200,7 +214,7 @@ impl Courier {
     }
 }
 
-fn spawn_wake(key: &str) {
+pub(crate) fn spawn_wake(key: &str) {
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
         Err(error) => {

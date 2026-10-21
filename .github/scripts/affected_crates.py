@@ -10,15 +10,14 @@ something that should run.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 GLOBAL_PREFIXES = (
-    ".github/workflows/",
     ".github/actions/",
-    ".github/scripts/",
     ".cargo/",
     "vendor/",
 )
@@ -33,8 +32,12 @@ GLOBAL_FILES = {
     ".gitmodules",
     ".config/hakari.toml",
     ".config/nextest.toml",
+    ".github/workflows/ci.yml",
+    ".github/scripts/affected_crates.py",
+    ".github/scripts/cleanup_cgroup_journal.py",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
+EMBEDDED_MARKDOWN = re.compile(r'^(.*?):\d+:.*include_(?:str|bytes)!\s*\(\s*"([^"]+\.md)"')
 WORKTREE_HEAD = "WORKTREE"
 
 
@@ -146,6 +149,7 @@ def skip_all(reason):
     emit(
         {
             "full": False,
+            "crates": "",
             "windows_process": False,
             "windows_dev_build": False,
             "ubuntu_clippy": "",
@@ -190,6 +194,20 @@ def with_untracked(files, head):
     return sorted(set(files) | set(untracked.stdout.splitlines()))
 
 
+def embedded_markdown():
+    found = run([
+        "git", "-C", str(REPO_ROOT), "grep", "-n", "-E",
+        r'include_(str|bytes)![[:space:]]*\([[:space:]]*"[^"]+\.md"', "--", "*.rs",
+    ])
+    if found.returncode not in (0, 1):
+        return None
+    return {
+        os.path.normpath(os.path.join(os.path.dirname(match[1]), match[2]))
+        for match in map(EMBEDDED_MARKDOWN.match, found.stdout.splitlines())
+        if match
+    }
+
+
 def lock_entries(text):
     return {
         (entry.get("name"), entry.get("version")): entry
@@ -220,6 +238,7 @@ def lock_changed_packages(base, head):
         key[0]
         for key in set(before) | set(after)
         if before.get(key) != after.get(key)
+        and (key in after or "source" in before[key])
     }
 
 
@@ -287,6 +306,33 @@ def args(packages, all_targets):
     return f"{flags}{feature_flags(packages)}"
 
 
+def affected_outputs(affected, pkgs):
+    macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
+    ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
+    windows = sorted(a for a in affected if a not in WINDOWS_EXCLUDE)
+    return {
+        "full": False,
+        "crates": " ".join(sorted(affected)),
+        "windows_process": "qol-process" in affected,
+        "windows_dev_build": "qol-dev-build" in affected,
+        "ubuntu_clippy": args(ubuntu, True),
+        "ubuntu_build": args(ubuntu, False),
+        "ubuntu_test": args(ubuntu, False),
+        "ubuntu_doctest": any(pkgs[name]["doctest"] for name in ubuntu),
+        "ubuntu_skip": not ubuntu,
+        "macos_clippy": args(macos, True),
+        "macos_build": args(macos, False),
+        "macos_test": args(macos, False),
+        "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
+        "macos_skip": not macos,
+        "windows_clippy": args(windows, True),
+        "windows_build": args(windows, False),
+        "windows_test": args(windows, False),
+        "windows_doctest": any(pkgs[name]["doctest"] for name in windows),
+        "windows_skip": not windows,
+    }
+
+
 def main():
     base = os.environ.get("BASE_SHA", "").strip()
     head = os.environ.get("HEAD_SHA", "").strip() or "HEAD"
@@ -299,6 +345,12 @@ def main():
     files = [f for f in files if f.strip()]
     if not files:
         return skip_all("empty diff")
+    if any(f.endswith(".md") for f in files):
+        embedded = embedded_markdown()
+        if embedded is not None:
+            files = [f for f in files if not f.endswith(".md") or f in embedded]
+    if not files:
+        return skip_all("markdown-only diff")
 
     lock_changed = False
     for path in files:
@@ -330,32 +382,8 @@ def main():
         return skip_all("no crate-owning changes (docs/non-build files only)")
 
     affected = dependents_closure(seeds, pkgs)
-    macos = sorted(a for a in affected if a not in MACOS_EXCLUDE)
-    ubuntu = sorted(a for a in affected if a not in UBUNTU_EXCLUDE)
-    windows = sorted(a for a in affected if a not in WINDOWS_EXCLUDE)
-    sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={macos}\n")
-    emit(
-        {
-            "full": False,
-            "windows_process": "qol-process" in affected,
-            "windows_dev_build": "qol-dev-build" in affected,
-            "ubuntu_clippy": args(ubuntu, True),
-            "ubuntu_build": args(ubuntu, False),
-            "ubuntu_test": args(ubuntu, False),
-            "ubuntu_doctest": any(pkgs[name]["doctest"] for name in ubuntu),
-            "ubuntu_skip": not ubuntu,
-            "macos_clippy": args(macos, True),
-            "macos_build": args(macos, False),
-            "macos_test": args(macos, False),
-            "macos_doctest": any(pkgs[name]["doctest"] for name in macos),
-            "macos_skip": not macos,
-            "windows_clippy": args(windows, True),
-            "windows_build": args(windows, False),
-            "windows_test": args(windows, False),
-            "windows_doctest": any(pkgs[name]["doctest"] for name in windows),
-            "windows_skip": not windows,
-        }
-    )
+    sys.stderr.write(f"[affected] changed={sorted(seeds)} affected={sorted(affected)}\n")
+    emit(affected_outputs(affected, pkgs))
 
 
 if __name__ == "__main__":

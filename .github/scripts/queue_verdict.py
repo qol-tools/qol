@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Decide whether a push to main can reuse a verdict this workflow already reached.
 
-A pull request run does not test, so a queue entry always runs the full workflow.
 A push to main whose commit already passed a merge queue run is the commit the
 queue tested, because the queue fast-forwards main to it, so it reruns nothing.
 """

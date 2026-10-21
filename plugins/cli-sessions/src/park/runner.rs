@@ -275,7 +275,11 @@ fn start_command(record: &ParkRecord, log_path: &Path) -> Result<std::process::C
         .split_first()
         .ok_or_else(|| anyhow!("the park record has no command"))?;
     let log = File::create(log_path).context("failed to create the park log")?;
-    Command::new(program)
+    let mut command = Command::new(program);
+    if let Some(path) = &record.path {
+        command.env("PATH", path);
+    }
+    command
         .args(args)
         .current_dir(&record.cwd)
         .stdin(Stdio::null())
@@ -626,6 +630,29 @@ pub fn watch_woken(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relaunched_command_is_found_on_the_path_the_park_recorded() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("qol-park-path-probe");
+        std::fs::write(&program, "#!/bin/sh\necho found\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let log = dir.path().join("park.log");
+        let record = ParkRecord {
+            cwd: dir.path().display().to_string(),
+            path: Some(dir.path().display().to_string()),
+            command: vec!["qol-park-path-probe".to_owned()],
+            ..crate::park::tests::record(ParkState::Waiting)
+        };
+        assert!(start_command(&record, &log)
+            .unwrap()
+            .wait()
+            .unwrap()
+            .success());
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "found\n");
+    }
 
     fn turn(role: ChatRole, text: &str) -> ChatTurn {
         ChatTurn {

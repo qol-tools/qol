@@ -5,7 +5,7 @@ use gpui::{
     StatefulInteractiveElement, Styled,
 };
 use qol_gpui::kit::{kit, Kit};
-use qol_gpui::scrollbar::ScrollSource;
+use qol_gpui::scrollbar::{seek_handle, ScrollGrip, ScrollSource};
 use qol_gpui::settings_panel::components::rail_caption;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{TextStyle, HEIGHT_CONTROL, SPACE_GUTTER, SPACE_INSET};
@@ -57,7 +57,10 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         let index = place_count + offset;
         children.push(render_row(index, row, current == Some(index), kit, cx));
     }
-    let count = children.len();
+    let source = ScrollSource::Handle {
+        handle: view.rail_scroll.clone(),
+        children: children.len(),
+    };
     div()
         .flex_none()
         .w(px(RAIL))
@@ -75,12 +78,11 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
                 .track_scroll(&view.rail_scroll)
                 .children(children),
         )
-        .child(kit.scroll_cue(
-            ScrollSource::Handle {
-                handle: view.rail_scroll.clone(),
-                children: count,
-            },
-            kit.grounds.rail,
+        .child(kit.scroll_cue(source.clone(), kit.grounds.rail))
+        .child(ScrollGrip::new(
+            "explorer-rail-grip",
+            source,
+            seek_handle(view.rail_scroll.clone()),
         ))
 }
 

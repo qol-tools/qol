@@ -53,6 +53,33 @@ class PluginMatrixTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tag expects version"):
             pm.release_outputs(self.root, "qol-alt-tab", "1.2.3")
 
+    def test_groups_every_plugin_of_a_target_into_one_row(self):
+        entries = [
+            {"os": "ubuntu-latest", "target": "linux", "package": "a", "tag": "a-v1.0.0"},
+            {"os": "macos-latest", "target": "mac", "package": "a", "tag": "a-v1.0.0"},
+            {"os": "ubuntu-latest", "target": "linux", "package": "b", "tag": "b-v2.0.0"},
+        ]
+
+        self.assertEqual(
+            pm.group_by_target(entries),
+            [
+                {
+                    "os": "ubuntu-latest",
+                    "target": "linux",
+                    "plugins": [
+                        {"package": "a", "tag": "a-v1.0.0"},
+                        {"package": "b", "tag": "b-v2.0.0"},
+                    ],
+                },
+                {
+                    "os": "macos-latest",
+                    "target": "mac",
+                    "plugins": [{"package": "a", "tag": "a-v1.0.0"}],
+                },
+            ],
+        )
+        self.assertEqual(pm.group_by_target([]), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,10 +8,11 @@ use gpui::{
     Styled, Window,
 };
 use qol_gpui::kit::{kit, Kit};
-use qol_gpui::scrollbar::ScrollSource;
+use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
 use qol_gpui::text::{baseline, line_height, TextStyled};
 use qol_gpui::theme::{
-    Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_CELL, SPACE_GUTTER, SPACE_INSET, SPACE_STACK,
+    translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_CELL, SPACE_GUTTER,
+    SPACE_INSET, SPACE_STACK,
 };
 
 use super::grid::{Layout, ACROSS};
@@ -110,6 +111,12 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
         .floor()
         .max(0.0) as usize;
     let shown = end.min(total).saturating_sub(first);
+    let source = ScrollSource::Window {
+        first,
+        shown,
+        total,
+    };
+    let seek = cx.entity().downgrade();
     div()
         .flex_1()
         .min_h_0()
@@ -136,13 +143,13 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             .size_full()
             .track_scroll(view.scroll.clone()),
         )
-        .child(kit.scroll_cue(
-            ScrollSource::Window {
-                first,
-                shown,
-                total,
+        .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
+        .child(ScrollGrip::new(
+            "explorer-rows-grip",
+            source,
+            move |at, _window, cx| {
+                let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
             },
-            kit.grounds.pane,
         ))
         .into_any_element()
 }
@@ -211,9 +218,7 @@ fn render_row(
         .items_center()
         .gap(px(SPACE_CELL))
         .px(px(SPACE_GUTTER))
-        .when(shown.cursor, |element| {
-            element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
-        })
+        .when(shown.cursor, |element| element.child(cursor_wash(ground)))
         .child(div().flex_none().w(px(ICON)).child(entry_pictogram(
             entry,
             stop.pictogram(),
@@ -313,9 +318,7 @@ fn render_cell(
         .justify_center()
         .gap(px(SPACE_INSET))
         .p(px(SPACE_INSET))
-        .when(shown.cursor, |element| {
-            element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
-        })
+        .when(shown.cursor, |element| element.child(cursor_wash(ground)))
         .child(entry_pictogram(entry, stop.pictogram(), shown.picked))
         .child(
             div()
@@ -343,6 +346,13 @@ fn second_line(entry: &Entry, size: &str) -> String {
         .chain((!size.is_empty()).then_some(size))
         .collect::<Vec<_>>()
         .join(SECOND_LINE_JOIN)
+}
+
+fn cursor_wash(ground: Ground) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(rgba(translucent(ground.ink, Alpha::Tint)))
 }
 
 fn detail_text(text: String, ground: Ground) -> Div {

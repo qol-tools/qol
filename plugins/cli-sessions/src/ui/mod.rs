@@ -287,6 +287,21 @@ impl SessionsView {
         }
     }
 
+    pub fn wake_selected(&mut self) {
+        let order = self.order();
+        let Some(id) = self.selection.resolved(&order) else {
+            return;
+        };
+        let key = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|reg| reg.get(&id).and_then(|s| s.key.clone()));
+        if let Some(key) = key {
+            crate::daemon::knocks::spawn_wake(&key);
+        }
+    }
+
     pub fn cycle_implementers(&mut self, forward: bool, cx: &mut Context<Self>) {
         let rows = self.rows();
         let order = self.order();

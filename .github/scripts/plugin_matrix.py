@@ -67,6 +67,18 @@ def release_outputs(root: Path, plugin_id: str, expected_version: str) -> dict[s
     }
 
 
+def group_by_target(entries: list[dict]) -> list[dict]:
+    rows: dict[str, dict] = {}
+    for entry in entries:
+        row = rows.setdefault(
+            entry["target"], {"os": entry["os"], "target": entry["target"], "plugins": []}
+        )
+        row["plugins"].append(
+            {key: value for key, value in entry.items() if key not in ("os", "target")}
+        )
+    return list(rows.values())
+
+
 def main() -> int:
     if len(sys.argv) != 4:
         print("usage: plugin_matrix.py <repo-root> <plugin-id> <version>", file=sys.stderr)

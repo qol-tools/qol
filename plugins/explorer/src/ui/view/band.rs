@@ -42,8 +42,10 @@ pub(super) fn render(
     let on_suggestion = on_crumb.clone();
     let on_wheel = on_crumb.clone();
     let on_caret = on_crumb.clone();
+    let on_folds = on_crumb.clone();
     let crumb_gesture = view.drag_gesture.clone();
     let edit_gesture = view.drag_gesture.clone();
+    let folds_gesture = view.drag_gesture.clone();
     let note_room = if note_width > 0.0 {
         note_width + SPACE_GUTTER
     } else {
@@ -83,6 +85,12 @@ pub(super) fn render(
     })
     .on_caret(move |index, _window, cx| {
         let _ = on_caret.update(cx, |view, cx| view.place_caret(index, cx));
+    })
+    .folds(view.folds_open, move |open, _window, cx| {
+        if open && folds_gesture.borrow().is_moving() {
+            return;
+        }
+        let _ = on_folds.update(cx, |view, cx| view.show_folds(open, cx));
     });
     let band = settings_band_bar(BAND, kit);
     let band = match editing {
@@ -176,6 +184,6 @@ fn failure_text(failure: String, kit: Kit) -> gpui::Div {
     div()
         .min_w_0()
         .text(TextStyle::Detail)
-        .text_color(rgb(kit.palette.danger))
+        .text_color(rgb(kit.palette.danger_ink))
         .child(failure)
 }

@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, ErrorKind};
 use std::path::PathBuf;
 
@@ -39,6 +39,12 @@ pub fn restore(claimed: &ClaimedKnock) -> io::Result<()> {
         Some(store) => store.restore(claimed),
         None => Ok(()),
     }
+}
+
+pub fn lock_delivery(recipient_key: &str) -> io::Result<Option<File>> {
+    KnockStore::system()
+        .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no sessions data directory"))?
+        .lock_delivery(recipient_key)
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -141,6 +147,21 @@ impl KnockStore {
             .open(path)?;
         lock.lock()?;
         apply()
+    }
+
+    pub(super) fn lock_delivery(&self, key: &str) -> io::Result<Option<File>> {
+        let path = self.path(key)?.with_extension("delivery");
+        fs::create_dir_all(&self.dir)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        match lock.try_lock() {
+            Ok(()) => Ok(Some(lock)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error),
+        }
     }
 
     fn load(&self, key: &str) -> io::Result<KnockRecord> {
@@ -396,6 +417,17 @@ mod tests {
             "[qol session] 1 new message from a. Read it with session_inbox. board mention in thread t2, board reply in thread t1. Read them with session_board."
         );
         assert_eq!(merged[0].since_ms, claimed.0.since_ms);
+    }
+
+    #[test]
+    fn one_deliverer_at_a_time_holds_a_recipient() {
+        let (_root, store) = store();
+        let held = store.lock_delivery("lane").unwrap();
+        assert!(held.is_some());
+        assert!(store.lock_delivery("lane").unwrap().is_none());
+        assert!(store.lock_delivery("other").unwrap().is_some());
+        drop(held);
+        assert!(store.lock_delivery("lane").unwrap().is_some());
     }
 
     #[test]
