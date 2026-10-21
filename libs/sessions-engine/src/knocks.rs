@@ -120,7 +120,6 @@ impl KnockStore {
         Some(Self { dir })
     }
 
-    #[cfg(test)]
     pub(super) fn with_dir(dir: PathBuf) -> Self {
         Self { dir }
     }

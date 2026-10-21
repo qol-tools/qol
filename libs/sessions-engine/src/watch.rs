@@ -2341,10 +2341,7 @@ fn deliver_wake(
         match driver.parse::<SessionBinding>() {
             Ok(binding) => {
                 if session_gone(terminals, &binding) {
-                    WakeDelivery {
-                        delivered: false,
-                        error: Some("the initiator terminal is no longer live".to_owned()),
-                    }
+                    mail_closed_initiator(trace_dir, session, message)
                 } else {
                     let mut hold = DraftHold::default();
                     let wait = type_when_empty(terminals, &binding, message, sleep, &mut hold);
@@ -2427,6 +2424,61 @@ fn deliver_wake(
         );
     }
     Ok(outcome)
+}
+
+fn mail_closed_initiator(
+    trace_dir: &std::path::Path,
+    session: &str,
+    message: &str,
+) -> WakeDelivery {
+    match mail_lane_parent(trace_dir, session, message) {
+        Ok(parent) => {
+            qol_runtime::probe!(
+                "CLI_SESSION_WATCH",
+                "event=wake_mailed session={} parent={}",
+                session,
+                parent
+            );
+            WakeDelivery {
+                delivered: true,
+                error: None,
+            }
+        }
+        Err(error) => WakeDelivery {
+            delivered: false,
+            error: Some(format!(
+                "the initiator terminal is no longer live, and its mailbox could not take the wake: {error:#}"
+            )),
+        },
+    }
+}
+
+fn mail_lane_parent(trace_dir: &std::path::Path, session: &str, message: &str) -> Result<String> {
+    let lane = SpawnLedger::with_dir(trace_dir.join("spawn-records"))
+        .find_by_session(session)?
+        .ok_or_else(|| anyhow!("the lane {session} has no spawn record"))?;
+    let lineage = super::lineage::LineageStore::with_dir(trace_dir.join("lineage"));
+    let parent = lineage
+        .parent(&lane.key)?
+        .ok_or_else(|| anyhow!("the lane `{}` has no recorded parent", lane.key))?;
+    let messaging = super::mailbox::Messaging {
+        mail: &super::mailbox::MailboxStore::with_dir(trace_dir.join("mail")),
+        lineage: &lineage,
+        knocks: &super::knocks::KnockStore::with_dir(trace_dir.join("knocks")),
+        board: &super::board::BoardStore::with_dir(trace_dir.join("board")),
+    };
+    messaging.send(
+        std::slice::from_ref(&parent),
+        &super::mailbox::SendRequest {
+            from: &lane.key,
+            to: &parent,
+            kind: super::mailbox::MessageKind::Report,
+            text: message,
+            reply_to: None,
+            as_user: false,
+        },
+    )?;
+    Ok(parent)
 }
 
 fn emit_completed(
@@ -4044,6 +4096,115 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(trace).unwrap()).unwrap();
         assert_eq!(record["event"], "completed");
         assert_eq!(record["session"], "v1:fake:7:100");
+    }
+
+    fn start_lane_of_a_closed_initiator(root: &tempfile::TempDir, parent: Option<&str>) {
+        let key = SpawnKey::new("lane-a").unwrap();
+        let ledger = ledger(root);
+        ledger
+            .record(
+                &key,
+                &CliToolId::new("pi").unwrap(),
+                SpawnSurface::Tab,
+                "/work",
+                None,
+                None,
+            )
+            .unwrap();
+        ledger
+            .bind_session(&key, "/work", "v1:fake:7:100", None)
+            .unwrap();
+        if let Some(parent) = parent {
+            super::super::lineage::LineageStore::with_dir(root.path().join("lineage"))
+                .record("lane-a", Some(parent))
+                .unwrap();
+        }
+        store(root)
+            .start(
+                &"v1:fake:7:100".parse().unwrap(),
+                "QOL_BRIDGE_DONE_round",
+                "v1:fake:9:900",
+                true,
+                None,
+            )
+            .unwrap();
+    }
+
+    fn watch_lane_of_a_closed_initiator(
+        root: &tempfile::TempDir,
+    ) -> (Vec<serde_json::Value>, Arc<FakeBackend>) {
+        let backend = FakeBackend::new(
+            facts("7", 100),
+            vec!["done\nQOL_BRIDGE_DONE_round".to_owned(); 2],
+        );
+        let (terminals, backend) = harness(backend);
+        let mut out = Vec::new();
+        watch(
+            &terminals,
+            &CliSessionInterpreter::system(),
+            &store(root),
+            &ledger(root),
+            &locks(root),
+            &["v1:fake:7:100".to_owned()],
+            &mut out,
+            root.path(),
+            fast_config(Duration::from_secs(3600)),
+        )
+        .unwrap();
+        (lines(&out), backend)
+    }
+
+    #[test]
+    fn a_wake_for_a_closed_initiator_lands_in_the_lane_parents_mailbox_with_a_knock() {
+        let root = tempfile::TempDir::new().unwrap();
+        start_lane_of_a_closed_initiator(&root, Some("architect"));
+
+        let (events, backend) = watch_lane_of_a_closed_initiator(&root);
+
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["event"], "completed");
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert!(
+            backend.sent.lock().unwrap().is_empty(),
+            "nothing may be typed when the initiator terminal is gone"
+        );
+        let mail = super::super::mailbox::MailboxStore::with_dir(root.path().join("mail"));
+        let messages = mail.messages("architect").unwrap();
+        assert_eq!(messages.len(), 1, "messages: {messages:?}");
+        assert_eq!(messages[0].from, "lane-a");
+        assert_eq!(messages[0].kind, super::super::mailbox::MessageKind::Report);
+        assert!(
+            messages[0].text.contains("v1:fake:7:100 completed"),
+            "the mailed wake must carry the completion: {}",
+            messages[0].text
+        );
+        let knocks =
+            super::super::knocks::KnockStore::with_dir(root.path().join("knocks")).pending_knocks();
+        assert!(
+            knocks
+                .iter()
+                .any(|knock| knock.recipient_key == "architect"),
+            "the mailed wake must queue a knock so CLI Sessions reopens the parent"
+        );
+        assert!(!root.path().join("wake-failed-v1_fake_7_100.json").exists());
+    }
+
+    #[test]
+    fn a_wake_for_a_closed_initiator_without_a_recorded_parent_stays_undelivered() {
+        let root = tempfile::TempDir::new().unwrap();
+        start_lane_of_a_closed_initiator(&root, None);
+
+        let (events, backend) = watch_lane_of_a_closed_initiator(&root);
+
+        assert_eq!(events.len(), 1, "events: {events:?}");
+        assert_eq!(events[0]["delivered"], false);
+        let error = events[0]["wake_error"].as_str().unwrap();
+        assert!(
+            error.contains("no longer live") && error.contains("no recorded parent"),
+            "{error}"
+        );
+        assert!(backend.closed.lock().unwrap().is_empty());
+        assert!(root.path().join("wake-failed-v1_fake_7_100.json").exists());
     }
 
     #[test]

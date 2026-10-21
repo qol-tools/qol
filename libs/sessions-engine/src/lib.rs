@@ -358,8 +358,14 @@ Details:
   watched rounds remain pending. Each event is delivered into the round's
   initiator terminal (the checkpoint driver) as a submitted wake message
   before the line is printed; an autoclose round closes its lane tab only
-  after that delivery is confirmed, and an undeliverable wake leaves a
-  wake-failed-<session>.json trace plus delivered=false on the event line.
+  after that delivery is confirmed. When the initiator terminal has closed,
+  the wake goes to the lane's recorded parent as a session_send report from
+  the lane's key, so CLI Sessions reopens the parent or it waits unread in
+  its inbox. A wake that reaches neither (a lane with no recorded parent)
+  leaves a wake-failed-<session>.json trace plus delivered=false on the
+  event line.
+  A watcher started by an MCP client runs in its own session, so it keeps
+  watching after the client's terminal closes.
   A lane whose window closed right after showing the marker completes with
   its last screen instead of going gone, so the report survives. With no
   tokens it watches every pending round in the checkpoint store and takes a
