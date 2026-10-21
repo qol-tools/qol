@@ -216,14 +216,21 @@ pub fn ghost_animation() -> Animation {
 }
 
 pub fn nudge(delta: f32) -> f32 {
+    nudge_offset(delta, qol_gpui::motion::moving())
+}
+
+fn nudge_offset(delta: f32, moving: bool) -> f32 {
+    if !moving {
+        return 0.0;
+    }
     let quick = Motion::QUICK.duration.as_secs_f32();
     let total = NUDGE_HOLD.as_secs_f32() + quick;
     let at = delta * total;
     let hold = NUDGE_HOLD.as_secs_f32();
     if at <= hold {
-        NUDGE * qol_gpui::motion::ease(Motion::QUICK, at / quick)
+        NUDGE * Motion::QUICK.curve.at(at / quick)
     } else {
-        NUDGE * (1.0 - qol_gpui::motion::ease(Motion::QUICK, (at - hold) / quick))
+        NUDGE * (1.0 - Motion::QUICK.curve.at((at - hold) / quick))
     }
 }
 
@@ -290,8 +297,11 @@ mod tests {
         assert_eq!(fade_in_hold_fade(LINE_HOLD, 0.5), 1.0);
         assert_eq!(ghost(0.0), GHOST_OPACITY);
         assert!(ghost(1.0) < 1e-6);
-        assert!(nudge(0.0).abs() < 1e-6);
-        assert!(nudge(1.0).abs() < 1e-6);
-        assert!((nudge(0.45) - NUDGE).abs() < 0.2);
+        assert!(nudge_offset(0.0, true).abs() < 1e-6);
+        assert!(nudge_offset(1.0, true).abs() < 1e-6);
+        assert!((nudge_offset(0.45, true) - NUDGE).abs() < 0.2);
+        for delta in [0.0, 0.45, 1.0] {
+            assert_eq!(nudge_offset(delta, false), 0.0);
+        }
     }
 }
