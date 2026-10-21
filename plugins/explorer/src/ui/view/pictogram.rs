@@ -2,6 +2,7 @@ use gpui::{div, img, px, AnyElement, App, IntoElement, ParentElement, RenderOnce
 use qol_gpui::kit::kit;
 use qol_gpui::theme::font_display;
 
+use crate::listing::Entry;
 use crate::ui::kind::{kind_of, tag_text, FileKind};
 
 macro_rules! sized_assets {
@@ -53,13 +54,8 @@ pub(super) enum RailGlyph {
     Drive,
 }
 
-pub(super) fn entry_pictogram(
-    name: &str,
-    is_dir: bool,
-    size: PictogramSize,
-    selected: bool,
-) -> AnyElement {
-    if is_dir {
+pub(super) fn entry_pictogram(entry: &Entry, size: PictogramSize, selected: bool) -> AnyElement {
+    if entry.opens_as_folder {
         return folder(size.px());
     }
     let kit = kit();
@@ -68,8 +64,8 @@ pub(super) fn entry_pictogram(
     } else {
         kit.grounds.pane.soft
     };
-    let kind = kind_of(name);
-    let tag = tag_text(name, kind);
+    let kind = kind_of(&entry.display, entry.executable);
+    let tag = tag_text(&entry.display, kind);
     Pictogram {
         name: format!("explorer-{}-{}-{tag}", kind.asset_stem(), size.px()),
         markup: tagged(outline(kind)[size.index()], kind, &tag),

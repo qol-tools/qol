@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs::{self, DirEntry, FileType, Metadata};
 use std::io;
 use std::os::macos::fs::MetadataExt;
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use crate::listing::EntryKind;
@@ -39,6 +39,10 @@ pub(crate) fn mounts() -> Vec<Mount> {
             path,
         })
         .collect()
+}
+
+pub(crate) fn is_executable(metadata: &Metadata) -> bool {
+    metadata.mode() & 0o111 != 0
 }
 
 pub(crate) fn is_hidden(name: &OsStr, metadata: &Metadata) -> bool {

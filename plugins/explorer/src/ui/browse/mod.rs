@@ -371,6 +371,9 @@ impl Browser {
     }
 
     pub fn extend_range(&mut self, step: Step, page: usize, columns: usize) -> bool {
+        if columns == 1 && matches!(step, Step::Left | Step::Right) {
+            return false;
+        }
         self.range_to(self.stepped(step, page, columns))
     }
 

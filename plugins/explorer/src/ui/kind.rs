@@ -194,9 +194,13 @@ impl FileKind {
     }
 }
 
-pub(crate) fn kind_of(name: &str) -> FileKind {
+pub(crate) fn kind_of(name: &str, executable: bool) -> FileKind {
     let Some(extension) = extension(&name.to_lowercase()) else {
-        return FileKind::Binary;
+        return if executable {
+            FileKind::Binary
+        } else {
+            FileKind::Unknown
+        };
     };
     if let Some((_, kind)) = ALIAS.iter().find(|(alias, _)| *alias == extension) {
         return *kind;
@@ -324,23 +328,30 @@ mod tests {
             ("xyz", FileKind::Unknown),
         ];
         for (extension, kind) in cases {
-            assert_eq!(kind_of(&format!("file.{extension}")), kind, "{extension}");
+            assert_eq!(
+                kind_of(&format!("file.{extension}"), false),
+                kind,
+                "{extension}"
+            );
         }
     }
 
     #[test]
-    fn names_without_a_plain_extension_are_programs_and_tarballs_are_archives() {
+    fn executables_without_a_plain_extension_are_programs_and_tarballs_are_archives() {
         let cases = [
-            ("firmware", FileKind::Binary),
-            ("trailing.", FileKind::Binary),
-            ("odd.b-c", FileKind::Binary),
-            ("backup.tar.gz", FileKind::Archive),
-            ("backup.TGZ", FileKind::Archive),
-            ("README.MD", FileKind::Markdown),
-            (".bashrc", FileKind::Unknown),
+            ("firmware", true, FileKind::Binary),
+            ("trailing.", true, FileKind::Binary),
+            ("odd.b-c", true, FileKind::Binary),
+            ("Makefile", false, FileKind::Unknown),
+            ("LICENSE", false, FileKind::Unknown),
+            ("install.sh", true, FileKind::Script),
+            ("backup.tar.gz", false, FileKind::Archive),
+            ("backup.TGZ", false, FileKind::Archive),
+            ("README.MD", false, FileKind::Markdown),
+            (".bashrc", false, FileKind::Unknown),
         ];
-        for (name, kind) in cases {
-            assert_eq!(kind_of(name), kind, "{name}");
+        for (name, executable, kind) in cases {
+            assert_eq!(kind_of(name, executable), kind, "{name}");
         }
     }
 
@@ -360,7 +371,11 @@ mod tests {
             ("app.AppImage", "APP"),
         ];
         for (name, tag) in cases {
-            assert_eq!(tag_text(name, kind_of(name)), tag, "{name}");
+            assert_eq!(
+                tag_text(name, kind_of(name, name == "firmware")),
+                tag,
+                "{name}"
+            );
         }
     }
 

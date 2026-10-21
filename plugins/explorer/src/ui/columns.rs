@@ -9,7 +9,7 @@ const LEFT_TO_RIGHT_MARK: char = '\u{200E}';
 pub fn kind_label(entry: &Entry) -> &'static str {
     match entry.kind {
         EntryKind::Folder => "Folder",
-        EntryKind::File => kind_of(&entry.display).label(),
+        EntryKind::File => kind_of(&entry.display, entry.executable).label(),
         EntryKind::Link => "Link",
         EntryKind::BrokenLink => "Broken link",
         EntryKind::Pipe => "Pipe",
@@ -83,6 +83,7 @@ mod tests {
             size,
             hidden: false,
             opens_as_folder,
+            executable: false,
         }
     }
 

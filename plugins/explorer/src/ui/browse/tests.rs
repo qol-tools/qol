@@ -434,6 +434,19 @@ fn a_row_clicked_while_a_folder_loads_keeps_the_cursor_once_it_settles() {
 }
 
 #[test]
+fn shift_left_and_right_pick_nothing_in_a_one_column_list() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    for step in [Step::Left, Step::Right] {
+        assert!(!browser.extend_range(step, 1, 1), "{step:?}");
+    }
+    assert!(picked(&browser).is_empty());
+    assert!(browser.extend_range(Step::Right, 1, 3));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
+}
+
+#[test]
 fn a_shift_run_keeps_its_start_when_rows_appear_above_it() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());

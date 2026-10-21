@@ -215,8 +215,7 @@ fn render_row(
             element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
         })
         .child(div().flex_none().w(px(ICON)).child(entry_pictogram(
-            &entry.display,
-            entry.opens_as_folder,
+            entry,
             stop.pictogram(),
             shown.picked,
         )))
@@ -317,12 +316,7 @@ fn render_cell(
         .when(shown.cursor, |element| {
             element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
         })
-        .child(entry_pictogram(
-            &entry.display,
-            entry.opens_as_folder,
-            stop.pictogram(),
-            shown.picked,
-        ))
+        .child(entry_pictogram(entry, stop.pictogram(), shown.picked))
         .child(
             div()
                 .w_full()
@@ -438,6 +432,7 @@ mod tests {
             size: Size::Blank,
             hidden: false,
             opens_as_folder,
+            executable: false,
         }
     }
 
