@@ -737,6 +737,12 @@ impl X11Client {
 
     fn handle_event(&self, event: Event) -> Option<()> {
         match event {
+            Event::DestroyNotify(event) => {
+                let window = self.get_window(event.window)?;
+                window.state.borrow_mut().destroyed = true;
+                window.close();
+                X11ClientStatePtr(Rc::downgrade(&self.0)).drop_window(event.window);
+            }
             Event::UnmapNotify(event) => {
                 let mut state = self.0.borrow_mut();
                 if let Some(window_ref) = state.windows.get_mut(&event.window) {

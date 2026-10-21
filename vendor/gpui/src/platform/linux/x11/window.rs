@@ -739,6 +739,9 @@ impl Drop for X11Window {
     fn drop(&mut self) {
         let mut state = self.0.state.borrow_mut();
         state.renderer.destroy();
+        if state.destroyed {
+            return;
+        }
 
         let destroy_x_window = maybe!({
             check_reply(
