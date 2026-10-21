@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -8,11 +9,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use qol_watch::{Watch, WatchNotice, WatchRoot};
 
+use super::pace::Pace;
 use super::REFRESH_QUIET;
 use crate::listing::{self, FolderCount, ListingEvent, ListingRead};
 use crate::places;
 
-pub(super) const FOLLOWED_FOLDERS: usize = 1024;
+const FOLLOWED_ROWS: usize = 1024;
+const FOLLOW_MARGIN: usize = 256;
 const CLOCK_SLACK: Duration = Duration::from_secs(2);
 
 type Stale = Arc<Mutex<HashSet<PathBuf>>>;
@@ -29,6 +32,29 @@ pub(super) struct LiveCounts {
     stale: Stale,
     stale_at: Option<Instant>,
     recounts: Vec<Recount>,
+    pace: Pace,
+}
+
+pub(super) fn follow_window(shown: &Range<usize>, total: usize) -> Range<usize> {
+    let middle = shown.start + shown.len() / 2;
+    let start = middle
+        .saturating_sub(FOLLOWED_ROWS / 2)
+        .min(total.saturating_sub(FOLLOWED_ROWS));
+    start..(start + FOLLOWED_ROWS).min(total)
+}
+
+pub(super) fn still_covers(followed: &Range<usize>, shown: &Range<usize>, total: usize) -> bool {
+    let low = if followed.start == 0 {
+        0
+    } else {
+        followed.start + FOLLOW_MARGIN
+    };
+    let high = if followed.end >= total {
+        total
+    } else {
+        followed.end.saturating_sub(FOLLOW_MARGIN)
+    };
+    low <= shown.start && shown.end <= high
 }
 
 impl LiveCounts {
@@ -69,8 +95,9 @@ impl LiveCounts {
         lock(&self.stale).contains(folder)
     }
 
-    pub(super) fn drain(&mut self) -> Vec<FolderCount> {
+    pub(super) fn drain(&mut self, now: Instant) -> Vec<FolderCount> {
         let mut counts = Vec::new();
+        let pace = &mut self.pace;
         self.recounts.retain_mut(|recount| loop {
             match recount.read.events().try_recv() {
                 Ok(ListingEvent::Counts(batch)) => {
@@ -81,7 +108,10 @@ impl LiveCounts {
                 }
                 Ok(_) => {}
                 Err(TryRecvError::Empty) => break true,
-                Err(TryRecvError::Disconnected) => break false,
+                Err(TryRecvError::Disconnected) => {
+                    pace.finish(now);
+                    break false;
+                }
             }
         });
         counts
@@ -96,7 +126,7 @@ impl LiveCounts {
         if self.stale_at.is_none() && !self.ready().is_empty() {
             self.stale_at = Some(now);
         }
-        let due = self.stale_at? + REFRESH_QUIET;
+        let due = self.pace.next(self.stale_at? + REFRESH_QUIET);
         if now < due {
             return Some(due - now);
         }
@@ -115,6 +145,7 @@ impl LiveCounts {
             let pending = folders.iter().cloned().collect();
             let read = listing::recount(folder.to_path_buf(), folders, wake);
             self.recounts.push(Recount { read, pending });
+            self.pace.start(now);
         }
         None
     }

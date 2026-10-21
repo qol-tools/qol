@@ -83,15 +83,6 @@ impl Listing {
         );
     }
 
-    pub fn folder_paths(&self, limit: usize) -> Vec<PathBuf> {
-        self.entries
-            .iter()
-            .filter(|entry| entry.opens_as_folder)
-            .take(limit)
-            .map(|entry| entry.path.clone())
-            .collect()
-    }
-
     pub fn apply(&mut self, event: ListingEvent) {
         match event {
             ListingEvent::Entries(batch) => {

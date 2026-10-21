@@ -89,6 +89,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
                 "explorer-rows",
                 total,
                 cx.processor(|view, range: Range<usize>, _window, cx| {
+                    view.browser.show_rows(range.clone());
                     let now = Instant::now();
                     range
                         .filter_map(|row| render_row(view, row, now, cx))

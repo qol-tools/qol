@@ -53,6 +53,7 @@ pub struct ExplorerView {
     drag_gesture: Rc<RefCell<DragGestureState>>,
     title: String,
     dismisser: SurfaceDismisser,
+    wake_at: Option<Instant>,
 }
 
 impl ExplorerView {
@@ -75,6 +76,7 @@ impl ExplorerView {
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
             title: WINDOW_TITLE.to_string(),
             dismisser,
+            wake_at: None,
         };
         view.listen(cx);
         view
@@ -154,7 +156,15 @@ impl ExplorerView {
         ((self.list_height() / ROW) as usize).max(1)
     }
 
-    fn wake_in(&self, delay: Duration, cx: &mut Context<Self>) {
+    fn wake_at(&mut self, at: Instant, now: Instant, cx: &mut Context<Self>) {
+        if self
+            .wake_at
+            .is_some_and(|pending| pending > now && pending <= at)
+        {
+            return;
+        }
+        self.wake_at = Some(at);
+        let delay = at.saturating_duration_since(now);
         let wake = self.browser.waker();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             cx.background_executor().timer(delay).await;
@@ -180,7 +190,8 @@ impl ExplorerView {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let drained = self.browser.drain(Instant::now());
+        let now = Instant::now();
+        let drained = self.browser.drain(now);
         if let Some(scroll) = drained.scroll {
             self.set_scroll((scroll + drained.cursor_shift as f32 * ROW).max(0.0));
             self.reveal_cursor();
@@ -192,7 +203,7 @@ impl ExplorerView {
             cx.notify();
         }
         if let Some(delay) = drained.wake_in {
-            self.wake_in(delay, cx);
+            self.wake_at(now + delay, now, cx);
         }
     }
 

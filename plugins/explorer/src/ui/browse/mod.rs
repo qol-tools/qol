@@ -1,4 +1,5 @@
 mod counts;
+mod pace;
 mod path_field;
 #[cfg(test)]
 mod tests;
@@ -6,6 +7,7 @@ mod watch;
 
 use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
@@ -16,14 +18,18 @@ use qol_gpui::{PathEdit, PathKey};
 use qol_watch::WatchError;
 
 use super::keys::Step;
-use crate::listing::{self, Entry, Listing, ListingEvent, ListingRead, ListingState, Pass};
+use crate::listing::{
+    self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass,
+};
 use crate::nav::{History, Jump, Picks, Spot};
-use counts::{LiveCounts, FOLLOWED_FOLDERS};
+use counts::LiveCounts;
+use pace::Pace;
 use path_field::PathField;
 use watch::FolderWatch;
 
 const REFRESH_QUIET: Duration = Duration::from_millis(150);
 const STALLED_AFTER: Duration = Duration::from_secs(1);
+const POLL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Opening {
@@ -70,7 +76,11 @@ pub struct Browser {
     path: Option<PathField>,
     incoming: Option<Listing>,
     counts: LiveCounts,
+    shown: Range<usize>,
+    followed: Range<usize>,
     changed_at: Option<Instant>,
+    listed: Pace,
+    pseudo: bool,
     watch: FolderWatch,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
@@ -96,7 +106,11 @@ impl Browser {
             path: None,
             incoming: None,
             counts: LiveCounts::default(),
+            shown: 0..0,
+            followed: 0..0,
             changed_at: None,
+            listed: Pace::default(),
+            pseudo: false,
             watch: FolderWatch::default(),
             wake,
             wakes: Some(wakes),
@@ -178,6 +192,20 @@ impl Browser {
         self.counts.following()
     }
 
+    #[cfg(all(test, unix))]
+    pub fn follows_links(&self) -> bool {
+        self.watch.follows_links()
+    }
+
+    pub fn show_rows(&mut self, rows: Range<usize>) {
+        self.shown = rows;
+        if self.arriving.is_none()
+            && !counts::still_covers(&self.followed, &self.shown, self.rows.len())
+        {
+            self.follow_counts();
+        }
+    }
+
     pub fn note(&self) -> Note {
         let count = if !self.picks.is_empty() {
             self.picked_note()
@@ -213,7 +241,11 @@ impl Browser {
     }
 
     pub fn drain(&mut self, now: Instant) -> Drained {
+        let reading = self.read.is_some();
         let events = drain_events(&mut self.read);
+        if reading && self.read.is_none() {
+            self.listed.finish(now);
+        }
         if !events.is_empty() {
             self.progressed_at = now;
         }
@@ -236,7 +268,7 @@ impl Browser {
                 drained.cursor_shift = cursor_shift;
             }
         }
-        drained.changed |= self.apply_recounts();
+        drained.changed |= self.apply_recounts(now);
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
@@ -392,6 +424,9 @@ impl Browser {
         if let Some(row) = at.and_then(|path| self.row_of(&path)) {
             self.cursor = row;
         }
+        if self.arriving.is_none() {
+            self.follow_counts();
+        }
         if let Some(field) = self.path.as_mut() {
             field.refresh_suggestions(self.show_hidden);
         }
@@ -515,7 +550,12 @@ impl Browser {
     fn arrive(&mut self, spot: Spot) {
         self.incoming = None;
         self.counts = LiveCounts::default();
+        self.shown = spot.cursor..spot.cursor + 1;
+        self.followed = 0..0;
         self.changed_at = None;
+        self.listed = Pace::default();
+        self.listed.start(Instant::now());
+        self.pseudo = crate::places::is_pseudo_fs(&spot.folder);
         let watched = self.watch.arm(&spot.folder, waker(&self.wake));
         warn_unwatched(&spot.folder, watched);
         self.read = Some(listing::start(
@@ -545,6 +585,7 @@ impl Browser {
             return Some((0.0, 0));
         }
         self.follow_counts();
+        self.follow_links();
         self.forget_vanished_picks();
         self.cursor = spot.cursor.min(self.rows.len().saturating_sub(1));
         if let Some(row) = landing.and_then(|child| self.row_of(&child)) {
@@ -573,20 +614,35 @@ impl Browser {
         if self.watch.changed() && self.changed_at.is_none() {
             self.changed_at = Some(now);
         }
-        let since = self.changed_at?;
         if self.loading() || self.incoming.is_some() {
             return None;
         }
-        let due = since + REFRESH_QUIET;
+        let polled = self
+            .polls()
+            .then(|| self.listed.started().map(|started| started + POLL))
+            .flatten();
+        let wanted = self
+            .changed_at
+            .map(|changed| changed + REFRESH_QUIET)
+            .into_iter()
+            .chain(polled)
+            .min()?;
+        let due = self.listed.next(wanted);
         if now < due {
             return Some(due - now);
         }
         self.changed_at = None;
-        self.refresh();
+        self.refresh(now);
         None
     }
 
-    fn refresh(&mut self) {
+    fn polls(&self) -> bool {
+        *self.listing.state() == ListingState::Done
+            && (self.pseudo || !self.watch.watches(self.folder()))
+    }
+
+    fn refresh(&mut self, now: Instant) {
+        self.listed.start(now);
         let folder = self.folder().to_path_buf();
         self.read = Some(listing::start(
             folder.clone(),
@@ -628,11 +684,12 @@ impl Browser {
         let folder = self.folder().to_path_buf();
         let watched = self.watch.rearm(&folder, failed, waker(&self.wake));
         warn_unwatched(&folder, watched);
+        self.follow_links();
         true
     }
 
-    fn apply_recounts(&mut self) -> bool {
-        let counts = self.counts.drain();
+    fn apply_recounts(&mut self, now: Instant) -> bool {
+        let counts = self.counts.drain(now);
         if counts.is_empty() {
             return false;
         }
@@ -644,9 +701,34 @@ impl Browser {
     }
 
     fn follow_counts(&mut self) {
-        let folders = self.listing.folder_paths(FOLLOWED_FOLDERS);
+        self.followed = counts::follow_window(&self.shown, self.rows.len());
+        if self.pseudo {
+            self.counts = LiveCounts::default();
+            return;
+        }
+        let folders = self.rows[self.followed.clone()]
+            .iter()
+            .map(|&index| &self.listing.entries()[index])
+            .filter(|entry| entry.opens_as_folder)
+            .map(|entry| entry.path.clone())
+            .collect();
         self.counts
             .follow(folders, self.listing.started(), waker(&self.wake));
+    }
+
+    fn follow_links(&mut self) {
+        let links = self
+            .listing
+            .entries()
+            .iter()
+            .filter(|entry| {
+                !entry.opens_as_folder
+                    && matches!(entry.kind, EntryKind::Link | EntryKind::BrokenLink)
+            })
+            .map(|entry| entry.path.clone())
+            .collect();
+        let folder = self.folder().to_path_buf();
+        self.watch.follow_links(&folder, links, waker(&self.wake));
     }
 
     fn follow_renamed_picks(&mut self, before: &Listing) {
