@@ -10,6 +10,17 @@ pub enum EntryKind {
     Folder,
     File,
     Link,
+    BrokenLink,
+    Pipe,
+    Socket,
+    Device,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Size {
+    Bytes(u64),
+    Blank,
+    Unreadable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,14 +30,14 @@ pub struct Entry {
     pub path: PathBuf,
     pub id: Option<(u64, u64)>,
     pub kind: EntryKind,
-    pub size: Option<u64>,
+    pub size: Size,
     pub hidden: bool,
     pub opens_as_folder: bool,
     pub sort_key: SortKey,
 }
 
 impl Entry {
-    pub(super) fn read(item: &fs::DirEntry) -> io::Result<Self> {
+    pub(super) fn read(item: &fs::DirEntry, real_sizes: bool) -> io::Result<Self> {
         let name = item.file_name();
         let path = item.path();
         let metadata = match item.metadata() {
@@ -35,7 +46,7 @@ impl Entry {
             Err(_) => None,
         };
         let (kind, size, opens_as_folder) = match &metadata {
-            Some(metadata) => classify(&path, metadata),
+            Some(metadata) => classify(&path, metadata, real_sizes),
             None => classify_unread(item),
         };
         let hidden = match &metadata {
@@ -66,24 +77,47 @@ impl AsRef<Path> for Entry {
     }
 }
 
-fn classify(path: &Path, metadata: &fs::Metadata) -> (EntryKind, Option<u64>, bool) {
+fn classify(path: &Path, metadata: &fs::Metadata, real_sizes: bool) -> (EntryKind, Size, bool) {
     if metadata.is_dir() {
-        return (EntryKind::Folder, Some(0), true);
+        return (EntryKind::Folder, Size::Blank, true);
     }
     if !metadata.file_type().is_symlink() {
-        return (EntryKind::File, Some(metadata.len()), false);
+        return match crate::places::special_kind(&metadata.file_type()) {
+            Some(kind) => (kind, Size::Blank, false),
+            None => (EntryKind::File, file_size(metadata, real_sizes), false),
+        };
     }
     match fs::metadata(path) {
-        Ok(target) if target.is_dir() => (EntryKind::Link, Some(0), true),
-        Ok(target) => (EntryKind::Link, Some(target.len()), false),
-        Err(_) => (EntryKind::Link, Some(0), false),
+        Ok(target) if target.is_dir() => (EntryKind::Link, Size::Blank, true),
+        Ok(target) => (EntryKind::Link, file_size(&target, real_sizes), false),
+        Err(error) if target_is_gone(&error) => (EntryKind::BrokenLink, Size::Blank, false),
+        Err(_) => (EntryKind::Link, Size::Unreadable, false),
     }
 }
 
-fn classify_unread(item: &fs::DirEntry) -> (EntryKind, Option<u64>, bool) {
+fn target_is_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    ) || crate::places::is_link_loop(error)
+}
+
+fn file_size(metadata: &fs::Metadata, real_sizes: bool) -> Size {
+    if real_sizes && metadata.is_file() {
+        Size::Bytes(metadata.len())
+    } else {
+        Size::Blank
+    }
+}
+
+fn classify_unread(item: &fs::DirEntry) -> (EntryKind, Size, bool) {
     match item.file_type() {
-        Ok(kind) if kind.is_dir() => (EntryKind::Folder, None, true),
-        Ok(kind) if kind.is_symlink() => (EntryKind::Link, None, false),
-        _ => (EntryKind::File, None, false),
+        Ok(kind) if kind.is_dir() => (EntryKind::Folder, Size::Unreadable, true),
+        Ok(kind) if kind.is_symlink() => (EntryKind::Link, Size::Unreadable, false),
+        Ok(kind) => match crate::places::special_kind(&kind) {
+            Some(special) => (special, Size::Blank, false),
+            None => (EntryKind::File, Size::Unreadable, false),
+        },
+        Err(_) => (EntryKind::File, Size::Unreadable, false),
     }
 }

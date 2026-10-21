@@ -234,7 +234,11 @@ impl SurfaceDismisser {
         self.state.title.borrow().clone()
     }
 
-    pub(crate) fn retitle(&self, window: &mut Window, title: String) {
+    pub fn is_visible(&self) -> bool {
+        self.state.visible.get()
+    }
+
+    pub fn retitle(&self, window: &mut Window, title: String) {
         release_surface_title(&self.state.title.borrow());
         let reserved = reserve_surface_title(&title);
         window.set_window_title(&reserved);

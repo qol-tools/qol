@@ -30,8 +30,10 @@ impl PathField {
         if !prefill.ends_with(is_separator) {
             prefill.push(MAIN_SEPARATOR);
         }
+        let mut edit = PathEdit::new(prefill.clone());
+        edit.select_all();
         Self {
-            edit: PathEdit::new(prefill.clone()),
+            edit,
             prefill,
             folder: folder.to_path_buf(),
             parent: PathBuf::new(),
@@ -69,8 +71,24 @@ impl PathField {
         self.edit.wheel(rows, SUGGESTION_ROWS)
     }
 
-    pub(super) fn target(&self, home: &Path) -> PathBuf {
+    pub(super) fn place_caret(&mut self, index: usize) {
+        self.edit.place_caret(index);
+    }
+
+    pub(super) fn folder(&self, home: &Path) -> Result<PathBuf, ListingError> {
         let text = self.edit.text();
+        let typed = self.target(text, home);
+        let Err(error) = folder_at(&typed) else {
+            return Ok(typed);
+        };
+        let trimmed = self.target(text.trim(), home);
+        if trimmed != typed && folder_at(&trimmed).is_ok() {
+            return Ok(trimmed);
+        }
+        Err(error)
+    }
+
+    fn target(&self, text: &str, home: &Path) -> PathBuf {
         match text.strip_prefix(self.prefill.as_str()) {
             Some(rest) => path::collapse(&self.folder.join(rest.trim_start_matches(is_separator))),
             None => path::resolve(text, home, &self.folder),
@@ -154,7 +172,7 @@ impl PathField {
     }
 }
 
-pub(super) fn folder_at(target: &Path) -> Result<(), ListingError> {
+fn folder_at(target: &Path) -> Result<(), ListingError> {
     let metadata = fs::metadata(target)
         .map_err(|error| ListingError::from_io(target.to_path_buf(), &error))?;
     if metadata.is_dir() {

@@ -79,22 +79,34 @@ impl PathEdit {
         self.selected = kept.or(auto);
     }
 
+    pub fn select_all(&mut self) {
+        self.field.select_all();
+    }
+
+    pub fn place_caret(&mut self, index: usize) {
+        self.field.clear_selection();
+        self.field.set_cursor(index);
+    }
+
     pub fn select_next(&mut self) -> bool {
-        let next = self.selected().map_or(0, |selected| selected + 1);
-        if next >= self.suggestions.len() {
+        if self.suggestions.is_empty() {
             return false;
         }
-        self.selected = Some(next);
+        let next = self.selected().map_or(0, |selected| selected + 1);
+        self.selected = Some(next).filter(|&next| next < self.suggestions.len());
         self.picked = true;
         self.wheeled = None;
         true
     }
 
     pub fn select_previous(&mut self) -> bool {
-        let Some(selected) = self.selected() else {
+        if self.suggestions.is_empty() {
             return false;
+        }
+        self.selected = match self.selected() {
+            Some(selected) => selected.checked_sub(1),
+            None => Some(self.suggestions.len() - 1),
         };
-        self.selected = selected.checked_sub(1);
         self.picked = true;
         self.wheeled = None;
         true
@@ -158,7 +170,9 @@ impl PathEdit {
                 self.select_next();
                 PathKey::Handled
             }
-            _ => match apply_edit_key(&mut self.field, keystroke, paste) {
+            _ => match apply_edit_key(&mut self.field, keystroke, || {
+                paste().map(|text| pasted_path(&text).to_owned())
+            }) {
                 EditKey::Changed => {
                     self.picked = false;
                     PathKey::Changed
@@ -168,6 +182,18 @@ impl PathEdit {
             },
         }
     }
+}
+
+fn pasted_path(text: &str) -> &str {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    ['"', '\'']
+        .into_iter()
+        .find_map(|quote| line.strip_prefix(quote)?.strip_suffix(quote))
+        .unwrap_or(line)
 }
 
 fn segment_start(text: &str) -> usize {
@@ -257,20 +283,57 @@ mod tests {
     }
 
     #[test]
-    fn up_and_down_stop_at_the_edges() {
+    fn up_and_down_cycle_through_the_typed_text() {
         let mut edit = edit("~/", &["a", "b", "c"]);
-        assert!(!edit.select_previous());
-        assert!(edit.select_next());
-        assert!(edit.select_next());
-        assert!(edit.select_next());
-        assert!(!edit.select_next());
-        assert_eq!(edit.selected(), Some(2));
-        assert!(edit.select_previous());
-        assert_eq!(edit.selected(), Some(1));
-        assert!(edit.select_previous());
-        assert!(edit.select_previous());
-        assert_eq!(edit.selected(), None);
-        assert!(!edit.select_previous());
+        let mut down = Vec::new();
+        for _ in 0..5 {
+            assert!(edit.select_next());
+            down.push(edit.selected());
+        }
+        assert_eq!(down, [Some(0), Some(1), Some(2), None, Some(0)]);
+        let mut up = Vec::new();
+        for _ in 0..5 {
+            assert!(edit.select_previous());
+            up.push(edit.selected());
+        }
+        assert_eq!(up, [None, Some(2), Some(1), Some(0), None]);
+        assert!(!PathEdit::new("~/").select_next());
+        assert!(!PathEdit::new("~/").select_previous());
+    }
+
+    #[test]
+    fn a_paste_takes_the_first_line_without_its_quotes_and_spaces() {
+        for (clipboard, pasted) in [
+            ("  \"/srv/beta\"  ", "/srv/beta"),
+            ("'/srv/it is'", "/srv/it is"),
+            ("\n/srv/alpha\n/srv/beta\n", "/srv/alpha"),
+            ("/srv/alpha\r\n", "/srv/alpha"),
+            ("\"/srv/half", "\"/srv/half"),
+        ] {
+            let mut edit = PathEdit::new("");
+            let ctrl_v = Keystroke {
+                modifiers: Modifiers::secondary_key(),
+                key: "v".to_string(),
+                key_char: Some("v".to_string()),
+            };
+            assert_eq!(
+                edit.key(&ctrl_v, || Some(clipboard.to_string())),
+                PathKey::Changed
+            );
+            assert_eq!(edit.text(), pasted, "{clipboard:?}");
+        }
+    }
+
+    #[test]
+    fn a_click_places_the_caret_and_drops_the_selection() {
+        let mut edit = PathEdit::new("~/Git/");
+        edit.select_all();
+        assert_eq!(edit.field().selected_range(), Some((0, 6)));
+        edit.place_caret(2);
+        assert_eq!(edit.field().selected_range(), None);
+        assert_eq!(edit.field().cursor(), 2);
+        edit.place_caret(99);
+        assert_eq!(edit.field().cursor(), 6);
     }
 
     #[test]

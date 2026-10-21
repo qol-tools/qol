@@ -14,18 +14,19 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, size, AsyncApp, Bounds, ClickEvent, Context, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent, ParentElement,
-    Point, Render, ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
+    InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ParentElement, Point, Render,
+    ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
-use qol_gpui::surface::DragGestureState;
-use qol_gpui::theme::HEIGHT_INLINE;
+use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
+use qol_gpui::theme::{HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
+use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 
 pub const WINDOW_TITLE: &str = "Explorer";
@@ -50,10 +51,18 @@ pub struct ExplorerView {
     body_height: f32,
     waiting: VecDeque<Keystroke>,
     drag_gesture: Rc<RefCell<DragGestureState>>,
+    title: String,
+    dismisser: SurfaceDismisser,
+    wake_at: Option<Instant>,
 }
 
 impl ExplorerView {
-    pub fn new(start: PathBuf, home: PathBuf, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        start: PathBuf,
+        home: PathBuf,
+        dismisser: SurfaceDismisser,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
             browser: Browser::new(start, home),
@@ -65,9 +74,33 @@ impl ExplorerView {
             body_height: 0.0,
             waiting: VecDeque::new(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
+            title: WINDOW_TITLE.to_string(),
+            dismisser,
+            wake_at: None,
         };
         view.listen(cx);
         view
+    }
+
+    pub(super) fn crumbs(&self) -> Vec<Crumb> {
+        trail::crumbs(
+            self.browser.folder(),
+            self.browser.home(),
+            self.devices
+                .iter()
+                .map(|device| (device.label.as_str(), device.path.as_path())),
+        )
+    }
+
+    fn follow_title(&mut self, window: &mut Window) {
+        let title = self.crumbs().pop().map_or_else(
+            || WINDOW_TITLE.to_string(),
+            |crumb| format!("{} - {WINDOW_TITLE}", crumb.label),
+        );
+        if title != self.title && self.dismisser.is_visible() {
+            self.dismisser.retitle(window, title.clone());
+            self.title = title;
+        }
     }
 
     fn scroll_offset(&self) -> f32 {
@@ -123,7 +156,15 @@ impl ExplorerView {
         ((self.list_height() / ROW) as usize).max(1)
     }
 
-    fn wake_in(&self, delay: Duration, cx: &mut Context<Self>) {
+    fn wake_at(&mut self, at: Instant, now: Instant, cx: &mut Context<Self>) {
+        if self
+            .wake_at
+            .is_some_and(|pending| pending > now && pending <= at)
+        {
+            return;
+        }
+        self.wake_at = Some(at);
+        let delay = at.saturating_duration_since(now);
         let wake = self.browser.waker();
         cx.spawn(async move |_: WeakEntity<Self>, cx: &mut AsyncApp| {
             cx.background_executor().timer(delay).await;
@@ -149,7 +190,8 @@ impl ExplorerView {
     }
 
     fn drain(&mut self, cx: &mut Context<Self>) {
-        let drained = self.browser.drain(Instant::now());
+        let now = Instant::now();
+        let drained = self.browser.drain(now);
         if let Some(scroll) = drained.scroll {
             self.set_scroll((scroll + drained.cursor_shift as f32 * ROW).max(0.0));
             self.reveal_cursor();
@@ -161,7 +203,7 @@ impl ExplorerView {
             cx.notify();
         }
         if let Some(delay) = drained.wake_in {
-            self.wake_in(delay, cx);
+            self.wake_at(now + delay, now, cx);
         }
     }
 
@@ -216,17 +258,6 @@ impl ExplorerView {
         self.apply(action, keystroke, cx)
     }
 
-    fn on_modifiers(
-        &mut self,
-        event: &ModifiersChangedEvent,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) {
-        if !event.modifiers.shift {
-            self.browser.end_range();
-        }
-    }
-
     fn apply(&mut self, action: Action, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
         let page = self.page_rows();
@@ -241,6 +272,9 @@ impl ExplorerView {
                 self.revealed(|browser| browser.jump(typed, Instant::now()));
                 self.expire_run(cx);
                 true
+            }
+            Action::Pick if self.browser.run_takes(' ', Instant::now()) => {
+                self.apply(Action::Jump(' '), keystroke, cx)
             }
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
@@ -279,6 +313,12 @@ impl ExplorerView {
         let scroll = self.scroll_offset();
         let step = self.browser.pick_suggestion(index, scroll);
         if self.stepped(step) {
+            cx.notify();
+        }
+    }
+
+    fn place_caret(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.browser.place_caret(index) {
             cx.notify();
         }
     }
@@ -367,17 +407,26 @@ impl ExplorerView {
         }
     }
 
-    fn click_row(&mut self, row: usize, event: &ClickEvent, cx: &mut Context<Self>) {
-        self.browser.end_range();
-        let changed = match keys::click(&event.modifiers(), event.click_count()) {
-            Click::Cursor => self.browser.set_cursor(row),
-            Click::AddPick => self.browser.add_pick(row),
-            Click::Open => {
-                self.browser.set_cursor(row);
-                self.open(cx)
-            }
+    fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {
+        let click = keys::click(&event.modifiers(), event.click_count());
+        if click != Click::Range {
+            self.browser.end_range();
+        }
+        let closed = self.browser.close_path();
+        let scroll = self.scroll_offset();
+        let changed = match self.browser.row_of(path) {
+            None => false,
+            Some(row) => match click {
+                Click::Cursor => self.browser.place_cursor(row, scroll),
+                Click::Range => self.browser.range_to(row),
+                Click::AddPick => self.browser.add_pick(row),
+                Click::Open => {
+                    self.browser.place_cursor(row, scroll);
+                    self.open(cx)
+                }
+            },
         };
-        if changed {
+        if closed || changed {
             cx.notify();
         }
     }
@@ -391,12 +440,12 @@ impl Focusable for ExplorerView {
 
 impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.body_height = f32::from(window.viewport_size().height) - BAND - HEAD;
+        self.body_height = f32::from(window.viewport_size().height) - 2.0 * LINE - BAND - HEAD;
+        self.follow_title(window);
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .flex()
             .flex_col()
             .child(band::render(self, window, cx))

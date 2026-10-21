@@ -384,6 +384,24 @@ impl<'a> TextFieldElement<'a> {
         self
     }
 
+    pub fn shown_window(&mut self) -> (usize, String) {
+        let mut measure = self.measure.take();
+        let (start, end) = self.window(measure.as_mut());
+        self.measure = measure;
+        (start, self.shown(start, end))
+    }
+
+    fn window(&self, measure: Option<&mut Measure<'a>>) -> (usize, usize) {
+        match measure {
+            Some(measure) => self.field.window_within(
+                self.visible,
+                self.visible as f32 * self.advance + FIT_SLACK,
+                |start, end| measure(&self.shown(start, end)),
+            ),
+            None => self.field.visible_window(self.visible),
+        }
+    }
+
     fn shown(&self, start: usize, end: usize) -> String {
         let text = self.field.text();
         let slice = &text[char_to_byte(text, start)..char_to_byte(text, end)];
@@ -408,14 +426,7 @@ impl<'a> TextFieldElement<'a> {
         }
 
         let mut measure = self.measure.take();
-        let (view_start, view_end) = match measure.as_mut() {
-            Some(measure) => self.field.window_within(
-                self.visible,
-                self.visible as f32 * self.advance + FIT_SLACK,
-                |start, end| measure(&self.shown(start, end)),
-            ),
-            None => self.field.visible_window(self.visible),
-        };
+        let (view_start, view_end) = self.window(measure.as_mut());
         let windowed = self.shown(view_start, view_end);
 
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = Vec::new();

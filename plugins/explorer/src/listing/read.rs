@@ -191,6 +191,7 @@ fn read_entries(
             return None;
         }
     };
+    let real_sizes = !crate::places::is_pseudo_fs(folder);
     let mut limit = batch_size;
     let mut batch = Vec::with_capacity(limit);
     let mut folders = Vec::new();
@@ -198,7 +199,7 @@ fn read_entries(
         if cancel.is_cancelled() {
             return None;
         }
-        let entry = match item.and_then(|item| Entry::read(&item)) {
+        let entry = match item.and_then(|item| Entry::read(&item, real_sizes)) {
             Ok(entry) => entry,
             Err(error) => {
                 log::warn!("skipped an entry in {}: {error}", folder.display());

@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use std::thread;
@@ -5,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{Keystroke, Modifiers};
 
-use super::counts::LiveCounts;
+use super::counts::{self, LiveCounts};
 use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
 use crate::listing::{ItemCount, ListingState};
 use crate::ui::keys::Step;
@@ -37,7 +38,16 @@ fn settle(browser: &mut Browser) -> Drained {
 }
 
 fn wait_until(browser: &mut Browser, what: &str, done: impl Fn(&Browser) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    wait_within(browser, Duration::from_secs(10), what, done);
+}
+
+fn wait_within(
+    browser: &mut Browser,
+    budget: Duration,
+    what: &str,
+    done: impl Fn(&Browser) -> bool,
+) {
+    let deadline = Instant::now() + budget;
     loop {
         let drained = browser.drain(Instant::now());
         if done(browser) {
@@ -281,19 +291,101 @@ fn picks_of_entries_that_vanish_are_dropped_and_picks_elsewhere_stay() {
     browser.toggle_pick();
     browser.set_cursor(2);
     browser.toggle_pick();
-    assert_eq!(browser.note().count, "3 picked");
+    assert_eq!(browser.note().count, "2 picked, 1 in another folder");
 
     fs::remove_file(temp.path().join("a.txt")).unwrap();
     wait_until(&mut browser, "the removal", |browser| {
         browser.row_count() == 4
     });
     assert_eq!(picked(&browser), ["b.txt"]);
-    assert_eq!(browser.note().count, "2 picked");
+    assert_eq!(browser.note().count, "1 picked, 1 in another folder");
 
     fs::remove_file(inner.join("x.txt")).unwrap();
     assert!(browser.go(inner.clone(), 0.0));
     settle(&mut browser);
+    assert_eq!(browser.note().count, "1 picked in another folder");
+    touch(&inner, "y.txt");
+    touch(&inner, "z.txt");
+    wait_until(&mut browser, "the new files", |browser| {
+        browser.row_count() == 2
+    });
+    browser.pick_all();
+    assert_eq!(browser.note().count, "2 picked, 1 in another folder");
+
+    browser.up(0.0);
+    settle(&mut browser);
+    assert_eq!(browser.note().count, "1 picked, 2 in another folder");
+}
+
+#[test]
+fn hiding_hidden_entries_drops_their_picks() {
+    let temp = abc_folder();
+    touch(temp.path(), ".hidden");
+    let mut browser = opened(temp.path());
+    browser.toggle_hidden();
+    let hidden = names(&browser).iter().position(|name| name == ".hidden");
+    browser.set_cursor(hidden.unwrap());
+    browser.toggle_pick();
+    browser.add_pick(
+        names(&browser)
+            .iter()
+            .position(|name| name == "b.txt")
+            .unwrap(),
+    );
+    assert_eq!(browser.note().count, "2 picked");
+
+    browser.toggle_hidden();
+    assert_eq!(picked(&browser), ["b.txt"]);
     assert_eq!(browser.note().count, "1 picked");
+    browser.pick_all();
+    assert_eq!(browser.note().count, "4 picked");
+}
+
+#[test]
+fn hiding_hidden_entries_while_a_folder_loads_keeps_the_picks_not_listed_yet() {
+    let temp = abc_folder();
+    touch(temp.path(), ".hidden");
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.toggle_hidden();
+    for name in [".hidden", "b.txt"] {
+        let row = names(&browser).iter().position(|shown| shown == name);
+        browser.add_pick(row.unwrap());
+    }
+    browser.go(inner, 0.0);
+    settle(&mut browser);
+
+    browser.back(0.0);
+    browser.toggle_hidden();
+    settle(&mut browser);
+    assert_eq!(picked(&browser), ["b.txt"]);
+    assert_eq!(browser.note().count, "1 picked");
+}
+
+#[test]
+fn a_shift_click_picks_from_the_cursor_and_the_next_one_moves_the_far_end() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    assert!(browser.range_to(3));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
+    assert_eq!(browser.cursor(), 3);
+    assert!(browser.range_to(0));
+    assert_eq!(picked(&browser), ["a.txt", "b.txt"]);
+    assert!(!browser.range_to(9));
+}
+
+#[test]
+fn a_row_clicked_while_a_folder_loads_keeps_the_cursor_once_it_settles() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    let folder = temp.path().to_path_buf();
+    browser.arriving = Some(crate::nav::Spot::at(folder.clone()));
+    browser.landing = Some(folder.join("a.txt"));
+
+    assert!(browser.place_cursor(2, 40.0));
+    assert_eq!(browser.settle_arrival(), Some((40.0, 0)));
+    assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
 }
 
 #[test]
@@ -462,6 +554,21 @@ fn going_somewhere_closes_the_path_field() {
 }
 
 #[test]
+fn closing_the_path_field_drops_its_red_note() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert!(!browser.close_path());
+    browser.edit_path();
+    type_text(&mut browser, "zzz");
+    browser.path_key(&key("enter", None), || None, 0.0);
+    assert!(browser.note().failure.is_some());
+
+    assert!(browser.close_path());
+    assert!(!browser.path_open());
+    assert_eq!(browser.note().failure, None);
+}
+
+#[test]
 fn going_to_the_current_folder_does_nothing() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
@@ -573,13 +680,12 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
     let step = browser.path_key(&key("enter", None), || None, 0.0);
     assert_eq!(step, PathStep::Stay { changed: true });
     assert!(browser.path_open());
-    let failure = browser.note().failure.unwrap();
-    assert!(failure.ends_with("is not a folder"), "{failure}");
+    assert_eq!(browser.note().failure.as_deref(), Some("Not a folder"));
 
     type_text(&mut browser, "x");
     assert_eq!(browser.note().failure, None);
     browser.path_key(&key("enter", None), || None, 0.0);
-    assert!(browser.note().failure.unwrap().ends_with("does not exist"));
+    assert_eq!(browser.note().failure.as_deref(), Some("Does not exist"));
 
     for _ in 0.."file.txtx".len() {
         browser.path_key(&key("backspace", None), || None, 0.0);
@@ -589,6 +695,63 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
     assert_eq!(step, PathStep::Arrived);
     assert!(!browser.path_open());
     assert_eq!(browser.folder(), inner);
+}
+
+#[test]
+fn the_path_field_opens_selected_so_typing_replaces_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.go(inner, 0.0);
+    settle(&mut browser);
+
+    browser.edit_path();
+    type_text(&mut browser, &temp.path().display().to_string());
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        temp.path().display().to_string()
+    );
+    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    assert_eq!(step, PathStep::Arrived);
+    assert_eq!(browser.folder(), temp.path());
+}
+
+#[test]
+fn a_path_with_stray_spaces_around_it_still_goes_there() {
+    let temp = tempfile::tempdir().unwrap();
+    let inner = make_folder(temp.path(), "inner");
+    make_folder(temp.path(), " spaced ");
+    let mut browser = opened(temp.path());
+
+    browser.edit_path();
+    type_text(&mut browser, " inner ");
+    assert_eq!(
+        browser.path_key(&key("enter", None), || None, 0.0),
+        PathStep::Arrived
+    );
+    assert_eq!(browser.folder(), inner);
+
+    browser.edit_path();
+    type_text(&mut browser, &format!("..{MAIN_SEPARATOR} spaced "));
+    assert_eq!(
+        browser.path_key(&key("enter", None), || None, 0.0),
+        PathStep::Arrived
+    );
+    assert_eq!(browser.folder(), temp.path().join(" spaced "));
+}
+
+#[test]
+fn a_click_in_the_path_field_puts_the_caret_there() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    assert!(!browser.place_caret(1));
+    browser.edit_path();
+    assert!(browser.place_caret(1));
+    type_text(&mut browser, "x");
+    assert_eq!(
+        browser.path_edit().unwrap().text(),
+        format!("~x{MAIN_SEPARATOR}")
+    );
 }
 
 #[test]
@@ -604,6 +767,7 @@ fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
         browser.path_edit().unwrap().text(),
         format!("~{MAIN_SEPARATOR}inner{MAIN_SEPARATOR}")
     );
+    browser.path_key(&key("end", None), || None, 0.0);
     browser.path_key(&key("backspace", None), || None, 0.0);
     settle(&mut browser);
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
@@ -844,7 +1008,10 @@ fn a_subfolder_changed_before_its_watch_is_up_is_counted_again() {
     let mut now = Instant::now();
     loop {
         counts.recount_when_due(now, temp.path(), || {});
-        let recounted = counts.drain().into_iter().find(|count| count.path == sub);
+        let recounted = counts
+            .drain(now)
+            .into_iter()
+            .find(|count| count.path == sub);
         if let Some(recounted) = recounted {
             assert_eq!(recounted.count, ItemCount::Items { all: 1, shown: 1 });
             return;
@@ -867,10 +1034,10 @@ fn a_subfolder_is_recounted_again_only_after_its_last_recount_reports() {
     let mut counts = LiveCounts::default();
     counts.follow(vec![sub.clone()], counted_from, || {});
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut now = Instant::now();
-    let mut due = |counts: &mut LiveCounts| {
-        now += REFRESH_QUIET;
-        counts.recount_when_due(now, temp.path(), || {});
+    let now = Cell::new(Instant::now());
+    let due = |counts: &mut LiveCounts| {
+        now.set(now.get() + REFRESH_QUIET);
+        counts.recount_when_due(now.get(), temp.path(), || {});
         assert!(Instant::now() < deadline, "the recounts did not settle");
         thread::sleep(Duration::from_millis(10));
     };
@@ -887,12 +1054,16 @@ fn a_subfolder_is_recounted_again_only_after_its_last_recount_reports() {
     assert_eq!(counts.recounting(), 1);
     assert!(counts.is_stale(&sub));
 
-    while !counts.drain().iter().any(|count| count.path == sub) {
+    while !counts
+        .drain(now.get())
+        .iter()
+        .any(|count| count.path == sub)
+    {
         due(&mut counts);
     }
     let two = ItemCount::Items { all: 2, shown: 2 };
     while !counts
-        .drain()
+        .drain(now.get())
         .iter()
         .any(|count| count.path == sub && count.count == two)
     {
@@ -1038,5 +1209,214 @@ fn a_subfolder_count_follows_files_added_and_removed_inside_it() {
     fs::remove_file(sub.join("one")).unwrap();
     wait_until(&mut browser, "the count after a file vanished", |browser| {
         browser.listing().item_count(&sub) == count(2, 1)
+    });
+}
+
+#[test]
+fn counts_follow_a_window_of_rows_around_the_screen_and_move_only_near_its_edge() {
+    let windows = [
+        (0..15, 100, 0..100),
+        (0..15, 5000, 0..1024),
+        (2000..2015, 5000, 1495..2519),
+        (4990..5000, 5000, 3976..5000),
+    ];
+    for (shown, total, window) in windows {
+        assert_eq!(counts::follow_window(&shown, total), window, "{shown:?}");
+    }
+    let covers = [
+        (0..1024, 0..15, 5000, true),
+        (0..1024, 760..775, 5000, false),
+        (1495..2519, 1760..1775, 5000, true),
+        (1495..2519, 1740..1755, 5000, false),
+        (3976..5000, 4985..5000, 5000, true),
+        (0..0, 0..15, 5000, false),
+    ];
+    for (followed, shown, total, covered) in covers {
+        assert_eq!(
+            counts::still_covers(&followed, &shown, total),
+            covered,
+            "{followed:?} {shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_count_far_down_a_big_folder_follows_once_its_rows_are_on_screen() {
+    let temp = tempfile::tempdir().unwrap();
+    let folders: Vec<PathBuf> = (0..1100)
+        .map(|index| make_folder(temp.path(), &format!("x{index:04}")))
+        .collect();
+    let mut browser = opened(temp.path());
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+
+    browser.show_rows(1080..1095);
+    wait_until(&mut browser, "the count watch", Browser::follows_counts);
+    touch(&folders[1090], "one");
+    wait_until(&mut browser, "the count far down", |browser| {
+        browser.listing().item_count(&folders[1090]) == Some(ItemCount::Items { all: 1, shown: 1 })
+    });
+}
+
+#[test]
+fn a_folder_changing_all_the_time_is_read_again_at_most_twice_a_second() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    let folder = temp.path().to_path_buf();
+    let churn = thread::spawn(move || {
+        let until = Instant::now() + Duration::from_millis(1200);
+        let mut index = 0;
+        while Instant::now() < until {
+            touch(&folder, &format!("churn{index}"));
+            index += 1;
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let mut reads = 0;
+    let mut reading = false;
+    while !churn.is_finished() {
+        browser.drain(Instant::now());
+        if browser.reading() && !reading {
+            reads += 1;
+        }
+        reading = browser.reading();
+        thread::sleep(Duration::from_millis(5));
+    }
+    churn.join().unwrap();
+    assert!((1..=4).contains(&reads), "read {reads} times");
+}
+
+#[test]
+fn a_folder_whose_grandparent_is_renamed_reports_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let deep = make_folder(temp.path(), "deep");
+    let inner = make_folder(&make_folder(&deep, "a"), "b");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+
+    fs::rename(&deep, temp.path().join("deep2")).unwrap();
+    wait_until(&mut browser, "the failure", |browser| {
+        matches!(browser.listing().state(), ListingState::Failed(_))
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_file_elsewhere_follows_its_size_and_when_it_breaks() {
+    use std::os::unix::fs::symlink;
+
+    use crate::listing::{EntryKind, Size};
+
+    let temp = tempfile::tempdir().unwrap();
+    let real = make_folder(temp.path(), "real");
+    let target = real.join("a.txt");
+    fs::write(&target, "small").unwrap();
+    let shown = make_folder(temp.path(), "shown");
+    symlink(&target, shown.join("lfile")).unwrap();
+    let mut browser = opened(&shown);
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+    let link = |browser: &Browser| {
+        let entry = browser.entry(0).unwrap();
+        (entry.kind, entry.size)
+    };
+
+    fs::write(&target, vec![0; 2000]).unwrap();
+    wait_until(&mut browser, "the new size", |browser| {
+        link(browser) == (EntryKind::Link, Size::Bytes(2000))
+    });
+    fs::remove_file(&target).unwrap();
+    wait_until(&mut browser, "the broken link", |browser| {
+        link(browser) == (EntryKind::BrokenLink, Size::Blank)
+    });
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+    fs::write(&target, "back").unwrap();
+    wait_until(&mut browser, "the mended link", |browser| {
+        link(browser) == (EntryKind::Link, Size::Bytes(4))
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refresh_keeps_the_link_watch_and_a_recreated_link_follows_its_new_target() {
+    use std::os::unix::fs::symlink;
+
+    use crate::listing::Size;
+
+    let temp = tempfile::tempdir().unwrap();
+    let first = make_folder(temp.path(), "first");
+    let second = make_folder(temp.path(), "second");
+    fs::write(first.join("a.txt"), "a").unwrap();
+    fs::write(second.join("b.txt"), "bb").unwrap();
+    let shown = make_folder(temp.path(), "shown");
+    symlink(first.join("a.txt"), shown.join("link")).unwrap();
+    let mut browser = opened(&shown);
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+
+    touch(&shown, "other.txt");
+    wait_until(&mut browser, "the new file", |browser| {
+        browser.row_count() == 2
+    });
+    assert!(browser.follows_links());
+
+    fs::remove_file(shown.join("link")).unwrap();
+    symlink(second.join("b.txt"), shown.join("link")).unwrap();
+    let size = |browser: &Browser| browser.entry(0).unwrap().size;
+    let followed = fs::canonicalize(second.join("b.txt")).unwrap();
+    wait_until(&mut browser, "the new target", |browser| {
+        browser.row_count() == 2
+            && size(browser) == Size::Bytes(2)
+            && browser.follows_link_to(&followed)
+    });
+    fs::write(second.join("b.txt"), "bbbb").unwrap();
+    wait_until(&mut browser, "the new target's size", |browser| {
+        size(browser) == Size::Bytes(4)
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_into_a_folder_made_later_is_followed_once_its_folder_is_read_again() {
+    use std::os::unix::fs::symlink;
+
+    use crate::listing::{EntryKind, Size};
+
+    let temp = tempfile::tempdir().unwrap();
+    let later = temp.path().join("later");
+    let shown = make_folder(temp.path(), "shown");
+    symlink(later.join("a.txt"), shown.join("link")).unwrap();
+    let mut browser = opened(&shown);
+    assert!(!browser.follows_links());
+
+    fs::create_dir(&later).unwrap();
+    touch(&shown, "other.txt");
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+    fs::write(later.join("a.txt"), "made").unwrap();
+    wait_until(&mut browser, "the mended link", |browser| {
+        let entry = browser.entry(0).unwrap();
+        (entry.kind, entry.size) == (EntryKind::Link, Size::Bytes(4))
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_is_read_again_while_shown_and_an_exited_process_folder_reports_it() {
+    use std::process::Command;
+
+    let proc = Path::new("/proc");
+    let paced = Duration::from_secs(60);
+    let mut browser = opened(proc);
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id().to_string();
+    wait_within(&mut browser, paced, "the new process", |browser| {
+        names(browser).contains(&pid)
+    });
+
+    let mut task = opened(&proc.join(&pid).join("task"));
+    child.kill().unwrap();
+    child.wait().unwrap();
+    wait_within(&mut browser, paced, "the process gone", |browser| {
+        !names(browser).contains(&pid)
+    });
+    wait_until(&mut task, "the failure", |browser| {
+        matches!(browser.listing().state(), ListingState::Failed(_))
     });
 }

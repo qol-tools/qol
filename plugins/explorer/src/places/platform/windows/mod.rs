@@ -1,13 +1,16 @@
 use std::ffi::OsStr;
-use std::fs::{DirEntry, Metadata};
+use std::fs::{DirEntry, FileType, Metadata};
+use std::io;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::ERROR_CANT_RESOLVE_FILENAME;
 use windows_sys::Win32::Storage::FileSystem::{
     GetDriveTypeW, GetLogicalDrives, FILE_ATTRIBUTE_HIDDEN,
 };
 use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
 
+use crate::listing::EntryKind;
 use crate::places::{Mount, PlaceKind};
 
 const SYSTEM_DRIVE: &str = "SystemDrive";
@@ -53,6 +56,18 @@ pub(crate) fn is_hidden_item(item: &DirEntry) -> bool {
 
 pub(crate) fn file_id(_metadata: &Metadata) -> Option<(u64, u64)> {
     None
+}
+
+pub(crate) fn special_kind(_file_type: &FileType) -> Option<EntryKind> {
+    None
+}
+
+pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
+    false
+}
+
+pub(crate) fn is_link_loop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_CANT_RESOLVE_FILENAME as i32)
 }
 
 fn drive(letter: char) -> Option<Mount> {
