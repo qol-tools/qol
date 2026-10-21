@@ -10,7 +10,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, TypeVar
 
 SEMVER_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)$")
 BREAKING_SUBJECT_RE = re.compile(r"^[a-z0-9_-]+(\([^)]+\))?!:", re.IGNORECASE)
@@ -19,6 +19,8 @@ FEATURE_SUBJECT_RE = re.compile(r"^feat(\([^)]+\))?:", re.IGNORECASE)
 RELEASABLE_SUBJECT_RE = re.compile(r"^(feat|fix|perf)(\([^)]+\))?!?:", re.IGNORECASE)
 RELEASE_SUBJECT_RE = re.compile(r"^chore\(release\):", re.IGNORECASE)
 SQUASHED_SUBJECT_RE = re.compile(r"^\* (\S.*)$", re.MULTILINE)
+SCOPE_RE = re.compile(r"^[a-z0-9_-]+\((?P<scope>[^)]*)\)!?:", re.IGNORECASE)
+UMBRELLA_SCOPES = frozenset({"workspace", "build", "ci", "deps", "dev", "emu", "settings"})
 
 DEPENDENCY_TABLES = {"dependencies", "build-dependencies"}
 WORKSPACE_HACK_PACKAGE = "workspace-hack"
@@ -359,6 +361,20 @@ def cached_dependency_closure(
     return closure_cache[package_name]
 
 
+CommitFact = TypeVar("CommitFact")
+
+
+def cached_per_commit(
+    cache: dict[str, CommitFact],
+    compute: Callable[[Path, str], CommitFact],
+    root: Path,
+    sha: str,
+) -> CommitFact:
+    if sha not in cache:
+        cache[sha] = compute(root, sha)
+    return cache[sha]
+
+
 def package_uses_dependency(
     package_name: str,
     dependency: str,
@@ -630,6 +646,35 @@ def dependency_names_affect_plugin(
     )
 
 
+def path_affects_all(
+    root: Path, commit: Commit, path: str, root_manifest_cache: dict[str, RootImpact]
+) -> bool:
+    if path in GLOBAL_FILES_AFFECT_ALL or path.startswith(GLOBAL_PREFIXES_AFFECT_ALL):
+        return True
+    return (
+        path == ROOT_MANIFEST
+        and cached_per_commit(root_manifest_cache, root_manifest_impact, root, commit.sha).affects_all
+    )
+
+
+def path_dependencies(
+    root: Path,
+    commit: Commit,
+    path: str,
+    packages: dict[str, Package],
+    root_manifest_cache: dict[str, RootImpact],
+    lockfile_cache: dict[str, frozenset[str]],
+) -> frozenset[str]:
+    if path == ROOT_MANIFEST:
+        return cached_per_commit(
+            root_manifest_cache, root_manifest_impact, root, commit.sha
+        ).dependencies
+    if path == ROOT_LOCKFILE:
+        return cached_per_commit(lockfile_cache, changed_lock_packages, root, commit.sha)
+    owner = owning_package(path, packages)
+    return frozenset() if owner is None else frozenset({owner})
+
+
 def path_affects_plugin(
     root: Path,
     commit: Commit,
@@ -640,28 +685,14 @@ def path_affects_plugin(
     root_manifest_cache: dict[str, RootImpact],
     lockfile_cache: dict[str, frozenset[str]],
 ) -> bool:
-    if path in GLOBAL_FILES_AFFECT_ALL or path.startswith(GLOBAL_PREFIXES_AFFECT_ALL):
+    if path_affects_all(root, commit, path, root_manifest_cache):
         return True
-    if path == ROOT_MANIFEST:
-        impact = root_manifest_cache.setdefault(
-            commit.sha, root_manifest_impact(root, commit.sha)
-        )
-        if impact.affects_all:
-            return True
-        return dependency_names_affect_plugin(
-            impact.dependencies, package_name, packages, closure_cache
-        )
-    if path == ROOT_LOCKFILE:
-        changed_packages = lockfile_cache.setdefault(
-            commit.sha, changed_lock_packages(root, commit.sha)
-        )
-        return dependency_names_affect_plugin(
-            changed_packages, package_name, packages, closure_cache
-        )
-    owner = owning_package(path, packages)
-    if owner is None:
-        return False
-    return owner in cached_dependency_closure(package_name, packages, closure_cache)
+    return dependency_names_affect_plugin(
+        path_dependencies(root, commit, path, packages, root_manifest_cache, lockfile_cache),
+        package_name,
+        packages,
+        closure_cache,
+    )
 
 
 def load_commits(root: Path, rev_range: str) -> list[Commit]:
@@ -813,32 +844,75 @@ def commit_touches_package(
     packages: dict[str, Package],
     changed_paths_cache: dict[str, list[str]],
 ) -> bool:
-    paths = changed_paths_cache.setdefault(
-        commit.sha, changed_paths_for_commit(root, commit.sha)
-    )
+    paths = cached_per_commit(changed_paths_cache, changed_paths_for_commit, root, commit.sha)
     return any(owning_package(path, packages) == package_name for path in paths)
 
 
-def commit_rebuilds_unit(
+def member_scopes(packages: dict[str, Package]) -> dict[str, set[str]]:
+    umbrellas = UMBRELLA_SCOPES | {package.rel_dir.partition("/")[0] for package in packages.values()}
+    scopes: dict[str, set[str]] = {}
+    for name, package in packages.items():
+        family, _, base = package.rel_dir.partition("/")
+        if not base or "/" in base:
+            continue
+        prefix = f"{family.removesuffix('s')}-"
+        scope = base[len(prefix):] if base.startswith(prefix) and base != prefix else base
+        tokens = {name, scope}
+        if scope.startswith("qol-") and scope != "qol-":
+            tokens.add(scope.removeprefix("qol-"))
+        for token in tokens - umbrellas:
+            scopes.setdefault(token, set()).add(name)
+    return scopes
+
+
+def release_scopes(
+    root: Path, packages: dict[str, Package], closure_cache: dict[str, set[str]]
+) -> dict[str, set[str]]:
+    released: set[str] = set()
+    for unit in discover_release_units(root, packages, None):
+        released |= cached_dependency_closure(unit.package_name, packages, closure_cache)
+    return {token: members & released for token, members in member_scopes(packages).items()}
+
+
+def scope_packages(commit: Commit, scopes: dict[str, set[str]]) -> set[str] | None:
+    match = SCOPE_RE.match(commit.subject)
+    tokens = [token.strip().lower() for token in match.group("scope").split(",")] if match else []
+    if not tokens or any(token not in scopes for token in tokens):
+        return None
+    return set().union(*(scopes[token] for token in tokens)) or None
+
+
+def commit_is_for_unit(
     root: Path,
     commit: Commit,
     unit: ReleaseUnit,
     packages: dict[str, Package],
+    scopes: dict[str, set[str]],
     changed_paths_cache: dict[str, list[str]],
+    closure_cache: dict[str, set[str]],
     root_manifest_cache: dict[str, RootImpact],
+    lockfile_cache: dict[str, frozenset[str]],
 ) -> bool:
-    if unit.plugin_manifest is None:
+    named = scope_packages(commit, scopes)
+    paths = cached_per_commit(changed_paths_cache, changed_paths_for_commit, root, commit.sha)
+    if named is None or any(
+        path_affects_all(root, commit, path, root_manifest_cache) for path in paths
+    ):
+        return True
+    if named & cached_dependency_closure(unit.package_name, packages, closure_cache):
         return True
     if commit_touches_package(root, commit, unit.package_name, packages, changed_paths_cache):
         return True
-    for path in changed_paths_cache[commit.sha]:
-        if path in GLOBAL_FILES_AFFECT_ALL or path.startswith(GLOBAL_PREFIXES_AFFECT_ALL):
-            return True
-        if path == ROOT_MANIFEST and root_manifest_cache.setdefault(
-            commit.sha, root_manifest_impact(root, commit.sha)
-        ).affects_all:
-            return True
-    return False
+    return any(
+        package_uses_dependency(unit.package_name, name, packages, closure_cache)
+        and not any(
+            package_uses_dependency(member, name, packages, closure_cache) for member in named
+        )
+        for path in paths
+        for name in path_dependencies(
+            root, commit, path, packages, root_manifest_cache, lockfile_cache
+        )
+    )
 
 
 def relevant_commits(
@@ -846,6 +920,7 @@ def relevant_commits(
     commits: list[Commit],
     unit: ReleaseUnit,
     packages: dict[str, Package],
+    scopes: dict[str, set[str]],
     changed_paths_cache: dict[str, list[str]],
     closure_cache: dict[str, set[str]],
     root_manifest_cache: dict[str, RootImpact],
@@ -853,9 +928,7 @@ def relevant_commits(
 ) -> list[Commit]:
     relevant: list[Commit] = []
     for commit in commits:
-        paths = changed_paths_cache.setdefault(
-            commit.sha, changed_paths_for_commit(root, commit.sha)
-        )
+        paths = cached_per_commit(changed_paths_cache, changed_paths_for_commit, root, commit.sha)
         if any(
             path_affects_plugin(
                 root,
@@ -868,6 +941,16 @@ def relevant_commits(
                 lockfile_cache,
             )
             for path in paths
+        ) and commit_is_for_unit(
+            root,
+            commit,
+            unit,
+            packages,
+            scopes,
+            changed_paths_cache,
+            closure_cache,
+            root_manifest_cache,
+            lockfile_cache,
         ):
             relevant.append(commit)
     return relevant
@@ -917,6 +1000,7 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
     closure_cache: dict[str, set[str]] = {}
     root_manifest_cache: dict[str, RootImpact] = {}
     lockfile_cache: dict[str, frozenset[str]] = {}
+    scopes = release_scopes(root, packages, closure_cache)
     plans: list[ReleasePlan] = []
 
     for unit in units:
@@ -938,6 +1022,7 @@ def compute_plans(root: Path, selected: str | None) -> list[ReleasePlan]:
             commits_by_range[rev_range],
             unit,
             packages,
+            scopes,
             changed_paths_cache,
             closure_cache,
             root_manifest_cache,

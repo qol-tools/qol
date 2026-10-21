@@ -807,6 +807,23 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("--latest=false", workflow)
 
+    def test_tray_release_notes_list_only_the_changes_released_for_the_tray(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        release = workflow.split("  release:\n", 1)[1]
+        source = release.split("      - uses: actions/checkout@", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("path: source", source)
+        self.assertIn("fetch-depth: 0", source)
+        notes = named_step(release, "Write user-facing release notes", "      ")
+        unguarded, guarded = notes.split('if [[ -n "${PREVIOUS_TAG}" ]]; then\n', 1)
+        guarded = guarded.split("\n          fi\n", 1)[0]
+        for contract, text in [
+            ("filter=(--root source)", unguarded),
+            ('filter+=(--unit qol-tray --range "${PREVIOUS_TAG}..${RELEASE_TAG}")', guarded),
+            ('python3 source/.github/scripts/release_notes.py "${filter[@]}"', notes),
+        ]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, text)
+
     def test_release_creation_steps_carry_an_explicit_latest_policy(self):
         for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
             with self.subTest(workflow=workflow_path.name):
