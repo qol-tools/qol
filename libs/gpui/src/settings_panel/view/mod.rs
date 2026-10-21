@@ -87,10 +87,7 @@ fn rail_covered(focus: PanelFocus, rail_kept: bool) -> bool {
 }
 
 const RAIL_SECTION_OPACITY: f32 = qol_theme::OPACITY_REST;
-const RAIL_ITEM_MIN_HEIGHT: f32 = {
-    let name = qol_theme::TextStyle::Name.spec();
-    name.size * name.line_height
-};
+const RAIL_ITEM_MIN_HEIGHT: f32 = qol_theme::HEIGHT_INLINE;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum TransitionAction {
@@ -3777,6 +3774,7 @@ impl SettingsPanelView {
             .justify_end()
             .w_full()
             .h(px(rail_caption_height()))
+            .mb(px(qol_theme::SPACE_INSET))
             .px(px(qol_theme::SPACE_CELL))
             .into_any_element()
     }
