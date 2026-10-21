@@ -117,7 +117,11 @@ class QueueTrustTests(unittest.TestCase):
             (True, {**self.record, "head": "a" * 40}),
             (True, {"head": PR_HEAD, "plan": self.record["plan"]}),
             (True, {"head": PR_HEAD, "base": TESTED_BASE}),
+            (True, {**self.record, "base": "--output=/tmp/diff"}),
+            (True, {**self.record, "base": "HEAD"}),
         ]
+        for base in ["--output=/tmp/diff", "HEAD"]:
+            self.diffs[(base, QUEUE_BASE)] = ["libs/b/src/lib.rs"]
         for downloaded, record in cases:
             with self.subTest(downloaded=downloaded, record=record):
                 self.downloaded, self.record = downloaded, record

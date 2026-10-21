@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -98,7 +99,12 @@ def covered_plan(repo: str, head_ref: str, queue_base: str) -> dict:
     if run is None:
         raise Untrusted(f"no pull request run passed the merge gate for {head}")
     record = tested_record(repo, run["id"])
-    if not record or record.get("head") != head or not isinstance(record.get("base"), str):
+    if (
+        not record
+        or record.get("head") != head
+        or not isinstance(record.get("base"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", record["base"])
+    ):
         raise Untrusted(f"pull request run {run['id']} recorded no tested base for {head}")
     tested = planned_crates(record.get("plan") or {})
     if tested is None:
