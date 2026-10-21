@@ -308,10 +308,10 @@ fn resolve_action_uses_catalog_args_without_runtime_action_map() {
 }
 
 #[test]
-fn resolve_action_hosts_only_contract_driven_gpui_settings() {
+fn resolve_action_hosts_every_contract_driven_settings_action() {
     let cases = [
         (true, ActionType::Settings, true, true),
-        (false, ActionType::Settings, true, false),
+        (false, ActionType::Settings, true, true),
         (true, ActionType::Run, true, false),
         (true, ActionType::Settings, false, false),
     ];

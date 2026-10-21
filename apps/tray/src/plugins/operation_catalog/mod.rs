@@ -276,7 +276,6 @@ fn available(
                 return false;
             }
             let hosted_settings = operation.action_kind == Some(ActionType::Settings)
-                && plugin.manifest.capabilities.gpui
                 && plugin.path.join("qol-config.toml").is_file();
             if hosted_settings {
                 return true;
