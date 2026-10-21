@@ -1397,6 +1397,56 @@ pub fn reassert_focus_while_current(
 
 pub fn register_native_display(_window: &gpui::Window) {}
 
+pub fn grab_keyboard(window: &gpui::Window) -> bool {
+    let Some((conn, wid)) = gpui_connection(window) else {
+        qol_runtime::probe!("KEYBOARD_GRAB", "held=false status=no_x11_connection");
+        return false;
+    };
+    let status = conn
+        .grab_keyboard(
+            false,
+            wid,
+            x11rb::CURRENT_TIME,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+        )
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.status);
+    let held = status == Some(GrabStatus::SUCCESS);
+    qol_runtime::probe!("KEYBOARD_GRAB", "wid={wid} held={held} status={status:?}");
+    held
+}
+
+pub fn release_keyboard(window: &gpui::Window) {
+    let Some((conn, wid)) = gpui_connection(window) else {
+        return;
+    };
+    let released = conn
+        .ungrab_keyboard(x11rb::CURRENT_TIME)
+        .ok()
+        .and_then(|cookie| cookie.check().ok())
+        .is_some();
+    qol_runtime::probe!("KEYBOARD_RELEASE", "wid={wid} released={released}");
+}
+
+fn gpui_connection(window: &gpui::Window) -> Option<(x11rb::xcb_ffi::XCBConnection, Window)> {
+    use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+    let RawWindowHandle::Xcb(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
+        return None;
+    };
+    let RawDisplayHandle::Xcb(display) = HasDisplayHandle::display_handle(window).ok()?.as_raw()
+    else {
+        return None;
+    };
+    let connection = display.connection?;
+    let conn = unsafe {
+        x11rb::xcb_ffi::XCBConnection::from_raw_xcb_connection(connection.as_ptr(), false)
+    }
+    .ok()?;
+    Some((conn, handle.window.get()))
+}
+
 pub fn hold_input(title: &str) -> bool {
     stop_input_hold_thread();
     INPUT_HELD.store(false, Ordering::Relaxed);

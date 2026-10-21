@@ -250,6 +250,12 @@ pub fn reassert_focus_while_current(
 
 pub fn register_native_display(_window: &gpui::Window) {}
 
+pub fn grab_keyboard(_window: &gpui::Window) -> bool {
+    false
+}
+
+pub fn release_keyboard(_window: &gpui::Window) {}
+
 pub fn hold_input(_title: &str) -> bool {
     false
 }

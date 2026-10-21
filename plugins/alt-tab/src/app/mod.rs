@@ -37,6 +37,8 @@ pub(crate) struct AltTabApp {
     pub(crate) _alt_poll_task: Option<Task<()>>,
     _live_preview_task: Option<Task<()>>,
     _dismiss_sub: (Subscription, Subscription, Option<Task<()>>),
+    keyboard_held: bool,
+    _keyboard_sub: Subscription,
     #[cfg(debug_assertions)]
     pending_cycle: Option<PendingCycle>,
 }
@@ -103,6 +105,19 @@ impl AltTabApp {
             "phase={_phase} show_id={show_id} before={before} after={after} visible={visible} title={}",
             self.picker_title
         );
+    }
+
+    pub(crate) fn sync_keyboard(&mut self, window: &Window) {
+        match keyboard_decision(self.is_active_visible(), self.keyboard_held) {
+            KeyboardDecision::Grab => {
+                self.keyboard_held = qol_gpui::popup_window::grab_keyboard(window);
+            }
+            KeyboardDecision::Release => {
+                qol_gpui::popup_window::release_keyboard(window);
+                self.keyboard_held = false;
+            }
+            KeyboardDecision::Keep => {}
+        }
     }
 
     pub(crate) fn mark_cycle(&mut self, method: &'static str, from: Option<usize>) {
@@ -189,11 +204,17 @@ impl AltTabApp {
             },
         );
 
+        let keyboard_sub = cx.observe_window_activation(window, |this: &mut Self, window, _cx| {
+            this.sync_keyboard(window);
+        });
+
         let mut blur_guard = qol_gpui::ghost::BlurGuard::new();
         blur_guard.arm(Duration::from_millis(BLUR_GUARD_MS));
 
         let mut app = Self {
             _dismiss_sub: dismiss_sub,
+            keyboard_held: false,
+            _keyboard_sub: keyboard_sub,
             _live_preview_task: None,
             picker_title,
             delegate,
@@ -635,11 +656,26 @@ fn focus_out_decision(
     FocusOutDecision::Dismiss
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum KeyboardDecision {
+    Grab,
+    Release,
+    Keep,
+}
+
+fn keyboard_decision(picker_visible: bool, held: bool) -> KeyboardDecision {
+    match (picker_visible, held) {
+        (true, false) => KeyboardDecision::Grab,
+        (false, true) => KeyboardDecision::Release,
+        _ => KeyboardDecision::Keep,
+    }
+}
+
 impl AltTabApp {
     pub(crate) fn dismiss(
         &mut self,
         _source: &'static str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         #[cfg(debug_assertions)]
@@ -654,6 +690,7 @@ impl AltTabApp {
             crate::preview_plane::hide_async(_source);
         }
         if !active {
+            self.sync_keyboard(window);
             qol_runtime::probe!(
                 "DISMISS",
                 "from={_source} title={} outcome=ignored_inactive",
@@ -667,6 +704,7 @@ impl AltTabApp {
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
             *lock = None;
         }
+        self.sync_keyboard(window);
         qol_gpui::ghost::dismiss_to_ghost_with(
             &self.picker_title,
             picker::platform::picker_window_title,
@@ -728,5 +766,22 @@ mod focus_out_tests {
             focus_out_decision(true, &ActionMode::Sticky, true),
             FocusOutDecision::Dismiss
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::{keyboard_decision, KeyboardDecision};
+
+    #[test]
+    fn visible_picker_holds_the_keyboard_once() {
+        assert_eq!(keyboard_decision(true, false), KeyboardDecision::Grab);
+        assert_eq!(keyboard_decision(true, true), KeyboardDecision::Keep);
+    }
+
+    #[test]
+    fn hidden_picker_never_holds_the_keyboard() {
+        assert_eq!(keyboard_decision(false, true), KeyboardDecision::Release);
+        assert_eq!(keyboard_decision(false, false), KeyboardDecision::Keep);
     }
 }
