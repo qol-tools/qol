@@ -33,6 +33,8 @@ pub struct ParkRecord {
     pub permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub session: String,
     pub command: Vec<String>,
     pub created_at: u64,
@@ -233,6 +235,7 @@ mod tests {
             title: None,
             permission_mode: None,
             claude_config_dir: None,
+            path: None,
             session: "v1:kitty:k1_f1.2:3".to_owned(),
             command: vec!["sleep".to_owned(), "5".to_owned()],
             created_at,
