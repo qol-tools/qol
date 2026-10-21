@@ -872,6 +872,31 @@ fn the_surface_tokens_added_for_v2_hold_their_contrast_floors() {
             DARK_SYSTEM.warning_ink,
             DARK_SYSTEM.surface_rail,
         ),
+        (
+            "light danger text on the pane",
+            LIGHT_SYSTEM.danger_ink,
+            LIGHT_SYSTEM.surface_elevated,
+        ),
+        (
+            "dark danger text on the pane",
+            DARK_SYSTEM.danger_ink,
+            DARK_SYSTEM.surface_elevated,
+        ),
+        (
+            "light danger text on the rail",
+            LIGHT_SYSTEM.danger_ink,
+            LIGHT_SYSTEM.surface_rail,
+        ),
+        (
+            "dark danger text on the rail",
+            DARK_SYSTEM.danger_ink,
+            DARK_SYSTEM.surface_rail,
+        ),
+        (
+            "light danger text on the canvas",
+            LIGHT_SYSTEM.danger_ink,
+            LIGHT_SYSTEM.surface_canvas,
+        ),
     ];
 
     for (name, ink, surface) in cases {
@@ -1515,12 +1540,13 @@ every other settings-scope file keeps its exact counts in LEAF_STYLING_DEBT.\n{}
 
 const PALETTE_PREFIXES: [&str; 3] = ["kit.palette.", "kit().palette", "shared.palette."];
 
-const SEMANTIC_HUES: [&str; 6] = [
+const SEMANTIC_HUES: [&str; 7] = [
     "success",
     "info",
     "warning",
     "warning_ink",
     "danger",
+    "danger_ink",
     "accent_ink",
 ];
 

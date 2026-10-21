@@ -1,8 +1,12 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gpui::*;
 
 pub const SEAM_TRACK_WIDTH: f32 = 3.0;
 pub const SEAM_TRACK_INSET: f32 = 2.0;
 pub const SEAM_THUMB_MIN: f32 = 24.0;
+pub const SEAM_GRIP_WIDTH: f32 = qol_theme::SPACE_CELL;
 
 pub const OVERFLOW_FADE_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
 pub const OVERFLOW_STREAK_WIDTH: f32 = 180.0;
@@ -127,12 +131,161 @@ fn paint_track(window: &mut Window, bounds: Bounds<Pixels>, state: CueState, ink
         ),
         rgba(ink.track),
     ));
-    let thumb_h = (view_h * state.share).max(px(SEAM_THUMB_MIN)).min(view_h);
-    let thumb_y = bounds.top() + (view_h - thumb_h) * state.at;
+    let thumb = Thumb::of(f32::from(view_h), state);
     window.paint_quad(fill(
-        Bounds::new(point(track_x, thumb_y), size(px(SEAM_TRACK_WIDTH), thumb_h)),
+        Bounds::new(
+            point(track_x, bounds.top() + px(thumb.top)),
+            size(px(SEAM_TRACK_WIDTH), px(thumb.height)),
+        ),
         rgba(ink.thumb),
     ));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Thumb {
+    top: f32,
+    height: f32,
+    travel: f32,
+}
+
+impl Thumb {
+    fn of(view: f32, state: CueState) -> Self {
+        let height = (view * state.share).max(SEAM_THUMB_MIN).min(view);
+        let travel = view - height;
+        Self {
+            top: travel * state.at,
+            height,
+            travel,
+        }
+    }
+
+    fn hold(self, y: f32) -> f32 {
+        if (self.top..=self.top + self.height).contains(&y) {
+            y - self.top
+        } else {
+            self.height / 2.0
+        }
+    }
+
+    fn seek(self, y: f32, held: f32) -> f32 {
+        if self.travel <= 0.0 {
+            return 0.0;
+        }
+        ((y - held) / self.travel).clamp(0.0, 1.0)
+    }
+}
+
+pub type Seek = Rc<dyn Fn(f32, &mut Window, &mut App)>;
+
+#[derive(IntoElement)]
+pub struct ScrollGrip {
+    id: ElementId,
+    source: ScrollSource,
+    on_seek: Seek,
+}
+
+impl ScrollGrip {
+    pub fn new(
+        id: impl Into<ElementId>,
+        source: ScrollSource,
+        on_seek: impl Fn(f32, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            source,
+            on_seek: Rc::new(on_seek),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Held(Option<f32>);
+
+impl RenderOnce for ScrollGrip {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let held = window.use_keyed_state(
+            ElementId::NamedChild(Box::new(self.id), "held".into()),
+            cx,
+            |_, _| Held::default(),
+        );
+        let Some(state) = self.source.state() else {
+            return div().into_any_element();
+        };
+        let strip: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+        let measured = strip.clone();
+        let watched = held.clone();
+        let on_drag = self.on_seek.clone();
+        let on_seek = self.on_seek;
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(SEAM_GRIP_WIDTH))
+            .block_mouse_except_scroll()
+            .child(
+                canvas(
+                    move |bounds, _, _| measured.set(Some(bounds)),
+                    move |bounds, _, window, _| {
+                        watch_grip(window, bounds, state, watched, on_drag);
+                    },
+                )
+                .size_full(),
+            )
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                cx.stop_propagation();
+                let Some(bounds) = strip.get() else {
+                    return;
+                };
+                let thumb = Thumb::of(f32::from(bounds.size.height), state);
+                let y = f32::from(event.position.y - bounds.top());
+                let grip = thumb.hold(y);
+                held.update(cx, |held, _| held.0 = Some(grip));
+                on_seek(thumb.seek(y, grip), window, cx);
+            })
+            .into_any_element()
+    }
+}
+
+fn watch_grip(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    state: CueState,
+    held: Entity<Held>,
+    on_seek: Seek,
+) {
+    let released = held.clone();
+    window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        if phase != DispatchPhase::Capture {
+            return;
+        }
+        let Some(grip) = held.read(cx).0 else {
+            return;
+        };
+        if !event.dragging() {
+            held.update(cx, |held, _| held.0 = None);
+            return;
+        }
+        let thumb = Thumb::of(f32::from(bounds.size.height), state);
+        on_seek(
+            thumb.seek(f32::from(event.position.y - bounds.top()), grip),
+            window,
+            cx,
+        );
+    });
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+        if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+            released.update(cx, |held, _| held.0 = None);
+        }
+    });
+}
+
+pub fn seek_handle(handle: ScrollHandle) -> impl Fn(f32, &mut Window, &mut App) + 'static {
+    move |at, window, _| {
+        let max = handle.max_offset().height;
+        handle.set_offset(point(handle.offset().x, -max * at));
+        window.refresh();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -259,8 +412,9 @@ pub fn chevron(edge: OverflowEdge, ink: u32) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        overflow_edges, window_state, OVERFLOW_CHEVRON_RISE, OVERFLOW_CHEVRON_STROKE,
+        overflow_edges, window_state, Thumb, OVERFLOW_CHEVRON_RISE, OVERFLOW_CHEVRON_STROKE,
         OVERFLOW_CUE_CENTRE, OVERFLOW_FADE_HEIGHT, OVERFLOW_STREAK_HEIGHT, OVERFLOW_STREAK_WIDTH,
+        SEAM_THUMB_MIN,
     };
     use gpui::{point, px, size, Bounds, Pixels};
 
@@ -339,5 +493,30 @@ mod tests {
         let last = window_state(100, 9, 109).expect("more above");
         assert!(last.top && !last.bottom);
         assert_eq!(last.at, 1.0);
+    }
+    #[test]
+    fn a_press_on_the_thumb_drags_it_from_where_it_was_held() {
+        let state = window_state(50, 10, 110).expect("more both ways");
+        let thumb = Thumb::of(400.0, state);
+        assert_eq!(thumb.height, 400.0 * 10.0 / 110.0);
+        let inside = thumb.top + 5.0;
+        let held = thumb.hold(inside);
+        assert_eq!(held, 5.0);
+        assert!((thumb.seek(inside, held) - state.at).abs() < 1e-6);
+        assert_eq!(thumb.seek(-100.0, held), 0.0);
+        assert_eq!(thumb.seek(900.0, held), 1.0);
+    }
+
+    #[test]
+    fn a_press_on_the_track_centres_the_thumb_under_the_pointer() {
+        let state = window_state(0, 10, 1000).expect("more below");
+        let thumb = Thumb::of(400.0, state);
+        assert_eq!(thumb.height, SEAM_THUMB_MIN);
+        let held = thumb.hold(200.0);
+        assert_eq!(held, SEAM_THUMB_MIN / 2.0);
+        let at = thumb.seek(200.0, held);
+        assert!((at - (200.0 - SEAM_THUMB_MIN / 2.0) / (400.0 - SEAM_THUMB_MIN)).abs() < 1e-6);
+        let moved = Thumb::of(400.0, super::CueState { at, ..state });
+        assert!((moved.top + moved.height / 2.0 - 200.0).abs() < 1e-3);
     }
 }

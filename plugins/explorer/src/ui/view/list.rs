@@ -8,9 +8,11 @@ use gpui::{
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
-use qol_gpui::scrollbar::ScrollSource;
+use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
 use qol_gpui::text::{baseline, cased, line_height, TextStyled};
-use qol_gpui::theme::{Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET};
+use qol_gpui::theme::{
+    translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_INSET,
+};
 use qol_gpui::Icon;
 
 use super::{ExplorerView, HEAD, ICON, ROW};
@@ -80,6 +82,12 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
     let first = ((scroll - 0.5) / ROW).ceil().max(0.0) as usize;
     let end = ((scroll + view.list_height() + 0.5) / ROW).floor().max(0.0) as usize;
     let shown = end.min(total).saturating_sub(first);
+    let source = ScrollSource::Window {
+        first,
+        shown,
+        total,
+    };
+    let seek = cx.entity().downgrade();
     div()
         .flex_1()
         .min_h_0()
@@ -99,13 +107,13 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             .size_full()
             .track_scroll(view.scroll.clone()),
         )
-        .child(kit.scroll_cue(
-            ScrollSource::Window {
-                first,
-                shown,
-                total,
+        .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
+        .child(ScrollGrip::new(
+            "explorer-rows-grip",
+            source,
+            move |at, _window, cx| {
+                let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
             },
-            kit.grounds.pane,
         ))
         .into_any_element()
 }
@@ -147,7 +155,12 @@ fn render_row(
         .gap(px(SPACE_INSET))
         .px(px(SPACE_GUTTER))
         .when(cursor, |element| {
-            element.child(div().absolute().inset_0().bg(rgba(ground.well.packed())))
+            element.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(rgba(translucent(ground.ink, Alpha::Tint))),
+            )
         })
         .child(div().flex_none().w(px(ICON)).child(icon(
             if entry.opens_as_folder {
