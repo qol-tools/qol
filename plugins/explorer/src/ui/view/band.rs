@@ -12,7 +12,6 @@ use qol_gpui::CrumbTrail;
 use super::{ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
-use crate::ui::trail;
 
 const FAILURE_MAX_WIDTH: f32 = 380.0;
 
@@ -35,13 +34,7 @@ pub(super) fn render(
             (render_note(note, widths, kit), widths.total())
         }
     };
-    let crumbs = trail::crumbs(
-        browser.folder(),
-        browser.home(),
-        view.devices
-            .iter()
-            .map(|device| (device.label.as_str(), device.path.as_path())),
-    );
+    let crumbs = view.crumbs();
     let paths: Vec<PathBuf> = crumbs.iter().map(|crumb| crumb.path.clone()).collect();
     let on_crumb = cx.entity().downgrade();
     let on_edit = on_crumb.clone();

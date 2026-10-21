@@ -19,13 +19,14 @@ use gpui::{
 };
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
-use qol_gpui::surface::DragGestureState;
+use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
 use qol_gpui::theme::{HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
+use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 
 pub const WINDOW_TITLE: &str = "Explorer";
@@ -50,10 +51,17 @@ pub struct ExplorerView {
     body_height: f32,
     waiting: VecDeque<Keystroke>,
     drag_gesture: Rc<RefCell<DragGestureState>>,
+    title: String,
+    dismisser: SurfaceDismisser,
 }
 
 impl ExplorerView {
-    pub fn new(start: PathBuf, home: PathBuf, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        start: PathBuf,
+        home: PathBuf,
+        dismisser: SurfaceDismisser,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
             browser: Browser::new(start, home),
@@ -65,9 +73,32 @@ impl ExplorerView {
             body_height: 0.0,
             waiting: VecDeque::new(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
+            title: WINDOW_TITLE.to_string(),
+            dismisser,
         };
         view.listen(cx);
         view
+    }
+
+    pub(super) fn crumbs(&self) -> Vec<Crumb> {
+        trail::crumbs(
+            self.browser.folder(),
+            self.browser.home(),
+            self.devices
+                .iter()
+                .map(|device| (device.label.as_str(), device.path.as_path())),
+        )
+    }
+
+    fn follow_title(&mut self, window: &mut Window) {
+        let title = self.crumbs().pop().map_or_else(
+            || WINDOW_TITLE.to_string(),
+            |crumb| format!("{} - {WINDOW_TITLE}", crumb.label),
+        );
+        if title != self.title && self.dismisser.is_visible() {
+            self.dismisser.retitle(window, title.clone());
+            self.title = title;
+        }
     }
 
     fn scroll_offset(&self) -> f32 {
@@ -399,6 +430,7 @@ impl Focusable for ExplorerView {
 impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.body_height = f32::from(window.viewport_size().height) - 2.0 * LINE - BAND - HEAD;
+        self.follow_title(window);
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)

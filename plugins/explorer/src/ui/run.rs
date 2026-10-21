@@ -22,8 +22,8 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
-            .show_focused(&tracker, cx, move |_dismisser, _window, cx| {
-                ExplorerView::new(start, home, cx)
+            .show_focused(&tracker, cx, move |dismisser, _window, cx| {
+                ExplorerView::new(start, home, dismisser, cx)
             });
         if let Err(error) = opened {
             reported_failure.borrow_mut().replace(error);

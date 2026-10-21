@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 pub const APP_CRUMB: &str = "explorer";
-const HOME_CRUMB: &str = "home";
+const HOME_CRUMB: &str = "Home";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Crumb {
@@ -78,7 +78,7 @@ mod tests {
         let trail = crumbs(folder, home, [("This computer", Path::new("/"))]);
         assert_eq!(
             labels(&trail),
-            [APP_CRUMB, "home", "Git", "qol-monorepo", "docs", "plans"]
+            [APP_CRUMB, "Home", "Git", "qol-monorepo", "docs", "plans"]
         );
         assert_eq!(trail[0].path, home);
         assert_eq!(trail[1].path, home);
@@ -104,7 +104,13 @@ mod tests {
     fn home_itself_is_one_crumb_after_the_app() {
         let home = Path::new("/home/kim");
         let trail = crumbs(home, home, [("This computer", Path::new("/"))]);
-        assert_eq!(labels(&trail), [APP_CRUMB, "home"]);
+        assert_eq!(labels(&trail), [APP_CRUMB, "Home"]);
+        let trail = crumbs(
+            Path::new("/home"),
+            home,
+            [("This computer", Path::new("/"))],
+        );
+        assert_eq!(labels(&trail), [APP_CRUMB, "This computer", "home"]);
     }
 
     #[test]
