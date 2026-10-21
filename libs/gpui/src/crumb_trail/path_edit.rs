@@ -20,6 +20,7 @@ pub struct PathEdit {
     suggestions: Vec<String>,
     selected: Option<usize>,
     picked: bool,
+    wheeled: Option<usize>,
 }
 
 impl PathEdit {
@@ -29,6 +30,7 @@ impl PathEdit {
             suggestions: Vec::new(),
             selected: None,
             picked: false,
+            wheeled: None,
         }
     }
 
@@ -63,6 +65,9 @@ impl PathEdit {
             .filter(|_| self.picked)
             .and_then(|selected| self.suggestions.get(selected))
             .and_then(|selected| names.iter().position(|name| name == selected));
+        if names != self.suggestions {
+            self.wheeled = None;
+        }
         self.suggestions = names;
         let segment = self.segment();
         let auto = if segment.is_empty() || self.suggestions.is_empty() {
@@ -81,6 +86,7 @@ impl PathEdit {
         }
         self.selected = Some(next);
         self.picked = true;
+        self.wheeled = None;
         true
     }
 
@@ -90,6 +96,7 @@ impl PathEdit {
         };
         self.selected = selected.checked_sub(1);
         self.picked = true;
+        self.wheeled = None;
         true
     }
 
@@ -113,10 +120,19 @@ impl PathEdit {
 
     pub fn shown(&self, rows: usize) -> Range<usize> {
         let total = self.suggestions.len();
-        let first = (self.selected().unwrap_or(0) + 2)
-            .saturating_sub(rows)
+        let first = self
+            .wheeled
+            .unwrap_or_else(|| (self.selected().unwrap_or(0) + 2).saturating_sub(rows))
             .min(total.saturating_sub(rows));
         first..(first + rows).min(total)
+    }
+
+    pub fn wheel(&mut self, rows: isize, shown: usize) -> bool {
+        let first = self.shown(shown).start;
+        let last = self.suggestions.len().saturating_sub(shown);
+        let target = first.saturating_add_signed(rows).min(last);
+        self.wheeled = Some(target);
+        target != first
     }
 
     pub fn key(
@@ -339,5 +355,52 @@ mod tests {
         let mut few = PathEdit::new("~/");
         few.set_suggestions(names(&["a", "b"]));
         assert_eq!(few.shown(4), 0..2);
+    }
+
+    #[test]
+    fn the_wheel_moves_the_shown_rows_and_keeps_the_selection() {
+        let all = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+        let mut edit = edit("~/a", &all);
+        assert_eq!(edit.selected(), Some(0));
+        assert!(edit.wheel(3, 4));
+        assert_eq!(edit.shown(4), 3..7);
+        assert!(edit.wheel(10, 4));
+        assert_eq!(edit.shown(4), 6..10);
+        assert!(!edit.wheel(1, 4));
+        assert!(edit.wheel(-2, 4));
+        assert_eq!(edit.shown(4), 4..8);
+        assert!(edit.wheel(-10, 4));
+        assert_eq!(edit.shown(4), 0..4);
+        assert!(!edit.wheel(-1, 4));
+        assert_eq!(edit.selected(), Some(0));
+    }
+
+    #[test]
+    fn an_arrow_key_after_the_wheel_brings_the_selection_back_into_view() {
+        let all = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+        let mut edit = edit("~/a", &all);
+        edit.wheel(6, 4);
+        assert_eq!(edit.shown(4), 6..10);
+        edit.select_next();
+        assert_eq!(edit.selected(), Some(1));
+        assert_eq!(edit.shown(4), 0..4);
+    }
+
+    #[test]
+    fn new_suggestions_drop_the_wheel_position_and_the_same_ones_keep_it() {
+        let all = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+        let mut edit = edit("~/", &all);
+        edit.wheel(5, 4);
+        edit.set_suggestions(names(&all));
+        assert_eq!(edit.shown(4), 5..9);
+        edit.set_suggestions(names(&all[1..]));
+        assert_eq!(edit.shown(4), 0..4);
+    }
+
+    #[test]
+    fn the_wheel_does_nothing_when_every_suggestion_fits() {
+        let mut edit = edit("~/", &["a", "b"]);
+        assert!(!edit.wheel(3, 4));
+        assert_eq!(edit.shown(4), 0..2);
     }
 }

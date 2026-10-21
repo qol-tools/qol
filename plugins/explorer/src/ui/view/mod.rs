@@ -2,9 +2,11 @@ mod band;
 mod list;
 mod rail;
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,6 +19,7 @@ use gpui::{
 };
 use qol_gpui::kit::kit;
 use qol_gpui::scroll_list::follow_offset_y;
+use qol_gpui::surface::DragGestureState;
 use qol_gpui::theme::HEIGHT_INLINE;
 
 use super::browse::{Browser, Opening, PathStep};
@@ -35,6 +38,7 @@ const ROW: f32 = qol_gpui::theme::HEIGHT_CONTROL;
 const RAIL: f32 = 200.0;
 const ICON: f32 = 16.0;
 const PUMP: Duration = Duration::from_millis(16);
+const DRAG_THRESHOLD: f32 = 4.0;
 
 pub struct ExplorerView {
     browser: Browser,
@@ -45,6 +49,7 @@ pub struct ExplorerView {
     focus_handle: FocusHandle,
     body_height: f32,
     waiting: VecDeque<Keystroke>,
+    drag_gesture: Rc<RefCell<DragGestureState>>,
 }
 
 impl ExplorerView {
@@ -59,6 +64,7 @@ impl ExplorerView {
             focus_handle: cx.focus_handle(),
             body_height: 0.0,
             waiting: VecDeque::new(),
+            drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
         };
         view.listen(cx);
         view
@@ -273,6 +279,12 @@ impl ExplorerView {
         let scroll = self.scroll_offset();
         let step = self.browser.pick_suggestion(index, scroll);
         if self.stepped(step) {
+            cx.notify();
+        }
+    }
+
+    fn wheel_suggestions(&mut self, rows: isize, cx: &mut Context<Self>) {
+        if self.browser.wheel_suggestions(rows) {
             cx.notify();
         }
     }

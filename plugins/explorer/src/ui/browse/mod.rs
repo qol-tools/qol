@@ -410,6 +410,10 @@ impl Browser {
         }
     }
 
+    pub fn wheel_suggestions(&mut self, rows: isize) -> bool {
+        self.path.as_mut().is_some_and(|field| field.wheel(rows))
+    }
+
     pub fn pick_suggestion(&mut self, index: usize, scroll: f32) -> PathStep {
         let Some(field) = self.path.as_mut() else {
             return PathStep::Closed;

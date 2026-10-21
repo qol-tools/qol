@@ -9,6 +9,7 @@ use gpui::{
 use qol_theme::{translucent, Alpha, TextStyle};
 
 use crate::kit::{float_shadow, Kit};
+use crate::scroll_list::wheel_rows;
 use crate::scrollbar::ScrollSource;
 use crate::text::{shaped_width, TextStyled};
 use crate::text_edit::{visible_char_count, CaretStyle, TextFieldElement};
@@ -23,6 +24,7 @@ const CARET_WIDTH: f32 = 2.0;
 
 pub type CrumbClick = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 pub type EditRequest = Rc<dyn Fn(&mut Window, &mut App)>;
+pub type SuggestionWheel = Rc<dyn Fn(isize, &mut Window, &mut App)>;
 
 struct Editing {
     edit: PathEdit,
@@ -38,6 +40,7 @@ pub struct CrumbTrail {
     on_crumb: Option<CrumbClick>,
     on_edit: Option<EditRequest>,
     on_suggestion: Option<CrumbClick>,
+    on_suggestion_wheel: Option<SuggestionWheel>,
     kit: Kit,
 }
 
@@ -55,6 +58,7 @@ impl CrumbTrail {
             on_crumb: None,
             on_edit: None,
             on_suggestion: None,
+            on_suggestion_wheel: None,
             kit,
         }
     }
@@ -74,6 +78,14 @@ impl CrumbTrail {
         on_suggestion: impl Fn(usize, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_suggestion = Some(Rc::new(on_suggestion));
+        self
+    }
+
+    pub fn on_suggestion_wheel(
+        mut self,
+        on_wheel: impl Fn(isize, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_suggestion_wheel = Some(Rc::new(on_wheel));
         self
     }
 
@@ -101,10 +113,18 @@ impl RenderOnce for CrumbTrail {
             on_crumb,
             on_edit,
             on_suggestion,
+            on_suggestion_wheel,
             kit,
         } = self;
         match editing {
-            Some(Editing { edit, width }) => path_field(&edit, width, on_suggestion, kit, window),
+            Some(Editing { edit, width }) => path_field(
+                &edit,
+                width,
+                on_suggestion,
+                on_suggestion_wheel,
+                kit,
+                window,
+            ),
             None => {
                 let folded = fit.map_or(0..0, |width| folded_run(&crumbs, width, window));
                 read_only(id, crumbs, folded, on_crumb, on_edit, kit)
@@ -230,6 +250,7 @@ fn path_field(
     edit: &PathEdit,
     width: f32,
     on_suggestion: Option<CrumbClick>,
+    on_wheel: Option<SuggestionWheel>,
     kit: Kit,
     window: &mut Window,
 ) -> AnyElement {
@@ -268,7 +289,7 @@ fn path_field(
         .w(px(width))
         .child(field)
         .when_some(
-            suggestion_menu(edit, width, on_suggestion, kit),
+            suggestion_menu(edit, width, on_suggestion, on_wheel, kit),
             |slot, menu| {
                 slot.child(
                     div()
@@ -286,6 +307,7 @@ fn suggestion_menu(
     edit: &PathEdit,
     width: f32,
     on_suggestion: Option<CrumbClick>,
+    on_wheel: Option<SuggestionWheel>,
     kit: Kit,
 ) -> Option<Div> {
     if edit.suggestions().is_empty() {
@@ -328,7 +350,16 @@ fn suggestion_menu(
                     total: edit.suggestions().len(),
                 },
                 kit.grounds.menu,
-            )),
+            ))
+            .when_some(on_wheel, |menu, on_wheel| {
+                menu.on_scroll_wheel(move |event, window, cx| {
+                    cx.stop_propagation();
+                    let rows = wheel_rows(&event.delta, qol_theme::HEIGHT_INLINE);
+                    if rows != 0 {
+                        on_wheel(rows, window, cx);
+                    }
+                })
+            }),
     )
 }
 
