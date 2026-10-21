@@ -1,11 +1,15 @@
 import os
 import re
 import subprocess
+import sys
 import textwrap
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / ".github/scripts"))
+
+import release_candidate as rc
 CARGO_GATE = re.compile(r"\bcargo (?:build|test|clippy|check|nextest run)\b")
 
 
@@ -404,21 +408,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
         self.assertNotIn("probe", workflow)
         self.assertFalse((ROOT / ".github/scripts/release_probe.py").exists())
-        action = (ROOT / ".github/actions/upload-next-dist/action.yml").read_text()
-        upload = named_step(action, "Upload release files", "    ")
-        for contract in [
-            "if: steps.next.outputs.name != ''",
-            "name: ${{ steps.next.outputs.name }}",
-            "path: ${{ steps.next.outputs.path }}",
-            "retention-days: 90",
-            "if-no-files-found: error",
-        ]:
-            with self.subTest(contract=contract):
-                self.assertIn(contract, upload)
-        self.assertIn(
-            'release_candidate.py next-dist --queue "${QUEUE}"',
-            named_step(action, "Take the next release files", "    "),
-        )
         for platform in ["linux", "macos", "windows"]:
             with self.subTest(platform=platform):
                 job = workflow.split(f"  qol_tray_{platform}_candidate:\n", 1)[1].split("\n  qol_tray_", 1)[0].split("\n  tag_and_dispatch:", 1)[0]
@@ -449,27 +438,39 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "RELEASE_TAGS: ${{ needs.prepare.outputs.tags }}",
             "release_candidate.py build-plugins",
             '--target "${TARGET}"',
-            '--queue "${RUNNER_TEMP}/release-files.json"',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, build)
         self.assertNotIn("matrix.package", plugin)
-        slot = (
-            "      - uses: ./.github/actions/upload-next-dist\n"
-            "        with:\n"
-            "          queue: ${{ runner.temp }}/release-files.json\n"
-        )
+        self.assertIn("id: candidates", build)
+        self.assertNotIn("upload-next-dist", plugin)
         plugins = len(list(ROOT.glob("plugins/*/plugin.toml")))
         self.assertGreaterEqual(
-            plugin.count(slot),
+            rc.UPLOAD_SLOTS,
             plugins,
-            "add upload-next-dist slots to plugin_candidate: one target can build every plugin",
+            "raise UPLOAD_SLOTS and add upload slots to plugin_candidate: one target can build every plugin",
         )
-        self.assertLess(plugin.index(slot), plugin.index("- name: Require every plugin candidate"))
-        self.assertIn(
-            'finish-dists --queue "${RUNNER_TEMP}/release-files.json"',
-            named_step(plugin, "Require every plugin candidate", "      "),
-        )
+        self.assertEqual(plugin.count("      - name: Upload release files "), rc.UPLOAD_SLOTS)
+        for slot in range(rc.UPLOAD_SLOTS):
+            with self.subTest(slot=slot):
+                upload = named_step(plugin, f"Upload release files {slot}", "      ")
+                for contract in [
+                    f"if: steps.candidates.outputs.dist_name_{slot} != ''",
+                    "uses: actions/upload-artifact@",
+                    f"name: ${{{{ steps.candidates.outputs.dist_name_{slot} }}}}",
+                    f"path: ${{{{ steps.candidates.outputs.dist_path_{slot} }}}}",
+                    "retention-days: 90",
+                    "if-no-files-found: error",
+                ]:
+                    self.assertIn(contract, upload)
+                self.assertLess(
+                    plugin.index(f"- name: Upload release files {slot}\n"),
+                    plugin.index("- name: Require every plugin candidate"),
+                )
+        require = named_step(plugin, "Require every plugin candidate", "      ")
+        self.assertIn("if: steps.candidates.outputs.failed != ''", require)
+        self.assertIn("FAILED: ${{ steps.candidates.outputs.failed }}", require)
+        self.assertIn("exit 1", require)
         reports = named_step(plugin, "Upload build reports", "      ")
         self.assertIn("if: always()", reports)
         self.assertIn("name: candidate-plugins-${{ matrix.target }}", reports)

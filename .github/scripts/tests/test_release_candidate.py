@@ -1028,8 +1028,8 @@ class TargetBuildTests(unittest.TestCase):
         )
         self.reports = self.root / "reports"
         self.dist = self.root / "dist"
-        self.queue = str(self.root / "queue.json")
         self.output = self.root / "output"
+        self.output.write_text("")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -1043,7 +1043,7 @@ class TargetBuildTests(unittest.TestCase):
             rc, "uses_gpui", side_effect=lambda root, package, target: package == "first-package"
         ):
             rc.build_plugins(
-                self.root, self.tags, self.target, self.reports, self.dist, self.queue
+                self.root, self.tags, self.target, self.reports, self.dist, str(self.output)
             )
         return build
 
@@ -1057,17 +1057,13 @@ class TargetBuildTests(unittest.TestCase):
                 for name, version in [("first", "1.0.0"), ("second", "2.0.0"), ("third", "3.0.0")]
             ],
         )
-        queue = json.loads(Path(self.queue).read_text())
-        self.assertEqual(queue["failed"], ["plugin-second-v2.0.0"])
         self.assertEqual(
-            queue["dists"],
-            [
-                {
-                    "name": f"dist-plugin-{name}-v{version}-{self.target}",
-                    "path": str(self.dist / f"plugin-{name}-v{version}"),
-                }
-                for name, version in [("first", "1.0.0"), ("third", "3.0.0")]
-            ],
+            self.output.read_text(),
+            f"dist_name_0=dist-plugin-first-v1.0.0-{self.target}\n"
+            f"dist_path_0={self.dist / 'plugin-first-v1.0.0'}\n"
+            f"dist_name_1=dist-plugin-third-v3.0.0-{self.target}\n"
+            f"dist_path_1={self.dist / 'plugin-third-v3.0.0'}\n"
+            "failed=plugin-second-v2.0.0\n",
         )
         self.assertEqual(
             sorted(path.name for path in (self.dist / "plugin-first-v1.0.0").iterdir()),
@@ -1082,41 +1078,13 @@ class TargetBuildTests(unittest.TestCase):
             b"third",
         )
 
-    def test_uploads_take_the_queue_in_order_and_the_job_fails_at_the_end(self):
-        self.build()
-
-        names = []
-        for _ in range(3):
-            self.output.write_text("")
-            rc.next_dist(self.queue, str(self.output))
-            names.append(self.output.read_text())
-
-        self.assertEqual(
-            names,
-            [
-                f"name=dist-plugin-first-v1.0.0-{self.target}\n"
-                f"path={self.dist / 'plugin-first-v1.0.0'}\n",
-                f"name=dist-plugin-third-v3.0.0-{self.target}\n"
-                f"path={self.dist / 'plugin-third-v3.0.0'}\n",
-                "",
-            ],
-        )
-        with self.assertRaisesRegex(
-            RuntimeError, f"candidate builds failed for {self.target}: plugin-second-v2.0.0"
-        ):
-            rc.finish_dists(self.queue)
-
-    def test_finish_refuses_files_no_upload_slot_took(self):
-        rc.write_json(self.queue, {"target": self.target, "dists": [{"name": "dist-a", "path": "a"}], "failed": []})
-        with self.assertRaisesRegex(RuntimeError, "no upload slot was left for: dist-a"):
-            rc.finish_dists(self.queue)
-
-        rc.write_json(self.queue, {"target": self.target, "dists": [], "failed": []})
-        rc.finish_dists(self.queue)
-
-    def test_next_dist_without_a_queue_uploads_nothing(self):
-        self.output.write_text("")
-        rc.next_dist(str(self.root / "missing.json"), str(self.output))
+    def test_more_plugins_than_upload_slots_build_nothing(self):
+        with patch.object(rc, "UPLOAD_SLOTS", 2), patch.object(rc, "execute_build") as build:
+            with self.assertRaisesRegex(RuntimeError, "3 plugins build for .*, but plugin_candidate has 2 upload slots"):
+                rc.build_plugins(
+                    self.root, self.tags, self.target, self.reports, self.dist, str(self.output)
+                )
+        build.assert_not_called()
         self.assertEqual(self.output.read_text(), "")
 
     def test_font_license_follows_a_gpui_dependency(self):

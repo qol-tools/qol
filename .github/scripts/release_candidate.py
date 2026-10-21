@@ -48,6 +48,7 @@ QUEUE_BUILD_CI_JOBS = {
 BATCH_CI_JOB = "batch role"
 BATCH_BUILD_CHECK = "batch release build"
 GPUI_FONT_LICENSE = "libs/gpui/assets/fonts/OFL.txt"
+UPLOAD_SLOTS = 32
 
 
 @dataclass(frozen=True)
@@ -706,12 +707,17 @@ def build_plugins(
     target: str,
     report_dir: Path,
     dist_dir: Path,
-    queue_path: str,
+    github_output: str | None,
 ) -> None:
-    plan = candidate_plan(root, tags)
-    dists = []
+    plugins = target_plugins(candidate_plan(root, tags), target)
+    if len(plugins) > UPLOAD_SLOTS:
+        raise RuntimeError(
+            f"{len(plugins)} plugins build for {target}, but plugin_candidate "
+            f"has {UPLOAD_SLOTS} upload slots"
+        )
+    outputs = {}
     failed = []
-    for plugin in target_plugins(plan, target):
+    for plugin in plugins:
         try:
             execute_build(
                 root,
@@ -725,31 +731,11 @@ def build_plugins(
             failed.append(plugin["tag"])
             print(f"::error::{plugin['tag']} ({target}) failed: {error}", file=sys.stderr)
             continue
-        dists.append({"name": f"dist-{plugin['tag']}-{target}", "path": str(files)})
+        slot = len(outputs) // 2
+        outputs[f"dist_name_{slot}"] = f"dist-{plugin['tag']}-{target}"
+        outputs[f"dist_path_{slot}"] = str(files)
         print(f"{plugin['tag']} ({target}) passed")
-    write_json(queue_path, {"target": target, "dists": dists, "failed": failed})
-
-
-def next_dist(queue_path: str, github_output: str | None) -> None:
-    path = Path(queue_path)
-    if not path.is_file():
-        return
-    queue = json.loads(path.read_text())
-    if not queue["dists"]:
-        return
-    write_json(queue_path, {**queue, "dists": queue["dists"][1:]})
-    emit_github_output(github_output, queue["dists"][0])
-
-
-def finish_dists(queue_path: str) -> None:
-    queue = json.loads(Path(queue_path).read_text())
-    if queue["dists"]:
-        names = ", ".join(dist["name"] for dist in queue["dists"])
-        raise RuntimeError(f"no upload slot was left for: {names}")
-    if queue["failed"]:
-        raise RuntimeError(
-            f"candidate builds failed for {queue['target']}: {', '.join(queue['failed'])}"
-        )
+    emit_github_output(github_output, {**outputs, "failed": " ".join(failed)})
 
 
 def plan_command(args: argparse.Namespace) -> None:
@@ -957,7 +943,7 @@ def build_parser() -> argparse.ArgumentParser:
     plugins.add_argument("--target", required=True)
     plugins.add_argument("--report-dir", required=True)
     plugins.add_argument("--dist-dir", required=True)
-    plugins.add_argument("--queue", required=True)
+    plugins.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     plugins.set_defaults(
         handler=lambda args: build_plugins(
             Path(args.root).resolve(),
@@ -965,22 +951,9 @@ def build_parser() -> argparse.ArgumentParser:
             args.target,
             Path(args.report_dir),
             Path(args.dist_dir),
-            args.queue,
+            args.github_output,
         )
     )
-
-    next_upload = commands.add_parser("next-dist")
-    next_upload.add_argument("--queue", required=True)
-    next_upload.add_argument(
-        "--github-output", default=os.environ.get("GITHUB_OUTPUT")
-    )
-    next_upload.set_defaults(
-        handler=lambda args: next_dist(args.queue, args.github_output)
-    )
-
-    finish = commands.add_parser("finish-dists")
-    finish.add_argument("--queue", required=True)
-    finish.set_defaults(handler=lambda args: finish_dists(args.queue))
     return parser
 
 
