@@ -113,7 +113,7 @@ default = true
 
 [section.glide]
 label = "Glide"
-description = "Continuous window movement speed while a glide shortcut is held."
+description = "Continuous window movement speed while a glide hotkey is held."
 actions = ["glide-left", "glide-right", "glide-up", "glide-down"]
 
 [field.glide_speed_px_per_second]

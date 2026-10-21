@@ -316,7 +316,7 @@ fn phone_removal_uses_the_displayed_stamp_and_legacy_pointz_offers_no_controls()
     snapshot.pointz.as_mut().unwrap().plugin = PointzPlugin::Legacy;
     let legacy = rows(Some(&snapshot), None, None, None, &[]);
     assert!(!legacy.iter().any(|row| row.label == "Remove phone"));
-    assert!(legacy.iter().any(|row| row.label == "PointZ"));
+    assert!(legacy.iter().any(|row| row.label == "PointZerver"));
 }
 
 #[test]
@@ -451,7 +451,12 @@ fn every_group_opens_with_a_header_and_headers_carry_no_action() {
         .collect();
     assert_eq!(
         titles,
-        ["this device", "nearby", "linked devices", "other networks"]
+        [
+            "this computer",
+            "nearby",
+            "linked devices",
+            "other networks"
+        ]
     );
 }
 

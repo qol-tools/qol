@@ -32,11 +32,31 @@ pub(super) fn watch_fork(
     title: &str,
     ready: &Path,
 ) -> Result<()> {
-    start_watcher(&watch_args(session, model, effort, title, ready))?;
+    watch(
+        &watch_args(session, Some(model), effort, title, ready, false),
+        ready,
+    )
+}
+
+pub(super) fn watch_final(
+    session: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    title: &str,
+    ready: &Path,
+) -> Result<()> {
+    watch(
+        &watch_args(session, model, effort, title, ready, true),
+        ready,
+    )
+}
+
+fn watch(args: &[String], ready: &Path) -> Result<()> {
+    start_watcher(args)?;
     let deadline = Instant::now() + WATCH_READY_TIMEOUT;
     while !ready.exists() {
         if Instant::now() >= deadline {
-            bail!("the watcher did not confirm it started, so the installed {PLUGIN_ID} may predate fork watching");
+            bail!("the watcher did not confirm it started, so the installed {PLUGIN_ID} may predate this watch");
         }
         thread::sleep(WATCH_READY_POLL);
     }
@@ -46,19 +66,26 @@ pub(super) fn watch_fork(
 
 fn watch_args(
     session: &str,
-    model: &str,
+    model: Option<&str>,
     effort: Option<&str>,
     title: &str,
     ready: &Path,
+    final_turn: bool,
 ) -> Vec<String> {
     let ready = ready.display().to_string();
     let mut args = [
-        "park", "--watch", session, "--ready", &ready, "--model", model, "--title", title,
+        "park", "--watch", session, "--ready", &ready, "--title", title,
     ]
     .map(str::to_owned)
     .to_vec();
+    if let Some(model) = model {
+        args.extend(["--model".to_owned(), model.to_owned()]);
+    }
     if let Some(effort) = effort {
         args.extend(["--effort".to_owned(), effort.to_owned()]);
+    }
+    if final_turn {
+        args.push("--final".to_owned());
     }
     args
 }

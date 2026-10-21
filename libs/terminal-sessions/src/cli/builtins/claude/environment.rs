@@ -15,8 +15,8 @@ pub(super) struct ClaudeSessionLocation {
 pub(super) trait ClaudeEnvironment: Send + Sync {
     fn session(&self, pid: i32) -> Option<ClaudeSessionLocation>;
 
-    fn remote_controlled(&self, _pid: i32) -> bool {
-        false
+    fn remote_control_session(&self, _pid: i32) -> Option<String> {
+        None
     }
 
     fn busy(&self, _pid: i32) -> bool {
@@ -46,9 +46,10 @@ impl ClaudeEnvironment for SystemClaudeEnvironment {
         })
     }
 
-    fn remote_controlled(&self, pid: i32) -> bool {
-        read_record(&Registry::load().current(Harness::Claude).path, pid)
-            .is_some_and(|record| record.bridge_session_id.is_some_and(|id| !id.is_empty()))
+    fn remote_control_session(&self, pid: i32) -> Option<String> {
+        read_record(&Registry::load().current(Harness::Claude).path, pid)?
+            .bridge_session_id
+            .filter(|id| !id.is_empty())
     }
 
     fn busy(&self, pid: i32) -> bool {

@@ -218,12 +218,12 @@ fn spawn_wake(key: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use qol_terminal_sessions::cli::{claude_tool, generic_tool};
     use qol_terminal_sessions::{SpawnIdentity, SpawnKey, SpawnSurface};
 
-    fn pane(window: u64, key: Option<&str>) -> Pane {
+    pub(crate) fn pane(window: u64, key: Option<&str>) -> Pane {
         Pane {
             id: crate::host::kitty_session_id(window),
             root_pid: i32::try_from(window).unwrap(),

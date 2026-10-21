@@ -59,8 +59,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         for contract in [
             "name: release build (${{ matrix.os }})",
-            "needs: batch",
-            "if: ${{ !cancelled() && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
+            "needs: [plan, batch]",
+            "if: ${{ !cancelled() && needs.plan.result == 'success' && needs.batch.result == 'success' && needs.batch.outputs.role == 'tail' }}",
             "RUSTFLAGS: -D warnings",
             "cache-key: ci-${{ matrix.os }}",
             "cargo build --release --locked $BUILD_ARGS",
@@ -104,10 +104,10 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_only_the_queue_tail_plans_a_release_build_against_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         batch = workflow.split("  batch:\n", 1)[1].split("  release-build:\n", 1)[0]
+        self.assertNotIn("needs:", batch)
         for contract in [
             "name: batch role",
-            "needs: plan",
-            "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}",
+            "if: github.event_name == 'merge_group'",
             "fetch-depth: 0",
             "run: python3 .github/scripts/queue_batch.py role",
             "if: steps.role.outputs.role == 'tail'",
@@ -158,14 +158,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
         for contract in [
             "name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}",
-            "needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]",
+            "needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]",
             "checks: write",
             "VERDICT: ${{ steps.verdict.outcome }}",
             "run: python3 .github/scripts/queue_batch.py gate",
             "if: ${{ always() && github.event_name != 'push' }}",
             '[ "$PLAN" = success ] || exit 1',
-            "LINT: ${{ needs.repository-lint.result }}",
-            '[ "$LINT" = success ] || exit 1',
             '[ "$BUILD" = success ] || exit 1',
             '[ "$REUSED" = true ] || [ "$CHECK" = success ] || exit 1',
             '*" failure "*|*" cancelled "*) exit 1 ;;',
@@ -173,20 +171,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, gate)
         report = workflow.split("  queue-report:\n", 1)[1]
-        self.assertIn("needs: [plan, repository-lint, check, batch, release-build, process-windows, registry-tool, batch-failure]", report)
+        self.assertIn("needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure]", report)
         self.assertIn("contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == ''", report)
 
-    def test_repository_lint_runs_beside_planning_after_review(self):
+    def test_repository_lint_runs_in_the_plan_before_any_runner_compiles(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        plan = workflow.split("  plan:\n", 1)[1].split("  repository-lint:\n", 1)[0]
-        lint = workflow.split("  repository-lint:\n", 1)[1].split("  check:\n", 1)[0]
-        self.assertNotIn("qac lint", plan)
-        self.assertNotIn("needs: plan", lint)
+        self.assertNotIn("repository-lint", workflow)
+        plan = workflow.split("  plan:\n", 1)[1].split("  check:\n", 1)[0]
+        self.assertNotIn("needs:", plan.split("    steps:", 1)[0])
+        self.assertIn("fetch-depth: 0", plan)
+        lint = named_step(plan, "qac lint", "      ")
         for contract in [
-            "needs: review",
-            "!cancelled() && needs.review.result != 'failure'",
-            "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
-            "fetch-depth: 0",
+            "if: github.event_name == 'pull_request' || github.event_name == 'merge_group'",
             "BASE_SHA: ${{ github.event.merge_group.base_sha }}",
             'base="${BASE_SHA:-$(git rev-parse HEAD^1)}"',
             'git worktree add --quiet --detach "$RUNNER_TEMP/qol-monorepo" HEAD',
@@ -195,20 +191,24 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, lint)
-        for job in ["check", "process-windows", "batch", "registry-tool"]:
+        self.assertNotIn("cargo", plan)
+        for job in ["check", "process-windows", "registry-tool"]:
             with self.subTest(job=job):
                 dependencies = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("needs: plan", dependencies)
-                self.assertNotIn("repository-lint", dependencies)
+                self.assertIn("!cancelled() && needs.plan.result == 'success' && ", dependencies)
+        build = workflow.split("  release-build:\n", 1)[1].split("    env:", 1)[0]
+        self.assertIn("needs: [plan, batch]", build)
+        self.assertIn("!cancelled() && needs.plan.result == 'success' && ", build)
 
-    def test_merge_gate_requires_successful_repository_lint(self):
+    def test_merge_gate_requires_a_successful_plan(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        gate = workflow.split("  gate:\n", 1)[1].split("  stop-on-failure:\n", 1)[0]
+        gate = workflow.split("  gate:\n", 1)[1].split("  supersede:\n", 1)[0]
         step = named_step(gate, "Every job passed or was skipped", "      ")
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
         for event in ["pull_request", "merge_group"]:
-            for lint in ["success", "failure", "cancelled", "skipped"]:
-                with self.subTest(event=event, lint=lint):
+            for plan in ["success", "failure", "cancelled", "skipped"]:
+                with self.subTest(event=event, plan=plan):
                     result = subprocess.run(
                         ["bash", "-e", "-c", script],
                         capture_output=True,
@@ -216,21 +216,20 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                         env={
                             **os.environ,
                             "GITHUB_EVENT_NAME": event,
-                            "PLAN": "success",
-                            "LINT": lint,
+                            "PLAN": plan,
                             "REUSED": "false",
                             "CHECK": "success",
                             "BATCH": "success",
                             "ROLE": "tail",
                             "BUILD": "success",
-                            "RESULTS": f"success {lint} success success skipped skipped",
+                            "RESULTS": f"{plan} success success success skipped skipped",
                         },
                     )
-                    self.assertEqual(result.returncode == 0, lint == "success", result.stdout + result.stderr)
+                    self.assertEqual(result.returncode == 0, plan == "success", result.stdout + result.stderr)
 
     def test_queue_gate_needs_a_release_build_only_from_the_tail(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        gate = workflow.split("  gate:\n", 1)[1].split("  stop-on-failure:\n", 1)[0]
+        gate = workflow.split("  gate:\n", 1)[1].split("  supersede:\n", 1)[0]
         step = named_step(gate, "Every job passed or was skipped", "      ")
         script = textwrap.dedent(step.split("        run: |\n", 1)[1].split("\n\n", 1)[0])
         cases = [
@@ -252,47 +251,38 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                         **os.environ,
                         "GITHUB_EVENT_NAME": "merge_group",
                         "PLAN": "success",
-                        "LINT": "success",
                         "REUSED": "false",
                         "CHECK": "success",
                         "BATCH": batch,
                         "ROLE": role,
                         "BUILD": build,
-                        "RESULTS": f"success success success {batch} {build} skipped success skipped skipped",
+                        "RESULTS": f"success success {batch} {build} skipped success skipped skipped",
                     },
                 )
                 self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
 
-    def test_pull_request_runs_start_only_after_the_review_passes(self):
-        for name, first in [("ci.yml", "  plan:\n"), ("codeql.yml", "  analyze:\n")]:
+    def test_no_run_waits_for_the_review_or_watches_for_failures(self):
+        scripts = {path.name for path in (ROOT / ".github/scripts").glob("*.py")}
+        for name in ["wait_for_review.py", "stop_on_failure.py"]:
+            with self.subTest(script=name):
+                self.assertNotIn(name, scripts)
+        for name, first in [("ci.yml", "  plan:\n"), ("codeql.yml", "  analyze:\n"), ("claude-review.yml", "  review:\n")]:
             with self.subTest(workflow=name):
                 workflow = (ROOT / ".github/workflows" / name).read_text()
-                wait = workflow.split("  review:\n", 1)[1].split(first, 1)[0]
-                self.assertIn("if: github.event_name == 'pull_request'", wait)
-                self.assertIn("run: python3 .github/scripts/wait_for_review.py", wait)
-                gated = workflow.split(first, 1)[1].split("    runs-on:", 1)[0]
-                self.assertIn("needs: review", gated)
-                self.assertIn("!cancelled() && needs.review.result != 'failure'", gated)
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        stop = workflow.split("  stop-on-failure:\n", 1)[1].split("    runs-on:", 1)[0]
-        self.assertIn("needs: review", stop)
-        self.assertIn("github.event_name == 'pull_request' && needs.review.result == 'success'", stop)
-        for job in ["check", "process-windows", "batch", "registry-tool"]:
-            with self.subTest(job=job):
-                gated = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
-                self.assertIn("!cancelled() && needs.plan.result == 'success' && ", gated)
+                for loose in ["Wait for the review", "wait_for_review", "stop_on_failure", "rerun-waits", "\n  follow:\n"]:
+                    self.assertNotIn(loose, workflow)
+                self.assertNotIn("needs:", workflow.split(first, 1)[1].split("    runs-on:", 1)[0])
+        codeql = (ROOT / ".github/workflows/codeql.yml").read_text()
+        self.assertIn("group: codeql-${{ github.event_name }}-${{ github.ref }}", codeql)
+        self.assertIn("cancel-in-progress: true", codeql)
 
-    def test_a_queue_run_stops_at_its_first_failure_and_still_reports_it(self):
+    def test_a_queue_run_stops_its_matrix_at_the_first_failure_and_still_reports_it(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        stop = workflow.split("  stop-on-failure:\n", 1)[1].split("\n\n  #", 1)[0]
-        for contract in [
-            "github.event_name == 'merge_group' ||",
-            "continue-on-error: true",
-            "actions: write",
-            "run: python3 .github/scripts/stop_on_failure.py",
-        ]:
-            with self.subTest(contract=contract):
-                self.assertIn(contract, stop)
+        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        self.assertIn("fail-fast: ${{ github.event_name == 'merge_group' }}", check)
+        build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
+        self.assertIn("fail-fast: true", build)
+        self.assertNotIn("actions: write", workflow.split("  gate:\n", 1)[1].split("  supersede:\n", 1)[0])
         for job in ["gate", "queue-report", "batch-failure"]:
             with self.subTest(job=job):
                 condition = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
@@ -310,7 +300,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_only_a_pass_verdict_or_an_owner_override_satisfies_the_review_check(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         self.assertIn("  merge_group:\n", workflow.split("jobs:\n", 1)[0])
-        verdict = workflow.split("  verdict:\n", 1)[1].split("\n  follow:\n", 1)[0]
+        verdict = workflow.split("  verdict:\n", 1)[1]
         for contract in [
             "name: claude review",
             "needs: [review, publish]",
@@ -346,14 +336,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for loose in ["head.sha", "ref:", "name: claude review", "cargo"]:
             with self.subTest(loose=loose):
                 self.assertNotIn(loose, override)
-
-    def test_a_new_review_run_reruns_the_checks_its_old_verdict_stopped(self):
-        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
-        follow = workflow.split("\n  follow:\n", 1)[1]
-        self.assertNotIn("needs:", follow.split("    steps:", 1)[0])
-        self.assertIn("if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository", follow)
-        self.assertIn("run: python3 .github/scripts/review_gate.py rerun-waits", follow)
-        self.assertNotIn("cargo", follow)
 
     def test_the_review_reads_the_live_conversation(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
@@ -465,7 +447,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("merge_group:", workflow)
         self.assertIn("cargo check --release --locked $BUILD_ARGS", workflow)
         self.assertIn("cargo build --release --locked $BUILD_ARGS", workflow)
-        self.assertIn("if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' }}", workflow)
+        self.assertIn("if: github.event_name == 'merge_group'", workflow)
         self.assertIn("RUSTFLAGS: -D warnings", workflow)
         self.assertNotIn("debug-assertions", workflow)
         self.assertIn("timeout-minutes:", workflow)

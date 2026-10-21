@@ -11,12 +11,23 @@ frees its runners for the run that counts.
 import json
 import os
 import re
+import subprocess
 import sys
 
 from queue_verdict import gh_json
-from stop_on_failure import cancel
 
 QUEUE_REF = re.compile(r"^(?:refs/heads/)?gh-readonly-queue/[^/]+/pr-(\d+)-[0-9a-f]+$")
+
+
+def cancel(repo: str, run_id: int | str) -> None:
+    result = subprocess.run(
+        ["gh", "api", "--method", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"could not cancel run {run_id}")
 
 
 def queue_pr(ref: str) -> str | None:

@@ -1534,7 +1534,7 @@ impl NativeToolsView {
         let selected = draft.selected == 3;
         let row = RowGround::of(selected, self.body_focused);
         let display = if draft.recording {
-            "Press a shortcut…  Esc cancels".to_string()
+            "Press a key combination…  Esc cancels".to_string()
         } else if draft.key.is_empty() {
             "Press Enter to record".to_string()
         } else {
@@ -1548,7 +1548,7 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(field_label(
-                ("Shortcut", "The keys you press to run it."),
+                ("Key combination", "The keys you press to run it."),
                 row,
                 kit,
             ))

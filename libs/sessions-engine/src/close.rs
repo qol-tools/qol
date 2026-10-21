@@ -61,6 +61,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         &PendingBridgeStore::system()?,
         &super::bridge::trace_dir(),
         &binding,
+        false,
     )?;
     crate::cli::line(serde_json::to_string(&outcome).context("failed to serialize close outcome")?);
     Ok(())
@@ -69,6 +70,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 pub(super) fn close_spawned_terminal(
     terminals: &TerminalSessionService,
     binding: &SessionBinding,
+    force: bool,
 ) -> Result<CloseOutcome> {
     if terminals.is_current(binding).unwrap_or(false) {
         bail!("refusing to close the calling terminal `{binding}`");
@@ -99,14 +101,19 @@ pub(super) fn close_spawned_terminal(
     if identity.key.as_str() == super::switchboard::SWITCHBOARD_KEY {
         bail!("`{binding}` is the switchboard; the session tools never close it, so close its window yourself");
     }
-    if let Some(reason) = CliSessionInterpreter::system().keep_open_reason(&facts) {
+    if let Some(reason) = CliSessionInterpreter::system()
+        .keep_open_reason(&facts)
+        .filter(|_| !force)
+    {
         return Ok(CloseOutcome {
             session: binding.token(),
             key: Some(identity.key.to_string()),
             tool: Some(identity.tool.to_string()),
             closed: false,
             terminal_state: TerminalCloseState::KeptOpen,
-            close_detail: Some(format!("`{binding}` stays open because {reason}")),
+            close_detail: Some(format!(
+                "`{binding}` stays open because {reason}; pass force to close it anyway"
+            )),
             discarded_round: None,
         });
     }
@@ -162,7 +169,7 @@ pub(super) fn close_loop_siblings(
             .screen
             .filter(|screen| !screen.is_empty())
             .unwrap_or_else(|| terminals.read_screen(&binding).unwrap_or_default());
-        let close = close_spawned_terminal(terminals, &binding)?;
+        let close = close_spawned_terminal(terminals, &binding, false)?;
         siblings.push(SiblingLaneClose {
             session: round.session,
             key: close.key,
@@ -181,6 +188,7 @@ pub(super) fn execute(
     pending: &PendingBridgeStore,
     trace_dir: &Path,
     binding: &SessionBinding,
+    force: bool,
 ) -> Result<CloseOutcome> {
     let hung = match pending.pending_round(binding)? {
         Some(round) if round.completed => bail!(
@@ -190,7 +198,7 @@ pub(super) fn execute(
         Some(round) => Some(round),
         None => None,
     };
-    let mut outcome = close_spawned_terminal(terminals, binding)?;
+    let mut outcome = close_spawned_terminal(terminals, binding, force)?;
     if let Some(round) = hung {
         let marker = round.completion_marker.clone();
         pending.discard(binding)?;
@@ -545,7 +553,7 @@ mod tests {
         let binding = switchboard.binding().unwrap();
         let (service, backend) = terminals_with_backend(vec![switchboard]);
 
-        let error = execute(&service, &store(&root), root.path(), &binding)
+        let error = execute(&service, &store(&root), root.path(), &binding, false)
             .unwrap_err()
             .to_string();
 
@@ -682,7 +690,7 @@ mod tests {
         let (service, backend) =
             terminals_with_backend(vec![facts("spawn-group-lane", 200), facts("driver", 900)]);
 
-        let outcome = execute(&service, &pending, root.path(), &lane).unwrap();
+        let outcome = execute(&service, &pending, root.path(), &lane, false).unwrap();
 
         assert!(outcome.closed);
         assert_eq!(

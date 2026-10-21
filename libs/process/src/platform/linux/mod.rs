@@ -53,6 +53,13 @@ pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<Pro
     Ok((command.spawn()?, None))
 }
 
+pub(crate) fn spawn_owned_session(
+    mut command: Command,
+) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    isolate_owned_session(&mut command)?;
+    Ok((command.spawn()?, None))
+}
+
 #[cfg(test)]
 mod tests {
     use super::process_from_stat;

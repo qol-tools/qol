@@ -4,15 +4,15 @@ description = "Core qol settings."
 
 [section.appearance]
 label = "Appearance"
-description = "How qol looks on this machine."
+description = "How qol looks on this computer."
 
 [field.native_theme]
 type = "select"
-label = "Desktop theme"
+label = "Theme"
 description = "The colors of every qol window."
 section = "appearance"
 default = "bone"
-card_description = "Colours for qol windows."
+card_description = "Colors for qol windows."
 options = ["bone", "slate"]
 
 [field.native_theme.option_labels]
@@ -29,7 +29,7 @@ label = "Accent"
 description = "The color that marks focus and selection."
 section = "appearance"
 default = "amber"
-card_description = "The colour of focus and selection."
+card_description = "The color of focus and selection."
 options = ["amber", "green", "cyan", "magenta", "blue", "violet"]
 
 [field.accent.option_labels]
@@ -49,22 +49,12 @@ blue = "swatch:blue"
 violet = "swatch:violet"
 
 [section.host]
-label = "This computer"
-description = "What qol is allowed to change on this computer."
-
-[field.profile]
-type = "select"
-label = "Profile"
-description = "Pick which saved settings this computer uses."
-section = "host"
-query = "profiles"
-lookup_label = "profiles"
-default = "default"
-card_description = "The profile this device loads."
+label = "When qol stops"
+description = "What qol leaves on this computer."
 
 [field.residency]
 type = "boolean"
-label = "Keep settings in place when qol is closed"
-description = "Your qol settings stay applied even when qol is not running."
+label = "Keep settings in place"
+description = "Your qol settings stay applied after qol stops."
 section = "host"
 default = false

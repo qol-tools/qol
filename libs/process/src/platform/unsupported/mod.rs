@@ -105,6 +105,12 @@ pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<Pro
     Ok((command.spawn()?, None))
 }
 
+pub(crate) fn spawn_owned_session(
+    command: Command,
+) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
+    spawn_owned(command)
+}
+
 pub(crate) fn isolate_owned_session(_command: &mut Command) -> io::Result<()> {
     Err(unsupported())
 }

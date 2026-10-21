@@ -174,6 +174,10 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn remote_control_url(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
+
     fn harness_busy(&self, _session: &SessionFacts) -> bool {
         false
     }

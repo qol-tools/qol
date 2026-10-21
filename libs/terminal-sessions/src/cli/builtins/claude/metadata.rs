@@ -146,11 +146,11 @@ impl ClaudeMetadataResolver {
             .map(|location| location.transcript_path)
     }
 
-    pub fn remote_controlled(&self, session: &SessionFacts) -> bool {
+    pub fn remote_control_session(&self, session: &SessionFacts) -> Option<String> {
         session
             .foreground_pids
             .iter()
-            .any(|pid| self.environment.remote_controlled(*pid))
+            .find_map(|pid| self.environment.remote_control_session(*pid))
     }
 
     pub fn busy(&self, session: &SessionFacts) -> bool {

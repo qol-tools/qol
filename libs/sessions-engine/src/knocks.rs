@@ -50,6 +50,8 @@ struct KnockRecord {
     #[serde(default)]
     senders: Vec<String>,
     #[serde(default)]
+    from_user: usize,
+    #[serde(default)]
     board: Vec<BoardKnock>,
 }
 
@@ -69,11 +71,17 @@ impl KnockRecord {
     }
 
     fn is_empty(&self) -> bool {
-        self.messages == 0 && self.board.is_empty()
+        self.messages == 0 && self.from_user == 0 && self.board.is_empty()
     }
 
     fn text(&self) -> String {
         let mut parts = Vec::new();
+        if self.from_user > 0 {
+            let pronoun = if self.from_user == 1 { "it" } else { "them" };
+            parts.push(format!(
+                "The user wrote to you through the switchboard. Read {pronoun} with session_inbox."
+            ));
+        }
         if self.messages > 0 {
             let (noun, pronoun) = match self.messages {
                 1 => ("message", "it"),
@@ -158,14 +166,19 @@ impl KnockStore {
         key: &str,
         unread: usize,
         senders: &[String],
+        from_user: usize,
     ) -> io::Result<()> {
         self.locked(key, || {
             let mut record = self.load(key)?;
-            if record.messages == unread && record.senders == senders {
+            if record.messages == unread
+                && record.senders == senders
+                && record.from_user == from_user
+            {
                 return Ok(());
             }
             record.messages = unread;
             record.senders = senders.to_vec();
+            record.from_user = from_user;
             self.save(&record)
         })
     }
@@ -269,7 +282,7 @@ mod tests {
         let (_root, store) = store();
         assert!(store.pending_knocks().is_empty());
         store
-            .set_messages("lane", 1, &["switchboard".to_owned()])
+            .set_messages("lane", 1, &["switchboard".to_owned()], 0)
             .unwrap();
         let first = store.pending_knocks();
         assert_eq!(
@@ -282,7 +295,7 @@ mod tests {
             }]
         );
         store
-            .set_messages("lane", 3, &["switchboard".to_owned(), "sib".to_owned()])
+            .set_messages("lane", 3, &["switchboard".to_owned(), "sib".to_owned()], 0)
             .unwrap();
         let updated = store.pending_knocks();
         assert_eq!(updated.len(), 1);
@@ -294,9 +307,28 @@ mod tests {
             updated[0].since_ms, first[0].since_ms,
             "the wait start is kept"
         );
-        store.set_messages("lane", 0, &[]).unwrap();
+        store.set_messages("lane", 0, &[], 0).unwrap();
         assert!(store.pending_knocks().is_empty());
         assert!(!store.dir.join("lane.json").exists());
+    }
+
+    #[test]
+    fn the_users_words_lead_the_knock_ahead_of_session_messages() {
+        let (_root, store) = store();
+        store.set_messages("lane", 0, &[], 1).unwrap();
+        assert_eq!(
+            store.pending_knocks()[0].text,
+            "[qol session] The user wrote to you through the switchboard. Read it with session_inbox."
+        );
+        store
+            .set_messages("lane", 1, &["sib".to_owned()], 2)
+            .unwrap();
+        assert_eq!(
+            store.pending_knocks()[0].text,
+            "[qol session] The user wrote to you through the switchboard. Read them with session_inbox. 1 new message from sib. Read it with session_inbox."
+        );
+        store.set_messages("lane", 0, &[], 0).unwrap();
+        assert!(store.pending_knocks().is_empty());
     }
 
     #[test]
@@ -310,14 +342,14 @@ mod tests {
         store.add_board("lane", "t1", false).unwrap();
         store.add_board("lane", "t2", true).unwrap();
         store
-            .set_messages("lane", 1, &["parent-key".to_owned()])
+            .set_messages("lane", 1, &["parent-key".to_owned()], 0)
             .unwrap();
         assert_eq!(
             store.pending_knocks()[0].text,
             "[qol session] 1 new message from parent-key. Read it with session_inbox. board reply in thread t1, board mention in thread t2. Read them with session_board."
         );
         store.clear_board("lane", "t1").unwrap();
-        store.set_messages("lane", 0, &[]).unwrap();
+        store.set_messages("lane", 0, &[], 0).unwrap();
         assert_eq!(
             store.pending_knocks()[0].text,
             "[qol session] board mention in thread t2. Read it with session_board."
@@ -330,8 +362,8 @@ mod tests {
     #[test]
     fn a_delivered_knock_clears_one_recipient_and_keeps_the_rest() {
         let (_root, store) = store();
-        store.set_messages("a", 1, &["x".to_owned()]).unwrap();
-        store.set_messages("b", 1, &["x".to_owned()]).unwrap();
+        store.set_messages("a", 1, &["x".to_owned()], 0).unwrap();
+        store.set_messages("b", 1, &["x".to_owned()], 0).unwrap();
         store.clear("a").unwrap();
         store.clear("a").unwrap();
         let left = store.pending_knocks();
@@ -344,7 +376,7 @@ mod tests {
     fn a_claimed_knock_leaves_room_for_news_and_a_failed_typing_merges_back() {
         let (_root, store) = store();
         assert!(store.claim("lane").unwrap().is_none());
-        store.set_messages("lane", 1, &["a".to_owned()]).unwrap();
+        store.set_messages("lane", 1, &["a".to_owned()], 0).unwrap();
         store.add_board("lane", "t1", false).unwrap();
         let claimed = store.claim("lane").unwrap().unwrap();
         assert_eq!(
