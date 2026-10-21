@@ -42,9 +42,11 @@ def pull_numbers(commits: list[pv.Commit]) -> set[str]:
 def unit_pulls(root: Path, unit_id: str, rev_range: str) -> set[str]:
     packages = pv.load_packages(root)
     [unit] = pv.discover_release_units(root, packages, unit_id)
+    closures: dict[str, set[str]] = {}
+    scopes = pv.release_scopes(root, packages, closures)
     return pull_numbers(
         pv.relevant_commits(
-            root, pv.load_commits(root, rev_range), unit, packages, {}, {}, {}, {}
+            root, pv.load_commits(root, rev_range), unit, packages, scopes, {}, closures, {}, {}
         )
     )
 
@@ -89,9 +91,16 @@ def main() -> int:
     args = parser.parse_args()
     if bool(args.unit) != bool(args.rev_range):
         parser.error("--unit and --range go together")
-    pulls = (
-        unit_pulls(args.root.resolve(), args.unit, args.rev_range) if args.unit else None
-    )
+    pulls = None
+    if args.unit:
+        try:
+            pulls = unit_pulls(args.root.resolve(), args.unit, args.rev_range)
+        except (RuntimeError, ValueError, OSError) as error:
+            print(
+                f"::warning::release notes list every pull request; "
+                f"planning {args.unit} for {args.rev_range} failed: {error}",
+                file=sys.stderr,
+            )
     sys.stdout.write(filter_notes(sys.stdin.read(), pulls))
     return 0
 

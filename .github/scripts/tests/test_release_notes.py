@@ -1,7 +1,12 @@
+import contextlib
 import importlib.util
+import io
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -95,6 +100,86 @@ class PullNumbers(unittest.TestCase):
         ]
 
         self.assertEqual(rn.pull_numbers(commits), {"251"})
+
+
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+class UnitPulls(unittest.TestCase):
+    def test_lists_the_pull_requests_whose_commits_count_toward_the_unit(self):
+        crate = '[package]\nname = "{}"\nversion = "0.1.0"\n\n[dependencies]\nshared = {{ path = "../../libs/shared" }}\n'
+        files = {
+            "Cargo.toml": '[workspace]\nresolver = "2"\nmembers = ["apps/*", "libs/*", "plugins/*"]\n',
+            "libs/shared/Cargo.toml": '[package]\nname = "shared"\nversion = "0.1.0"\n',
+            "apps/tray/Cargo.toml": crate.format("qol-tray"),
+            "plugins/alpha/Cargo.toml": crate.format("qol-alpha"),
+            "plugins/alpha/plugin.toml": (
+                '[plugin]\nid = "qol-alpha"\nname = "X"\ndescription = "x"\n'
+                'version = "0.1.0"\nplatforms = ["linux"]\n'
+            ),
+        }
+        changes = [
+            ("feat: baseline", "README.md"),
+            ("fix(alpha): shared (#11)", "libs/shared/lib.rs"),
+            ("fix(tray): tray (#12)", "apps/tray/main.rs"),
+            ("fix: shared (#13)", "libs/shared/lib.rs"),
+            ("fix(tray): notes (#14)", "docs/notes.md"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git(root, "init", "--quiet")
+            git(root, "config", "user.name", "Fixture")
+            git(root, "config", "user.email", "fixture@example.invalid")
+            for path, text in files.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text)
+            for subject, path in changes:
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(subject)
+                git(root, "add", ".")
+                git(root, "commit", "--quiet", "-m", subject)
+            base = git(root, "rev-list", "--max-parents=0", "HEAD")
+
+            self.assertEqual(rn.unit_pulls(root, "qol-tray", f"{base}..HEAD"), {"12", "13"})
+
+
+class Main(unittest.TestCase):
+    BODY = notes("feat(tray): a", "ci: b")
+
+    def run_main(self, *argv: str) -> tuple[str, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["release_notes.py", *argv]), mock.patch.object(
+            sys, "stdin", io.StringIO(self.BODY)
+        ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            self.assertEqual(rn.main(), 0)
+        return stdout.getvalue(), stderr.getvalue()
+
+    def test_without_a_unit_every_user_facing_pull_request_stays(self):
+        self.assertEqual(self.run_main(), (rn.filter_notes(self.BODY), ""))
+
+    def test_a_unit_keeps_only_its_pull_requests(self):
+        with mock.patch.object(rn, "unit_pulls", return_value=set()) as pulls:
+            output = self.run_main("--root", "/x", "--unit", "qol-tray", "--range", "a..b")
+
+        pulls.assert_called_once_with(Path("/x"), "qol-tray", "a..b")
+        self.assertEqual(output, (rn.filter_notes(self.BODY, set()), ""))
+
+    def test_a_unit_without_a_range_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.run_main("--unit", "qol-tray")
+
+        self.assertEqual(refused.exception.code, 2)
+
+    def test_a_planning_failure_warns_and_keeps_every_pull_request(self):
+        with mock.patch.object(rn, "unit_pulls", side_effect=RuntimeError("git failed")):
+            stdout, stderr = self.run_main("--unit", "qol-tray", "--range", "a..b")
+
+        self.assertEqual(stdout, rn.filter_notes(self.BODY))
+        self.assertIn("::warning::", stderr)
+        self.assertIn("git failed", stderr)
 
 
 if __name__ == "__main__":

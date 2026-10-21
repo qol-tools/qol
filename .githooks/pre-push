@@ -26,13 +26,22 @@ def released_units(rev_range: str) -> tuple[list[str], int]:
     units = plugin_version.discover_release_units(ROOT, packages, None)
     commits = plugin_version.load_commits(ROOT, rev_range)
     changed_paths, closures, root_manifests, lockfiles = {}, {}, {}, {}
+    scopes = plugin_version.release_scopes(ROOT, packages, closures)
     released = [
         unit.id
         for unit in units
         if any(
             plugin_version.is_releasable_commit(commit)
             for commit in plugin_version.relevant_commits(
-                ROOT, commits, unit, packages, changed_paths, closures, root_manifests, lockfiles
+                ROOT,
+                commits,
+                unit,
+                packages,
+                scopes,
+                changed_paths,
+                closures,
+                root_manifests,
+                lockfiles,
             )
         )
     ]
@@ -59,8 +68,8 @@ def main() -> int:
         if len(released) * 2 >= total and os.environ.get(OVERRIDE_ENV) != "1":
             print(
                 f"\n  pre-push rejected: this push re-releases {len(released)} of {total} units\n"
-                "  fix    : scope the commit to the units it is for, keep it out of shared\n"
-                "           build config, or get the owner's go-ahead for a wide release\n"
+                "  fix    : keep the commit out of shared build config, scope it to the units\n"
+                "           it is for, or get the owner's go-ahead for a wide release\n"
                 f"  then   : {OVERRIDE_ENV}=1 git push\n",
                 file=sys.stderr,
             )
