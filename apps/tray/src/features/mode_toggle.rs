@@ -22,14 +22,9 @@ impl ModeToggle {
 impl MenuProvider for ModeToggle {
     fn menu_items(&self) -> Vec<PluginMenuItem> {
         let is_dev = ModeConfig::load().unwrap_or_default().is_dev();
-        let label = if is_dev {
-            "Mode: dev (active)".to_string()
-        } else {
-            "Mode: prod".to_string()
-        };
         vec![PluginMenuItem::Checkbox {
             id: MENU_ITEM_ID.to_string(),
-            label,
+            label: "Dev mode".to_string(),
             checked: is_dev,
             action: crate::plugins::ActionType::Run,
             config_key: None,
@@ -47,9 +42,7 @@ impl MenuProvider for ModeToggle {
             ModeFlag::Dev
         };
         ModeConfig::set(next)?;
-        log::info!(
-            "Runtime mode flipped to {next:?}. Restart qol-tray for the menu label to refresh."
-        );
+        log::info!("Runtime mode flipped to {next:?}.");
         Ok(())
     }
 }

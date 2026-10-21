@@ -571,7 +571,7 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     assert_eq!(detail(&pages, ROOT, "changes"), "Nothing so far");
     assert_eq!(
         detail(&pages, ROOT, "hold"),
-        "Could not hold: the password prompt was closed."
+        "The password prompt was closed."
     );
 }
 
@@ -584,7 +584,7 @@ fn rules_the_password_prompt_refused_switch_off_and_retry() {
     let pages = build(&session, now()).pages;
     assert_eq!(
         detail(&pages, ROOT, "guard"),
-        "Could not hold: the password prompt timed out."
+        "The password prompt timed out."
     );
     assert_eq!(
         page(&pages, ROOT)
