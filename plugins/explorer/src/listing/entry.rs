@@ -33,6 +33,7 @@ pub struct Entry {
     pub size: Size,
     pub hidden: bool,
     pub opens_as_folder: bool,
+    pub executable: bool,
     pub sort_key: SortKey,
 }
 
@@ -53,6 +54,8 @@ impl Entry {
             Some(metadata) => crate::places::is_hidden(&name, metadata),
             None => crate::places::is_hidden_item(item),
         };
+        let executable =
+            kind == EntryKind::File && metadata.as_ref().is_some_and(crate::places::is_executable);
         Ok(Self {
             display: display_name(&name),
             sort_key: SortKey::new(&name, opens_as_folder),
@@ -63,6 +66,7 @@ impl Entry {
             size,
             hidden,
             opens_as_folder,
+            executable,
         })
     }
 }

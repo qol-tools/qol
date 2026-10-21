@@ -8,6 +8,15 @@ pub enum Step {
     PageDown,
     Home,
     End,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resize {
+    Bigger,
+    Smaller,
+    To(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +34,7 @@ pub enum Action {
     ToggleHidden,
     EditPath,
     PathField,
+    Resize(Resize),
     Nothing,
 }
 
@@ -46,6 +56,9 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
             _ => Action::PathField,
         };
     }
+    if let Some(resize) = resize(keystroke.key.as_str(), chord) {
+        return Action::Resize(resize);
+    }
     match (keystroke.key.as_str(), chord) {
         ("up", (false, false, false)) => Action::Cursor(Step::Up),
         ("down", (false, false, false)) => Action::Cursor(Step::Down),
@@ -53,12 +66,16 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("pagedown", (false, false, false)) => Action::Cursor(Step::PageDown),
         ("home", (false, false, false)) => Action::Cursor(Step::Home),
         ("end", (false, false, false)) => Action::Cursor(Step::End),
+        ("left", (false, false, false)) => Action::Cursor(Step::Left),
+        ("right", (false, false, false)) => Action::Cursor(Step::Right),
         ("up", (false, false, true)) => Action::Range(Step::Up),
         ("down", (false, false, true)) => Action::Range(Step::Down),
         ("pageup", (false, false, true)) => Action::Range(Step::PageUp),
         ("pagedown", (false, false, true)) => Action::Range(Step::PageDown),
         ("home", (false, false, true)) => Action::Range(Step::Home),
         ("end", (false, false, true)) => Action::Range(Step::End),
+        ("left", (false, false, true)) => Action::Range(Step::Left),
+        ("right", (false, false, true)) => Action::Range(Step::Right),
         ("enter", (false, false, false)) => Action::Open,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
@@ -69,6 +86,18 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("h", (true, false, false)) => Action::ToggleHidden,
         ("g", (true, false, false)) => Action::EditPath,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
+    }
+}
+
+fn resize(key: &str, chord: (bool, bool, bool)) -> Option<Resize> {
+    match (key, chord) {
+        ("=" | "+", (true, false, _)) => Some(Resize::Bigger),
+        ("-", (true, false, false)) => Some(Resize::Smaller),
+        (digit, (true, false, false)) => match digit.parse::<usize>() {
+            Ok(stop @ 1..=5) => Some(Resize::To(stop - 1)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -125,7 +154,7 @@ fn typed(keystroke: &Keystroke) -> Option<char> {
 mod tests {
     use gpui::{Keystroke, Modifiers};
 
-    use super::{action, click, leaves, waits, Action, Click, Step};
+    use super::{action, click, leaves, waits, Action, Click, Resize, Step};
 
     fn key(key: &str, modifiers: Modifiers, key_char: Option<&str>) -> Keystroke {
         Keystroke {
@@ -178,6 +207,10 @@ mod tests {
             ),
             (key("home", shift(), None), Action::Range(Step::Home)),
             (key("end", shift(), None), Action::Range(Step::End)),
+            (plain("left"), Action::Cursor(Step::Left)),
+            (plain("right"), Action::Cursor(Step::Right)),
+            (key("left", shift(), None), Action::Range(Step::Left)),
+            (key("right", shift(), None), Action::Range(Step::Right)),
             (plain("enter"), Action::Open),
             (plain("backspace"), Action::Up),
             (key("up", alt(), None), Action::Up),
@@ -222,8 +255,6 @@ mod tests {
         let cases = [
             key("x", control(), Some("x")),
             key("x", alt(), Some("x")),
-            key("left", Modifiers::none(), None),
-            key("right", Modifiers::none(), None),
             key("tab", Modifiers::none(), Some("\t")),
             key("f1", Modifiers::none(), None),
             key("enter", shift(), None),
@@ -232,6 +263,62 @@ mod tests {
         for keystroke in cases {
             assert_eq!(action(&keystroke, false), Action::Nothing, "{keystroke:?}");
         }
+    }
+
+    #[test]
+    fn size_keys_step_or_pick_a_stop_and_plain_digits_still_jump() {
+        let secondary = Modifiers::secondary_key;
+        let secondary_shift = || Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let cases = [
+            (
+                key("=", secondary(), Some("=")),
+                Action::Resize(Resize::Bigger),
+            ),
+            (
+                key("=", secondary_shift(), Some("+")),
+                Action::Resize(Resize::Bigger),
+            ),
+            (
+                key("+", secondary_shift(), Some("+")),
+                Action::Resize(Resize::Bigger),
+            ),
+            (
+                key("+", secondary(), Some("+")),
+                Action::Resize(Resize::Bigger),
+            ),
+            (
+                key("-", secondary(), Some("-")),
+                Action::Resize(Resize::Smaller),
+            ),
+            (
+                key("1", secondary(), Some("1")),
+                Action::Resize(Resize::To(0)),
+            ),
+            (
+                key("3", secondary(), Some("3")),
+                Action::Resize(Resize::To(2)),
+            ),
+            (
+                key("5", secondary(), Some("5")),
+                Action::Resize(Resize::To(4)),
+            ),
+            (key("0", secondary(), Some("0")), Action::Nothing),
+            (key("6", secondary(), Some("6")), Action::Nothing),
+            (key("-", secondary_shift(), Some("_")), Action::Nothing),
+            (key("3", Modifiers::none(), Some("3")), Action::Jump('3')),
+            (key("=", Modifiers::none(), Some("=")), Action::Jump('=')),
+            (key("-", Modifiers::none(), Some("-")), Action::Jump('-')),
+        ];
+        for (keystroke, expected) in cases {
+            assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
+        }
+        assert_eq!(
+            action(&key("=", secondary(), Some("=")), true),
+            Action::PathField
+        );
     }
 
     #[test]

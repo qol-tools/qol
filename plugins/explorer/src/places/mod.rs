@@ -117,6 +117,10 @@ pub fn is_hidden(name: &OsStr, metadata: &Metadata) -> bool {
     platform::is_hidden(name, metadata)
 }
 
+pub fn is_executable(metadata: &Metadata) -> bool {
+    platform::is_executable(metadata)
+}
+
 pub fn is_hidden_item(item: &DirEntry) -> bool {
     platform::is_hidden_item(item)
 }

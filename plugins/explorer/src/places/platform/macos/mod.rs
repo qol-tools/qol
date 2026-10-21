@@ -41,6 +41,10 @@ pub(crate) fn mounts() -> Vec<Mount> {
         .collect()
 }
 
+pub(crate) fn is_executable(metadata: &Metadata) -> bool {
+    metadata.st_mode() & 0o111 != 0
+}
+
 pub(crate) fn is_hidden(name: &OsStr, metadata: &Metadata) -> bool {
     name.as_encoded_bytes().starts_with(b".") || metadata.st_flags() & libc::UF_HIDDEN != 0
 }

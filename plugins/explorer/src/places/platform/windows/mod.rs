@@ -45,6 +45,10 @@ pub(crate) fn mounts() -> Vec<Mount> {
         .collect()
 }
 
+pub(crate) fn is_executable(_metadata: &Metadata) -> bool {
+    false
+}
+
 pub(crate) fn is_hidden(_name: &OsStr, metadata: &Metadata) -> bool {
     metadata.file_attributes() & FILE_ATTRIBUTE_HIDDEN != 0
 }

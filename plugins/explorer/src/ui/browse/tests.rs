@@ -119,13 +119,13 @@ fn the_cursor_moves_one_row_and_stops_at_both_ends() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
     assert_eq!(browser.cursor(), 0);
-    assert!(!browser.move_cursor(Step::Up, 1));
+    assert!(!browser.move_cursor(Step::Up, 1, 1));
     for expected in [1, 2, 3] {
-        assert!(browser.move_cursor(Step::Down, 1));
+        assert!(browser.move_cursor(Step::Down, 1, 1));
         assert_eq!(browser.cursor(), expected);
     }
-    assert!(!browser.move_cursor(Step::Down, 1));
-    assert!(browser.move_cursor(Step::Up, 1));
+    assert!(!browser.move_cursor(Step::Down, 1, 1));
+    assert!(browser.move_cursor(Step::Up, 1, 1));
     assert_eq!(browser.cursor(), 2);
 }
 
@@ -133,23 +133,68 @@ fn the_cursor_moves_one_row_and_stops_at_both_ends() {
 fn page_and_edge_steps_jump_the_cursor_and_stop_at_the_ends() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
-    assert!(browser.move_cursor(Step::PageDown, 3));
+    assert!(browser.move_cursor(Step::PageDown, 3, 1));
     assert_eq!(browser.cursor(), 3);
-    assert!(!browser.move_cursor(Step::PageDown, 3));
-    assert!(browser.move_cursor(Step::PageUp, 2));
+    assert!(!browser.move_cursor(Step::PageDown, 3, 1));
+    assert!(browser.move_cursor(Step::PageUp, 2, 1));
     assert_eq!(browser.cursor(), 1);
-    assert!(browser.move_cursor(Step::PageUp, 9));
+    assert!(browser.move_cursor(Step::PageUp, 9, 1));
     assert_eq!(browser.cursor(), 0);
-    assert!(browser.move_cursor(Step::End, 1));
+    assert!(browser.move_cursor(Step::End, 1, 1));
     assert_eq!(browser.cursor(), 3);
-    assert!(browser.move_cursor(Step::Home, 1));
+    assert!(browser.move_cursor(Step::Home, 1, 1));
     assert_eq!(browser.cursor(), 0);
 
-    browser.move_cursor(Step::Down, 1);
-    assert!(browser.extend_range(Step::End, 1));
+    browser.move_cursor(Step::Down, 1, 1);
+    assert!(browser.extend_range(Step::End, 1, 1));
     assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
-    assert!(browser.extend_range(Step::PageUp, 1));
+    assert!(browser.extend_range(Step::PageUp, 1, 1));
     assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
+}
+
+#[test]
+fn grid_steps_move_across_by_one_and_down_by_a_line_and_stop_at_the_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+        touch(temp.path(), name);
+    }
+    let mut browser = opened(temp.path());
+    let grid = 3;
+    let cases = [
+        (Step::Left, 0, false),
+        (Step::Up, 0, false),
+        (Step::Right, 1, true),
+        (Step::Down, 4, true),
+        (Step::Down, 7, true),
+        (Step::Down, 7, false),
+        (Step::Right, 7, false),
+        (Step::Left, 6, true),
+        (Step::Up, 3, true),
+        (Step::Up, 0, true),
+        (Step::PageDown, 6, true),
+        (Step::PageUp, 0, true),
+        (Step::End, 7, true),
+        (Step::Home, 0, true),
+    ];
+    for (step, expected, moved) in cases {
+        assert_eq!(browser.move_cursor(step, 2, grid), moved, "{step:?}");
+        assert_eq!(browser.cursor(), expected, "{step:?}");
+    }
+    browser.set_cursor(5);
+    assert!(browser.move_cursor(Step::Up, 2, grid));
+    assert_eq!(browser.cursor(), 2);
+    assert!(browser.move_cursor(Step::Up, 2, grid));
+    assert_eq!(browser.cursor(), 0);
+}
+
+#[test]
+fn left_and_right_do_nothing_in_a_one_column_list() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    assert!(!browser.move_cursor(Step::Right, 1, 1));
+    assert!(!browser.move_cursor(Step::Left, 1, 1));
+    assert_eq!(browser.cursor(), 1);
 }
 
 #[test]
@@ -389,18 +434,31 @@ fn a_row_clicked_while_a_folder_loads_keeps_the_cursor_once_it_settles() {
 }
 
 #[test]
+fn shift_left_and_right_pick_nothing_in_a_one_column_list() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    for step in [Step::Left, Step::Right] {
+        assert!(!browser.extend_range(step, 1, 1), "{step:?}");
+    }
+    assert!(picked(&browser).is_empty());
+    assert!(browser.extend_range(Step::Right, 1, 3));
+    assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
+}
+
+#[test]
 fn a_shift_run_keeps_its_start_when_rows_appear_above_it() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
     browser.set_cursor(1);
-    browser.extend_range(Step::Down, 1);
+    browser.extend_range(Step::Down, 1, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
 
     touch(temp.path(), "0.txt");
     wait_until(&mut browser, "the new file", |browser| {
         browser.row_count() == 5
     });
-    browser.extend_range(Step::Down, 1);
+    browser.extend_range(Step::Down, 1, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
 }
 
@@ -430,7 +488,7 @@ fn a_cursor_step_ends_the_typed_run() {
     let now = Instant::now();
     browser.jump('b', now);
     assert_eq!(browser.jump_run(now), "b");
-    browser.move_cursor(Step::Down, 1);
+    browser.move_cursor(Step::Down, 1, 1);
     assert_eq!(browser.jump_run(now), "");
 }
 
@@ -438,19 +496,19 @@ fn a_cursor_step_ends_the_typed_run() {
 fn shift_steps_pick_a_run_from_where_the_run_started() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
-    browser.move_cursor(Step::Down, 1);
-    browser.extend_range(Step::Down, 1);
-    browser.extend_range(Step::Down, 1);
+    browser.move_cursor(Step::Down, 1, 1);
+    browser.extend_range(Step::Down, 1, 1);
+    browser.extend_range(Step::Down, 1, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt", "d.txt"]);
     assert_eq!(browser.cursor(), 3);
 
-    browser.extend_range(Step::Up, 1);
+    browser.extend_range(Step::Up, 1, 1);
     assert_eq!(picked(&browser), ["b.txt", "c.txt"]);
 
     browser.end_range();
-    browser.move_cursor(Step::Up, 1);
-    browser.move_cursor(Step::Up, 1);
-    browser.extend_range(Step::Up, 1);
+    browser.move_cursor(Step::Up, 1, 1);
+    browser.move_cursor(Step::Up, 1, 1);
+    browser.extend_range(Step::Up, 1, 1);
     assert_eq!(picked(&browser), ["a.txt", "b.txt", "c.txt"]);
 }
 
