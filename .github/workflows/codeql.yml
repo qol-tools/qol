@@ -2,9 +2,6 @@ name: CodeQL
 
 on:
   # Markdown holds no code any analyzer reads.
-  push:
-    branches: [main]
-    paths-ignore: ["**/*.md"]
   pull_request:
     branches: [main]
     paths-ignore: ["**/*.md"]
@@ -14,17 +11,13 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same ref replaces the analysis of the commit it buried,
-# so a burst of merges analyzes main once, from the commit that lands last.
 concurrency:
-  group: "${{ startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') && format('codeql-bump-{0}', github.sha) || format('codeql-{0}-{1}', github.event_name, github.ref) }}"
+  group: codeql-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})
-    # The Versioning bump commit changes only version strings, which no analyzer reads.
-    if: "${{ !startsWith(github.event.head_commit.message, 'chore(plugins): bump plugin versions') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
