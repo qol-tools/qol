@@ -90,11 +90,16 @@ fn classify(path: &Path, metadata: &fs::Metadata, real_sizes: bool) -> (EntryKin
     match fs::metadata(path) {
         Ok(target) if target.is_dir() => (EntryKind::Link, Size::Blank, true),
         Ok(target) => (EntryKind::Link, file_size(&target, real_sizes), false),
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            (EntryKind::Link, Size::Unreadable, false)
-        }
-        Err(_) => (EntryKind::BrokenLink, Size::Blank, false),
+        Err(error) if target_is_gone(&error) => (EntryKind::BrokenLink, Size::Blank, false),
+        Err(_) => (EntryKind::Link, Size::Unreadable, false),
     }
+}
+
+fn target_is_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    ) || crate::places::is_link_loop(error)
 }
 
 fn file_size(metadata: &fs::Metadata, real_sizes: bool) -> Size {

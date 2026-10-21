@@ -5,6 +5,7 @@ mod user_dirs;
 
 use std::ffi::{CString, OsStr};
 use std::fs::{self, DirEntry, FileType, Metadata};
+use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
@@ -82,4 +83,8 @@ pub(crate) fn is_pseudo_fs(folder: &Path) -> bool {
             | libc::CGROUP_SUPER_MAGIC
             | libc::CGROUP2_SUPER_MAGIC
     )
+}
+
+pub(crate) fn is_link_loop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
 }

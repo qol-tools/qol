@@ -419,7 +419,7 @@ fn a_reason_reads_on_its_own_beside_the_typed_path() {
         (FailureReason::Permission, "No permission"),
         (FailureReason::Missing, "Does not exist"),
         (FailureReason::NotAFolder, "Not a folder"),
-        (FailureReason::Other("busy".into()), "Could not read: busy"),
+        (FailureReason::Other("busy".into()), "Could not read"),
     ];
     for (reason, message) in cases {
         assert_eq!(reason.to_string(), message);
@@ -535,6 +535,7 @@ fn pipes_sockets_devices_and_broken_links_have_their_own_kind_and_no_size() {
     symlink(temp.path().join("nowhere"), temp.path().join("broken")).unwrap();
     symlink(temp.path().join("looped"), temp.path().join("looped")).unwrap();
     symlink("/dev/null", temp.path().join("null")).unwrap();
+    symlink(temp.path().join("fifo/inside"), temp.path().join("through")).unwrap();
 
     let listing = listing_of(temp.path());
     let kinds: Vec<(&str, EntryKind, Size)> = listing
@@ -550,6 +551,7 @@ fn pipes_sockets_devices_and_broken_links_have_their_own_kind_and_no_size() {
             ("looped", EntryKind::BrokenLink, Size::Blank),
             ("null", EntryKind::Link, Size::Blank),
             ("socket", EntryKind::Socket, Size::Blank),
+            ("through", EntryKind::BrokenLink, Size::Blank),
         ]
     );
     let devices = listing_of(Path::new("/dev"));

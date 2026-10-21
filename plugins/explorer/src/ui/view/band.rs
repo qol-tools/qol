@@ -124,6 +124,7 @@ fn reason_slot(window: &mut Window) -> f32 {
         FailureReason::Permission,
         FailureReason::Missing,
         FailureReason::NotAFolder,
+        FailureReason::Other(String::new()),
     ]
     .iter()
     .map(|reason| laid_out_width(window, &reason.to_string(), TextStyle::Detail))

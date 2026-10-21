@@ -8,12 +8,14 @@ use std::thread;
 use qol_watch::{Watch, WatchError, WatchNotice, WatchRoot};
 
 const FOLLOWED_LINK_FOLDERS: usize = 64;
+const FOLLOWED_LINKS: usize = 1024;
 
 #[derive(Default)]
 pub(super) struct FolderWatch {
     watch: Option<Watch>,
     chain: Option<Watch>,
     links: Arc<Mutex<Option<Watch>>>,
+    followed: Vec<(PathBuf, Option<(u64, u64)>)>,
     watched: Option<PathBuf>,
     changed: Arc<AtomicBool>,
     gone: Arc<AtomicBool>,
@@ -27,6 +29,7 @@ impl FolderWatch {
     ) -> Result<(), WatchError> {
         self.changed.store(false, Ordering::Relaxed);
         self.links = Arc::default();
+        self.followed.clear();
         self.watch_nearest(folder, wake)
     }
 
@@ -54,11 +57,17 @@ impl FolderWatch {
     pub(super) fn follow_links(
         &mut self,
         folder: &Path,
-        links: Vec<PathBuf>,
+        links: impl IntoIterator<Item = (PathBuf, Option<(u64, u64)>)>,
         wake: impl Fn() + Send + 'static,
     ) {
+        let links: Vec<_> = links.into_iter().take(FOLLOWED_LINKS).collect();
+        if links == self.followed {
+            return;
+        }
         self.links = Arc::default();
-        if links.is_empty() {
+        let paths: Vec<PathBuf> = links.iter().map(|(path, _)| path.clone()).collect();
+        self.followed = links;
+        if paths.is_empty() {
             return;
         }
         let slot = Arc::downgrade(&self.links);
@@ -67,7 +76,7 @@ impl FolderWatch {
         let spawned = thread::Builder::new()
             .name("qol-explorer-links".into())
             .spawn(move || {
-                let targets = link_targets(&folder, &links);
+                let targets = link_targets(&folder, &paths);
                 if targets.is_empty() {
                     return;
                 }

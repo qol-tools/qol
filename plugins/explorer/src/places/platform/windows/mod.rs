@@ -1,8 +1,10 @@
 use std::ffi::OsStr;
 use std::fs::{DirEntry, FileType, Metadata};
+use std::io;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use windows_sys::Win32::Foundation::ERROR_CANT_RESOLVE_FILENAME;
 use windows_sys::Win32::Storage::FileSystem::{
     GetDriveTypeW, GetLogicalDrives, FILE_ATTRIBUTE_HIDDEN,
 };
@@ -62,6 +64,10 @@ pub(crate) fn special_kind(_file_type: &FileType) -> Option<EntryKind> {
 
 pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
     false
+}
+
+pub(crate) fn is_link_loop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(ERROR_CANT_RESOLVE_FILENAME as i32)
 }
 
 fn drive(letter: char) -> Option<Mount> {

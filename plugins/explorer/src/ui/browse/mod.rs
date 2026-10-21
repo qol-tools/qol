@@ -418,7 +418,7 @@ impl Browser {
         self.picks.end_range();
         self.show_hidden = !self.show_hidden;
         self.refresh_rows();
-        if !self.show_hidden {
+        if !self.show_hidden && *self.listing.state() == ListingState::Done {
             self.forget_vanished_picks();
         }
         if let Some(row) = at.and_then(|path| self.row_of(&path)) {
@@ -725,8 +725,7 @@ impl Browser {
                 !entry.opens_as_folder
                     && matches!(entry.kind, EntryKind::Link | EntryKind::BrokenLink)
             })
-            .map(|entry| entry.path.clone())
-            .collect();
+            .map(|entry| (entry.path.clone(), entry.id));
         let folder = self.folder().to_path_buf();
         self.watch.follow_links(&folder, links, waker(&self.wake));
     }

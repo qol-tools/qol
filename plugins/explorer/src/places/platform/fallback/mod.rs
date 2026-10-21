@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{DirEntry, FileType, Metadata};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::listing::EntryKind;
@@ -35,5 +36,9 @@ pub(crate) fn special_kind(_file_type: &FileType) -> Option<EntryKind> {
 }
 
 pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
+    false
+}
+
+pub(crate) fn is_link_loop(_error: &io::Error) -> bool {
     false
 }

@@ -333,6 +333,27 @@ fn hiding_hidden_entries_drops_their_picks() {
 }
 
 #[test]
+fn hiding_hidden_entries_while_a_folder_loads_keeps_the_picks_not_listed_yet() {
+    let temp = abc_folder();
+    touch(temp.path(), ".hidden");
+    let inner = make_folder(temp.path(), "inner");
+    let mut browser = opened(temp.path());
+    browser.toggle_hidden();
+    for name in [".hidden", "b.txt"] {
+        let row = names(&browser).iter().position(|shown| shown == name);
+        browser.add_pick(row.unwrap());
+    }
+    browser.go(inner, 0.0);
+    settle(&mut browser);
+
+    browser.back(0.0);
+    browser.toggle_hidden();
+    settle(&mut browser);
+    assert_eq!(picked(&browser), ["b.txt"]);
+    assert_eq!(browser.note().count, "1 picked");
+}
+
+#[test]
 fn a_shift_click_picks_from_the_cursor_and_the_next_one_moves_the_far_end() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
@@ -1301,6 +1322,41 @@ fn a_link_to_a_file_elsewhere_follows_its_size_and_when_it_breaks() {
     fs::write(&target, "back").unwrap();
     wait_until(&mut browser, "the mended link", |browser| {
         link(browser) == (EntryKind::Link, Size::Bytes(4))
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn a_refresh_keeps_the_link_watch_and_a_replaced_link_follows_its_new_target() {
+    use std::os::unix::fs::symlink;
+
+    use crate::listing::Size;
+
+    let temp = tempfile::tempdir().unwrap();
+    let first = make_folder(temp.path(), "first");
+    let second = make_folder(temp.path(), "second");
+    fs::write(first.join("a.txt"), "a").unwrap();
+    fs::write(second.join("b.txt"), "bb").unwrap();
+    let shown = make_folder(temp.path(), "shown");
+    symlink(first.join("a.txt"), shown.join("link")).unwrap();
+    let mut browser = opened(&shown);
+    wait_until(&mut browser, "the link watch", Browser::follows_links);
+
+    touch(&shown, "other.txt");
+    wait_until(&mut browser, "the new file", |browser| {
+        browser.row_count() == 2
+    });
+    assert!(browser.follows_links());
+
+    symlink(second.join("b.txt"), shown.join("next")).unwrap();
+    fs::rename(shown.join("next"), shown.join("link")).unwrap();
+    let size = |browser: &Browser| browser.entry(0).unwrap().size;
+    wait_until(&mut browser, "the new target", |browser| {
+        browser.row_count() == 2 && size(browser) == Size::Bytes(2) && browser.follows_links()
+    });
+    fs::write(second.join("b.txt"), "bbbb").unwrap();
+    wait_until(&mut browser, "the new target's size", |browser| {
+        size(browser) == Size::Bytes(4)
     });
 }
 

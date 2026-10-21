@@ -34,7 +34,7 @@ impl fmt::Display for FailureReason {
             Self::Permission => f.write_str("No permission"),
             Self::Missing => f.write_str("Does not exist"),
             Self::NotAFolder => f.write_str("Not a folder"),
-            Self::Other(message) => write!(f, "Could not read: {message}"),
+            Self::Other(_) => f.write_str("Could not read"),
         }
     }
 }

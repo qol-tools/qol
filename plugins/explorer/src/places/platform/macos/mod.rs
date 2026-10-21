@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{self, DirEntry, FileType, Metadata};
+use std::io;
 use std::os::macos::fs::MetadataExt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
@@ -69,4 +70,8 @@ pub(crate) fn special_kind(file_type: &FileType) -> Option<EntryKind> {
 
 pub(crate) fn is_pseudo_fs(_folder: &Path) -> bool {
     false
+}
+
+pub(crate) fn is_link_loop(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
 }
