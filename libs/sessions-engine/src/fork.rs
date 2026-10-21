@@ -214,12 +214,34 @@ pub(super) fn validate_brief(brief: &str) -> Result<()> {
     Ok(())
 }
 
-fn delivery_line(key: &str) -> String {
-    format!("When your work leaves commits on a branch, push the branch and open a pull request without asking, then arm auto-merge with `gh pr merge --auto`, unless the change involves design (UI, or architecture such as a new command, a file format or a large refactor): open that as a draft and report that it waits for the user's approval. Put `Session: {key}` as the last line of the pull request body. Never force-push, and never mark a draft ready yourself. When your pull request has merged, or nothing is left that anyone must do, send one line to your parent with session_send kind report and done true, then end your turn; your tab closes when that turn ends. When only the user can decide something, send it to your parent with session_send kind ask instead of asking in your own terminal; the answer comes back as a message. When a check fails and you cannot fix it, report the pull request and what broke to your parent.")
+fn in_qol_repo(cwd: &str) -> bool {
+    Path::new(cwd).components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| name.starts_with("qol-"))
+    })
+}
+
+fn delivery_line(key: &str, cwd: &str) -> String {
+    let (delivery, landed, failure) = match in_qol_repo(cwd) {
+        true => (
+            format!("When your work leaves commits on a branch, push the branch and open a pull request without asking, then arm auto-merge with `gh pr merge --auto`, unless the change involves design (UI, or architecture such as a new command, a file format or a large refactor): open that as a draft and report that it waits for the user's approval. Put `Session: {key}` as the last line of the pull request body. Never force-push, and never mark a draft ready yourself."),
+            "your pull request has merged",
+            "report the pull request and what broke",
+        ),
+        false => (
+            "This is not a qol-tools repository: deliver your commits the way its own instructions (CLAUDE.md, AGENTS.md) say, and open a pull request only when they ask for one.".to_owned(),
+            "your work has landed",
+            "report what broke",
+        ),
+    };
+    format!("{delivery} When {landed}, or nothing is left that anyone must do, send one line to your parent with session_send kind report and done true, then end your turn; your tab closes when that turn ends. When only the user can decide something, send it to your parent with session_send kind ask instead of asking in your own terminal; the answer comes back as a message. When a check fails and you cannot fix it, {failure} to your parent.")
 }
 
 pub(super) fn fork_prompt(
     key: &str,
+    cwd: &str,
     brief_path: &Path,
     parent: Option<&str>,
     chat_path: Option<&Path>,
@@ -246,7 +268,7 @@ pub(super) fn fork_prompt(
     format!(
         "{FORK_HEADER}\nYou are a detached architect and this terminal is the root of a new tree. Nothing collects your result, no round is open on you, and there is no completion marker to print. Own the problem end to end and report to the user in this terminal.\n\n{BRIEF_LEAD}{}{BRIEF_END}, then work the problem.{chat}\n\n{lineage} {contact} Spawn your own lanes if you need them.\n\n{}",
         brief_path.display(),
-        delivery_line(key)
+        delivery_line(key, cwd)
     )
 }
 
@@ -418,9 +440,20 @@ pub(super) fn fork_linked(
         }
         _ => None,
     };
+    let resolved_cwd = super::spawn::canonicalize_cwd(cwd)?;
+    let resolved_cwd = resolved_cwd.to_string_lossy();
     let prompt = brief_path
         .as_deref()
-        .map(|path| fork_prompt(key, path, parent, chat_path.as_deref(), report))
+        .map(|path| {
+            fork_prompt(
+                key,
+                &resolved_cwd,
+                path,
+                parent,
+                chat_path.as_deref(),
+                report,
+            )
+        })
         .unwrap_or_default();
     let mut record = ForkRecord {
         key: key.to_owned(),
@@ -793,6 +826,8 @@ pub(super) fn flag_value(args: &[OsString], index: &mut usize, flag: &str) -> Re
 mod tests {
     use super::*;
 
+    const QOL_CWD: &str = "/git/worktrees/topic/qol-monorepo/libs";
+
     fn args(values: &[&str]) -> Vec<OsString> {
         values.iter().map(OsString::from).collect()
     }
@@ -859,6 +894,7 @@ mod tests {
     fn the_fork_prompt_points_at_the_brief_and_forbids_reporting_back() {
         let prompt = fork_prompt(
             "chase",
+            QOL_CWD,
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
@@ -870,7 +906,7 @@ mod tests {
         assert!(prompt.contains("no completion marker"));
         assert!(prompt.contains("v1:kitty:7:100"));
         assert!(
-            prompt.ends_with(&delivery_line("chase")),
+            prompt.ends_with(&delivery_line("chase", QOL_CWD)),
             "a fork delivers its own pull request instead of asking: {prompt}"
         );
         assert!(prompt.contains("arm auto-merge with `gh pr merge --auto`"));
@@ -887,9 +923,59 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_outside_a_qol_repo_follows_that_repo_instead_of_opening_a_pull_request() {
+        for cwd in [
+            "/git/kcd2-m4a1",
+            "/git/worktrees/kcd2-m4a1-probe",
+            "/git/qolonly",
+        ] {
+            let prompt = fork_prompt(
+                "chase",
+                cwd,
+                Path::new("/data/forks/chase-1.md"),
+                Some("v1:kitty:7:100"),
+                None,
+                true,
+            );
+            assert!(prompt.ends_with(&delivery_line("chase", cwd)), "{prompt}");
+            assert!(
+                prompt.contains("open a pull request only when they ask for one"),
+                "{prompt}"
+            );
+            assert!(!prompt.contains("gh pr merge --auto"), "{prompt}");
+            assert!(!prompt.contains("Session: chase"), "{prompt}");
+            assert!(prompt.contains("kind report and done true"), "{prompt}");
+        }
+        for cwd in [
+            "/git/qol-skills",
+            "/git/qol-monorepo-worktrees/topic",
+            QOL_CWD,
+        ] {
+            assert!(
+                delivery_line("chase", cwd).contains("gh pr merge --auto"),
+                "{cwd}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_into_a_qol_repo_keeps_the_pull_request_delivery() {
+        let root = tempfile::TempDir::new().unwrap();
+        let repo = root.path().join("qol-monorepo");
+        std::fs::create_dir(&repo).unwrap();
+        let link = root.path().join("checkout");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+        let resolved = super::super::spawn::canonicalize_cwd(&link.to_string_lossy()).unwrap();
+        assert!(delivery_line("chase", &resolved.to_string_lossy()).contains("gh pr merge --auto"));
+        assert!(!delivery_line("chase", &link.to_string_lossy()).contains("gh pr merge --auto"));
+    }
+
+    #[test]
     fn a_reporting_fork_prompt_points_at_session_send_instead_of_forbidding_contact() {
         let prompt = fork_prompt(
             "chase",
+            QOL_CWD,
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             None,
@@ -904,6 +990,7 @@ mod tests {
     fn the_fork_prompt_names_the_chat_copy_when_one_exists() {
         let prompt = fork_prompt(
             "chase",
+            QOL_CWD,
             Path::new("/data/forks/chase-1.md"),
             Some("v1:kitty:7:100"),
             Some(Path::new("/data/forks/chase-1.chat.md")),
@@ -974,7 +1061,7 @@ mod tests {
         let brief = store.write_brief("chase", 7, "the brief").unwrap();
         store.record(&fork_record("chase", &brief)).unwrap();
         for chat in [None, Some(Path::new("/data/forks/chase-7.chat.md"))] {
-            let prompt = fork_prompt("chase", &brief, Some("parent"), chat, true);
+            let prompt = fork_prompt("chase", QOL_CWD, &brief, Some("parent"), chat, true);
             assert_eq!(
                 brief_in_prompt(&prompt),
                 Some(brief.display().to_string().as_str())
