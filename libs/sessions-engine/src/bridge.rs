@@ -3092,8 +3092,8 @@ mod tests {
             1
         );
         assert_eq!(get_text, outcome.reads + 2);
-        assert_eq!(ls, outcome.reads / 10 + 5);
-        assert!(ls - 4 <= outcome.reads.div_ceil(10) + 1);
+        assert_eq!(ls, outcome.reads / 10 + 6);
+        assert!(ls - 5 <= outcome.reads.div_ceil(10) + 1);
     }
 
     #[test]

@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn the_quiet_clock_restarts_whenever_the_box_changes() {
         let binding = SessionBinding::new(
-            SessionId::new(BackendId::new("kitty").unwrap(), "k1:7").unwrap(),
+            SessionId::new(BackendId::new("kitty").unwrap(), "k1_7").unwrap(),
             42,
         )
         .unwrap();

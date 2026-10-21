@@ -2835,6 +2835,19 @@ mod tests {
             if self.fail_send.load(Ordering::Relaxed) {
                 return Err(TerminalError::TargetMissing(target.clone()));
             }
+            if mode == DeliveryMode::Insert {
+                let echo = text.lines().last().unwrap_or_default();
+                let mut screens = self.screens.lock().unwrap();
+                if screens.is_empty() {
+                    if let Some(last) = self.last.lock().unwrap().clone() {
+                        screens.push_back(last);
+                    }
+                }
+                screens.push_front(claude_screen(
+                    &format!("\u{1b}[m\u{276F}\u{a0}{echo}"),
+                    false,
+                ));
+            }
             Ok(())
         }
 
@@ -4809,8 +4822,8 @@ mod tests {
         let calls = backend.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            9,
-            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the transcript gate on each marker sighting, the completion capture and the delivery re-check each add a discovery"
+            12,
+            "the first marker poll must not emit; the second confirms, then each successful poll's early external-id capture, the transcript gate on each marker sighting, the completion capture and the delivery re-check each add a discovery, and the typing guard reads the composer twice with a discovery each"
         );
         let sent = backend.sent.lock().unwrap();
         assert_eq!(sent.len(), 1);
@@ -5153,6 +5166,7 @@ mod tests {
             vec![
                 marker.clone(),
                 marker,
+                CLAUDE_PLACEHOLDER.to_owned(),
                 CLAUDE_PLACEHOLDER.to_owned(),
                 CLAUDE_DRAFT.to_owned(),
             ],
