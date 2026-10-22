@@ -377,6 +377,12 @@ impl Browser {
         self.range_to(self.stepped(step, page, columns))
     }
 
+    pub fn click_to(&mut self, row: usize, scroll: f32) -> bool {
+        let had_picks = !self.picks.is_empty();
+        self.picks.clear();
+        self.place_cursor(row, scroll) || had_picks
+    }
+
     pub fn range_to(&mut self, row: usize) -> bool {
         if self.loading() || row >= self.rows.len() {
             return false;

@@ -516,7 +516,7 @@ impl ExplorerView {
         let changed = match self.browser.row_of(path) {
             None => false,
             Some(row) => match click {
-                Click::Cursor => self.browser.place_cursor(row, scroll),
+                Click::Cursor => self.browser.click_to(row, scroll),
                 Click::Range => self.browser.range_to(row),
                 Click::AddPick => self.browser.add_pick(row),
                 Click::Open => {

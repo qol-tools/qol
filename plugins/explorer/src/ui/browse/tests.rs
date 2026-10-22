@@ -421,6 +421,18 @@ fn a_shift_click_picks_from_the_cursor_and_the_next_one_moves_the_far_end() {
 }
 
 #[test]
+fn a_plain_click_drops_the_picks_and_moves_the_cursor() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    browser.set_cursor(1);
+    assert!(browser.range_to(3));
+    assert!(browser.click_to(0, 0.0));
+    assert!(picked(&browser).is_empty());
+    assert_eq!(browser.cursor(), 0);
+    assert_eq!(browser.note().count, "4 items");
+}
+
+#[test]
 fn a_row_clicked_while_a_folder_loads_keeps_the_cursor_once_it_settles() {
     let temp = abc_folder();
     let mut browser = opened(temp.path());
