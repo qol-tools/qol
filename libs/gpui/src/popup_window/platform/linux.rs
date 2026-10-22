@@ -146,6 +146,7 @@ impl WindowGeometrySession {
     }
 
     pub fn reposition(&self, x: i32, y: i32) -> bool {
+        let (x, y) = frame_origin_for(&*self.conn, self.wid, self.target, x, y);
         let aux = ConfigureWindowAux::new().x(x).y(y);
         let moved = self.conn.configure_window(self.target, &aux).is_ok();
         let flushed = self.conn.flush().is_ok();
@@ -186,6 +187,11 @@ impl WindowGeometrySession {
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
         pointer_on(&*self.conn, self.root, self.wid)
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
+        let pointer = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        Some(button_pressed(&pointer))
     }
 
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
@@ -375,11 +381,15 @@ fn pointer_on(
     wid: Window,
 ) -> Option<crate::popup_window::PointerOnWindow> {
     let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
-    let pressed = u16::from(pointer.mask)
-        & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
-        != 0;
+    let pressed = button_pressed(&pointer);
     let inside = pointer_inside(conn, root, wid, &pointer)?;
     Some(crate::popup_window::PointerOnWindow { inside, pressed })
+}
+
+fn button_pressed(pointer: &QueryPointerReply) -> bool {
+    u16::from(pointer.mask)
+        & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
+        != 0
 }
 
 fn pointer_inside(
@@ -1082,42 +1092,16 @@ fn lock_window_size(conn: &impl Connection, wid: u32) {
 }
 
 fn set_window_fixed_size(conn: &impl Connection, wid: u32, size: (i32, i32)) -> bool {
-    set_size_hints(
-        conn,
-        wid,
-        x11rb::properties::WmSizeHints {
-            min_size: Some(size),
-            max_size: Some(size),
-            ..Default::default()
-        },
-    )
-}
-
-fn set_size_hints(conn: &impl Connection, wid: u32, hints: x11rb::properties::WmSizeHints) -> bool {
+    let hints = x11rb::properties::WmSizeHints {
+        min_size: Some(size),
+        max_size: Some(size),
+        ..Default::default()
+    };
     hints
         .set(conn, wid, AtomEnum::WM_NORMAL_HINTS)
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some()
-}
-
-pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
-    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
-    else {
-        return false;
-    };
-    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        return false;
-    };
-    let size = (
-        size.width.to_f64().round().max(1.0) as i32,
-        size.height.to_f64().round().max(1.0) as i32,
-    );
-    let hints = x11rb::properties::WmSizeHints {
-        min_size: Some(size),
-        ..Default::default()
-    };
-    set_size_hints(&conn, wid, hints) && conn.flush().is_ok()
 }
 
 fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
@@ -2054,11 +2038,24 @@ fn window_pid_matches(conn: &impl Connection, wid: u32, pid_atom: u32, pid: u32)
 
 fn move_window(conn: &impl Connection, root: u32, wid: u32, x: i32, y: i32) -> bool {
     let target = top_level_frame(conn, root, wid).unwrap_or(wid);
+    let (x, y) = frame_origin_for(conn, wid, target, x, y);
     let aux = ConfigureWindowAux::new().x(x).y(y);
     let moved = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
     log::debug!("move client={wid} target={target} root={root} to=({x},{y}) ok={moved}");
     moved
+}
+
+fn frame_origin_for(conn: &impl Connection, wid: u32, target: u32, x: i32, y: i32) -> (i32, i32) {
+    if target == wid {
+        return (x, y);
+    }
+    conn.translate_coordinates(wid, target, 0, 0)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map_or((x, y), |inset| {
+            (x - i32::from(inset.dst_x), y - i32::from(inset.dst_y))
+        })
 }
 
 fn set_window_bounds(

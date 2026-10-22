@@ -48,6 +48,10 @@ impl WindowGeometrySession {
         None
     }
 
+    pub fn pressed(&self) -> Option<bool> {
+        None
+    }
+
     pub fn set_input_region(&self, _x: i16, _y: i16, _width: u16, _height: u16) -> bool {
         false
     }
@@ -197,10 +201,6 @@ pub fn show_normal_window_by_title(_title: &str) -> bool {
 
 pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
     true
-}
-
-pub fn set_window_min_size_by_title(_title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
-    false
 }
 
 pub fn disable_window_shadow(_title: &str) -> bool {

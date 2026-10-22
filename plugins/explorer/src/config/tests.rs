@@ -15,15 +15,25 @@ fn contract_defaults_match_runtime_type() {
 
 #[test]
 fn every_view_size_round_trips_through_its_contract_option() {
-    for (size, option) in [
+    let cases = [
         (ViewSize::Compact, "compact"),
         (ViewSize::List, "list"),
         (ViewSize::Roomy, "roomy"),
         (ViewSize::Icons, "icons"),
         (ViewSize::BigIcons, "big_icons"),
-    ] {
+    ];
+    let spec = qol_config::contract::parse_spec_str(CONFIG_CONTRACT).expect("contract parses");
+    let options = &spec.field("view_size").expect("view_size field").options;
+    assert_eq!(
+        options,
+        &cases.map(|(_, option)| option.to_string()).to_vec()
+    );
+    for (size, option) in cases {
         assert_eq!(serde_json::to_value(size).unwrap(), json!(option));
-        assert!(CONFIG_CONTRACT.contains(&format!("\"{option}\"")));
+        assert_eq!(
+            serde_json::from_value::<ViewSize>(json!(option)).unwrap(),
+            size
+        );
     }
 }
 

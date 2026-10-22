@@ -445,11 +445,7 @@ pub(crate) fn open(
         .title("QoL Shot Editor")
         .size(size(px(layout.window.0), px(layout.window.1)))
         .min_size(size(px(min_size.0), px(min_size.1)))
-        .remember(WindowMemory::reopened_by_action(
-            WINDOW_MEMORY_KEY,
-            crate::PLUGIN_ID,
-            "preview",
-        ))
+        .remember(WindowMemory::size_and_place(WINDOW_MEMORY_KEY))
         .show_focused_on(&monitor, cx, move |dismisser, _window, cx| {
             EditorView::new(document, dismisser, cx)
         })?;

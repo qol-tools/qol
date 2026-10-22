@@ -35,7 +35,6 @@ const PICKING_CHROME: f32 = 2.0 * qol_gpui::theme::LINE
 const MIN_ROWS: usize = 3;
 pub const MIN_WINDOW_HEIGHT: f32 = PICKING_CHROME + MIN_ROWS as f32 * ROW_H;
 const CONTENT_MAX_W: f32 = 720.0;
-const RESIZE_EDGE: f32 = 5.0;
 const REMOVE_KEY: Key = Key::BACKSPACE.platform();
 
 fn continue_or_quit_hint(cx: &mut Context<RemoveAppView>) -> gpui::Div {
@@ -995,7 +994,7 @@ fn clear_of_resize_edge(cue: impl IntoElement) -> gpui::Div {
         .top_0()
         .bottom_0()
         .left_0()
-        .right(px(RESIZE_EDGE))
+        .right(px(qol_gpui::resize_frame::EDGE_BAND))
         .child(cue)
 }
 
@@ -1197,9 +1196,11 @@ mod tests {
 
     #[test]
     fn minimum_fits_a_480_pixel_screen_with_a_panel() {
-        assert_eq!(
-            MIN_WINDOW_HEIGHT, 290.0,
-            "fits under a 48 px panel on a 480 px screen"
+        let screen = 480.0;
+        let panel = 48.0;
+        assert!(
+            MIN_WINDOW_HEIGHT <= screen - panel,
+            "{MIN_WINDOW_HEIGHT} leaves no room on a {screen} px screen under a {panel} px panel"
         );
     }
 

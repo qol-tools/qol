@@ -1718,6 +1718,11 @@ impl Window {
         self.platform_window.resize(size);
     }
 
+    /// Set the minimum content size the user can resize the window to.
+    pub fn set_window_min_size(&self, size: Size<Pixels>) {
+        self.platform_window.set_window_min_size(size);
+    }
+
     /// Returns whether or not the window is currently fullscreen
     pub fn is_fullscreen(&self) -> bool {
         self.platform_window.is_fullscreen()

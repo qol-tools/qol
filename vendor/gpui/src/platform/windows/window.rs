@@ -575,6 +575,10 @@ impl PlatformWindow for WindowsWindow {
         self.0.state.borrow().content_size()
     }
 
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        self.0.state.borrow_mut().min_size = Some(size);
+    }
+
     fn resize(&mut self, size: Size<Pixels>) {
         let hwnd = self.0.hwnd;
         let bounds =

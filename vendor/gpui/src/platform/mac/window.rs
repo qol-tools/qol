@@ -982,6 +982,15 @@ impl PlatformWindow for MacWindow {
             .detach();
     }
 
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        unsafe {
+            self.0.lock().native_window.setContentMinSize_(NSSize {
+                width: size.width.to_f64(),
+                height: size.height.to_f64(),
+            });
+        }
+    }
+
     fn merge_all_windows(&self) {
         let native_window = self.0.lock().native_window;
         unsafe extern "C" fn merge_windows_async(context: *mut std::ffi::c_void) {

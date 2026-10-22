@@ -466,6 +466,7 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_bounds(&self) -> WindowBounds;
     fn content_size(&self) -> Size<Pixels>;
     fn resize(&mut self, size: Size<Pixels>);
+    fn set_window_min_size(&self, _size: Size<Pixels>) {}
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;

@@ -1,94 +1,62 @@
-use std::path::PathBuf;
-
 use gpui::{point, px, size, Bounds, Pixels};
-use serde::{Deserialize, Serialize};
 
 use crate::storage::paths;
+use crate::storage::persist::{self, UnfoldedPanel};
 
-const FILE_NAME: &str = "panel-unfolded.json";
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-struct UnfoldedPanel {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-impl UnfoldedPanel {
-    fn of(bounds: Bounds<Pixels>) -> Self {
-        Self {
-            x: bounds.origin.x.to_f64(),
-            y: bounds.origin.y.to_f64(),
-            width: bounds.size.width.to_f64(),
-            height: bounds.size.height.to_f64(),
-        }
-    }
-
-    fn bounds(self) -> Option<Bounds<Pixels>> {
-        let drawable = self.width > 0.0 && self.height > 0.0;
-        let finite = [self.x, self.y, self.width, self.height]
-            .iter()
-            .all(|value| value.is_finite());
-        (drawable && finite).then(|| {
-            Bounds::new(
-                point(px(self.x as f32), px(self.y as f32)),
-                size(px(self.width as f32), px(self.height as f32)),
-            )
-        })
+fn record_of(bounds: Bounds<Pixels>) -> UnfoldedPanel {
+    UnfoldedPanel {
+        x: bounds.origin.x.to_f64(),
+        y: bounds.origin.y.to_f64(),
+        width: bounds.size.width.to_f64(),
+        height: bounds.size.height.to_f64(),
     }
 }
 
-fn path() -> Option<PathBuf> {
-    Some(paths::state_path()?.with_file_name(FILE_NAME))
+fn bounds_of(record: UnfoldedPanel) -> Option<Bounds<Pixels>> {
+    let drawable = record.width > 0.0 && record.height > 0.0;
+    let finite = [record.x, record.y, record.width, record.height]
+        .iter()
+        .all(|value| value.is_finite());
+    (drawable && finite).then(|| {
+        Bounds::new(
+            point(px(record.x as f32), px(record.y as f32)),
+            size(px(record.width as f32), px(record.height as f32)),
+        )
+    })
 }
 
 pub fn save(unfolded: Bounds<Pixels>) {
-    let Some(path) = path() else {
-        return;
-    };
-    let json = match serde_json::to_vec(&UnfoldedPanel::of(unfolded)) {
-        Ok(json) => json,
-        Err(error) => {
-            log::warn!("[cli-sessions] unfolded panel encode failed: {error}");
-            return;
-        }
-    };
-    if let Err(error) = qol_fs::atomic_write(&path, &json) {
-        log::warn!("[cli-sessions] unfolded panel write failed: {error}");
+    if let Some(path) = paths::unfolded_panel_path() {
+        persist::save_unfolded_panel(&path, record_of(unfolded));
     }
 }
 
 pub fn load() -> Option<Bounds<Pixels>> {
-    let bytes = std::fs::read(path()?).ok()?;
-    serde_json::from_slice::<UnfoldedPanel>(&bytes)
-        .ok()?
-        .bounds()
+    bounds_of(persist::load_unfolded_panel(&paths::unfolded_panel_path()?)?)
 }
 
 pub fn clear() {
-    let Some(path) = path() else {
-        return;
-    };
-    match std::fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => log::warn!("[cli-sessions] unfolded panel clear failed: {error}"),
+    if let Some(path) = paths::unfolded_panel_path() {
+        persist::clear_unfolded_panel(&path);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::UnfoldedPanel;
+    use super::{bounds_of, record_of};
+    use crate::storage::persist::{self, UnfoldedPanel};
     use gpui::{point, px, size, Bounds};
 
     #[test]
-    fn unfolded_bounds_round_trip_through_the_record() {
+    fn unfolded_bounds_round_trip_through_the_record_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("panel-unfolded.json");
         let bounds = Bounds::new(point(px(-1200.0), px(36.5)), size(px(420.0), px(712.0)));
-        let record = UnfoldedPanel::of(bounds);
-        let json = serde_json::to_string(&record).unwrap();
-        let read: UnfoldedPanel = serde_json::from_str(&json).unwrap();
-        assert_eq!(read.bounds(), Some(bounds));
+        persist::save_unfolded_panel(&path, record_of(bounds));
+        let read = persist::load_unfolded_panel(&path).unwrap();
+        assert_eq!(bounds_of(read), Some(bounds));
+        persist::clear_unfolded_panel(&path);
+        assert_eq!(persist::load_unfolded_panel(&path), None);
     }
 
     fn record(x: f64, y: f64, width: f64, height: f64) -> UnfoldedPanel {
@@ -108,7 +76,7 @@ mod tests {
             record(f64::NAN, 0.0, 360.0, 400.0),
             record(0.0, f64::INFINITY, 360.0, 400.0),
         ] {
-            assert_eq!(stored.bounds(), None, "{stored:?}");
+            assert_eq!(bounds_of(stored), None, "{stored:?}");
         }
     }
 }

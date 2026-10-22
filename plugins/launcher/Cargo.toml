@@ -23,7 +23,6 @@ qol-plugin-api.workspace = true
 qol-plugin-daemon.workspace = true
 qol-watch.workspace = true
 qol-gpui.workspace = true
-qol-window-state.workspace = true
 qol-headless.workspace = true
 qol-runtime.workspace = true
 qol-search.workspace = true

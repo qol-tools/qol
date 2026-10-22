@@ -1,12 +1,12 @@
-use gpui::{point, px, size, Bounds, Pixels, Point, Size};
+use gpui::{point, px, size, Bounds, Pixels, Point, ResizeEdge, Size};
+use qol_gpui::resize_frame;
 
 use crate::ui::placement::Corner;
 
 pub const STRIP_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 pub const MIN_WIDTH: f32 = 360.0;
 pub const MIN_LIST_ROWS: f32 = 3.0;
-pub const EDGE_GRIP: f32 = 10.0;
-const HEIGHT_TOLERANCE: f32 = 1.0;
+const BOUNDS_TOLERANCE: f32 = 1.0;
 
 pub fn unfolded_min_size() -> Size<Pixels> {
     let list = MIN_LIST_ROWS * qol_gpui::theme::LIST_ENTRY_HEIGHTS[1];
@@ -36,11 +36,11 @@ pub fn unfolded_bounds(
 }
 
 pub fn folded_height_drifted(height: Pixels) -> bool {
-    (height - px(STRIP_HEIGHT)).abs() > px(HEIGHT_TOLERANCE)
+    (height - px(STRIP_HEIGHT)).abs() > px(BOUNDS_TOLERANCE)
 }
 
 pub fn bounds_differ(left: Bounds<Pixels>, right: Bounds<Pixels>) -> bool {
-    let far = |a: Pixels, b: Pixels| (a - b).abs() > px(HEIGHT_TOLERANCE);
+    let far = |a: Pixels, b: Pixels| (a - b).abs() > px(BOUNDS_TOLERANCE);
     far(left.origin.x, right.origin.x)
         || far(left.origin.y, right.origin.y)
         || far(left.size.width, right.size.width)
@@ -48,13 +48,12 @@ pub fn bounds_differ(left: Bounds<Pixels>, right: Bounds<Pixels>) -> bool {
 }
 
 pub fn presses_height_edge(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
-    position.y < px(EDGE_GRIP) || position.y > viewport.height - px(EDGE_GRIP)
+    resize_frame::edge_at(position, viewport)
+        .is_some_and(|edge| !matches!(edge, ResizeEdge::Left | ResizeEdge::Right))
 }
 
 pub fn presses_edge(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
-    presses_height_edge(position, viewport)
-        || position.x < px(EDGE_GRIP)
-        || position.x > viewport.width - px(EDGE_GRIP)
+    resize_frame::edge_at(position, viewport).is_some()
 }
 
 pub fn strip_bounds(expanded: Bounds<Pixels>, corner: Corner, strip_height: f32) -> Bounds<Pixels> {
@@ -139,6 +138,7 @@ mod tests {
     };
     use crate::ui::placement::Corner;
     use gpui::{point, px, size, Bounds, Pixels};
+    use qol_gpui::resize_frame;
 
     const CORNERS: [Corner; 4] = [
         Corner::TopLeft,
@@ -230,12 +230,16 @@ mod tests {
     }
 
     #[test]
-    fn a_press_near_the_top_or_bottom_reaches_a_height_edge() {
+    fn a_press_in_the_frame_top_or_bottom_band_reaches_a_height_edge() {
         let strip = size(px(360.0), px(STRIP_HEIGHT));
+        let band = resize_frame::EDGE_BAND;
         for (x, y, height_edge, any_edge) in [
             (180.0, 2.0, true, true),
-            (180.0, 9.0, true, true),
+            (180.0, band - 1.0, true, true),
+            (180.0, band, false, false),
             (180.0, STRIP_HEIGHT - 2.0, true, true),
+            (180.0, STRIP_HEIGHT - band - 1.0, false, false),
+            (9.0, 9.0, true, true),
             (2.0, 2.0, true, true),
             (358.0, STRIP_HEIGHT - 2.0, true, true),
             (180.0, 26.0, false, false),
@@ -243,8 +247,13 @@ mod tests {
             (358.0, 26.0, false, true),
         ] {
             let at = point(px(x), px(y));
-            assert_eq!(presses_height_edge(at, strip), height_edge, "{x},{y}");
-            assert_eq!(presses_edge(at, strip), any_edge, "{x},{y}");
+            let shown = resize_frame::FRAME_RESIZES_WINDOW;
+            assert_eq!(
+                presses_height_edge(at, strip),
+                height_edge && shown,
+                "{x},{y}"
+            );
+            assert_eq!(presses_edge(at, strip), any_edge && shown, "{x},{y}");
         }
     }
 }

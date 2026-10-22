@@ -4,6 +4,10 @@ pub fn state_path() -> Option<std::path::PathBuf> {
     Some(plugin_data_dir()?.join("sessions.json"))
 }
 
+pub fn unfolded_panel_path() -> Option<std::path::PathBuf> {
+    Some(plugin_data_dir()?.join("panel-unfolded.json"))
+}
+
 pub fn anomalies_dir() -> Option<std::path::PathBuf> {
     Some(plugin_data_dir()?.join("anomalies"))
 }

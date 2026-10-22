@@ -20,16 +20,6 @@ fn full_window_size() -> Size<Pixels> {
     size(px(WINDOW_WIDTH), px(full_window_height()))
 }
 
-fn work_area(monitor: Option<&monitor::ActiveMonitor>) -> Option<Bounds<Pixels>> {
-    let monitor = monitor?;
-    let native = monitor.bounds();
-    Some(monitor.logical(popup_window::work_area_within(native).unwrap_or(native)))
-}
-
-fn user_size_on(monitor: Option<&monitor::ActiveMonitor>) -> Option<Size<Pixels>> {
-    window_memory::user_size().map(|user| window_memory::fitted(user, work_area(monitor)))
-}
-
 fn native_size(user: Option<Size<Pixels>>, flow: bool) -> Size<Pixels> {
     user.filter(|_| !flow).unwrap_or_else(full_window_size)
 }
@@ -41,7 +31,7 @@ fn launcher_placement(
 ) -> WindowPlacement {
     let header = size(native.width, px(header_window_height()));
     let mut placement = centered_window_placement(monitor, header, cx);
-    if let Some(area) = work_area(monitor) {
+    if let Some(area) = monitor.map(monitor::ActiveMonitor::logical_work_area) {
         let lowest = area.origin.y + area.size.height - native.height;
         placement.bounds.origin.y = placement.bounds.origin.y.min(lowest).max(area.origin.y);
     }
@@ -72,7 +62,6 @@ pub(crate) fn pre_create_ghost(
         popup_window::configure_popup_window(&title);
         popup_window::disable_window_shadow(&title);
         popup_window::join_all_spaces(&title);
-        popup_window::set_window_min_size_by_title(&title, window_memory::min_size());
         qol_gpui::ghost::hide_invisible(&title);
     }
     let keys = active.borrow().keys();
@@ -187,7 +176,7 @@ fn show_ghost(
     cx: &mut App,
 ) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("show");
-    let user = user_size_on(monitor_snapshot);
+    let user = window_memory::user_size(monitor_snapshot);
     let native = native_size(user, flow.is_some());
     let placement = launcher_placement(monitor_snapshot, native, cx);
     let target = placement.target;
@@ -244,7 +233,7 @@ fn create_and_show_ghost(
     cx: &mut App,
 ) {
     let _reason = qol_gpui::popup_window::reason_scope("create");
-    let user = user_size_on(monitor_snapshot);
+    let user = window_memory::user_size(monitor_snapshot);
     let native = native_size(user, flow.is_some());
     let placement = launcher_placement(monitor_snapshot, native, cx);
     let target = placement.target;
@@ -260,7 +249,6 @@ fn create_and_show_ghost(
     popup_window::configure_popup_window(&title);
     popup_window::disable_window_shadow(&title);
     popup_window::join_all_spaces(&title);
-    popup_window::set_window_min_size_by_title(&title, window_memory::min_size());
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
         view.set_window_sizes(user, native);
@@ -339,6 +327,7 @@ fn ghost_window_options(
         .bounds(bounds)
         .display_id(placement.display_id)
         .focus(focus)
+        .min_size(window_memory::min_size())
         .app_id(LAUNCHER_APP_ID)
         .build()
 }

@@ -187,7 +187,21 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::{Layout, Stop};
+    use crate::config::ViewSize;
     use crate::ui::keys::Resize;
+
+    #[test]
+    fn every_view_size_round_trips_through_its_stop() {
+        for size in [
+            ViewSize::Compact,
+            ViewSize::List,
+            ViewSize::Roomy,
+            ViewSize::Icons,
+            ViewSize::BigIcons,
+        ] {
+            assert_eq!(Stop::from(size).view_size(), size, "{size:?}");
+        }
+    }
 
     #[test]
     fn stops_step_one_at_a_time_and_clamp_at_both_ends() {

@@ -448,12 +448,11 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
+    use qol_gpui::resize_frame::EDGE_BAND;
     use qol_gpui::scrollbar::{SEAM_TRACK_INSET, SEAM_TRACK_WIDTH};
     use qol_gpui::theme::LINE;
 
     use super::{kind_text, second_line, GRIP_WIDTH, SCROLL_CLEARANCE};
-
-    const RESIZE_EDGE: f32 = 5.0;
     use crate::listing::{Entry, EntryKind, Size, SortKey};
 
     fn entry(name: &str, kind: EntryKind, opens_as_folder: bool) -> Entry {
@@ -497,7 +496,7 @@ mod tests {
     fn the_scroll_grip_and_thumb_sit_clear_of_the_window_resize_edge() {
         let grip_outer = LINE + SCROLL_CLEARANCE;
         let thumb_inner = grip_outer + SEAM_TRACK_INSET + SEAM_TRACK_WIDTH;
-        assert!(grip_outer >= RESIZE_EDGE, "{grip_outer}");
+        assert!(grip_outer >= EDGE_BAND, "{grip_outer}");
         assert!(thumb_inner <= grip_outer + GRIP_WIDTH, "{thumb_inner}");
     }
 }

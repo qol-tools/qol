@@ -413,6 +413,10 @@ impl WindowGeometrySession {
         None
     }
 
+    pub fn pressed(&self) -> Option<bool> {
+        None
+    }
+
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
         set_input_region_on_main(&self.title, x, y, width, height)
     }
@@ -914,16 +918,6 @@ enum WindowPresentation {
     Overlay,
     Notice,
     Normal,
-}
-
-pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
-    let Some(window) = resolve_window(title) else {
-        return false;
-    };
-    let unbounded = f64::from(f32::MAX);
-    window.setContentMinSize(NSSize::new(size.width.to_f64(), size.height.to_f64()));
-    window.setContentMaxSize(NSSize::new(unbounded, unbounded));
-    true
 }
 
 fn show_window_by_title_with_focus(

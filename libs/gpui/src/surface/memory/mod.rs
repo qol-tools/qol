@@ -43,6 +43,45 @@ impl WindowMemory {
             reopen: Some(Reopen::Settings { page: None }),
         }
     }
+
+    pub fn size_and_place(key: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            reopen: None,
+        }
+    }
+
+    pub fn user_size(
+        &self,
+        placement: MonitorPlacement,
+        min: Size<Pixels>,
+        work_area: Option<Bounds<Pixels>>,
+    ) -> Option<Size<Pixels>> {
+        let store = WindowStateStore::shared()?;
+        fitted_user_size(
+            latest(&store, &self.key),
+            &placement.memory_label(),
+            min,
+            work_area,
+        )
+    }
+
+    pub fn record_user_size(
+        &self,
+        placement: MonitorPlacement,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        cx: &mut App,
+    ) {
+        let Some(remembered) = Remembered::new(self.clone(), placement, cx) else {
+            return;
+        };
+        remembered.mark_user_sized();
+        if remembered.capture(bounds, scale, false, cx) {
+            let key = self.key.clone();
+            cx.background_spawn(async move { flush_key(&key) }).detach();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +103,7 @@ pub(crate) struct Remembered {
     last: RefCell<Option<WindowState>>,
     save_generation: Cell<u64>,
     user_sized: Cell<bool>,
+    unsaved_bounds: Cell<Option<(Bounds<Pixels>, f32)>>,
 }
 
 impl Remembered {
@@ -94,6 +134,7 @@ impl Remembered {
             last: RefCell::new(last),
             save_generation: Cell::new(0),
             user_sized: Cell::new(user_sized),
+            unsaved_bounds: Cell::new(None),
         }))
     }
 
@@ -138,16 +179,16 @@ impl Remembered {
     }
 
     pub(crate) fn record_bounds(self: &Rc<Self>, bounds: Bounds<Pixels>, scale: f32, cx: &mut App) {
-        let open = self.last.borrow().as_ref().is_none_or(|state| state.open);
-        if !self.capture(bounds, scale, open, cx) {
-            return;
-        }
+        self.unsaved_bounds.set(Some((bounds, scale)));
         let generation = self.save_generation.get().wrapping_add(1);
         self.save_generation.set(generation);
         let this = self.clone();
         cx.spawn(async move |cx: &mut AsyncApp| {
             cx.background_executor().timer(SAVE_DEBOUNCE).await;
-            if this.save_generation.get() == generation {
+            if this.save_generation.get() != generation {
+                return;
+            }
+            if cx.update(|cx| this.capture_unsaved(cx)).unwrap_or(false) {
                 let key = this.key.clone();
                 cx.background_spawn(async move { flush_key(&key) }).await;
             }
@@ -156,12 +197,14 @@ impl Remembered {
     }
 
     pub(crate) fn record_open(&self, bounds: Bounds<Pixels>, scale: f32, cx: &App) {
+        self.unsaved_bounds.set(None);
         if self.capture(bounds, scale, true, cx) {
             flush_key(&self.key);
         }
     }
 
-    pub(crate) fn record_closed(&self) {
+    pub(crate) fn record_closed(&self, cx: &App) {
+        self.capture_unsaved(cx);
         let Some(mut state) = self.last.borrow().clone() else {
             return;
         };
@@ -182,6 +225,14 @@ impl Remembered {
         state.reopen = reopen;
         self.queue(state);
         flush_key(&self.key);
+    }
+
+    fn capture_unsaved(&self, cx: &App) -> bool {
+        let Some((bounds, scale)) = self.unsaved_bounds.take() else {
+            return false;
+        };
+        let open = self.last.borrow().as_ref().is_none_or(|state| state.open);
+        self.capture(bounds, scale, open, cx)
     }
 
     fn capture(&self, bounds: Bounds<Pixels>, scale: f32, open: bool, cx: &App) -> bool {
@@ -224,6 +275,29 @@ static PENDING: LazyLock<Mutex<PendingWrites>> = LazyLock::new(|| Mutex::new(Has
 
 /// Held across take-and-write so an older pending state can never land after a newer one.
 static WRITE_ORDER: Mutex<()> = Mutex::new(());
+
+fn latest(store: &WindowStateStore, key: &str) -> Option<WindowState> {
+    let pending = PENDING
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(key)
+        .map(|(_, state)| state.clone());
+    pending.or_else(|| store.load(key))
+}
+
+fn fitted_user_size(
+    saved: Option<WindowState>,
+    placement: &str,
+    min: Size<Pixels>,
+    work_area: Option<Bounds<Pixels>>,
+) -> Option<Size<Pixels>> {
+    let saved = saved.filter(|state| state.user_sized && state.default_placement == placement)?;
+    let window = match work_area {
+        Some(area) => at_least(saved.bounds_on_monitor, min, monitor_bounds(area)),
+        None => grown(saved.bounds_on_monitor, min),
+    };
+    Some(to_bounds(window).size)
+}
 
 fn flush_key(key: &str) {
     let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
@@ -290,14 +364,15 @@ fn with_size_of(window: WindowRect, content: WindowRect) -> WindowRect {
 }
 
 fn at_least(window: WindowRect, min: Size<Pixels>, work_area: MonitorBounds) -> WindowRect {
-    qol_window_state::clamp_into(
-        WindowRect {
-            width: window.width.max(min.width.to_f64()),
-            height: window.height.max(min.height.to_f64()),
-            ..window
-        },
-        work_area,
-    )
+    qol_window_state::clamp_into(grown(window, min), work_area)
+}
+
+fn grown(window: WindowRect, min: Size<Pixels>) -> WindowRect {
+    WindowRect {
+        width: window.width.max(min.width.to_f64()),
+        height: window.height.max(min.height.to_f64()),
+        ..window
+    }
 }
 
 fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {

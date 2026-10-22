@@ -128,6 +128,7 @@ impl SessionsView {
 
     pub fn set_showing(&mut self, showing: bool) {
         self.is_showing = showing;
+        self.edge_press = false;
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -136,7 +137,7 @@ impl SessionsView {
 
     pub fn collapse_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let expanded = qol_gpui::popup_window::window_bounds_primary_anchored(window);
-        if self.edge_press {
+        if self.edge_held() {
             trace::fold("refused-while-resizing", expanded);
             return false;
         }
@@ -160,9 +161,9 @@ impl SessionsView {
         let Some(unfolded) = self.collapse_state.unfolded(strip) else {
             return false;
         };
-        if self.edge_press {
+        if self.edge_held() {
             trace::fold("refused-while-resizing", strip);
-            return true;
+            return false;
         }
         self.collapse_state.expand();
         let anchored = clamp_to_monitor(unfolded, strip, cx);
@@ -192,6 +193,7 @@ impl SessionsView {
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let showing = self.is_showing;
         self.is_showing = false;
+        self.edge_press = false;
         self.dismisser.dismiss(cx);
         trace::dismiss(reason, showing);
         showing
@@ -221,6 +223,16 @@ impl SessionsView {
 
     fn end_press(&mut self) {
         self.edge_press = false;
+    }
+
+    fn edge_held(&mut self) -> bool {
+        if self.edge_press {
+            let title = self.dismisser.current_title();
+            self.edge_press = qol_gpui::popup_window::window_geometry_session(&title)
+                .and_then(|session| session.pressed())
+                .unwrap_or(false);
+        }
+        self.edge_press
     }
 
     fn restore_unfolded(

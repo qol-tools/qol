@@ -17,7 +17,7 @@ pub(crate) const FACES: [&[u8]; 8] = [
     include_bytes!("../assets/fonts/SairaSemiCondensed-SemiBold.ttf"),
 ];
 
-const EMOJI_FALLBACK_CODE_POINT: u32 = 0x1F389;
+const EMOJI_FALLBACK: char = '\u{1F389}';
 const FALLBACK_WARMUP_DELAY: Duration = Duration::from_millis(500);
 
 pub fn install(cx: &App) {
@@ -37,9 +37,7 @@ fn warm_fallback_fonts(cx: &App) {
             executor.timer(FALLBACK_WARMUP_DELAY).await;
             let started = Instant::now();
             let faces = styled_faces();
-            let emoji = char::from_u32(EMOJI_FALLBACK_CODE_POINT)
-                .map(String::from)
-                .unwrap_or_default();
+            let emoji = EMOJI_FALLBACK.to_string();
             for (face, weight) in &faces {
                 let styled = Font {
                     weight: FontWeight(f32::from(*weight)),

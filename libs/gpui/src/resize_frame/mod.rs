@@ -1,9 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 
 use crate::popup_window::WindowGeometrySession;
@@ -12,8 +11,9 @@ mod geometry;
 
 use self::geometry::{resized_rect, NativeRect, ResizeLimits};
 
-const EDGE_BAND: f32 = 5.0;
+pub const EDGE_BAND: f32 = 5.0;
 const CORNER_BAND: f32 = 10.0;
+pub const FRAME_RESIZES_WINDOW: bool = crate::platform::FRAME_RESIZES_WINDOW;
 const SETTLE_WAIT: Duration = Duration::from_millis(300);
 const REAPPLY_AFTER: Duration = Duration::from_millis(50);
 const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
@@ -38,9 +38,23 @@ pub struct ResizeFrame {
 struct FrameState {
     title: Box<dyn Fn() -> String>,
     min_size: Cell<Size<Pixels>>,
-    sizing: Arc<Mutex<Sizing>>,
+    sizing: Rc<Cell<Sizing>>,
     drag: RefCell<Option<Drag>>,
-    epoch: Arc<AtomicU64>,
+    epoch: Rc<Cell<u64>>,
+}
+
+impl FrameState {
+    fn start_drag(&self) -> u64 {
+        self.sizing.set(Sizing::Dragging);
+        let epoch = self.epoch.get().wrapping_add(1);
+        self.epoch.set(epoch);
+        epoch
+    }
+
+    fn hand_off(&self, at: Instant) {
+        self.drag.borrow_mut().take();
+        self.sizing.set(Sizing::Settling(at));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,7 +82,7 @@ struct Drag {
     pointer_start: (i32, i32),
     limits: ResizeLimits,
     epoch: u64,
-    sizing: Arc<Mutex<Sizing>>,
+    sizing: Rc<Cell<Sizing>>,
     release_seen: Rc<Cell<bool>>,
 }
 
@@ -90,27 +104,16 @@ impl Drag {
     }
 
     fn released(&self) -> bool {
-        self.release_seen.get()
-            || self
-                .session
-                .pointer_on()
-                .is_none_or(|pointer| !pointer.pressed)
+        self.release_seen.get() || self.session.pressed().is_none_or(|pressed| !pressed)
     }
 
-    fn finish(&self, epochs: &AtomicU64) -> bool {
-        let mut sizing = lock(&self.sizing);
-        let finished = epochs
-            .compare_exchange(
-                self.epoch,
-                self.epoch.wrapping_add(1),
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok();
-        if finished {
-            *sizing = Sizing::Settling(Instant::now());
+    fn finish(&self, epochs: &Cell<u64>) -> bool {
+        if epochs.get() != self.epoch {
+            return false;
         }
-        finished
+        epochs.set(self.epoch.wrapping_add(1));
+        self.sizing.set(Sizing::Settling(Instant::now()));
+        true
     }
 }
 
@@ -120,9 +123,9 @@ impl ResizeFrame {
             state: Rc::new(FrameState {
                 title: Box::new(title),
                 min_size: Cell::new(min_size),
-                sizing: Arc::new(Mutex::new(Sizing::Idle)),
+                sizing: Rc::new(Cell::new(Sizing::Idle)),
                 drag: RefCell::new(None),
-                epoch: Arc::new(AtomicU64::new(0)),
+                epoch: Rc::new(Cell::new(0)),
             }),
         }
     }
@@ -136,18 +139,20 @@ impl ResizeFrame {
     }
 
     pub fn is_user_sizing(&self) -> bool {
-        lock(&self.state.sizing).counts_as_user(Instant::now())
+        self.state.sizing.get().counts_as_user(Instant::now())
     }
 
     pub fn end_user_sizing(&self) {
-        *lock(&self.state.sizing) = Sizing::Idle;
+        self.state.sizing.set(Sizing::Idle);
     }
 
     pub fn zones(&self) -> impl IntoElement {
         div()
             .absolute()
             .inset_0()
-            .children(RESIZE_EDGES.map(|edge| self.zone(edge)))
+            .when(FRAME_RESIZES_WINDOW, |zones| {
+                zones.children(RESIZE_EDGES.map(|edge| self.zone(edge)))
+            })
     }
 
     fn zone(&self, edge: ResizeEdge) -> Div {
@@ -167,16 +172,9 @@ impl ResizeFrame {
     }
 
     fn begin(&self, edge: ResizeEdge, press: Point<Pixels>, window: &mut Window, cx: &mut App) {
-        let epoch = {
-            let mut sizing = lock(&self.state.sizing);
-            *sizing = Sizing::Dragging;
-            self.state
-                .epoch
-                .fetch_add(1, Ordering::SeqCst)
-                .wrapping_add(1)
-        };
+        let epoch = self.state.start_drag();
         let Some(drag) = self.client_drag(edge, press, epoch, window, cx) else {
-            self.state.drag.borrow_mut().take();
+            self.state.hand_off(Instant::now());
             window.start_window_resize(edge);
             return;
         };
@@ -190,7 +188,7 @@ impl ResizeFrame {
         );
         if crate::platform::RESIZE_BY_WINDOW_MANAGER {
             window.start_window_resize(edge);
-            watch_release(drag, self.state.epoch.clone(), cx);
+            watch_release(drag, self.state.clone(), cx);
             return;
         }
         let applied = drag.start;
@@ -199,9 +197,8 @@ impl ResizeFrame {
 
     fn end(&self) {
         let Some(drag) = self.state.drag.borrow_mut().take() else {
-            let mut sizing = lock(&self.state.sizing);
-            if *sizing == Sizing::Dragging {
-                *sizing = Sizing::Settling(Instant::now());
+            if self.state.sizing.get() == Sizing::Dragging {
+                self.state.sizing.set(Sizing::Settling(Instant::now()));
             }
             return;
         };
@@ -252,9 +249,9 @@ impl ResizeFrame {
     }
 }
 
-fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, window: &Window) {
+fn follow_pointer(drag: Drag, epochs: Rc<Cell<u64>>, applied: NativeRect, window: &Window) {
     window.on_next_frame(move |window, cx| {
-        if epochs.load(Ordering::SeqCst) != drag.epoch {
+        if epochs.get() != drag.epoch {
             return;
         }
         let released = drag.released();
@@ -287,11 +284,11 @@ fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, windo
     });
 }
 
-fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
+fn watch_release(drag: Drag, state: Rc<FrameState>, cx: &mut App) {
     let started = Instant::now();
     cx.spawn(async move |cx| loop {
         cx.background_executor().timer(RELEASE_POLL).await;
-        if epochs.load(Ordering::SeqCst) != drag.epoch {
+        if state.epoch.get() != drag.epoch {
             return;
         }
         if drag.released() {
@@ -301,7 +298,9 @@ fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
                 drag.epoch,
                 started.elapsed().as_millis()
             );
-            drag.finish(&epochs);
+            if drag.finish(&state.epoch) {
+                state.drag.borrow_mut().take();
+            }
             return;
         }
     })
@@ -310,14 +309,14 @@ fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
 
 fn settle_at(
     drag: Drag,
-    epochs: Arc<AtomicU64>,
+    epochs: Rc<Cell<u64>>,
     target: NativeRect,
     since: Instant,
     applied_at: Instant,
     window: &Window,
 ) {
     window.on_next_frame(move |window, cx| {
-        if epochs.load(Ordering::SeqCst) != drag.epoch {
+        if epochs.get() != drag.epoch {
             return;
         }
         let actual = drag.session.bounds();
@@ -355,10 +354,6 @@ fn apply_after_present(drag: Drag, rect: NativeRect, cx: &mut App) {
     cx.spawn(async move |_| drag.apply(rect)).detach();
 }
 
-fn lock(sizing: &Mutex<Sizing>) -> std::sync::MutexGuard<'_, Sizing> {
-    sizing.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 fn native_work_area(window: &Window, cx: &App) -> Option<NativeRect> {
     let display = window.display(cx)?;
     let monitor = crate::monitor::native_display_bounds(display.as_ref());
@@ -371,6 +366,46 @@ fn native_work_area(window: &Window, cx: &App) -> Option<NativeRect> {
 
 fn capped(min_span: f64, room: Option<f64>) -> f64 {
     room.map_or(min_span, |room| min_span.min(room))
+}
+
+pub fn edge_at(position: Point<Pixels>, viewport: Size<Pixels>) -> Option<ResizeEdge> {
+    if !FRAME_RESIZES_WINDOW {
+        return None;
+    }
+    zone_at(position, viewport)
+}
+
+fn zone_at(position: Point<Pixels>, viewport: Size<Pixels>) -> Option<ResizeEdge> {
+    let inside = position.x >= px(0.0)
+        && position.y >= px(0.0)
+        && position.x < viewport.width
+        && position.y < viewport.height;
+    if !inside {
+        return None;
+    }
+    let left = |band: f32| position.x < px(band);
+    let right = |band: f32| viewport.width - position.x <= px(band);
+    let top = |band: f32| position.y < px(band);
+    let bottom = |band: f32| viewport.height - position.y <= px(band);
+    if top(CORNER_BAND) && left(CORNER_BAND) {
+        Some(ResizeEdge::TopLeft)
+    } else if top(CORNER_BAND) && right(CORNER_BAND) {
+        Some(ResizeEdge::TopRight)
+    } else if bottom(CORNER_BAND) && left(CORNER_BAND) {
+        Some(ResizeEdge::BottomLeft)
+    } else if bottom(CORNER_BAND) && right(CORNER_BAND) {
+        Some(ResizeEdge::BottomRight)
+    } else if top(EDGE_BAND) {
+        Some(ResizeEdge::Top)
+    } else if bottom(EDGE_BAND) {
+        Some(ResizeEdge::Bottom)
+    } else if left(EDGE_BAND) {
+        Some(ResizeEdge::Left)
+    } else if right(EDGE_BAND) {
+        Some(ResizeEdge::Right)
+    } else {
+        None
+    }
 }
 
 fn placed(zone: Div, edge: ResizeEdge) -> Div {

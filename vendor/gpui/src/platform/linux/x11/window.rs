@@ -97,6 +97,16 @@ fn query_render_extent(
     })
 }
 
+const MAX_RENDER_EXTENT: u32 = 8192;
+
+fn capped_render_extent(extent: gpu::Extent) -> gpu::Extent {
+    gpu::Extent {
+        width: extent.width.min(MAX_RENDER_EXTENT),
+        height: extent.height.min(MAX_RENDER_EXTENT),
+        depth: 1,
+    }
+}
+
 fn largest_monitor_extent(
     xcb: &Rc<XCBConnection>,
     root: xproto::Window,
@@ -106,16 +116,44 @@ fn largest_monitor_extent(
         || "X11 RandR GetMonitors failed.",
         xcb.randr_get_monitors(root, true),
     ) else {
-        return floor;
+        return capped_render_extent(floor);
     };
-    monitors
-        .monitors
-        .iter()
-        .fold(floor, |extent, monitor| gpu::Extent {
-            width: extent.width.max(monitor.width as u32),
-            height: extent.height.max(monitor.height as u32),
-            depth: 1,
-        })
+    capped_render_extent(
+        monitors
+            .monitors
+            .iter()
+            .fold(floor, |extent, monitor| gpu::Extent {
+                width: extent.width.max(monitor.width as u32),
+                height: extent.height.max(monitor.height as u32),
+                depth: 1,
+            }),
+    )
+}
+
+fn render_extent_fits(current: gpu::Extent, content: gpu::Extent) -> bool {
+    let content = capped_render_extent(content);
+    content.width <= current.width && content.height <= current.height
+}
+
+fn grown_render_extent(
+    current: gpu::Extent,
+    content: gpu::Extent,
+    screen: gpu::Extent,
+) -> gpu::Extent {
+    let axis = |current: u32, content: u32, screen: u32| {
+        let needed = current.max(content);
+        let target = if screen <= MAX_RENDER_EXTENT {
+            needed.max(screen)
+        } else {
+            needed
+        };
+        target.min(MAX_RENDER_EXTENT)
+    };
+    gpu::Extent {
+        width: axis(current.width, content.width, screen.width),
+        height: axis(current.height, content.height, screen.height),
+        depth: 1,
+    }
 }
 
 fn grow_render_window(
@@ -125,15 +163,10 @@ fn grow_render_window(
     current: gpu::Extent,
     content: gpu::Extent,
 ) -> anyhow::Result<gpu::Extent> {
-    if content.width <= current.width && content.height <= current.height {
+    if render_extent_fits(current, content) {
         return Ok(current);
     }
-    let screen = query_render_extent(xcb, root)?;
-    let grown = gpu::Extent {
-        width: current.width.max(content.width).max(screen.width),
-        height: current.height.max(content.height).max(screen.height),
-        depth: 1,
-    };
+    let grown = grown_render_extent(current, content, query_render_extent(xcb, root)?);
     check_reply(
         || "X11 ConfigureWindow for the render surface failed.",
         xcb.configure_window(
@@ -305,6 +338,7 @@ pub struct X11WindowState {
     x_root_window: xproto::Window,
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
+    resized_sync_counter: Option<sync::Int64>,
     drawn_sync_counter: Option<sync::Int64>,
     pub(crate) press_root: Option<(i32, i32)>,
     bounds: Bounds<Pixels>,
@@ -728,7 +762,7 @@ impl X11WindowState {
                 ),
             )?;
 
-            let render_window = if params.is_resizable {
+            let render_window = if params.window_min_size.is_some() {
                 let extent = largest_monitor_extent(
                     xcb,
                     visual_set.root,
@@ -766,6 +800,7 @@ impl X11WindowState {
 
             xcb_flush(xcb);
 
+            let content_extent = query_render_extent(xcb, x_window)?;
             let renderer = {
                 let raw_window = RawWindow {
                     connection: as_raw_xcb_connection::AsRawXcbConnection::as_raw_xcb_connection(
@@ -779,6 +814,7 @@ impl X11WindowState {
                     // Note: this has to be done after the GPU init, or otherwise
                     // the sizes are immediately invalidated.
                     size: query_render_extent(xcb, render_target)?,
+                    content_size: Some(content_extent),
                     // We set it to transparent by default, even if we have client-side
                     // decorations, since those seem to work on X11 even without `true` here.
                     // If the window appearance changes, then the renderer will get updated
@@ -799,7 +835,7 @@ impl X11WindowState {
                 scale_factor,
                 renderer,
                 render_window,
-                content_extent: query_render_extent(xcb, x_window)?,
+                content_extent,
                 atoms: *atoms,
                 input_handler: None,
                 active: false,
@@ -818,6 +854,7 @@ impl X11WindowState {
                 edge_constraints: None,
                 counter_id: sync_request_counter,
                 last_sync_counter: None,
+                resized_sync_counter: None,
                 drawn_sync_counter: None,
                 press_root: None,
             })
@@ -1250,13 +1287,23 @@ impl X11WindowStatePtr {
                 None => gpu_size,
             };
             if true {
-                state.renderer.update_drawable_size(size(
-                    DevicePixels(drawable.width as i32),
-                    DevicePixels(drawable.height as i32),
-                ));
+                state.renderer.update_render_size(
+                    size(
+                        DevicePixels(drawable.width as i32),
+                        DevicePixels(drawable.height as i32),
+                    ),
+                    size(
+                        DevicePixels(gpu_size.width as i32),
+                        DevicePixels(gpu_size.height as i32),
+                    ),
+                );
                 resize_args = Some((state.content_size(), state.scale_factor));
             }
-            if !is_resize && let Some(value) = state.last_sync_counter.take() {
+            if is_resize {
+                if let Some(value) = state.last_sync_counter.take() {
+                    state.resized_sync_counter = Some(value);
+                }
+            } else if let Some(value) = state.last_sync_counter.take() {
                 check_reply(
                     || "X11 sync SetCounter failed.",
                     sync::set_counter(&self.xcb, state.counter_id, value),
@@ -1377,6 +1424,25 @@ impl PlatformWindow for X11Window {
                     .width(width)
                     .height(height),
             ),
+        )
+        .log_err();
+        xcb_flush(&self.0.xcb);
+    }
+
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        let state = self.0.state.borrow();
+        let size_hints = normal_hints(
+            state.bounds.to_device_pixels(state.scale_factor),
+            Some(size),
+        );
+        check_reply(
+            || {
+                format!(
+                    "X11 change of WM_SIZE_HINTS failed. hints: {:?}",
+                    size_hints
+                )
+            },
+            size_hints.set_normal_hints(&self.0.xcb, self.0.x_window),
         )
         .log_err();
         xcb_flush(&self.0.xcb);
@@ -1631,7 +1697,7 @@ impl PlatformWindow for X11Window {
     fn draw(&self, scene: &Scene) {
         let mut inner = self.0.state.borrow_mut();
         inner.renderer.draw(scene);
-        if let Some(value) = inner.last_sync_counter.take() {
+        if let Some(value) = inner.resized_sync_counter.take() {
             inner.drawn_sync_counter = Some(value);
         }
     }
@@ -1827,5 +1893,75 @@ impl PlatformWindow for X11Window {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.0.state.borrow().renderer.gpu_specs().into()
+    }
+}
+
+#[cfg(test)]
+mod render_extent_tests {
+    use super::{MAX_RENDER_EXTENT, grown_render_extent, render_extent_fits};
+    use blade_graphics as gpu;
+
+    fn extent(width: u32, height: u32) -> gpu::Extent {
+        gpu::Extent {
+            width,
+            height,
+            depth: 1,
+        }
+    }
+
+    #[test]
+    fn content_inside_the_render_window_needs_no_growth() {
+        let cases = [
+            (extent(1920, 1080), extent(800, 600), true),
+            (extent(1920, 1080), extent(1920, 1080), true),
+            (extent(1920, 1080), extent(1921, 600), false),
+            (extent(1920, 1080), extent(800, 1081), false),
+            (
+                extent(MAX_RENDER_EXTENT, 1080),
+                extent(MAX_RENDER_EXTENT + 500, 600),
+                true,
+            ),
+        ];
+        for (current, content, fits) in cases {
+            assert_eq!(
+                render_extent_fits(current, content),
+                fits,
+                "{current:?} {content:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn growth_takes_the_screen_up_to_the_cap() {
+        let cases = [
+            (
+                extent(1920, 1080),
+                extent(2400, 900),
+                extent(3840, 1080),
+                extent(3840, 1080),
+            ),
+            (
+                extent(3840, 2160),
+                extent(5000, 2000),
+                extent(11520, 2160),
+                extent(5000, 2160),
+            ),
+            (
+                extent(3840, 2160),
+                extent(9000, 2000),
+                extent(11520, 2160),
+                extent(MAX_RENDER_EXTENT, 2160),
+            ),
+            (
+                extent(1920, 1080),
+                extent(1000, 1500),
+                extent(1920, 2160),
+                extent(1920, 2160),
+            ),
+        ];
+        for (current, content, screen, grown) in cases {
+            let actual = grown_render_extent(current, content, screen);
+            assert_eq!(actual, grown, "{current:?} {content:?} {screen:?}");
+        }
     }
 }
