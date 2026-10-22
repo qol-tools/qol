@@ -26,15 +26,16 @@ impl EditorView {
         group
     }
 
-    fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_canvas(&self, display: (f32, f32), cx: &mut Context<Self>) -> impl IntoElement {
         let mut strokes = self.history.applied().to_vec();
         strokes.extend(self.active_stroke.iter().cloned());
         let image_bounds = self.image_bounds.clone();
         div()
             .id("shot-editor-canvas")
             .relative()
-            .w(px(self.layout.image.0))
-            .h(px(self.layout.image.1))
+            .flex_none()
+            .w(px(display.0))
+            .h(px(display.1))
             .overflow_hidden()
             .border_1()
             .border_color(rgb(qol_gpui::kit::kit().palette.border_subtle))
@@ -169,8 +170,15 @@ impl EditorView {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
+        let viewport = window.viewport_size();
+        let viewport = (
+            viewport.width.to_f64() as f32,
+            viewport.height.to_f64() as f32,
+        );
+        let area = image_area(viewport);
+        let display = fit_display(self.document.width, self.document.height, area);
         kit.window()
             .id("shot-editor")
             .track_focus(&self.focus_handle)
@@ -185,11 +193,13 @@ impl Render for EditorView {
             .child(
                 div()
                     .flex_none()
+                    .h(px(SPACE_PAD + area.1))
                     .flex()
+                    .items_center()
                     .justify_center()
                     .px(px(SPACE_PAD))
                     .pt(px(SPACE_PAD))
-                    .child(self.render_canvas(cx)),
+                    .child(self.render_canvas(display, cx)),
             )
             .child(
                 div()
@@ -217,30 +227,58 @@ impl Render for EditorView {
                     .text(TextStyle::Detail)
                     .child(self.render_label()),
             )
-            .child(self.render_hint_bar(self.layout.window.0))
+            .child(self.render_hint_bar(viewport.0))
     }
 }
 
-pub(super) fn editor_layout(width: u32, height: u32, monitor: (f32, f32)) -> EditorLayout {
-    let chrome_width = action_row_width(CONTROL_COUNT, ActionCircleSize::Full) + 2.0 * SPACE_PAD;
-    let chrome_height = qol_gpui::kit::HEADER_HEIGHT
+fn chrome_width() -> f32 {
+    action_row_width(CONTROL_COUNT, ActionCircleSize::Full) + 2.0 * SPACE_PAD
+}
+
+fn chrome_height() -> f32 {
+    qol_gpui::kit::HEADER_HEIGHT
         + SPACE_PAD
         + SPACE_PAD
         + ACTION_CIRCLE_SIZE
         + HEIGHT_INLINE
-        + HEIGHT_HINT_BAR;
+        + HEIGHT_HINT_BAR
+}
+
+pub(super) fn editor_layout(width: u32, height: u32, monitor: (f32, f32)) -> EditorLayout {
     let max_width = (monitor.0 - 2.0 * qol_gpui::placement::CORNER_MARGIN - 2.0 * SPACE_PAD)
         .clamp(1.0, MAX_IMAGE_WIDTH);
-    let max_height = (monitor.1 - 2.0 * qol_gpui::placement::CORNER_MARGIN - chrome_height)
+    let max_height = (monitor.1 - 2.0 * qol_gpui::placement::CORNER_MARGIN - chrome_height())
         .clamp(1.0, MAX_IMAGE_HEIGHT);
     let image = fit_image(width, height, max_width, max_height);
     EditorLayout {
         image,
         window: (
-            (image.0 + 2.0 * SPACE_PAD).max(chrome_width),
-            image.1 + chrome_height,
+            (image.0 + 2.0 * SPACE_PAD).max(chrome_width()),
+            image.1 + chrome_height(),
         ),
     }
+}
+
+pub(super) fn editor_min_size(layout: EditorLayout) -> (f32, f32) {
+    (
+        chrome_width().min(layout.window.0),
+        (chrome_height() + MIN_IMAGE_HEIGHT).min(layout.window.1),
+    )
+}
+
+fn image_area(viewport: (f32, f32)) -> (f32, f32) {
+    (
+        (viewport.0 - 2.0 * SPACE_PAD).max(1.0),
+        (viewport.1 - chrome_height()).max(1.0),
+    )
+}
+
+fn fit_display(width: u32, height: u32, area: (f32, f32)) -> (f32, f32) {
+    if width == 0 || height == 0 {
+        return area;
+    }
+    let scale = (area.0 / width as f32).min(area.1 / height as f32);
+    (width as f32 * scale, height as f32 * scale)
 }
 
 fn fit_image(width: u32, height: u32, max_width: f32, max_height: f32) -> (f32, f32) {
@@ -298,7 +336,9 @@ fn display_paths(strokes: &[PenStroke], bounds: Bounds<Pixels>) -> Vec<(gpui::Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{editor_layout, fit_image, normalized_pointer};
+    use super::{
+        editor_layout, editor_min_size, fit_display, fit_image, image_area, normalized_pointer,
+    };
     use crate::capture::annotation::NormalizedPoint;
     use gpui::{point, px, size, Bounds};
 
@@ -325,6 +365,66 @@ mod tests {
     fn image_fit_does_not_upscale_small_screenshots() {
         assert_eq!(fit_image(80, 60, 1000.0, 680.0), (80.0, 60.0));
         assert_eq!(fit_image(2000, 1000, 1000.0, 680.0), (1000.0, 500.0));
+    }
+
+    #[test]
+    fn opening_size_shows_the_designed_image_size() {
+        let cases = [
+            (1920, 1080, (1920.0, 1080.0)),
+            (1080, 1920, (1920.0, 1080.0)),
+            (80, 60, (1920.0, 1080.0)),
+            (7680, 2160, (2560.0, 1440.0)),
+        ];
+        for (width, height, monitor) in cases {
+            let layout = editor_layout(width, height, monitor);
+            let display = fit_display(width, height, image_area(layout.window));
+            assert!(
+                (display.0 - layout.image.0).abs() < 0.01
+                    && (display.1 - layout.image.1).abs() < 0.01,
+                "{width}x{height}: {display:?} vs {:?}",
+                layout.image
+            );
+        }
+    }
+
+    #[test]
+    fn display_scales_with_the_window_and_keeps_aspect() {
+        let cases = [
+            ((1920, 1080), (1920.0, 1080.0)),
+            ((1920, 1080), (600.0, 1200.0)),
+            ((80, 60), (1600.0, 900.0)),
+            ((1080, 1920), (2000.0, 600.0)),
+        ];
+        for ((width, height), viewport) in cases {
+            let area = image_area(viewport);
+            let display = fit_display(width, height, area);
+            assert!(display.0 <= area.0 + 0.01 && display.1 <= area.1 + 0.01);
+            assert!(
+                (display.0 - area.0).abs() < 0.01 || (display.1 - area.1).abs() < 0.01,
+                "{width}x{height} in {viewport:?} leaves both axes short: {display:?}"
+            );
+            assert!(
+                (display.0 / display.1 - width as f32 / height as f32).abs() < 0.01,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimum_fits_small_screens_and_never_exceeds_the_opening_size() {
+        let cases = [
+            (1920, 1080, (1920.0, 1080.0)),
+            (1920, 1080, (1024.0, 700.0)),
+            (80, 60, (1920.0, 1080.0)),
+            (300, 4000, (1280.0, 720.0)),
+        ];
+        for (width, height, monitor) in cases {
+            let layout = editor_layout(width, height, monitor);
+            let min = editor_min_size(layout);
+            assert!(min.0 <= layout.window.0 && min.1 <= layout.window.1);
+            assert!(min.1 < 700.0, "{width}x{height}: {min:?}");
+            assert!(image_area(min).1 > 0.0, "{width}x{height}: {min:?}");
+        }
     }
 
     #[test]

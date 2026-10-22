@@ -12,7 +12,7 @@ use qol_gpui::color_wheel::{ColorWheel, ColorWheelPopup, WheelCallbacks, WheelSt
 use qol_gpui::history::UndoHistory;
 use qol_gpui::kit::next_selectable;
 use qol_gpui::monitor::{ActiveMonitor, MonitorTracker};
-use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind};
+use qol_gpui::surface::{Surface, SurfaceDismisser, SurfaceKind, WindowMemory};
 use qol_plugin_daemon::notification::send_notification;
 
 use crate::capture::actions::ShotAction;
@@ -28,6 +28,8 @@ mod render;
 
 const MAX_IMAGE_WIDTH: f32 = 1000.0;
 const MAX_IMAGE_HEIGHT: f32 = 680.0;
+const MIN_IMAGE_HEIGHT: f32 = 160.0;
+const WINDOW_MEMORY_KEY: &str = "qol-shot-editor";
 const CONTROL_COUNT: usize = 7;
 const PRIMARY_CONTROL: usize = 3;
 
@@ -360,7 +362,6 @@ pub(crate) const EDITOR_KEY_ROWS: &[EditorKeyRow] = &[
 
 struct EditorView {
     document: EditorDocument,
-    layout: EditorLayout,
     history: UndoHistory<PenStroke>,
     active_stroke: Option<PenStroke>,
     pen_color: u32,
@@ -439,11 +440,18 @@ pub(crate) fn open(
         .or(fallback_monitor)
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for screenshot editor"))?;
     let layout = render::editor_layout(document.width, document.height, monitor.size());
+    let min_size = render::editor_min_size(layout);
     Surface::new(SurfaceKind::Panel)
         .title("QoL Shot Editor")
         .size(size(px(layout.window.0), px(layout.window.1)))
+        .min_size(size(px(min_size.0), px(min_size.1)))
+        .remember(WindowMemory::reopened_by_action(
+            WINDOW_MEMORY_KEY,
+            crate::PLUGIN_ID,
+            "preview",
+        ))
         .show_focused_on(&monitor, cx, move |dismisser, _window, cx| {
-            EditorView::new(document, layout, dismisser, cx)
+            EditorView::new(document, dismisser, cx)
         })?;
     qol_runtime::probe!(
         "SHOT_EDIT",
@@ -457,18 +465,12 @@ pub(crate) fn open(
 }
 
 impl EditorView {
-    fn new(
-        document: EditorDocument,
-        layout: EditorLayout,
-        dismisser: SurfaceDismisser,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(document: EditorDocument, dismisser: SurfaceDismisser, cx: &mut Context<Self>) -> Self {
         cx.on_release(|view, cx| view.close_wheel_popup(cx))
             .detach();
         let default_copy_action = crate::config::load().shortcuts.copy_command;
         Self {
             document,
-            layout,
             history: UndoHistory::new(),
             active_stroke: None,
             pen_color: qol_gpui::kit::kit().palette.danger,
