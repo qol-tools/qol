@@ -397,6 +397,10 @@ impl WindowGeometrySession {
         reposition_window_by_title(&self.title, f64::from(x), f64::from(y))
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
     }

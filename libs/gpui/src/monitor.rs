@@ -151,7 +151,7 @@ impl ActiveMonitor {
     }
 
     pub fn logical_windowed_area(&self) -> Bounds<Pixels> {
-        windowed_area(self.logical_bounds(), self.logical_work_area())
+        windowed_area(self.logical_bounds(), self.logical_work_area(), px(1.0))
     }
 
     pub fn logical(&self, native: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -374,13 +374,17 @@ fn resolve_cursor_snapshot(
     Some((ActiveMonitor::from_bounds(monitor), cursor))
 }
 
-pub(crate) fn windowed_area(monitor: Bounds<Pixels>, work_area: Bounds<Pixels>) -> Bounds<Pixels> {
+pub(crate) fn windowed_area(
+    monitor: Bounds<Pixels>,
+    work_area: Bounds<Pixels>,
+    reserve: Pixels,
+) -> Bounds<Pixels> {
     if work_area != monitor {
         return work_area;
     }
     Bounds::new(
         work_area.origin,
-        size(work_area.size.width, work_area.size.height - px(1.0)),
+        size(work_area.size.width, work_area.size.height - reserve),
     )
 }
 
@@ -398,9 +402,9 @@ mod tests {
     fn a_window_never_fills_a_monitor_that_has_no_panel() {
         let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(900.0)));
         let below_panel = Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(860.0)));
-        assert_eq!(windowed_area(monitor, below_panel), below_panel);
+        assert_eq!(windowed_area(monitor, below_panel, px(1.0)), below_panel);
         assert_eq!(
-            windowed_area(monitor, monitor),
+            windowed_area(monitor, monitor, px(1.0)),
             Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(899.0)))
         );
     }

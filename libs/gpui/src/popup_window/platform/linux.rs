@@ -159,6 +159,10 @@ impl WindowGeometrySession {
         moved && flushed
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        self.bounds().map(|(x, y, _, _)| (x, y))
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         let reply = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
         Some((i32::from(reply.root_x), i32::from(reply.root_y)))

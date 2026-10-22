@@ -101,19 +101,21 @@ fn largest_monitor_extent(
     xcb: &Rc<XCBConnection>,
     root: xproto::Window,
     floor: gpu::Extent,
-) -> anyhow::Result<gpu::Extent> {
-    let monitors = get_reply(
+) -> gpu::Extent {
+    let Ok(monitors) = get_reply(
         || "X11 RandR GetMonitors failed.",
         xcb.randr_get_monitors(root, true),
-    )?;
-    Ok(monitors
+    ) else {
+        return floor;
+    };
+    monitors
         .monitors
         .iter()
         .fold(floor, |extent, monitor| gpu::Extent {
             width: extent.width.max(monitor.width as u32),
             height: extent.height.max(monitor.height as u32),
             depth: 1,
-        }))
+        })
 }
 
 fn grow_render_window(
@@ -729,7 +731,7 @@ impl X11WindowState {
                     xcb,
                     visual_set.root,
                     query_render_extent(xcb, x_window)?,
-                )?;
+                );
                 let id = xcb.generate_id()?;
                 check_reply(
                     || "X11 CreateWindow for the render surface failed.",

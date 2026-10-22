@@ -184,6 +184,11 @@ impl WindowGeometrySession {
         move_client(self.handle(), x, y)
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        let mut client = POINT { x: 0, y: 0 };
+        (unsafe { ClientToScreen(self.handle(), &mut client) } != 0).then_some((client.x, client.y))
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         cursor_position()
     }
@@ -414,7 +419,12 @@ pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>)
         }
         tracked.insert(hwnd as isize, MinTrack { previous, min });
     }
-    unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, min_track_proc as *const () as isize) };
+    let replaced =
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, min_track_proc as *const () as isize) };
+    if replaced == 0 {
+        lock_min_tracks().remove(&(hwnd as isize));
+        return false;
+    }
     true
 }
 

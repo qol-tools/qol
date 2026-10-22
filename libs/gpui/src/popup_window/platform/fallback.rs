@@ -32,6 +32,10 @@ impl WindowGeometrySession {
         false
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
     }

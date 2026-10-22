@@ -17,6 +17,7 @@ const CORNER_BAND: f32 = 10.0;
 const SETTLE_WAIT: Duration = Duration::from_millis(300);
 const REAPPLY_AFTER: Duration = Duration::from_millis(50);
 const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
+const RELEASE_POLL: Duration = Duration::from_millis(16);
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
     ResizeEdge::Top,
@@ -93,7 +94,7 @@ impl Drag {
             || self
                 .session
                 .pointer_on()
-                .is_some_and(|pointer| !pointer.pressed)
+                .is_none_or(|pointer| !pointer.pressed)
     }
 
     fn finish(&self, epochs: &AtomicU64) -> bool {
@@ -189,7 +190,7 @@ impl ResizeFrame {
         );
         if crate::platform::RESIZE_BY_WINDOW_MANAGER {
             window.start_window_resize(edge);
-            watch_release(drag, self.state.epoch.clone(), Instant::now(), window);
+            watch_release(drag, self.state.epoch.clone(), cx);
             return;
         }
         let applied = drag.start;
@@ -217,11 +218,12 @@ impl ResizeFrame {
     ) -> Option<Drag> {
         let session = crate::popup_window::window_geometry_session(&(self.state.title)())?;
         let (x, y, width, height) = session.bounds()?;
+        let (client_x, client_y) = session.client_origin()?;
         session.pointer_root()?;
         let scale = f64::from(window.scale_factor());
         let pointer_start = (
-            x + (press.x.to_f64() * scale).round() as i32,
-            y + (press.y.to_f64() * scale).round() as i32,
+            client_x + (press.x.to_f64() * scale).round() as i32,
+            client_y + (press.y.to_f64() * scale).round() as i32,
         );
         let min_size = self.state.min_size.get();
         let area = native_work_area(window, cx);
@@ -285,25 +287,25 @@ fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, windo
     });
 }
 
-fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, last_frame: Instant, window: &Window) {
-    window.on_next_frame(move |window, _| {
+fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
+    let started = Instant::now();
+    cx.spawn(async move |cx| loop {
+        cx.background_executor().timer(RELEASE_POLL).await;
         if epochs.load(Ordering::SeqCst) != drag.epoch {
             return;
         }
-        let released = drag.released();
-        qol_runtime::probe!(
-            "GPUI_RESIZE",
-            "phase=wm-frame epoch={} drawn={:?} frame_ms={} released={released}",
-            drag.epoch,
-            drawn_size(window),
-            last_frame.elapsed().as_millis()
-        );
-        if released {
+        if drag.released() {
+            qol_runtime::probe!(
+                "GPUI_RESIZE",
+                "phase=wm-released epoch={} held_ms={}",
+                drag.epoch,
+                started.elapsed().as_millis()
+            );
             drag.finish(&epochs);
             return;
         }
-        watch_release(drag, epochs, Instant::now(), window);
-    });
+    })
+    .detach();
 }
 
 fn settle_at(
@@ -361,8 +363,9 @@ fn native_work_area(window: &Window, cx: &App) -> Option<NativeRect> {
     let display = window.display(cx)?;
     let monitor = crate::monitor::native_display_bounds(display.as_ref());
     let area = crate::popup_window::work_area_within(monitor).unwrap_or(monitor);
+    let reserve = px(crate::platform::display_scale_factor(display.id()));
     Some(NativeRect::of_bounds(crate::monitor::windowed_area(
-        monitor, area,
+        monitor, area, reserve,
     )))
 }
 
