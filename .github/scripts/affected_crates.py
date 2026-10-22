@@ -3,9 +3,11 @@
 
 Emits per-OS clippy/test argument strings to GITHUB_OUTPUT. The result is the
 set of changed crates plus every crate that (transitively) depends on them, so a
-shared-lib edit still rebuilds its dependents. Anything ambiguous - a global
-file changed, no usable base, cargo metadata unavailable - falls back to the
-full workspace. The bias is always toward over-building, never toward skipping
+shared-lib edit still rebuilds its dependents. A file a crate embeds with
+include_str! or include_bytes! counts as a change to that crate, wherever the
+file lives. Anything ambiguous - a global file changed, no usable base, cargo
+metadata or the embedded file list unavailable - falls back to the full
+workspace. The bias is always toward over-building, never toward skipping
 something that should run.
 """
 import json
@@ -37,7 +39,15 @@ GLOBAL_FILES = {
     ".github/scripts/cleanup_cgroup_journal.py",
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EMBEDDED_MARKDOWN = re.compile(r'^(.*?):\d+:.*include_(?:str|bytes)!\s*\(\s*"([^"]+\.md)"')
+# include_str!/include_bytes! of a literal path, or of a concat! that starts
+# with a literal or with CARGO_MANIFEST_DIR and a literal. A concat! literal is
+# only the start of the path, so it matches every file under it. OUT_DIR paths
+# are build outputs, not repository files.
+EMBED = re.compile(
+    r'include_(?:str|bytes)!\s*\(\s*(?:"(?P<path>[^"]+)"|concat!\s*\(\s*'
+    r'(?P<manifest>env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*)?"(?P<prefix>[^"]+)")'
+)
+REGISTRY_TOOL = "qol-plugin-registry"
 WORKTREE_HEAD = "WORKTREE"
 
 
@@ -123,8 +133,8 @@ def full_workspace(reason):
     emit(
         {
             "full": True,
-            "windows_process": True,
-            "windows_dev_build": True,
+            "lint_skip": False,
+            "registry_tool_skip": False,
             "ubuntu_clippy": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)} --all-targets{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_build": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
             "ubuntu_test": f"--workspace{exclude_flags(UBUNTU_EXCLUDE)}{workspace_feature_flags(UBUNTU_EXCLUDE)}",
@@ -150,8 +160,8 @@ def skip_all(reason):
         {
             "full": False,
             "crates": "",
-            "windows_process": False,
-            "windows_dev_build": False,
+            "lint_skip": True,
+            "registry_tool_skip": True,
             "ubuntu_clippy": "",
             "ubuntu_build": "",
             "ubuntu_test": "",
@@ -194,18 +204,47 @@ def with_untracked(files, head):
     return sorted(set(files) | set(untracked.stdout.splitlines()))
 
 
-def embedded_markdown():
+def manifest_dir(path):
+    for parent in Path(path).parents:
+        if (REPO_ROOT / parent / "Cargo.toml").is_file():
+            return parent.as_posix()
+    return None
+
+
+# Each embed is (target, whether the target is only a path prefix, the source
+# file that embeds it). A source can embed a file outside its own crate, so the
+# embedding crate rebuilds when that file changes.
+def embedded_files():
     found = run([
-        "git", "-C", str(REPO_ROOT), "grep", "-n", "-E",
-        r'include_(str|bytes)![[:space:]]*\([[:space:]]*"[^"]+\.md"', "--", "*.rs",
+        "git", "-C", str(REPO_ROOT), "grep", "-l", "--untracked", "-E",
+        r"include_(str|bytes)!", "--", "*.rs",
     ])
     if found.returncode not in (0, 1):
         return None
-    return {
-        os.path.normpath(os.path.join(os.path.dirname(match[1]), match[2]))
-        for match in map(EMBEDDED_MARKDOWN.match, found.stdout.splitlines())
-        if match
-    }
+    embeds = []
+    for source in found.stdout.splitlines():
+        try:
+            text = (REPO_ROOT / source).read_text()
+        except (OSError, UnicodeDecodeError):
+            return None
+        for match in EMBED.finditer(text):
+            if match["path"]:
+                base, target, prefix = os.path.dirname(source), match["path"], False
+            elif match["manifest"]:
+                base, target, prefix = manifest_dir(source), match["prefix"].lstrip("/"), True
+            else:
+                base, target, prefix = os.path.dirname(source), match["prefix"], True
+            if base is not None:
+                embeds.append((os.path.normpath(os.path.join(base, target)), prefix, source))
+    return embeds
+
+
+def embedding_sources(path, embeds):
+    return [
+        source
+        for target, prefix, source in embeds
+        if path == target or (prefix and path.startswith(target))
+    ]
 
 
 def lock_entries(text):
@@ -313,8 +352,10 @@ def affected_outputs(affected, pkgs):
     return {
         "full": False,
         "crates": " ".join(sorted(affected)),
-        "windows_process": "qol-process" in affected,
-        "windows_dev_build": "qol-dev-build" in affected,
+        # The ubuntu runner also runs the workspace-wide format, workspace-hack
+        # and lockfile gates, so it runs them when any runner has work.
+        "lint_skip": not (ubuntu or macos or windows),
+        "registry_tool_skip": REGISTRY_TOOL not in affected,
         "ubuntu_clippy": args(ubuntu, True),
         "ubuntu_build": args(ubuntu, False),
         "ubuntu_test": args(ubuntu, False),
@@ -345,10 +386,11 @@ def main():
     files = [f for f in files if f.strip()]
     if not files:
         return skip_all("empty diff")
-    if any(f.endswith(".md") for f in files):
-        embedded = embedded_markdown()
-        if embedded is not None:
-            files = [f for f in files if not f.endswith(".md") or f in embedded]
+    embeds = embedded_files()
+    if embeds is None:
+        return full_workspace("cannot list the files the sources embed")
+    embedders = {f: embedding_sources(f, embeds) for f in files}
+    files = [f for f in files if not f.endswith(".md") or embedders[f]]
     if not files:
         return skip_all("markdown-only diff")
 
@@ -375,9 +417,9 @@ def main():
                 f"Cargo.lock changed a non-workspace package: {sorted(foreign)[0]}"
             )
 
-    seeds = {
-        owner for owner in (owning_package(f, pkgs) for f in files) if owner
-    } | lock_seeds
+    owners = [owning_package(f, pkgs) for f in files]
+    owners += [owning_package(source, pkgs) for f in files for source in embedders[f]]
+    seeds = {owner for owner in owners if owner} | lock_seeds
     if not seeds:
         return skip_all("no crate-owning changes (docs/non-build files only)")
 

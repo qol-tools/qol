@@ -162,8 +162,8 @@ class QueueTrustTests(unittest.TestCase):
                 self.assertEqual(plan["crates"], "")
                 for system in ("ubuntu", "macos", "windows"):
                     self.assertIs(plan[f"{system}_skip"], True)
-                self.assertIs(plan["windows_process"], False)
-                self.assertIs(plan["windows_dev_build"], False)
+                self.assertIs(plan["lint_skip"], True)
+                self.assertIs(plan["registry_tool_skip"], True)
 
     def test_overlapping_closures_check_only_the_intersection(self):
         self.record = {**self.record, "plan": pr_plan({"lib-a", "app-a", "app-ab"})}
@@ -208,7 +208,7 @@ class QueueTrustTests(unittest.TestCase):
             lines = output.read_text().splitlines()
         self.assertIn("trusted=true", lines)
         self.assertIn("ubuntu_skip=true", lines)
-        self.assertIn("windows_process=false", lines)
+        self.assertIn("lint_skip=true", lines)
 
 
 class RecordTests(unittest.TestCase):

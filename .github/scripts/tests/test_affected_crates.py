@@ -121,8 +121,8 @@ class LocalPlannerContract(unittest.TestCase):
                         "ubuntu_skip": True,
                         "ubuntu_test": "",
                         "macos_build": "",
-                        "windows_process": True,
-                        "windows_dev_build": True,
+                        "lint_skip": False,
+                        "registry_tool_skip": True,
                     }
                 )
 
@@ -134,15 +134,15 @@ class LocalPlannerContract(unittest.TestCase):
                     "ubuntu_build": "",
                     "ubuntu_skip": True,
                     "ubuntu_test": "",
-                    "windows_process": True,
-                    "windows_dev_build": True,
+                    "lint_skip": False,
+                    "registry_tool_skip": True,
                 },
             )
             self.assertEqual(
                 github_output.read_text(),
                 "full=false\nubuntu_build=\nubuntu_skip=true\nubuntu_test=\n"
                 "macos_build=\n"
-                "windows_process=true\nwindows_dev_build=true\n",
+                "lint_skip=false\nregistry_tool_skip=true\n",
             )
 
     def test_terminal_plans_set_windows_targets(self):
@@ -155,12 +155,8 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(emit.call_args.args[0]["full"], expected)
                     self.assertIs(emit.call_args.args[0]["ubuntu_doctest"], expected)
                     self.assertIs(emit.call_args.args[0]["macos_doctest"], expected)
-                    self.assertIs(
-                        emit.call_args.args[0]["windows_process"], expected
-                    )
-                    self.assertIs(
-                        emit.call_args.args[0]["windows_dev_build"], expected
-                    )
+                    self.assertIs(emit.call_args.args[0]["lint_skip"], not expected)
+                    self.assertIs(emit.call_args.args[0]["registry_tool_skip"], not expected)
                     self.assertIs(
                         emit.call_args.args[0]["windows_doctest"], expected
                     )
@@ -259,35 +255,118 @@ class LocalPlannerContract(unittest.TestCase):
         )
 
     def test_markdown_a_source_file_embeds_is_found(self):
-        embedded = ac.embedded_markdown()
-        self.assertIn("vendor/gpui/README.md", embedded)
-        self.assertNotIn("vendor/gpui/MODIFICATIONS.md", embedded)
+        targets = {target for target, _, _ in ac.embedded_files()}
+        self.assertIn("vendor/gpui/README.md", targets)
+        self.assertNotIn("vendor/gpui/MODIFICATIONS.md", targets)
 
-    @patch.object(ac, "embedded_markdown")
+    def test_every_include_form_resolves_to_the_file_it_embeds(self):
+        source = "crates/a/src/lib.rs"
+        cases = [
+            ('include_str!("../../../flows/env.toml")', ("flows/env.toml", False)),
+            ('include_str!(\n    "../data/x.txt"\n)', ("crates/a/data/x.txt", False)),
+            ('#![doc = include_str!("../README.md")]', ("crates/a/README.md", False)),
+            (
+                'include_bytes!(concat!(\n    env!("CARGO_MANIFEST_DIR"),\n    "/shell/ext.js"\n))',
+                ("crates/a/shell/ext.js", True),
+            ),
+            ('include_bytes!(concat!("../assets/icon-", $size, ".png"))', ("crates/a/assets/icon-", True)),
+            ('include_bytes!(concat!(env!("OUT_DIR"), "/generated.bin"))', None),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "crates/a/src").mkdir(parents=True)
+                (root / "crates/a/Cargo.toml").write_text('[package]\nname = "a"\n')
+                (root / source).write_text(f"const X: &[u8] = {text};\n")
+                subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+                with patch.object(ac, "REPO_ROOT", root):
+                    embeds = ac.embedded_files()
+                self.assertEqual(embeds, [(*expected, source)] if expected else [])
+
+    @patch.object(ac, "embedded_files")
+    @patch.object(ac, "emit")
+    @patch.object(ac, "skip_all")
+    @patch.object(ac, "workspace_graph")
+    @patch.object(ac, "changed_files")
+    def test_a_file_another_crate_embeds_seeds_that_crate(
+        self, changed_files, graph, skip_all, emit, embedded_files
+    ):
+        graph.return_value = {
+            "qol-plugin-api": {"dir": "libs/plugin-api", "deps": set(), "doctest": False},
+            "qol-lights": {"dir": "plugins/lights", "deps": set(), "doctest": False},
+            "qol": {"dir": "tools/cli", "deps": set(), "doctest": False},
+        }
+        embedded_files.return_value = [
+            ("plugins/lights/plugin.toml", False, "libs/plugin-api/src/operations/tests.rs"),
+            ("flows/envs/mint.toml", False, "tools/cli/src/commands/flow.rs"),
+            ("tools/cli/assets/icon", True, "tools/cli/src/icon.rs"),
+        ]
+        cases = [
+            ("plugins/lights/plugin.toml", "qol-lights qol-plugin-api"),
+            ("flows/envs/mint.toml", "qol"),
+            ("tools/cli/assets/icon-16.png", "qol"),
+            ("flows/envs/other.toml", None),
+        ]
+        with patch.object(ac, "UBUNTU_EXCLUDE", set()), patch.dict(
+            os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}
+        ):
+            for path, crates in cases:
+                with self.subTest(path=path):
+                    changed_files.return_value = [path]
+                    emit.reset_mock()
+                    skip_all.reset_mock()
+                    ac.main()
+                    if crates is None:
+                        skip_all.assert_called_once()
+                        emit.assert_not_called()
+                    else:
+                        self.assertEqual(emit.call_args.args[0]["crates"], crates)
+
+    @patch.object(ac, "embedded_files")
     @patch.object(ac, "full_workspace")
     @patch.object(ac, "workspace_graph")
     @patch.object(ac, "changed_files")
     def test_embedded_markdown_counts_as_source(
-        self, changed_files, graph, full_workspace, embedded_markdown
+        self, changed_files, graph, full_workspace, embedded_files
     ):
         changed_files.return_value = ["vendor/gpui/README.md"]
-        embedded_markdown.return_value = {"vendor/gpui/README.md"}
+        embedded_files.return_value = [("vendor/gpui/README.md", False, "vendor/gpui/src/gpui.rs")]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
             ac.main()
         full_workspace.assert_called_once_with("global file changed: vendor/gpui/README.md")
 
-    @patch.object(ac, "embedded_markdown")
+    @patch.object(ac, "embedded_files")
     @patch.object(ac, "full_workspace")
     @patch.object(ac, "workspace_graph")
     @patch.object(ac, "changed_files")
-    def test_unknown_embeds_keep_markdown(
-        self, changed_files, graph, full_workspace, embedded_markdown
+    def test_unknown_embeds_plan_the_full_workspace(
+        self, changed_files, graph, full_workspace, embedded_files
     ):
-        changed_files.return_value = ["vendor/gpui/MODIFICATIONS.md"]
-        embedded_markdown.return_value = None
+        changed_files.return_value = ["flows/envs/mint.toml"]
+        embedded_files.return_value = None
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
             ac.main()
-        full_workspace.assert_called_once_with("global file changed: vendor/gpui/MODIFICATIONS.md")
+        full_workspace.assert_called_once_with("cannot list the files the sources embed")
+
+    def test_workspace_gates_and_the_registry_tool_follow_the_affected_crates(self):
+        pkgs = {
+            "qol-keyremap": {"dir": "plugins/keyremap", "deps": set(), "doctest": False},
+            "qol-plugin-registry": {"dir": "tools/plugin-registry", "deps": set(), "doctest": False},
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": False},
+        }
+        cases = [
+            ({"qol-keyremap"}, (True, False, True)),
+            ({"qol-plugin-registry"}, (False, False, False)),
+            ({"qol-alt-tab"}, (False, False, True)),
+        ]
+        with patch.object(ac, "UBUNTU_EXCLUDE", {"qol-keyremap"}):
+            for affected, expected in cases:
+                with self.subTest(affected=affected):
+                    outputs = ac.affected_outputs(affected, pkgs)
+                    self.assertEqual(
+                        (outputs["ubuntu_skip"], outputs["lint_skip"], outputs["registry_tool_skip"]),
+                        expected,
+                    )
 
     @patch.object(ac, "emit")
     @patch.object(ac, "lock_changed_packages")
@@ -416,29 +495,22 @@ class LocalPlannerContract(unittest.TestCase):
             "unrelated": {"dir": "libs/unrelated", "deps": set(), "doctest": True},
         }
         cases = [
-            ("libs/process/src/lib.rs", True, True, "qol-dev-build"),
-            ("libs/foundation/src/lib.rs", True, True, "foundation"),
-            ("libs/dev-build/src/lib.rs", False, True, "qol-dev-build"),
-            ("tools/cli/src/main.rs", False, False, "qol"),
-            ("plugins/launcher/src/lib.rs", False, False, "qol-launcher"),
-            ("libs/unrelated/src/lib.rs", False, False, "unrelated"),
+            ("libs/process/src/lib.rs", "qol-process"),
+            ("libs/process/src/lib.rs", "qol-dev-build"),
+            ("libs/foundation/src/lib.rs", "qol-process"),
+            ("libs/dev-build/src/lib.rs", "qol-dev-build"),
+            ("tools/cli/src/main.rs", "qol"),
+            ("plugins/launcher/src/lib.rs", "qol-launcher"),
+            ("libs/unrelated/src/lib.rs", "unrelated"),
         ]
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
-            for path, process_expected, dev_build_expected, checked in cases:
-                with self.subTest(path=path):
+            for path, checked in cases:
+                with self.subTest(path=path, checked=checked):
                     changed_files.return_value = [path]
                     emit.reset_mock()
 
                     ac.main()
 
-                    self.assertIs(
-                        emit.call_args.args[0]["windows_process"],
-                        process_expected,
-                    )
-                    self.assertIs(
-                        emit.call_args.args[0]["windows_dev_build"],
-                        dev_build_expected,
-                    )
                     self.assertIn(
                         f"-p {checked}", emit.call_args.args[0]["windows_clippy"]
                     )
