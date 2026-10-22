@@ -27,21 +27,13 @@ fn move_from(legacy_dir: &Path, config_path: &Path) {
         );
         return;
     }
-    if let Err(error) = rename_or_copy(&legacy, config_path) {
+    if let Err(error) = qol_fs::move_file(&legacy, config_path) {
         eprintln!(
             "warning: could not move {} to {}: {error}",
             legacy.display(),
             config_path.display()
         );
     }
-}
-
-fn rename_or_copy(legacy: &Path, target: &Path) -> std::io::Result<()> {
-    if std::fs::rename(legacy, target).is_ok() {
-        return Ok(());
-    }
-    std::fs::copy(legacy, target)?;
-    std::fs::remove_file(legacy)
 }
 
 #[cfg(test)]

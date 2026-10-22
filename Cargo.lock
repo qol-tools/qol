@@ -6971,6 +6971,7 @@ dependencies = [
  "qol-conventions",
  "qol-desktop-settings",
  "qol-frecency",
+ "qol-fs",
  "qol-gpui",
  "qol-headless",
  "qol-log",

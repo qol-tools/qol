@@ -32,21 +32,13 @@ fn move_file(legacy: &Path, target: &Path) {
     if target.exists() || !legacy.is_file() {
         return;
     }
-    if let Err(error) = rename_or_copy(legacy, target) {
+    if let Err(error) = qol_fs::move_file(legacy, target) {
         log::warn!(
             "legacy store: could not move {} to {}: {error}",
             legacy.display(),
             target.display()
         );
     }
-}
-
-fn rename_or_copy(legacy: &Path, target: &Path) -> std::io::Result<()> {
-    if std::fs::rename(legacy, target).is_ok() {
-        return Ok(());
-    }
-    std::fs::copy(legacy, target)?;
-    std::fs::remove_file(legacy)
 }
 
 #[cfg(test)]

@@ -28,6 +28,7 @@ qol-headless.workspace = true
 qol-runtime.workspace = true
 qol-search.workspace = true
 qol-frecency.workspace = true
+qol-fs.workspace = true
 qol-apps.workspace = true
 qol-platform.workspace = true
 qol-process.workspace = true
