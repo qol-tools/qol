@@ -32,7 +32,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_only_pull_requests_check_the_release_profile(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         step = named_step(check, "Release profile check", "      ")
         for contract in [
             "if: matrix.skip != 'true' && github.event_name == 'pull_request'",
@@ -44,21 +44,21 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_checks_restore_the_cache_without_competing_with_the_warmer(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         setup = check.split("      - uses: ./.github/actions/rust-setup\n", 1)[1].split("\n      - ", 1)[0]
         self.assertIn("cache-key: ci-${{ matrix.os }}", setup)
         self.assertIn('save-cache: "false"', setup)
 
     def test_build_jobs_never_hold_a_cache_deletion_token(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         self.assertNotIn("actions: write", check)
         self.assertNotIn("github.token", check)
         self.assertNotIn("cache_prune.py", check)
 
     def test_release_build_runs_beside_lint_and_test(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         self.assertIn(
             "if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' }}",
             check,
@@ -190,7 +190,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         gate = workflow.split("  gate:\n", 1)[1].split("  queue-report:\n", 1)[0]
         for contract in [
             "name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}",
-            "needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]",
+            "needs: [plan, check, batch, release-build, registry-tool, batch-failure, queue-report]",
             "checks: write",
             "VERDICT: ${{ steps.verdict.outcome }}",
             "run: python3 .github/scripts/queue_batch.py gate",
@@ -204,7 +204,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, gate)
         report = workflow.split("  queue-report:\n", 1)[1]
-        self.assertIn("needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure]", report)
+        self.assertIn("needs: [plan, check, batch, release-build, registry-tool, batch-failure]", report)
         self.assertIn("contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == ''", report)
 
     def test_repository_lint_runs_in_the_plan_before_any_runner_compiles(self):
@@ -225,7 +225,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract=contract):
                 self.assertIn(contract, lint)
         self.assertNotIn("cargo", plan)
-        for job in ["check", "process-windows", "registry-tool"]:
+        for job in ["check", "registry-tool"]:
             with self.subTest(job=job):
                 dependencies = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("needs: plan", dependencies)
@@ -391,14 +391,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn(contract, trust)
         covered = named_step(plan, "Pull request results cover this entry", "      ")
         self.assertIn("if: steps.trust.outputs.trusted == 'true'", covered)
-        for job in ["check", "process-windows", "registry-tool"]:
+        for job in ["check", "registry-tool"]:
             with self.subTest(job=job):
                 condition = workflow.split(f"  {job}:\n", 1)[1].split("    runs-on:", 1)[0]
                 self.assertIn("needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true'", condition)
 
     def test_pull_request_runs_test_what_the_queue_trusts(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         test_steps = re.findall(r"      - name: Test\n(.*?)(?=\n      - name:|\Z)", check, re.S)
         self.assertEqual(len(test_steps), 2)
         for step in [*test_steps, named_step(check, "Install cargo-nextest", "      ")]:
@@ -424,7 +424,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_a_queue_run_stops_its_matrix_at_the_first_failure_and_still_reports_it(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         self.assertIn("fail-fast: ${{ github.event_name == 'merge_group' }}", check)
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
         self.assertIn("fail-fast: true", build)
@@ -698,7 +698,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_nextest_preserves_affected_scope_and_documentation_on_each_platform(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check_job = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check_job = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         test_steps = re.findall(r"      - name: Test\n(.*?)(?=\n      - name:|\Z)", check_job, re.S)
         self.assertEqual(len(test_steps), 2)
         self.assertRegex(check_job, r"tool: cargo-nextest@\d+\.\d+\.\d+")
@@ -716,20 +716,48 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn("cargo test --locked $TEST_ARGS --doc", step)
                 self.assertLess(step.index("cargo nextest run"), step.index("cargo test"))
 
-    def test_windows_dev_build_tests_follow_the_affected_plan(self):
+    def test_windows_tests_run_once_in_the_check_leg(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 
-        for contract in [
-            "windows_dev_build: ${{ steps.trust.outputs.windows_dev_build || steps.affected.outputs.windows_dev_build }}",
-            "fromJSON(needs.plan.outputs.windows_dev_build || 'false')",
-            "if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}",
-            "run: cargo test --locked -p qol-dev-build --all-targets",
-        ]:
-            self.assertIn(contract, workflow)
+        for loose in ["process-windows", "windows_process", "windows_dev_build", "ci-windows-sandbox"]:
+            with self.subTest(loose=loose):
+                self.assertNotIn(loose, workflow)
+
+    def test_workspace_gates_run_when_any_runner_has_work(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
+
+        self.assertIn(
+            "lint_skip: ${{ steps.trust.outputs.lint_skip || steps.affected.outputs.lint_skip }}", workflow
+        )
+        self.assertIn(
+            "            skip: ${{ needs.plan.outputs.ubuntu_skip }}\n"
+            "            lint_skip: ${{ needs.plan.outputs.lint_skip }}\n",
+            check,
+        )
+        self.assertEqual(check.count("lint_skip: ${{ needs.plan.outputs.lint_skip }}"), 1)
+        for name in ["Install cargo-hakari", "Workspace-hack is current", "Lockfile is current", "Format"]:
+            with self.subTest(step=name):
+                self.assertIn("if: runner.os == 'Linux' && matrix.lint_skip != 'true'\n", named_step(check, name, "      "))
+        self.assertIn("if: matrix.skip != 'true'\n", named_step(check, "Clippy", "      "))
+        setup = check.split("      - uses: ./.github/actions/rust-setup\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("if: matrix.skip != 'true' || (runner.os == 'Linux' && matrix.lint_skip != 'true')", setup)
+        self.assertIn("lookup-only: ${{ matrix.skip == 'true' }}", setup)
+
+    def test_the_registry_tool_builds_only_when_the_plan_reaches_it(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        job = workflow.split("  registry-tool:\n", 1)[1].split("    runs-on:", 1)[0]
+
+        self.assertIn(
+            "registry_tool_skip: ${{ steps.trust.outputs.registry_tool_skip || steps.affected.outputs.registry_tool_skip }}",
+            workflow,
+        )
+        self.assertIn("needs.plan.outputs.registry_tool_skip != 'true' }}", job)
+        self.assertNotIn("ubuntu_skip", job)
 
     def test_windows_lints_and_tests_the_affected_plan_like_the_other_runners(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        check = workflow.split("  check:\n", 1)[1].split("  process-windows:\n", 1)[0]
+        check = workflow.split("  check:\n", 1)[1].split("  batch:\n", 1)[0]
         for key in ["clippy", "build", "test", "doctest", "skip"]:
             with self.subTest(key=key):
                 self.assertIn(
@@ -787,15 +815,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_merge_queue_builds_windows_release_binaries(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        sandbox = workflow.split("  process-windows:\n", 1)[1].split("  release-build:\n", 1)[0]
         build = workflow.split("  release-build:\n", 1)[1].split("  registry-tool:\n", 1)[0]
 
         self.assertNotIn("windows_apps", workflow)
-        self.assertNotIn("cargo build", sandbox)
-        self.assertNotIn("upload-artifact", sandbox)
-        self.assertIn(
-            "RUSTFLAGS: -D warnings -C linker=rust-lld -C target-feature=+crt-static", sandbox
-        )
         for contract in [
             "          - os: windows-latest\n"
             "            build_args: ${{ needs.batch.outputs.windows_build }}\n"

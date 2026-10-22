@@ -49,8 +49,8 @@ jobs:
       windows_test: ${{ steps.trust.outputs.windows_test || steps.affected.outputs.windows_test }}
       windows_doctest: ${{ steps.trust.outputs.windows_doctest || steps.affected.outputs.windows_doctest }}
       windows_skip: ${{ steps.trust.outputs.windows_skip || steps.affected.outputs.windows_skip }}
-      windows_process: ${{ steps.trust.outputs.windows_process || steps.affected.outputs.windows_process }}
-      windows_dev_build: ${{ steps.trust.outputs.windows_dev_build || steps.affected.outputs.windows_dev_build }}
+      lint_skip: ${{ steps.trust.outputs.lint_skip || steps.affected.outputs.lint_skip }}
+      registry_tool_skip: ${{ steps.trust.outputs.registry_tool_skip || steps.affected.outputs.registry_tool_skip }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,12 +192,15 @@ jobs:
       fail-fast: ${{ github.event_name == 'merge_group' }}
       matrix:
         include:
+          # Format, workspace-hack and lockfile gates cover the whole workspace
+          # and run here once, also when only another runner has crates to test.
           - os: ubuntu-latest
             clippy_args: ${{ needs.plan.outputs.ubuntu_clippy }}
             build_args: ${{ needs.plan.outputs.ubuntu_build }}
             test_args: ${{ needs.plan.outputs.ubuntu_test }}
             doctest: ${{ needs.plan.outputs.ubuntu_doctest }}
             skip: ${{ needs.plan.outputs.ubuntu_skip }}
+            lint_skip: ${{ needs.plan.outputs.lint_skip }}
           - os: macos-latest
             clippy_args: ${{ needs.plan.outputs.macos_clippy }}
             build_args: ${{ needs.plan.outputs.macos_build }}
@@ -213,17 +216,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' || (runner.os == 'Linux' && matrix.lint_skip != 'true')
 
+      # A runner that only lints compiles nothing, so it neither restores the
+      # build cache nor installs the system libraries.
       - uses: ./.github/actions/rust-setup
-        if: matrix.skip != 'true'
+        if: matrix.skip != 'true' || (runner.os == 'Linux' && matrix.lint_skip != 'true')
         with:
           cache-key: ci-${{ matrix.os }}
           save-cache: "false"
+          lookup-only: ${{ matrix.skip == 'true' }}
           components: rustfmt, clippy
 
       - name: Install cargo-hakari
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.lint_skip != 'true'
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
           tool: cargo-hakari
@@ -239,7 +245,7 @@ jobs:
       # with workspace builds. Both checks exit non-zero when a manifest
       # changed without regenerating it.
       - name: Workspace-hack is current
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.lint_skip != 'true'
         run: |
           cargo hakari generate --diff
           cargo hakari manage-deps --dry-run
@@ -250,7 +256,7 @@ jobs:
       # `--no-deps` cannot stand in here: it skips resolution and exits 0
       # against a stale lockfile.
       - name: Lockfile is current
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.lint_skip != 'true'
         run: |
           if error=$(cargo metadata --locked --format-version 1 2>&1 >/dev/null); then
             exit 0
@@ -260,7 +266,7 @@ jobs:
           exit 1
 
       - name: Format
-        if: runner.os == 'Linux' && matrix.skip != 'true'
+        if: runner.os == 'Linux' && matrix.lint_skip != 'true'
         run: cargo fmt --all -- --check
 
       - name: Clippy
@@ -355,32 +361,6 @@ jobs:
           if [ "$DOCTEST" = "true" ]; then
             cargo test --locked $TEST_ARGS --doc
           fi
-
-  process-windows:
-    name: sandbox lifecycle (windows)
-    needs: plan
-    if: >-
-      ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' && (
-      fromJSON(needs.plan.outputs.windows_process || 'false') ||
-      fromJSON(needs.plan.outputs.windows_dev_build || 'false')) }}
-    runs-on: windows-latest
-    timeout-minutes: 60
-    env:
-      RUSTFLAGS: -D warnings -C linker=rust-lld -C target-feature=+crt-static
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: ./.github/actions/rust-setup
-        with:
-          cache-key: ci-windows-sandbox
-
-      - name: Test development build crate
-        if: ${{ fromJSON(needs.plan.outputs.windows_dev_build) }}
-        run: cargo test --locked -p qol-dev-build --all-targets
-
-      - name: Test process containment
-        if: ${{ fromJSON(needs.plan.outputs.windows_process) }}
-        run: cargo test --locked -p qol-process --all-targets
 
   # Only the tail of the merge queue, the last entry GitHub is building, runs
   # the release build. Its queue commit holds every entry ahead of it, so the
@@ -481,7 +461,7 @@ jobs:
   registry-tool:
     name: registry tool build
     needs: plan
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.ubuntu_skip != 'true' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.reused != 'true' && needs.plan.outputs.trusted != 'true' && needs.plan.outputs.registry_tool_skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -536,7 +516,7 @@ jobs:
   # entry still queued.
   gate:
     name: ${{ github.event_name == 'merge_group' && 'queue gate' || 'merge gate' }}
-    needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure, queue-report]
+    needs: [plan, check, batch, release-build, registry-tool, batch-failure, queue-report]
     if: ${{ always() && github.event_name != 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -609,7 +589,7 @@ jobs:
   # queue run says which jobs failed on the pull request itself and fails its head.
   queue-report:
     name: Report merge queue failure
-    needs: [plan, check, batch, release-build, process-windows, registry-tool, batch-failure]
+    needs: [plan, check, batch, release-build, registry-tool, batch-failure]
     if: ${{ always() && github.event_name == 'merge_group' && contains(needs.*.result, 'failure') && needs.batch-failure.outputs.combined == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
