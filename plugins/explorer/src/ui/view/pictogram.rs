@@ -101,7 +101,7 @@ fn folder(size: f32) -> AnyElement {
         name: "explorer-folder".to_string(),
         markup: FOLDER.to_string(),
         size,
-        ink: 0,
+        ink: kit().palette.accent,
     }
     .into_any_element()
 }
@@ -202,6 +202,11 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn folder_takes_the_theme_accent() {
+        assert!(FOLDER.contains("currentColor"));
     }
 
     #[test]
