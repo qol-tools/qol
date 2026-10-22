@@ -4,7 +4,7 @@ uid = "2f4c2ef3-2e20-4be6-8c5f-183d28fbc59d"
 name = "Explorer"
 icon = "qol"
 description = "Browse and pick files from the keyboard"
-version = "0.7.0"
+version = "0.8.0"
 author = "KMRH47"
 platforms = ["linux"]
 
