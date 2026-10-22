@@ -9,6 +9,7 @@ use crate::nav::path;
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPEN_COMMAND: &str = "open";
+const SETTINGS_COMMAND: &str = "settings";
 const SUPPORTED: [Os; 1] = [Os::Linux];
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
@@ -57,6 +58,18 @@ where
                         }
                     };
                     open(start)?;
+                    Ok(CommandResult::success(""))
+                }),
+        )
+        .command(
+            Command::new(SETTINGS_COMMAND)
+                .about("Open the Explorer settings page in qol-tray.")
+                .usage(format!("{PLUGIN_ID} {SETTINGS_COMMAND}"))
+                .output("No stdout on success.")
+                .exit_behavior("Exits non-zero if qol-tray cannot open the settings page.")
+                .run_result(|_| {
+                    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+                        .context("failed to open the Explorer settings")?;
                     Ok(CommandResult::success(""))
                 }),
         )

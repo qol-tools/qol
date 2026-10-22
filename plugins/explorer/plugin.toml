@@ -19,6 +19,12 @@ command = "qol-explorer"
 label = "Open Explorer"
 args = ["open"]
 
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
+
 [capabilities]
 doctor = true
 
