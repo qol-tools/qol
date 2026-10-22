@@ -238,5 +238,3 @@ pub(crate) fn monitor_scale(monitor: &gpui::Bounds<gpui::Pixels>) -> f32 {
         })
         .map_or(1.0, |candidate| candidate.scale)
 }
-
-pub(crate) const RESIZE_ON_CANVAS: bool = false;

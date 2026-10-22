@@ -18,12 +18,13 @@ impl NativeRect {
         }
     }
 
-    pub(crate) fn overlap(self, other: Self) -> Self {
-        let left = self.x.max(other.x);
-        let top = self.y.max(other.y);
-        let right = self.right().min(other.right()).max(left);
-        let bottom = self.bottom().min(other.bottom()).max(top);
-        Self::spanning(left, top, right, bottom)
+    pub(crate) fn rounded(self) -> (i32, i32, u32, u32) {
+        (
+            self.x.round() as i32,
+            self.y.round() as i32,
+            self.width.round().max(1.0) as u32,
+            self.height.round().max(1.0) as u32,
+        )
     }
 
     fn right(self) -> f64 {
@@ -130,29 +131,6 @@ pub(crate) fn resized_rect(
     NativeRect::spanning(left, top, right, bottom)
 }
 
-pub(crate) fn drag_canvas(start: NativeRect, edge: ResizeEdge, limits: ResizeLimits) -> NativeRect {
-    let sides = dragged_sides(edge);
-    let toward = |leading: bool, trailing: bool| match (leading, trailing) {
-        (true, _) => -FAR,
-        (_, true) => FAR,
-        _ => 0.0,
-    };
-    let dx = toward(sides.left, sides.right);
-    let dy = toward(sides.top, sides.bottom);
-    let grown = resized_rect(start, edge, dx, dy, limits);
-    let shrunk = resized_rect(start, edge, -dx, -dy, limits);
-    [grown, shrunk].into_iter().fold(start, |canvas, rect| {
-        NativeRect::spanning(
-            canvas.x.min(rect.x),
-            canvas.y.min(rect.y),
-            canvas.right().max(rect.right()),
-            canvas.bottom().max(rect.bottom()),
-        )
-    })
-}
-
-const FAR: f64 = 1.0e7;
-
 fn leading_edge(target: f64, floor: Option<f64>, opposite: f64, min_span: f64) -> f64 {
     let bounded = floor.map_or(target, |floor| target.max(floor));
     bounded.min(opposite - min_span)
@@ -165,7 +143,7 @@ fn trailing_edge(target: f64, ceiling: Option<f64>, opposite: f64, min_span: f64
 
 #[cfg(test)]
 mod tests {
-    use super::{drag_canvas, resized_rect, NativeRect, ResizeLimits};
+    use super::{resized_rect, NativeRect, ResizeLimits};
     use gpui::ResizeEdge;
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> NativeRect {
@@ -332,54 +310,6 @@ mod tests {
         assert_eq!(
             resized_rect(narrow, ResizeEdge::BottomRight, -10.0, -10.0, limits(area)),
             rect(0.0, 0.0, 200.0, 150.0)
-        );
-    }
-
-    #[test]
-    fn the_overlap_is_the_shared_part_or_empty_at_the_nearer_corner() {
-        let a = rect(0.0, 0.0, 400.0, 300.0);
-        assert_eq!(
-            a.overlap(rect(100.0, 50.0, 400.0, 300.0)),
-            rect(100.0, 50.0, 300.0, 250.0)
-        );
-        assert_eq!(
-            a.overlap(rect(0.0, 0.0, 300.0, 300.0)),
-            rect(0.0, 0.0, 300.0, 300.0)
-        );
-        assert_eq!(
-            a.overlap(rect(500.0, 0.0, 10.0, 10.0)),
-            rect(500.0, 0.0, 0.0, 10.0)
-        );
-    }
-
-    #[test]
-    fn the_canvas_reaches_the_work_area_only_on_the_dragged_sides() {
-        let start = rect(100.0, 100.0, 400.0, 300.0);
-        let area = Some(rect(0.0, 0.0, 1000.0, 800.0));
-        let cases = [
-            (ResizeEdge::Right, rect(100.0, 100.0, 900.0, 300.0)),
-            (ResizeEdge::Left, rect(0.0, 100.0, 500.0, 300.0)),
-            (ResizeEdge::Top, rect(100.0, 0.0, 400.0, 400.0)),
-            (ResizeEdge::Bottom, rect(100.0, 100.0, 400.0, 700.0)),
-            (ResizeEdge::TopLeft, rect(0.0, 0.0, 500.0, 400.0)),
-            (ResizeEdge::BottomRight, rect(100.0, 100.0, 900.0, 700.0)),
-        ];
-        for (edge, expected) in cases {
-            assert_eq!(drag_canvas(start, edge, limits(area)), expected, "{edge:?}");
-        }
-    }
-
-    #[test]
-    fn the_canvas_holds_a_window_narrower_than_its_minimum() {
-        let start = rect(100.0, 100.0, 120.0, 100.0);
-        let area = Some(rect(0.0, 0.0, 1000.0, 800.0));
-        assert_eq!(
-            drag_canvas(start, ResizeEdge::BottomRight, limits(area)),
-            rect(100.0, 100.0, 900.0, 700.0)
-        );
-        assert_eq!(
-            drag_canvas(start, ResizeEdge::TopLeft, limits(area)),
-            rect(0.0, 0.0, 220.0, 200.0)
         );
     }
 }

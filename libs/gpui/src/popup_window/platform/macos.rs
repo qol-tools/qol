@@ -391,8 +391,6 @@ pub struct WindowGeometrySession {
 impl WindowGeometrySession {
     pub fn set_bounds(&self, _x: i32, _y: i32, _width: u32, _height: u32) {}
 
-    pub fn clip(&self, _region: Option<(i32, i32, u32, u32)>) {}
-
     pub fn set_position(&self, _x: i32, _y: i32) {}
 
     pub fn reposition(&self, x: i32, y: i32) -> bool {

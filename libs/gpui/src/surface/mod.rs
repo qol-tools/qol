@@ -561,11 +561,7 @@ impl Surface {
                     if bounds_visible.get() {
                         bounds_state.observe_bounds(window.viewport_size());
                         if let Some(remembered) = &bounds_state.remembered {
-                            remembered.record_bounds(
-                                window.content_bounds(),
-                                window.scale_factor(),
-                                cx,
-                            );
+                            remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
                         }
                     }
                     cx.notify();

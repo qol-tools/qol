@@ -145,36 +145,6 @@ impl WindowGeometrySession {
         let _ = self.conn.flush();
     }
 
-    pub fn clip(&self, region: Option<(i32, i32, u32, u32)>) {
-        let _ = match region {
-            Some((x, y, width, height)) => shape::rectangles(
-                &*self.conn,
-                shape::SO::SET,
-                shape::SK::BOUNDING,
-                ClipOrdering::UNSORTED,
-                self.wid,
-                0,
-                0,
-                &[Rectangle {
-                    x: x.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
-                    y: y.clamp(i16::MIN.into(), i16::MAX.into()) as i16,
-                    width: width.min(u16::MAX.into()) as u16,
-                    height: height.min(u16::MAX.into()) as u16,
-                }],
-            ),
-            None => shape::mask(
-                &*self.conn,
-                shape::SO::SET,
-                shape::SK::BOUNDING,
-                self.wid,
-                0,
-                0,
-                x11rb::NONE,
-            ),
-        };
-        let _ = self.conn.flush();
-    }
-
     pub fn reposition(&self, x: i32, y: i32) -> bool {
         let aux = ConfigureWindowAux::new().x(x).y(y);
         let moved = self.conn.configure_window(self.target, &aux).is_ok();

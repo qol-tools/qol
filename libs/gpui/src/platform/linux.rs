@@ -296,8 +296,6 @@ fn window_pid(conn: &RustConnection, window: u32) -> Option<u32> {
     prop.value32().and_then(|mut value| value.next())
 }
 
-pub(crate) const RESIZE_ON_CANVAS: bool = true;
-
 #[cfg(test)]
 mod tests {
     use super::keycode_held;
