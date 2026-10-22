@@ -104,6 +104,11 @@ impl Remembered {
             Some(active) => (active.clone(), placed_on(&saved, active)),
             None => resolved(&saved, cx)?,
         };
+        let window = if keep_content_size {
+            with_size_of(window, saved.bounds_on_monitor)
+        } else {
+            window
+        };
         Some(RestoredPlacement {
             bounds: to_bounds(window),
             monitor,
@@ -256,6 +261,14 @@ fn resolved(saved: &WindowState, cx: &App) -> Option<(ActiveMonitor, WindowRect)
 fn placed_on(saved: &WindowState, monitor: &ActiveMonitor) -> WindowRect {
     let (bounds, work_area) = logical_areas(monitor);
     qol_window_state::place_on(saved, bounds, work_area)
+}
+
+fn with_size_of(window: WindowRect, content: WindowRect) -> WindowRect {
+    WindowRect {
+        width: content.width,
+        height: content.height,
+        ..window
+    }
 }
 
 fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {

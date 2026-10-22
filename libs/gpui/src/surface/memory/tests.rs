@@ -115,3 +115,25 @@ fn geometry_ids_stand_in_for_monitors_without_identity() {
         "geometry--1920-0-1920x1080"
     );
 }
+
+#[test]
+fn a_fixed_size_window_keeps_its_size_on_a_smaller_monitor() {
+    let mut saved = state("memory-test-small-monitor", true);
+    saved.bounds_on_monitor = WindowRect {
+        x: 160.0,
+        y: 60.0,
+        width: 1040.0,
+        height: 640.0,
+    };
+    let screen = bounds(0.0, 0.0, 900.0, 600.0);
+    let placed = qol_window_state::place_on(&saved, screen, screen);
+    assert_eq!(
+        with_size_of(placed, saved.bounds_on_monitor),
+        WindowRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1040.0,
+            height: 640.0,
+        }
+    );
+}

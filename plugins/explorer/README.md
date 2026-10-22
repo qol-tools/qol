@@ -18,7 +18,7 @@ The list follows the folder on disk, so files that appear, change or vanish show
 
 The Kind column reads Folder, File, Link, Pipe, Socket, Device or Broken link, the last for a link whose target is gone or loops. Pipes, sockets, devices, broken links and files on the kernel filesystems show no size, since the size they report is not their content.
 
-Explorer remembers the row or icon size and whether hidden entries show, and opens with them next time on every machine your profile syncs to. Both are also on Explorer's settings page. The window reopens at the size and place you left it.
+Explorer remembers the row or icon size and whether hidden entries show, and opens with them next time on every machine your profile syncs to. Both are also on Explorer's settings page. The window reopens where you left it.
 
 Picks stay picked when you move to another folder, and the note beside the crumbs says how many sit in other folders. Enter opens a file in its default app, or says in red that no app could open it.
 
