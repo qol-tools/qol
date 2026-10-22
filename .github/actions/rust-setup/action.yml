@@ -91,7 +91,10 @@ runs:
           apt_get 120 update && break
           if [ "$attempt" = 3 ]; then exit 1; fi
         done
-        apt_get 300 install -y --no-install-recommends \
-          pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
-          libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
-          libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev
+        for attempt in 1 2 3; do
+          apt_get 300 install -y --no-install-recommends \
+            pkg-config libx11-dev libxi-dev libxtst-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxdo-dev libvulkan-dev \
+            libwayland-dev libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev && break
+          if [ "$attempt" = 3 ]; then exit 1; fi
+        done
