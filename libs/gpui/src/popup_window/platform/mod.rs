@@ -25,7 +25,7 @@ use windows as imp;
 use imp::Platform as ActivePlatform;
 
 pub use imp::{
-    capture_focus_return, configure_keepalive_window, configure_overlay_window,
+    capture_focus_return, compositor_active, configure_keepalive_window, configure_overlay_window,
     configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
     focus_window_by_title, grab_escape, hide_for_capture, hide_invisible, hide_window_by_title,
     hide_windows_by_title_prefix, join_all_spaces, make_override_redirect, park_window_by_title,

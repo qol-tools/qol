@@ -6,7 +6,7 @@ pub(crate) struct Platform;
 
 impl SurfacePlatform for Platform {
     fn supports_native_reveal_gate() -> bool {
-        true
+        crate::popup_window::compositor_active()
     }
 
     fn required_layout_epoch(current: u64) -> u64 {

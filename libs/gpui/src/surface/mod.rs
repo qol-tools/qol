@@ -556,9 +556,9 @@ impl Surface {
             .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
         let title = reserve_surface_title(&self.title);
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
-        let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
-        let passive_reveal_gate =
-            matches!(self.kind, SurfaceKind::Toast) && supports_native_reveal_gate();
+        let reveal_gate = supports_native_reveal_gate();
+        let native_reveal_gate = reveal_after_move && reveal_gate;
+        let passive_reveal_gate = matches!(self.kind, SurfaceKind::Toast) && reveal_gate;
         let retain_on_dismiss = self.retain_on_dismiss && native_reveal_gate;
         let resolved_app_id = resolved_app_id(&self.app_id, &title);
         let applies_settings_identity = resolved_app_id == qol_conventions::SETTINGS_SURFACE_APP_ID;

@@ -383,6 +383,10 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
         .count()
 }
 
+pub fn compositor_active() -> bool {
+    true
+}
+
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;

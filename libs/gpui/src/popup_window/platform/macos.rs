@@ -722,6 +722,10 @@ pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }
 
+pub fn compositor_active() -> bool {
+    true
+}
+
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;

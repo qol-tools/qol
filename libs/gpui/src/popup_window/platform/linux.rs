@@ -2392,6 +2392,12 @@ fn absolute_geometry(conn: &impl Connection, root: u32, wid: u32) -> Option<(i32
     ))
 }
 
+pub fn compositor_active() -> bool {
+    x11rb::connect(None)
+        .ok()
+        .is_some_and(|(conn, screen_num)| compositor_running(&conn, screen_num))
+}
+
 fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {
     let selection = format!("_NET_WM_CM_S{screen_num}");
     let Some(atom) = intern(conn, selection.as_bytes()) else {
