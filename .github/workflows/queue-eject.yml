@@ -8,8 +8,11 @@ on:
 permissions:
   contents: read
 
+# Only queue runs serialize here. GitHub cancels a run waiting in a group when
+# another joins it, so a pull request or push run, whose job is skipped, would
+# otherwise cancel a waiting queue run's sweep.
 concurrency:
-  group: queue-eject
+  group: ${{ github.event.workflow_run.event == 'merge_group' && 'queue-eject' || format('queue-eject-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

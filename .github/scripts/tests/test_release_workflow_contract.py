@@ -155,7 +155,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "workflow_run:\n    workflows: [tests]\n    types: [completed]",
             "permissions:\n  contents: read",
-            "cancel-in-progress: false",
+            "group: ${{ github.event.workflow_run.event == 'merge_group' && 'queue-batch' || "
+            "format('queue-batch-{0}', github.run_id) }}\n  cancel-in-progress: false",
             "if: github.event.workflow_run.event == 'merge_group'",
             "actions: write",
             "checks: write",
@@ -171,7 +172,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "workflow_run:\n    workflows: [tests]\n    types: [completed]",
             "permissions:\n  contents: read",
-            "cancel-in-progress: false",
+            "group: ${{ github.event.workflow_run.event == 'merge_group' && 'queue-eject' || "
+            "format('queue-eject-{0}', github.run_id) }}\n  cancel-in-progress: false",
             "if: github.event.workflow_run.event == 'merge_group'",
             "contents: write",
             "pull-requests: write",
