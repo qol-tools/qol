@@ -49,6 +49,7 @@ jobs:
       # New host builds are listed only once gh attestation verify accepts
       # every file as built by the host publish workflow on main.
       - name: Build index
+        id: index
         env:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
@@ -61,7 +62,8 @@ jobs:
             --previous-url "${INDEX_URL}" \
             --provenance-repo "${GITHUB_REPOSITORY}" \
             --provenance-workflow .github/workflows/qol-tray-host-publish.yml \
-            --output index.json | tee -a "${GITHUB_STEP_SUMMARY}"
+            --output index.json | tee -a "${GITHUB_STEP_SUMMARY}" index.log
+          echo "left_out=$(grep -c '^::warning::' index.log || true)" >> "${GITHUB_OUTPUT}"
 
       # Every plugin release dispatches this workflow, and one run usually
       # picks up the tags of the releases after it, so most runs rebuild the
@@ -97,13 +99,23 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # A host version left out of the index fails the run only after the
+      # rest is published, so rerunning the failed jobs retries that version.
+      - name: Fail when a host version is left out
+        if: steps.index.outputs.left_out != '0'
+        env:
+          LEFT_OUT: ${{ steps.index.outputs.left_out }}
+        run: |
+          echo "::error::${LEFT_OUT} host version(s) were left out of the index; the Build index warnings name each cause"
+          exit 1
+
   # The signing key lives only in this job, which compiles nothing and runs
   # only the pinned minisign binary. The environment only scopes the key, so
   # it records no deployment.
   sign:
     name: Sign index
     needs: build
-    if: needs.build.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.build.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -172,6 +184,7 @@ jobs:
   deploy:
     name: Deploy to Pages
     needs: sign
+    if: ${{ !cancelled() && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -189,6 +202,7 @@ jobs:
   registry:
     name: Publish index to the registry
     needs: sign
+    if: ${{ !cancelled() && needs.sign.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

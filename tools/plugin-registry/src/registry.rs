@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const BODY_LIMIT: u64 = 64 * 1024 * 1024;
+const BLOB_LIMIT: u64 = 1024 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(300);
 const TAGS_PAGE: u32 = 1000;
@@ -66,10 +67,14 @@ pub fn agent() -> ureq::Agent {
 }
 
 pub fn read_body(response: ureq::Response, url: &str) -> Result<Vec<u8>> {
+    read_limited(response, url, BODY_LIMIT)
+}
+
+fn read_limited(response: ureq::Response, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     response
         .into_reader()
-        .take(BODY_LIMIT)
+        .take(limit)
         .read_to_end(&mut bytes)
         .with_context(|| format!("could not read {url}"))?;
     Ok(bytes)
@@ -150,9 +155,14 @@ impl Registry {
 
     pub fn blob(&self, digest: &str, size: u64) -> Result<Vec<u8>> {
         let url = self.url(&format!("blobs/{digest}"));
+        if size > BLOB_LIMIT {
+            anyhow::bail!(
+                "{url} declares {size} bytes, more than the {BLOB_LIMIT} byte blob limit"
+            );
+        }
         let response = self.call(Request::new("GET", url.clone()))?;
         require_status(&response, &[200], &url)?;
-        let bytes = read_body(response, &url)?;
+        let bytes = read_limited(response, &url, size + 1)?;
         if bytes.len() as u64 != size || sha256_digest(&bytes) != digest {
             anyhow::bail!("{url} sent a blob that does not match its digest and size");
         }
@@ -346,6 +356,47 @@ mod tests {
         for bad in ["ghcr.io", "ftp://ghcr.io/a/b", "ghcr.io/"] {
             assert!(location(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn blob_reads_a_layer_larger_than_the_body_limit() {
+        use std::io::Write;
+        let body = vec![7u8; BODY_LIMIT as usize + 1];
+        let digest = sha256_digest(&body);
+        let size = body.len() as u64;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            assert!(read > 0);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        let registry = Registry::new(
+            &format!("http://127.0.0.1:{port}/qol-tools/plugins"),
+            Access::Pull,
+            None,
+        )
+        .unwrap();
+        let bytes = registry.blob(&digest, size).unwrap();
+        assert_eq!(bytes.len() as u64, size);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn blob_refuses_a_declared_size_over_the_blob_limit_without_a_request() {
+        let registry =
+            Registry::new("http://127.0.0.1:9/qol-tools/plugins", Access::Pull, None).unwrap();
+        let error = registry.blob("sha256:00", BLOB_LIMIT + 1).unwrap_err();
+        assert!(error.to_string().contains("byte blob limit"), "{error:#}");
+        assert_eq!(registry.requests(), 0);
     }
 
     #[test]
