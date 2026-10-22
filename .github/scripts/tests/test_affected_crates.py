@@ -99,8 +99,22 @@ class LocalPlannerContract(unittest.TestCase):
         )
         self.assertEqual(
             run.call_args_list[0].args[0],
-            ["git", "diff", "--name-only", "base"],
+            ["git", "diff", "--name-only", "--no-renames", "base"],
         )
+
+    def test_a_renamed_file_is_listed_under_both_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git = ["git", "-C", directory, "-c", "user.name=t", "-c", "user.email=t@t"]
+            subprocess.run(["git", "init", "--quiet", directory], check=True)
+            (root / "flows").mkdir()
+            (root / "flows/a.toml").write_text("name = 'a'\n" * 20)
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "--quiet", "-m", "base"], check=True)
+            subprocess.run([*git, "mv", "flows/a.toml", "flows/b.toml"], check=True)
+            subprocess.run([*git, "commit", "--quiet", "-m", "rename"], check=True)
+            with patch.object(ac, "run", lambda args: subprocess.run(["git", "-C", directory, *args[1:]], capture_output=True, text=True)):
+                self.assertEqual(sorted(ac.changed_files("HEAD~1", "HEAD")), ["flows/a.toml", "flows/b.toml"])
 
     def test_emit_writes_structured_local_output(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -270,6 +284,7 @@ class LocalPlannerContract(unittest.TestCase):
                 ("crates/a/shell/ext.js", True),
             ),
             ('include_bytes!(concat!("../assets/icon-", $size, ".png"))', ("crates/a/assets/icon-", True)),
+            ('include_str!(concat!("../../../", $name))', (".", True)),
             ('include_bytes!(concat!(env!("OUT_DIR"), "/generated.bin"))', None),
         ]
         for text, expected in cases:
@@ -282,6 +297,13 @@ class LocalPlannerContract(unittest.TestCase):
                 with patch.object(ac, "REPO_ROOT", root):
                     embeds = ac.embedded_files()
                 self.assertEqual(embeds, [(*expected, source)] if expected else [])
+
+    def test_a_prefix_at_the_repository_root_matches_every_path(self):
+        embeds = [(".", True, "crates/a/src/x.rs"), ("crates/b/assets", True, "crates/b/src/y.rs")]
+        self.assertEqual(ac.embedding_sources("flows/x.toml", embeds), ["crates/a/src/x.rs"])
+        self.assertEqual(
+            ac.embedding_sources("crates/b/assets/z.png", embeds), ["crates/a/src/x.rs", "crates/b/src/y.rs"]
+        )
 
     @patch.object(ac, "embedded_files")
     @patch.object(ac, "emit")

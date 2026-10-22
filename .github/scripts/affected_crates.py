@@ -182,7 +182,7 @@ def skip_all(reason):
 
 
 def changed_files(base, head):
-    diff_args = ["git", "diff", "--name-only", base]
+    diff_args = ["git", "diff", "--name-only", "--no-renames", base]
     if head != WORKTREE_HEAD:
         diff_args.append(head)
     diff = run(diff_args)
@@ -243,7 +243,7 @@ def embedding_sources(path, embeds):
     return [
         source
         for target, prefix, source in embeds
-        if path == target or (prefix and path.startswith(target))
+        if path == target or (prefix and (target == "." or path.startswith(target)))
     ]
 
 
