@@ -22,6 +22,7 @@ qol-connection-health.workspace = true
 qol-color.workspace = true
 qol-conventions.workspace = true
 qol-hotkeys.workspace = true
+qol-platform.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true
 qol-window-state.workspace = true
@@ -34,7 +35,6 @@ workspace-hack.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 log = "0.4"
 proptest = "1.6"
-qol-platform.workspace = true
 taffy = "0.9"
 tempfile = "3"
 
@@ -66,7 +66,6 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-platform.workspace = true
 qol-process.workspace = true
 raw-window-handle = { workspace = true }
 windows-sys = { version = "0.59", features = [

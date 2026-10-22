@@ -54,6 +54,7 @@ impl EntryStore {
         flow_entries: Arc<Vec<FlowEntry>>,
     ) -> Self {
         let frecency_path = frecency::default_store_path(qol_conventions::launcher::WINDOW_TITLE);
+        discovery::legacy_store::move_legacy_store(&frecency_path);
         let frecency = frecency::load(&frecency_path);
         let boosts = load_boosts(&frecency_path);
         Self {

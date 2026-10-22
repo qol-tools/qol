@@ -1,13 +1,15 @@
-use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use qol_desktop_settings::gsettings;
 use zbus::blocking::Proxy;
 
 use super::NotificationPlatform;
 
 pub(super) struct Platform;
+
+const GSETTINGS_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl NotificationPlatform for Platform {
     fn send_notification(&self, title: &str, message: &str) -> bool {
@@ -24,12 +26,14 @@ impl NotificationPlatform for Platform {
 
     fn os_do_not_disturb(&self) -> Option<bool> {
         let (schema, key) = banner_setting()?;
-        parse_gsettings_bool(&gsettings(&["get", schema, key])?).map(|showing| !showing)
+        parse_gsettings_bool(&gsettings::get_within(schema, key, GSETTINGS_TIMEOUT).ok()?)
+            .map(|showing| !showing)
     }
 
     fn set_os_banners(&self, showing: bool) {
         if let Some((schema, key)) = banner_setting() {
-            gsettings(&["set", schema, key, if showing { "true" } else { "false" }]);
+            let value = if showing { "true" } else { "false" };
+            let _ = gsettings::set_within(schema, key, value, GSETTINGS_TIMEOUT);
         }
     }
 
@@ -107,31 +111,6 @@ fn banner_setting() -> Option<(&'static str, &'static str)> {
         return Some(("org.gnome.desktop.notifications", "show-banners"));
     }
     None
-}
-
-fn gsettings(args: &[&str]) -> Option<String> {
-    let mut child = Command::new("gsettings")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match child.try_wait().ok()? {
-            Some(status) if !status.success() => return None,
-            Some(_) => break,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                return None;
-            }
-            None => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
-    let mut output = String::new();
-    child.stdout.as_mut()?.read_to_string(&mut output).ok()?;
-    Some(output)
 }
 
 fn parse_gsettings_bool(output: &str) -> Option<bool> {

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use chrono::NaiveDateTime;
+use qol_desktop_settings::gsettings;
 
 use super::privileged::{refused, run_script};
 use super::{lenient, run, READ};
@@ -216,7 +217,7 @@ pub(super) fn read_restart() -> Option<NaiveDateTime> {
 }
 
 fn setting(key: &str) -> bool {
-    lenient("gsettings", &["get", SCHEMA, key]).trim() == "true"
+    gsettings::get_within(SCHEMA, key, READ).is_ok_and(|value| value == "true")
 }
 
 fn gsettings_key(key: AutoKey) -> Option<&'static str> {
@@ -229,19 +230,8 @@ fn gsettings_key(key: AutoKey) -> Option<&'static str> {
 
 pub(super) fn set_auto(key: AutoKey, on: bool) -> Result<(), Refusal> {
     match gsettings_key(key) {
-        Some(name) => {
-            let done = run(
-                "gsettings",
-                &["set", SCHEMA, name, if on { "true" } else { "false" }],
-                READ,
-            )
-            .map_err(Refusal::Failed)?;
-            if done.code == Some(0) {
-                Ok(())
-            } else {
-                Err(Refusal::Failed(done.reason()))
-            }
-        }
+        Some(name) => gsettings::set_within(SCHEMA, name, if on { "true" } else { "false" }, READ)
+            .map_err(|error| Refusal::Failed(format!("{error:#}"))),
         None => run_script(AUTO_SH, &[if on { "enable" } else { "disable" }.into()]),
     }
 }

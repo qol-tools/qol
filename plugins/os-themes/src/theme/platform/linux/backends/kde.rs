@@ -205,9 +205,7 @@ fn tool_available(name: &str) -> bool {
 }
 
 fn is_x11_session() -> bool {
-    std::env::var("XDG_SESSION_TYPE")
-        .map(|session| session == "x11")
-        .unwrap_or(false)
+    qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::X11
 }
 
 fn classify(name: &str) -> ColorScheme {

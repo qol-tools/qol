@@ -85,30 +85,12 @@ pub(crate) enum DisplayServer {
 }
 
 impl DisplayServer {
-    pub(crate) fn detect(
-        wayland_display: Option<&str>,
-        session_type: Option<&str>,
-        display: Option<&str>,
-    ) -> Self {
-        if wayland_display.is_some() || session_type == Some("wayland") {
-            Self::Wayland
-        } else if display.is_some() {
-            Self::X11
-        } else {
-            Self::None
-        }
-    }
-
     fn from_env() -> Self {
-        Self::detect(
-            std::env::var_os("WAYLAND_DISPLAY")
-                .as_deref()
-                .and_then(|value| value.to_str()),
-            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
-            std::env::var_os("DISPLAY")
-                .as_deref()
-                .and_then(|value| value.to_str()),
-        )
+        match qol_platform::linux_display_backend() {
+            qol_platform::LinuxDisplayBackend::Wayland => Self::Wayland,
+            qol_platform::LinuxDisplayBackend::X11 => Self::X11,
+            qol_platform::LinuxDisplayBackend::Unknown => Self::None,
+        }
     }
 }
 
@@ -136,28 +118,6 @@ pub(crate) fn apply_configured_policies(control: &Control, device: &crate::confi
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn display_server_detection_prefers_wayland_then_x11_then_none() {
-        assert_eq!(DisplayServer::detect(None, None, None), DisplayServer::None);
-        assert_eq!(
-            DisplayServer::detect(Some("wayland-0"), Some("x11"), Some(":0")),
-            DisplayServer::Wayland,
-            "WAYLAND_DISPLAY wins over an x11 session type"
-        );
-        assert_eq!(
-            DisplayServer::detect(None, Some("wayland"), Some(":0")),
-            DisplayServer::Wayland
-        );
-        assert_eq!(
-            DisplayServer::detect(None, Some("x11"), Some(":0")),
-            DisplayServer::X11
-        );
-        assert_eq!(
-            DisplayServer::detect(None, Some("tty"), None),
-            DisplayServer::None
-        );
-    }
 
     #[test]
     fn stub_facade_selects_nothing_and_offers_no_lut() {

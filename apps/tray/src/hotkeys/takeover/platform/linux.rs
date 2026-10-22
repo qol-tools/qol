@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, SystemTime};
 
+use qol_desktop_settings::gsettings;
+
 const USER_HZ: f64 = 100.0;
 
 const KNOWN_COMPOSITORS: &[&str] = &[
@@ -25,25 +27,14 @@ pub(crate) fn dump(root: &str) -> Result<String, HostFailure> {
 }
 
 pub(crate) fn list_schema(schema: &str) -> Result<String, HostFailure> {
-    let command = format!("gsettings list-recursively {schema}");
-    let output = Command::new("gsettings")
-        .args(["list-recursively", schema])
-        .output()
-        .map_err(|error| HostFailure {
-            command: command.clone(),
-            detail: error.to_string(),
-            tool_missing: true,
-        })?;
-    if !output.status.success() {
-        return Err(HostFailure {
-            command,
-            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            tool_missing: false,
-        });
-    }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim_end()
-        .to_string())
+    let pairs = gsettings::list(schema).map_err(|error| {
+        settings_failure(format!("gsettings list-recursively {schema}"), &error)
+    })?;
+    Ok(pairs
+        .into_iter()
+        .map(|(key, value)| format!("{schema} {key} {value}"))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 pub(crate) fn read(full_key: &str) -> Result<String, HostFailure> {
@@ -59,25 +50,16 @@ pub(crate) fn reset(full_key: &str) -> Result<(), HostFailure> {
 }
 
 pub(crate) fn get_schema_value(schema: &str, key: &str) -> Result<String, HostFailure> {
-    let command = format!("gsettings get {schema} {key}");
-    let output = Command::new("gsettings")
-        .args(["get", schema, key])
-        .output()
-        .map_err(|error| HostFailure {
-            command: command.clone(),
-            detail: error.to_string(),
-            tool_missing: true,
-        })?;
-    if !output.status.success() {
-        return Err(HostFailure {
-            command,
-            detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            tool_missing: false,
-        });
+    gsettings::get(schema, key)
+        .map_err(|error| settings_failure(format!("gsettings get {schema} {key}"), &error))
+}
+
+fn settings_failure(command: String, error: &anyhow::Error) -> HostFailure {
+    HostFailure {
+        command,
+        detail: error.root_cause().to_string(),
+        tool_missing: error.downcast_ref::<std::io::Error>().is_some(),
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .trim_end()
-        .to_string())
 }
 
 fn run(args: &[&str]) -> Result<String, HostFailure> {

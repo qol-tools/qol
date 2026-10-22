@@ -25,6 +25,9 @@ workspace-hack.workspace = true
 [build-dependencies]
 qol-conventions.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+qol-desktop-settings.workspace = true
+
 [dev-dependencies]
 qol-plugin-api.workspace = true
 

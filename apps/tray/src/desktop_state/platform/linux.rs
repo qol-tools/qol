@@ -265,10 +265,7 @@ fn xrandr_monitors() -> Vec<MonitorBounds> {
 }
 
 pub(crate) fn is_wayland() -> bool {
-    std::env::var("XDG_SESSION_TYPE")
-        .map(|v| v == "wayland")
-        .unwrap_or(false)
-        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::Wayland
 }
 
 #[cfg(test)]

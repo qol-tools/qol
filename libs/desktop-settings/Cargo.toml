@@ -9,5 +9,8 @@ description = "The running Linux desktop and its gsettings store for qol-tools"
 anyhow = "1"
 workspace-hack.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

@@ -47,6 +47,10 @@ pub fn config_dir() -> Option<PathBuf> {
     resolve_namespaced(dirs::config_dir())
 }
 
+pub fn cache_dir() -> Option<PathBuf> {
+    resolve_namespaced(dirs::cache_dir())
+}
+
 pub fn dev_console_state_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("dev/console.json"))
 }

@@ -1,3 +1,5 @@
+mod legacy_config;
+
 pub(crate) use qol_dev_env::{registry, resources};
 
 use crate::commands::emu;
@@ -8,6 +10,7 @@ use qol_dev_env::{EnvironmentDefinition, LocalConfig, ResolvedEnvironment};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Once;
 
 pub(crate) fn discover() -> Result<Vec<ResolvedEnvironment>> {
     let root = repo_root()?;
@@ -61,7 +64,10 @@ pub(crate) fn reconcile_resources() -> Result<resources::ReservedResources> {
 }
 
 pub(crate) fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|root| root.join("qol").join("dev-envs.toml"))
+    static MOVE_LEGACY: Once = Once::new();
+    let path = qol_config::config_dir().map(|dir| dir.join("dev-envs.toml"))?;
+    MOVE_LEGACY.call_once(|| legacy_config::move_legacy_config(&path));
+    Some(path)
 }
 
 pub(crate) fn clear_host_session(command: &mut Command) {

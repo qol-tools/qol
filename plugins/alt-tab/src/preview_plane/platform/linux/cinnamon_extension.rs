@@ -1,8 +1,9 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
+
+use qol_desktop_settings::gsettings;
 
 use super::cinnamon_shell;
 
@@ -195,27 +196,17 @@ fn ensure_extension_root(root: &Path) -> Result<ExtensionRootTransition, Integra
 }
 
 fn read_enabled_extensions() -> Result<Vec<String>, IntegrationError> {
-    let output = gsettings(["get", SETTINGS_SCHEMA, SETTINGS_KEY])?;
+    let output = gsettings::get(SETTINGS_SCHEMA, SETTINGS_KEY).map_err(settings_error)?;
     parse_enabled_extensions(&output)
 }
 
 fn write_enabled_extensions(entries: &[String]) -> Result<(), IntegrationError> {
     let value = serialize_enabled_extensions(entries);
-    gsettings(["set", SETTINGS_SCHEMA, SETTINGS_KEY, &value]).map(|_| ())
+    gsettings::set(SETTINGS_SCHEMA, SETTINGS_KEY, &value).map_err(settings_error)
 }
 
-fn gsettings<const N: usize>(args: [&str; N]) -> Result<String, IntegrationError> {
-    let output = Command::new("gsettings")
-        .args(args)
-        .output()
-        .map_err(|error| integration_error("settings", error.to_string()))?;
-    if !output.status.success() {
-        return Err(integration_error(
-            "settings",
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn settings_error(error: impl std::fmt::Display) -> IntegrationError {
+    integration_error("settings", format!("{error:#}"))
 }
 
 fn parse_enabled_extensions(raw: &str) -> Result<Vec<String>, IntegrationError> {

@@ -28,6 +28,7 @@ windows = { version = "0.61", features = ["Data_Xml_Dom", "UI_Notifications"] }
 windows-sys = { version = "0.59", features = ["Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+qol-desktop-settings.workspace = true
 zbus = { version = "5.16.0", features = ["blocking-api"] }
 
 [dev-dependencies]
