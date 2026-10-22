@@ -104,6 +104,9 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
+      # A follow-up review reads only the changes since the last review, so it
+      # stands on that review only when both judged the same base. After a
+      # retarget the head can be unchanged, and the review covers it whole.
       - name: Find the last review
         if: github.event_name == 'pull_request'
         id: last
@@ -112,11 +115,16 @@ jobs:
           NODE: ${{ steps.node.outputs.path }}
           OUT: ${{ steps.node.outputs.out }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           sha="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
             --jq '.[] | select(.user.login == "github-actions[bot]") | {body}' | node "$NODE" previous --out "$OUT")"
-          if [ -n "$sha" ] && git fetch -q --no-tags --depth=1 origin "$sha"; then
+          [ -n "$sha" ] || exit 0
+          reviewed="$(sed -n 's/^<!-- base \(.*\) -->$/\1/p' "$OUT/previous.md" | tail -n 1)"
+          if [ "$reviewed" != "$BASE" ]; then
+            echo "::notice::${sha:0:7} was reviewed against ${reviewed:-a base it did not record}, so this review covers the whole pull request against ${BASE}."
+          elif git fetch -q --no-tags --depth=1 origin "$sha"; then
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
           fi
 
@@ -215,6 +223,7 @@ jobs:
           OUT: ${{ steps.node.outputs.out }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.ref }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -225,6 +234,9 @@ jobs:
           status=0
           node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
           body="$OUT/comment.md"
+          if [ -f "$body" ]; then
+            printf '\n<!-- base %s -->\n' "$BASE" >> "$body"
+          fi
           for secret in "$SECRET_OAUTH" "$SECRET_PAT"; do
             if [ -n "$secret" ] && grep -qF -- "$secret" "$body"; then
               echo "::error::the review contains a secret and was not posted"
@@ -280,4 +292,5 @@ jobs:
           VERDICT: ${{ needs.review.outputs.verdict }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: python3 .github/scripts/review_gate.py verdict
