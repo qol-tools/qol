@@ -4,7 +4,7 @@ uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Display"
 icon = "display"
 description = "Control display brightness, night mode and resolution"
-version = "0.45.1"
+version = "0.45.2"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
