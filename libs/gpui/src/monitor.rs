@@ -150,6 +150,10 @@ impl ActiveMonitor {
         self.logical(crate::popup_window::work_area_within(native).unwrap_or(native))
     }
 
+    pub fn logical_windowed_area(&self) -> Bounds<Pixels> {
+        windowed_area(self.logical_bounds(), self.logical_work_area())
+    }
+
     pub fn logical(&self, native: Bounds<Pixels>) -> Bounds<Pixels> {
         divided(native, self.scale())
     }
@@ -370,14 +374,36 @@ fn resolve_cursor_snapshot(
     Some((ActiveMonitor::from_bounds(monitor), cursor))
 }
 
+pub(crate) fn windowed_area(monitor: Bounds<Pixels>, work_area: Bounds<Pixels>) -> Bounds<Pixels> {
+    if work_area != monitor {
+        return work_area;
+    }
+    Bounds::new(
+        work_area.origin,
+        size(work_area.size.width, work_area.size.height - px(1.0)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         active_first_monitor, cached_first_monitor, divided, focus_first_monitor,
-        resolve_cursor_snapshot, validate_cursor_anchor, ActiveMonitor, CursorAnchorError,
+        resolve_cursor_snapshot, validate_cursor_anchor, windowed_area, ActiveMonitor,
+        CursorAnchorError,
     };
     use gpui::{point, px, size, Bounds};
     use qol_runtime::{CursorPos, MonitorBounds, PlatformState};
+
+    #[test]
+    fn a_window_never_fills_a_monitor_that_has_no_panel() {
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(900.0)));
+        let below_panel = Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(860.0)));
+        assert_eq!(windowed_area(monitor, below_panel), below_panel);
+        assert_eq!(
+            windowed_area(monitor, monitor),
+            Bounds::new(point(px(0.0), px(0.0)), size(px(1400.0), px(899.0)))
+        );
+    }
 
     fn monitor(x: f32) -> MonitorBounds {
         MonitorBounds {

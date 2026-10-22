@@ -114,7 +114,9 @@ impl Remembered {
         };
         let window = match size {
             RestoreSize::Content(_) => with_size_of(window, saved.bounds_on_monitor),
-            RestoreSize::AtLeast(min) => at_least(window, min, logical_areas(&monitor).1),
+            RestoreSize::AtLeast(min) => {
+                at_least(window, min, monitor_bounds(monitor.logical_windowed_area()))
+            }
         };
         Some(RestoredPlacement {
             bounds: to_bounds(window),

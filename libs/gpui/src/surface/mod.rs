@@ -867,9 +867,12 @@ fn placed_bounds(
             placement,
             monitor.logical_bounds(),
             monitor.logical_work_area(),
-            size,
+            size.min(&monitor.logical_windowed_area().size),
         ),
-        SurfaceKind::OverlayPanel => placement.bounds(monitor.logical_bounds(), size),
+        SurfaceKind::OverlayPanel => placement.bounds(
+            monitor.logical_bounds(),
+            size.min(&monitor.logical_windowed_area().size),
+        ),
     }
 }
 

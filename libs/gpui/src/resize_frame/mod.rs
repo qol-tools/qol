@@ -156,16 +156,16 @@ impl ResizeFrame {
         let zone = div()
             .absolute()
             .cursor(resize_cursor(edge))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
                 cx.stop_propagation();
-                pressed.begin(edge, window, cx);
+                pressed.begin(edge, event.position, window, cx);
             })
             .on_mouse_up(MouseButton::Left, move |_, _, _| released.end())
             .on_mouse_up_out(MouseButton::Left, move |_, _, _| released_outside.end());
         placed(zone, edge)
     }
 
-    fn begin(&self, edge: ResizeEdge, window: &mut Window, cx: &mut App) {
+    fn begin(&self, edge: ResizeEdge, press: Point<Pixels>, window: &mut Window, cx: &mut App) {
         let epoch = {
             let mut sizing = lock(&self.state.sizing);
             *sizing = Sizing::Dragging;
@@ -174,7 +174,7 @@ impl ResizeFrame {
                 .fetch_add(1, Ordering::SeqCst)
                 .wrapping_add(1)
         };
-        let Some(drag) = self.client_drag(edge, epoch, window, cx) else {
+        let Some(drag) = self.client_drag(edge, press, epoch, window, cx) else {
             self.state.drag.borrow_mut().take();
             window.start_window_resize(edge);
             return;
@@ -199,12 +199,24 @@ impl ResizeFrame {
         }
     }
 
-    fn client_drag(&self, edge: ResizeEdge, epoch: u64, window: &Window, cx: &App) -> Option<Drag> {
+    fn client_drag(
+        &self,
+        edge: ResizeEdge,
+        press: Point<Pixels>,
+        epoch: u64,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Drag> {
         let session = crate::popup_window::window_geometry_session(&(self.state.title)())?;
         let (x, y, width, height) = session.bounds()?;
-        let pointer_start = session.pointer_root()?;
+        session.pointer_root()?;
         let scale = f64::from(window.scale_factor());
+        let pointer_start = (
+            x + (press.x.to_f64() * scale).round() as i32,
+            y + (press.y.to_f64() * scale).round() as i32,
+        );
         let min_size = self.state.min_size.get();
+        let area = native_work_area(window, cx);
         Some(Drag {
             edge,
             start: NativeRect {
@@ -215,9 +227,12 @@ impl ResizeFrame {
             },
             pointer_start,
             limits: ResizeLimits {
-                min_width: min_size.width.to_f64() * scale,
-                min_height: min_size.height.to_f64() * scale,
-                area: native_work_area(window, cx),
+                min_width: capped(min_size.width.to_f64() * scale, area.map(|area| area.width)),
+                min_height: capped(
+                    min_size.height.to_f64() * scale,
+                    area.map(|area| area.height),
+                ),
+                area,
             },
             epoch,
             sizing: self.state.sizing.clone(),
@@ -257,7 +272,13 @@ fn native_work_area(window: &Window, cx: &App) -> Option<NativeRect> {
     let display = window.display(cx)?;
     let monitor = crate::monitor::native_display_bounds(display.as_ref());
     let area = crate::popup_window::work_area_within(monitor).unwrap_or(monitor);
-    Some(NativeRect::of_bounds(area))
+    Some(NativeRect::of_bounds(crate::monitor::windowed_area(
+        monitor, area,
+    )))
+}
+
+fn capped(min_span: f64, room: Option<f64>) -> f64 {
+    room.map_or(min_span, |room| min_span.min(room))
 }
 
 fn placed(zone: Div, edge: ResizeEdge) -> Div {
