@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const BODY_LIMIT: u64 = 64 * 1024 * 1024;
+const BLOB_LIMIT: u64 = 1024 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(300);
 const TAGS_PAGE: u32 = 1000;
@@ -154,9 +155,14 @@ impl Registry {
 
     pub fn blob(&self, digest: &str, size: u64) -> Result<Vec<u8>> {
         let url = self.url(&format!("blobs/{digest}"));
+        if size > BLOB_LIMIT {
+            anyhow::bail!(
+                "{url} declares {size} bytes, more than the {BLOB_LIMIT} byte blob limit"
+            );
+        }
         let response = self.call(Request::new("GET", url.clone()))?;
         require_status(&response, &[200], &url)?;
-        let bytes = read_limited(response, &url, size.saturating_add(1))?;
+        let bytes = read_limited(response, &url, size + 1)?;
         if bytes.len() as u64 != size || sha256_digest(&bytes) != digest {
             anyhow::bail!("{url} sent a blob that does not match its digest and size");
         }
@@ -382,6 +388,15 @@ mod tests {
         let bytes = registry.blob(&digest, size).unwrap();
         assert_eq!(bytes.len() as u64, size);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn blob_refuses_a_declared_size_over_the_blob_limit_without_a_request() {
+        let registry =
+            Registry::new("http://127.0.0.1:9/qol-tools/plugins", Access::Pull, None).unwrap();
+        let error = registry.blob("sha256:00", BLOB_LIMIT + 1).unwrap_err();
+        assert!(error.to_string().contains("byte blob limit"), "{error:#}");
+        assert_eq!(registry.requests(), 0);
     }
 
     #[test]
