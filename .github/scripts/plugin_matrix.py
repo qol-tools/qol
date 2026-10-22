@@ -45,6 +45,9 @@ def release_outputs(root: Path, plugin_id: str, expected_version: str) -> dict[s
         f"{plugin_id}-{{os}}-{{arch}}"
     )
     platforms = plugin.get("plugin", {}).get("platforms", ["linux"])
+    unknown = sorted(set(platforms) - RUNNERS.keys())
+    if unknown:
+        raise ValueError(f"unknown platforms {unknown} for {plugin_id}; known: {sorted(RUNNERS)}")
 
     include = [
         {
@@ -54,7 +57,7 @@ def release_outputs(root: Path, plugin_id: str, expected_version: str) -> dict[s
             "artifact_name": asset_pattern.replace("{os}", os_token).replace("{arch}", arch_token),
         }
         for platform in platforms
-        for runner, target, os_token, arch_token, ext in RUNNERS.get(platform, [])
+        for runner, target, os_token, arch_token, ext in RUNNERS[platform]
     ]
     if not include:
         raise ValueError(f"no buildable platforms for {plugin_id}")

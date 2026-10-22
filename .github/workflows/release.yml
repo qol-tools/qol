@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   statuses: read
+  actions: read
 
 concurrency:
   group: plugin-release-${{ inputs.tag || github.ref_name }}

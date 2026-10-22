@@ -519,6 +519,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("|| format('plugin-version-idle-{0}', github.run_id)", group)
         self.assertIn("cancel-in-progress: false", group)
 
+    def test_versioning_releases_mains_head_when_a_stale_run_cancelled_its_run(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        prepare = workflow.split("  prepare:\n", 1)[1].split("\n  plugin_candidate:", 1)[0]
+
+        self.assertIn("      actions: read\n", prepare.split("    steps:", 1)[0])
+        self.assertLess(
+            prepare.index("release_candidate.py newest-source"),
+            prepare.index("release_candidate.py verify-source-ci"),
+        )
+        verify = named_step(prepare, "Verify successful source CI", "      ")
+        self.assertIn("SOURCE_SHA: ${{ steps.source.outputs.sha }}", verify)
+        self.assertIn("SOURCE_CI_RUN_ID: ${{ steps.source.outputs.run_id }}", verify)
+        for name in ["Verify successful source CI", "Compute release versions"]:
+            with self.subTest(step=name):
+                step = named_step(prepare, name, "      ")
+                self.assertIn("if: steps.source.outputs.superseded != 'true'", step)
+        candidate = named_step(prepare, "Commit version candidate", "      ")
+        self.assertIn("SOURCE_SHA: ${{ steps.source.outputs.sha }}", candidate)
+
     def test_candidates_are_attested_before_tags_are_created(self):
         workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
 
@@ -651,6 +670,19 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "every CI cargo gate must pass --locked so a stale Cargo.lock cannot "
             "reach the --locked release pipeline",
         )
+
+    def test_every_workflow_runs_cargo_against_the_lockfile(self):
+        command = re.compile(
+            r"^\s*(?:run: )?cargo (?:build|check|clippy|metadata|nextest|run|test|tree)\b"
+        )
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow=path.name):
+                lenient = [
+                    line.strip()
+                    for line in path.read_text().splitlines()
+                    if command.search(line) and "--locked" not in line
+                ]
+                self.assertEqual(lenient, [])
 
     def test_ci_asserts_lockfile_freshness_with_a_full_resolve(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()

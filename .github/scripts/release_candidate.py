@@ -587,7 +587,10 @@ def source_ci_evidence(
         evidence = settled_ci(repo, sha, [run], ci_run_jobs(repo, run_id))
         return {**evidence, "source_sha": sha, "ci_sha": sha}
     ci_sha = sha
-    runs = completed_ci_runs(repo, ci_sha)
+    # A version bump commit's own push run skips every job, so it is no evidence.
+    runs = [
+        run for run in completed_ci_runs(repo, ci_sha) if run.get("conclusion") != "skipped"
+    ]
     try:
         run = successful_ci_run(runs, ci_sha)
     except RuntimeError as exact_error:
@@ -603,6 +606,22 @@ def source_ci_evidence(
         run = successful_ci_run(runs, ci_sha)
     evidence = settled_ci(repo, ci_sha, runs, ci_run_jobs(repo, run["id"]))
     return {**evidence, "source_sha": sha, "ci_sha": ci_sha}
+
+
+# A Versioning run waiting in the concurrency group is cancelled by the next
+# one queued, so a run for an older push can cancel the run for main's head.
+# Each run therefore releases main's head once the head passed CI. When the
+# head has no successful CI run, its own Versioning run is still to come, it is
+# a version bump commit, or it failed CI, and the Versioning run of the next
+# commit that passes CI releases what is left.
+def newest_source(repo: str, sha: str, run_id: int | None, head: str) -> dict:
+    if head == sha:
+        return {"sha": sha, "run_id": run_id, "superseded": False}
+    try:
+        run = successful_ci_run(completed_ci_runs(repo, head), head)
+    except RuntimeError:
+        return {"sha": sha, "run_id": run_id, "superseded": True}
+    return {"sha": head, "run_id": run["id"], "superseded": False}
 
 
 def commit_statuses(repo: str, sha: str) -> list[dict]:
@@ -692,9 +711,14 @@ def target_plugins(plan: dict, target: str) -> list[dict]:
     raise ValueError(f"no plugin candidate builds for {target}")
 
 
+# Reads the graph the release build compiles, so a gpui dependency behind a
+# release feature still ships the font license.
 def uses_gpui(root: Path, package: str, target: str) -> bool:
+    command = ["cargo", "tree", "--locked", "-p", package, "--target", target]
+    for feature in plugin_release_features(root, package):
+        command.extend(["--features", feature])
     result = subprocess.run(
-        ["cargo", "tree", "-p", package, "--target", target, "-e", "normal", "--prefix", "none"],
+        [*command, "-e", "normal", "--prefix", "none"],
         cwd=root,
         capture_output=True,
         text=True,
@@ -804,6 +828,31 @@ def source_ci_command(args: argparse.Namespace) -> None:
     )
 
 
+def newest_source_command(args: argparse.Namespace) -> None:
+    repo = validate_repo(args.repo)
+    sha = validate_sha(args.sha)
+    head = validate_sha(args.head)
+    source = newest_source(repo, sha, args.run_id, head)
+    emit_github_output(
+        args.github_output,
+        {
+            "sha": source["sha"],
+            "run_id": source["run_id"] or "",
+            "superseded": source["superseded"],
+        },
+    )
+    if source["superseded"]:
+        print(
+            f"::notice::main moved past {sha} to {head}, which has no successful CI run; "
+            "the Versioning run of the next commit that passes CI releases what is left"
+        )
+    elif source["sha"] != sha:
+        print(
+            f"::notice::main moved past {sha} to {head}, which passed CI in run "
+            f"{source['run_id']}, so this run releases {head}"
+        )
+
+
 def attest_command(args: argparse.Namespace) -> None:
     repo = validate_repo(args.repo)
     sha = validate_sha(args.sha)
@@ -903,6 +952,16 @@ def build_parser() -> argparse.ArgumentParser:
     source_ci.add_argument("--root", default=".")
     source_ci.add_argument("--report")
     source_ci.set_defaults(handler=source_ci_command)
+
+    newest = commands.add_parser("newest-source")
+    newest.add_argument("--repo", required=True)
+    newest.add_argument("--sha", required=True)
+    newest.add_argument("--head", required=True)
+    newest.add_argument("--run-id", type=int)
+    newest.add_argument(
+        "--github-output", default=os.environ.get("GITHUB_OUTPUT")
+    )
+    newest.set_defaults(handler=newest_source_command)
 
     create = commands.add_parser("attest")
     create.add_argument("--repo", required=True)

@@ -3,9 +3,9 @@
 
 Reads a release body on stdin and writes it to stdout without the
 "What's Changed" bullets whose pull request title is not releasable under
-plugin_version.py's rules (feat, fix, perf, or breaking) or whose scope is
-ci. ci, refactor, docs, test, chore and the like never reach the releases
-page.
+plugin_version.py's rules (feat, fix, perf, revert, breaking, or a revert of
+one of those) or whose scope is ci. ci, refactor, docs, test, chore and the
+like never reach the releases page.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ EMPTY_NOTE = "* No user-facing changes."
 
 
 def is_user_facing(title: str) -> bool:
-    scope = pv.SCOPE_RE.match(title)
+    scope = pv.SCOPE_RE.match(pv.reverted_subject(title))
     if scope is not None and scope.group("scope").lower() in INTERNAL_SCOPES:
         return False
     return pv.is_releasable_commit(pv.Commit(sha="", subject=title, body=""))

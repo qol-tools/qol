@@ -16,7 +16,10 @@ SEMVER_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)$")
 BREAKING_SUBJECT_RE = re.compile(r"^[a-z0-9_-]+(\([^)]+\))?!:", re.IGNORECASE)
 BREAKING_BODY_RE = re.compile(r"(^|\n)BREAKING[ -]CHANGE:", re.IGNORECASE)
 FEATURE_SUBJECT_RE = re.compile(r"^feat(\([^)]+\))?:", re.IGNORECASE)
-RELEASABLE_SUBJECT_RE = re.compile(r"^(feat|fix|perf)(\([^)]+\))?!?:", re.IGNORECASE)
+RELEASABLE_SUBJECT_RE = re.compile(r"^(feat|fix|perf|revert)(\([^)]+\))?!?:", re.IGNORECASE)
+# GitHub titles a revert pull request `Revert "<subject>"`. It releases when
+# the subject it reverts would, under that subject's scope, and as a patch.
+REVERT_TITLE_RE = re.compile(r'^Revert "(?P<subject>.*)"(?: \(#[0-9]+\))?$')
 RELEASE_SUBJECT_RE = re.compile(r"^chore\(release\):", re.IGNORECASE)
 SQUASHED_SUBJECT_RE = re.compile(r"^\* (\S.*)$", re.MULTILINE)
 SCOPE_RE = re.compile(r"^[a-z0-9_-]+\((?P<scope>[^)]*)\)!?:", re.IGNORECASE)
@@ -180,6 +183,12 @@ def commit_subjects(commit: Commit) -> list[str]:
     return [commit.subject.strip(), *SQUASHED_SUBJECT_RE.findall(commit.body or "")]
 
 
+def reverted_subject(subject: str) -> str:
+    while match := REVERT_TITLE_RE.match(subject):
+        subject = match.group("subject")
+    return subject
+
+
 def is_releasable_commit(commit: Commit) -> bool:
     if is_release_commit(commit):
         return False
@@ -187,7 +196,7 @@ def is_releasable_commit(commit: Commit) -> bool:
         return True
     return any(
         BREAKING_SUBJECT_RE.match(subject) or RELEASABLE_SUBJECT_RE.match(subject)
-        for subject in commit_subjects(commit)
+        for subject in map(reverted_subject, commit_subjects(commit))
     )
 
 
@@ -875,7 +884,7 @@ def release_scopes(
 
 
 def scope_packages(commit: Commit, scopes: dict[str, set[str]]) -> set[str] | None:
-    match = SCOPE_RE.match(commit.subject)
+    match = SCOPE_RE.match(reverted_subject(commit.subject))
     tokens = [token.strip().lower() for token in match.group("scope").split(",")] if match else []
     if not tokens or any(token not in scopes for token in tokens):
         return None

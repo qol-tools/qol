@@ -575,6 +575,27 @@ class SquashMergeBumpTests(unittest.TestCase):
         self.assertEqual(pv.detect_bump([commit]), "patch")
 
 
+class RevertReleaseTests(unittest.TestCase):
+    def test_a_revert_releases_a_patch(self):
+        cases = [
+            ("revert(alpha): undo the cache", True, "patch"),
+            ('Revert "fix(alpha): cache" (#130)', True, "patch"),
+            ('Revert "feat(alpha): cache"', True, "patch"),
+            ('Revert "Revert "fix(alpha): cache" (#130)" (#131)', True, "patch"),
+            ('Revert "feat(alpha)!: drop v1"', True, "patch"),
+            ('Revert "chore(alpha): bump serde"', False, None),
+            ("revert(alpha)!: drop v1", True, "major"),
+            ("Release notes (#12)", False, None),
+            ("Revert the cache", False, None),
+        ]
+        for subject, releasable, bump in cases:
+            with self.subTest(subject=subject):
+                commit = pv.Commit(sha="a", subject=subject, body="")
+                self.assertEqual(pv.is_releasable_commit(commit), releasable)
+                if bump:
+                    self.assertEqual(pv.detect_bump([commit]), bump)
+
+
 class RebuildScopeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -656,6 +677,8 @@ class RebuildScopeTests(unittest.TestCase):
             ("fix(alpha): a (#5)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* refactor(shared): b", ["qol-alpha"]),
             ("fix(alpha): a (#6)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* fix(shared): b", ["qol-alpha"]),
             ("fix(alpha): a (#7)", ["libs/shared/lib.rs"], "* fix(alpha): a\n\n* fix: b", ["qol-alpha"]),
+            ('Revert "fix(alpha): shared" (#9)', ["libs/shared/lib.rs"], "", ["qol-alpha"]),
+            ("revert(beta): shared", ["libs/shared/lib.rs"], "", ["qol-beta"]),
         ]
         for subject, paths, body, released in cases:
             with self.subTest(subject=subject, body=body):
@@ -665,6 +688,30 @@ class RebuildScopeTests(unittest.TestCase):
                     self.assertEqual(sorted(self.plans()), released)
                 finally:
                     git(self.root, "reset", "--quiet", "--hard", base)
+
+    def bump(self, plugin_dir: str, version: str) -> None:
+        crate = self.root / "plugins" / plugin_dir
+        pv.update_table_version(crate / "Cargo.toml", "package", version)
+        pv.update_table_version(crate / "plugin.toml", "plugin", version)
+        self.commit("chore(plugins): bump plugin versions")
+
+    def test_a_failed_candidate_is_retried_at_its_untagged_version(self):
+        self.commit("fix(alpha): a", "plugins/alpha/lib.rs")
+        self.bump("alpha", "0.1.1")
+        plan = self.plans()["qol-alpha"]
+        self.assertEqual(
+            (plan.old_version, plan.new_version, plan.tag), ("0.1.1", "0.1.1", "qol-alpha-v0.1.1")
+        )
+        self.assertFalse(pv.apply_plans(self.root, [plan]))
+
+    def test_a_version_tagged_off_main_is_skipped(self):
+        git(self.root, "checkout", "--quiet", "-b", "abandoned")
+        self.commit("fix(alpha): abandoned", "plugins/alpha/lib.rs")
+        git(self.root, "tag", "qol-alpha-v0.1.1")
+        git(self.root, "checkout", "--quiet", "-")
+        self.commit("fix(alpha): a", "plugins/alpha/lib.rs")
+        plan = self.plans()["qol-alpha"]
+        self.assertEqual((plan.old_version, plan.new_version), ("0.1.0", "0.1.2"))
 
     def test_each_bumped_dependency_releases_the_units_it_reaches_outside_the_scope(self):
         manifest = (self.root / "Cargo.toml").read_text()
@@ -706,6 +753,10 @@ class ScopePackagesTests(unittest.TestCase):
             ("fix(): a", "", None),
             ("fix: a", "", None),
             ("Launcher marks from one drawn set (#40)", "* feat(alpha): a", None),
+            ('Revert "fix(alpha): a" (#9)', "", {"qol-alpha"}),
+            ('Revert "Revert "fix(beta): a""', "", {"qol-beta"}),
+            ("revert(beta): a", "", {"qol-beta"}),
+            ('Revert "fix: a"', "", None),
         ]
         for subject, body, named in cases:
             with self.subTest(subject=subject, body=body):
