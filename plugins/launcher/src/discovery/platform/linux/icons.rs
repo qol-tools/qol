@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+
+use qol_desktop_settings::gsettings;
 
 const ICON_SIZE: u32 = 48;
 const EXTENSIONS: [&str; 2] = ["png", "svg"];
@@ -148,18 +149,8 @@ fn current_theme() -> String {
 }
 
 fn gsettings_icon_theme(schema: &str) -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", schema, "icon-theme"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8(output.stdout).ok()?;
-    let value = value.trim().trim_matches('\'');
-    (!value.is_empty()).then(|| value.to_owned())
+    let value = gsettings::get(schema, "icon-theme").ok()?;
+    (!value.is_empty()).then_some(value)
 }
 
 fn gtk_settings_icon_theme() -> Option<String> {

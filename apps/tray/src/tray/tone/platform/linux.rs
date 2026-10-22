@@ -1,25 +1,14 @@
 use super::super::PanelTone;
-use std::process::Command;
+use qol_desktop_settings::gsettings;
 
 pub(crate) fn current() -> PanelTone {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if is_cinnamon(&desktop) {
-        return gsettings("org.cinnamon.theme", "name")
+        return gsettings::get("org.cinnamon.theme", "name")
             .map_or(PanelTone::Dark, |name| tone_from_cinnamon_theme(&name));
     }
-    gsettings("org.gnome.desktop.interface", "color-scheme")
+    gsettings::get("org.gnome.desktop.interface", "color-scheme")
         .map_or(PanelTone::Dark, |scheme| tone_from_color_scheme(&scheme))
-}
-
-fn gsettings(schema: &str, key: &str) -> Option<String> {
-    let output = Command::new("gsettings")
-        .args(["get", schema, key])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn is_cinnamon(desktop: &str) -> bool {
@@ -35,19 +24,11 @@ fn tone_from_cinnamon_theme(name: &str) -> PanelTone {
 }
 
 fn tone_from_color_scheme(scheme: &str) -> PanelTone {
-    if unquote(scheme) == "prefer-light" {
+    if scheme == "prefer-light" {
         PanelTone::Light
     } else {
         PanelTone::Dark
     }
-}
-
-fn unquote(value: &str) -> &str {
-    let value = value.trim();
-    value
-        .strip_prefix('\'')
-        .and_then(|inner| inner.strip_suffix('\''))
-        .unwrap_or(value)
 }
 
 #[cfg(test)]
@@ -71,10 +52,10 @@ mod tests {
     #[test]
     fn cinnamon_theme_name_with_dark_is_dark() {
         let cases = [
-            ("'Mint-Y-Dark-Aqua'\n", PanelTone::Dark),
-            ("'Mint-Y-DARK'", PanelTone::Dark),
-            ("'Mint-Y-Aqua'\n", PanelTone::Light),
-            ("'Mint-L'", PanelTone::Light),
+            ("Mint-Y-Dark-Aqua", PanelTone::Dark),
+            ("Mint-Y-DARK", PanelTone::Dark),
+            ("Mint-Y-Aqua", PanelTone::Light),
+            ("Mint-L", PanelTone::Light),
             ("", PanelTone::Light),
         ];
         for (name, expected) in cases {
@@ -85,10 +66,9 @@ mod tests {
     #[test]
     fn only_prefer_light_color_scheme_is_light() {
         let cases = [
-            ("'prefer-dark'\n", PanelTone::Dark),
             ("prefer-dark", PanelTone::Dark),
-            ("'prefer-light'\n", PanelTone::Light),
-            ("'default'\n", PanelTone::Dark),
+            ("prefer-light", PanelTone::Light),
+            ("default", PanelTone::Dark),
             ("", PanelTone::Dark),
         ];
         for (scheme, expected) in cases {

@@ -36,7 +36,7 @@ impl InstallerOps for Platform {
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
-        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        if qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::Unknown {
             log::info!("Skipping auto-start because no GUI session was detected.");
             return Ok(());
         }

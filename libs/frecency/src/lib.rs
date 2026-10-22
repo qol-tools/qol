@@ -63,11 +63,8 @@ pub fn prune(data: &mut FrequencyData, now: u64, half_life_days: f64) {
     }
 }
 
-/// Returns the default frecency store path for a plugin.
-///
-/// Resolves to `$XDG_CACHE_DIR/{plugin_name}-frequency.json`.
 pub fn default_store_path(plugin_name: &str) -> PathBuf {
-    dirs::cache_dir()
+    qol_config::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(format!("{}-frequency.json", plugin_name))
 }

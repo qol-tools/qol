@@ -159,10 +159,8 @@ pub fn adjust_ghost_bounds(bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<g
 }
 
 pub fn should_poll_focus() -> bool {
-    let session = std::env::var("XDG_SESSION_TYPE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    std::env::var_os("DISPLAY").is_some() || session == "x11"
+    std::env::var_os("DISPLAY").is_some()
+        || qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::X11
 }
 
 pub fn has_process_focus() -> bool {

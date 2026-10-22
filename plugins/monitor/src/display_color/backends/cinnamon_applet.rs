@@ -1,4 +1,4 @@
-use std::process::Command;
+use qol_desktop_settings::gsettings;
 
 const APPLET_SCHEMA: &str = "org.cinnamon";
 const ENABLED_APPLETS_KEY: &str = "enabled-applets";
@@ -22,22 +22,11 @@ pub struct GsettingsRunner;
 
 impl SettingsRunner for GsettingsRunner {
     fn get(&self, key: &str) -> Option<String> {
-        let output = Command::new("gsettings")
-            .args(["get", APPLET_SCHEMA, key])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        gsettings::get(APPLET_SCHEMA, key).ok()
     }
 
     fn set(&self, key: &str, value: &str) -> bool {
-        Command::new("gsettings")
-            .args(["set", APPLET_SCHEMA, key, value])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+        gsettings::set(APPLET_SCHEMA, key, value).is_ok()
     }
 }
 

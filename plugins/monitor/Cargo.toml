@@ -11,6 +11,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 qol-apps.workspace = true
 qol-config.workspace = true
 qol-conventions.workspace = true
+qol-desktop-settings.workspace = true
 qol-fs.workspace = true
 qol-headless.workspace = true
 qol-host-fixes.workspace = true

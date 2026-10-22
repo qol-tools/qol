@@ -6378,6 +6378,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-fs",
  "qol-gpui",
  "qol-headless",
@@ -6656,6 +6657,7 @@ name = "qol-desktop-settings"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "workspace-hack",
 ]
 
@@ -6759,8 +6761,8 @@ dependencies = [
 name = "qol-frecency"
 version = "0.2.0"
 dependencies = [
- "dirs 6.0.0",
  "log",
+ "qol-config",
  "qol-fs",
  "qol-runtime",
  "serde",
@@ -6951,6 +6953,7 @@ version = "1.104.0"
 dependencies = [
  "anyhow",
  "block2",
+ "dirs 6.0.0",
  "flate2",
  "gpui",
  "imagesize",
@@ -6966,7 +6969,9 @@ dependencies = [
  "qol-color",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-frecency",
+ "qol-fs",
  "qol-gpui",
  "qol-headless",
  "qol-log",
@@ -7102,6 +7107,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",
@@ -7232,6 +7238,7 @@ dependencies = [
  "log",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-platform",
  "qol-runtime",
  "qol-theme",
@@ -7602,6 +7609,7 @@ dependencies = [
  "qol-config",
  "qol-connection-health",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-dev-build",
  "qol-fs",
  "qol-gpui",
@@ -7664,6 +7672,7 @@ dependencies = [
  "qol-audio",
  "qol-config",
  "qol-conventions",
+ "qol-desktop-settings",
  "qol-fs",
  "qol-headless",
  "qol-host-fixes",

@@ -3,6 +3,7 @@ pub mod details;
 pub mod entry_store;
 mod file_cache;
 mod file_scan;
+mod legacy_store;
 pub(crate) mod platform;
 pub mod search;
 #[cfg(debug_assertions)]

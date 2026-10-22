@@ -108,9 +108,9 @@ impl StagedStorage {
 fn isolated_worktree_root(source_root: &Path) -> Result<PathBuf> {
     let source = plain_canonical(source_root)
         .with_context(|| format!("canonicalizing source root {}", source_root.display()))?;
-    let cache = dirs::cache_dir()
+    let cache = qol_config::cache_dir()
         .context("locating the user cache directory for staged checks")?
-        .join("qol-check/staged-worktrees");
+        .join("check/staged-worktrees");
     std::fs::create_dir_all(&cache)
         .with_context(|| format!("creating staged worktree storage {}", cache.display()))?;
     let cache = plain_canonical(&cache)

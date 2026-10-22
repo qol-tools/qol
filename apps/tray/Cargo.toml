@@ -133,6 +133,7 @@ workspace-hack.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+qol-desktop-settings.workspace = true
 x11rb = { workspace = true, features = ["allow-unsafe-code"] }
 evdev = { version = "0.13", optional = true }
 # Git sync (libgit2 bindings; vendored so the host needs no system git)

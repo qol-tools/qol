@@ -47,7 +47,7 @@ impl PlatformOps for Platform {
     }
 
     fn open_path(&self, path: &Path) -> Result<OpenPathOutcome> {
-        if env::var_os("DISPLAY").is_none() && env::var_os("WAYLAND_DISPLAY").is_none() {
+        if qol_platform::linux_display_backend() == qol_platform::LinuxDisplayBackend::Unknown {
             return Ok(OpenPathOutcome::new(false));
         }
         qol_apps::desktop_integration::open_with_default_app(path)

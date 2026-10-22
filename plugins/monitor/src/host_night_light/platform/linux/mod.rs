@@ -3,6 +3,8 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+use qol_desktop_settings::gsettings;
+
 mod controller;
 
 use super::super::{HostNightLight, HostNightLightError, UnavailableHostNightLight};
@@ -54,20 +56,21 @@ struct Gsettings {
 }
 
 impl Gsettings {
-    fn command(&self, verb: &str, args: &[&str]) -> Result<String, HostNightLightError> {
-        let output = Command::new("gsettings")
-            .arg(verb)
-            .arg(self.desktop.schema())
-            .args(args)
-            .output()
-            .map_err(|error| HostNightLightError::Failed(format!("gsettings {verb}: {error}")))?;
-        if !output.status.success() {
-            return Err(HostNightLightError::Failed(format!(
-                "gsettings {verb}: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    fn get_key(&self, key: &str) -> Result<String, HostNightLightError> {
+        gsettings::get(self.desktop.schema(), key).map_err(settings_error)
+    }
+
+    fn set_key(&self, key: &str, value: &str) -> Result<(), HostNightLightError> {
+        gsettings::set(self.desktop.schema(), key, value).map_err(settings_error)
+    }
+
+    fn list_keys(&self) -> Result<String, HostNightLightError> {
+        let pairs = gsettings::list(self.desktop.schema()).map_err(settings_error)?;
+        Ok(pairs
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 
     fn disabled_until_tomorrow(&self, value: Option<&str>) -> Result<String, HostNightLightError> {
@@ -129,24 +132,24 @@ impl Gsettings {
     }
 
     fn write_values(&self, values: &BTreeMap<String, String>) -> Result<(), HostNightLightError> {
-        self.command("set", &[ENABLED, "false"])?;
+        self.set_key(ENABLED, "false")?;
         for (key, value) in values
             .iter()
             .filter(|(key, _)| key.as_str() != ENABLED && key.as_str() != DISABLED_UNTIL_TOMORROW)
         {
-            self.command("set", &[key, value])?;
+            self.set_key(key, value)?;
         }
         if let Some(disabled) = values.get(DISABLED_UNTIL_TOMORROW) {
             self.disabled_until_tomorrow(Some(disabled))?;
         }
         if let Some(enabled) = values.get(ENABLED) {
-            self.command("set", &[ENABLED, enabled])?;
+            self.set_key(ENABLED, enabled)?;
         }
         for (key, expected) in values {
             let actual = if key == DISABLED_UNTIL_TOMORROW {
                 self.disabled_until_tomorrow(None)?
             } else {
-                self.command("get", &[key])?
+                self.get_key(key)?
             };
             if actual != *expected {
                 return Err(HostNightLightError::Failed(format!(
@@ -156,6 +159,10 @@ impl Gsettings {
         }
         Ok(())
     }
+}
+
+fn settings_error(error: anyhow::Error) -> HostNightLightError {
+    HostNightLightError::Failed(format!("{error:#}"))
 }
 
 fn schedule_values(keys: &str) -> Option<BTreeMap<String, String>> {
@@ -220,7 +227,7 @@ impl Settings for Gsettings {
     }
 
     fn get(&self) -> Result<bool, HostNightLightError> {
-        match self.command("get", &[ENABLED])?.as_str() {
+        match self.get_key(ENABLED)?.as_str() {
             "true" => Ok(true),
             "false" => Ok(false),
             _ => Err(HostNightLightError::Failed(
@@ -230,7 +237,7 @@ impl Settings for Gsettings {
     }
 
     fn set(&self, enabled: bool) -> Result<(), HostNightLightError> {
-        self.command("set", &[ENABLED, if enabled { "true" } else { "false" }])?;
+        self.set_key(ENABLED, if enabled { "true" } else { "false" })?;
         if self.get()? != enabled {
             return Err(HostNightLightError::Failed(
                 "night light enabled state did not verify".into(),
@@ -247,7 +254,7 @@ impl Settings for Gsettings {
             .map(String::as_str)
             .chain([ENABLED, TEMPERATURE])
         {
-            values.insert(key.into(), self.command("get", &[key])?);
+            values.insert(key.into(), self.get_key(key)?);
         }
         values.insert(
             DISABLED_UNTIL_TOMORROW.into(),
@@ -304,7 +311,7 @@ pub(crate) fn control(config_root: Option<&Path>) -> Arc<dyn HostNightLight> {
         desktop,
         schedule: BTreeMap::new(),
     };
-    let Ok(keys) = settings.command("list-keys", &[]) else {
+    let Ok(keys) = settings.list_keys() else {
         return Arc::new(UnavailableHostNightLight(
             "No available native night light service for this desktop; using display gamma",
         ));

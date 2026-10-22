@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 pub(crate) fn log_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .map(|d| d.join("qol-tray/logs"))
+    qol_config::data_dir()
+        .map(|dir| dir.join("logs"))
         .unwrap_or_else(|| PathBuf::from("C:/Temp/qol-tray/logs"))
 }

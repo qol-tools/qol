@@ -119,6 +119,15 @@ pub fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
     Ok(())
 }
 
+pub fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
+    match fs::rename(source, destination) {
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            copy_then_remove(source, destination)
+        }
+        result => result,
+    }
+}
+
 fn atomic_write_inner(
     path: &Path,
     content: &[u8],
@@ -153,6 +162,17 @@ fn atomic_write_inner(
         platform::sync_parent(parent)?;
     }
     Ok(())
+}
+
+fn copy_then_remove(source: &Path, destination: &Path) -> io::Result<()> {
+    let staged = Builder::new()
+        .prefix(&temp_prefix(destination))
+        .suffix(".tmp")
+        .tempfile_in(parent_dir(destination))?
+        .into_temp_path();
+    fs::copy(source, &staged)?;
+    staged.persist(destination).map_err(|error| error.error)?;
+    fs::remove_file(source)
 }
 
 fn parent_dir(path: &Path) -> &Path {
@@ -444,6 +464,37 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    #[test]
+    fn a_move_across_filesystems_copies_through_a_staged_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("old/state.json");
+        let destination = dir.path().join("new/state.json");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&source, "ranking").unwrap();
+
+        copy_then_remove(&source, &destination).unwrap();
+
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "ranking");
+        assert!(!source.exists());
+        assert!(temp_files(destination.parent().unwrap(), "state.json").is_empty());
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_no_destination_and_keeps_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("old");
+        let destination = dir.path().join("new/state.json");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+
+        copy_then_remove(&source, &destination).unwrap_err();
+
+        assert!(!destination.exists());
+        assert!(source.exists());
+        assert!(temp_files(destination.parent().unwrap(), "state.json").is_empty());
     }
 
     fn temp_files(parent: &Path, target_name: &str) -> Vec<std::path::PathBuf> {

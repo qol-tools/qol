@@ -30,6 +30,7 @@ qol-conventions.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+qol-desktop-settings.workspace = true
 qol-fs.workspace = true
 x11rb = { workspace = true, features = [
   "allow-unsafe-code",

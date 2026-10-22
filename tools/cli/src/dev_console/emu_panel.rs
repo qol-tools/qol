@@ -1775,7 +1775,7 @@ fn sandbox_inventory_lines(
     if inventory.environments.is_empty() {
         let config = crate::commands::dev_env::config_path()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "~/.config/qol/dev-envs.toml".to_string());
+            .unwrap_or_else(|| "~/.config/qol-tray/dev-envs.toml".to_string());
         lines.extend(emu_empty_lines(&config));
     }
     for (index, snapshot) in inventory.environments.iter().enumerate() {

@@ -37,5 +37,45 @@
         "why": "DWMWA_CLOAK hides and reveals the window without unmapping it; that is visibility, not chrome"
       }
     ]
+  },
+  "qol folders": {
+    "owner": "libs/config/src/",
+    "use": "qol_config::config_dir, data_dir or cache_dir, which put qol's files in the qol-tray folder",
+    "paths": ["dirs::config_dir", "dirs::data_dir", "dirs::data_local_dir", "dirs::cache_dir"],
+    "allow": [
+      { "path": "apps/tray/src/paths/platform/linux.rs", "text": "dirs::config_dir", "why": "the XDG config home holds the desktop's autostart entries, not qol's files" },
+      { "path": "apps/tray/src/paths/platform/linux.rs", "text": "dirs::data_dir", "why": "the XDG data home holds the desktop's menu entries and icons, not qol's files" },
+      { "path": "libs/apps/src/tray_install/platform/windows.rs", "text": "dirs::data_local_dir", "why": "Windows installs per-user programs under LocalAppData\\Programs; that is the install location, not qol's data folder" },
+      { "path": "tools/cli/src/dev_console/disk.rs", "text": "dirs::cache_dir", "why": "sccache keeps its cache in its own default folder, and the disk report reads it there" },
+      { "path": "plugins/launcher/src/discovery/legacy_store.rs", "text": "dirs::cache_dir", "why": "moves the ranking and boosts files out of the cache folder they used before; delete with the move" },
+      { "path": "tools/cli/src/commands/dev_env/legacy_config.rs", "text": "dirs::config_dir", "why": "moves dev-envs.toml out of the qol folder it used before; delete with the move" }
+    ]
+  },
+  "display server": {
+    "owner": "libs/platform/src/",
+    "use": "qol_platform::linux_display_backend()",
+    "texts": ["XDG_SESSION_TYPE", "WAYLAND_DISPLAY"],
+    "allow": [
+      { "path": "libs/dev-env/src/session.rs", "text": "WAYLAND_DISPLAY", "why": "lists host session variables to remove from a child's environment; it decides nothing" },
+      { "path": "libs/dev-env/src/session.rs", "text": "XDG_SESSION_TYPE", "why": "lists host session variables to remove from a child's environment; it decides nothing" },
+      { "path": "plugins/alt-tab/src/runtime/doctor/platform/linux.rs", "text": "WAYLAND_DISPLAY", "why": "the doctor reports the raw session variable for diagnosis; it decides nothing" },
+      { "path": "plugins/alt-tab/src/runtime/doctor/platform/linux.rs", "text": "XDG_SESSION_TYPE", "why": "the doctor reports the raw session variable for diagnosis; it decides nothing" },
+      { "path": "plugins/os-themes/src/doctor/platform/linux.rs", "text": "XDG_SESSION_TYPE", "why": "the doctor reports the raw session variable for diagnosis; it decides nothing" },
+      { "path": "plugins/os-themes/src/doctor/platform/linux.rs", "text": "WAYLAND_DISPLAY", "why": "the doctor reports the raw session variable for diagnosis; it decides nothing" },
+      { "path": "plugins/window-actions/src/platform/linux/doctor.rs", "text": "XDG_SESSION_TYPE", "why": "the doctor reports the raw session variable for diagnosis; it decides nothing" },
+      { "path": "tools/guest-runner/src/platform/linux/mod.rs", "text": "XDG_SESSION_TYPE", "why": "reports the guest session's raw variables to the host's dev tools; it decides nothing" }
+    ]
+  },
+  "desktop settings": {
+    "owner": "libs/desktop-settings/src/",
+    "use": "qol_desktop_settings::gsettings",
+    "texts": ["gsettings"],
+    "allow": [
+      { "path": "apps/tray/src/hotkeys/takeover/platform/fallback.rs", "text": "gsettings", "why": "names the tool in the unsupported-platform error; nothing runs" },
+      { "path": "apps/tray/src/hotkeys/takeover/platform/macos.rs", "text": "gsettings", "why": "names the tool in the unsupported-platform error; nothing runs" },
+      { "path": "apps/tray/src/hotkeys/takeover/platform/windows.rs", "text": "gsettings", "why": "names the tool in the unsupported-platform error; nothing runs" },
+      { "path": "plugins/os-themes/src/doctor/platform/linux.rs", "text": "gsettings", "why": "the doctor reports where the gsettings binary is; it never runs it" },
+      { "path": "plugins/os-themes/src/theme/platform/linux/mod.rs", "text": "gsettings", "why": "a test puts a fake gsettings on PATH to record the owner's calls" }
+    ]
   }
 }
