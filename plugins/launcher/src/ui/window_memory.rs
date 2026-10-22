@@ -37,7 +37,7 @@ pub(super) fn remember(user: Size<Pixels>, window: &Window, cx: &mut App) {
     let Some(store) = WindowStateStore::shared() else {
         return;
     };
-    let bounds = window.bounds();
+    let bounds = window.content_bounds();
     let monitor = match window.display(cx) {
         Some(display) => display.bounds(),
         None => bounds,

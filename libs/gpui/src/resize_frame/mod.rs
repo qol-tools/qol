@@ -10,12 +10,12 @@ use crate::popup_window::WindowGeometrySession;
 
 mod geometry;
 
-use self::geometry::{resized_rect, NativeRect, ResizeLimits};
+use self::geometry::{drag_canvas, resized_rect, NativeRect, ResizeLimits};
 
 const EDGE_BAND: f32 = 5.0;
 const CORNER_BAND: f32 = 10.0;
-const DRAW_WAIT: Duration = Duration::from_millis(50);
 const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
+const NATIVE_RESIZE_WAIT: Duration = Duration::from_millis(300);
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
     ResizeEdge::Top,
@@ -67,6 +67,23 @@ struct Drag {
     limits: ResizeLimits,
     epoch: u64,
     sizing: Arc<Mutex<Sizing>>,
+    release_seen: Rc<Cell<bool>>,
+}
+
+#[derive(Clone, Copy)]
+enum Stage {
+    Growing {
+        canvas: NativeRect,
+        since: Instant,
+    },
+    Following {
+        canvas: NativeRect,
+        shown: NativeRect,
+    },
+    Settling {
+        target: NativeRect,
+        since: Instant,
+    },
 }
 
 impl Drag {
@@ -90,10 +107,22 @@ impl Drag {
         );
     }
 
+    fn clip_within(&self, canvas: NativeRect, rect: NativeRect) {
+        let (x, y) = (rect.x - canvas.x, rect.y - canvas.y);
+        self.session.clip(Some((
+            x.round() as i32,
+            y.round() as i32,
+            rect.width.round().max(1.0) as u32,
+            rect.height.round().max(1.0) as u32,
+        )));
+    }
+
     fn released(&self) -> bool {
-        self.session
-            .pointer_on()
-            .is_some_and(|pointer| !pointer.pressed)
+        self.release_seen.get()
+            || self
+                .session
+                .pointer_on()
+                .is_some_and(|pointer| !pointer.pressed)
     }
 
     fn finish(&self, epochs: &AtomicU64) -> bool {
@@ -180,8 +209,26 @@ impl ResizeFrame {
             return;
         };
         *self.state.drag.borrow_mut() = Some(drag.clone());
-        let applied = drag.start;
-        follow_pointer(drag, self.state.epoch.clone(), applied, None, window);
+        let epochs = self.state.epoch.clone();
+        if !crate::platform::RESIZE_ON_CANVAS || drag.limits.area.is_none() {
+            let applied = drag.start;
+            follow_pointer(drag, epochs, applied, window);
+            return;
+        }
+        let canvas = drag_canvas(drag.start, drag.edge, drag.limits);
+        if canvas != drag.start {
+            let grow = drag.clone();
+            cx.spawn(async move |_| {
+                grow.clip_within(canvas, grow.start);
+                grow.apply(canvas);
+            })
+            .detach();
+        }
+        let stage = Stage::Growing {
+            canvas,
+            since: Instant::now(),
+        };
+        follow_on_canvas(drag, epochs, stage, window);
     }
 
     fn end(&self) {
@@ -192,12 +239,7 @@ impl ResizeFrame {
             }
             return;
         };
-        if !drag.finish(&self.state.epoch) {
-            return;
-        }
-        if let Some(last) = drag.bounds_now() {
-            drag.apply(last);
-        }
+        drag.release_seen.set(true);
     }
 
     fn client_drag(
@@ -237,50 +279,131 @@ impl ResizeFrame {
             },
             epoch,
             sizing: self.state.sizing.clone(),
+            release_seen: Rc::new(Cell::new(false)),
             session,
         })
     }
 }
 
-fn follow_pointer(
-    drag: Drag,
-    epochs: Arc<AtomicU64>,
-    applied: NativeRect,
-    awaiting_draw: Option<Instant>,
-    window: &Window,
-) {
+fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, window: &Window) {
     window.on_next_frame(move |window, cx| {
         if epochs.load(Ordering::SeqCst) != drag.epoch {
             return;
         }
         let released = drag.released();
-        let waiting = !released
-            && awaiting_draw
-                .is_some_and(|since| since.elapsed() < DRAW_WAIT && !drawn_at(window, applied));
-        let (applied, awaiting_draw) = match drag.bounds_now() {
-            Some(next) if !waiting && next != applied => {
+        let applied = match drag.bounds_now() {
+            Some(next) if next != applied => {
                 apply_after_present(drag.clone(), next, cx);
-                (next, Some(Instant::now()))
+                next
             }
-            _ => (applied, awaiting_draw.filter(|_| waiting)),
+            _ => applied,
         };
         if released {
             drag.finish(&epochs);
             return;
         }
-        follow_pointer(drag, epochs, applied, awaiting_draw, window);
+        follow_pointer(drag, epochs, applied, window);
     });
+}
+
+fn follow_on_canvas(drag: Drag, epochs: Arc<AtomicU64>, stage: Stage, window: &Window) {
+    window.on_next_frame(move |window, cx| {
+        if epochs.load(Ordering::SeqCst) != drag.epoch {
+            drag.session.clip(None);
+            window.set_content_rect(None, cx);
+            return;
+        }
+        let released = drag.released();
+        let next = match stage {
+            Stage::Growing { canvas, since } => {
+                if sized_to(window, canvas) {
+                    let shown = show_on_canvas(&drag, canvas, drag.start, window, cx);
+                    Some(Stage::Following { canvas, shown })
+                } else if released || since.elapsed() > NATIVE_RESIZE_WAIT {
+                    let target = drag.bounds_now().unwrap_or(drag.start);
+                    apply_after_present(drag.clone(), target, cx);
+                    settling(target)
+                } else {
+                    Some(stage)
+                }
+            }
+            Stage::Following { canvas, shown } => {
+                let rect = show_on_canvas(&drag, canvas, shown, window, cx);
+                if released {
+                    apply_after_present(drag.clone(), rect, cx);
+                    settling(rect)
+                } else {
+                    Some(Stage::Following {
+                        canvas,
+                        shown: rect,
+                    })
+                }
+            }
+            Stage::Settling { target, since } => {
+                if sized_to(window, target) || since.elapsed() > NATIVE_RESIZE_WAIT {
+                    drag.session.clip(None);
+                    window.set_content_rect(None, cx);
+                    drag.finish(&epochs);
+                    None
+                } else {
+                    Some(stage)
+                }
+            }
+        };
+        if let Some(stage) = next {
+            follow_on_canvas(drag, epochs, stage, window);
+        }
+    });
+}
+
+fn settling(target: NativeRect) -> Option<Stage> {
+    Some(Stage::Settling {
+        target,
+        since: Instant::now(),
+    })
+}
+
+fn show_on_canvas(
+    drag: &Drag,
+    canvas: NativeRect,
+    shown: NativeRect,
+    window: &mut Window,
+    cx: &mut App,
+) -> NativeRect {
+    let rect = drag.bounds_now().unwrap_or(shown);
+    let kept = shown.overlap(rect);
+    if kept != shown {
+        drag.clip_within(canvas, kept);
+    }
+    if rect != kept {
+        let reveal = drag.clone();
+        cx.spawn(async move |_| reveal.clip_within(canvas, rect))
+            .detach();
+    }
+    let scale = f64::from(window.scale_factor());
+    let local = Bounds::new(
+        point(
+            px(((rect.x - canvas.x) / scale) as f32),
+            px(((rect.y - canvas.y) / scale) as f32),
+        ),
+        size(
+            px((rect.width / scale) as f32),
+            px((rect.height / scale) as f32),
+        ),
+    );
+    window.set_content_rect(Some(local), cx);
+    rect
+}
+
+fn sized_to(window: &Window, rect: NativeRect) -> bool {
+    let scale = f64::from(window.scale_factor());
+    let size = window.bounds().size;
+    (size.width.to_f64() * scale).round() == rect.width.round()
+        && (size.height.to_f64() * scale).round() == rect.height.round()
 }
 
 fn apply_after_present(drag: Drag, rect: NativeRect, cx: &mut App) {
     cx.spawn(async move |_| drag.apply(rect)).detach();
-}
-
-fn drawn_at(window: &Window, rect: NativeRect) -> bool {
-    let scale = window.scale_factor();
-    let size = window.bounds().size;
-    (size.width.to_f64() * f64::from(scale)).round() == rect.width.round()
-        && (size.height.to_f64() * f64::from(scale)).round() == rect.height.round()
 }
 
 fn lock(sizing: &Mutex<Sizing>) -> std::sync::MutexGuard<'_, Sizing> {

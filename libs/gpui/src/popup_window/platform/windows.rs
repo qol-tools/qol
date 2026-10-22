@@ -175,6 +175,8 @@ impl WindowGeometrySession {
         }
     }
 
+    pub fn clip(&self, _region: Option<(i32, i32, u32, u32)>) {}
+
     pub fn set_position(&self, x: i32, y: i32) {
         move_window(self.handle(), x, y);
     }

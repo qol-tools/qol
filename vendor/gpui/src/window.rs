@@ -831,6 +831,7 @@ pub struct Window {
     /// a given rem size.
     rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
+    content_rect: Option<Bounds<Pixels>>,
     layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
@@ -1239,6 +1240,7 @@ impl Window {
             rem_size: px(16.),
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
+            content_rect: None,
             layout_engine: Some(TaffyLayoutEngine::new()),
             root: None,
             element_id_stack: SmallVec::default(),
@@ -1698,7 +1700,10 @@ impl Window {
 
     fn bounds_changed(&mut self, cx: &mut App) {
         self.scale_factor = self.platform_window.scale_factor();
-        self.viewport_size = self.platform_window.content_size();
+        self.viewport_size = match self.content_rect {
+            Some(rect) => rect.size,
+            None => self.platform_window.content_size(),
+        };
         self.display_id = self.platform_window.display().map(|display| display.id());
 
         self.refresh();
@@ -1711,6 +1716,33 @@ impl Window {
     /// Returns the bounds of the current window in the global coordinate space, which could span across multiple displays.
     pub fn bounds(&self) -> Bounds<Pixels> {
         self.platform_window.bounds()
+    }
+
+    #[doc = "Bounds of the drawn content in global coordinates: the window bounds, narrowed to the content rect when one is set."]
+    pub fn content_bounds(&self) -> Bounds<Pixels> {
+        let bounds = self.platform_window.bounds();
+        match self.content_rect {
+            Some(rect) => Bounds::new(bounds.origin + rect.origin, rect.size),
+            None => bounds,
+        }
+    }
+
+    #[doc = "The window-relative rect the root view is drawn into, when narrower than the window."]
+    pub fn content_rect(&self) -> Option<Bounds<Pixels>> {
+        self.content_rect
+    }
+
+    #[doc = "Draw the root view into a window-relative rect instead of the whole window, so the content can change size without resizing the native window."]
+    pub fn set_content_rect(&mut self, rect: Option<Bounds<Pixels>>, cx: &mut App) {
+        if self.content_rect == rect {
+            return;
+        }
+        self.content_rect = rect;
+        self.bounds_changed(cx);
+    }
+
+    fn content_origin(&self) -> Point<Pixels> {
+        self.content_rect.map(|rect| rect.origin).unwrap_or_default()
     }
 
     /// Set the content size of the window.
@@ -2058,7 +2090,7 @@ impl Window {
 
         // Layout all root elements.
         let mut root_element = self.root.as_ref().unwrap().clone().into_any();
-        root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
+        root_element.prepaint_as_root(self.content_origin(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
@@ -2073,7 +2105,7 @@ impl Window {
         let mut tooltip_element = None;
         if let Some(prompt) = self.prompt.take() {
             let mut element = prompt.view.any_view().into_any();
-            element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
+            element.prepaint_as_root(self.content_origin(), root_size.into(), self, cx);
             prompt_element = Some(element);
             self.prompt = Some(prompt);
         } else if let Some(active_drag) = cx.active_drag.take() {
@@ -2579,7 +2611,7 @@ impl Window {
             .cloned()
             .unwrap_or_else(|| ContentMask {
                 bounds: Bounds {
-                    origin: Point::default(),
+                    origin: self.content_origin(),
                     size: self.viewport_size,
                 },
             })

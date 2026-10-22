@@ -1135,7 +1135,7 @@ impl X11WindowStatePtr {
                 ));
                 resize_args = Some((state.content_size(), state.scale_factor));
             }
-            if let Some(value) = state.last_sync_counter.take() {
+            if !is_resize && let Some(value) = state.last_sync_counter.take() {
                 check_reply(
                     || "X11 sync SetCounter failed.",
                     sync::set_counter(&self.xcb, state.counter_id, value),
@@ -1510,6 +1510,13 @@ impl PlatformWindow for X11Window {
     fn draw(&self, scene: &Scene) {
         let mut inner = self.0.state.borrow_mut();
         inner.renderer.draw(scene);
+        if let Some(value) = inner.last_sync_counter.take() {
+            check_reply(
+                || "X11 sync SetCounter failed.",
+                sync::set_counter(&self.0.xcb, inner.counter_id, value),
+            )
+            .log_err();
+        }
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {

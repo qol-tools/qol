@@ -102,7 +102,7 @@ impl LauncherView {
         self.sizing.requested = Some(want);
         self.sizing.frame.end_user_sizing();
         cx.defer_in(window, move |this, window, _| {
-            let bounds = window.bounds();
+            let bounds = window.content_bounds();
             let origin = point(
                 bounds.origin.x + (was.width - want.width) * 0.5,
                 bounds.origin.y,
