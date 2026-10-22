@@ -1,6 +1,6 @@
 mod platform;
 
-pub use platform::{set_window_fixed_size_by_title, show_normal_window_by_title};
+pub use platform::{set_window_min_size_by_title, show_normal_window_by_title};
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};

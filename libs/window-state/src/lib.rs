@@ -19,6 +19,8 @@ pub struct WindowState {
     pub owner_pid: u32,
     pub default_placement: String,
     pub reopen: Option<Reopen>,
+    #[serde(default)]
+    pub user_sized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -912,13 +912,13 @@ enum WindowPresentation {
     Normal,
 }
 
-pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
+pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
     };
-    let size = NSSize::new(size.width.to_f64(), size.height.to_f64());
-    window.setContentMinSize(size);
-    window.setContentMaxSize(size);
+    let unbounded = f64::from(f32::MAX);
+    window.setContentMinSize(NSSize::new(size.width.to_f64(), size.height.to_f64()));
+    window.setContentMaxSize(NSSize::new(unbounded, unbounded));
     true
 }
 

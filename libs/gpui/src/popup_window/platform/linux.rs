@@ -1076,11 +1076,18 @@ fn lock_window_size(conn: &impl Connection, wid: u32) {
 }
 
 fn set_window_fixed_size(conn: &impl Connection, wid: u32, size: (i32, i32)) -> bool {
-    let hints = x11rb::properties::WmSizeHints {
-        min_size: Some(size),
-        max_size: Some(size),
-        ..Default::default()
-    };
+    set_size_hints(
+        conn,
+        wid,
+        x11rb::properties::WmSizeHints {
+            min_size: Some(size),
+            max_size: Some(size),
+            ..Default::default()
+        },
+    )
+}
+
+fn set_size_hints(conn: &impl Connection, wid: u32, hints: x11rb::properties::WmSizeHints) -> bool {
     hints
         .set(conn, wid, AtomEnum::WM_NORMAL_HINTS)
         .ok()
@@ -1088,7 +1095,7 @@ fn set_window_fixed_size(conn: &impl Connection, wid: u32, size: (i32, i32)) -> 
         .is_some()
 }
 
-pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
+pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -1100,7 +1107,11 @@ pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels
         size.width.to_f64().round().max(1.0) as i32,
         size.height.to_f64().round().max(1.0) as i32,
     );
-    set_window_fixed_size(&conn, wid, size) && conn.flush().is_ok()
+    let hints = x11rb::properties::WmSizeHints {
+        min_size: Some(size),
+        ..Default::default()
+    };
+    set_size_hints(&conn, wid, hints) && conn.flush().is_ok()
 }
 
 fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {

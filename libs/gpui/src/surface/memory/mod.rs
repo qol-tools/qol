@@ -45,6 +45,12 @@ impl WindowMemory {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum RestoreSize {
+    Content(Size<Pixels>),
+    AtLeast(Size<Pixels>),
+}
+
 pub(crate) struct RestoredPlacement {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) monitor: ActiveMonitor,
@@ -57,6 +63,7 @@ pub(crate) struct Remembered {
     default_placement: String,
     last: RefCell<Option<WindowState>>,
     save_generation: Cell<u64>,
+    user_sized: Cell<bool>,
 }
 
 impl Remembered {
@@ -78,6 +85,7 @@ impl Remembered {
         let last = store
             .load(&memory.key)
             .filter(|state| state.default_placement == default_placement);
+        let user_sized = last.as_ref().is_some_and(|state| state.user_sized);
         Some(Rc::new(Self {
             store,
             key: memory.key,
@@ -85,18 +93,18 @@ impl Remembered {
             default_placement,
             last: RefCell::new(last),
             save_generation: Cell::new(0),
+            user_sized: Cell::new(user_sized),
         }))
     }
 
     pub(crate) fn restore(
         &self,
-        content: Size<Pixels>,
-        keep_content_size: bool,
+        size: RestoreSize,
         active: Option<&ActiveMonitor>,
         cx: &App,
     ) -> Option<RestoredPlacement> {
         let mut saved = self.last.borrow().clone()?;
-        if keep_content_size {
+        if let RestoreSize::Content(content) = size {
             saved.bounds_on_monitor.width = content.width.to_f64();
             saved.bounds_on_monitor.height = content.height.to_f64();
         }
@@ -104,15 +112,22 @@ impl Remembered {
             Some(active) => (active.clone(), placed_on(&saved, active)),
             None => resolved(&saved, cx)?,
         };
-        let window = if keep_content_size {
-            with_size_of(window, saved.bounds_on_monitor)
-        } else {
-            window
+        let window = match size {
+            RestoreSize::Content(_) => with_size_of(window, saved.bounds_on_monitor),
+            RestoreSize::AtLeast(min) => at_least(window, min, logical_areas(&monitor).1),
         };
         Some(RestoredPlacement {
             bounds: to_bounds(window),
             monitor,
         })
+    }
+
+    pub(crate) fn user_sized(&self) -> bool {
+        self.user_sized.get()
+    }
+
+    pub(crate) fn mark_user_sized(&self) {
+        self.user_sized.set(true);
     }
 
     pub(crate) fn monitor(&self, cx: &App) -> Option<ActiveMonitor> {
@@ -187,6 +202,7 @@ impl Remembered {
             owner_pid: std::process::id(),
             default_placement: self.default_placement.clone(),
             reopen: self.reopen.borrow().clone(),
+            user_sized: self.user_sized.get(),
         });
         true
     }
@@ -269,6 +285,17 @@ fn with_size_of(window: WindowRect, content: WindowRect) -> WindowRect {
         height: content.height,
         ..window
     }
+}
+
+fn at_least(window: WindowRect, min: Size<Pixels>, work_area: MonitorBounds) -> WindowRect {
+    qol_window_state::clamp_into(
+        WindowRect {
+            width: window.width.max(min.width.to_f64()),
+            height: window.height.max(min.height.to_f64()),
+            ..window
+        },
+        work_area,
+    )
 }
 
 fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {

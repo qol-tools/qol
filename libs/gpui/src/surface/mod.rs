@@ -13,12 +13,13 @@ use gpui::*;
 
 use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::placement::{Corner, MonitorPlacement, CORNER_MARGIN};
+use crate::resize_frame::ResizeFrame;
 
 mod memory;
 mod platform;
 mod reveal;
 
-use self::memory::Remembered;
+use self::memory::{Remembered, RestoreSize};
 use self::platform::{Platform, SurfacePlatform};
 
 pub use self::memory::WindowMemory;
@@ -30,6 +31,7 @@ pub use self::reveal::{
 
 const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
 const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
+const USER_SIZE_TOLERANCE: f64 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
@@ -134,6 +136,7 @@ pub struct Surface {
     placement: MonitorPlacement,
     timeout: Option<Duration>,
     size: Size<Pixels>,
+    min_size: Option<Size<Pixels>>,
     retain_on_dismiss: bool,
     memory: Option<WindowMemory>,
     live_while: Option<LiveWhile>,
@@ -146,7 +149,6 @@ pub struct OpenedSurface<V> {
     pub(crate) dismisser: SurfaceDismisser,
     kind: SurfaceKind,
     placement: MonitorPlacement,
-    constrains_size: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
 }
@@ -157,13 +159,64 @@ struct DismissState {
     close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
     reusable: bool,
-    title: RefCell<String>,
+    title: Rc<RefCell<String>>,
     size: Cell<Size<Pixels>>,
     expected_viewport: Rc<Cell<Size<Pixels>>>,
-    constrains_size: bool,
+    resize_frame: Option<ResizeFrame>,
+    user_sized: Cell<bool>,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
     remembered: Option<Rc<Remembered>>,
+}
+
+impl DismissState {
+    fn hint_programmatic_size(&self, requested: Size<Pixels>) -> bool {
+        let Some(frame) = &self.resize_frame else {
+            return true;
+        };
+        frame.end_user_sizing();
+        hint_native_min_size(
+            &self.title.borrow(),
+            native_min_size(frame.min_size(), requested),
+        )
+    }
+
+    fn rehint_min_size(&self) {
+        if let Some(frame) = &self.resize_frame {
+            hint_native_min_size(
+                &self.title.borrow(),
+                native_min_size(frame.min_size(), self.size.get()),
+            );
+        }
+    }
+
+    fn restore_size(&self) -> RestoreSize {
+        restore_size(
+            self.size.get(),
+            self.resize_frame.as_ref().map(ResizeFrame::min_size),
+            self.user_sized.get(),
+        )
+    }
+
+    fn observe_bounds(&self, observed: Size<Pixels>) {
+        let Some(frame) = &self.resize_frame else {
+            return;
+        };
+        if !takes_user_size(
+            frame.is_user_sizing(),
+            self.user_sized.get(),
+            self.size.get(),
+            observed,
+        ) {
+            return;
+        }
+        self.user_sized.set(true);
+        self.size.set(observed);
+        self.expected_viewport.set(observed);
+        if let Some(remembered) = &self.remembered {
+            remembered.mark_user_sized();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -176,20 +229,28 @@ impl SurfaceDismisser {
         reusable: bool,
         title: String,
         size: Size<Pixels>,
-        constrains_size: bool,
+        min_size: Option<Size<Pixels>>,
         visible: Rc<Cell<bool>>,
         reveal_pending: Rc<Cell<bool>>,
         remembered: Option<Rc<Remembered>>,
     ) -> Self {
+        let title = Rc::new(RefCell::new(title));
+        let frame_title = title.clone();
+        let resize_frame = min_size
+            .map(|min_size| ResizeFrame::new(move || frame_title.borrow().clone(), min_size));
+        let user_sized = remembered
+            .as_ref()
+            .is_some_and(|remembered| remembered.user_sized());
         Self {
             state: Rc::new(DismissState {
                 close: RefCell::new(None),
                 generation: Cell::new(0),
                 reusable,
-                title: RefCell::new(title),
+                title,
                 size: Cell::new(size),
                 expected_viewport: Rc::new(Cell::new(size)),
-                constrains_size,
+                resize_frame,
+                user_sized: Cell::new(user_sized),
                 visible,
                 reveal_pending,
                 remembered,
@@ -207,12 +268,26 @@ impl SurfaceDismisser {
         self.state.size.get()
     }
 
+    pub fn user_sized(&self) -> bool {
+        self.state.user_sized.get()
+    }
+
+    pub fn set_min_size(&self, min_size: Size<Pixels>) -> bool {
+        let Some(frame) = &self.state.resize_frame else {
+            return false;
+        };
+        frame.set_min_size(min_size);
+        hint_native_min_size(
+            &self.current_title(),
+            native_min_size(min_size, self.state.size.get()),
+        )
+    }
+
     pub fn resize_window(&self, size: Size<Pixels>, window: &mut Window) -> bool {
         if !self.state.visible.get() && !self.state.reveal_pending.get() {
             return false;
         }
-        let title = self.current_title();
-        if self.state.constrains_size && !constrain_native_size(&title, size) {
+        if !self.state.hint_programmatic_size(size) {
             return false;
         }
         window.resize(size);
@@ -281,6 +356,7 @@ impl Surface {
             placement,
             timeout: None,
             size: size(px(320.0), px(72.0)),
+            min_size: None,
             retain_on_dismiss: false,
             memory: None,
             live_while: None,
@@ -324,6 +400,11 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn min_size(mut self, min_size: Size<Pixels>) -> Self {
+        self.min_size = Some(min_size);
         self
     }
 
@@ -398,20 +479,31 @@ impl Surface {
         cx: &mut App,
         build: impl FnOnce(SurfaceDismisser, &mut Window, &mut Context<V>) -> V + 'static,
     ) -> Result<OpenedSurface<V>> {
-        let constrains_size = self.constrains_size();
+        let min_size = self.resize_min_size();
         let remembered = self
             .memory
             .clone()
             .and_then(|memory| Remembered::new(memory, self.placement, cx));
+        let restore_size = restore_size(
+            self.size,
+            min_size,
+            remembered
+                .as_ref()
+                .is_some_and(|remembered| remembered.user_sized()),
+        );
         let restored = remembered
             .as_ref()
-            .and_then(|remembered| remembered.restore(self.size, constrains_size, monitor, cx));
+            .and_then(|remembered| remembered.restore(restore_size, monitor, cx));
         let restored_monitor = restored.as_ref().map(|restored| restored.monitor.clone());
         let monitor = restored_monitor.as_ref().or(monitor);
         let bounds = restored
             .map(|restored| restored.bounds)
             .or_else(|| monitor.map(|m| self.resolved_bounds(m)))
             .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
+        let opening_size = match restore_size {
+            RestoreSize::AtLeast(_) => bounds.size,
+            RestoreSize::Content(size) => size,
+        };
         let title = reserve_surface_title(&self.title);
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
@@ -429,7 +521,7 @@ impl Surface {
             focus: self.takes_focus(),
             show: !native_reveal_gate && !passive_reveal_gate,
             is_movable: true,
-            is_resizable: !constrains_size,
+            is_resizable: true,
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(resolved_app_id),
             ..Default::default()
@@ -439,8 +531,8 @@ impl Surface {
         let dismisser = SurfaceDismisser::new(
             retain_on_dismiss,
             title.clone(),
-            self.size,
-            constrains_size,
+            opening_size,
+            min_size,
             visible.clone(),
             reveal_pending.clone(),
             remembered.clone(),
@@ -451,7 +543,8 @@ impl Surface {
         let root_visible = visible.clone();
         let live_while = self.live_while.clone();
         let bounds_visible = visible.clone();
-        let bounds_memory = remembered.clone();
+        let bounds_state = dismisser.state.clone();
+        let resize_frame = dismisser.state.resize_frame.clone();
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
@@ -465,10 +558,11 @@ impl Surface {
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
-                    if let Some(remembered) =
-                        bounds_memory.as_ref().filter(|_| bounds_visible.get())
-                    {
-                        remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
+                    if bounds_visible.get() {
+                        bounds_state.observe_bounds(window.viewport_size());
+                        if let Some(remembered) = &bounds_state.remembered {
+                            remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
+                        }
                     }
                     cx.notify();
                 });
@@ -486,6 +580,7 @@ impl Surface {
                     inner,
                     look: WindowLook::Live,
                     live_while,
+                    resize_frame,
                     _bounds_subscription: bounds_subscription,
                     _activation_subscription: activation_subscription,
                 }
@@ -555,26 +650,29 @@ impl Surface {
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
-            let size_constrained = !constrains_size || constrain_native_size(&title, bounds.size);
-            let fresh_frame = (hidden && size_constrained)
+            let size_hinted = min_size.is_none_or(|min_size| {
+                hint_native_min_size(&title, native_min_size(min_size, bounds.size))
+            });
+            let fresh_frame = (hidden && size_hinted)
                 .then(|| {
                     schedule_fresh_frame(handle, dismisser.state.expected_viewport.clone(), cx)
                 })
-                .flatten();
+                .flatten()
+                .map(|fresh_frame| fresh_frame_for(fresh_frame, min_size.is_some()));
             let frame_scheduled = fresh_frame.is_some();
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
-                "title={title} phase=opened hidden={hidden} fixed_size={} size_constrained={size_constrained} frame_scheduled={frame_scheduled} x={} y={}",
-                constrains_size,
+                "title={title} phase=opened hidden={hidden} resizable={} size_hinted={size_hinted} frame_scheduled={frame_scheduled} x={} y={}",
+                min_size.is_some(),
                 bounds.origin.x.to_f64(),
                 bounds.origin.y.to_f64()
             );
             if !frame_scheduled {
                 release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
-                if !size_constrained {
+                if !size_hinted {
                     return Err(anyhow!(
-                        "surface could not constrain its native window size"
+                        "surface could not set its native minimum window size"
                     ));
                 }
                 return Err(anyhow!("surface could not prepare a fresh frame"));
@@ -602,7 +700,6 @@ impl Surface {
             dismisser,
             kind: self.kind,
             placement: self.placement,
-            constrains_size,
             visible,
             reveal_pending,
         })
@@ -626,8 +723,15 @@ impl Surface {
         }
     }
 
-    fn constrains_size(&self) -> bool {
-        matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel)
+    fn resizable(&self) -> bool {
+        match self.kind {
+            SurfaceKind::Toast => false,
+            SurfaceKind::Panel | SurfaceKind::OverlayPanel => true,
+        }
+    }
+
+    fn resize_min_size(&self) -> Option<Size<Pixels>> {
+        self.resizable().then(|| self.min_size.unwrap_or(self.size))
     }
 }
 
@@ -635,6 +739,7 @@ pub(crate) struct SurfaceRoot<V> {
     pub(crate) inner: Entity<V>,
     look: WindowLook,
     live_while: Option<LiveWhile>,
+    resize_frame: Option<ResizeFrame>,
     _bounds_subscription: Subscription,
     _activation_subscription: Subscription,
 }
@@ -661,9 +766,11 @@ impl<V: Render + 'static> Render for SurfaceRoot<V> {
             self.live_while.as_ref().is_some_and(|held| held())
         }));
         div()
+            .relative()
             .size_full()
             .text(TextStyle::Value)
             .child(self.inner.clone())
+            .children(self.resize_frame.as_ref().map(ResizeFrame::zones))
     }
 }
 
@@ -707,9 +814,45 @@ fn supports_native_reveal_gate() -> bool {
     Platform::supports_native_reveal_gate()
 }
 
-fn constrain_native_size(title: &str, size: Size<Pixels>) -> bool {
-    !supports_native_reveal_gate()
-        || crate::popup_window::set_window_fixed_size_by_title(title, size)
+fn hint_native_min_size(title: &str, size: Size<Pixels>) -> bool {
+    !supports_native_reveal_gate() || crate::popup_window::set_window_min_size_by_title(title, size)
+}
+
+fn native_min_size(min_size: Size<Pixels>, requested: Size<Pixels>) -> Size<Pixels> {
+    size(
+        min_size.width.min(requested.width),
+        min_size.height.min(requested.height),
+    )
+}
+
+fn restore_size(
+    content: Size<Pixels>,
+    min_size: Option<Size<Pixels>>,
+    user_sized: bool,
+) -> RestoreSize {
+    match min_size.filter(|_| user_sized) {
+        Some(min_size) => RestoreSize::AtLeast(min_size),
+        None => RestoreSize::Content(content),
+    }
+}
+
+fn takes_user_size(
+    user_sizing: bool,
+    user_sized: bool,
+    declared: Size<Pixels>,
+    observed: Size<Pixels>,
+) -> bool {
+    let drawable = observed.width > px(0.0) && observed.height > px(0.0);
+    let changed = !platform::dimensions_match(observed, declared, USER_SIZE_TOLERANCE);
+    drawable && changed && (user_sizing || user_sized)
+}
+
+fn fresh_frame_for(fresh_frame: FreshFrame, resizable: bool) -> FreshFrame {
+    if resizable {
+        fresh_frame.accepting_granted_viewport()
+    } else {
+        fresh_frame
+    }
 }
 
 fn placed_bounds(
@@ -916,6 +1059,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
                 let shown = show_after_timeout(&title, false, "surface-reveal-timeout", kind);
+                dismiss_state.rehint_min_size();
                 visible.set(shown);
                 qol_runtime::probe!(
                     "SURFACE_REVEAL",
@@ -944,6 +1088,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             return;
         }
         let shown = restore_reveal_state_verified(&title, false, "surface-reveal", kind);
+        dismiss_state.rehint_min_size();
         let repaint_requested = shown
             && cx
                 .update(|cx| request_surface_repaint(handle, cx))
@@ -1111,7 +1256,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 .remembered
                 .as_ref()
                 .and_then(|remembered| {
-                    remembered.restore(self.size(), self.constrains_size, active.as_ref(), cx)
+                    remembered.restore(self.dismisser.state.restore_size(), active.as_ref(), cx)
                 });
             let bounds = match (restored, self.kind, active) {
                 (Some(restored), _, _) => restored.bounds,
@@ -1125,7 +1270,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             };
             crate::popup_window::capture_focus_return();
             let title = self.dismisser.current_title();
-            if self.constrains_size && !constrain_native_size(&title, bounds.size) {
+            if !self.dismisser.state.hint_programmatic_size(bounds.size) {
                 return false;
             }
             let resized = self
@@ -1142,12 +1287,15 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             if !prepared {
                 return false;
             }
+            self.dismisser.state.size.set(bounds.size);
             self.dismisser.state.expected_viewport.set(bounds.size);
             let expected = self.dismisser.state.expected_viewport.clone();
             let Some(fresh_frame) = schedule_fresh_frame(self.handle, expected, cx) else {
                 let _ = crate::popup_window::hide_invisible(&title);
                 return false;
             };
+            let fresh_frame =
+                fresh_frame_for(fresh_frame, self.dismisser.state.resize_frame.is_some());
             self.reveal_pending.set(true);
             if let Some(remembered) = &self.dismisser.state.remembered {
                 let scale = self
@@ -1191,11 +1339,8 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
     }
 
     pub(crate) fn resize(&mut self, size: Size<Pixels>, cx: &mut App) -> anyhow::Result<()> {
-        let title = self.dismisser.current_title();
-        if self.constrains_size && !constrain_native_size(&title, size) {
-            return Err(anyhow!(
-                "surface could not update its native size constraint"
-            ));
+        if !self.dismisser.state.hint_programmatic_size(size) {
+            return Err(anyhow!("surface could not update its native minimum size"));
         }
         self.handle.update(cx, |_, window, _| window.resize(size))?;
         self.dismisser.state.size.set(size);
@@ -1280,6 +1425,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
                 let shown = show_after_timeout(&title, true, "surface-reuse-timeout", kind);
+                dismiss_state.rehint_min_size();
                 visible.set(shown);
                 qol_runtime::probe!(
                     "SURFACE_REVEAL",
@@ -1306,6 +1452,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             return;
         }
         let shown = restore_reveal_state_verified(&title, true, "surface-reuse-reveal", kind);
+        dismiss_state.rehint_min_size();
         visible.set(shown);
         reveal_pending.set(false);
         if !shown {
@@ -1400,9 +1547,10 @@ fn dismiss_on_close_request(window: &Window, dismisser: SurfaceDismisser, cx: &A
 mod tests {
     use super::platform::SurfacePlatform;
     use super::{
-        cancel_focus_reassert, held_look, panel_bounds, resolved_app_id, reveal_cancelled,
-        state_restore_needs_retry, surface_look, DragGestureState, RevealReadiness, Surface,
-        SurfaceDismisser, SurfaceKind, PANEL_FOCUS_GENERATION,
+        cancel_focus_reassert, held_look, native_min_size, panel_bounds, resolved_app_id,
+        restore_size, reveal_cancelled, state_restore_needs_retry, surface_look, takes_user_size,
+        DragGestureState, RestoreSize, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
+        PANEL_FOCUS_GENERATION,
     };
     use crate::kit::WindowLook;
     use crate::placement::MonitorPlacement;
@@ -1582,7 +1730,7 @@ mod tests {
         assert_eq!(surface.window_kind(), WindowKind::Normal);
         assert_eq!(surface.placement, MonitorPlacement::center());
         assert!(surface.takes_focus());
-        assert!(surface.constrains_size());
+        assert!(surface.resizable());
     }
 
     #[test]
@@ -1592,7 +1740,101 @@ mod tests {
         assert_eq!(surface.window_kind(), WindowKind::Normal);
         assert_eq!(surface.placement, MonitorPlacement::center());
         assert!(surface.takes_focus());
-        assert!(surface.constrains_size());
+        assert!(surface.resizable());
+    }
+
+    #[test]
+    fn toasts_stay_fixed_and_resizable_surfaces_default_their_minimum_to_the_opening_size() {
+        let opening = size(px(640.0), px(480.0));
+        let toast = Surface::new(SurfaceKind::Toast).size(opening);
+        assert!(!toast.resizable());
+        assert_eq!(toast.resize_min_size(), None);
+
+        let panel = Surface::new(SurfaceKind::Panel).size(opening);
+        assert_eq!(panel.resize_min_size(), Some(opening));
+
+        let floor = size(px(420.0), px(300.0));
+        let chosen = Surface::new(SurfaceKind::OverlayPanel)
+            .size(opening)
+            .min_size(floor);
+        assert_eq!(chosen.resize_min_size(), Some(floor));
+    }
+
+    #[test]
+    fn a_window_reopens_at_its_saved_size_only_once_the_user_sized_it() {
+        let content = size(px(640.0), px(480.0));
+        let min = size(px(420.0), px(300.0));
+        let cases = [
+            (
+                None,
+                false,
+                RestoreSize::Content(content),
+                "a toast never sized",
+            ),
+            (
+                None,
+                true,
+                RestoreSize::Content(content),
+                "a toast with a stray flag",
+            ),
+            (
+                Some(min),
+                false,
+                RestoreSize::Content(content),
+                "a panel the user never sized",
+            ),
+            (
+                Some(min),
+                true,
+                RestoreSize::AtLeast(min),
+                "a panel the user sized",
+            ),
+        ];
+        for (min_size, user_sized, expected, note) in cases {
+            assert_eq!(
+                restore_size(content, min_size, user_sized),
+                expected,
+                "{note}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_drag_or_an_earlier_user_size_claims_a_changed_viewport() {
+        let declared = size(px(640.0), px(480.0));
+        let dragged = size(px(700.0), px(520.0));
+        let rounded = size(px(640.5), px(480.0));
+        let empty = size(px(0.0), px(0.0));
+        let cases = [
+            (true, false, dragged, true, "a drag that changed the size"),
+            (
+                false,
+                true,
+                dragged,
+                true,
+                "a remembered user size follows the window",
+            ),
+            (false, false, dragged, false, "a programmatic or WM resize"),
+            (true, false, rounded, false, "native rounding during a drag"),
+            (true, true, empty, false, "an unmapped viewport"),
+        ];
+        for (user_sizing, user_sized, observed, expected, note) in cases {
+            assert_eq!(
+                takes_user_size(user_sizing, user_sized, declared, observed),
+                expected,
+                "{note}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_native_minimum_never_blocks_a_programmatic_shrink() {
+        let min = size(px(640.0), px(480.0));
+        assert_eq!(native_min_size(min, size(px(800.0), px(600.0))), min);
+        assert_eq!(
+            native_min_size(min, size(px(640.0), px(120.0))),
+            size(px(640.0), px(120.0))
+        );
     }
 
     #[test]
@@ -1631,7 +1873,7 @@ mod tests {
             true,
             "test".to_owned(),
             size(px(10.0), px(10.0)),
-            true,
+            Some(size(px(10.0), px(10.0))),
             visible,
             pending,
             None,
@@ -1718,7 +1960,7 @@ mod tests {
             false,
             "Close Request Panel".into(),
             size(px(100.0), px(100.0)),
-            false,
+            None,
             Rc::new(Cell::new(true)),
             Rc::new(Cell::new(false)),
             None,

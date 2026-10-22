@@ -27,6 +27,7 @@ pub mod placement;
 pub mod platform;
 pub mod popup_window;
 pub mod probe;
+pub mod resize_frame;
 pub mod runtime_config;
 pub mod scroll_list;
 pub mod scrollbar;

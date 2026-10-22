@@ -195,7 +195,7 @@ pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
     true
 }
 
-pub fn set_window_fixed_size_by_title(_title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
+pub fn set_window_min_size_by_title(_title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
     false
 }
 

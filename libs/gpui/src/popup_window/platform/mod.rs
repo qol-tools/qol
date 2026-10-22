@@ -32,7 +32,7 @@ pub use imp::{
     pinned_window_kind, pointer_on_window_by_title, pointer_over_window_by_title,
     prepare_window_reveal_by_title, reassert_focus_while_current, release_focus_by_title,
     reposition_window_by_title, set_ghost_debug, set_input_region_by_title,
-    set_override_redirect_by_title, set_unmap_hide, set_window_fixed_size_by_title,
+    set_override_redirect_by_title, set_unmap_hide, set_window_min_size_by_title,
     set_window_type_dock_by_title, show_normal_window_by_title, show_toast_window_by_title,
     show_window_by_title, show_window_interactive_by_title, show_window_passive_by_title,
     sync_window_layout, sync_window_layout_by_title, visible_windows_by_title_prefix,

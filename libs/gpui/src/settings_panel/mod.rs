@@ -62,6 +62,12 @@ const PANEL_GROUP_HEADER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_HINT_BAR_HEIGHT: f32 = qol_theme::HEIGHT_HINT_BAR;
 const PANEL_FILTER_HEIGHT: f32 = qol_theme::HEIGHT_CONTROL;
 const PANEL_MAX_HEIGHT: f32 = 720.0;
+const PANEL_MIN_ROWS: f32 = 3.0;
+const PANEL_MIN_HEIGHT: f32 = PANEL_BAND_HEIGHT
+    + PANEL_HINT_BAR_HEIGHT
+    + PANEL_GROUP_HEADER_HEIGHT
+    + PANEL_MIN_ROWS * PANEL_ROW_HEIGHT
+    + qol_theme::SPACE_PAD;
 const PANEL_CUSTOM_WIDTH: f32 = 560.0;
 const PANEL_CUSTOM_HEIGHT: f32 = PANEL_MAX_HEIGHT;
 
@@ -319,6 +325,7 @@ struct PreparedPanel {
     panel: SettingsPanel,
     state: SettingsPanelState,
     size: Size<Pixels>,
+    min_size: Size<Pixels>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -485,7 +492,7 @@ impl SettingsWindowHost {
         };
         let dismisser = active.surface.dismisser.clone();
         let visible = active.surface.is_visible();
-        active.surface.resize(prepared.size, cx)?;
+        fit_to_page(&mut active.surface, &prepared, cx)?;
         active.surface.handle.update(cx, move |root, window, cx| {
             let carried = root.inner.update(cx, |view, _| {
                 view.pause_runtime_poll();
@@ -578,7 +585,7 @@ impl SettingsWindowHost {
         let heading = prepared.panel.heading.clone();
         let dismisser = active.surface.dismisser.clone();
         let visible = active.surface.is_visible();
-        active.surface.resize(prepared.size, cx)?;
+        fit_to_page(&mut active.surface, &prepared, cx)?;
         active.surface.handle.update(cx, move |root, window, cx| {
             root.inner.update(cx, |view, _| view.pause_runtime_poll());
             dismisser.retitle(window, heading);
@@ -1053,8 +1060,8 @@ fn size_prepared_panel(
     } else {
         0.0
     };
-    let width = (body_width + device_list + rail_width(prepared.sources.len()))
-        .min(room_on(work_area.width.to_f64() as f32));
+    let rail = rail_width(prepared.sources.len());
+    let width = (body_width + device_list + rail).min(room_on(work_area.width.to_f64() as f32));
     let height = panel_height(&prepared.rows, &prepared.sections)
         .max(if has_custom_source {
             PANEL_CUSTOM_HEIGHT
@@ -1062,6 +1069,7 @@ fn size_prepared_panel(
             0.0
         })
         .min(available);
+    let min_size = panel_min_size(device_list + rail, size(px(width), px(height)));
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
@@ -1074,7 +1082,50 @@ fn size_prepared_panel(
             screen_aspect: screen_width / screen_height.max(1.0),
         },
         size: size(px(width), px(height)),
+        min_size,
     })
+}
+
+fn panel_min_size(side_columns: f32, page: Size<Pixels>) -> Size<Pixels> {
+    size(
+        px(PANEL_COMPACT_WIDTH + side_columns).min(page.width),
+        px(PANEL_MIN_HEIGHT).min(page.height),
+    )
+}
+
+fn fit_to_page(
+    surface: &mut OpenedSurface<SettingsPanelView>,
+    prepared: &PreparedPanel,
+    cx: &mut App,
+) -> anyhow::Result<()> {
+    let dismisser = &surface.dismisser;
+    dismisser.set_min_size(prepared.min_size);
+    let target = page_size_target(
+        dismisser.user_sized(),
+        prepared.size,
+        dismisser.window_size(),
+        prepared.min_size,
+    );
+    match target {
+        Some(target) => surface.resize(target, cx),
+        None => Ok(()),
+    }
+}
+
+fn page_size_target(
+    user_sized: bool,
+    page: Size<Pixels>,
+    current: Size<Pixels>,
+    min_size: Size<Pixels>,
+) -> Option<Size<Pixels>> {
+    if !user_sized {
+        return Some(page);
+    }
+    let grown = size(
+        current.width.max(min_size.width),
+        current.height.max(min_size.height),
+    );
+    (grown != current).then_some(grown)
 }
 
 fn room_on(work_area: f32) -> f32 {
@@ -1093,6 +1144,7 @@ fn open_prepared(
     let opened = settings_surface()
         .title(title)
         .size(prepared.size)
+        .min_size(prepared.min_size)
         .show_focused(tracker, cx, move |dismisser, _window, cx| {
             SettingsPanelView::new(
                 prepared.panel,
@@ -1894,6 +1946,65 @@ active_query = "status"
             wrapped_overflow > 0.0,
             "a block scroll viewport over a flex_col wrapper must keep scroll room"
         );
+    }
+
+    #[test]
+    fn pages_pick_the_size_until_the_user_resizes_then_only_the_minimum_can_grow_it() {
+        use super::page_size_target;
+        use gpui::{px, size};
+        let page = size(px(760.0), px(640.0));
+        let min = size(px(616.0), px(300.0));
+        let cases = [
+            (
+                false,
+                size(px(900.0), px(700.0)),
+                Some(page),
+                "never resized: the page decides",
+            ),
+            (
+                true,
+                size(px(900.0), px(700.0)),
+                None,
+                "resized and above the minimum: kept",
+            ),
+            (
+                true,
+                size(px(500.0), px(700.0)),
+                Some(size(px(616.0), px(700.0))),
+                "resized below a wider page minimum: only the width grows",
+            ),
+            (
+                true,
+                size(px(500.0), px(200.0)),
+                Some(min),
+                "resized below both minimums: grows to the minimum",
+            ),
+        ];
+        for (user_sized, current, expected, note) in cases {
+            assert_eq!(
+                page_size_target(user_sized, page, current, min),
+                expected,
+                "{note}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_minimum_keeps_the_compact_body_beside_the_rail_and_device_list() {
+        use super::{panel_min_size, PANEL_COMPACT_WIDTH, PANEL_MIN_HEIGHT, PANEL_RAIL_WIDTH};
+        use crate::settings_panel::components::DEVICE_LIST_WIDTH;
+        use gpui::{px, size};
+        let roomy = size(px(1400.0), px(720.0));
+        assert_eq!(PANEL_MIN_HEIGHT, 300.0);
+        assert_eq!(
+            panel_min_size(PANEL_RAIL_WIDTH + DEVICE_LIST_WIDTH, roomy),
+            size(
+                px(PANEL_COMPACT_WIDTH + PANEL_RAIL_WIDTH + DEVICE_LIST_WIDTH),
+                px(PANEL_MIN_HEIGHT)
+            )
+        );
+        let small_page = size(px(420.0), px(240.0));
+        assert_eq!(panel_min_size(0.0, small_page), small_page);
     }
 }
 

@@ -110,10 +110,7 @@ impl ActiveMonitor {
     }
 
     pub fn from_display(display: &dyn PlatformDisplay) -> Self {
-        let native = multiplied(
-            display.bounds(),
-            crate::platform::display_scale_factor(display.id()),
-        );
+        let native = native_display_bounds(display);
         Self::from_bounds(MonitorBounds {
             x: native.origin.x.to_f64() as f32,
             y: native.origin.y.to_f64() as f32,
@@ -185,6 +182,13 @@ fn divided(bounds: Bounds<Pixels>, scale: f32) -> Bounds<Pixels> {
     Bounds::new(
         point(bounds.origin.x / scale, bounds.origin.y / scale),
         size(bounds.size.width / scale, bounds.size.height / scale),
+    )
+}
+
+pub(crate) fn native_display_bounds(display: &dyn PlatformDisplay) -> Bounds<Pixels> {
+    multiplied(
+        display.bounds(),
+        crate::platform::display_scale_factor(display.id()),
     )
 }
 

@@ -386,12 +386,12 @@ pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     true
 }
 
-pub fn set_window_fixed_size_by_title(title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
+pub fn set_window_min_size_by_title(title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-    style & WS_THICKFRAME as isize == 0
+    style & WS_THICKFRAME as isize != 0
 }
 
 pub fn park_window_by_title(title: &str) -> bool {

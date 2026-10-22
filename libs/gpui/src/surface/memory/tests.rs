@@ -29,6 +29,7 @@ fn state(key: &str, open: bool) -> WindowState {
         owner_pid: std::process::id(),
         default_placement: MonitorPlacement::center().memory_label(),
         reopen: None,
+        user_sized: false,
     }
 }
 
@@ -78,10 +79,17 @@ fn a_restore_lands_on_the_active_monitor_at_the_saved_offset(cx: &mut gpui::Test
         default_placement: saved.default_placement.clone(),
         last: RefCell::new(Some(saved)),
         save_generation: Cell::new(0),
+        user_sized: Cell::new(false),
     };
     let active = ActiveMonitor::from_bounds(bounds(100_000.0, 0.0, 2560.0, 1440.0));
     let restored = cx
-        .update(|cx| remembered.restore(size(px(300.0), px(200.0)), false, Some(&active), cx))
+        .update(|cx| {
+            remembered.restore(
+                RestoreSize::AtLeast(size(px(300.0), px(200.0))),
+                Some(&active),
+                cx,
+            )
+        })
         .unwrap();
     assert_eq!(
         restored.bounds,
@@ -136,4 +144,50 @@ fn a_fixed_size_window_keeps_its_size_on_a_smaller_monitor() {
             height: 640.0,
         }
     );
+}
+
+#[test]
+fn a_restored_size_grows_to_the_minimum_and_stays_inside_the_work_area() {
+    let screen = bounds(0.0, 0.0, 1920.0, 1040.0);
+    let at = |x: f64, y: f64, width: f64, height: f64| WindowRect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let cases = [
+        (
+            at(100.0, 100.0, 300.0, 200.0),
+            size(px(400.0), px(250.0)),
+            at(100.0, 100.0, 400.0, 250.0),
+            "a saved size under the minimum grows to it",
+        ),
+        (
+            at(100.0, 100.0, 800.0, 600.0),
+            size(px(400.0), px(250.0)),
+            at(100.0, 100.0, 800.0, 600.0),
+            "a saved size over the minimum is kept",
+        ),
+        (
+            at(1800.0, 900.0, 300.0, 200.0),
+            size(px(400.0), px(250.0)),
+            at(1520.0, 790.0, 400.0, 250.0),
+            "growing near the edge moves the window back on screen",
+        ),
+        (
+            at(0.0, 0.0, 2400.0, 1400.0),
+            size(px(400.0), px(250.0)),
+            at(0.0, 0.0, 1920.0, 1040.0),
+            "a saved size larger than the work area is clamped to it",
+        ),
+        (
+            at(0.0, 0.0, 300.0, 200.0),
+            size(px(2400.0), px(1400.0)),
+            at(0.0, 0.0, 1920.0, 1040.0),
+            "a minimum larger than the work area yields to the screen",
+        ),
+    ];
+    for (saved, min, expected, note) in cases {
+        assert_eq!(at_least(saved, min, screen), expected, "{note}");
+    }
 }
