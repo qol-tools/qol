@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -141,6 +141,7 @@ pub struct Surface {
     memory: Option<WindowMemory>,
     live_while: Option<LiveWhile>,
     os_frame: bool,
+    icon: Option<Arc<::image::RgbaImage>>,
 }
 
 type LiveWhile = Rc<dyn Fn() -> bool>;
@@ -402,6 +403,7 @@ impl Surface {
             memory: None,
             live_while: None,
             os_frame: false,
+            icon: None,
         }
     }
 
@@ -447,6 +449,11 @@ impl Surface {
 
     pub fn os_frame(mut self) -> Self {
         self.os_frame = true;
+        self
+    }
+
+    pub fn icon(mut self, side: u32, rgba: &'static [u8]) -> Self {
+        self.icon = ::image::RgbaImage::from_raw(side, side, rgba.to_vec()).map(Arc::new);
         self
     }
 
@@ -575,6 +582,7 @@ impl Surface {
             window_min_size: min_size.map(|min_size| native_min_size(min_size, bounds.size)),
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(resolved_app_id),
+            icon: self.icon.clone(),
             ..Default::default()
         };
         let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));

@@ -9,6 +9,9 @@ use qol_gpui::surface::{Surface, SurfaceKind, WindowMemory};
 use super::view::{ExplorerView, MIN_HEIGHT, MIN_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 use crate::ui::PLUGIN_ID;
 
+const ICON_SIDE: u32 = 64;
+const ICON: &[u8] = include_bytes!("../../assets/icon-64.rgba");
+
 pub fn open(start: PathBuf) -> anyhow::Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| start.clone());
     let config = crate::config::load();
@@ -23,6 +26,7 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
             .os_frame()
+            .icon(ICON_SIDE, ICON)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
             .min_size(size(px(MIN_WIDTH), px(MIN_HEIGHT)))
             .remember(WindowMemory::reopened_by_action(
@@ -39,4 +43,14 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
     });
     let failure = failure.borrow_mut().take();
     failure.map_or(Ok(()), Err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ICON, ICON_SIDE};
+
+    #[test]
+    fn icon_is_one_rgba_pixel_per_square_cell() {
+        assert_eq!(ICON.len(), (ICON_SIDE * ICON_SIDE * 4) as usize);
+    }
 }
