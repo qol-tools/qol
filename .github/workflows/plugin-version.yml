@@ -45,6 +45,7 @@ jobs:
     permissions:
       contents: write
       checks: read
+      actions: read
     env:
       SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
       SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -73,9 +74,38 @@ jobs:
       - name: Fetch tags
         run: git fetch --tags --force origin
 
-      - name: Verify successful source CI
+      # A run for an older push can cancel the pending run for main's head, so
+      # this run releases the head once the head passed CI, and otherwise ends
+      # and leaves the release to the run of the next commit that passes CI.
+      - name: Resolve the newest source
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          args=()
+          if [[ -n "${SOURCE_CI_RUN_ID}" ]]; then
+            args+=(--run-id "${SOURCE_CI_RUN_ID}")
+          fi
+          python .github/scripts/release_candidate.py newest-source \
+            --repo "${GITHUB_REPOSITORY}" \
+            --sha "${SOURCE_SHA}" \
+            --head "$(git rev-parse FETCH_HEAD)" \
+            "${args[@]}"
+
+      - name: Check out main's head
+        if: steps.source.outputs.superseded != 'true' && steps.source.outputs.sha != env.SOURCE_SHA
+        env:
+          HEAD_SHA: ${{ steps.source.outputs.sha }}
+        run: git checkout --quiet --detach "${HEAD_SHA}"
+
+      - name: Verify successful source CI
+        if: steps.source.outputs.superseded != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_CI_RUN_ID: ${{ steps.source.outputs.run_id }}
         run: |
           args=()
           if [[ -n "${SOURCE_CI_RUN_ID}" ]]; then
@@ -90,6 +120,7 @@ jobs:
 
       - name: Compute release versions
         id: version
+        if: steps.source.outputs.superseded != 'true'
         shell: bash
         env:
           PLUGIN_ID: ${{ inputs.plugin_id }}
@@ -105,6 +136,7 @@ jobs:
             "${args[@]}"
 
       - name: Summarize release plan
+        if: steps.source.outputs.superseded != 'true'
         shell: bash
         env:
           SHOULD_RELEASE: ${{ steps.version.outputs.should_release }}
@@ -127,6 +159,8 @@ jobs:
         id: candidate
         if: steps.version.outputs.should_release == 'true'
         shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -211,7 +245,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+        run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Build exact plugin candidates
         id: candidates
@@ -555,7 +589,7 @@ jobs:
           cache-key: qol-tray-linux
 
       - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+        run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Install cargo-deb
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
@@ -626,7 +660,7 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+        run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Build exact qol-tray candidate
         run: >
@@ -750,7 +784,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Export production artifact identity
-        run: cargo run --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+        run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
 
       - name: Build exact qol-tray candidate
         run: >

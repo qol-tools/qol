@@ -627,6 +627,28 @@ class SourceCiTests(unittest.TestCase):
 
     @patch.object(rc.plugin_version, "verified_version_bump_parent")
     @patch.object(rc, "gh_json")
+    def test_a_bump_commits_skipped_run_falls_back_to_its_parent(self, gh_json, verified_parent):
+        source_sha = "a" * 40
+        parent_sha = "b" * 40
+        verified_parent.return_value = parent_sha
+        skipped = {"id": 41, "head_sha": source_sha, "conclusion": "skipped"}
+        run = {
+            "id": 42,
+            "head_sha": parent_sha,
+            "conclusion": "success",
+            "html_url": "https://example.invalid/42",
+            "run_started_at": "2026-07-30T11:00:00Z",
+        }
+        jobs = [{"name": name, "conclusion": "success"} for name in rc.REQUIRED_CI_JOBS]
+        gh_json.side_effect = [{"workflow_runs": [skipped]}, {"workflow_runs": [run]}, {"jobs": jobs}]
+
+        evidence = rc.source_ci_evidence("qol-tools/qol", source_sha, Path("/repo"))
+
+        self.assertEqual((evidence["ci_sha"], evidence["id"]), (parent_sha, 42))
+        verified_parent.assert_called_once_with(Path("/repo"), source_sha)
+
+    @patch.object(rc.plugin_version, "verified_version_bump_parent")
+    @patch.object(rc, "gh_json")
     def test_bot_bump_uses_its_verified_parent_ci(
         self,
         gh_json,
@@ -715,6 +737,53 @@ class SourceCiTests(unittest.TestCase):
             )
 
         verified_parent.assert_not_called()
+
+
+class NewestSourceTests(unittest.TestCase):
+    SOURCE = "a" * 40
+    HEAD = "b" * 40
+
+    @patch.object(rc, "completed_ci_runs")
+    def test_a_run_releases_mains_head_once_the_head_passed_ci(self, completed):
+        passed = {"id": 9, "head_sha": self.HEAD, "conclusion": "success"}
+        cases = [
+            ("source is the head", self.SOURCE, [], {"sha": self.SOURCE, "run_id": 5, "superseded": False}),
+            ("head passed", self.HEAD, [passed], {"sha": self.HEAD, "run_id": 9, "superseded": False}),
+            ("head still running", self.HEAD, [], {"sha": self.SOURCE, "run_id": 5, "superseded": True}),
+            (
+                "head is a bump commit",
+                self.HEAD,
+                [{**passed, "conclusion": "skipped"}],
+                {"sha": self.SOURCE, "run_id": 5, "superseded": True},
+            ),
+            (
+                "head failed",
+                self.HEAD,
+                [{**passed, "conclusion": "failure"}],
+                {"sha": self.SOURCE, "run_id": 5, "superseded": True},
+            ),
+        ]
+        for name, head, runs, expected in cases:
+            with self.subTest(name):
+                completed.return_value = runs
+                self.assertEqual(rc.newest_source("qol-tools/qol", self.SOURCE, 5, head), expected)
+
+    @patch.object(rc, "completed_ci_runs")
+    def test_the_command_writes_the_source_for_the_later_steps(self, completed):
+        completed.return_value = [{"id": 9, "head_sha": self.HEAD, "conclusion": "success"}]
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "output"
+            args = rc.build_parser().parse_args(
+                [
+                    "newest-source", "--repo", "qol-tools/qol", "--sha", self.SOURCE,
+                    "--head", self.HEAD, "--github-output", str(output),
+                ]
+            )
+            with patch("sys.stdout"):
+                args.handler(args)
+            self.assertEqual(
+                output.read_text(), f"sha={self.HEAD}\nrun_id=9\nsuperseded=false\n"
+            )
 
 
 class AttestationTests(unittest.TestCase):
@@ -1117,12 +1186,26 @@ class TargetBuildTests(unittest.TestCase):
                     self.assertEqual(rc.uses_gpui(self.root, "first-package", self.target), expected)
                 self.assertEqual(
                     run.call_args.args[0],
-                    ["cargo", "tree", "-p", "first-package", "--target", self.target, "-e", "normal", "--prefix", "none"],
+                    ["cargo", "tree", "--locked", "-p", "first-package", "--target", self.target, "-e", "normal", "--prefix", "none"],
                 )
         failed = subprocess.CompletedProcess([], 101, stdout="", stderr="no such package")
         with patch.object(rc.subprocess, "run", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "no such package"):
                 rc.uses_gpui(self.root, "first-package", self.target)
+
+    def test_font_license_check_reads_the_release_feature_graph(self):
+        manifest = self.root / "plugins" / "first" / "plugin.toml"
+        manifest.write_text(manifest.read_text() + '\n[build]\nfeatures = ["local-stt", "cuda"]\n')
+        result = subprocess.CompletedProcess([], 0, stdout="qol-gpui v0.1.0\n", stderr="")
+        with patch.object(rc.subprocess, "run", return_value=result) as run:
+            self.assertTrue(rc.uses_gpui(self.root, "first-package", self.target))
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "cargo", "tree", "--locked", "-p", "first-package", "--target", self.target,
+                "--features", "local-stt", "--features", "cuda", "-e", "normal", "--prefix", "none",
+            ],
+        )
 
 
 if __name__ == "__main__":

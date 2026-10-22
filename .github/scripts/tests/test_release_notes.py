@@ -38,6 +38,9 @@ class IsUserFacing(unittest.TestCase):
             ("docs: link tiles", False),
             ("chore(plugins): bump plugin versions", False),
             ("test(cli): cover parser", False),
+            ('Revert "fix(os-themes): crisp cursor"', True),
+            ('Revert "fix(ci): test only in the merge queue"', False),
+            ('Revert "docs: link tiles"', False),
             ("Update README", False),
         ]
         for title, expected in cases:

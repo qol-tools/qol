@@ -53,6 +53,21 @@ class PluginMatrixTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tag expects version"):
             pm.release_outputs(self.root, "qol-alt-tab", "1.2.3")
 
+    def test_rejects_a_platform_it_cannot_build(self):
+        cases = [
+            ('["linux", "macOS"]', r"unknown platforms \['macOS'\] for qol-alt-tab"),
+            ('["darwin"]', r"unknown platforms \['darwin'\]"),
+            ("[]", "no buildable platforms"),
+        ]
+        for platforms, error in cases:
+            with self.subTest(platforms=platforms), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                write_plugin(root, "alt-tab", "qol-alt-tab")
+                manifest = root / "plugins/alt-tab/plugin.toml"
+                manifest.write_text(manifest.read_text().replace('["linux"]', platforms))
+                with self.assertRaisesRegex(ValueError, error):
+                    pm.release_outputs(root, "qol-alt-tab", "1.2.3")
+
     def test_groups_every_plugin_of_a_target_into_one_row(self):
         entries = [
             {"os": "ubuntu-latest", "target": "linux", "package": "a", "tag": "a-v1.0.0"},
