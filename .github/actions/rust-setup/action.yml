@@ -66,6 +66,9 @@ runs:
       shell: bash
       run: echo "RUST_PROFILES_HASH=$(sed -n '/^\[profile/,$p' Cargo.toml | git hash-object --stdin)" >> "${GITHUB_ENV}"
 
+    # Every job that saves only compiles, so a failed or cancelled one would
+    # save an incomplete entry under a key no later run replaces. It saves
+    # nothing instead, and the next main run saves the whole entry.
     - name: Restore or save build cache
       id: build-cache
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -73,7 +76,6 @@ runs:
         shared-key: ${{ inputs.cache-key }}
         lookup-only: ${{ inputs.lookup-only }}
         save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}
-        cache-on-failure: true
 
     - name: Install Linux system dependencies
       if: runner.os == 'Linux' && inputs.system-dependencies == 'true' && inputs.lookup-only != 'true'

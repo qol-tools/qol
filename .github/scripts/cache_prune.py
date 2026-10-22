@@ -5,9 +5,12 @@ Dependency cache keys carry a trailing lockfile-hash segment, e.g.
 `v0-rust-ci-ubuntu-latest-Linux-x64-607b40e9-23b0bf21`, so every Cargo.lock
 change deposits a new entry under the same logical namespace (the key with
 its trailing `-[0-9a-f]{8}` segment stripped). Entries are grouped per ref
-and namespace, pruned to the newest `--keep` by creation time, dropped when
-unaccessed for `--max-age-days`, and then evicted least recently used first
-until the total fits `--max-bytes`.
+and namespace, pruned to the `--keep` most recently used, dropped when
+unaccessed for `--max-age-days`, and then evicted until the total fits
+`--max-bytes`: superseded entries first, then release build caches, then the
+caches every pull request and merge queue run restores, least recently used
+first within each. An entry restored in the last two hours goes last, because
+a later job of the same run may restore it again.
 Deletes are by cache id, never by key prefix, so a cache a concurrent build
 just recreated under the same prefix is never harmed.
 """
@@ -28,6 +31,12 @@ MUTATION_PAUSE_SECONDS = 0.5
 RETRY_PAUSE_SECONDS = 30
 RETRIES = 3
 MAX_CACHE_BYTES = 9 * 1024**3
+# claude review's publish job restores the plugin seed its review job restored
+# up to an hour earlier.
+IN_USE = timedelta(hours=2)
+# The merge gate restores these on every pull request and queue run. Release
+# builds run after merge, so a cold one delays a release, not a merge.
+MERGE_GATE_KEYS = ("v0-rust-ci-", "v0-rust-plugin-registry-", "claude-seed-")
 
 LOCKFILE_HASH = re.compile(r"-[0-9a-f]{8}$")
 
@@ -45,8 +54,14 @@ def parse_timestamp(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def cache_order(cache: dict) -> tuple[datetime, int]:
-    return parse_timestamp(cache["created_at"]), cache["id"]
+def last_used(cache: dict) -> datetime:
+    return parse_timestamp(cache["last_accessed_at"])
+
+
+# Recency of use, not creation: after a lockfile revert main restores the older
+# entry by its exact key and saves nothing, so the newer one is the stale one.
+def cache_order(cache: dict) -> tuple[datetime, datetime, int]:
+    return last_used(cache), parse_timestamp(cache["created_at"]), cache["id"]
 
 
 def plan_prune(
@@ -54,6 +69,7 @@ def plan_prune(
     max_bytes: int = MAX_CACHE_BYTES,
 ) -> list[dict]:
     cutoff = now - timedelta(days=max_age_days)
+    in_use_since = now - IN_USE
     grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for cache in caches:
         grouped[(cache.get("ref", ""), namespace_of_key(cache["key"]))].append(cache)
@@ -61,27 +77,29 @@ def plan_prune(
     newest_ids = set()
     for entries in grouped.values():
         entries.sort(key=cache_order, reverse=True)
-        fresh = [cache for cache in entries if parse_timestamp(cache["last_accessed_at"]) >= cutoff]
-        doomed.extend(cache for cache in entries if parse_timestamp(cache["last_accessed_at"]) < cutoff)
+        fresh = [cache for cache in entries if last_used(cache) >= cutoff]
+        doomed.extend(cache for cache in entries if last_used(cache) < cutoff)
         if not fresh:
             continue
         newest_ids.add(fresh[0]["id"])
-        doomed.extend(fresh[keep:])
+        doomed.extend(cache for cache in fresh[keep:] if last_used(cache) < in_use_since)
     doomed_ids = {cache["id"] for cache in doomed}
     survivors = [cache for cache in caches if cache["id"] not in doomed_ids]
-    doomed.extend(over_budget(survivors, newest_ids, max_bytes))
+    doomed.extend(over_budget(survivors, newest_ids, max_bytes, in_use_since))
     return sorted(doomed, key=lambda cache: cache["key"])
 
 
-def over_budget(caches: list[dict], newest_ids: set[int], max_bytes: int) -> list[dict]:
+def over_budget(
+    caches: list[dict], newest_ids: set[int], max_bytes: int, in_use_since: datetime
+) -> list[dict]:
     remaining_bytes = sum(cache.get("size_in_bytes", 0) for cache in caches)
     candidates = sorted(
         caches,
         key=lambda cache: (
+            last_used(cache) >= in_use_since,
             cache["id"] in newest_ids,
-            parse_timestamp(cache["last_accessed_at"]),
-            parse_timestamp(cache["created_at"]),
-            cache["id"],
+            cache["key"].startswith(MERGE_GATE_KEYS),
+            cache_order(cache),
         ),
     )
     doomed = []

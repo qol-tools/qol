@@ -182,6 +182,45 @@ class PlanPrune(unittest.TestCase):
         )
 
 
+def hours_ago(hours: float) -> str:
+    return stamp(NOW - timedelta(hours=hours))
+
+
+class Priorities(unittest.TestCase):
+    GATE = "v0-rust-ci-ubuntu-latest-Linux-x64-8c40b80f-"
+    RELEASE = "v0-rust-plugin-release-x86_64-unknown-linux-gnu-Linux-x64-8c40b80f-"
+
+    def test_the_entry_used_last_survives_a_lockfile_revert(self):
+        reverted_to = cache_entry(self.GATE + "11111111", hours_ago(72), hours_ago(5))
+        reverted_from = cache_entry(self.GATE + "22222222", hours_ago(24))
+        self.assertEqual(
+            cp.plan_prune([reverted_to, reverted_from], 1, 14, NOW), [reverted_from]
+        )
+
+    def test_release_build_caches_leave_before_merge_gate_caches(self):
+        superseded = cache_entry(self.GATE + "11111111", hours_ago(48), hours_ago(30))
+        gate = cache_entry(self.GATE + "22222222", hours_ago(24), hours_ago(8))
+        release = cache_entry(self.RELEASE + "22222222", hours_ago(24), hours_ago(5))
+        for budget, expected in [(3000, []), (2000, [superseded]), (1000, [superseded, release])]:
+            with self.subTest(budget=budget):
+                doomed = cp.plan_prune([superseded, gate, release], 2, 14, NOW, budget)
+                self.assertEqual(
+                    sorted(cache["id"] for cache in doomed),
+                    sorted(cache["id"] for cache in expected),
+                )
+
+    def test_an_entry_restored_in_the_last_two_hours_is_kept_and_leaves_last(self):
+        for last_use, budget, expected in [(1, 3000, []), (1, 2000, ["release"]), (3, 3000, ["restored"])]:
+            with self.subTest(last_use=last_use, budget=budget):
+                entries = {
+                    "restored": cache_entry("claude-seed-36a6efd3", hours_ago(30), hours_ago(last_use)),
+                    "newer": cache_entry("claude-seed-0c77063d", hours_ago(0.5)),
+                    "release": cache_entry(self.RELEASE + "22222222", hours_ago(24), hours_ago(5)),
+                }
+                doomed = cp.plan_prune(list(entries.values()), 1, 14, NOW, budget)
+                self.assertEqual(doomed, [entries[name] for name in expected])
+
+
 class Fixture(unittest.TestCase):
     NAMESPACES = [
         "ci-ubuntu-latest",
