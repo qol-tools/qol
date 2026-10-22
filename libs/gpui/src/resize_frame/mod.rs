@@ -200,10 +200,13 @@ impl ResizeFrame {
 
     fn end(&self) {
         let Some(drag) = self.state.drag.borrow_mut().take() else {
-            if matches!(
-                self.state.sizing.get(),
-                Sizing::Dragging | Sizing::HandedOff(_)
-            ) {
+            let sizing = self.state.sizing.get();
+            let live = match sizing {
+                Sizing::Dragging => true,
+                Sizing::HandedOff(_) => sizing.counts_as_user(Instant::now()),
+                Sizing::Idle | Sizing::Settling(_) => false,
+            };
+            if live {
                 self.state.sizing.set(Sizing::Settling(Instant::now()));
             }
             return;
