@@ -3060,6 +3060,7 @@ mod tests {
         assert_eq!(record.model.as_deref(), Some("flash-x"));
         assert_eq!(record.external_id.as_deref(), Some("01a00a6b"));
         assert_eq!(record.created_at, record.last_seen);
+        let first_created_at = record.created_at;
 
         ledger
             .record(
@@ -3083,8 +3084,12 @@ mod tests {
             "a refresh without a model keeps the previous model"
         );
         assert_eq!(
-            record.created_at, record.last_seen,
-            "the first record pins created_at and the refresh bumps last_seen"
+            record.created_at, first_created_at,
+            "the first record pins created_at"
+        );
+        assert!(
+            record.last_seen >= first_created_at,
+            "the refresh bumps last_seen"
         );
     }
 
