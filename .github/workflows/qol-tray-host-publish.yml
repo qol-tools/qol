@@ -61,7 +61,7 @@ jobs:
         with:
           name: host-${{ inputs.tag }}-${{ inputs.os }}
           path: host_files/*
-          retention-days: 7
+          retention-days: 90
           if-no-files-found: error
 
   # Rerunnable: push-host accepts a tag that already holds this build.

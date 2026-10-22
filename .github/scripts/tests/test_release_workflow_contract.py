@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -17,6 +18,12 @@ def named_step(document, name, indent):
     start = document.index(f"{indent}- name: {name}\n")
     end = document.find(f"\n{indent}- ", start + 1)
     return document[start:end] if end != -1 else document[start:]
+
+
+def fake_command(directory, name, body):
+    command = Path(directory) / name
+    command.write_text(f"#!/usr/bin/env bash\n{body}\n")
+    command.chmod(0o755)
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -846,6 +853,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn(f"os: {platform}", job)
         attest = publish.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
         self.assertIn("actions/attest-build-provenance@", attest)
+        self.assertIn("retention-days: 90", named_step(attest, "Upload host files", "      "))
         self.assertNotIn("cargo", attest)
         registry = publish.split("  registry:\n", 1)[1].split("\n  index:\n", 1)[0]
         self.assertIn("needs: attest", registry)
@@ -942,7 +950,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("environment:", build)
         self.assertNotIn("secrets.", build)
         self.assertIn("needs: build", sign)
-        self.assertIn("if: needs.build.outputs.changed == 'true'", sign)
+        self.assertIn("if: ${{ !cancelled() && needs.build.outputs.changed == 'true' }}", sign)
         self.assertIn("name: plugin-index\n      deployment: false", sign)
         compare = named_step(build, "Compare with the deployed index", "      ")
         self.assertIn("jq -S 'del(.serial)' index.json", compare)
@@ -1004,6 +1012,118 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]
         positions = [sign.index(marker) for marker in order]
         self.assertEqual(positions, sorted(positions))
+
+    def test_plugin_index_fails_after_publishing_when_a_host_version_is_left_out(self):
+        workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
+        build = workflow.split("  build:\n", 1)[1].split("  sign:\n", 1)[0]
+        deploy = workflow.split("  deploy:\n", 1)[1].split("  registry:\n", 1)[0]
+        registry = workflow.split("  registry:\n", 1)[1]
+        for job in (deploy, registry):
+            self.assertIn("if: ${{ !cancelled() && needs.sign.result == 'success' }}", job)
+        fail = named_step(build, "Fail when a host version is left out", "      ")
+        self.assertIn("if: steps.index.outputs.left_out != '0'", fail)
+        self.assertIn("exit 1", fail)
+        self.assertGreater(build.index("- name: Fail when a host version is left out"), build.index("actions/upload-artifact"))
+        index = named_step(build, "Build index", "      ")
+        self.assertIn("id: index", index)
+        script = textwrap.dedent(index.split("        run: |\n", 1)[1])
+        listed = "host linux 3.116.4 (2 versions)"
+        warned = "::warning::qol-tray-windows-v3.116.5 is left out of the index: too big"
+        for printed, left_out in [(listed, "0"), (f"{listed}\n{warned}\n{warned}", "2")]:
+            with self.subTest(left_out=left_out), tempfile.TemporaryDirectory() as temp:
+                tool = Path(temp) / "target" / "debug"
+                tool.mkdir(parents=True)
+                fake_command(tool, "qol-plugin-registry", f"cat <<'OUT'\n{printed}\nOUT")
+                output = Path(temp) / "output"
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script],
+                    cwd=temp,
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "GITHUB_OUTPUT": str(output),
+                        "GITHUB_STEP_SUMMARY": str(Path(temp) / "summary"),
+                        "GITHUB_REPOSITORY_OWNER": "qol-tools",
+                        "GITHUB_REPOSITORY": "qol-tools/qol",
+                        "PUBLIC_KEY": "key.pub",
+                        "INDEX_URL": "https://example.invalid/index.signed.json",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"left_out={left_out}\n", output.read_text())
+
+    def test_tray_release_skips_a_tag_that_is_already_published(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        self.assertIn("group: qol-tray-release-${{ inputs.tag || github.ref_name }}", workflow)
+        gate = workflow.split("  gate:\n", 1)[1].split("\n  release:\n", 1)[0]
+        release = workflow.split("\n  release:\n", 1)[1]
+        self.assertIn("published: ${{ steps.existing.outputs.published }}", gate)
+        self.assertIn("if: needs.gate.outputs.published != 'true'", release.split("    steps:\n", 1)[0])
+        steps = gate.split("\n      - ")[1:]
+        self.assertTrue(steps[0].startswith("name: Check for a published release\n"))
+        for step in steps[1:]:
+            with self.subTest(step=step.splitlines()[0]):
+                self.assertIn("if: steps.existing.outputs.published != 'true'", step)
+        existing = named_step(gate, "Check for a published release", "      ")
+        self.assertIn("shell: bash", existing)
+        script = textwrap.dedent(existing.split("        run: |\n", 1)[1])
+        cases = [
+            ("echo false", True, True),
+            ("echo true", True, False),
+            ("echo 'release not found' >&2; exit 1", True, False),
+            ("echo 'HTTP 502: Bad Gateway' >&2; exit 1", False, False),
+        ]
+        for gh, passes, published in cases:
+            with self.subTest(gh=gh), tempfile.TemporaryDirectory() as temp:
+                fake_command(temp, "gh", gh)
+                output = Path(temp) / "output"
+                output.touch()
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{temp}:{os.environ['PATH']}",
+                        "RELEASE_TAG": "qol-tray-v3.116.5",
+                        "RUNNER_TEMP": temp,
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                )
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+                self.assertEqual("published=true" in output.read_text(), published)
+
+    def test_previous_tray_release_fails_when_releases_cannot_be_listed(self):
+        workflow = (ROOT / ".github/workflows/qol-tray-release.yml").read_text()
+        step = named_step(workflow, "Find previous tray release", "      ")
+        self.assertIn("shell: bash", step)
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        listed = "printf 'qol-tray-v3.116.5\\nlauncher-v1.4.0\\nqol-tray-v3.116.4\\nqol-tray-v3.9.0\\n'"
+        cases = [
+            (listed, True, "qol-tray-v3.116.4"),
+            ("printf 'launcher-v1.4.0\\n'", True, ""),
+            ("echo 'HTTP 502: Bad Gateway' >&2; exit 1", False, None),
+        ]
+        for gh, passes, previous in cases:
+            with self.subTest(gh=gh), tempfile.TemporaryDirectory() as temp:
+                fake_command(temp, "gh", gh)
+                output = Path(temp) / "output"
+                output.touch()
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{temp}:{os.environ['PATH']}",
+                        "RELEASE_TAG": "qol-tray-v3.116.5",
+                        "GITHUB_OUTPUT": str(output),
+                    },
+                )
+                self.assertEqual(result.returncode == 0, passes, result.stdout + result.stderr)
+                if passes:
+                    self.assertEqual(output.read_text(), f"tag={previous}\n")
 
     def test_registry_backfill_pushes_only_from_main(self):
         workflow = (ROOT / ".github/workflows/plugin-registry-backfill.yml").read_text()

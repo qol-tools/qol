@@ -66,10 +66,14 @@ pub fn agent() -> ureq::Agent {
 }
 
 pub fn read_body(response: ureq::Response, url: &str) -> Result<Vec<u8>> {
+    read_limited(response, url, BODY_LIMIT)
+}
+
+fn read_limited(response: ureq::Response, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     response
         .into_reader()
-        .take(BODY_LIMIT)
+        .take(limit)
         .read_to_end(&mut bytes)
         .with_context(|| format!("could not read {url}"))?;
     Ok(bytes)
@@ -152,7 +156,7 @@ impl Registry {
         let url = self.url(&format!("blobs/{digest}"));
         let response = self.call(Request::new("GET", url.clone()))?;
         require_status(&response, &[200], &url)?;
-        let bytes = read_body(response, &url)?;
+        let bytes = read_limited(response, &url, size.saturating_add(1))?;
         if bytes.len() as u64 != size || sha256_digest(&bytes) != digest {
             anyhow::bail!("{url} sent a blob that does not match its digest and size");
         }
@@ -346,6 +350,38 @@ mod tests {
         for bad in ["ghcr.io", "ftp://ghcr.io/a/b", "ghcr.io/"] {
             assert!(location(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn blob_reads_a_layer_larger_than_the_body_limit() {
+        use std::io::Write;
+        let body = vec![7u8; BODY_LIMIT as usize + 1];
+        let digest = sha256_digest(&body);
+        let size = body.len() as u64;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let read = stream.read(&mut request).unwrap();
+            assert!(read > 0);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(&body).unwrap();
+        });
+        let registry = Registry::new(
+            &format!("http://127.0.0.1:{port}/qol-tools/plugins"),
+            Access::Pull,
+            None,
+        )
+        .unwrap();
+        let bytes = registry.blob(&digest, size).unwrap();
+        assert_eq!(bytes.len() as u64, size);
+        server.join().unwrap();
     }
 
     #[test]
