@@ -35,6 +35,11 @@
         "path": "libs/gpui/src/popup_window/platform/windows.rs",
         "text": "cloak",
         "why": "DWMWA_CLOAK hides and reveals the window without unmapping it; that is visibility, not chrome"
+      },
+      {
+        "path": "libs/gpui/src/popup_window/platform/windows.rs",
+        "text": "set_window_min_size_by_title",
+        "why": "GWLP_WNDPROC chains a window procedure that raises WM_GETMINMAXINFO to the surface's minimum size; that is sizing, not chrome"
       }
     ]
   }
