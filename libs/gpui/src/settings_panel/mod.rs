@@ -1035,9 +1035,8 @@ fn size_prepared_panel(
 ) -> anyhow::Result<PreparedPanel> {
     let monitor = monitor
         .ok_or_else(|| anyhow::anyhow!("no monitor state available for the settings panel"))?;
-    let available = (monitor.logical_work_area().size.height.to_f64() as f32
-        - 2.0 * crate::placement::CORNER_MARGIN)
-        .min(PANEL_MAX_HEIGHT);
+    let work_area = monitor.logical_work_area().size;
+    let available = room_on(work_area.height.to_f64() as f32).min(PANEL_MAX_HEIGHT);
     let (screen_width, screen_height) = monitor.size();
     let has_custom_source = prepared.panel.sources.iter().any(|source| source.custom);
     let body_width = panel_width(&prepared.rows).max(if has_custom_source {
@@ -1054,7 +1053,8 @@ fn size_prepared_panel(
     } else {
         0.0
     };
-    let width = body_width + device_list + rail_width(prepared.sources.len());
+    let width = (body_width + device_list + rail_width(prepared.sources.len()))
+        .min(room_on(work_area.width.to_f64() as f32));
     let height = panel_height(&prepared.rows, &prepared.sections)
         .max(if has_custom_source {
             PANEL_CUSTOM_HEIGHT
@@ -1075,6 +1075,10 @@ fn size_prepared_panel(
         },
         size: size(px(width), px(height)),
     })
+}
+
+fn room_on(work_area: f32) -> f32 {
+    work_area - 2.0 * crate::placement::CORNER_MARGIN
 }
 
 fn open_prepared(
@@ -1433,6 +1437,14 @@ active_query = "status"
 
         assert_eq!(panel_width(&regular), super::PANEL_COMPACT_WIDTH);
         assert_eq!(panel_width(&gamepad), PANEL_GAMEPAD_WIDTH);
+    }
+
+    #[test]
+    fn the_panel_never_asks_for_more_room_than_the_work_area_has() {
+        let widest =
+            PANEL_GAMEPAD_WIDTH + super::components::DEVICE_LIST_WIDTH + super::PANEL_RAIL_WIDTH;
+        assert_eq!(widest.min(super::room_on(1280.0)), 1232.0);
+        assert_eq!(widest.min(super::room_on(1920.0)), widest);
     }
 
     #[test]
