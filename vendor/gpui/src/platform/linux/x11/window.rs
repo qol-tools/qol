@@ -305,6 +305,8 @@ pub struct X11WindowState {
     x_root_window: xproto::Window,
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
+    drawn_sync_counter: Option<sync::Int64>,
+    pub(crate) press_root: Option<(i32, i32)>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
     renderer: BladeRenderer,
@@ -816,6 +818,8 @@ impl X11WindowState {
                 edge_constraints: None,
                 counter_id: sync_request_counter,
                 last_sync_counter: None,
+                drawn_sync_counter: None,
+                press_root: None,
             })
         });
 
@@ -980,17 +984,23 @@ impl X11Window {
             self.0.xcb.ungrab_pointer(x11rb::CURRENT_TIME),
         )?;
 
-        let pointer = get_reply(
-            || "X11 QueryPointer before move/resize of window failed.",
-            self.0.xcb.query_pointer(self.0.x_window),
-        )?;
+        let (root_x, root_y) = match state.press_root {
+            Some(press) => press,
+            None => {
+                let pointer = get_reply(
+                    || "X11 QueryPointer before move/resize of window failed.",
+                    self.0.xcb.query_pointer(self.0.x_window),
+                )?;
+                (pointer.root_x.into(), pointer.root_y.into())
+            }
+        };
         let message = ClientMessageEvent::new(
             32,
             self.0.x_window,
             state.atoms._NET_WM_MOVERESIZE,
             [
-                pointer.root_x as u32,
-                pointer.root_y as u32,
+                root_x as u32,
+                root_y as u32,
                 flag,
                 0, // Left mouse button
                 0,
@@ -1114,6 +1124,16 @@ impl X11WindowStatePtr {
     }
 
     pub fn refresh(&self, request_frame_options: RequestFrameOptions) {
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(value) = state.drawn_sync_counter.take() {
+                check_reply(
+                    || "X11 sync SetCounter failed.",
+                    sync::set_counter(&self.xcb, state.counter_id, value),
+                )
+                .log_err();
+            }
+        }
         let mut cb = self.callbacks.borrow_mut();
         if let Some(ref mut fun) = cb.request_frame {
             fun(request_frame_options);
@@ -1612,11 +1632,7 @@ impl PlatformWindow for X11Window {
         let mut inner = self.0.state.borrow_mut();
         inner.renderer.draw(scene);
         if let Some(value) = inner.last_sync_counter.take() {
-            check_reply(
-                || "X11 sync SetCounter failed.",
-                sync::set_counter(&self.0.xcb, inner.counter_id, value),
-            )
-            .log_err();
+            inner.drawn_sync_counter = Some(value);
         }
     }
 

@@ -1086,6 +1086,8 @@ impl X11Client {
             }
             Event::XinputButtonPress(event) => {
                 let window = self.get_window(event.event)?;
+                window.state.borrow_mut().press_root =
+                    Some((event.root_x >> 16, event.root_y >> 16));
                 let mut state = self.0.borrow_mut();
 
                 let modifiers = modifiers_from_xinput_info(event.mods);
@@ -1163,6 +1165,7 @@ impl X11Client {
             }
             Event::XinputButtonRelease(event) => {
                 let window = self.get_window(event.event)?;
+                window.state.borrow_mut().press_root = None;
                 let mut state = self.0.borrow_mut();
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;
