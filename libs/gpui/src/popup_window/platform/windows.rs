@@ -1,19 +1,25 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::{LazyLock, Mutex, PoisonError};
 
 use qol_windowing::platform::windows::{cursor_position, monitors, top_level_windows, Window};
 use qol_windowing::{WindowId, WindowRect};
-use windows_sys::Win32::Foundation::{BOOL, FALSE, HWND, POINT, RECT, TRUE};
+use windows_sys::Win32::Foundation::{
+    BOOL, FALSE, HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM,
+};
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows_sys::Win32::Graphics::Gdi::{
     ClientToScreen, CreateRectRgn, DeleteObject, SetWindowRgn,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    CallWindowProcW, DefWindowProcW, GetClientRect, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_WNDPROC,
+    GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, MINMAXINFO, SM_SWAPBUTTON, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WM_GETMINMAXINFO, WM_NCDESTROY, WNDPROC, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 use super::PopupPresentation;
@@ -193,7 +199,12 @@ impl WindowGeometrySession {
     }
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
-        None
+        let (x, y) = cursor_position()?;
+        let rect = window_rect(self.handle())?;
+        Some(crate::popup_window::PointerOnWindow {
+            inside: (rect.left..rect.right).contains(&x) && (rect.top..rect.bottom).contains(&y),
+            pressed: primary_button_down(),
+        })
     }
 
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
@@ -386,12 +397,97 @@ pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     true
 }
 
-pub fn set_window_min_size_by_title(title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
+pub fn set_window_min_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-    style & WS_THICKFRAME as isize != 0
+    let min = (f32::from(size.width), f32::from(size.height));
+    {
+        let mut tracked = lock_min_tracks();
+        if let Some(track) = tracked.get_mut(&(hwnd as isize)) {
+            track.min = min;
+            return true;
+        }
+        let previous = unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) };
+        if previous == 0 {
+            return false;
+        }
+        tracked.insert(hwnd as isize, MinTrack { previous, min });
+    }
+    unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, min_track_proc as *const () as isize) };
+    true
+}
+
+#[derive(Clone, Copy)]
+struct MinTrack {
+    previous: isize,
+    min: (f32, f32),
+}
+
+static MIN_TRACKS: LazyLock<Mutex<HashMap<isize, MinTrack>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn lock_min_tracks() -> std::sync::MutexGuard<'static, HashMap<isize, MinTrack>> {
+    MIN_TRACKS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+unsafe extern "system" fn min_track_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let track = if message == WM_NCDESTROY {
+        lock_min_tracks().remove(&(hwnd as isize))
+    } else {
+        lock_min_tracks().get(&(hwnd as isize)).copied()
+    };
+    let Some(track) = track else {
+        return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
+    };
+    let previous: WNDPROC = unsafe { std::mem::transmute(track.previous) };
+    let result = unsafe { CallWindowProcW(previous, hwnd, message, wparam, lparam) };
+    if message == WM_GETMINMAXINFO {
+        let info = unsafe { &mut *(lparam as *mut MINMAXINFO) };
+        let (width, height) = native_min_track_size(hwnd, track.min);
+        info.ptMinTrackSize.x = info.ptMinTrackSize.x.max(width);
+        info.ptMinTrackSize.y = info.ptMinTrackSize.y.max(height);
+    }
+    result
+}
+
+fn native_min_track_size(hwnd: HWND, min: (f32, f32)) -> (i32, i32) {
+    let scale = window_scale(hwnd);
+    let (frame_width, frame_height) = frame_extent(hwnd);
+    (
+        (f64::from(min.0) * scale).round() as i32 + frame_width,
+        (f64::from(min.1) * scale).round() as i32 + frame_height,
+    )
+}
+
+fn frame_extent(hwnd: HWND) -> (i32, i32) {
+    let mut client = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    let Some(outer) = window_rect(hwnd) else {
+        return (0, 0);
+    };
+    if unsafe { GetClientRect(hwnd, &mut client) } == 0 {
+        return (0, 0);
+    }
+    (
+        ((outer.right - outer.left) - (client.right - client.left)).max(0),
+        ((outer.bottom - outer.top) - (client.bottom - client.top)).max(0),
+    )
+}
+
+fn primary_button_down() -> bool {
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
+    let button = if swapped { VK_RBUTTON } else { VK_LBUTTON };
+    (unsafe { GetAsyncKeyState(i32::from(button)) } as u16 & 0x8000) != 0
 }
 
 pub fn park_window_by_title(title: &str) -> bool {

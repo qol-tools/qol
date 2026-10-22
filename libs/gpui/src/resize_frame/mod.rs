@@ -1,8 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use gpui::*;
 
@@ -15,6 +15,7 @@ use self::geometry::{resized_rect, NativeRect, ResizeLimits};
 const EDGE_BAND: f32 = 5.0;
 const CORNER_BAND: f32 = 10.0;
 const RESIZE_TICK: Duration = Duration::from_millis(8);
+const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
     ResizeEdge::Top,
@@ -35,9 +36,26 @@ pub struct ResizeFrame {
 struct FrameState {
     title: Box<dyn Fn() -> String>,
     min_size: Cell<Size<Pixels>>,
-    user_sizing: Cell<bool>,
+    sizing: Arc<Mutex<Sizing>>,
     drag: RefCell<Option<Drag>>,
     epoch: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sizing {
+    Idle,
+    Dragging,
+    Settling(Instant),
+}
+
+impl Sizing {
+    fn counts_as_user(self, now: Instant) -> bool {
+        match self {
+            Self::Idle => false,
+            Self::Dragging => true,
+            Self::Settling(since) => now.duration_since(since) < USER_SIZE_SETTLE,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -48,6 +66,7 @@ struct Drag {
     pointer_start: (i32, i32),
     limits: ResizeLimits,
     epoch: u64,
+    sizing: Arc<Mutex<Sizing>>,
 }
 
 impl Drag {
@@ -78,14 +97,19 @@ impl Drag {
     }
 
     fn finish(&self, epochs: &AtomicU64) -> bool {
-        epochs
+        let mut sizing = lock(&self.sizing);
+        let finished = epochs
             .compare_exchange(
                 self.epoch,
                 self.epoch.wrapping_add(1),
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             )
-            .is_ok()
+            .is_ok();
+        if finished {
+            *sizing = Sizing::Settling(Instant::now());
+        }
+        finished
     }
 }
 
@@ -95,7 +119,7 @@ impl ResizeFrame {
             state: Rc::new(FrameState {
                 title: Box::new(title),
                 min_size: Cell::new(min_size),
-                user_sizing: Cell::new(false),
+                sizing: Arc::new(Mutex::new(Sizing::Idle)),
                 drag: RefCell::new(None),
                 epoch: Arc::new(AtomicU64::new(0)),
             }),
@@ -111,11 +135,11 @@ impl ResizeFrame {
     }
 
     pub fn is_user_sizing(&self) -> bool {
-        self.state.user_sizing.get()
+        lock(&self.state.sizing).counts_as_user(Instant::now())
     }
 
     pub fn end_user_sizing(&self) {
-        self.state.user_sizing.set(false);
+        *lock(&self.state.sizing) = Sizing::Idle;
     }
 
     pub fn zones(&self) -> impl IntoElement {
@@ -142,12 +166,14 @@ impl ResizeFrame {
     }
 
     fn begin(&self, edge: ResizeEdge, window: &mut Window, cx: &mut App) {
-        self.state.user_sizing.set(true);
-        let epoch = self
-            .state
-            .epoch
-            .fetch_add(1, Ordering::SeqCst)
-            .wrapping_add(1);
+        let epoch = {
+            let mut sizing = lock(&self.state.sizing);
+            *sizing = Sizing::Dragging;
+            self.state
+                .epoch
+                .fetch_add(1, Ordering::SeqCst)
+                .wrapping_add(1)
+        };
         let Some(drag) = self.client_drag(edge, epoch, window, cx) else {
             self.state.drag.borrow_mut().take();
             window.start_window_resize(edge);
@@ -159,6 +185,10 @@ impl ResizeFrame {
 
     fn end(&self) {
         let Some(drag) = self.state.drag.borrow_mut().take() else {
+            let mut sizing = lock(&self.state.sizing);
+            if *sizing == Sizing::Dragging {
+                *sizing = Sizing::Settling(Instant::now());
+            }
             return;
         };
         if !drag.finish(&self.state.epoch) {
@@ -190,6 +220,7 @@ impl ResizeFrame {
                 area: native_work_area(window, cx),
             },
             epoch,
+            sizing: self.state.sizing.clone(),
             session,
         })
     }
@@ -216,6 +247,10 @@ fn spawn_resize_loop(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
         }
     })
     .detach();
+}
+
+fn lock(sizing: &Mutex<Sizing>) -> std::sync::MutexGuard<'_, Sizing> {
+    sizing.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn native_work_area(window: &Window, cx: &App) -> Option<NativeRect> {
@@ -270,3 +305,6 @@ fn resize_cursor(edge: ResizeEdge) -> CursorStyle {
         ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
     }
 }
+
+#[cfg(test)]
+mod tests;
