@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.113.0"
+version = "0.113.1"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6949,7 +6949,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.104.0"
+version = "1.104.1"
 dependencies = [
  "anyhow",
  "block2",
@@ -7098,7 +7098,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.45.2"
+version = "0.45.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7133,7 +7133,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.76.1"
+version = "0.76.2"
 dependencies = [
  "anyhow",
  "libc",
@@ -7571,7 +7571,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.117.0"
+version = "3.117.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -7662,7 +7662,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.15.1"
+version = "0.15.2"
 dependencies = [
  "anyhow",
  "chrono",
