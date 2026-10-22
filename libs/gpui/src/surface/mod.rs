@@ -140,6 +140,7 @@ pub struct Surface {
     retain_on_dismiss: bool,
     memory: Option<WindowMemory>,
     live_while: Option<LiveWhile>,
+    os_frame: bool,
 }
 
 type LiveWhile = Rc<dyn Fn() -> bool>;
@@ -360,6 +361,7 @@ impl Surface {
             retain_on_dismiss: false,
             memory: None,
             live_while: None,
+            os_frame: false,
         }
     }
 
@@ -400,6 +402,11 @@ impl Surface {
 
     pub fn size(mut self, size: Size<Pixels>) -> Self {
         self.size = size;
+        self
+    }
+
+    pub fn os_frame(mut self) -> Self {
+        self.os_frame = true;
         self
     }
 
@@ -515,13 +522,20 @@ impl Surface {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             display_id: crate::window::display_id_for_monitor(monitor, cx),
-            titlebar: None,
-            window_decorations: Some(WindowDecorations::Client),
+            titlebar: self.os_frame.then(|| TitlebarOptions {
+                title: Some(title.clone().into()),
+                ..Default::default()
+            }),
+            window_decorations: Some(if self.os_frame {
+                WindowDecorations::Server
+            } else {
+                WindowDecorations::Client
+            }),
             kind: self.window_kind(),
             focus: self.takes_focus(),
             show: !native_reveal_gate && !passive_reveal_gate,
             is_movable: true,
-            is_resizable: true,
+            is_resizable: self.resizable(),
             window_background: WindowBackgroundAppearance::Transparent,
             app_id: Some(resolved_app_id),
             ..Default::default()

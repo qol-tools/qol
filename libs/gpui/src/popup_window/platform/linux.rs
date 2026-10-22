@@ -582,6 +582,8 @@ pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         qol_runtime::probe!("PREPARE_WIN", "title={title} wid=NONE reason={reason}");
+        #[cfg(debug_assertions)]
+        probe_own_windows(&conn, root, list_atom, title);
         return false;
     };
     if !compositor_running(&conn, screen_num) {
@@ -1992,6 +1994,29 @@ fn find_window_by_title(
         );
     }
     pid_match.or_else(|| titled.into_iter().next())
+}
+
+#[cfg(debug_assertions)]
+fn probe_own_windows(conn: &impl Connection, root: u32, list_atom: u32, title: &str) {
+    let Some(pid_atom) = intern(conn, b"_NET_WM_PID") else {
+        return;
+    };
+    let mut ids = root_window_ids(conn, root, list_atom);
+    append_tree_window_ids(conn, root, &mut ids);
+    let own = ids
+        .into_iter()
+        .filter(|&wid| window_pid_matches(conn, wid, pid_atom, std::process::id()));
+    for wid in own {
+        let name = conn
+            .get_property(false, wid, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 256)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| String::from_utf8_lossy(&reply.value).into_owned());
+        qol_runtime::probe!(
+            "PREPARE_WIN",
+            "title={title} miss_candidate={wid} name={name:?}"
+        );
+    }
 }
 
 fn window_title_matches(

@@ -180,6 +180,18 @@ impl ResizeFrame {
             return;
         };
         *self.state.drag.borrow_mut() = Some(drag.clone());
+        qol_runtime::probe!(
+            "GPUI_RESIZE",
+            "phase=begin epoch={} edge={edge:?} start={:?} pointer={:?}",
+            drag.epoch,
+            drag.start.rounded(),
+            drag.pointer_start
+        );
+        if crate::platform::RESIZE_BY_WINDOW_MANAGER {
+            window.start_window_resize(edge);
+            watch_release(drag, self.state.epoch.clone(), Instant::now(), window);
+            return;
+        }
         let applied = drag.start;
         follow_pointer(drag, self.state.epoch.clone(), applied, window);
     }
@@ -244,6 +256,7 @@ fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, windo
             return;
         }
         let released = drag.released();
+        let drawn = drawn_size(window);
         let applied = match drag.bounds_now() {
             Some(next) if next != applied => {
                 apply_after_present(drag.clone(), next, cx);
@@ -251,6 +264,12 @@ fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, windo
             }
             _ => applied,
         };
+        qol_runtime::probe!(
+            "GPUI_RESIZE",
+            "phase=step epoch={} drawn={drawn:?} applied={:?} released={released}",
+            drag.epoch,
+            applied.rounded()
+        );
         if released {
             settle_at(
                 drag,
@@ -266,6 +285,27 @@ fn follow_pointer(drag: Drag, epochs: Arc<AtomicU64>, applied: NativeRect, windo
     });
 }
 
+fn watch_release(drag: Drag, epochs: Arc<AtomicU64>, last_frame: Instant, window: &Window) {
+    window.on_next_frame(move |window, _| {
+        if epochs.load(Ordering::SeqCst) != drag.epoch {
+            return;
+        }
+        let released = drag.released();
+        qol_runtime::probe!(
+            "GPUI_RESIZE",
+            "phase=wm-frame epoch={} drawn={:?} frame_ms={} released={released}",
+            drag.epoch,
+            drawn_size(window),
+            last_frame.elapsed().as_millis()
+        );
+        if released {
+            drag.finish(&epochs);
+            return;
+        }
+        watch_release(drag, epochs, Instant::now(), window);
+    });
+}
+
 fn settle_at(
     drag: Drag,
     epochs: Arc<AtomicU64>,
@@ -278,7 +318,15 @@ fn settle_at(
         if epochs.load(Ordering::SeqCst) != drag.epoch {
             return;
         }
-        if drag.session.bounds() == Some(target.rounded()) || since.elapsed() > SETTLE_WAIT {
+        let actual = drag.session.bounds();
+        if actual == Some(target.rounded()) || since.elapsed() > SETTLE_WAIT {
+            qol_runtime::probe!(
+                "GPUI_RESIZE",
+                "phase=settled epoch={} target={:?} actual={actual:?} waited_ms={}",
+                drag.epoch,
+                target.rounded(),
+                since.elapsed().as_millis()
+            );
             drag.finish(&epochs);
             return;
         }
@@ -290,6 +338,15 @@ fn settle_at(
         };
         settle_at(drag, epochs, target, since, applied_at, window);
     });
+}
+
+fn drawn_size(window: &Window) -> (i32, i32) {
+    let scale = window.scale_factor();
+    let size = window.bounds().size;
+    (
+        (size.width.to_f64() * f64::from(scale)).round() as i32,
+        (size.height.to_f64() * f64::from(scale)).round() as i32,
+    )
 }
 
 fn apply_after_present(drag: Drag, rect: NativeRect, cx: &mut App) {

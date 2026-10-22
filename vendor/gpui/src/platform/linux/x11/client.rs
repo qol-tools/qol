@@ -611,7 +611,10 @@ impl X11Client {
 
             for window in windows_to_refresh.into_iter() {
                 let mut state = self.0.borrow_mut();
-                if let Some(window) = state.windows.get_mut(&window) {
+                if let Some(window) = state.windows.values_mut().find(|reference| {
+                    reference.window.x_window == window
+                        || reference.window.state.borrow().render_window == Some(window)
+                }) {
                     window.expose_event_received = true;
                 }
             }

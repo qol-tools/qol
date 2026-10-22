@@ -19,6 +19,7 @@ use x11rb::{
     errors::ConnectionError,
     properties::{WmSizeHints, WmSizeHintsSpecification},
     protocol::{
+        randr::ConnectionExt as _,
         sync,
         xinput::{self, ConnectionExt as _},
         xproto::{self, ClientMessageEvent, ConnectionExt, TranslateCoordinatesReply},
@@ -94,6 +95,53 @@ fn query_render_extent(
         height: reply.height as u32,
         depth: 1,
     })
+}
+
+fn largest_monitor_extent(
+    xcb: &Rc<XCBConnection>,
+    root: xproto::Window,
+    floor: gpu::Extent,
+) -> anyhow::Result<gpu::Extent> {
+    let monitors = get_reply(
+        || "X11 RandR GetMonitors failed.",
+        xcb.randr_get_monitors(root, true),
+    )?;
+    Ok(monitors
+        .monitors
+        .iter()
+        .fold(floor, |extent, monitor| gpu::Extent {
+            width: extent.width.max(monitor.width as u32),
+            height: extent.height.max(monitor.height as u32),
+            depth: 1,
+        }))
+}
+
+fn grow_render_window(
+    xcb: &Rc<XCBConnection>,
+    root: xproto::Window,
+    render_window: xproto::Window,
+    current: gpu::Extent,
+    content: gpu::Extent,
+) -> anyhow::Result<gpu::Extent> {
+    if content.width <= current.width && content.height <= current.height {
+        return Ok(current);
+    }
+    let screen = query_render_extent(xcb, root)?;
+    let grown = gpu::Extent {
+        width: current.width.max(content.width).max(screen.width),
+        height: current.height.max(content.height).max(screen.height),
+        depth: 1,
+    };
+    check_reply(
+        || "X11 ConfigureWindow for the render surface failed.",
+        xcb.configure_window(
+            render_window,
+            &xproto::ConfigureWindowAux::new()
+                .width(grown.width)
+                .height(grown.height),
+        ),
+    )?;
+    Ok(grown)
 }
 
 impl ResizeEdge {
@@ -258,6 +306,8 @@ pub struct X11WindowState {
     bounds: Bounds<Pixels>,
     scale_factor: f32,
     renderer: BladeRenderer,
+    pub(crate) render_window: Option<xproto::Window>,
+    content_extent: gpu::Extent,
     display: Rc<dyn PlatformDisplay>,
     input_handler: Option<PlatformInputHandler>,
     appearance: WindowAppearance,
@@ -674,6 +724,42 @@ impl X11WindowState {
                 ),
             )?;
 
+            let render_window = if params.is_resizable {
+                let extent = largest_monitor_extent(
+                    xcb,
+                    visual_set.root,
+                    query_render_extent(xcb, x_window)?,
+                )?;
+                let id = xcb.generate_id()?;
+                check_reply(
+                    || "X11 CreateWindow for the render surface failed.",
+                    xcb.create_window(
+                        visual.depth,
+                        id,
+                        x_window,
+                        0,
+                        0,
+                        extent.width as u16,
+                        extent.height as u16,
+                        0,
+                        xproto::WindowClass::INPUT_OUTPUT,
+                        visual.id,
+                        &xproto::CreateWindowAux::new()
+                            .border_pixel(visual_set.black_pixel)
+                            .colormap(colormap)
+                            .event_mask(xproto::EventMask::EXPOSURE),
+                    ),
+                )?;
+                check_reply(
+                    || "X11 MapWindow for the render surface failed.",
+                    xcb.map_window(id),
+                )?;
+                Some(id)
+            } else {
+                None
+            };
+            let render_target = render_window.unwrap_or(x_window);
+
             xcb_flush(xcb);
 
             let renderer = {
@@ -682,13 +768,13 @@ impl X11WindowState {
                         xcb,
                     ) as *mut _,
                     screen_id: x_screen_index,
-                    window_id: x_window,
+                    window_id: render_target,
                     visual_id: visual.id,
                 };
                 let config = BladeSurfaceConfig {
                     // Note: this has to be done after the GPU init, or otherwise
                     // the sizes are immediately invalidated.
-                    size: query_render_extent(xcb, x_window)?,
+                    size: query_render_extent(xcb, render_target)?,
                     // We set it to transparent by default, even if we have client-side
                     // decorations, since those seem to work on X11 even without `true` here.
                     // If the window appearance changes, then the renderer will get updated
@@ -708,6 +794,8 @@ impl X11WindowState {
                 bounds: bounds.to_pixels(scale_factor),
                 scale_factor,
                 renderer,
+                render_window,
+                content_extent: query_render_extent(xcb, x_window)?,
                 atoms: *atoms,
                 input_handler: None,
                 active: false,
@@ -741,7 +829,7 @@ impl X11WindowState {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        let size = self.renderer.viewport_size();
+        let size = self.content_extent;
         Size {
             width: size.width.into(),
             height: size.height.into(),
@@ -1128,10 +1216,21 @@ impl X11WindowStatePtr {
             }
 
             let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
+            state.content_extent = gpu_size;
+            let drawable = match state.render_window {
+                Some(render_window) => grow_render_window(
+                    &self.xcb,
+                    state.x_root_window,
+                    render_window,
+                    state.renderer.viewport_size(),
+                    gpu_size,
+                )?,
+                None => gpu_size,
+            };
             if true {
                 state.renderer.update_drawable_size(size(
-                    DevicePixels(gpu_size.width as i32),
-                    DevicePixels(gpu_size.height as i32),
+                    DevicePixels(drawable.width as i32),
+                    DevicePixels(drawable.height as i32),
                 ));
                 resize_args = Some((state.content_size(), state.scale_factor));
             }
