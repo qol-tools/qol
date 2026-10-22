@@ -63,7 +63,16 @@ def record(head_sha: str, actor: str) -> str:
 def verdict(env: dict, summary: str | None) -> int:
     event, review = env.get("EVENT", ""), env.get("VERDICT", "")
     print(f"event: {event}, bot: {env.get('BOT', '')}, verdict: {review or 'none'}")
-    if event == "merge_group" or env.get("BOT") == "true" or review == "pass":
+    if event == "merge_group" or env.get("BOT") == "true":
+        return 0
+    reviewed, base = env["BASE"], gh_json([f"repos/{env['GITHUB_REPOSITORY']}/pulls/{env['PR_NUMBER']}"])["base"]["ref"]
+    if base != reviewed:
+        print(
+            f"::error::{env['HEAD_SHA'][:7]} was reviewed against {reviewed}, and the base is now {base}. "
+            f"Close and reopen the pull request, or push a commit, to review it against {base}."
+        )
+        return 1
+    if review == "pass":
         return 0
     override = override_for(comments(env["GITHUB_REPOSITORY"], env["PR_NUMBER"]), env["HEAD_SHA"])
     if not override:

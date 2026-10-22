@@ -460,6 +460,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
             "run: python3 .github/scripts/review_gate.py verdict",
             "VERDICT: ${{ needs.review.outputs.verdict }}",
+            "BASE: ${{ github.event.pull_request.base.ref }}",
             "github.event.pull_request.user.login == 'dependabot[bot]'",
             "github.event.pull_request.head.repo.full_name == github.repository",
         ]:
@@ -490,6 +491,68 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(loose=loose):
                 self.assertNotIn(loose, override)
 
+    def test_a_pull_request_retargeted_to_main_is_held_until_a_review_against_main(self):
+        workflow = (ROOT / ".github/workflows/auto-merge-ready.yml").read_text()
+        self.assertIn("    types: [opened, reopened, ready_for_review, edited]\n", workflow.split("jobs:\n", 1)[0])
+        arm = workflow.split("  arm:\n", 1)[1]
+        self.assertIn("(github.event.action != 'edited' || github.event.changes.base != null)", arm)
+        self.assertIn("    permissions:\n      checks: write\n", arm)
+        hold = named_step(arm, "Hold the review of the old base", "      ")
+        self.assertIn("if: github.event.action == 'edited'", hold)
+        self.assertLess(arm.index("- name: Hold the review of the old base"), arm.index("- name: Enable auto-merge"))
+        for loose in ["AUTO_MERGE_TOKEN", "gh pr close", "gh run rerun", "in_progress"]:
+            with self.subTest(loose=loose):
+                self.assertNotIn(loose, hold)
+        script = textwrap.dedent(hold.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "gh.log"
+            gh = Path(temp) / "gh"
+            gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$GH_TOKEN" "$@" > "{log}"\n')
+            gh.chmod(0o755)
+            result = subprocess.run(
+                ["bash", "-e", "-c", script],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PATH": f"{temp}:{os.environ['PATH']}",
+                    "GH_TOKEN": "workflow",
+                    "REPO": "qol-tools/qol",
+                    "HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
+                    "OLD_BASE": "fix/stacked-base",
+                    "BASE": "main",
+                    "RUN_URL": "https://github.com/qol-tools/qol/actions/runs/7",
+                },
+            )
+            reason = (
+                "0123456 was reviewed against fix/stacked-base, and the base is now main. "
+                "Close and reopen the pull request, or push a commit, to review it against main."
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn(f"::error::{reason}", result.stdout)
+            self.assertEqual(
+                log.read_text().splitlines(),
+                [
+                    "workflow",
+                    "api",
+                    "repos/qol-tools/qol/check-runs",
+                    "-f",
+                    "name=claude review",
+                    "-f",
+                    "head_sha=0123456789abcdef0123456789abcdef01234567",
+                    "-f",
+                    "status=completed",
+                    "-f",
+                    "conclusion=failure",
+                    "-f",
+                    "details_url=https://github.com/qol-tools/qol/actions/runs/7",
+                    "-f",
+                    "output[title]=Review against main",
+                    "-f",
+                    f"output[summary]={reason}",
+                ],
+            )
+
     def test_the_review_reads_the_live_conversation(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         conversation = named_step(workflow, "Read the conversation", "      ")
@@ -497,6 +560,99 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         review = named_step(workflow, "Review", "      ")
         self.assertIn('--conversation "$OUT/conversation.md"', review)
         self.assertNotIn("github.event.pull_request.body", workflow)
+
+    def test_a_follow_up_review_stands_only_on_a_review_of_the_same_base(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        last = named_step(workflow, "Find the last review", "      ")
+        self.assertIn("BASE: ${{ github.event.pull_request.base.ref }}", last)
+        script = textwrap.dedent(last.split("        run: |\n", 1)[1])
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        review = f"<!-- qol-code-review -->\n\n<!-- reviewed {sha} -->\n> [!NOTE]\n> **pass**\n"
+        whole = "so this review covers the whole pull request against main."
+        for case, previous, notice in [
+            ("the same base", f"{review}\n<!-- base main -->\n", None),
+            ("another base", f"{review}\n<!-- base fix/stacked-base -->\n", f"0123456 was reviewed against fix/stacked-base, {whole}"),
+            ("no recorded base", review, f"0123456 was reviewed against a base it did not record, {whole}"),
+            ("no review", "", None),
+        ]:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                tools, out, output, fetched = Path(temp) / "bin", Path(temp) / "out", Path(temp) / "output", Path(temp) / "git.log"
+                tools.mkdir()
+                for name, body in [
+                    ("gh", 'printf "%s\\n" "{\\"body\\": \\"\\"}"'),
+                    ("node", 'cat > /dev/null\n[ -n "$PREVIOUS" ] || exit 0\nmkdir -p "$4"\nprintf "%s" "$PREVIOUS" > "$4/previous.md"\necho "$REVIEWED"'),
+                    ("git", f'printf "%s\\n" "$@" > "{fetched}"'),
+                ]:
+                    (tools / name).write_text(f"#!/usr/bin/env bash\n{body}\n")
+                    (tools / name).chmod(0o755)
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{tools}:{os.environ['PATH']}",
+                        "GH_TOKEN": "workflow",
+                        "NODE": "/seed/ci-pr.cjs",
+                        "OUT": str(out),
+                        "PR_NUMBER": "7",
+                        "BASE": "main",
+                        "GITHUB_REPOSITORY": "qol-tools/qol",
+                        "GITHUB_OUTPUT": str(output),
+                        "PREVIOUS": previous,
+                        "REVIEWED": sha if previous else "",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                follow = case == "the same base"
+                self.assertEqual(output.read_text() if output.exists() else "", f"sha={sha}\n" if follow else "")
+                self.assertEqual(fetched.read_text() if fetched.exists() else "", f"fetch\n-q\n--no-tags\n--depth=1\norigin\n{sha}\n" if follow else "")
+                self.assertEqual([line for line in result.stdout.splitlines() if line.startswith("::")], [f"::notice::{notice}"] if notice else [])
+
+    def test_the_review_comment_records_the_base_it_judged(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        post = named_step(workflow, "Post review comment", "      ")
+        self.assertIn("BASE: ${{ github.event.pull_request.base.ref }}", post)
+        script = textwrap.dedent(post.split("        run: |\n", 1)[1])
+        rendered = "<!-- qol-code-review -->\n\n<!-- reviewed 0123456789abcdef0123456789abcdef01234567 -->\n> [!NOTE]\n> **pass**\n"
+        for case, comment in [("a rendered review", rendered), ("no rendered review", "")]:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
+                tools, out, posted = Path(temp) / "bin", Path(temp) / "out", Path(temp) / "posted.md"
+                tools.mkdir()
+                for name, body in [
+                    ("node", 'case "$2" in\n  comment) [ -n "$COMMENT" ] || exit 1; printf "%s" "$COMMENT" > "$4/comment.md" ;;\n  marker) echo "<!-- qol-code-review -->" ;;\nesac'),
+                    ("gh", f'for arg in "$@"; do\n  case "$arg" in body=@*) [ -f "${{arg#body=@}}" ] || exit 1; cp "${{arg#body=@}}" "{posted}" ;; esac\ndone'),
+                ]:
+                    (tools / name).write_text(f"#!/usr/bin/env bash\n{body}\n")
+                    (tools / name).chmod(0o755)
+                result = subprocess.run(
+                    ["bash", "-c", script],
+                    capture_output=True,
+                    text=True,
+                    env={
+                        **os.environ,
+                        "PATH": f"{tools}:{os.environ['PATH']}",
+                        "GH_TOKEN": "workflow",
+                        "NODE": "/seed/ci-pr.cjs",
+                        "OUT": str(out),
+                        "PR_NUMBER": "7",
+                        "HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
+                        "BASE": "fix/stacked-base",
+                        "RUN_URL": "https://github.com/qol-tools/qol/actions/runs/7",
+                        "REPO_URL": "https://github.com/qol-tools/qol",
+                        "SECRET_OAUTH": "",
+                        "SECRET_PAT": "",
+                        "GITHUB_REPOSITORY": "qol-tools/qol",
+                        "COMMENT": comment,
+                    },
+                )
+                if comment:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(posted.read_text(), f"{rendered}\n<!-- base fix/stacked-base -->\n")
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((out / "comment.md").exists())
+                    self.assertFalse(posted.exists())
 
     def test_no_workflow_wraps_the_compiler(self):
         sources = [ROOT / ".github/actions/rust-setup/action.yml"]

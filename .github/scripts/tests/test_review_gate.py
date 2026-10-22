@@ -46,22 +46,45 @@ class OverrideRecordTests(unittest.TestCase):
 
 
 class VerdictTests(unittest.TestCase):
-    ENV = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA, "EVENT": "pull_request", "BOT": "false"}
+    ENV = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA, "EVENT": "pull_request", "BOT": "false", "BASE": "main"}
 
-    def verdict(self, review: str, entries: list[dict] | None = None, **env) -> tuple[int, str, str]:
+    def verdict(self, review: str, entries: list[dict] | None = None, live_base: str = "main", **env) -> tuple[int, str, str]:
         fetch = mock.Mock(return_value=entries or [])
-        with tempfile.NamedTemporaryFile("r", suffix=".md") as summary, mock.patch.object(gate, "comments", fetch):
+        pull = mock.Mock(return_value={"base": {"ref": live_base}})
+        with (
+            tempfile.NamedTemporaryFile("r", suffix=".md") as summary,
+            mock.patch.object(gate, "comments", fetch),
+            mock.patch.object(gate, "gh_json", pull),
+        ):
             out = io.StringIO()
             with redirect_stdout(out):
                 code = gate.verdict({**self.ENV, "VERDICT": review, **env}, summary.name)
+            pull.assert_called_once_with(["repos/o/r/pulls/7"])
             return code, out.getvalue(), summary.read()
 
     def test_a_pass_verdict_a_queue_run_and_dependabot_pass_without_reading_comments(self):
-        for review, env in [("pass", {}), ("", {"EVENT": "merge_group"}), ("", {"BOT": "true"})]:
-            with self.subTest(review=review, env=env), mock.patch.object(gate, "comments") as fetch:
+        for review, env, reads_base in [("pass", {}, True), ("", {"EVENT": "merge_group"}, False), ("", {"BOT": "true"}, False)]:
+            with (
+                self.subTest(review=review, env=env),
+                mock.patch.object(gate, "comments") as fetch,
+                mock.patch.object(gate, "gh_json", return_value={"base": {"ref": "main"}}) as pull,
+            ):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(gate.verdict({**self.ENV, "VERDICT": review, **env}, None), 0)
                 fetch.assert_not_called()
+                self.assertEqual(pull.call_count, int(reads_base))
+
+    def test_a_review_of_a_base_the_pull_request_left_fails_even_with_an_override(self):
+        for review in ["pass", "conditional"]:
+            with self.subTest(review=review):
+                code, out, summary = self.verdict(review, [comment(gate.record(SHA, "KMRH47"))], BASE="fix/stacked-base")
+                self.assertEqual(code, 1)
+                self.assertIn(
+                    "::error::1f8c4b7 was reviewed against fix/stacked-base, and the base is now main. "
+                    "Close and reopen the pull request, or push a commit, to review it against main.",
+                    out,
+                )
+                self.assertEqual(summary, "")
 
     def test_a_blocking_verdict_without_an_override_fails(self):
         for review in ["conditional", "block", ""]:
@@ -208,12 +231,21 @@ class MainTests(unittest.TestCase):
         self.assertIn("usage: review_gate.py verdict|superseded|override", stderr.getvalue())
 
     def test_a_failed_verdict_lookup_fails_closed(self):
-        env = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA, "EVENT": "pull_request", "VERDICT": "conditional"}
-        with mock.patch.dict(gate.os.environ, env), mock.patch.object(gate, "comments", side_effect=RuntimeError("HTTP 502")):
-            out = io.StringIO()
-            with redirect_stdout(out):
-                self.assertEqual(gate.main(["review_gate.py", "verdict"]), 1)
-        self.assertIn("::error::HTTP 502", out.getvalue())
+        env = {"GITHUB_REPOSITORY": "o/r", "PR_NUMBER": "7", "HEAD_SHA": SHA, "EVENT": "pull_request", "VERDICT": "conditional", "BASE": "main"}
+        for lookup, pull, fetch in [
+            ("base", mock.Mock(side_effect=RuntimeError("HTTP 502")), mock.Mock()),
+            ("comments", mock.Mock(return_value={"base": {"ref": "main"}}), mock.Mock(side_effect=RuntimeError("HTTP 502"))),
+        ]:
+            with (
+                self.subTest(lookup=lookup),
+                mock.patch.dict(gate.os.environ, env),
+                mock.patch.object(gate, "gh_json", pull),
+                mock.patch.object(gate, "comments", fetch),
+            ):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(gate.main(["review_gate.py", "verdict"]), 1)
+                self.assertIn("::error::HTTP 502", out.getvalue())
 
 
 if __name__ == "__main__":
