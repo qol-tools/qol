@@ -178,7 +178,7 @@ pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
         qol_runtime::probe!("SHOT_SELECT_PREPARE", "title={title} result=invalid");
         return;
     };
-    let prepared = qol_gpui::popup_window::configure_overlay_window(title)
+    let prepared = qol_gpui::popup_window::configure_overlay_window(title, false)
         && qol_gpui::popup_window::window_geometry_session(title).is_some_and(|session| {
             if !qol_gpui::popup_window::make_override_redirect(title) {
                 return false;
@@ -195,7 +195,7 @@ pub(super) fn prepare_selector_window(title: &str, bounds: Rect) {
 }
 
 fn configure_selector_window_once(title: &str, expected: (i32, i32, u32, u32)) -> bool {
-    if !qol_gpui::popup_window::configure_overlay_window(title) {
+    if !qol_gpui::popup_window::configure_overlay_window(title, false) {
         return false;
     }
     let Some(session) = qol_gpui::popup_window::window_geometry_session(title) else {

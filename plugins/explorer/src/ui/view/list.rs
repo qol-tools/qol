@@ -23,6 +23,7 @@ use crate::ui::columns::{kind_label, left_to_right, size_label, typed_split};
 
 const KIND_WIDTH: f32 = 110.0;
 const SIZE_WIDTH: f32 = 90.0;
+const NAME_MAX_WIDTH: f32 = 640.0;
 const SECOND_LINE_JOIN: &str = "  ·  ";
 
 pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> impl IntoElement {
@@ -69,7 +70,7 @@ fn header(kit: Kit) -> impl IntoElement {
         .border_b(px(LINE))
         .border_color(rgba(kit.washes.hairline.packed()))
         .child(div().flex_none().w(px(ICON)))
-        .child(label("name").flex_1().min_w_0())
+        .child(label("name").flex_1().min_w_0().max_w(px(NAME_MAX_WIDTH)))
         .child(label("kind").flex_none().w(px(KIND_WIDTH)))
         .child(
             div()
@@ -207,7 +208,8 @@ fn render_row(
         stop.name_style(),
         false,
         window,
-    );
+    )
+    .when(stop.shows_columns(), |name| name.max_w(px(NAME_MAX_WIDTH)));
     let element = div()
         .id(("explorer-row", row))
         .relative()

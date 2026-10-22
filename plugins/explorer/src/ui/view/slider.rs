@@ -11,8 +11,8 @@ use qol_gpui::kit::kit;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{translucent, Alpha, TextStyle, LINE, SPACE_CELL, SPACE_INSET, SPACE_STACK};
 
-use super::grid::Stop;
 use super::ExplorerView;
+use crate::config::ViewSize;
 
 const LABEL_WIDTH: f32 = 56.0;
 const TRACK_WIDTH: f32 = 120.0;
@@ -27,13 +27,13 @@ const REACH_ACROSS: f32 = SPACE_INSET;
 const REACH_DOWN: f32 = SPACE_CELL;
 pub(super) const WIDTH: f32 = LABEL_WIDTH + SPACE_INSET + TRACK_WIDTH;
 
-fn stop_at(fraction: f32) -> Stop {
-    let last = (Stop::ALL.len() - 1) as f32;
-    Stop::at((fraction.clamp(0.0, 1.0) * last).round() as usize)
+fn stop_at(fraction: f32) -> ViewSize {
+    let last = (ViewSize::ALL.len() - 1) as f32;
+    ViewSize::at((fraction.clamp(0.0, 1.0) * last).round() as usize)
 }
 
-fn fraction_of(stop: Stop) -> f32 {
-    stop.index() as f32 / (Stop::ALL.len() - 1) as f32
+fn fraction_of(stop: ViewSize) -> f32 {
+    stop.index() as f32 / (ViewSize::ALL.len() - 1) as f32
 }
 
 fn track_fraction(x: Pixels, track: Bounds<Pixels>) -> f32 {
@@ -62,8 +62,8 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
     let fraction = fraction_of(view.stop);
     let thumb_left = fraction * TRAVEL;
     let haloed = view.slider_hovered || view.slider_dragging;
-    let tick_step = TRAVEL / (Stop::ALL.len() - 1) as f32;
-    let ticks = (0..Stop::ALL.len()).map(|index| {
+    let tick_step = TRAVEL / (ViewSize::ALL.len() - 1) as f32;
+    let ticks = (0..ViewSize::ALL.len()).map(|index| {
         div()
             .absolute()
             .left(px(THUMB / 2.0 + index as f32 * tick_step))
@@ -208,23 +208,23 @@ fn follow_drag(window: &mut Window, view: WeakEntity<ExplorerView>, track: Bound
 
 #[cfg(test)]
 mod tests {
-    use super::{fraction_of, stop_at, Stop};
+    use super::{fraction_of, stop_at, ViewSize};
 
     #[test]
     fn a_click_or_drag_snaps_to_the_nearest_stop() {
         let cases = [
-            (-0.5, Stop::Compact),
-            (0.0, Stop::Compact),
-            (0.12, Stop::Compact),
-            (0.13, Stop::List),
-            (0.3, Stop::List),
-            (0.4, Stop::Roomy),
-            (0.62, Stop::Roomy),
-            (0.63, Stop::Icons),
-            (0.87, Stop::Icons),
-            (0.88, Stop::BigIcons),
-            (1.0, Stop::BigIcons),
-            (1.7, Stop::BigIcons),
+            (-0.5, ViewSize::Compact),
+            (0.0, ViewSize::Compact),
+            (0.12, ViewSize::Compact),
+            (0.13, ViewSize::List),
+            (0.3, ViewSize::List),
+            (0.4, ViewSize::Roomy),
+            (0.62, ViewSize::Roomy),
+            (0.63, ViewSize::Icons),
+            (0.87, ViewSize::Icons),
+            (0.88, ViewSize::BigIcons),
+            (1.0, ViewSize::BigIcons),
+            (1.7, ViewSize::BigIcons),
         ];
         for (fraction, stop) in cases {
             assert_eq!(stop_at(fraction), stop, "{fraction}");
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn every_stop_sits_where_a_click_on_it_lands() {
-        for stop in Stop::ALL {
+        for stop in ViewSize::ALL {
             assert_eq!(stop_at(fraction_of(stop)), stop);
         }
     }

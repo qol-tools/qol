@@ -21,6 +21,8 @@ pub const DETAIL_HEIGHT: f32 = 380.0;
 pub const PREVIEW_HEIGHT: f32 = 534.0;
 pub const PREVIEW_CARD: f32 = 64.0;
 pub const PREVIEW_ROWS: usize = 7;
+pub const MIN_WIDTH: f32 = 680.0;
+pub const MIN_APP_ROWS: usize = 4;
 const FRAME: f32 = 2.0 * qol_gpui::theme::LINE;
 
 pub fn visible_rows(mode: SearchMode) -> usize {
@@ -28,6 +30,19 @@ pub fn visible_rows(mode: SearchMode) -> usize {
         SearchMode::Apps => MAX_VISIBLE,
         SearchMode::Files => FILES_VISIBLE,
     }
+}
+
+pub fn min_height() -> f32 {
+    window_height_for_list(&[APP_CARD_MAX; MIN_APP_ROWS], APP_GAP)
+}
+
+pub fn rows_that_fit(window_height: f32, mode: SearchMode) -> usize {
+    let (card, gap) = match mode {
+        SearchMode::Apps => (APP_CARD_MAX, APP_GAP),
+        SearchMode::Files => (FILE_CARD_MAX, FILE_GAP),
+    };
+    let room = window_height - header_window_height() - 2.0 * LIST_PAD_Y + gap;
+    (room / (card + gap)).floor().max(1.0) as usize
 }
 
 pub fn content_width(flow: bool) -> f32 {
@@ -128,6 +143,40 @@ mod tests {
         let inner = WINDOW_WIDTH - 2.0 * qol_gpui::theme::LINE - 2.0 * FILE_INSET;
         assert_eq!(inner - PANEL_GAP - PANEL_WIDTH, 594.0);
         assert_eq!(inner - APP_GAP - APP_PANEL_WIDTH, 494.0);
+    }
+
+    #[test]
+    fn the_opening_height_fits_the_designed_row_counts() {
+        let full = full_window_height();
+        assert_eq!(rows_that_fit(full, SearchMode::Apps), MAX_VISIBLE);
+        assert_eq!(rows_that_fit(full, SearchMode::Files), FILES_VISIBLE);
+    }
+
+    #[test]
+    fn taller_windows_fit_more_rows_and_never_fewer_than_one() {
+        let apps = |height| rows_that_fit(height, SearchMode::Apps);
+        assert_eq!(apps(min_height()), MIN_APP_ROWS);
+        assert_eq!(
+            apps(min_height() + APP_CARD_MAX + APP_GAP - 1.0),
+            MIN_APP_ROWS
+        );
+        assert_eq!(
+            apps(min_height() + APP_CARD_MAX + APP_GAP),
+            MIN_APP_ROWS + 1
+        );
+        assert_eq!(apps(header_window_height()), 1);
+        assert_eq!(rows_that_fit(min_height(), SearchMode::Files), 2);
+        assert_eq!(rows_that_fit(1400.0, SearchMode::Files), 12);
+    }
+
+    #[test]
+    fn the_minimum_keeps_four_app_cards_and_the_side_panel_beside_the_list() {
+        assert_eq!(min_height(), 370.0);
+        assert!(min_height() <= window_height_for_detail());
+        let inner = MIN_WIDTH - 2.0 * qol_gpui::theme::LINE - 2.0 * FILE_INSET;
+        assert_eq!(inner - APP_GAP - APP_PANEL_WIDTH, 334.0);
+        assert_eq!(inner - PANEL_GAP - PANEL_WIDTH, 434.0);
+        const { assert!(MIN_WIDTH < WINDOW_WIDTH) };
     }
 
     #[test]

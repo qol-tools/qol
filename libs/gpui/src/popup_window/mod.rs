@@ -1,6 +1,6 @@
 mod platform;
 
-pub use platform::{set_window_fixed_size_by_title, show_normal_window_by_title};
+pub use platform::show_normal_window_by_title;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -74,7 +74,7 @@ pub async fn wait_for_hidden_windows(
 }
 
 pub use platform::{
-    capture_focus_return, configure_keepalive_window, configure_overlay_window,
+    capture_focus_return, compositor_active, configure_keepalive_window, configure_overlay_window,
     configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
     focus_window_by_title, grab_escape, grab_keyboard, hide_for_capture, hide_invisible,
     hide_window_by_title, hide_windows_by_title_prefix, hold_input, input_held, join_all_spaces,

@@ -18,7 +18,7 @@ use windows as imp;
 
 pub(crate) use imp::{
     display_scale_factor, monitor_scale, native_readback_position, native_scale_for,
-    readback_matches, GLYPH_STEPS_PER_PIXEL,
+    readback_matches, DRAWS_RESIZE_ZONES, GLYPH_STEPS_PER_PIXEL, RESIZE_BY_WINDOW_MANAGER,
 };
 
 pub fn is_modifier_held() -> bool {

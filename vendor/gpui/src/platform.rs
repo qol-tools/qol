@@ -466,6 +466,11 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_bounds(&self) -> WindowBounds;
     fn content_size(&self) -> Size<Pixels>;
     fn resize(&mut self, size: Size<Pixels>);
+    fn set_window_min_size(&self, _size: Size<Pixels>) {}
+    fn is_live_resizing(&self) -> bool {
+        false
+    }
+    fn expect_live_resize(&self) {}
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
@@ -1133,6 +1138,9 @@ pub struct WindowOptions {
     /// Note that this may be ignored.
     pub window_decorations: Option<WindowDecorations>,
 
+    /// Icon image (X11 only)
+    pub icon: Option<Arc<image::RgbaImage>>,
+
     /// Tab group name, allows opening the window as a native tab on macOS 10.12+. Windows with the same tabbing identifier will be grouped together.
     pub tabbing_identifier: Option<String>,
 }
@@ -1177,6 +1185,12 @@ pub(crate) struct WindowParams {
 
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     pub show: bool,
+
+    #[cfg_attr(
+        not(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11")),
+        allow(dead_code)
+    )]
+    pub icon: Option<Arc<image::RgbaImage>>,
 
     #[cfg_attr(feature = "wayland", allow(dead_code))]
     pub display_id: Option<DisplayId>,
@@ -1238,6 +1252,7 @@ impl Default for WindowOptions {
             is_minimizable: true,
             display_id: None,
             window_background: WindowBackgroundAppearance::default(),
+            icon: None,
             app_id: None,
             window_min_size: None,
             window_decorations: None,

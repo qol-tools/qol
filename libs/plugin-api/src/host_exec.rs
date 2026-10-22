@@ -1,4 +1,5 @@
 use base64::Engine;
+use qol_conventions::api_routes;
 use qol_runtime::local_http::{Client, Method};
 use std::io;
 use std::time::Duration;
@@ -55,6 +56,20 @@ pub fn post_to_daemon_with_timeout(
     let body = if body.is_empty() { "{}" } else { body };
     let response = daemon_client(timeout)?.request(Method::Post, path, Some(body))?;
     Ok((response.status, response.body))
+}
+
+pub fn save_plugin_config_keys(plugin_id: &str, keys: &serde_json::Value) -> io::Result<()> {
+    let body = serde_json::to_string(keys)?;
+    let route = api_routes::config_route(&api_routes::plugin_base(plugin_id));
+    let response = daemon_client(DAEMON_IO_TIMEOUT)?.request(Method::Put, &route, Some(&body))?;
+    if response.status == 200 {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "tray refused the config save ({}): {}",
+        response.status,
+        response.body.trim()
+    )))
 }
 
 fn daemon_client(timeout: Duration) -> io::Result<Client> {

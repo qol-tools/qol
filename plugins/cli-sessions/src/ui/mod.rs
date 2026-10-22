@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, Subscription,
-    WeakEntity, Window,
+    px, size, App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels,
+    Subscription, WeakEntity, Window,
 };
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
@@ -20,7 +20,7 @@ use qol_terminal_sessions::{SessionBinding, SessionId};
 
 use crate::host::TerminalHost;
 use crate::session::registry::Registry;
-use crate::ui::placement::{Corner, CORNER_MARGIN};
+use crate::ui::placement::Corner;
 use crate::ui::selection::Selection;
 
 pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
@@ -45,6 +45,7 @@ pub struct SessionsView {
     last_jumped: Option<SessionId>,
     pub focus_handle: FocusHandle,
     _activation: Subscription,
+    _bounds: Subscription,
 }
 
 impl SessionsView {
@@ -62,6 +63,10 @@ impl SessionsView {
                 view.read_focus_after_leaving(cx);
             }
         });
+        let bounds = cx.observe_window_bounds(window, |view: &mut Self, window, _| {
+            view.hold_folded_height(window);
+        });
+        dismisser.set_min_size(collapse::unfolded_min_size());
         Self {
             registry,
             host,
@@ -77,6 +82,7 @@ impl SessionsView {
             last_jumped: None,
             focus_handle: cx.focus_handle(),
             _activation: activation,
+            _bounds: bounds,
         }
     }
 
@@ -121,10 +127,20 @@ impl SessionsView {
 
     pub fn collapse_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let expanded = qol_gpui::popup_window::window_bounds_primary_anchored(window);
+        if self.dismisser.is_user_sizing() {
+            trace::fold("refused-while-resizing", expanded);
+            return false;
+        }
         let strip = self.collapse_state.collapse(expanded);
+        self.dismisser.hold_remembered_bounds(expanded, window, cx);
+        self.dismisser.set_min_size(collapse::folded_min_size());
+        self.dismisser.set_fixed_height(true);
         trace::collapse(true);
-        schedule_panel_bounds(window, cx, strip, |view, _| {
+        schedule_panel_bounds(window, cx, strip, |view, _, window, cx| {
             view.collapse_state.expand();
+            view.dismisser.set_min_size(collapse::unfolded_min_size());
+            view.dismisser.set_fixed_height(false);
+            view.dismisser.release_remembered_bounds(window, cx);
             trace::collapse(false);
         });
         self.key_hold.clear();
@@ -133,17 +149,24 @@ impl SessionsView {
     }
 
     pub fn expand_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(expanded) = self.collapse_state.expand() else {
+        let strip = qol_gpui::popup_window::window_bounds_primary_anchored(window);
+        let Some(unfolded) = self.collapse_state.unfolded(strip) else {
             return false;
         };
-        let anchored = collapse::reanchor_expanded(
-            expanded,
-            qol_gpui::popup_window::window_bounds_primary_anchored(window),
-            self.collapse_state.corner(),
-        );
-        let anchored = clamp_to_monitor(anchored, cx);
-        schedule_panel_bounds(window, cx, anchored, |view, bounds| {
+        if self.dismisser.is_user_sizing() {
+            trace::fold("refused-while-resizing", strip);
+            return false;
+        }
+        self.collapse_state.expand();
+        let anchored = clamp_to_monitor(unfolded, strip, cx);
+        self.dismisser.set_min_size(collapse::unfolded_min_size());
+        self.dismisser.set_fixed_height(false);
+        self.dismisser.release_remembered_bounds(window, cx);
+        schedule_panel_bounds(window, cx, anchored, |view, bounds, window, cx| {
             view.collapse_state.collapse(bounds);
+            view.dismisser.set_min_size(collapse::folded_min_size());
+            view.dismisser.set_fixed_height(true);
+            view.dismisser.hold_remembered_bounds(bounds, window, cx);
         });
         trace::collapse(false);
         self.key_hold.clear();
@@ -151,13 +174,35 @@ impl SessionsView {
         true
     }
 
-    pub fn dismiss_with_reason(&mut self, reason: &'static str, cx: &mut Context<Self>) -> bool {
+    pub fn dismiss_with_reason(
+        &mut self,
+        reason: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let strip = qol_gpui::popup_window::window_bounds_primary_anchored(window);
+        if let Some(unfolded) = self.collapse_state.unfolded(strip) {
+            self.dismisser.hold_remembered_bounds(unfolded, window, cx);
+        }
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let showing = self.is_showing;
         self.is_showing = false;
         self.dismisser.dismiss(cx);
         trace::dismiss(reason, showing);
         showing
+    }
+
+    fn hold_folded_height(&mut self, window: &mut Window) {
+        let viewport = window.viewport_size();
+        if !self.is_collapsed() || !collapse::folded_height_drifted(viewport.height) {
+            return;
+        }
+        trace::fold(
+            "held-height",
+            qol_gpui::popup_window::window_bounds_primary_anchored(window),
+        );
+        self.dismisser
+            .resize_window(size(viewport.width, px(collapse::STRIP_HEIGHT)), window);
     }
 
     fn key_repeat_guard(&mut self, key: &str) -> bool {
@@ -375,14 +420,14 @@ fn schedule_panel_bounds(
     window: &mut Window,
     cx: &mut Context<SessionsView>,
     bounds: Bounds<Pixels>,
-    on_failure: fn(&mut SessionsView, Bounds<Pixels>),
+    on_failure: fn(&mut SessionsView, Bounds<Pixels>, &mut Window, &mut Context<SessionsView>),
 ) {
     cx.spawn_in(window, async move |view, cx| {
         let _ = view.update_in(cx, |view, window, cx| {
             let resized = view.dismisser.resize_window(bounds.size, window);
             let moved = view.dismisser.reposition_window(bounds.origin);
             if !(resized && moved) {
-                on_failure(view, bounds);
+                on_failure(view, bounds, window, cx);
             }
             cx.notify();
         });
@@ -390,13 +435,24 @@ fn schedule_panel_bounds(
     .detach();
 }
 
-fn clamp_to_monitor(bounds: Bounds<Pixels>, cx: &mut Context<SessionsView>) -> Bounds<Pixels> {
-    match MonitorTracker::start(cx).snapshot_monitor() {
-        Some(monitor) => qol_gpui::placement::clamp_origin_to_monitor(
-            monitor.logical_bounds(),
-            bounds,
-            CORNER_MARGIN,
-        ),
+fn clamp_to_monitor(
+    bounds: Bounds<Pixels>,
+    anchor: Bounds<Pixels>,
+    cx: &mut Context<SessionsView>,
+) -> Bounds<Pixels> {
+    let tracker = MonitorTracker::start(cx);
+    let monitors: Vec<Bounds<Pixels>> = tracker
+        .all_monitors_or_snapshot()
+        .iter()
+        .map(|monitor| monitor.logical_bounds())
+        .collect();
+    let monitor = qol_gpui::placement::monitor_at_point(&monitors, anchor.center()).or_else(|| {
+        tracker
+            .snapshot_monitor()
+            .map(|monitor| monitor.logical_bounds())
+    });
+    match monitor {
+        Some(monitor) => qol_gpui::placement::clamp_origin_to_monitor(monitor, bounds, 0.0),
         None => bounds,
     }
 }

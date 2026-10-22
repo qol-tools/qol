@@ -8,7 +8,7 @@ use crate::monitor::{self, MonitorTracker};
 use crate::open_window_with_focus;
 
 use super::layout::{full_window_height, header_window_height, WINDOW_WIDTH};
-use super::{trace, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
+use super::{trace, window_memory, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
 use qol_gpui::popup_window;
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
@@ -16,20 +16,23 @@ use qol_gpui::window_options::PopupWindowOptions;
 
 pub(crate) type ActiveLaunchers = ActiveWindows<LauncherView>;
 
-fn header_size() -> Size<Pixels> {
-    size(px(WINDOW_WIDTH), px(header_window_height()))
-}
-
 fn full_window_size() -> Size<Pixels> {
     size(px(WINDOW_WIDTH), px(full_window_height()))
 }
 
-fn launcher_placement(monitor: Option<&monitor::ActiveMonitor>, cx: &App) -> WindowPlacement {
-    let mut placement = centered_window_placement(monitor, header_size(), cx);
-    if let Some(monitor) = monitor {
-        let native = monitor.bounds();
-        let area = monitor.logical(popup_window::work_area_within(native).unwrap_or(native));
-        let lowest = area.origin.y + area.size.height - px(full_window_height());
+fn native_size(user: Option<Size<Pixels>>, flow: bool) -> Size<Pixels> {
+    user.filter(|_| !flow).unwrap_or_else(full_window_size)
+}
+
+fn launcher_placement(
+    monitor: Option<&monitor::ActiveMonitor>,
+    native: Size<Pixels>,
+    cx: &App,
+) -> WindowPlacement {
+    let header = size(native.width, px(header_window_height()));
+    let mut placement = centered_window_placement(monitor, header, cx);
+    if let Some(area) = monitor.map(monitor::ActiveMonitor::logical_work_area) {
+        let lowest = area.origin.y + area.size.height - native.height;
         placement.bounds.origin.y = placement.bounds.origin.y.min(lowest).max(area.origin.y);
     }
     placement
@@ -43,7 +46,7 @@ pub(crate) fn pre_create_ghost(
 ) {
     apply_ghost_debug();
     for monitor in tracker.all_monitors_or_snapshot() {
-        let placement = launcher_placement(Some(&monitor), cx);
+        let placement = launcher_placement(Some(&monitor), full_window_size(), cx);
         let target = placement.target;
         let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
         let Some(handle) = open_hidden_ghost(cx, entries.clone(), &placement, &title) else {
@@ -173,7 +176,9 @@ fn show_ghost(
     cx: &mut App,
 ) -> bool {
     let _reason = qol_gpui::popup_window::reason_scope("show");
-    let placement = launcher_placement(monitor_snapshot, cx);
+    let user = window_memory::user_size(monitor_snapshot);
+    let native = native_size(user, flow.is_some());
+    let placement = launcher_placement(monitor_snapshot, native, cx);
     let target = placement.target;
     let handle = active.borrow().existing(target);
     let Some(handle) = handle else {
@@ -189,6 +194,7 @@ fn show_ghost(
             view.sync_entries_from_shared();
             view.reset_for_show();
             view.set_window_origin(placement.bounds.origin);
+            view.set_window_sizes(user, native);
             view.store.ensure_filtered(
                 view.state.query.text(),
                 view.state.mode,
@@ -201,7 +207,7 @@ fn show_ghost(
                 &title,
                 window,
                 placement.bounds.origin,
-                full_window_size(),
+                native,
                 monitor_snapshot.map(monitor::ActiveMonitor::scale),
             );
             super::platform::show_topmost_window(&title, &all_titles);
@@ -227,12 +233,14 @@ fn create_and_show_ghost(
     cx: &mut App,
 ) {
     let _reason = qol_gpui::popup_window::reason_scope("create");
-    let placement = launcher_placement(monitor_snapshot, cx);
+    let user = window_memory::user_size(monitor_snapshot);
+    let native = native_size(user, flow.is_some());
+    let placement = launcher_placement(monitor_snapshot, native, cx);
     let target = placement.target;
     let title = qol_gpui::ghost::ghost_window_title(LAUNCHER_WINDOW_TITLE, target);
 
     mark_non_target_hidden(&active, target, cx);
-    let Some(handle) = open_visible_ghost(cx, entries, &placement, &title) else {
+    let Some(handle) = open_visible_ghost(cx, entries, &placement, native, &title) else {
         log::warn!("open failed");
         return;
     };
@@ -243,6 +251,7 @@ fn create_and_show_ghost(
     popup_window::join_all_spaces(&title);
     let _ = handle.update(cx, |view, window, cx| {
         view.set_showing(true);
+        view.set_window_sizes(user, native);
         if let Some(plugin_id) = flow {
             view.open_flow_for(plugin_id, cx);
         }
@@ -263,18 +272,21 @@ fn open_hidden_ghost(
 ) -> Option<WindowHandle<LauncherView>> {
     let title = title.to_string();
     let handle = cx
-        .open_window(ghost_window_options(placement, false), {
-            let title = title.clone();
-            let origin = placement.bounds.origin;
-            move |window, cx| {
-                window.set_window_title(&title);
-                cx.new(move |cx| {
-                    let mut view = LauncherView::new(title.clone(), entries, cx);
-                    view.set_window_origin(origin);
-                    view
-                })
-            }
-        })
+        .open_window(
+            ghost_window_options(placement, full_window_size(), false),
+            {
+                let title = title.clone();
+                let origin = placement.bounds.origin;
+                move |window, cx| {
+                    window.set_window_title(&title);
+                    cx.new(move |cx| {
+                        let mut view = LauncherView::new(title.clone(), entries, cx);
+                        view.set_window_origin(origin);
+                        view
+                    })
+                }
+            },
+        )
         .ok()?;
     qol_gpui::ghost::hide_invisible(&title);
     Some(handle)
@@ -284,13 +296,14 @@ fn open_visible_ghost(
     cx: &mut App,
     entries: SharedEntries,
     placement: &WindowPlacement,
+    native: Size<Pixels>,
     title: &str,
 ) -> Option<WindowHandle<LauncherView>> {
     let title = title.to_string();
     let origin = placement.bounds.origin;
     open_window_with_focus(
         cx,
-        ghost_window_options(placement, true),
+        ghost_window_options(placement, native, true),
         move |window, cx| {
             window.set_window_title(&title);
             let mut view = LauncherView::new(title.clone(), entries, cx);
@@ -301,15 +314,20 @@ fn open_visible_ghost(
     .ok()
 }
 
-fn ghost_window_options(placement: &WindowPlacement, focus: bool) -> WindowOptions {
+fn ghost_window_options(
+    placement: &WindowPlacement,
+    native: Size<Pixels>,
+    focus: bool,
+) -> WindowOptions {
     let bounds = Bounds {
         origin: placement.bounds.origin,
-        size: full_window_size(),
+        size: native,
     };
     PopupWindowOptions::new()
         .bounds(bounds)
         .display_id(placement.display_id)
         .focus(focus)
+        .min_size(window_memory::min_size())
         .app_id(LAUNCHER_APP_ID)
         .build()
 }

@@ -611,7 +611,10 @@ impl X11Client {
 
             for window in windows_to_refresh.into_iter() {
                 let mut state = self.0.borrow_mut();
-                if let Some(window) = state.windows.get_mut(&window) {
+                if let Some(window) = state.windows.values_mut().find(|reference| {
+                    reference.window.x_window == window
+                        || reference.window.state.borrow().render_window == Some(window)
+                }) {
                     window.expose_event_received = true;
                 }
             }
@@ -778,8 +781,11 @@ impl X11Client {
                     }
                     state = self.0.borrow_mut();
                 } else if atom == state.atoms._NET_WM_SYNC_REQUEST {
-                    window.state.borrow_mut().last_sync_counter =
-                        Some(x11rb::protocol::sync::Int64 {
+                    window
+                        .state
+                        .borrow_mut()
+                        .sync
+                        .request(x11rb::protocol::sync::Int64 {
                             lo: arg2,
                             hi: arg3 as i32,
                         })
@@ -1083,6 +1089,8 @@ impl X11Client {
             }
             Event::XinputButtonPress(event) => {
                 let window = self.get_window(event.event)?;
+                window.state.borrow_mut().press_root =
+                    Some((event.root_x >> 16, event.root_y >> 16));
                 let mut state = self.0.borrow_mut();
 
                 let modifiers = modifiers_from_xinput_info(event.mods);
@@ -1160,6 +1168,7 @@ impl X11Client {
             }
             Event::XinputButtonRelease(event) => {
                 let window = self.get_window(event.event)?;
+                window.state.borrow_mut().press_root = None;
                 let mut state = self.0.borrow_mut();
                 let modifiers = modifiers_from_xinput_info(event.mods);
                 state.modifiers = modifiers;

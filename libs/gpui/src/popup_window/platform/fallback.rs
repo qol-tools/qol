@@ -32,6 +32,10 @@ impl WindowGeometrySession {
         false
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
     }
@@ -41,6 +45,10 @@ impl WindowGeometrySession {
     }
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        None
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
         None
     }
 
@@ -143,6 +151,10 @@ pub fn park_window_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn compositor_active() -> bool {
+    false
+}
+
 pub fn prepare_window_reveal_by_title(_title: &str) -> bool {
     false
 }
@@ -195,10 +207,6 @@ pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
     true
 }
 
-pub fn set_window_fixed_size_by_title(_title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
-    false
-}
-
 pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }
@@ -215,7 +223,7 @@ pub fn set_window_type_dock_by_title(_title: &str) -> bool {
     false
 }
 
-pub fn configure_overlay_window(_title: &str) -> bool {
+pub fn configure_overlay_window(_title: &str, _resizable: bool) -> bool {
     false
 }
 

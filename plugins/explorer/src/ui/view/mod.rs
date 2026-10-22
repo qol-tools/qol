@@ -26,19 +26,25 @@ use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
+use crate::config::{ConfigSaver, ExplorerConfig, ViewSize};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
-use grid::{Layout, Stop};
+use grid::Layout;
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
 pub const WINDOW_HEIGHT: f32 = 640.0;
+pub const MIN_WIDTH: f32 = 640.0;
+pub const MIN_HEIGHT: f32 = 400.0;
 
 const BAND: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 const HEAD: f32 = qol_gpui::theme::HEIGHT_INLINE;
 const RAIL: f32 = 200.0;
+const RAIL_MIN: f32 = 168.0;
+const RAIL_MAX: f32 = 264.0;
+const RAIL_GROWTH: f32 = 8.0;
 const ICON: f32 = 16.0;
 const PUMP: Duration = Duration::from_millis(16);
 const DRAG_THRESHOLD: f32 = 4.0;
@@ -53,7 +59,8 @@ pub struct ExplorerView {
     focus_handle: FocusHandle,
     frame_height: f32,
     list_width: f32,
-    stop: Stop,
+    rail_width: f32,
+    stop: ViewSize,
     wheeled: f32,
     slider_hovered: bool,
     slider_dragging: bool,
@@ -63,18 +70,20 @@ pub struct ExplorerView {
     dismisser: SurfaceDismisser,
     wake_at: Option<Instant>,
     folds_open: bool,
+    saver: ConfigSaver,
 }
 
 impl ExplorerView {
     pub fn new(
         start: PathBuf,
         home: PathBuf,
+        config: ExplorerConfig,
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
-            browser: Browser::new(start, home),
+            browser: Browser::new(start, home, config.show_hidden),
             places: places::places(),
             devices: places::devices(),
             scroll: UniformListScrollHandle::new(),
@@ -82,7 +91,8 @@ impl ExplorerView {
             focus_handle: cx.focus_handle(),
             frame_height: 0.0,
             list_width: 0.0,
-            stop: Stop::default(),
+            rail_width: RAIL,
+            stop: config.view_size,
             wheeled: 0.0,
             slider_hovered: false,
             slider_dragging: false,
@@ -92,6 +102,7 @@ impl ExplorerView {
             dismisser,
             wake_at: None,
             folds_open: false,
+            saver: ConfigSaver::start(),
         };
         view.listen(cx);
         view
@@ -189,11 +200,12 @@ impl ExplorerView {
         ((self.list_height() / self.layout().pitch) as usize).max(1)
     }
 
-    fn resize(&mut self, stop: Stop) -> bool {
+    fn resize(&mut self, stop: ViewSize) -> bool {
         if stop == self.stop {
             return false;
         }
         self.stop = stop;
+        self.saver.save("view_size", stop);
         self.reveal_cursor();
         true
     }
@@ -354,7 +366,11 @@ impl ExplorerView {
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
             Action::Unpick => self.browser.dismiss(),
-            Action::ToggleHidden => self.revealed(Browser::toggle_hidden),
+            Action::ToggleHidden => {
+                let changed = self.revealed(Browser::toggle_hidden);
+                self.saver.save("show_hidden", self.browser.shows_hidden());
+                changed
+            }
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),
@@ -500,7 +516,7 @@ impl ExplorerView {
         let changed = match self.browser.row_of(path) {
             None => false,
             Some(row) => match click {
-                Click::Cursor => self.browser.place_cursor(row, scroll),
+                Click::Cursor => self.browser.click_to(row, scroll),
                 Click::Range => self.browser.range_to(row),
                 Click::AddPick => self.browser.add_pick(row),
                 Click::Open => {
@@ -515,6 +531,10 @@ impl ExplorerView {
     }
 }
 
+fn rail_width(window_width: f32) -> f32 {
+    (RAIL + (window_width - WINDOW_WIDTH) / RAIL_GROWTH).clamp(RAIL_MIN, RAIL_MAX)
+}
+
 impl Focusable for ExplorerView {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
@@ -525,7 +545,9 @@ impl Render for ExplorerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewport = window.viewport_size();
         self.frame_height = f32::from(viewport.height) - 2.0 * LINE - BAND;
-        self.list_width = f32::from(viewport.width) - 2.0 * LINE - RAIL;
+        let inner_width = f32::from(viewport.width) - 2.0 * LINE;
+        self.rail_width = rail_width(f32::from(viewport.width));
+        self.list_width = inner_width - self.rail_width;
         self.follow_title(window);
         let kit = kit();
         kit.window()
@@ -543,5 +565,25 @@ impl Render for ExplorerView {
                     .child(rail::render(self, cx))
                     .child(list::render(self, cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rail_width, MIN_WIDTH, RAIL, RAIL_MAX, RAIL_MIN, WINDOW_WIDTH};
+
+    #[test]
+    fn the_rail_keeps_its_width_at_the_opening_size_and_follows_the_window() {
+        let cases = [
+            (WINDOW_WIDTH, RAIL),
+            (MIN_WIDTH, RAIL_MIN),
+            (800.0, 170.0),
+            (1280.0, 230.0),
+            (1920.0, RAIL_MAX),
+            (3840.0, RAIL_MAX),
+        ];
+        for (window, rail) in cases {
+            assert_eq!(rail_width(window), rail, "{window}");
+        }
     }
 }

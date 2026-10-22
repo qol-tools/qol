@@ -111,6 +111,7 @@ pub struct WaylandWindowState {
     hovered: bool,
     in_progress_configure: Option<InProgressConfigure>,
     resize_throttle: bool,
+    live_resizing: bool,
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
@@ -152,6 +153,7 @@ impl WaylandWindowState {
                     height: options.bounds.size.height.0 as u32,
                     depth: 1,
                 },
+                content_size: None,
                 transparent: true,
             };
             BladeRenderer::new(gpu_context, &raw_window, config)?
@@ -181,6 +183,7 @@ impl WaylandWindowState {
             window_bounds: options.bounds,
             in_progress_configure: None,
             resize_throttle: false,
+            live_resizing: false,
             client,
             appearance,
             handle,
@@ -387,6 +390,7 @@ impl WaylandWindowStatePtr {
                     state.fullscreen = configure.fullscreen;
                     state.maximized = configure.maximized;
                     state.tiling = configure.tiling;
+                    state.live_resizing = configure.resizing;
                     // Limit interactive resizes to once per vblank
                     if configure.resizing && state.resize_throttle {
                         return;
@@ -938,6 +942,16 @@ impl PlatformWindow for WaylandWindow {
 
     fn set_title(&mut self, title: &str) {
         self.borrow().toplevel.set_title(title.to_string());
+    }
+
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        self.borrow()
+            .toplevel
+            .set_min_size(size.width.0 as i32, size.height.0 as i32);
+    }
+
+    fn is_live_resizing(&self) -> bool {
+        self.borrow().live_resizing
     }
 
     fn set_app_id(&mut self, app_id: &str) {

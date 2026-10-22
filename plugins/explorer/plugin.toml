@@ -8,12 +8,22 @@ version = "0.7.0"
 author = "KMRH47"
 platforms = ["linux"]
 
+[config.scope]
+view_size = "core"
+show_hidden = "core"
+
 [runtime]
 command = "qol-explorer"
 
 [action.open]
 label = "Open Explorer"
 args = ["open"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
 
 [capabilities]
 doctor = true

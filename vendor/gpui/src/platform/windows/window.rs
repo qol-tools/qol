@@ -54,6 +54,7 @@ pub struct WindowsWindowState {
     pub click_state: ClickState,
     pub current_cursor: Option<HCURSOR>,
     pub nc_button_pressed: Option<u32>,
+    pub in_size_move: bool,
 
     pub display: WindowsDisplay,
     fullscreen: Option<StyleAndBounds>,
@@ -119,6 +120,7 @@ impl WindowsWindowState {
         let hovered = false;
         let click_state = ClickState::new();
         let nc_button_pressed = None;
+        let in_size_move = false;
         let fullscreen = None;
         let initial_placement = None;
 
@@ -143,6 +145,7 @@ impl WindowsWindowState {
             click_state,
             current_cursor,
             nc_button_pressed,
+            in_size_move,
             display,
             fullscreen,
             initial_placement,
@@ -573,6 +576,14 @@ impl PlatformWindow for WindowsWindow {
     /// whether the mouse collides with other elements of GPUI).
     fn content_size(&self) -> Size<Pixels> {
         self.0.state.borrow().content_size()
+    }
+
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        self.0.state.borrow_mut().min_size = Some(size);
+    }
+
+    fn is_live_resizing(&self) -> bool {
+        self.0.state.borrow().in_size_move
     }
 
     fn resize(&mut self, size: Size<Pixels>) {

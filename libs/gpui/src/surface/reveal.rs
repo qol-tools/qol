@@ -66,16 +66,35 @@ pub struct FreshFrame {
     expected_viewport: Rc<Cell<Size<Pixels>>>,
     required_layout_epoch: u64,
     required_render_epoch: u64,
+    accepts_granted_viewport: bool,
     request_frame: Box<dyn Fn(&mut App) -> bool>,
     _bounds_subscription: Subscription,
 }
 
 impl FreshFrame {
+    pub(crate) fn accepting_granted_viewport(mut self) -> Self {
+        self.accepts_granted_viewport = true;
+        self
+    }
+
     fn request(&self, cx: &mut App) -> bool {
         (self.request_frame)(cx)
     }
 
+    fn adopt_granted_viewport(&self) {
+        if let Some(granted) = granted_viewport(
+            self.cells.layout_epoch.get(),
+            self.required_layout_epoch,
+            self.cells.observed_viewport.get(),
+        ) {
+            self.expected_viewport.set(granted);
+        }
+    }
+
     fn snapshot(&self) -> RevealProof {
+        if self.accepts_granted_viewport {
+            self.adopt_granted_viewport();
+        }
         RevealProof {
             layout_confirmed: self.layout_confirmed(),
             viewport_ready: self.viewport_ready(),
@@ -161,6 +180,7 @@ pub fn schedule_fresh_frame_in<V: Render + 'static>(
     let fresh_frame = FreshFrame {
         required_layout_epoch: Platform::required_layout_epoch(cells.layout_epoch.get()),
         required_render_epoch: cells.render_epoch.get().wrapping_add(1),
+        accepts_granted_viewport: false,
         cells,
         expected_viewport,
         request_frame: Box::new(move |cx: &mut App| {
@@ -262,6 +282,16 @@ pub async fn await_reveal_readiness(
     }
 }
 
+fn granted_viewport(
+    layout_epoch: u64,
+    required_layout_epoch: u64,
+    observed: Size<Pixels>,
+) -> Option<Size<Pixels>> {
+    let observed_since_scheduling = layout_epoch > 0 && layout_epoch >= required_layout_epoch;
+    let drawable = observed.width > px(0.0) && observed.height > px(0.0);
+    (observed_since_scheduling && drawable).then_some(observed)
+}
+
 fn request_frame_in<V: Render + 'static>(
     window: &mut Window,
     cx: &mut Context<V>,
@@ -300,4 +330,35 @@ fn reposition_reveal_window(
         },
         |session| session.reposition(origin.x.to_f64() as i32, origin.y.to_f64() as i32),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::granted_viewport;
+    use gpui::{px, size};
+
+    #[test]
+    fn a_resizable_reveal_takes_the_size_the_window_manager_granted() {
+        let granted = size(px(900.0), px(640.0));
+        let cases = [
+            (0, 0, granted, None, "no bounds event since scheduling"),
+            (
+                1,
+                2,
+                granted,
+                None,
+                "only a bounds event older than the request",
+            ),
+            (2, 2, granted, Some(granted), "a fresh bounds event"),
+            (3, 1, granted, Some(granted), "a later bounds event"),
+            (2, 1, size(px(0.0), px(640.0)), None, "an empty viewport"),
+        ];
+        for (epoch, required, observed, expected, note) in cases {
+            assert_eq!(
+                granted_viewport(epoch, required, observed),
+                expected,
+                "{note}"
+            );
+        }
+    }
 }

@@ -9,6 +9,7 @@ use crate::nav::path;
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPEN_COMMAND: &str = "open";
+const SETTINGS_COMMAND: &str = "settings";
 const SUPPORTED: [Os; 1] = [Os::Linux];
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
@@ -60,6 +61,18 @@ where
                     Ok(CommandResult::success(""))
                 }),
         )
+        .command(
+            Command::new(SETTINGS_COMMAND)
+                .about("Open the Explorer settings page in qol-tray.")
+                .usage(format!("{PLUGIN_ID} {SETTINGS_COMMAND}"))
+                .output("No stdout on success.")
+                .exit_behavior("Exits non-zero if qol-tray cannot open the settings page.")
+                .run_result(|_| {
+                    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
+                        .context("failed to open the Explorer settings")?;
+                    Ok(CommandResult::success(""))
+                }),
+        )
         .doctor_checks(doctor_checks())
 }
 
@@ -76,15 +89,24 @@ fn doctor_checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             "config_readable",
-            "Verify the plugin can run without persistent config.",
-            || {
-                Ok(DoctorCheckResult::ok(
-                    "config_readable",
-                    "No persistent config is required.",
-                ))
-            },
+            "Read and validate the Explorer view settings without changing them.",
+            || Ok(config_readable_result()),
         ),
     ]
+}
+
+fn config_readable_result() -> DoctorCheckResult {
+    match crate::config::inspect() {
+        Ok(inspection) => DoctorCheckResult::ok(
+            "config_readable",
+            inspection.source.map_or_else(
+                || "No saved view settings; Explorer opens with the defaults.".to_string(),
+                |path| format!("View settings at {} are valid.", path.display()),
+            ),
+        ),
+        Err(error) => DoctorCheckResult::fail("config_readable", error.to_string())
+            .with_fix("Change the view settings on Explorer's settings page to rewrite them."),
+    }
 }
 
 fn platform_supported_result(os: Option<Os>) -> DoctorCheckResult {

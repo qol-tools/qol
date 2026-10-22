@@ -22,7 +22,7 @@ use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
 use crate::ui::placement::{Corner, CORNER_MARGIN};
-use crate::ui::{trace, SessionsView, WINDOW_TITLE};
+use crate::ui::{collapse, trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 
@@ -177,6 +177,7 @@ fn open_panel(
         .title(WINDOW_TITLE)
         .app_id(APP_ID)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .min_size(collapse::unfolded_min_size())
         .placement(qol_gpui::placement::MonitorPlacement::corner(
             corner,
             CORNER_MARGIN,
@@ -524,6 +525,14 @@ fn next_attention_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_minimum_fits_inside_the_designed_opening_size() {
+        let min_size = collapse::unfolded_min_size();
+        assert!(min_size.width <= px(WINDOW_WIDTH));
+        assert!(min_size.height <= px(WINDOW_HEIGHT));
+        assert!(min_size.height > px(collapse::STRIP_HEIGHT));
+    }
 
     #[test]
     fn open_action_expands_only_a_collapsed_panel() {

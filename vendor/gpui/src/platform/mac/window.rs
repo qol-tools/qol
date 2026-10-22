@@ -582,6 +582,7 @@ impl MacWindow {
             display_id,
             window_min_size,
             tabbing_identifier,
+            ..
         }: WindowParams,
         executor: ForegroundExecutor,
         renderer_context: renderer::Context,
@@ -980,6 +981,21 @@ impl PlatformWindow for MacWindow {
                 }
             })
             .detach();
+    }
+
+    fn set_window_min_size(&self, size: Size<Pixels>) {
+        unsafe {
+            self.0.lock().native_window.setContentMinSize_(NSSize {
+                width: size.width.to_f64(),
+                height: size.height.to_f64(),
+            });
+        }
+    }
+
+    fn is_live_resizing(&self) -> bool {
+        let native_window = self.0.lock().native_window;
+        let live: BOOL = unsafe { msg_send![native_window, inLiveResize] };
+        live == YES
     }
 
     fn merge_all_windows(&self) {

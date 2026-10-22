@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use qol_conventions::api_routes;
 use qol_runtime::local_http::{Client, Method, Session};
 
 #[derive(serde::Deserialize)]
@@ -23,17 +24,13 @@ pub(super) fn panel_base(plugin_id: &str) -> String {
     } else if let Some(page) = plugin_id.strip_prefix(qol_conventions::CORE_PAGE_PREFIX) {
         format!("/api/core/{page}")
     } else {
-        format!("/api/plugins/{plugin_id}")
+        api_routes::plugin_base(plugin_id)
     }
 }
 
 pub(super) fn keeps_a_config_file(plugin_id: &str) -> bool {
     plugin_id != qol_conventions::CORE_PANEL_ID
         && !plugin_id.starts_with(qol_conventions::CORE_PAGE_PREFIX)
-}
-
-fn tray_config_route(base: &str) -> String {
-    format!("{base}/config")
 }
 
 pub(super) fn query(base: &str, query: &str) -> Result<serde_json::Value, String> {
@@ -117,7 +114,7 @@ pub(super) fn daemon_port(base: &str) -> Option<u16> {
 }
 
 pub(super) fn load_values(base: &str, path: Option<&Path>) -> serde_json::Value {
-    if let Ok((200, body)) = tray_http(Method::Get, &tray_config_route(base), None) {
+    if let Ok((200, body)) = tray_http(Method::Get, &api_routes::config_route(base), None) {
         if let Ok(values) = serde_json::from_str(&body) {
             return values;
         }
@@ -139,7 +136,7 @@ pub(super) fn save_values(
             return Err(format!("settings serialize failed: {error:#}"));
         }
     };
-    let tray_error = match tray_http(Method::Put, &tray_config_route(base), Some(&body)) {
+    let tray_error = match tray_http(Method::Put, &api_routes::config_route(base), Some(&body)) {
         Ok((200, _)) => {
             qol_runtime::probe!(
                 "SETTINGS_PERSIST",

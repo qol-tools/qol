@@ -397,6 +397,10 @@ impl WindowGeometrySession {
         reposition_window_by_title(&self.title, f64::from(x), f64::from(y))
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        None
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         None
     }
@@ -406,6 +410,10 @@ impl WindowGeometrySession {
     }
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
+        None
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
         None
     }
 
@@ -714,6 +722,10 @@ pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }
 
+pub fn compositor_active() -> bool {
+    true
+}
+
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
@@ -910,16 +922,6 @@ enum WindowPresentation {
     Overlay,
     Notice,
     Normal,
-}
-
-pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
-    let Some(window) = resolve_window(title) else {
-        return false;
-    };
-    let size = NSSize::new(size.width.to_f64(), size.height.to_f64());
-    window.setContentMinSize(size);
-    window.setContentMaxSize(size);
-    true
 }
 
 fn show_window_by_title_with_focus(
@@ -1256,7 +1258,7 @@ pub fn join_all_spaces(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
     if !configure_popup_window(title) {
         return false;
     }

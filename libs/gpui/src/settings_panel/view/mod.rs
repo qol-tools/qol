@@ -4863,6 +4863,9 @@ impl SettingsPanelView {
                     body_bounds.get(),
                     page_scroll.as_ref().map(ScrollHandle::bounds)
                 );
+                if dismisser.user_sized() {
+                    return;
+                }
                 let current = window.viewport_size().height.to_f64() as f32;
                 if (target - current).abs() <= 1.0 {
                     return;

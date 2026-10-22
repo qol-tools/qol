@@ -22,6 +22,7 @@ fn state(key: &str, open: bool, owner_pid: u32, reopen: Option<Reopen>) -> Windo
         owner_pid,
         default_placement: "Center:24".into(),
         reopen,
+        user_sized: false,
     }
 }
 

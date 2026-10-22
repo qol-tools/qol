@@ -16,10 +16,10 @@ use super::details::Want;
 use super::feedback::{self, Copied, Cue, Feedback, Placed};
 use super::files::{self, FileCard, Panel};
 use super::layout::{
-    content_width, header_window_height, list_gap, window_height_for, window_height_for_detail,
-    window_height_for_preview, window_height_for_trail, window_height_with_panel, APP_CARD_MIN,
-    APP_GAP, FILES_PANEL_MIN, FILE_CARD_MAX, FILE_INSET, FLOW_ROW_HEIGHT, HEADER_HEIGHT,
-    LIST_PAD_Y, PANEL_GAP, WINDOW_WIDTH,
+    content_width, header_window_height, list_gap, rows_that_fit, window_height_for,
+    window_height_for_detail, window_height_for_preview, window_height_for_trail,
+    window_height_with_panel, APP_CARD_MIN, APP_GAP, FILES_PANEL_MIN, FILE_CARD_MAX, FILE_INSET,
+    FLOW_ROW_HEIGHT, HEADER_HEIGHT, LIST_PAD_Y, PANEL_GAP, WINDOW_WIDTH,
 };
 use super::sizing;
 use super::state::PanelItem;
@@ -154,6 +154,11 @@ impl Render for LauncherView {
         let t0 = std::time::Instant::now();
         let now = Instant::now();
         let flow_active = self.state.flow.is_some();
+        self.reconcile_native_size(window, cx);
+        let sized = self.sized_card(window);
+        if let Some((_, height)) = sized {
+            self.state.scroll_list.max_visible = rows_that_fit(height, self.state.mode);
+        }
         if !flow_active {
             self.store.ensure_filtered(
                 self.state.query.text(),
@@ -195,7 +200,10 @@ impl Render for LauncherView {
         if flow_preview {
             self.request_flow_detail(cx);
         }
-        let width = content_width(flow_active && !flow_preview);
+        let width = sized.map_or_else(
+            || content_width(flow_active && !flow_preview),
+            |(width, _)| width,
+        );
         #[cfg(debug_assertions)]
         let t1 = std::time::Instant::now();
         let VisibleRows {
@@ -240,6 +248,8 @@ impl Render for LauncherView {
             } else {
                 window_height_for(0, FLOW_ROW_HEIGHT)
             }
+        } else if let Some((_, height)) = sized {
+            height
         } else {
             self.transitions.value(
                 WINDOW_KEY,
@@ -256,7 +266,7 @@ impl Render for LauncherView {
         if self.transitions.moving(now) {
             window.request_animation_frame();
         }
-        let target_height = match self.menu_kind {
+        let target_height = match self.menu_kind.filter(|_| sized.is_none()) {
             Some(super::menu::MenuKind::Help) => {
                 content_height.max(HEADER_HEIGHT + self.menu_height())
             }
@@ -265,7 +275,9 @@ impl Render for LauncherView {
             }
             None => content_height,
         };
-        self.sync_input_region(width, target_height, window);
+        let frame_width = self.native_width(window);
+        self.sync_input_region(frame_width, width, target_height, window);
+        self.sizing.drawn(target_height);
         let results_height = content_height
             - header_window_height()
             - if flow_active && !flow_preview {
@@ -344,6 +356,11 @@ impl Render for LauncherView {
                     }
                     this.handle_key(event, window, cx);
                 }))
+                .when(!flow_active, |root| {
+                    root.capture_any_mouse_down(cx.listener(
+                        |this, _: &MouseDownEvent, window, cx| this.note_press(window, cx),
+                    ))
+                })
                 .child(view::search_bar(
                     &self.state.query,
                     self.state.launch_error.as_deref(),
@@ -468,10 +485,11 @@ impl Render for LauncherView {
                         view::hint_bar_flow(flow_entry.as_ref().expect("active flow has an entry"))
                     })
                 })
-                .when_some(menu, |root, menu| root.child(menu));
+                .when_some(menu, |root, menu| root.child(menu))
+                .when(!flow_active, |root| root.child(self.sizing.zones()));
         div()
             .id("launcher-frame")
-            .w(px(WINDOW_WIDTH))
+            .w(px(frame_width))
             .flex()
             .justify_center()
             .child(launcher)

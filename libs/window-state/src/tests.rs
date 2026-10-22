@@ -49,6 +49,7 @@ fn saved(monitor: MonitorRef, bounds_on_monitor: WindowRect) -> WindowState {
         reopen: Some(Reopen::Settings {
             page: Some("__core-updates".into()),
         }),
+        user_sized: false,
     }
 }
 
@@ -283,4 +284,16 @@ fn reopen_serialises_with_a_kind_tag() {
         json,
         serde_json::json!({"kind": "plugin_action", "plugin": "qol-cli-sessions", "action": "open"})
     );
+}
+
+#[test]
+fn a_state_saved_before_user_sizing_existed_loads_as_not_user_sized() {
+    let mut json = serde_json::to_value(saved(
+        reference("left", "DP-1", area(0.0, 0.0, 1920.0, 1080.0)),
+        rect(80.0, 100.0, 400.0, 300.0),
+    ))
+    .unwrap();
+    json.as_object_mut().unwrap().remove("user_sized");
+    let state: WindowState = serde_json::from_value(json).unwrap();
+    assert!(!state.user_sized);
 }

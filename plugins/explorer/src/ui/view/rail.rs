@@ -11,7 +11,7 @@ use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{TextStyle, HEIGHT_CONTROL, SPACE_GUTTER, SPACE_INSET};
 
 use super::pictogram::{rail_pictogram, RailGlyph};
-use super::{ExplorerView, RAIL};
+use super::ExplorerView;
 use crate::places::PlaceKind;
 use crate::ui::trail;
 
@@ -63,7 +63,7 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
     };
     div()
         .flex_none()
-        .w(px(RAIL))
+        .w(px(view.rail_width))
         .h_full()
         .relative()
         .bg(rgb(kit.grounds.rail.bg))

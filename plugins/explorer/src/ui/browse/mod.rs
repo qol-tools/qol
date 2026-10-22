@@ -87,7 +87,7 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn new(start: PathBuf, home: PathBuf) -> Self {
+    pub fn new(start: PathBuf, home: PathBuf, show_hidden: bool) -> Self {
         let (wake, wakes) = mpsc::unbounded();
         let mut browser = Self {
             home,
@@ -98,7 +98,7 @@ impl Browser {
             cursor: 0,
             picks: Picks::new(),
             jump: Jump::new(),
-            show_hidden: false,
+            show_hidden,
             arriving: None,
             progressed_at: Instant::now(),
             landing: None,
@@ -375,6 +375,12 @@ impl Browser {
             return false;
         }
         self.range_to(self.stepped(step, page, columns))
+    }
+
+    pub fn click_to(&mut self, row: usize, scroll: f32) -> bool {
+        let had_picks = !self.picks.is_empty();
+        self.picks.clear();
+        self.place_cursor(row, scroll) || had_picks
     }
 
     pub fn range_to(&mut self, row: usize) -> bool {

@@ -8,23 +8,14 @@ use qol_gpui::theme::{
 };
 
 use super::pictogram::PictogramSize;
+use crate::config::ViewSize;
 use crate::ui::keys::Resize;
 
 pub(super) const ACROSS: f32 = SPACE_INSET + SPACE_STACK;
 const ICONS_CELL: (f32, f32) = (120.0, 96.0);
 const BIG_ICONS_CELL: (f32, f32) = (152.0, 136.0);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub(super) enum Stop {
-    Compact,
-    #[default]
-    List,
-    Roomy,
-    Icons,
-    BigIcons,
-}
-
-impl Stop {
+impl ViewSize {
     pub(super) const ALL: [Self; 5] = [
         Self::Compact,
         Self::List,
@@ -107,13 +98,13 @@ impl Stop {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) struct Layout {
-    pub(super) stop: Stop,
+    pub(super) stop: ViewSize,
     pub(super) columns: usize,
     pub(super) pitch: f32,
 }
 
 impl Layout {
-    pub(super) fn new(stop: Stop, width: f32) -> Self {
+    pub(super) fn new(stop: ViewSize, width: f32) -> Self {
         let columns = stop.cell().map_or(1, |(cell, _)| {
             let room = width - 2.0 * SPACE_GUTTER + ACROSS;
             (room / (cell + ACROSS)).floor().max(1.0) as usize
@@ -163,17 +154,18 @@ impl Layout {
 
 #[cfg(test)]
 mod tests {
-    use super::{Layout, Stop};
+    use super::Layout;
+    use crate::config::ViewSize;
     use crate::ui::keys::Resize;
 
     #[test]
     fn stops_step_one_at_a_time_and_clamp_at_both_ends() {
         let bigger = [
-            (Stop::Compact, Stop::List),
-            (Stop::List, Stop::Roomy),
-            (Stop::Roomy, Stop::Icons),
-            (Stop::Icons, Stop::BigIcons),
-            (Stop::BigIcons, Stop::BigIcons),
+            (ViewSize::Compact, ViewSize::List),
+            (ViewSize::List, ViewSize::Roomy),
+            (ViewSize::Roomy, ViewSize::Icons),
+            (ViewSize::Icons, ViewSize::BigIcons),
+            (ViewSize::BigIcons, ViewSize::BigIcons),
         ];
         for (from, to) in bigger {
             assert_eq!(from.resized(Resize::Bigger), to, "{from:?}");
@@ -183,27 +175,30 @@ mod tests {
                 "{to:?}"
             );
         }
-        assert_eq!(Stop::Compact.resized(Resize::Smaller), Stop::Compact);
-        assert_eq!(Stop::default(), Stop::List);
+        assert_eq!(
+            ViewSize::Compact.resized(Resize::Smaller),
+            ViewSize::Compact
+        );
+        assert_eq!(ViewSize::default(), ViewSize::List);
     }
 
     #[test]
     fn picking_a_stop_lands_on_it_and_past_the_last_clamps() {
-        for (index, stop) in Stop::ALL.into_iter().enumerate() {
-            assert_eq!(Stop::Roomy.resized(Resize::To(index)), stop);
+        for (index, stop) in ViewSize::ALL.into_iter().enumerate() {
+            assert_eq!(ViewSize::Roomy.resized(Resize::To(index)), stop);
             assert_eq!(stop.index(), index);
         }
-        assert_eq!(Stop::List.resized(Resize::To(9)), Stop::BigIcons);
+        assert_eq!(ViewSize::List.resized(Resize::To(9)), ViewSize::BigIcons);
     }
 
     #[test]
     fn every_stop_has_its_name_shape_and_header() {
         let cases = [
-            (Stop::Compact, "compact", false, true, 28.0),
-            (Stop::List, "list", false, true, 36.0),
-            (Stop::Roomy, "roomy", false, false, 52.0),
-            (Stop::Icons, "icons", true, false, 104.0),
-            (Stop::BigIcons, "big icons", true, false, 144.0),
+            (ViewSize::Compact, "compact", false, true, 28.0),
+            (ViewSize::List, "list", false, true, 36.0),
+            (ViewSize::Roomy, "roomy", false, false, 52.0),
+            (ViewSize::Icons, "icons", true, false, 104.0),
+            (ViewSize::BigIcons, "big icons", true, false, 144.0),
         ];
         for (stop, name, grid, header, pitch) in cases {
             assert_eq!(stop.name(), name);
@@ -216,12 +211,12 @@ mod tests {
     #[test]
     fn grid_columns_fit_the_list_width() {
         let cases = [
-            (Stop::List, 838.0, 1),
-            (Stop::Icons, 838.0, 6),
-            (Stop::BigIcons, 838.0, 4),
-            (Stop::BigIcons, 840.0, 5),
-            (Stop::Icons, 100.0, 1),
-            (Stop::BigIcons, 0.0, 1),
+            (ViewSize::List, 838.0, 1),
+            (ViewSize::Icons, 838.0, 6),
+            (ViewSize::BigIcons, 838.0, 4),
+            (ViewSize::BigIcons, 840.0, 5),
+            (ViewSize::Icons, 100.0, 1),
+            (ViewSize::BigIcons, 0.0, 1),
         ];
         for (stop, width, columns) in cases {
             assert_eq!(
@@ -234,7 +229,7 @@ mod tests {
 
     #[test]
     fn lines_cover_every_entry_and_map_back_to_their_entries() {
-        let layout = Layout::new(Stop::Icons, 838.0);
+        let layout = Layout::new(ViewSize::Icons, 838.0);
         assert_eq!(layout.lines(0), 0);
         assert_eq!(layout.lines(6), 1);
         assert_eq!(layout.lines(7), 2);
@@ -251,14 +246,14 @@ mod tests {
         let total = 200;
         let height = 552.0;
         let cursor = 120;
-        let list = Layout::new(Stop::List, 838.0);
+        let list = Layout::new(ViewSize::List, 838.0);
         let scroll = list.revealed(cursor, 0.0, height, total);
         let shown = |layout: Layout, scroll: f32| {
             let top = layout.top(cursor);
             top >= scroll && top + layout.pitch <= scroll + height
         };
         assert!(shown(list, scroll));
-        for stop in Stop::ALL {
+        for stop in ViewSize::ALL {
             let layout = Layout::new(stop, 838.0);
             let followed = layout.revealed(cursor, scroll, height, total);
             assert!(shown(layout, followed), "{stop:?} {followed}");

@@ -5,11 +5,11 @@ use std::sync::mpsc;
 use gpui::{px, size, App, Application};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind};
+use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind, WindowMemory};
 
 use crate::cli::PLUGIN_ID;
 use crate::daemon::actions::{self, Command};
-use crate::ui::{RemoveAppView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use crate::ui::{RemoveAppView, MIN_WINDOW_HEIGHT, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 
 type SharedPanel = Rc<RefCell<OpenedSurface<RemoveAppView>>>;
 
@@ -48,6 +48,10 @@ fn open_window(
     Surface::new(SurfaceKind::Panel)
         .title(WINDOW_TITLE)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .min_size(size(px(WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT)))
+        .remember(WindowMemory::reopened_by_action(
+            PLUGIN_ID, PLUGIN_ID, "open",
+        ))
         .show_focused(tracker, cx, move |_dismisser, _window, cx| {
             RemoveAppView::new(cx)
         })

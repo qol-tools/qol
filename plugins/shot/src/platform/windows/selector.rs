@@ -109,7 +109,7 @@ fn open_selectors(
     }
     cx.defer(move |_| {
         for title in &titles {
-            qol_gpui::popup_window::configure_overlay_window(title);
+            qol_gpui::popup_window::configure_overlay_window(title, false);
         }
     });
     cx.activate(true);

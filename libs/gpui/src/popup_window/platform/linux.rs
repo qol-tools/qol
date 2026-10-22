@@ -146,6 +146,7 @@ impl WindowGeometrySession {
     }
 
     pub fn reposition(&self, x: i32, y: i32) -> bool {
+        let (x, y) = frame_origin_for(&*self.conn, self.wid, self.target, x, y);
         let aux = ConfigureWindowAux::new().x(x).y(y);
         let moved = self.conn.configure_window(self.target, &aux).is_ok();
         let flushed = self.conn.flush().is_ok();
@@ -157,6 +158,10 @@ impl WindowGeometrySession {
             self.root
         );
         moved && flushed
+    }
+
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        self.bounds().map(|(x, y, _, _)| (x, y))
     }
 
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
@@ -182,6 +187,11 @@ impl WindowGeometrySession {
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
         pointer_on(&*self.conn, self.root, self.wid)
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
+        let pointer = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        Some(u16::from(pointer.mask) & u16::from(KeyButMask::BUTTON1) != 0)
     }
 
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
@@ -371,11 +381,15 @@ fn pointer_on(
     wid: Window,
 ) -> Option<crate::popup_window::PointerOnWindow> {
     let pointer = conn.query_pointer(root).ok()?.reply().ok()?;
-    let pressed = u16::from(pointer.mask)
-        & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
-        != 0;
+    let pressed = button_pressed(&pointer);
     let inside = pointer_inside(conn, root, wid, &pointer)?;
     Some(crate::popup_window::PointerOnWindow { inside, pressed })
+}
+
+fn button_pressed(pointer: &QueryPointerReply) -> bool {
+    u16::from(pointer.mask)
+        & u16::from(KeyButMask::BUTTON1 | KeyButMask::BUTTON2 | KeyButMask::BUTTON3)
+        != 0
 }
 
 fn pointer_inside(
@@ -582,6 +596,8 @@ pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     };
     let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
         qol_runtime::probe!("PREPARE_WIN", "title={title} wid=NONE reason={reason}");
+        #[cfg(debug_assertions)]
+        probe_own_windows(&conn, root, list_atom, title);
         return false;
     };
     if !compositor_running(&conn, screen_num) {
@@ -993,7 +1009,7 @@ fn window_presentation_is_normal(conn: &impl Connection, wid: u32) -> bool {
         .any(|atom| states.contains(&atom))
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -1003,7 +1019,9 @@ pub fn configure_overlay_window(title: &str) -> bool {
     };
 
     set_window_manager_decorations(&conn, wid, false);
-    lock_window_size(&conn, wid);
+    if !resizable {
+        lock_window_size(&conn, wid);
+    }
     add_window_state(&conn, root, wid);
     let _ = conn.flush();
     activate_window(&conn, root, wid);
@@ -1086,21 +1104,6 @@ fn set_window_fixed_size(conn: &impl Connection, wid: u32, size: (i32, i32)) -> 
         .ok()
         .and_then(|cookie| cookie.check().ok())
         .is_some()
-}
-
-pub fn set_window_fixed_size_by_title(title: &str, size: gpui::Size<gpui::Pixels>) -> bool {
-    let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
-    else {
-        return false;
-    };
-    let Some(wid) = resolve_window(&conn, root, list_atom, name_atom, utf8_atom, title) else {
-        return false;
-    };
-    let size = (
-        size.width.to_f64().round().max(1.0) as i32,
-        size.height.to_f64().round().max(1.0) as i32,
-    );
-    set_window_fixed_size(&conn, wid, size) && conn.flush().is_ok()
 }
 
 fn add_window_state(conn: &impl Connection, root: u32, wid: u32) {
@@ -1983,6 +1986,29 @@ fn find_window_by_title(
     pid_match.or_else(|| titled.into_iter().next())
 }
 
+#[cfg(debug_assertions)]
+fn probe_own_windows(conn: &impl Connection, root: u32, list_atom: u32, title: &str) {
+    let Some(pid_atom) = intern(conn, b"_NET_WM_PID") else {
+        return;
+    };
+    let mut ids = root_window_ids(conn, root, list_atom);
+    append_tree_window_ids(conn, root, &mut ids);
+    let own = ids
+        .into_iter()
+        .filter(|&wid| window_pid_matches(conn, wid, pid_atom, std::process::id()));
+    for wid in own {
+        let name = conn
+            .get_property(false, wid, AtomEnum::WM_NAME, AtomEnum::ANY, 0, 256)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| String::from_utf8_lossy(&reply.value).into_owned());
+        qol_runtime::probe!(
+            "PREPARE_WIN",
+            "title={title} miss_candidate={wid} name={name:?}"
+        );
+    }
+}
+
 fn window_title_matches(
     conn: &impl Connection,
     wid: u32,
@@ -2014,11 +2040,24 @@ fn window_pid_matches(conn: &impl Connection, wid: u32, pid_atom: u32, pid: u32)
 
 fn move_window(conn: &impl Connection, root: u32, wid: u32, x: i32, y: i32) -> bool {
     let target = top_level_frame(conn, root, wid).unwrap_or(wid);
+    let (x, y) = frame_origin_for(conn, wid, target, x, y);
     let aux = ConfigureWindowAux::new().x(x).y(y);
     let moved = configure_window_synced(conn, target, &aux);
     #[cfg(debug_assertions)]
     log::debug!("move client={wid} target={target} root={root} to=({x},{y}) ok={moved}");
     moved
+}
+
+fn frame_origin_for(conn: &impl Connection, wid: u32, target: u32, x: i32, y: i32) -> (i32, i32) {
+    if target == wid {
+        return (x, y);
+    }
+    conn.translate_coordinates(wid, target, 0, 0)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map_or((x, y), |inset| {
+            (x - i32::from(inset.dst_x), y - i32::from(inset.dst_y))
+        })
 }
 
 fn set_window_bounds(
@@ -2351,6 +2390,12 @@ fn absolute_geometry(conn: &impl Connection, root: u32, wid: u32) -> Option<(i32
         geometry.width,
         geometry.height,
     ))
+}
+
+pub fn compositor_active() -> bool {
+    x11rb::connect(None)
+        .ok()
+        .is_some_and(|(conn, screen_num)| compositor_running(&conn, screen_num))
 }
 
 fn compositor_running(conn: &impl Connection, screen_num: usize) -> bool {

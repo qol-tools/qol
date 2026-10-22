@@ -50,6 +50,21 @@ pub(super) fn collapse(collapsed: bool) {
     let _ = collapsed;
 }
 
+pub(super) fn fold(phase: &'static str, bounds: gpui::Bounds<gpui::Pixels>) {
+    #[cfg(debug_assertions)]
+    qol_runtime::probe!(
+        "CLI_SESSIONS_COLLAPSE",
+        "phase={phase} x={} y={} w={} h={}",
+        bounds.origin.x.to_f64(),
+        bounds.origin.y.to_f64(),
+        bounds.size.width.to_f64(),
+        bounds.size.height.to_f64()
+    );
+
+    #[cfg(not(debug_assertions))]
+    let _ = (phase, bounds);
+}
+
 pub(super) fn focus_start(reason: &'static str, id: &SessionId) {
     #[cfg(debug_assertions)]
     qol_runtime::probe!("CLI_SESSIONS_FOCUS", "phase=start reason={reason} id={id}");

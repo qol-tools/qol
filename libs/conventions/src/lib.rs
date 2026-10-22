@@ -101,6 +101,14 @@ pub mod api_routes {
         format!("{SHORTCUTS}/{id}")
     }
 
+    pub fn plugin_base(plugin_id: &str) -> String {
+        format!("/api/plugins/{plugin_id}")
+    }
+
+    pub fn config_route(base: &str) -> String {
+        format!("{base}/config")
+    }
+
     pub fn plugin_action(plugin_id: &str, action: &str) -> String {
         format!("/api/plugins/{plugin_id}/actions/{action}")
     }
@@ -382,6 +390,10 @@ mod tests {
                 "/api/notifications/mirror/activate/mb-0000000000000001",
             ),
             (api_routes::shortcut("abc"), "/api/shortcuts/abc"),
+            (
+                api_routes::config_route(&api_routes::plugin_base("qol-explorer")),
+                "/api/plugins/qol-explorer/config",
+            ),
         ];
         for (actual, expected) in cases {
             assert_eq!(actual, expected);

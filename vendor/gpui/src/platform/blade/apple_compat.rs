@@ -53,6 +53,7 @@ pub unsafe fn new_renderer(
                 height: bounds.height as u32,
                 depth: 1,
             },
+            content_size: None,
             transparent,
         },
     )

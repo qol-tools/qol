@@ -976,6 +976,7 @@ impl Window {
             app_id,
             window_min_size,
             window_decorations,
+            icon,
             #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
             tabbing_identifier,
         } = options;
@@ -996,6 +997,7 @@ impl Window {
                 show,
                 display_id,
                 window_min_size,
+                icon,
                 #[cfg(target_os = "macos")]
                 tabbing_identifier,
             },
@@ -1716,6 +1718,21 @@ impl Window {
     /// Set the content size of the window.
     pub fn resize(&mut self, size: Size<Pixels>) {
         self.platform_window.resize(size);
+    }
+
+    /// Set the minimum content size the user can resize the window to.
+    pub fn set_window_min_size(&self, size: Size<Pixels>) {
+        self.platform_window.set_window_min_size(size);
+    }
+
+    /// Returns whether the user is resizing this window through the operating system right now.
+    pub fn is_live_resizing(&self) -> bool {
+        self.platform_window.is_live_resizing()
+    }
+
+    /// Prepare the renderer for a resize the client drives itself, one size change per frame.
+    pub fn expect_live_resize(&self) {
+        self.platform_window.expect_live_resize();
     }
 
     /// Returns whether or not the window is currently fullscreen

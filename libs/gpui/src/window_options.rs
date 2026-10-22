@@ -1,5 +1,5 @@
 use gpui::{
-    Bounds, DisplayId, Pixels, SharedString, WindowBackgroundAppearance, WindowDecorations,
+    Bounds, DisplayId, Pixels, SharedString, Size, WindowBackgroundAppearance, WindowDecorations,
     WindowKind, WindowOptions,
 };
 
@@ -82,6 +82,11 @@ impl PopupWindowOptions {
         self
     }
 
+    pub fn min_size(mut self, min_size: Size<Pixels>) -> Self {
+        self.options.window_min_size = Some(min_size);
+        self
+    }
+
     pub fn app_id(mut self, app_id: impl Into<SharedString>) -> Self {
         self.options.app_id = Some(app_id.into().to_string());
         self
@@ -147,6 +152,7 @@ mod tests {
             .movable(false)
             .resizable(false)
             .minimizable(false)
+            .min_size(size(px(120.0), px(80.0)))
             .app_id("qol-test")
             .build();
         assert_eq!(options.window_bounds, Some(WindowBounds::Windowed(bounds)));
@@ -161,6 +167,7 @@ mod tests {
         assert!(!options.is_movable);
         assert!(!options.is_resizable);
         assert!(!options.is_minimizable);
+        assert_eq!(options.window_min_size, Some(size(px(120.0), px(80.0))));
         assert_eq!(options.app_id.as_deref(), Some("qol-test"));
     }
 

@@ -317,7 +317,33 @@ impl BladePipelines {
 
 pub struct BladeSurfaceConfig {
     pub size: gpu::Extent,
+    pub content_size: Option<gpu::Extent>,
     pub transparent: bool,
+}
+
+const PATH_EXTENT_STEP: u32 = 256;
+
+fn path_texture_extent(content: gpu::Extent, drawable: gpu::Extent) -> gpu::Extent {
+    let axis = |content: u32, drawable: u32| {
+        content
+            .div_ceil(PATH_EXTENT_STEP)
+            .saturating_mul(PATH_EXTENT_STEP)
+            .min(drawable)
+            .max(1)
+    };
+    gpu::Extent {
+        width: axis(content.width, drawable.width),
+        height: axis(content.height, drawable.height),
+        depth: 1,
+    }
+}
+
+fn device_extent(size: Size<DevicePixels>) -> gpu::Extent {
+    gpu::Extent {
+        width: size.width.0 as u32,
+        height: size.height.0 as u32,
+        depth: 1,
+    }
 }
 
 //Note: we could see some of these fields moved into `BladeContext`
@@ -336,6 +362,7 @@ pub struct BladeRenderer {
     atlas_sampler: gpu::Sampler,
     #[cfg(target_os = "macos")]
     core_video_texture_cache: CVMetalTextureCache,
+    path_extent: gpu::Extent,
     path_intermediate_texture: gpu::Texture,
     path_intermediate_texture_view: gpu::TextureView,
     path_intermediate_msaa_texture: Option<gpu::Texture>,
@@ -385,19 +412,21 @@ impl BladeRenderer {
             ..Default::default()
         });
 
+        let path_extent =
+            path_texture_extent(config.content_size.unwrap_or(config.size), config.size);
         let (path_intermediate_texture, path_intermediate_texture_view) =
             create_path_intermediate_texture(
                 &context.gpu,
                 surface.info().format,
-                config.size.width,
-                config.size.height,
+                path_extent.width,
+                path_extent.height,
             );
         let (path_intermediate_msaa_texture, path_intermediate_msaa_texture_view) =
             create_msaa_texture_if_needed(
                 &context.gpu,
                 surface.info().format,
-                config.size.width,
-                config.size.height,
+                path_extent.width,
+                path_extent.height,
                 rendering_parameters.path_sample_count,
             )
             .unzip();
@@ -422,6 +451,7 @@ impl BladeRenderer {
             atlas_sampler,
             #[cfg(target_os = "macos")]
             core_video_texture_cache,
+            path_extent,
             path_intermediate_texture,
             path_intermediate_texture_view,
             path_intermediate_msaa_texture,
@@ -452,8 +482,18 @@ impl BladeRenderer {
         }
     }
 
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
-        self.update_drawable_size_impl(size, false);
+        self.update_drawable_size_impl(size, size, false);
+    }
+
+    #[cfg_attr(any(target_os = "macos", not(feature = "x11")), allow(dead_code))]
+    pub fn update_render_size(
+        &mut self,
+        drawable: Size<DevicePixels>,
+        content: Size<DevicePixels>,
+    ) {
+        self.update_drawable_size_impl(drawable, content, false);
     }
 
     /// Like `update_drawable_size` but skips the check that the size has changed. This is useful in
@@ -464,21 +504,29 @@ impl BladeRenderer {
         allow(dead_code)
     )]
     pub fn update_drawable_size_even_if_unchanged(&mut self, size: Size<DevicePixels>) {
-        self.update_drawable_size_impl(size, true);
+        self.update_drawable_size_impl(size, size, true);
     }
 
-    fn update_drawable_size_impl(&mut self, size: Size<DevicePixels>, always_resize: bool) {
-        let gpu_size = gpu::Extent {
-            width: size.width.0 as u32,
-            height: size.height.0 as u32,
-            depth: 1,
-        };
+    fn update_drawable_size_impl(
+        &mut self,
+        size: Size<DevicePixels>,
+        content: Size<DevicePixels>,
+        always_resize: bool,
+    ) {
+        let gpu_size = device_extent(size);
+        let path_extent = path_texture_extent(device_extent(content), gpu_size);
+        let resize_surface = always_resize || gpu_size != self.surface_config.size;
 
-        if always_resize || gpu_size != self.surface_config.size {
+        if resize_surface || path_extent != self.path_extent {
             self.wait_for_gpu();
+        }
+        if resize_surface {
             self.surface_config.size = gpu_size;
             self.gpu
                 .reconfigure_surface(&mut self.surface, self.surface_config);
+        }
+        if resize_surface || path_extent != self.path_extent {
+            self.path_extent = path_extent;
             self.gpu.destroy_texture(self.path_intermediate_texture);
             self.gpu
                 .destroy_texture_view(self.path_intermediate_texture_view);
@@ -492,8 +540,8 @@ impl BladeRenderer {
                 create_path_intermediate_texture(
                     &self.gpu,
                     self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
+                    path_extent.width,
+                    path_extent.height,
                 );
             self.path_intermediate_texture = path_intermediate_texture;
             self.path_intermediate_texture_view = path_intermediate_texture_view;
@@ -501,8 +549,8 @@ impl BladeRenderer {
                 create_msaa_texture_if_needed(
                     &self.gpu,
                     self.surface.info().format,
-                    gpu_size.width,
-                    gpu_size.height,
+                    path_extent.width,
+                    path_extent.height,
                     self.rendering_parameters.path_sample_count,
                 )
                 .unzip();
@@ -709,8 +757,8 @@ impl BladeRenderer {
                     drop(pass);
                     self.draw_paths_to_intermediate(
                         paths,
-                        self.surface_config.size.width as f32,
-                        self.surface_config.size.height as f32,
+                        self.path_extent.width as f32,
+                        self.path_extent.height as f32,
                     );
                     pass = self.command_encoder.render(
                         "main",
@@ -1068,5 +1116,41 @@ impl RenderingParameters {
             ratios[2] * NORM13,
             ratios[3] * NORM24,
         ]
+    }
+}
+
+#[cfg(test)]
+mod path_extent_tests {
+    use super::{PATH_EXTENT_STEP, path_texture_extent};
+    use blade_graphics as gpu;
+
+    fn extent(width: u32, height: u32) -> gpu::Extent {
+        gpu::Extent {
+            width,
+            height,
+            depth: 1,
+        }
+    }
+
+    #[test]
+    fn path_textures_cover_the_content_in_steps_inside_the_drawable() {
+        let cases = [
+            (extent(800, 600), extent(3840, 2160), extent(1024, 768)),
+            (
+                extent(PATH_EXTENT_STEP, 1),
+                extent(3840, 2160),
+                extent(PATH_EXTENT_STEP, PATH_EXTENT_STEP),
+            ),
+            (extent(1000, 700), extent(1000, 700), extent(1000, 700)),
+            (extent(4000, 600), extent(3840, 2160), extent(3840, 768)),
+            (extent(0, 0), extent(0, 0), extent(1, 1)),
+        ];
+        for (content, drawable, expected) in cases {
+            assert_eq!(
+                path_texture_extent(content, drawable),
+                expected,
+                "{content:?} {drawable:?}"
+            );
+        }
     }
 }

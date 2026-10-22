@@ -342,6 +342,7 @@ fn open_window(
         .kind(qol_gpui::popup_window::pinned_window_kind())
         .focus(spec.focus)
         .show(spec.show)
+        .min_size(pin_min_size(spec.bounds.size))
         .app_id(PREVIEW_APP_ID)
         .build();
     let focus = spec.focus;
@@ -1560,6 +1561,13 @@ fn pin_display_size((width, height): (f32, f32)) -> (f32, f32) {
     (width * factor, height * factor)
 }
 
+fn pin_min_size(opening: Size<Pixels>) -> Size<Pixels> {
+    size(
+        px(MIN_DIM).min(opening.width),
+        px(MIN_DIM).min(opening.height),
+    )
+}
+
 fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
     if width <= 0.0 || height <= 0.0 {
         return 1.0;
@@ -1573,9 +1581,21 @@ fn clamp_scale_factor(factor: f32, width: f32, height: f32) -> f32 {
 mod tests {
     use super::{
         action_row_fits, clamp_scale_factor, controls_visible, drag_bounds, hover_after_event,
-        pin_display_size, resize_rect, PinRect,
+        pin_display_size, pin_min_size, resize_rect, PinRect, MIN_DIM,
     };
-    use gpui::ResizeEdge;
+    use gpui::{px, size, ResizeEdge};
+
+    #[test]
+    fn pin_min_size_never_exceeds_the_opening_size() {
+        let cases = [
+            (size(px(400.0), px(200.0)), size(px(MIN_DIM), px(MIN_DIM))),
+            (size(px(30.0), px(200.0)), size(px(30.0), px(MIN_DIM))),
+            (size(px(20.0), px(10.0)), size(px(20.0), px(10.0))),
+        ];
+        for (opening, expected) in cases {
+            assert_eq!(pin_min_size(opening), expected, "{opening:?}");
+        }
+    }
 
     #[test]
     fn drag_hover_suppression_preserves_pin_control_visibility() {

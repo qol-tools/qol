@@ -9,11 +9,12 @@ use windows_sys::Win32::Graphics::Gdi::{
     ClientToScreen, CreateRectRgn, DeleteObject, SetWindowRgn,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, HWND_NOTOPMOST, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsIconic, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SM_SWAPBUTTON, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 use super::PopupPresentation;
@@ -178,6 +179,11 @@ impl WindowGeometrySession {
         move_client(self.handle(), x, y)
     }
 
+    pub fn client_origin(&self) -> Option<(i32, i32)> {
+        let mut client = POINT { x: 0, y: 0 };
+        (unsafe { ClientToScreen(self.handle(), &mut client) } != 0).then_some((client.x, client.y))
+    }
+
     pub fn pointer_root(&self) -> Option<(i32, i32)> {
         cursor_position()
     }
@@ -193,7 +199,16 @@ impl WindowGeometrySession {
     }
 
     pub fn pointer_on(&self) -> Option<crate::popup_window::PointerOnWindow> {
-        None
+        let (x, y) = cursor_position()?;
+        let rect = window_rect(self.handle())?;
+        Some(crate::popup_window::PointerOnWindow {
+            inside: (rect.left..rect.right).contains(&x) && (rect.top..rect.bottom).contains(&y),
+            pressed: primary_button_down(),
+        })
+    }
+
+    pub fn pressed(&self) -> Option<bool> {
+        Some(primary_button_down())
     }
 
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
@@ -368,6 +383,10 @@ pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
         .count()
 }
 
+pub fn compositor_active() -> bool {
+    true
+}
+
 pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
@@ -386,12 +405,10 @@ pub fn prepare_window_reveal_by_title(title: &str) -> bool {
     true
 }
 
-pub fn set_window_fixed_size_by_title(title: &str, _size: gpui::Size<gpui::Pixels>) -> bool {
-    let Some(hwnd) = find_window(title).map(Window::handle) else {
-        return false;
-    };
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
-    style & WS_THICKFRAME as isize == 0
+fn primary_button_down() -> bool {
+    let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
+    let button = if swapped { VK_RBUTTON } else { VK_LBUTTON };
+    (unsafe { GetAsyncKeyState(i32::from(button)) } as u16 & 0x8000) != 0
 }
 
 pub fn park_window_by_title(title: &str) -> bool {
@@ -426,7 +443,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
@@ -435,7 +452,7 @@ pub fn configure_overlay_window(title: &str) -> bool {
 }
 
 pub fn configure_pinned_window(title: &str) -> bool {
-    configure_overlay_window(title)
+    configure_overlay_window(title, false)
 }
 
 #[cfg(test)]

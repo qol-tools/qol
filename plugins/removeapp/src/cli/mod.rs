@@ -31,7 +31,7 @@ where
         .default_command(["open"])
         .command(
             Command::new("open")
-                .about("Open the Remove App picker.")
+                .about("Open the Remove App picker; it reopens at its last size and place.")
                 .usage(format!("{PLUGIN_ID} open"))
                 .output("No stdout on success.")
                 .exit_behavior("Exits non-zero if the picker cannot be opened.")
