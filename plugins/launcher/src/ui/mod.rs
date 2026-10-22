@@ -11,6 +11,7 @@ mod layout;
 mod menu;
 mod platform;
 mod render;
+mod resize;
 pub mod run;
 mod sizing;
 mod state;
@@ -19,6 +20,7 @@ mod trace;
 mod transitions;
 mod view;
 mod window_host;
+mod window_memory;
 
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
@@ -29,7 +31,6 @@ use crate::discovery::details::AppFace;
 use crate::discovery::entry_store::{BeforeTyping, EntryStore};
 use crate::discovery::{PreloadedEntries, SharedEntries};
 
-use layout::WINDOW_WIDTH;
 use menu::MenuKind;
 use state::LauncherState;
 
@@ -69,6 +70,7 @@ pub(crate) struct LauncherView {
     blur_guard: qol_gpui::ghost::BlurGuard,
     pub(crate) window_title: String,
     pub(crate) window_origin: Point<Pixels>,
+    sizing: resize::Sizing,
     #[cfg(debug_assertions)]
     last_render_trace: Option<trace::RenderSignature>,
 }
@@ -128,6 +130,7 @@ impl LauncherView {
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard,
+            sizing: resize::Sizing::new(title.clone()),
             window_title: title,
             window_origin: point(px(0.0), px(0.0)),
             #[cfg(debug_assertions)]
@@ -280,10 +283,10 @@ impl LauncherView {
         .detach();
     }
 
-    fn sync_input_region(&mut self, width: f32, height: f32, window: &Window) {
+    fn sync_input_region(&mut self, frame_width: f32, width: f32, height: f32, window: &Window) {
         let scale = window.scale_factor();
         let region = (
-            ((WINDOW_WIDTH - width) / 2.0 * scale).round() as i16,
+            ((frame_width - width) / 2.0 * scale).round() as i16,
             0,
             (width * scale).round() as u16,
             (height * scale).ceil() as u16,

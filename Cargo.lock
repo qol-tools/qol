@@ -6977,6 +6977,7 @@ dependencies = [
  "qol-runtime",
  "qol-search",
  "qol-watch",
+ "qol-window-state",
  "qol-windowing",
  "roxmltree",
  "serde",
