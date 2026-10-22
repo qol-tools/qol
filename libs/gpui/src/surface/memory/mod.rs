@@ -103,7 +103,7 @@ pub(crate) struct Remembered {
     last: RefCell<Option<WindowState>>,
     save_generation: Cell<u64>,
     user_sized: Cell<bool>,
-    unsaved_bounds: Cell<Option<(Bounds<Pixels>, f32)>>,
+    burst_monitors: RefCell<Option<Vec<Monitor>>>,
 }
 
 impl Remembered {
@@ -134,7 +134,7 @@ impl Remembered {
             last: RefCell::new(last),
             save_generation: Cell::new(0),
             user_sized: Cell::new(user_sized),
-            unsaved_bounds: Cell::new(None),
+            burst_monitors: RefCell::new(None),
         }))
     }
 
@@ -179,7 +179,12 @@ impl Remembered {
     }
 
     pub(crate) fn record_bounds(self: &Rc<Self>, bounds: Bounds<Pixels>, scale: f32, cx: &mut App) {
-        self.unsaved_bounds.set(Some((bounds, scale)));
+        let open = self.last.borrow().as_ref().is_none_or(|state| state.open);
+        {
+            let mut burst = self.burst_monitors.borrow_mut();
+            let monitors = burst.get_or_insert_with(|| monitor_list(cx));
+            self.capture_on(bounds, scale, open, monitors);
+        }
         let generation = self.save_generation.get().wrapping_add(1);
         self.save_generation.set(generation);
         let this = self.clone();
@@ -188,23 +193,20 @@ impl Remembered {
             if this.save_generation.get() != generation {
                 return;
             }
-            if cx.update(|cx| this.capture_unsaved(cx)).unwrap_or(false) {
-                let key = this.key.clone();
-                cx.background_spawn(async move { flush_key(&key) }).await;
-            }
+            this.burst_monitors.borrow_mut().take();
+            let key = this.key.clone();
+            cx.background_spawn(async move { flush_key(&key) }).await;
         })
         .detach();
     }
 
     pub(crate) fn record_open(&self, bounds: Bounds<Pixels>, scale: f32, cx: &App) {
-        self.unsaved_bounds.set(None);
         if self.capture(bounds, scale, true, cx) {
             flush_key(&self.key);
         }
     }
 
-    pub(crate) fn record_closed(&self, cx: &App) {
-        self.capture_unsaved(cx);
+    pub(crate) fn record_closed(&self) {
         let Some(mut state) = self.last.borrow().clone() else {
             return;
         };
@@ -227,21 +229,19 @@ impl Remembered {
         flush_key(&self.key);
     }
 
-    fn capture_unsaved(&self, cx: &App) -> bool {
-        let Some((bounds, scale)) = self.unsaved_bounds.take() else {
-            return false;
-        };
-        let open = self.last.borrow().as_ref().is_none_or(|state| state.open);
-        self.capture(bounds, scale, open, cx)
+    fn capture(&self, bounds: Bounds<Pixels>, scale: f32, open: bool, cx: &App) -> bool {
+        self.capture_on(bounds, scale, open, &monitor_list(cx))
     }
 
-    fn capture(&self, bounds: Bounds<Pixels>, scale: f32, open: bool, cx: &App) -> bool {
-        let monitors = current_monitors(cx)
-            .into_iter()
-            .map(|(monitor, _)| monitor)
-            .collect::<Vec<_>>();
+    fn capture_on(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        open: bool,
+        monitors: &[Monitor],
+    ) -> bool {
         let Some((monitor, bounds_on_monitor)) =
-            qol_window_state::locate(rect_of_bounds(bounds), scale, &monitors)
+            qol_window_state::locate(rect_of_bounds(bounds), scale, monitors)
         else {
             return false;
         };
@@ -373,6 +373,13 @@ fn grown(window: WindowRect, min: Size<Pixels>) -> WindowRect {
         height: window.height.max(min.height.to_f64()),
         ..window
     }
+}
+
+fn monitor_list(cx: &App) -> Vec<Monitor> {
+    current_monitors(cx)
+        .into_iter()
+        .map(|(monitor, _)| monitor)
+        .collect()
 }
 
 fn current_monitors(cx: &App) -> Vec<(Monitor, ActiveMonitor)> {

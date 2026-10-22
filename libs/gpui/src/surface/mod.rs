@@ -340,7 +340,7 @@ impl SurfaceDismisser {
     pub fn dismiss(&self, cx: &mut App) {
         cancel_focus_reassert();
         if let Some(remembered) = &self.state.remembered {
-            remembered.record_closed(cx);
+            remembered.record_closed();
         }
         self.state
             .generation

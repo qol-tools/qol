@@ -80,7 +80,7 @@ fn a_restore_lands_on_the_active_monitor_at_the_saved_offset(cx: &mut gpui::Test
         last: RefCell::new(Some(saved)),
         save_generation: Cell::new(0),
         user_sized: Cell::new(false),
-        unsaved_bounds: Cell::new(None),
+        burst_monitors: RefCell::new(None),
     };
     let active = ActiveMonitor::from_bounds(bounds(100_000.0, 0.0, 2560.0, 1440.0));
     let restored = cx

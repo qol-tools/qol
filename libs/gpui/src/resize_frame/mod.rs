@@ -17,6 +17,7 @@ pub const FRAME_RESIZES_WINDOW: bool = crate::platform::FRAME_RESIZES_WINDOW;
 const SETTLE_WAIT: Duration = Duration::from_millis(300);
 const REAPPLY_AFTER: Duration = Duration::from_millis(50);
 const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
+const HAND_OFF_LIMIT: Duration = Duration::from_secs(5);
 const RELEASE_POLL: Duration = Duration::from_millis(16);
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
@@ -53,7 +54,7 @@ impl FrameState {
 
     fn hand_off(&self, at: Instant) {
         self.drag.borrow_mut().take();
-        self.sizing.set(Sizing::Settling(at));
+        self.sizing.set(Sizing::HandedOff(at));
     }
 }
 
@@ -62,6 +63,7 @@ enum Sizing {
     Idle,
     Dragging,
     Settling(Instant),
+    HandedOff(Instant),
 }
 
 impl Sizing {
@@ -70,6 +72,7 @@ impl Sizing {
             Self::Idle => false,
             Self::Dragging => true,
             Self::Settling(since) => now.duration_since(since) < USER_SIZE_SETTLE,
+            Self::HandedOff(since) => now.duration_since(since) < HAND_OFF_LIMIT,
         }
     }
 }
@@ -197,7 +200,10 @@ impl ResizeFrame {
 
     fn end(&self) {
         let Some(drag) = self.state.drag.borrow_mut().take() else {
-            if self.state.sizing.get() == Sizing::Dragging {
+            if matches!(
+                self.state.sizing.get(),
+                Sizing::Dragging | Sizing::HandedOff(_)
+            ) {
                 self.state.sizing.set(Sizing::Settling(Instant::now()));
             }
             return;

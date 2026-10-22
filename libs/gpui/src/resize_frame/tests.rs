@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{point, px, size, ResizeEdge};
 
-use super::{zone_at, ResizeFrame, Sizing, USER_SIZE_SETTLE};
+use super::{zone_at, ResizeFrame, Sizing, HAND_OFF_LIMIT, USER_SIZE_SETTLE};
 
 #[test]
 fn only_a_live_or_just_finished_drag_counts_as_user_sizing() {
@@ -23,13 +23,17 @@ fn only_a_live_or_just_finished_drag_counts_as_user_sizing() {
 }
 
 #[test]
-fn a_drag_handed_to_the_window_manager_stops_counting_without_a_release() {
+fn a_drag_handed_to_the_window_manager_counts_until_its_limit_without_a_release() {
     let frame = ResizeFrame::new(String::new, size(px(200.0), px(150.0)));
     frame.state.start_drag();
     assert!(frame.is_user_sizing());
     frame
         .state
         .hand_off(Instant::now() - USER_SIZE_SETTLE - Duration::from_millis(1));
+    assert!(frame.is_user_sizing());
+    frame
+        .state
+        .hand_off(Instant::now() - HAND_OFF_LIMIT - Duration::from_millis(1));
     assert!(!frame.is_user_sizing());
     frame.end();
     assert!(!frame.is_user_sizing());
