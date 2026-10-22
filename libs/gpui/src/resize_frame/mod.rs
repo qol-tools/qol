@@ -14,7 +14,7 @@ use self::geometry::{resized_rect, NativeRect, ResizeLimits};
 
 const EDGE_BAND: f32 = 5.0;
 const CORNER_BAND: f32 = 10.0;
-const RESIZE_TICK: Duration = Duration::from_millis(8);
+const DRAW_WAIT: Duration = Duration::from_millis(50);
 const USER_SIZE_SETTLE: Duration = Duration::from_millis(250);
 
 const RESIZE_EDGES: [ResizeEdge; 8] = [
@@ -180,7 +180,8 @@ impl ResizeFrame {
             return;
         };
         *self.state.drag.borrow_mut() = Some(drag.clone());
-        spawn_resize_loop(drag, self.state.epoch.clone(), cx);
+        let applied = drag.start;
+        follow_pointer(drag, self.state.epoch.clone(), applied, None, window);
     }
 
     fn end(&self) {
@@ -241,27 +242,45 @@ impl ResizeFrame {
     }
 }
 
-fn spawn_resize_loop(drag: Drag, epochs: Arc<AtomicU64>, cx: &mut App) {
-    let executor = cx.background_executor().clone();
-    cx.background_spawn(async move {
-        let mut applied = drag.start;
-        loop {
-            executor.timer(RESIZE_TICK).await;
-            if epochs.load(Ordering::SeqCst) != drag.epoch {
-                return;
-            }
-            let released = drag.released();
-            if let Some(next) = drag.bounds_now().filter(|next| *next != applied) {
-                drag.apply(next);
-                applied = next;
-            }
-            if released {
-                drag.finish(&epochs);
-                return;
-            }
+fn follow_pointer(
+    drag: Drag,
+    epochs: Arc<AtomicU64>,
+    applied: NativeRect,
+    awaiting_draw: Option<Instant>,
+    window: &Window,
+) {
+    window.on_next_frame(move |window, cx| {
+        if epochs.load(Ordering::SeqCst) != drag.epoch {
+            return;
         }
-    })
-    .detach();
+        let released = drag.released();
+        let waiting = !released
+            && awaiting_draw
+                .is_some_and(|since| since.elapsed() < DRAW_WAIT && !drawn_at(window, applied));
+        let (applied, awaiting_draw) = match drag.bounds_now() {
+            Some(next) if !waiting && next != applied => {
+                apply_after_present(drag.clone(), next, cx);
+                (next, Some(Instant::now()))
+            }
+            _ => (applied, awaiting_draw.filter(|_| waiting)),
+        };
+        if released {
+            drag.finish(&epochs);
+            return;
+        }
+        follow_pointer(drag, epochs, applied, awaiting_draw, window);
+    });
+}
+
+fn apply_after_present(drag: Drag, rect: NativeRect, cx: &mut App) {
+    cx.spawn(async move |_| drag.apply(rect)).detach();
+}
+
+fn drawn_at(window: &Window, rect: NativeRect) -> bool {
+    let scale = window.scale_factor();
+    let size = window.bounds().size;
+    (size.width.to_f64() * f64::from(scale)).round() == rect.width.round()
+        && (size.height.to_f64() * f64::from(scale)).round() == rect.height.round()
 }
 
 fn lock(sizing: &Mutex<Sizing>) -> std::sync::MutexGuard<'_, Sizing> {
