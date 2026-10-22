@@ -6,7 +6,7 @@ use gpui::{px, size, App, Application, AsyncApp};
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{Surface, SurfaceKind, WindowMemory};
 
-use super::view::{ExplorerView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use super::view::{ExplorerView, MIN_HEIGHT, MIN_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 use crate::ui::PLUGIN_ID;
 
 pub fn open(start: PathBuf) -> anyhow::Result<()> {
@@ -23,6 +23,7 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+            .min_size(size(px(MIN_WIDTH), px(MIN_HEIGHT)))
             .remember(WindowMemory::reopened_by_action(
                 PLUGIN_ID, PLUGIN_ID, "open",
             ))
