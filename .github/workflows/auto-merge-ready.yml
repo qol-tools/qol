@@ -2,7 +2,7 @@ name: auto-merge ready
 
 on:
   pull_request:
-    types: [opened, ready_for_review, edited]
+    types: [opened, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -21,29 +21,27 @@ jobs:
     permissions:
       checks: write
     steps:
-      # The claude review check of this head judged it against the old base,
-      # and a check that already passed would let the queue take it. A pending
-      # check of the same name holds it, and the reopen starts a review against
-      # the new base whose verdict replaces that check.
-      - name: Review again against the new base
+      # The claude review check of this head judged it against the old base, and
+      # one that passed would let the queue take it. A failed check of the same
+      # name holds it, and only a reopen or a push reviews it against the new
+      # base: a rerun reviews the old merge commit again. The failed job tells
+      # the session watching the pull request, and the reopen run replaces it.
+      - name: Hold the review of the old base
         if: github.event.action == 'edited'
         env:
           GH_TOKEN: ${{ github.token }}
-          REOPEN_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          OLD_BASE: ${{ github.event.changes.base.ref.from }}
           BASE: ${{ github.event.pull_request.base.ref }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          gh api "repos/${REPO}/check-runs" -f name="claude review" -f head_sha="${HEAD_SHA}" -f status=in_progress \
-            -f "output[title]=Reviewing again against ${BASE}" \
-            -f "output[summary]=The base branch changed, so the review of this commit no longer counts. A review against ${BASE} replaces this check." > /dev/null
-          if [ -z "$REOPEN_TOKEN" ]; then
-            echo "::warning::AUTO_MERGE_TOKEN is not set, so no new review starts. Push a commit, or close and reopen the pull request, to review it against ${BASE}."
-            exit 0
-          fi
-          GH_TOKEN="$REOPEN_TOKEN" gh pr close "$PR_URL"
-          GH_TOKEN="$REOPEN_TOKEN" gh pr reopen "$PR_URL"
+          reason="${HEAD_SHA:0:7} was reviewed against ${OLD_BASE}, and the base is now ${BASE}. Close and reopen the pull request, or push a commit, to review it against ${BASE}."
+          gh api "repos/${REPO}/check-runs" -f name="claude review" -f head_sha="${HEAD_SHA}" \
+            -f status=completed -f conclusion=failure -f details_url="${RUN_URL}" \
+            -f "output[title]=Review against ${BASE}" -f "output[summary]=${reason}" > /dev/null
+          echo "::error::${reason}"
+          exit 1
 
       - name: Enable auto-merge
         env:

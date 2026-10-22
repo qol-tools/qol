@@ -484,46 +484,67 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             with self.subTest(loose=loose):
                 self.assertNotIn(loose, override)
 
-    def test_a_pull_request_retargeted_to_main_is_reviewed_again_before_it_arms(self):
+    def test_a_pull_request_retargeted_to_main_is_held_until_a_review_against_main(self):
         workflow = (ROOT / ".github/workflows/auto-merge-ready.yml").read_text()
+        self.assertIn("    types: [opened, reopened, ready_for_review, edited]\n", workflow.split("jobs:\n", 1)[0])
         arm = workflow.split("  arm:\n", 1)[1]
         self.assertIn("(github.event.action != 'edited' || github.event.changes.base != null)", arm)
         self.assertIn("    permissions:\n      checks: write\n", arm)
-        again = named_step(arm, "Review again against the new base", "      ")
-        self.assertIn("if: github.event.action == 'edited'", again)
-        self.assertLess(arm.index("- name: Review again against the new base"), arm.index("- name: Enable auto-merge"))
-        script = textwrap.dedent(again.split("        run: |\n", 1)[1])
-        url = "https://github.com/qol-tools/qol/pull/9"
-        placeholder = "workflow api repos/qol-tools/qol/check-runs -f name=claude review -f head_sha=abc123 -f status=in_progress"
-        for token, calls in [
-            ("pat", [placeholder, f"pat pr close {url}", f"pat pr reopen {url}"]),
-            ("", [placeholder]),
-        ]:
-            with self.subTest(token=token), tempfile.TemporaryDirectory() as temp:
-                log = Path(temp) / "gh.log"
-                gh = Path(temp) / "gh"
-                gh.write_text(f'#!/usr/bin/env bash\necho "$GH_TOKEN $*" >> "{log}"\n')
-                gh.chmod(0o755)
-                result = subprocess.run(
-                    ["bash", "-e", "-c", script],
-                    capture_output=True,
-                    text=True,
-                    env={
-                        **os.environ,
-                        "PATH": f"{temp}:{os.environ['PATH']}",
-                        "GH_TOKEN": "workflow",
-                        "REOPEN_TOKEN": token,
-                        "REPO": "qol-tools/qol",
-                        "HEAD_SHA": "abc123",
-                        "BASE": "main",
-                        "PR_URL": url,
-                    },
-                )
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                logged = log.read_text().splitlines()
-                self.assertEqual(len(logged), len(calls), logged)
-                for line, call in zip(logged, calls):
-                    self.assertTrue(line.startswith(call), line)
+        hold = named_step(arm, "Hold the review of the old base", "      ")
+        self.assertIn("if: github.event.action == 'edited'", hold)
+        self.assertLess(arm.index("- name: Hold the review of the old base"), arm.index("- name: Enable auto-merge"))
+        for loose in ["AUTO_MERGE_TOKEN", "gh pr close", "gh run rerun", "in_progress"]:
+            with self.subTest(loose=loose):
+                self.assertNotIn(loose, hold)
+        script = textwrap.dedent(hold.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "gh.log"
+            gh = Path(temp) / "gh"
+            gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$GH_TOKEN" "$@" > "{log}"\n')
+            gh.chmod(0o755)
+            result = subprocess.run(
+                ["bash", "-e", "-c", script],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PATH": f"{temp}:{os.environ['PATH']}",
+                    "GH_TOKEN": "workflow",
+                    "REPO": "qol-tools/qol",
+                    "HEAD_SHA": "0123456789abcdef0123456789abcdef01234567",
+                    "OLD_BASE": "fix/stacked-base",
+                    "BASE": "main",
+                    "RUN_URL": "https://github.com/qol-tools/qol/actions/runs/7",
+                },
+            )
+            reason = (
+                "0123456 was reviewed against fix/stacked-base, and the base is now main. "
+                "Close and reopen the pull request, or push a commit, to review it against main."
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn(f"::error::{reason}", result.stdout)
+            self.assertEqual(
+                log.read_text().splitlines(),
+                [
+                    "workflow",
+                    "api",
+                    "repos/qol-tools/qol/check-runs",
+                    "-f",
+                    "name=claude review",
+                    "-f",
+                    "head_sha=0123456789abcdef0123456789abcdef01234567",
+                    "-f",
+                    "status=completed",
+                    "-f",
+                    "conclusion=failure",
+                    "-f",
+                    "details_url=https://github.com/qol-tools/qol/actions/runs/7",
+                    "-f",
+                    "output[title]=Review against main",
+                    "-f",
+                    f"output[summary]={reason}",
+                ],
+            )
 
     def test_the_review_reads_the_live_conversation(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
