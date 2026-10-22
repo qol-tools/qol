@@ -33,7 +33,8 @@ BUILT = "batch release build"
 BUILDING = {"AWAITING_CHECKS", "MERGEABLE", "LOCKED"}
 BATCH_BRANCH = "queue-batch/"
 MAX_ATTEMPTS = 3
-CONVENTIONAL = re.compile(r"^([a-z]+)(?:\([^)]*\))?(!)?:")
+CONVENTIONAL = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]*)\))?(?P<breaking>!)?:")
+TITLE_LIMIT = 72
 QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
@@ -99,12 +100,32 @@ def numbers(entries: list[dict]) -> str:
     return refs[0] if len(refs) == 1 else f"{', '.join(refs[:-1])} and {refs[-1]}"
 
 
+def combined_scope(parsed: list[re.Match | None]) -> str | None:
+    """Every original's scope, or None when one original names none."""
+    tokens: list[str] = []
+    for match in parsed:
+        if not match or not match["scope"]:
+            return None
+        for token in match["scope"].split(","):
+            token = token.strip().lower()
+            if token and token not in tokens:
+                tokens.append(token)
+    return ",".join(tokens) or None
+
+
 def combined_title(entries: list[dict]) -> str:
-    """Versioning releases on feat, fix and perf, so the title keeps the highest type."""
+    """Versioning releases on feat, fix and perf, so the title keeps the highest type. A title
+    with no scope releases every unit the batch reaches, so it names the originals' scopes."""
     parsed = [CONVENTIONAL.match(entry["title"]) for entry in entries]
-    types = [match.group(1) for match in parsed if match]
+    types = [match["type"] for match in parsed if match]
     kind = next((name for name in ("feat", "fix", "perf") if name in types), types[0] if types else "chore")
-    breaking = "!" if any(match and match.group(2) for match in parsed) else ""
+    breaking = "!" if any(match and match["breaking"] for match in parsed) else ""
+    scope = combined_scope(parsed)
+    if scope:
+        for summary in (f"land {numbers(entries)} together", f"land {len(entries)} pull requests together"):
+            title = f"{kind}({scope}){breaking}: {summary}"
+            if len(title) <= TITLE_LIMIT:
+                return title
     return f"{kind}{breaking}: land {numbers(entries)} together"
 
 

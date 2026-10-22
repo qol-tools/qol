@@ -187,7 +187,7 @@ class TitleTests(unittest.TestCase):
     def test_keeps_the_type_versioning_releases_highest(self):
         cases = [
             (("fix(a): x", "feat(b): y", "perf: z"), "feat: land #101, #102 and #103 together"),
-            (("perf(a): x", "fix(b): y"), "fix: land #101 and #102 together"),
+            (("perf(a): x", "fix(b): y"), "fix(a,b): land #101 and #102 together"),
             (("perf(a): x", "docs: y"), "perf: land #101 and #102 together"),
             (("ci: x", "docs: y"), "ci: land #101 and #102 together"),
             (("chore(a)!: x", "fix: y"), "fix!: land #101 and #102 together"),
@@ -197,18 +197,40 @@ class TitleTests(unittest.TestCase):
             with self.subTest(titles=titles):
                 self.assertEqual(qb.combined_title(self.titled(*titles)), expected)
 
-    def test_the_commit_msg_gate_accepts_the_longest_title(self):
-        entries = [entry(n, n, MAIN, title="feat(a)!: x") for n in range(1, 6)]
-        for e, number in zip(entries, range(9995, 10000)):
-            e["number"] = number
-        title = qb.combined_title(entries)
-        with tempfile.TemporaryDirectory() as tmp:
-            message = Path(tmp) / "msg"
-            message.write_text(title + "\n")
-            result = subprocess.run(
-                [str(ROOT / ".githooks/commit-msg"), str(message)], capture_output=True, text=True, cwd=ROOT
-            )
-        self.assertEqual(result.returncode, 0, title + result.stdout + result.stderr)
+    def test_names_every_original_scope_while_it_fits(self):
+        five = ("fix(launcher): a", "fix(gpui): b", "fix(tray): c", "fix(alt-tab): d", "fix(tray): e")
+        long = ("feat(connection-health): x", "fix(desktop-settings): y", "fix(dev-orchestrator): z")
+        cases = [
+            (("feat(launcher): x", "fix(gpui): y"), "feat(launcher,gpui): land #101 and #102 together"),
+            (("fix(tray, alt-tab): x", "fix(Tray): y"), "fix(tray,alt-tab): land #101 and #102 together"),
+            (("feat(a)!: x", "fix(b): y"), "feat(a,b)!: land #101 and #102 together"),
+            (("feat(a): x", "fix(): y"), "feat: land #101 and #102 together"),
+            (five, "fix(launcher,gpui,tray,alt-tab): land 5 pull requests together"),
+            (long, "feat: land #101, #102 and #103 together"),
+        ]
+        for titles, expected in cases:
+            with self.subTest(titles=titles):
+                self.assertEqual(qb.combined_title(self.titled(*titles)), expected)
+
+    def test_versioning_releases_what_the_originals_name(self):
+        scopes = {"launcher": {"qol-launcher"}, "gpui": {"qol-gpui"}, "tray": {"qol-tray"}}
+        titles = ("feat(launcher): x", "fix(gpui,tray): y")
+        commit = plugin_version.Commit(sha=MAIN, subject=qb.combined_title(self.titled(*titles)), body="")
+        self.assertEqual(plugin_version.scope_packages(commit, scopes), {"qol-launcher", "qol-gpui", "qol-tray"})
+
+    def test_the_commit_msg_gate_accepts_the_longest_titles(self):
+        for title in ["fix(tray): x", "feat(dev-orchestrator)!: x", "fix(connection-health,desktop-settings): x", "perf: x"]:
+            entries = [entry(n, n, MAIN, title=title) for n in range(1, 6)]
+            for e, number in zip(entries, range(9995, 10000)):
+                e["number"] = number
+            combined = qb.combined_title(entries)
+            with self.subTest(title=combined), tempfile.TemporaryDirectory() as tmp:
+                message = Path(tmp) / "msg"
+                message.write_text(combined + "\n")
+                result = subprocess.run(
+                    [str(ROOT / ".githooks/commit-msg"), str(message)], capture_output=True, text=True, cwd=ROOT
+                )
+                self.assertEqual(result.returncode, 0, combined + result.stdout + result.stderr)
 
     def test_the_body_lists_each_original_subject_for_versioning(self):
         body = qb.combined_body(self.titled("feat(a): add x", "fix(b): mend y"), "failure details")
@@ -276,7 +298,7 @@ class CombineTests(unittest.TestCase):
         fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS", "AWAITING_CHECKS"))
         self.assertEqual(self.combine(fake, 3), 900)
         self.assertEqual(fake.refs, {f"queue-batch/{sha(3)[:7]}": sha(3)})
-        self.assertEqual(fake.pulls[0]["title"], "fix: land #101, #102 and #103 together")
+        self.assertEqual(fake.pulls[0]["title"], "fix(x): land #101, #102 and #103 together")
         closes = fake.writes("state=closed")
         self.assertEqual(
             [call[2] for call in closes], ["repos/o/r/pulls/103", "repos/o/r/pulls/102", "repos/o/r/pulls/101"]
@@ -290,7 +312,7 @@ class CombineTests(unittest.TestCase):
         fake = FakeGitHub(chain("AWAITING_CHECKS", "AWAITING_CHECKS", "AWAITING_CHECKS"))
         fake.checks[(sha(1), qb.GATE)] = "success"
         self.assertEqual(self.combine(fake, 3), 900)
-        self.assertEqual(fake.pulls[0]["title"], "fix: land #102 and #103 together")
+        self.assertEqual(fake.pulls[0]["title"], "fix(x): land #102 and #103 together")
         self.assertEqual([call[2] for call in fake.writes("state=closed")], ["repos/o/r/pulls/103", "repos/o/r/pulls/102"])
 
     def test_the_tail_goes_back_alone_when_every_entry_ahead_is_gated(self):
