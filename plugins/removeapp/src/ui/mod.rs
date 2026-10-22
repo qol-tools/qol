@@ -26,13 +26,16 @@ const SEARCH_H: f32 = qol_gpui::theme::HEIGHT_HINT_BAR;
 const SEARCH_PAD: f32 = qol_gpui::theme::SPACE_CELL;
 const FAILBAR_H: f32 = qol_gpui::theme::HEIGHT_BAND;
 const ROW_H: f32 = 40.0;
-const MAX_VISIBLE: usize = ((WINDOW_HEIGHT
-    - SEARCH_PAD
-    - SEARCH_H
-    - SEARCH_PAD
-    - FAILBAR_H
-    - qol_gpui::theme::HEIGHT_HINT_BAR)
-    / ROW_H) as usize;
+const PICKING_CHROME: f32 = 2.0 * qol_gpui::theme::LINE
+    + SEARCH_PAD
+    + SEARCH_H
+    + SEARCH_PAD
+    + FAILBAR_H
+    + qol_gpui::theme::HEIGHT_HINT_BAR;
+const MIN_ROWS: usize = 3;
+pub const MIN_WINDOW_HEIGHT: f32 = PICKING_CHROME + MIN_ROWS as f32 * ROW_H;
+const CONTENT_MAX_W: f32 = 720.0;
+const RESIZE_EDGE: f32 = 5.0;
 const REMOVE_KEY: Key = Key::BACKSPACE.platform();
 
 fn continue_or_quit_hint(cx: &mut Context<RemoveAppView>) -> gpui::Div {
@@ -126,7 +129,7 @@ impl RemoveAppView {
             apps,
             query: TextField::new(),
             matches,
-            list: ScrollList::new(MAX_VISIBLE),
+            list: ScrollList::new(rows_that_fit(WINDOW_HEIGHT)),
             mode: Mode::Picking,
             disposal: Disposal::Trash,
             plan: None,
@@ -496,37 +499,53 @@ impl RemoveAppView {
             })
             .collect();
         let counter = format!("{} / {}", self.matches.len(), self.apps.len());
+        let empty = self.matches.is_empty().then(|| {
+            let title = if self.query.is_empty() {
+                "No installed apps found".to_string()
+            } else {
+                format!("No apps match \"{}\"", self.query.text())
+            };
+            kit.empty(title, None)
+        });
         div()
             .flex()
             .flex_col()
             .size_full()
-            .child(self.search_box(window))
-            .child(
+            .child(centered_column(
                 div()
-                    .id("qol-removeapp-list")
-                    .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                        let rows = wheel_rows(&event.delta, ROW_H);
-                        this.list.wheel_by(rows, this.matches.len());
-                        cx.notify();
-                    }))
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
                     .flex()
                     .flex_col()
-                    .pt(px(SEARCH_PAD))
-                    .children(rows)
-                    .child(kit.scroll_cue(
-                        ScrollSource::Window {
-                            first: range.start,
-                            shown: range.len(),
-                            total: self.matches.len(),
-                        },
-                        kit.grounds.pane,
-                    )),
-            )
-            .children(self.remove_bar(cx))
+                    .child(self.search_box(window))
+                    .child(
+                        div()
+                            .id("qol-removeapp-list")
+                            .on_scroll_wheel(cx.listener(
+                                |this, event: &ScrollWheelEvent, _, cx| {
+                                    let rows = wheel_rows(&event.delta, ROW_H);
+                                    this.list.wheel_by(rows, this.matches.len());
+                                    cx.notify();
+                                },
+                            ))
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .pt(px(SEARCH_PAD))
+                            .children(rows)
+                            .children(empty)
+                            .child(clear_of_resize_edge(kit.scroll_cue(
+                                ScrollSource::Window {
+                                    first: range.start,
+                                    shown: range.len(),
+                                    total: self.matches.len(),
+                                },
+                                kit.grounds.pane,
+                            ))),
+                    )
+                    .children(self.remove_bar(cx)),
+            ))
             .child(footer(
                 &[
                     (Key::ENTER, "select", Command::Select),
@@ -582,7 +601,7 @@ impl RemoveAppView {
         let keycap = qol_gpui::text::shaped_width(window, "/", mono, qol_gpui::theme::TEXT_KEYCAP)
             + 2.0 * qol_gpui::theme::SPACE_SNUG
             + 2.0;
-        let available = WINDOW_WIDTH
+        let available = content_width(f32::from(window.viewport_size().width))
             - 2.0 * SEARCH_PAD
             - 2.0 * qol_gpui::theme::SPACE_PAD
             - 10.0
@@ -731,54 +750,59 @@ impl RemoveAppView {
             .size_full()
             .child(section_header(&plan.app.name))
             .children(self.guard_banner())
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .child(
-                        div()
-                            .id("qol-removeapp-items")
-                            .size_full()
-                            .track_scroll(&self.items_scroll)
-                            .overflow_y_scroll()
-                            .children(items),
-                    )
-                    .child(kit.scroll_cue(
-                        ScrollSource::Handle {
-                            handle: self.items_scroll.clone(),
-                            children: item_count,
-                        },
-                        kit.grounds.pane,
-                    )),
-            )
-            .child(
+            .child(centered_column(
                 div()
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .border_t_1()
-                    .border_color(rgba(kit.grounds.pane.edge.packed()))
+                    .flex_col()
                     .child(
                         div()
-                            .text_color(rgb(disp_color))
-                            .text(TextStyle::Name)
-                            .child(disp_label),
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .child(
+                                div()
+                                    .id("qol-removeapp-items")
+                                    .size_full()
+                                    .track_scroll(&self.items_scroll)
+                                    .overflow_y_scroll()
+                                    .children(items),
+                            )
+                            .child(clear_of_resize_edge(kit.scroll_cue(
+                                ScrollSource::Handle {
+                                    handle: self.items_scroll.clone(),
+                                    children: item_count,
+                                },
+                                kit.grounds.pane,
+                            ))),
                     )
                     .child(
                         div()
-                            .text_color(rgb(kit.grounds.pane.ink))
-                            .text(TextStyle::Detail)
-                            .child(format!(
-                                "{} \u{00b7} {}",
-                                qol_gpui::plural(plan.items.len(), "item", "items"),
-                                qol_gpui::format_bytes(plan.total_bytes)
-                            )),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .px(px(12.0))
+                            .py(px(8.0))
+                            .border_t_1()
+                            .border_color(rgba(kit.grounds.pane.edge.packed()))
+                            .child(
+                                div()
+                                    .text_color(rgb(disp_color))
+                                    .text(TextStyle::Name)
+                                    .child(disp_label),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(kit.grounds.pane.ink))
+                                    .text(TextStyle::Detail)
+                                    .child(format!(
+                                        "{} \u{00b7} {}",
+                                        qol_gpui::plural(plan.items.len(), "item", "items"),
+                                        qol_gpui::format_bytes(plan.total_bytes)
+                                    )),
+                            ),
                     ),
-            )
+            ))
             .child(footer(&hints, None, cx))
             .into_any_element()
     }
@@ -919,6 +943,7 @@ impl Focusable for RemoveAppView {
 impl Render for RemoveAppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let kit = qol_gpui::kit::kit();
+        self.list.max_visible = rows_that_fit(f32::from(window.viewport_size().height));
         self.list.sync(self.matches.len());
         qol_gpui::kit::kit()
             .window()
@@ -943,6 +968,35 @@ fn uninstall_then_remove(
         &PackageStatus::Managed(package),
         true,
     )
+}
+
+fn rows_that_fit(window_height: f32) -> usize {
+    (((window_height - PICKING_CHROME) / ROW_H).floor().max(0.0) as usize).max(1)
+}
+
+fn content_width(window_width: f32) -> f32 {
+    window_width.min(CONTENT_MAX_W)
+}
+
+fn centered_column(content: gpui::Div) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(content.flex_1().min_h_0().w_full().max_w(px(CONTENT_MAX_W)))
+}
+
+fn clear_of_resize_edge(cue: impl IntoElement) -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .right(px(RESIZE_EDGE))
+        .child(cue)
 }
 
 fn is_typed_char(key: &str) -> bool {
@@ -1109,25 +1163,56 @@ fn banner_busy(color: u32) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        confirm_command, done_action, primary_action, working_command, Command, PrimaryAction,
-        FAILBAR_H, MAX_VISIBLE, ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT,
+        confirm_command, content_width, done_action, primary_action, rows_that_fit,
+        working_command, Command, PrimaryAction, CONTENT_MAX_W, FAILBAR_H, MIN_WINDOW_HEIGHT,
+        ROW_H, SEARCH_H, SEARCH_PAD, WINDOW_HEIGHT, WINDOW_WIDTH,
     };
     use crate::core::{Guards, ManagedPackage, PackageManager, PackageScope, PackageStatus};
 
     #[test]
-    fn visible_rows_fit_window_and_are_maximal() {
-        let chrome =
-            SEARCH_PAD + SEARCH_H + SEARCH_PAD + FAILBAR_H + qol_gpui::theme::HEIGHT_HINT_BAR;
-        let fits = chrome + MAX_VISIBLE as f32 * ROW_H;
-        let one_more = chrome + (MAX_VISIBLE + 1) as f32 * ROW_H;
-        assert!(
-            fits <= WINDOW_HEIGHT,
-            "all {MAX_VISIBLE} rows fit: {fits} <= {WINDOW_HEIGHT}"
+    fn rows_fill_every_height_and_are_maximal() {
+        let chrome = 2.0 * qol_gpui::theme::LINE
+            + SEARCH_PAD
+            + SEARCH_H
+            + SEARCH_PAD
+            + FAILBAR_H
+            + qol_gpui::theme::HEIGHT_HINT_BAR;
+        let mut height = MIN_WINDOW_HEIGHT;
+        while height <= 2160.0 {
+            let rows = rows_that_fit(height);
+            let fits = chrome + rows as f32 * ROW_H;
+            let one_more = chrome + (rows + 1) as f32 * ROW_H;
+            assert!(fits <= height, "{rows} rows fit {height}: {fits}");
+            assert!(one_more > height, "{rows} is the most that fit {height}");
+            height += 1.0;
+        }
+    }
+
+    #[test]
+    fn opening_size_keeps_nine_rows_and_minimum_keeps_three() {
+        assert_eq!(rows_that_fit(WINDOW_HEIGHT), 9);
+        assert_eq!(rows_that_fit(MIN_WINDOW_HEIGHT), 3);
+        assert_eq!(rows_that_fit(100.0), 1);
+    }
+
+    #[test]
+    fn minimum_fits_a_480_pixel_screen_with_a_panel() {
+        assert_eq!(
+            MIN_WINDOW_HEIGHT, 290.0,
+            "fits under a 48 px panel on a 480 px screen"
         );
-        assert!(
-            one_more > WINDOW_HEIGHT,
-            "MAX_VISIBLE is the most that fit: {one_more} > {WINDOW_HEIGHT}"
-        );
+    }
+
+    #[test]
+    fn content_stops_widening_past_its_cap() {
+        let cases = [
+            (WINDOW_WIDTH, WINDOW_WIDTH),
+            (CONTENT_MAX_W, CONTENT_MAX_W),
+            (1920.0, CONTENT_MAX_W),
+        ];
+        for (window, expected) in cases {
+            assert_eq!(content_width(window), expected, "window: {window}");
+        }
     }
 
     #[test]
