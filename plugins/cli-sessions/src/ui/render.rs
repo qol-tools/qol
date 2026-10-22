@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, KeyDownEvent, KeyUpEvent,
-    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, Window,
+    Modifiers, SharedString, Window,
 };
 use qol_gpui::kit::Chip;
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
@@ -446,21 +446,6 @@ impl SessionsView {
             .tab_stop(true)
             .flex()
             .flex_col()
-            .capture_any_mouse_down(cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                if this.blocks_press(ev.position, window.viewport_size()) {
-                    cx.stop_propagation();
-                }
-            }))
-            .capture_any_mouse_up(cx.listener(|this, _: &MouseUpEvent, _, _| this.end_press()))
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseUpEvent, _, _| this.end_press()),
-            )
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, _| {
-                if ev.pressed_button.is_none() {
-                    this.end_press();
-                }
-            }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if this.is_collapsed() && ev.keystroke.key != "tab" {
                     match strip_key_action(&ev.keystroke.key, &ev.keystroke.modifiers) {

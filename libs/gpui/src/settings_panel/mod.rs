@@ -1061,7 +1061,11 @@ fn size_prepared_panel(
         0.0
     };
     let rail = rail_width(prepared.sources.len());
-    let width = (body_width + device_list + rail).min(room_on(work_area.width.to_f64() as f32));
+    let width = panel_width_on(
+        body_width,
+        device_list + rail,
+        work_area.width.to_f64() as f32,
+    );
     let height = panel_height(&prepared.rows, &prepared.sections)
         .max(if has_custom_source {
             PANEL_CUSTOM_HEIGHT
@@ -1126,6 +1130,10 @@ fn page_size_target(
         current.height.max(min_size.height),
     );
     (grown != current).then_some(grown)
+}
+
+fn panel_width_on(body: f32, side_columns: f32, work_area_width: f32) -> f32 {
+    (body + side_columns).min(room_on(work_area_width))
 }
 
 fn room_on(work_area: f32) -> f32 {
@@ -1493,10 +1501,16 @@ active_query = "status"
 
     #[test]
     fn the_panel_never_asks_for_more_room_than_the_work_area_has() {
-        let widest =
-            PANEL_GAMEPAD_WIDTH + super::components::DEVICE_LIST_WIDTH + super::PANEL_RAIL_WIDTH;
-        assert_eq!(widest.min(super::room_on(1280.0)), 1232.0);
-        assert_eq!(widest.min(super::room_on(1920.0)), widest);
+        let side_columns = super::components::DEVICE_LIST_WIDTH + super::PANEL_RAIL_WIDTH;
+        let widest = PANEL_GAMEPAD_WIDTH + side_columns;
+        assert_eq!(
+            super::panel_width_on(PANEL_GAMEPAD_WIDTH, side_columns, 1280.0),
+            1232.0
+        );
+        assert_eq!(
+            super::panel_width_on(PANEL_GAMEPAD_WIDTH, side_columns, 1920.0),
+            widest
+        );
     }
 
     #[test]

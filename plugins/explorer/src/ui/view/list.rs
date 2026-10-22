@@ -12,7 +12,7 @@ use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
 use qol_gpui::text::{baseline, line_height, TextStyled};
 use qol_gpui::theme::{
     translucent, Alpha, Ground, TextStyle, HEIGHT_INLINE, LINE, SPACE_CELL, SPACE_GUTTER,
-    SPACE_INSET, SPACE_STACK, SPACE_TIGHT,
+    SPACE_INSET, SPACE_STACK,
 };
 
 use super::grid::{Layout, ACROSS};
@@ -24,8 +24,6 @@ use crate::ui::columns::{kind_label, left_to_right, size_label, typed_split};
 const KIND_WIDTH: f32 = 110.0;
 const SIZE_WIDTH: f32 = 90.0;
 const NAME_MAX_WIDTH: f32 = 640.0;
-const SCROLL_CLEARANCE: f32 = SPACE_TIGHT;
-const GRIP_WIDTH: f32 = SPACE_INSET;
 const SECOND_LINE_JOIN: &str = "  ·  ";
 
 pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> impl IntoElement {
@@ -146,31 +144,14 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             .size_full()
             .track_scroll(view.scroll.clone()),
         )
-        .child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .right(px(SCROLL_CLEARANCE))
-                .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right_0()
-                        .w(px(GRIP_WIDTH))
-                        .overflow_hidden()
-                        .child(ScrollGrip::new(
-                            "explorer-rows-grip",
-                            source,
-                            move |at, _window, cx| {
-                                let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
-                            },
-                        )),
-                ),
-        )
+        .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
+        .child(ScrollGrip::new(
+            "explorer-rows-grip",
+            source,
+            move |at, _window, cx| {
+                let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
+            },
+        ))
         .into_any_element()
 }
 
@@ -448,11 +429,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use qol_gpui::resize_frame::EDGE_BAND;
-    use qol_gpui::scrollbar::{SEAM_TRACK_INSET, SEAM_TRACK_WIDTH};
-    use qol_gpui::theme::LINE;
-
-    use super::{kind_text, second_line, GRIP_WIDTH, SCROLL_CLEARANCE};
+    use super::{kind_text, second_line};
     use crate::listing::{Entry, EntryKind, Size, SortKey};
 
     fn entry(name: &str, kind: EntryKind, opens_as_folder: bool) -> Entry {
@@ -490,13 +467,5 @@ mod tests {
                 entry.display
             );
         }
-    }
-
-    #[test]
-    fn the_scroll_grip_and_thumb_sit_clear_of_the_window_resize_edge() {
-        let grip_outer = LINE + SCROLL_CLEARANCE;
-        let thumb_inner = grip_outer + SEAM_TRACK_INSET + SEAM_TRACK_WIDTH;
-        assert!(grip_outer >= EDGE_BAND, "{grip_outer}");
-        assert!(thumb_inner <= grip_outer + GRIP_WIDTH, "{thumb_inner}");
     }
 }

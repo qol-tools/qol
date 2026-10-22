@@ -26,12 +26,12 @@ use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
-use crate::config::{ConfigSaver, ExplorerConfig};
+use crate::config::{ConfigSaver, ExplorerConfig, ViewSize};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
-use grid::{Layout, Stop};
+use grid::Layout;
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
@@ -60,7 +60,7 @@ pub struct ExplorerView {
     frame_height: f32,
     list_width: f32,
     rail_width: f32,
-    stop: Stop,
+    stop: ViewSize,
     wheeled: f32,
     slider_hovered: bool,
     slider_dragging: bool,
@@ -92,7 +92,7 @@ impl ExplorerView {
             frame_height: 0.0,
             list_width: 0.0,
             rail_width: RAIL,
-            stop: Stop::from(config.view_size),
+            stop: config.view_size,
             wheeled: 0.0,
             slider_hovered: false,
             slider_dragging: false,
@@ -200,12 +200,12 @@ impl ExplorerView {
         ((self.list_height() / self.layout().pitch) as usize).max(1)
     }
 
-    fn resize(&mut self, stop: Stop) -> bool {
+    fn resize(&mut self, stop: ViewSize) -> bool {
         if stop == self.stop {
             return false;
         }
         self.stop = stop;
-        self.saver.save("view_size", stop.view_size());
+        self.saver.save("view_size", stop);
         self.reveal_cursor();
         true
     }

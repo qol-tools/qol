@@ -166,7 +166,6 @@ struct DismissState {
     resize_frame: Option<ResizeFrame>,
     native_window: RefCell<Option<(AnyWindowHandle, AsyncApp)>>,
     user_sized: Cell<bool>,
-    os_frame: bool,
     visible: Rc<Cell<bool>>,
     reveal_pending: Rc<Cell<bool>>,
     remembered: Option<Rc<Remembered>>,
@@ -176,7 +175,7 @@ impl DismissState {
     fn hint_programmatic_size(&self, requested: Size<Pixels>, window: &Window) {
         if let Some(frame) = &self.resize_frame {
             frame.end_user_sizing();
-            hint_native_min_size(window, native_min_size(frame.min_size(), requested));
+            window.set_window_min_size(native_min_size(frame.min_size(), requested));
         }
     }
 
@@ -198,9 +197,7 @@ impl DismissState {
                     return;
                 };
                 let min_size = native_min_size(frame.min_size(), state.size.get());
-                let _ = handle.update(&mut cx, |_, window, _| {
-                    hint_native_min_size(window, min_size)
-                });
+                let _ = handle.update(&mut cx, |_, window, _| window.set_window_min_size(min_size));
             })
             .detach();
     }
@@ -213,14 +210,13 @@ impl DismissState {
         )
     }
 
-    fn observe_bounds(&self, observed: Size<Pixels>, maximized: bool) {
+    fn observe_bounds(&self, observed: Size<Pixels>, maximized: bool, live_resizing: bool) {
         let Some(frame) = &self.resize_frame else {
             return;
         };
         if !takes_user_size(
             frame.is_user_sizing(),
-            self.user_sized.get(),
-            self.os_frame,
+            live_resizing,
             maximized,
             self.size.get(),
             observed,
@@ -242,13 +238,11 @@ pub struct SurfaceDismisser {
 }
 
 impl SurfaceDismisser {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         reusable: bool,
         title: String,
         size: Size<Pixels>,
         min_size: Option<Size<Pixels>>,
-        os_frame: bool,
         visible: Rc<Cell<bool>>,
         reveal_pending: Rc<Cell<bool>>,
         remembered: Option<Rc<Remembered>>,
@@ -271,7 +265,6 @@ impl SurfaceDismisser {
                 resize_frame,
                 native_window: RefCell::new(None),
                 user_sized: Cell::new(user_sized),
-                os_frame,
                 visible,
                 reveal_pending,
                 remembered,
@@ -300,6 +293,37 @@ impl SurfaceDismisser {
         frame.set_min_size(min_size);
         self.state.rehint_min_size();
         true
+    }
+
+    pub fn is_user_sizing(&self) -> bool {
+        self.state
+            .resize_frame
+            .as_ref()
+            .is_some_and(ResizeFrame::is_user_sizing)
+    }
+
+    pub fn set_fixed_height(&self, fixed: bool) -> bool {
+        let Some(frame) = &self.state.resize_frame else {
+            return false;
+        };
+        frame.set_fixed_height(fixed);
+        true
+    }
+
+    pub fn hold_remembered_bounds(&self, bounds: Bounds<Pixels>, window: &Window, cx: &mut App) {
+        if let Some(remembered) = &self.state.remembered {
+            remembered.hold_bounds(bounds, window.scale_factor(), cx);
+        }
+    }
+
+    pub fn release_remembered_bounds(&self, window: &Window, cx: &mut App) {
+        let Some(remembered) = &self.state.remembered else {
+            return;
+        };
+        remembered.release_bounds();
+        if !window.is_maximized() && !window.is_fullscreen() {
+            remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
+        }
     }
 
     pub fn resize_window(&self, size: Size<Pixels>, window: &mut Window) -> bool {
@@ -523,10 +547,6 @@ impl Surface {
             .map(|restored| restored.bounds)
             .or_else(|| monitor.map(|m| self.resolved_bounds(m)))
             .unwrap_or_else(|| Bounds::centered(None, self.size, cx));
-        let opening_size = match restore_size {
-            RestoreSize::AtLeast(_) => bounds.size,
-            RestoreSize::Content(size) => size,
-        };
         let title = reserve_surface_title(&self.title);
         let reveal_after_move = matches!(self.kind, SurfaceKind::Panel | SurfaceKind::OverlayPanel);
         let native_reveal_gate = reveal_after_move && supports_native_reveal_gate();
@@ -562,9 +582,8 @@ impl Surface {
         let dismisser = SurfaceDismisser::new(
             retain_on_dismiss,
             title.clone(),
-            opening_size,
+            bounds.size,
             min_size,
-            self.os_frame,
             visible.clone(),
             reveal_pending.clone(),
             remembered.clone(),
@@ -576,7 +595,11 @@ impl Surface {
         let live_while = self.live_while.clone();
         let bounds_visible = visible.clone();
         let bounds_state = dismisser.state.clone();
-        let resize_frame = dismisser.state.resize_frame.clone();
+        let resize_frame = dismisser
+            .state
+            .resize_frame
+            .clone()
+            .filter(|_| !self.os_frame);
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
@@ -594,7 +617,11 @@ impl Surface {
                 let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
                     if bounds_visible.get() {
                         let maximized = window.is_maximized() || window.is_fullscreen();
-                        bounds_state.observe_bounds(window.viewport_size(), maximized);
+                        bounds_state.observe_bounds(
+                            window.viewport_size(),
+                            maximized,
+                            window.is_live_resizing(),
+                        );
                         if let Some(remembered) =
                             bounds_state.remembered.as_ref().filter(|_| !maximized)
                         {
@@ -843,10 +870,6 @@ fn supports_native_reveal_gate() -> bool {
     Platform::supports_native_reveal_gate()
 }
 
-fn hint_native_min_size(window: &Window, size: Size<Pixels>) {
-    window.set_window_min_size(size);
-}
-
 fn native_min_size(min_size: Size<Pixels>, requested: Size<Pixels>) -> Size<Pixels> {
     size(
         min_size.width.min(requested.width),
@@ -867,15 +890,14 @@ fn restore_size(
 
 fn takes_user_size(
     user_sizing: bool,
-    user_sized: bool,
-    os_frame: bool,
+    live_resizing: bool,
     maximized: bool,
     declared: Size<Pixels>,
     observed: Size<Pixels>,
 ) -> bool {
     let drawable = observed.width > px(0.0) && observed.height > px(0.0);
     let changed = !platform::dimensions_match(observed, declared, USER_SIZE_TOLERANCE);
-    drawable && changed && !maximized && (user_sizing || user_sized || os_frame)
+    drawable && changed && !maximized && (user_sizing || live_resizing)
 }
 
 fn fresh_frame_for(fresh_frame: FreshFrame, resizable: bool) -> FreshFrame {
@@ -971,17 +993,18 @@ fn restore_reveal_state_verified(
     reused: bool,
     reason: &str,
     kind: SurfaceKind,
+    resizable: bool,
 ) -> bool {
     match kind {
-        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason, resizable),
         SurfaceKind::Toast | SurfaceKind::Panel => {
             restore_window_state_verified(title, reused, reason)
         }
     }
 }
 
-fn restore_overlay_state(title: &str, reused: bool, reason: &str) -> bool {
-    let configured = crate::popup_window::configure_overlay_window(title);
+fn restore_overlay_state(title: &str, reused: bool, reason: &str, resizable: bool) -> bool {
+    let configured = crate::popup_window::configure_overlay_window(title, resizable);
     let shown = {
         let _reason = crate::popup_window::reason_scope(reason);
         crate::popup_window::show_window_by_title(title)
@@ -993,9 +1016,15 @@ fn restore_overlay_state(title: &str, reused: bool, reason: &str) -> bool {
     shown
 }
 
-fn show_after_timeout(title: &str, reused: bool, reason: &str, kind: SurfaceKind) -> bool {
+fn show_after_timeout(
+    title: &str,
+    reused: bool,
+    reason: &str,
+    kind: SurfaceKind,
+    resizable: bool,
+) -> bool {
     match kind {
-        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason),
+        SurfaceKind::OverlayPanel => restore_overlay_state(title, reused, reason, resizable),
         SurfaceKind::Toast | SurfaceKind::Panel => {
             let _reason = crate::popup_window::reason_scope(reason);
             crate::popup_window::show_normal_window_by_title(title)
@@ -1092,7 +1121,13 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
         if !readiness.ready() {
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
-                let shown = show_after_timeout(&title, false, "surface-reveal-timeout", kind);
+                let shown = show_after_timeout(
+                    &title,
+                    false,
+                    "surface-reveal-timeout",
+                    kind,
+                    dismiss_state.resize_frame.is_some(),
+                );
                 dismiss_state.rehint_min_size();
                 visible.set(shown);
                 qol_runtime::probe!(
@@ -1121,7 +1156,13 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             );
             return;
         }
-        let shown = restore_reveal_state_verified(&title, false, "surface-reveal", kind);
+        let shown = restore_reveal_state_verified(
+            &title,
+            false,
+            "surface-reveal",
+            kind,
+            dismiss_state.resize_frame.is_some(),
+        );
         dismiss_state.rehint_min_size();
         let repaint_requested = shown
             && cx
@@ -1460,7 +1501,13 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
         if !readiness.ready() {
             reveal_pending.set(false);
             if Platform::reveal_fail_open() {
-                let shown = show_after_timeout(&title, true, "surface-reuse-timeout", kind);
+                let shown = show_after_timeout(
+                    &title,
+                    true,
+                    "surface-reuse-timeout",
+                    kind,
+                    dismiss_state.resize_frame.is_some(),
+                );
                 dismiss_state.rehint_min_size();
                 visible.set(shown);
                 qol_runtime::probe!(
@@ -1487,7 +1534,13 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             );
             return;
         }
-        let shown = restore_reveal_state_verified(&title, true, "surface-reuse-reveal", kind);
+        let shown = restore_reveal_state_verified(
+            &title,
+            true,
+            "surface-reuse-reveal",
+            kind,
+            dismiss_state.resize_frame.is_some(),
+        );
         dismiss_state.rehint_min_size();
         visible.set(shown);
         reveal_pending.set(false);
@@ -1836,9 +1889,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_drag_an_earlier_user_size_or_an_os_frame_claims_a_changed_viewport() {
+    fn only_a_drag_or_a_live_os_resize_claims_a_changed_viewport() {
         let declared = size(px(640.0), px(480.0));
         let dragged = size(px(700.0), px(520.0));
+        let clamped = size(px(640.0), px(400.0));
         let rounded = size(px(640.5), px(480.0));
         let empty = size(px(0.0), px(0.0));
         let cases = [
@@ -1846,94 +1900,73 @@ mod tests {
                 true,
                 false,
                 false,
-                false,
                 dragged,
                 true,
-                "a drag that changed the size",
+                "a frame drag that changed the size",
             ),
             (
                 false,
                 true,
                 false,
-                false,
                 dragged,
                 true,
-                "a remembered user size follows the window",
+                "a window manager resize the user drives",
             ),
             (
                 false,
+                true,
                 false,
-                false,
-                false,
-                dragged,
-                false,
-                "a programmatic or WM resize",
+                size(px(900.0), px(700.0)),
+                true,
+                "an Explorer drag on its OS frame",
             ),
             (
-                false,
-                false,
+                true,
                 true,
                 false,
                 dragged,
                 true,
-                "a resize by the window manager's own frame",
+                "a hand-off the window manager reports live",
             ),
+            (false, false, false, dragged, false, "a programmatic resize"),
             (
                 false,
+                false,
+                false,
+                clamped,
+                false,
+                "a window manager clamp without evidence",
+            ),
+            (
                 false,
                 true,
                 false,
                 declared,
                 false,
-                "an os frame at the requested size",
+                "a live resize at the requested size",
             ),
             (
-                false,
                 false,
                 true,
                 true,
                 dragged,
                 false,
-                "a maximize through the os frame",
+                "a maximize during a live resize",
             ),
+            (true, false, true, dragged, false, "a maximize after a drag"),
             (
                 true,
-                true,
-                false,
-                true,
-                dragged,
-                false,
-                "a maximize after the user sized it",
-            ),
-            (
-                true,
-                false,
                 false,
                 false,
                 rounded,
                 false,
                 "native rounding during a drag",
             ),
-            (
-                true,
-                true,
-                true,
-                false,
-                empty,
-                false,
-                "an unmapped viewport",
-            ),
+            (true, true, false, empty, false, "an unmapped viewport"),
         ];
-        for (user_sizing, user_sized, os_frame, maximized, observed, expected, note) in cases {
+        for (user_sizing, live_resizing, maximized, observed, expected, note) in cases {
             assert_eq!(
-                takes_user_size(
-                    user_sizing,
-                    user_sized,
-                    os_frame,
-                    maximized,
-                    declared,
-                    observed
-                ),
+                takes_user_size(user_sizing, live_resizing, maximized, declared, observed),
                 expected,
                 "{note}"
             );
@@ -1987,7 +2020,6 @@ mod tests {
             "test".to_owned(),
             size(px(10.0), px(10.0)),
             Some(size(px(10.0), px(10.0))),
-            false,
             visible,
             pending,
             None,
@@ -2075,7 +2107,6 @@ mod tests {
             "Close Request Panel".into(),
             size(px(100.0), px(100.0)),
             None,
-            false,
             Rc::new(Cell::new(true)),
             Rc::new(Cell::new(false)),
             None,

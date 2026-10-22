@@ -81,6 +81,7 @@ fn a_restore_lands_on_the_active_monitor_at_the_saved_offset(cx: &mut gpui::Test
         save_generation: Cell::new(0),
         user_sized: Cell::new(false),
         burst_monitors: RefCell::new(None),
+        held: Cell::new(false),
     };
     let active = ActiveMonitor::from_bounds(bounds(100_000.0, 0.0, 2560.0, 1440.0));
     let restored = cx
@@ -281,4 +282,54 @@ fn a_user_size_reads_a_queued_save_before_the_file() {
     assert_eq!(latest(&store, key), Some(queued));
     flush_key(key);
     assert_eq!(latest(&store, key), Some(state(key, false)));
+}
+
+#[gpui::test]
+fn held_bounds_are_saved_at_once_and_survive_later_records(cx: &mut gpui::TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = WindowStateStore::new(dir.path());
+    let saved = state("memory-test-held-key", true);
+    let remembered = Rc::new(Remembered {
+        store: store.clone(),
+        key: saved.key.clone(),
+        reopen: RefCell::new(None),
+        default_placement: saved.default_placement.clone(),
+        last: RefCell::new(Some(saved.clone())),
+        save_generation: Cell::new(0),
+        user_sized: Cell::new(false),
+        burst_monitors: RefCell::new(None),
+        held: Cell::new(false),
+    });
+    let monitor = Monitor {
+        id: "id".into(),
+        connector: "DP-1".into(),
+        work_area: bounds(0.0, 0.0, 1920.0, 1080.0),
+        bounds: bounds(0.0, 0.0, 1920.0, 1080.0),
+        scale: 1.0,
+        primary: true,
+    };
+    let expanded = to_bounds(WindowRect {
+        x: 400.0,
+        y: 300.0,
+        width: 640.0,
+        height: 480.0,
+    });
+    remembered.hold_on(expanded, 1.0, &[monitor]);
+    let held = remembered.last.borrow().clone().unwrap();
+    assert_ne!(held.bounds_on_monitor, saved.bounds_on_monitor);
+    assert_eq!(store.load(&saved.key), Some(held.clone()));
+
+    let strip = to_bounds(WindowRect {
+        x: 400.0,
+        y: 300.0,
+        width: 640.0,
+        height: 40.0,
+    });
+    cx.update(|cx| remembered.record_bounds(strip, 1.0, cx));
+    assert_eq!(remembered.last.borrow().clone(), Some(held.clone()));
+
+    remembered.record_closed();
+    let closed = store.load(&saved.key).unwrap();
+    assert_eq!(closed.bounds_on_monitor, held.bounds_on_monitor);
+    assert!(!closed.open);
 }

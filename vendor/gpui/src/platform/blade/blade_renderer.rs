@@ -487,10 +487,7 @@ impl BladeRenderer {
         self.update_drawable_size_impl(size, size, false);
     }
 
-    #[cfg_attr(
-        any(target_os = "macos", feature = "wayland", target_os = "windows"),
-        allow(dead_code)
-    )]
+    #[cfg_attr(any(target_os = "macos", not(feature = "x11")), allow(dead_code))]
     pub fn update_render_size(
         &mut self,
         drawable: Size<DevicePixels>,

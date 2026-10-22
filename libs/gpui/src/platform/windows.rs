@@ -211,7 +211,7 @@ pub(crate) const GLYPH_STEPS_PER_PIXEL: f32 = 1.0;
 
 pub(crate) const RESIZE_BY_WINDOW_MANAGER: bool = false;
 
-pub(crate) const FRAME_RESIZES_WINDOW: bool = true;
+pub(crate) const DRAWS_RESIZE_ZONES: bool = true;
 
 pub(crate) fn display_scale_factor(display: gpui::DisplayId) -> f32 {
     qol_windowing::platform::windows::monitors()

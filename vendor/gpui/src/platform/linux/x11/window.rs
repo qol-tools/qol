@@ -98,6 +98,7 @@ fn query_render_extent(
 }
 
 const MAX_RENDER_EXTENT: u32 = 8192;
+const RENDER_EXTENT_STEP: u32 = 256;
 
 fn capped_render_extent(extent: gpu::Extent) -> gpu::Extent {
     gpu::Extent {
@@ -107,27 +108,38 @@ fn capped_render_extent(extent: gpu::Extent) -> gpu::Extent {
     }
 }
 
-fn largest_monitor_extent(
-    xcb: &Rc<XCBConnection>,
-    root: xproto::Window,
-    floor: gpu::Extent,
-) -> gpu::Extent {
-    let Ok(monitors) = get_reply(
+fn covering_extent(a: gpu::Extent, b: gpu::Extent) -> gpu::Extent {
+    gpu::Extent {
+        width: a.width.max(b.width),
+        height: a.height.max(b.height),
+        depth: 1,
+    }
+}
+
+fn stepped_render_extent(extent: gpu::Extent) -> gpu::Extent {
+    let step = |span: u32| span.max(1).div_ceil(RENDER_EXTENT_STEP) * RENDER_EXTENT_STEP;
+    capped_render_extent(gpu::Extent {
+        width: step(extent.width),
+        height: step(extent.height),
+        depth: 1,
+    })
+}
+
+fn largest_monitor_extent(xcb: &Rc<XCBConnection>, root: xproto::Window) -> Option<gpu::Extent> {
+    let monitors = get_reply(
         || "X11 RandR GetMonitors failed.",
         xcb.randr_get_monitors(root, true),
-    ) else {
-        return capped_render_extent(floor);
-    };
-    capped_render_extent(
-        monitors
-            .monitors
-            .iter()
-            .fold(floor, |extent, monitor| gpu::Extent {
-                width: extent.width.max(monitor.width as u32),
-                height: extent.height.max(monitor.height as u32),
-                depth: 1,
-            }),
     )
+    .log_err()?;
+    monitors
+        .monitors
+        .iter()
+        .map(|monitor| gpu::Extent {
+            width: monitor.width as u32,
+            height: monitor.height as u32,
+            depth: 1,
+        })
+        .reduce(covering_extent)
 }
 
 fn render_extent_fits(current: gpu::Extent, content: gpu::Extent) -> bool {
@@ -135,48 +147,113 @@ fn render_extent_fits(current: gpu::Extent, content: gpu::Extent) -> bool {
     content.width <= current.width && content.height <= current.height
 }
 
-fn grown_render_extent(
+fn next_render_extent(
     current: gpu::Extent,
     content: gpu::Extent,
-    screen: gpu::Extent,
-) -> gpu::Extent {
-    let axis = |current: u32, content: u32, screen: u32| {
-        let needed = current.max(content);
-        let target = if screen <= MAX_RENDER_EXTENT {
-            needed.max(screen)
-        } else {
-            needed
-        };
-        target.min(MAX_RENDER_EXTENT)
+    live_monitor: Option<gpu::Extent>,
+) -> Option<gpu::Extent> {
+    let needed = covering_extent(current, content);
+    let grown = match live_monitor {
+        Some(monitor) => capped_render_extent(covering_extent(needed, monitor)),
+        None if render_extent_fits(current, content) => return None,
+        None => stepped_render_extent(needed),
     };
-    gpu::Extent {
-        width: axis(current.width, content.width, screen.width),
-        height: axis(current.height, content.height, screen.height),
-        depth: 1,
+    (grown != current).then_some(grown)
+}
+
+fn fit_render_window(
+    xcb: &Rc<XCBConnection>,
+    state: &mut X11WindowState,
+    live: bool,
+) -> anyhow::Result<()> {
+    let content = state.content_extent;
+    let drawable = match state.render_window {
+        Some(render_window) => {
+            let current = state.renderer.viewport_size();
+            let live_monitor = live
+                .then(|| largest_monitor_extent(xcb, state.x_root_window))
+                .flatten();
+            match next_render_extent(current, content, live_monitor) {
+                Some(grown) => {
+                    check_reply(
+                        || "X11 ConfigureWindow for the render surface failed.",
+                        xcb.configure_window(
+                            render_window,
+                            &xproto::ConfigureWindowAux::new()
+                                .width(grown.width)
+                                .height(grown.height),
+                        ),
+                    )?;
+                    grown
+                }
+                None => current,
+            }
+        }
+        None => content,
+    };
+    let device = |extent: gpu::Extent| {
+        size(
+            DevicePixels(extent.width as i32),
+            DevicePixels(extent.height as i32),
+        )
+    };
+    state
+        .renderer
+        .update_render_size(device(drawable), device(content));
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) struct SyncAck<T> {
+    requested: Option<T>,
+    resized: Option<T>,
+    drawn: Option<T>,
+    live: bool,
+}
+
+impl<T: Copy> SyncAck<T> {
+    fn new() -> Self {
+        Self {
+            requested: None,
+            resized: None,
+            drawn: None,
+            live: false,
+        }
+    }
+
+    pub(crate) fn request(&mut self, value: T) {
+        self.requested = Some(value);
+    }
+
+    fn configured(&mut self, is_resize: bool) -> Option<T> {
+        let requested = self.requested.take();
+        self.live = is_resize && requested.is_some();
+        if is_resize {
+            if requested.is_some() {
+                self.resized = requested;
+            }
+            return None;
+        }
+        if requested.is_some() {
+            self.resized = None;
+            self.drawn = None;
+        }
+        requested
+    }
+
+    fn drawn(&mut self) {
+        if let Some(value) = self.resized.take() {
+            self.drawn = Some(value);
+        }
+    }
+
+    fn refreshed(&mut self) -> Option<T> {
+        self.drawn.take()
     }
 }
 
-fn grow_render_window(
-    xcb: &Rc<XCBConnection>,
-    root: xproto::Window,
-    render_window: xproto::Window,
-    current: gpu::Extent,
-    content: gpu::Extent,
-) -> anyhow::Result<gpu::Extent> {
-    if render_extent_fits(current, content) {
-        return Ok(current);
-    }
-    let grown = grown_render_extent(current, content, query_render_extent(xcb, root)?);
-    check_reply(
-        || "X11 ConfigureWindow for the render surface failed.",
-        xcb.configure_window(
-            render_window,
-            &xproto::ConfigureWindowAux::new()
-                .width(grown.width)
-                .height(grown.height),
-        ),
-    )?;
-    Ok(grown)
+fn device_min_size(min_size: Size<Pixels>, scale_factor: f32) -> Size<DevicePixels> {
+    min_size.map(|span| DevicePixels((span.0 * scale_factor).ceil() as i32))
 }
 
 impl ResizeEdge {
@@ -337,9 +414,7 @@ pub struct X11WindowState {
     atoms: XcbAtoms,
     x_root_window: xproto::Window,
     pub(crate) counter_id: sync::Counter,
-    pub(crate) last_sync_counter: Option<sync::Int64>,
-    resized_sync_counter: Option<sync::Int64>,
-    drawn_sync_counter: Option<sync::Int64>,
+    pub(crate) sync: SyncAck<sync::Int64>,
     pub(crate) press_root: Option<(i32, i32)>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
@@ -490,7 +565,7 @@ pub(crate) fn handle_connection_error(err: ConnectionError) -> anyhow::Error {
 // client area, not the frame, at that origin, so restoring a saved inner
 // bounds does not drift by the title bar height. Upstream candidate for
 // zed-industries/zed; delete once gpui sets these hints itself.
-fn normal_hints(bounds: Bounds<DevicePixels>, min_size: Option<Size<Pixels>>) -> WmSizeHints {
+fn normal_hints(bounds: Bounds<DevicePixels>, min_size: Option<Size<DevicePixels>>) -> WmSizeHints {
     let mut size_hints = WmSizeHints::new();
     size_hints.position = Some((
         WmSizeHintsSpecification::UserSpecified,
@@ -502,7 +577,7 @@ fn normal_hints(bounds: Bounds<DevicePixels>, min_size: Option<Size<Pixels>>) ->
         bounds.size.width.0,
         bounds.size.height.0,
     ));
-    size_hints.min_size = min_size.map(|size| (size.width.0 as i32, size.height.0 as i32));
+    size_hints.min_size = min_size.map(|size| (size.width.0, size.height.0));
     size_hints.win_gravity = Some(xproto::Gravity::STATIC);
     size_hints
 }
@@ -630,7 +705,12 @@ impl X11WindowState {
                     xcb.configure_window(x_window, &xproto::ConfigureWindowAux::new().x(x).y(y)),
                 )?;
             }
-            let size_hints = normal_hints(bounds, params.window_min_size);
+            let size_hints = normal_hints(
+                bounds,
+                params
+                    .window_min_size
+                    .map(|min_size| device_min_size(min_size, scale_factor)),
+            );
             check_reply(
                 || {
                     format!(
@@ -763,11 +843,7 @@ impl X11WindowState {
             )?;
 
             let render_window = if params.window_min_size.is_some() {
-                let extent = largest_monitor_extent(
-                    xcb,
-                    visual_set.root,
-                    query_render_extent(xcb, x_window)?,
-                );
+                let extent = stepped_render_extent(query_render_extent(xcb, x_window)?);
                 let id = xcb.generate_id()?;
                 check_reply(
                     || "X11 CreateWindow for the render surface failed.",
@@ -853,9 +929,7 @@ impl X11WindowState {
                 last_insets: [0, 0, 0, 0],
                 edge_constraints: None,
                 counter_id: sync_request_counter,
-                last_sync_counter: None,
-                resized_sync_counter: None,
-                drawn_sync_counter: None,
+                sync: SyncAck::new(),
                 press_root: None,
             })
         });
@@ -1014,14 +1088,14 @@ impl X11Window {
     }
 
     fn send_moveresize(&self, flag: u32) -> anyhow::Result<()> {
-        let state = self.0.state.borrow();
+        let mut state = self.0.state.borrow_mut();
 
         check_reply(
             || "X11 UngrabPointer before move/resize of window failed.",
             self.0.xcb.ungrab_pointer(x11rb::CURRENT_TIME),
         )?;
 
-        let (root_x, root_y) = match state.press_root {
+        let (root_x, root_y) = match state.press_root.take() {
             Some(press) => press,
             None => {
                 let pointer = get_reply(
@@ -1163,7 +1237,7 @@ impl X11WindowStatePtr {
     pub fn refresh(&self, request_frame_options: RequestFrameOptions) {
         {
             let mut state = self.state.borrow_mut();
-            if let Some(value) = state.drawn_sync_counter.take() {
+            if let Some(value) = state.sync.refreshed() {
                 check_reply(
                     || "X11 sync SetCounter failed.",
                     sync::set_counter(&self.xcb, state.counter_id, value),
@@ -1257,8 +1331,8 @@ impl X11WindowStatePtr {
     }
 
     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
-        let mut resize_args = None;
         let is_resize;
+        let (content_size, scale_factor);
         {
             let mut state = self.state.borrow_mut();
             let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
@@ -1274,36 +1348,12 @@ impl X11WindowStatePtr {
                 state.bounds = bounds;
             }
 
-            let gpu_size = query_render_extent(&self.xcb, self.x_window)?;
-            state.content_extent = gpu_size;
-            let drawable = match state.render_window {
-                Some(render_window) => grow_render_window(
-                    &self.xcb,
-                    state.x_root_window,
-                    render_window,
-                    state.renderer.viewport_size(),
-                    gpu_size,
-                )?,
-                None => gpu_size,
-            };
-            if true {
-                state.renderer.update_render_size(
-                    size(
-                        DevicePixels(drawable.width as i32),
-                        DevicePixels(drawable.height as i32),
-                    ),
-                    size(
-                        DevicePixels(gpu_size.width as i32),
-                        DevicePixels(gpu_size.height as i32),
-                    ),
-                );
-                resize_args = Some((state.content_size(), state.scale_factor));
-            }
-            if is_resize {
-                if let Some(value) = state.last_sync_counter.take() {
-                    state.resized_sync_counter = Some(value);
-                }
-            } else if let Some(value) = state.last_sync_counter.take() {
+            state.content_extent = query_render_extent(&self.xcb, self.x_window)?;
+            let ack = state.sync.configured(is_resize);
+            let live = state.sync.live;
+            fit_render_window(&self.xcb, &mut state, live)?;
+            (content_size, scale_factor) = (state.content_size(), state.scale_factor);
+            if let Some(value) = ack {
                 check_reply(
                     || "X11 sync SetCounter failed.",
                     sync::set_counter(&self.xcb, state.counter_id, value),
@@ -1312,9 +1362,7 @@ impl X11WindowStatePtr {
         }
 
         let mut callbacks = self.callbacks.borrow_mut();
-        if let Some((content_size, scale_factor)) = resize_args
-            && let Some(ref mut fun) = callbacks.resize
-        {
+        if let Some(ref mut fun) = callbacks.resize {
             fun(content_size, scale_factor)
         }
 
@@ -1433,7 +1481,7 @@ impl PlatformWindow for X11Window {
         let state = self.0.state.borrow();
         let size_hints = normal_hints(
             state.bounds.to_device_pixels(state.scale_factor),
-            Some(size),
+            Some(device_min_size(size, state.scale_factor)),
         );
         check_reply(
             || {
@@ -1446,6 +1494,15 @@ impl PlatformWindow for X11Window {
         )
         .log_err();
         xcb_flush(&self.0.xcb);
+    }
+
+    fn is_live_resizing(&self) -> bool {
+        self.0.state.borrow().sync.live
+    }
+
+    fn expect_live_resize(&self) {
+        let mut state = self.0.state.borrow_mut();
+        fit_render_window(&self.0.xcb, &mut state, true).log_err();
     }
 
     fn scale_factor(&self) -> f32 {
@@ -1697,9 +1754,7 @@ impl PlatformWindow for X11Window {
     fn draw(&self, scene: &Scene) {
         let mut inner = self.0.state.borrow_mut();
         inner.renderer.draw(scene);
-        if let Some(value) = inner.resized_sync_counter.take() {
-            inner.drawn_sync_counter = Some(value);
-        }
+        inner.sync.drawn();
     }
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -1749,6 +1804,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn start_window_resize(&self, edge: ResizeEdge) {
+        self.expect_live_resize();
         self.send_moveresize(edge.to_moveresize()).log_err();
     }
 
@@ -1898,7 +1954,11 @@ impl PlatformWindow for X11Window {
 
 #[cfg(test)]
 mod render_extent_tests {
-    use super::{MAX_RENDER_EXTENT, grown_render_extent, render_extent_fits};
+    use super::{
+        MAX_RENDER_EXTENT, SyncAck, device_min_size, next_render_extent, render_extent_fits,
+        stepped_render_extent,
+    };
+    use crate::{DevicePixels, px, size};
     use blade_graphics as gpu;
 
     fn extent(width: u32, height: u32) -> gpu::Extent {
@@ -1932,36 +1992,114 @@ mod render_extent_tests {
     }
 
     #[test]
-    fn growth_takes_the_screen_up_to_the_cap() {
+    fn a_resting_window_holds_its_content_rounded_up_to_a_step() {
         let cases = [
+            (extent(840, 682), extent(1024, 768)),
+            (extent(1024, 768), extent(1024, 768)),
+            (extent(1, 1), extent(256, 256)),
+            (extent(0, 0), extent(256, 256)),
+            (extent(9000, 300), extent(MAX_RENDER_EXTENT, 512)),
+        ];
+        for (content, stepped) in cases {
+            assert_eq!(stepped_render_extent(content), stepped, "{content:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_live_resize_takes_the_monitor() {
+        let monitor = Some(extent(3840, 2160));
+        let cases = [
+            (extent(1024, 768), extent(900, 700), None, None),
             (
-                extent(1920, 1080),
-                extent(2400, 900),
-                extent(3840, 1080),
-                extent(3840, 1080),
+                extent(1024, 768),
+                extent(1100, 700),
+                None,
+                Some(extent(1280, 768)),
             ),
+            (
+                extent(1024, 768),
+                extent(900, 700),
+                monitor,
+                Some(extent(3840, 2160)),
+            ),
+            (extent(3840, 2160), extent(3000, 2000), monitor, None),
             (
                 extent(3840, 2160),
                 extent(5000, 2000),
-                extent(11520, 2160),
-                extent(5000, 2160),
+                monitor,
+                Some(extent(5000, 2160)),
             ),
             (
                 extent(3840, 2160),
                 extent(9000, 2000),
-                extent(11520, 2160),
-                extent(MAX_RENDER_EXTENT, 2160),
-            ),
-            (
-                extent(1920, 1080),
-                extent(1000, 1500),
-                extent(1920, 2160),
-                extent(1920, 2160),
+                monitor,
+                Some(extent(MAX_RENDER_EXTENT, 2160)),
             ),
         ];
-        for (current, content, screen, grown) in cases {
-            let actual = grown_render_extent(current, content, screen);
-            assert_eq!(actual, grown, "{current:?} {content:?} {screen:?}");
+        for (current, content, live_monitor, grown) in cases {
+            assert_eq!(
+                next_render_extent(current, content, live_monitor),
+                grown,
+                "{current:?} {content:?} {live_monitor:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_resize_is_acked_only_after_its_frame_is_drawn() {
+        let mut sync = SyncAck::new();
+        sync.request(1u64);
+        assert_eq!(sync.configured(true), None);
+        assert!(sync.live);
+        assert_eq!(sync.refreshed(), None);
+        sync.drawn();
+        assert_eq!(sync.refreshed(), Some(1));
+        assert_eq!(sync.refreshed(), None);
+    }
+
+    #[test]
+    fn a_move_acks_at_once_and_drops_older_parked_values() {
+        let mut sync = SyncAck::new();
+        sync.request(1u64);
+        sync.configured(true);
+        sync.request(2);
+        assert_eq!(sync.configured(false), Some(2));
+        assert!(!sync.live);
+        sync.drawn();
+        assert_eq!(sync.refreshed(), None);
+    }
+
+    #[test]
+    fn a_resize_without_a_request_is_not_live() {
+        let mut sync = SyncAck::<u64>::new();
+        assert_eq!(sync.configured(true), None);
+        assert!(!sync.live);
+        sync.request(3);
+        sync.configured(true);
+        sync.request(4);
+        sync.configured(true);
+        sync.drawn();
+        assert_eq!(sync.refreshed(), Some(4));
+    }
+
+    #[test]
+    fn the_minimum_size_hint_is_in_device_pixels() {
+        let cases = [
+            (1.0, size(DevicePixels(640), DevicePixels(400))),
+            (2.0, size(DevicePixels(1280), DevicePixels(800))),
+            (1.25, size(DevicePixels(800), DevicePixels(500))),
+            (1.5, size(DevicePixels(960), DevicePixels(600))),
+        ];
+        for (scale, device) in cases {
+            assert_eq!(
+                device_min_size(size(px(640.0), px(400.0)), scale),
+                device,
+                "{scale}"
+            );
+        }
+        assert_eq!(
+            device_min_size(size(px(333.0), px(1.0)), 1.5),
+            size(DevicePixels(500), DevicePixels(2))
+        );
     }
 }

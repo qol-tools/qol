@@ -1,5 +1,4 @@
 pub mod collapse;
-mod fold_memory;
 pub mod nav;
 pub mod notify;
 pub mod placement;
@@ -12,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    px, size, App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels, Point,
-    Size, Subscription, WeakEntity, Window,
+    px, size, App, AppContext, AsyncApp, Bounds, Context, FocusHandle, Focusable, Pixels,
+    Subscription, WeakEntity, Window,
 };
 use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
@@ -30,8 +29,6 @@ static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 
 /// How long a terminal takes to report the focus the panel just gave up.
 const FOCUS_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
-const REVEAL_POLL: std::time::Duration = std::time::Duration::from_millis(50);
-const REVEAL_POLLS: usize = 60;
 
 pub struct SessionsView {
     pub registry: Arc<Mutex<Registry>>,
@@ -42,7 +39,6 @@ pub struct SessionsView {
     is_showing: bool,
     collapse_state: collapse::CollapseState,
     drag_gesture: std::rc::Rc<std::cell::RefCell<DragGestureState>>,
-    edge_press: bool,
     key_hold: KeyHold,
     nav_guard: qol_gpui::phantom_nav::PhantomNavGuard,
     list_scroll: qol_gpui::scroll_list::SelectionScroll,
@@ -57,7 +53,6 @@ impl SessionsView {
         registry: Arc<Mutex<Registry>>,
         host: Arc<dyn TerminalHost + Send + Sync>,
         corner: Corner,
-        unfolded: Option<Bounds<Pixels>>,
         dismisser: SurfaceDismisser,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -72,9 +67,6 @@ impl SessionsView {
             view.hold_folded_height(window);
         });
         dismisser.set_min_size(collapse::unfolded_min_size());
-        if let Some(unfolded) = unfolded {
-            restore_unfolded_after_reveal(window, cx, unfolded);
-        }
         Self {
             registry,
             host,
@@ -85,7 +77,6 @@ impl SessionsView {
             is_showing: true,
             collapse_state: collapse::CollapseState::new(corner),
             drag_gesture: std::rc::Rc::new(std::cell::RefCell::new(DragGestureState::new(4.0))),
-            edge_press: false,
             key_hold: KeyHold::default(),
             nav_guard: qol_gpui::phantom_nav::PhantomNavGuard::new(),
             last_jumped: None,
@@ -128,7 +119,6 @@ impl SessionsView {
 
     pub fn set_showing(&mut self, showing: bool) {
         self.is_showing = showing;
-        self.edge_press = false;
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -137,18 +127,20 @@ impl SessionsView {
 
     pub fn collapse_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let expanded = qol_gpui::popup_window::window_bounds_primary_anchored(window);
-        if self.edge_held() {
+        if self.dismisser.is_user_sizing() {
             trace::fold("refused-while-resizing", expanded);
             return false;
         }
         let strip = self.collapse_state.collapse(expanded);
-        fold_memory::save(expanded);
+        self.dismisser.hold_remembered_bounds(expanded, window, cx);
         self.dismisser.set_min_size(collapse::folded_min_size());
+        self.dismisser.set_fixed_height(true);
         trace::collapse(true);
-        schedule_panel_bounds(window, cx, strip, |view, _| {
+        schedule_panel_bounds(window, cx, strip, |view, _, window, cx| {
             view.collapse_state.expand();
             view.dismisser.set_min_size(collapse::unfolded_min_size());
-            fold_memory::clear();
+            view.dismisser.set_fixed_height(false);
+            view.dismisser.release_remembered_bounds(window, cx);
             trace::collapse(false);
         });
         self.key_hold.clear();
@@ -161,18 +153,20 @@ impl SessionsView {
         let Some(unfolded) = self.collapse_state.unfolded(strip) else {
             return false;
         };
-        if self.edge_held() {
+        if self.dismisser.is_user_sizing() {
             trace::fold("refused-while-resizing", strip);
             return false;
         }
         self.collapse_state.expand();
         let anchored = clamp_to_monitor(unfolded, strip, cx);
         self.dismisser.set_min_size(collapse::unfolded_min_size());
-        fold_memory::clear();
-        schedule_panel_bounds(window, cx, anchored, |view, bounds| {
+        self.dismisser.set_fixed_height(false);
+        self.dismisser.release_remembered_bounds(window, cx);
+        schedule_panel_bounds(window, cx, anchored, |view, bounds, window, cx| {
             view.collapse_state.collapse(bounds);
             view.dismisser.set_min_size(collapse::folded_min_size());
-            fold_memory::save(bounds);
+            view.dismisser.set_fixed_height(true);
+            view.dismisser.hold_remembered_bounds(bounds, window, cx);
         });
         trace::collapse(false);
         self.key_hold.clear();
@@ -188,12 +182,11 @@ impl SessionsView {
     ) -> bool {
         let strip = qol_gpui::popup_window::window_bounds_primary_anchored(window);
         if let Some(unfolded) = self.collapse_state.unfolded(strip) {
-            fold_memory::save(unfolded);
+            self.dismisser.hold_remembered_bounds(unfolded, window, cx);
         }
         let _scope = qol_gpui::popup_window::reason_scope(reason);
         let showing = self.is_showing;
         self.is_showing = false;
-        self.edge_press = false;
         self.dismisser.dismiss(cx);
         trace::dismiss(reason, showing);
         showing
@@ -210,48 +203,6 @@ impl SessionsView {
         );
         self.dismisser
             .resize_window(size(viewport.width, px(collapse::STRIP_HEIGHT)), window);
-    }
-
-    fn blocks_press(&mut self, position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
-        if self.is_collapsed() && collapse::presses_height_edge(position, viewport) {
-            self.edge_press = false;
-            return true;
-        }
-        self.edge_press = collapse::presses_edge(position, viewport);
-        false
-    }
-
-    fn end_press(&mut self) {
-        self.edge_press = false;
-    }
-
-    fn edge_held(&mut self) -> bool {
-        if self.edge_press {
-            let title = self.dismisser.current_title();
-            self.edge_press = qol_gpui::popup_window::window_geometry_session(&title)
-                .and_then(|session| session.pressed())
-                .unwrap_or(false);
-        }
-        self.edge_press
-    }
-
-    fn restore_unfolded(
-        &mut self,
-        unfolded: Bounds<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.is_collapsed() {
-            return;
-        }
-        fold_memory::clear();
-        let current = qol_gpui::popup_window::window_bounds_primary_anchored(window);
-        let target = clamp_to_monitor(unfolded, current, cx);
-        if !collapse::bounds_differ(current, target) {
-            return;
-        }
-        trace::fold("restored", target);
-        schedule_panel_bounds(window, cx, target, |_, _| {});
     }
 
     fn key_repeat_guard(&mut self, key: &str) -> bool {
@@ -469,14 +420,14 @@ fn schedule_panel_bounds(
     window: &mut Window,
     cx: &mut Context<SessionsView>,
     bounds: Bounds<Pixels>,
-    on_failure: fn(&mut SessionsView, Bounds<Pixels>),
+    on_failure: fn(&mut SessionsView, Bounds<Pixels>, &mut Window, &mut Context<SessionsView>),
 ) {
     cx.spawn_in(window, async move |view, cx| {
         let _ = view.update_in(cx, |view, window, cx| {
             let resized = view.dismisser.resize_window(bounds.size, window);
             let moved = view.dismisser.reposition_window(bounds.origin);
             if !(resized && moved) {
-                on_failure(view, bounds);
+                on_failure(view, bounds, window, cx);
             }
             cx.notify();
         });
@@ -504,29 +455,6 @@ fn clamp_to_monitor(
         Some(monitor) => qol_gpui::placement::clamp_origin_to_monitor(monitor, bounds, 0.0),
         None => bounds,
     }
-}
-
-fn restore_unfolded_after_reveal(
-    window: &mut Window,
-    cx: &mut Context<SessionsView>,
-    unfolded: Bounds<Pixels>,
-) {
-    cx.spawn_in(window, async move |view, cx| {
-        for _ in 0..REVEAL_POLLS {
-            cx.background_executor().timer(REVEAL_POLL).await;
-            let restored = view.update_in(cx, |view, window, cx| {
-                if !view.dismisser.is_visible() {
-                    return false;
-                }
-                view.restore_unfolded(unfolded, window, cx);
-                true
-            });
-            if !matches!(restored, Ok(false)) {
-                return;
-            }
-        }
-    })
-    .detach();
 }
 
 fn open_park_async(park: String, cx: &mut Context<SessionsView>) {

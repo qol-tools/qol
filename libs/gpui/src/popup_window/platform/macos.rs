@@ -1254,7 +1254,7 @@ pub fn join_all_spaces(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
     if !configure_popup_window(title) {
         return false;
     }

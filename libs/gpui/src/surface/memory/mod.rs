@@ -104,6 +104,7 @@ pub(crate) struct Remembered {
     save_generation: Cell<u64>,
     user_sized: Cell<bool>,
     burst_monitors: RefCell<Option<Vec<Monitor>>>,
+    held: Cell<bool>,
 }
 
 impl Remembered {
@@ -135,6 +136,7 @@ impl Remembered {
             save_generation: Cell::new(0),
             user_sized: Cell::new(user_sized),
             burst_monitors: RefCell::new(None),
+            held: Cell::new(false),
         }))
     }
 
@@ -179,7 +181,10 @@ impl Remembered {
     }
 
     pub(crate) fn record_bounds(self: &Rc<Self>, bounds: Bounds<Pixels>, scale: f32, cx: &mut App) {
-        let open = self.last.borrow().as_ref().is_none_or(|state| state.open);
+        if self.held.get() {
+            return;
+        }
+        let open = self.open();
         {
             let mut burst = self.burst_monitors.borrow_mut();
             let monitors = burst.get_or_insert_with(|| monitor_list(cx));
@@ -198,6 +203,25 @@ impl Remembered {
             cx.background_spawn(async move { flush_key(&key) }).await;
         })
         .detach();
+    }
+
+    pub(crate) fn hold_bounds(&self, bounds: Bounds<Pixels>, scale: f32, cx: &App) {
+        self.hold_on(bounds, scale, &monitor_list(cx));
+    }
+
+    fn hold_on(&self, bounds: Bounds<Pixels>, scale: f32, monitors: &[Monitor]) {
+        if self.capture_on(bounds, scale, self.open(), monitors) {
+            flush_key(&self.key);
+        }
+        self.held.set(true);
+    }
+
+    pub(crate) fn release_bounds(&self) {
+        self.held.set(false);
+    }
+
+    fn open(&self) -> bool {
+        self.last.borrow().as_ref().is_none_or(|state| state.open)
     }
 
     pub(crate) fn record_open(&self, bounds: Bounds<Pixels>, scale: f32, cx: &App) {

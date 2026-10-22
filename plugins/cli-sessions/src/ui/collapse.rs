@@ -1,15 +1,15 @@
-use gpui::{point, px, size, Bounds, Pixels, Point, ResizeEdge, Size};
-use qol_gpui::resize_frame;
+use gpui::{point, px, size, Bounds, Pixels, Size};
 
 use crate::ui::placement::Corner;
 
 pub const STRIP_HEIGHT: f32 = qol_gpui::theme::HEIGHT_SETTING_ROW;
 pub const MIN_WIDTH: f32 = 360.0;
 pub const MIN_LIST_ROWS: f32 = 3.0;
+const COMPACT_DESCRIBED_ROW: f32 = qol_gpui::theme::LIST_ENTRY_HEIGHTS[1];
 const BOUNDS_TOLERANCE: f32 = 1.0;
 
 pub fn unfolded_min_size() -> Size<Pixels> {
-    let list = MIN_LIST_ROWS * qol_gpui::theme::LIST_ENTRY_HEIGHTS[1];
+    let list = MIN_LIST_ROWS * COMPACT_DESCRIBED_ROW;
     size(
         px(MIN_WIDTH),
         px(STRIP_HEIGHT + list + qol_gpui::theme::HEIGHT_HINT_BAR),
@@ -37,23 +37,6 @@ pub fn unfolded_bounds(
 
 pub fn folded_height_drifted(height: Pixels) -> bool {
     (height - px(STRIP_HEIGHT)).abs() > px(BOUNDS_TOLERANCE)
-}
-
-pub fn bounds_differ(left: Bounds<Pixels>, right: Bounds<Pixels>) -> bool {
-    let far = |a: Pixels, b: Pixels| (a - b).abs() > px(BOUNDS_TOLERANCE);
-    far(left.origin.x, right.origin.x)
-        || far(left.origin.y, right.origin.y)
-        || far(left.size.width, right.size.width)
-        || far(left.size.height, right.size.height)
-}
-
-pub fn presses_height_edge(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
-    resize_frame::edge_at(position, viewport)
-        .is_some_and(|edge| !matches!(edge, ResizeEdge::Left | ResizeEdge::Right))
-}
-
-pub fn presses_edge(position: Point<Pixels>, viewport: Size<Pixels>) -> bool {
-    resize_frame::edge_at(position, viewport).is_some()
 }
 
 pub fn strip_bounds(expanded: Bounds<Pixels>, corner: Corner, strip_height: f32) -> Bounds<Pixels> {
@@ -133,12 +116,11 @@ impl CollapseState {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounds_differ, folded_height_drifted, folded_min_size, presses_edge, presses_height_edge,
-        unfolded_bounds, unfolded_min_size, CollapseState, STRIP_HEIGHT,
+        folded_height_drifted, folded_min_size, unfolded_bounds, unfolded_min_size, CollapseState,
+        STRIP_HEIGHT,
     };
     use crate::ui::placement::Corner;
     use gpui::{point, px, size, Bounds, Pixels};
-    use qol_gpui::resize_frame;
 
     const CORNERS: [Corner; 4] = [
         Corner::TopLeft,
@@ -211,49 +193,6 @@ mod tests {
             (400.0, true),
         ] {
             assert_eq!(folded_height_drifted(px(height)), drifted, "{height}");
-        }
-    }
-
-    #[test]
-    fn bounds_differ_past_a_pixel_on_any_side() {
-        let base = bounds(10.0, 20.0, 360.0, 400.0);
-        assert!(!bounds_differ(base, base));
-        assert!(!bounds_differ(base, bounds(10.5, 20.0, 360.0, 400.5)));
-        for moved in [
-            bounds(12.0, 20.0, 360.0, 400.0),
-            bounds(10.0, 18.0, 360.0, 400.0),
-            bounds(10.0, 20.0, 380.0, 400.0),
-            bounds(10.0, 20.0, 360.0, 52.0),
-        ] {
-            assert!(bounds_differ(base, moved), "{moved:?}");
-        }
-    }
-
-    #[test]
-    fn a_press_in_the_frame_top_or_bottom_band_reaches_a_height_edge() {
-        let strip = size(px(360.0), px(STRIP_HEIGHT));
-        let band = resize_frame::EDGE_BAND;
-        for (x, y, height_edge, any_edge) in [
-            (180.0, 2.0, true, true),
-            (180.0, band - 1.0, true, true),
-            (180.0, band, false, false),
-            (180.0, STRIP_HEIGHT - 2.0, true, true),
-            (180.0, STRIP_HEIGHT - band - 1.0, false, false),
-            (9.0, 9.0, true, true),
-            (2.0, 2.0, true, true),
-            (358.0, STRIP_HEIGHT - 2.0, true, true),
-            (180.0, 26.0, false, false),
-            (2.0, 26.0, false, true),
-            (358.0, 26.0, false, true),
-        ] {
-            let at = point(px(x), px(y));
-            let shown = resize_frame::FRAME_RESIZES_WINDOW;
-            assert_eq!(
-                presses_height_edge(at, strip),
-                height_edge && shown,
-                "{x},{y}"
-            );
-            assert_eq!(presses_edge(at, strip), any_edge && shown, "{x},{y}");
         }
     }
 }

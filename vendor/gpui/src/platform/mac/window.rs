@@ -991,6 +991,12 @@ impl PlatformWindow for MacWindow {
         }
     }
 
+    fn is_live_resizing(&self) -> bool {
+        let native_window = self.0.lock().native_window;
+        let live: BOOL = unsafe { msg_send![native_window, inLiveResize] };
+        live == YES
+    }
+
     fn merge_all_windows(&self) {
         let native_window = self.0.lock().native_window;
         unsafe extern "C" fn merge_windows_async(context: *mut std::ffi::c_void) {

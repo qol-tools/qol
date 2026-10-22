@@ -70,7 +70,7 @@ pub(crate) struct LauncherView {
     blur_guard: qol_gpui::ghost::BlurGuard,
     pub(crate) window_title: String,
     pub(crate) window_origin: Point<Pixels>,
-    sizing: resize::Sizing,
+    sizing: resize::CardSizing,
     #[cfg(debug_assertions)]
     last_render_trace: Option<trace::RenderSignature>,
 }
@@ -103,6 +103,8 @@ impl LauncherView {
         );
         let config = crate::config::load_launcher_config();
         store.set_before_typing(before_typing(&config));
+        let sizing = resize::CardSizing::new(title.clone());
+        sizing.finish_when_ended(cx.weak_entity());
         Self {
             state: fresh_state(&config),
             store,
@@ -130,7 +132,7 @@ impl LauncherView {
             is_showing: true,
             showing_flag: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             blur_guard,
-            sizing: resize::Sizing::new(title.clone()),
+            sizing,
             window_title: title,
             window_origin: point(px(0.0), px(0.0)),
             #[cfg(debug_assertions)]
@@ -147,6 +149,7 @@ impl LauncherView {
         self.leaving.clear();
         if !showing {
             self.menu_kind = None;
+            self.sizing.release();
             self.stop_click_away_monitor();
         }
     }

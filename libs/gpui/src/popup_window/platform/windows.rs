@@ -439,7 +439,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
@@ -448,7 +448,7 @@ pub fn configure_overlay_window(title: &str) -> bool {
 }
 
 pub fn configure_pinned_window(title: &str) -> bool {
-    configure_overlay_window(title)
+    configure_overlay_window(title, false)
 }
 
 #[cfg(test)]

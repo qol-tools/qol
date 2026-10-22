@@ -1,12 +1,9 @@
-use std::time::Duration;
-
 use gpui::*;
 use qol_gpui::resize_frame::ResizeFrame;
 
 use super::layout::{full_window_height, window_height_for_detail, WINDOW_WIDTH};
 use super::{window_memory, LauncherView};
 
-const SIZING_POLL: Duration = Duration::from_millis(60);
 const RESIZE_SLOP: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,7 +12,7 @@ struct Press {
     viewport: Size<Pixels>,
 }
 
-pub(super) struct Sizing {
+pub(super) struct CardSizing {
     frame: ResizeFrame,
     press: Option<Press>,
     pinned: Option<Press>,
@@ -24,10 +21,11 @@ pub(super) struct Sizing {
     drawn_height: f32,
 }
 
-impl Sizing {
+impl CardSizing {
     pub(super) fn new(title: String) -> Self {
         Self {
-            frame: ResizeFrame::new(move || title.clone(), window_memory::min_size()),
+            frame: ResizeFrame::new(move || title.clone(), window_memory::min_size())
+                .client_resized(),
             press: None,
             pinned: None,
             user: None,
@@ -36,12 +34,56 @@ impl Sizing {
         }
     }
 
+    pub(super) fn finish_when_ended(&self, view: WeakEntity<LauncherView>) {
+        self.frame.on_sizing_ended(move |window, cx| {
+            let _ = view.update(cx, |view, cx| view.finish_user_sizing(window, cx));
+        });
+    }
+
     pub(super) fn zones(&self) -> impl IntoElement {
         self.frame.zones()
     }
 
     pub(super) fn drawn(&mut self, height: f32) {
         self.drawn_height = height;
+    }
+
+    pub(super) fn release(&mut self) {
+        self.press = None;
+        self.pinned = None;
+        self.frame.set_min_size(window_memory::min_size());
+    }
+
+    fn pressed(&mut self, viewport: Size<Pixels>) {
+        let slack = (f32::from(viewport.height) - self.drawn_height).max(0.0);
+        self.press = Some(Press { slack, viewport });
+        let min = window_memory::min_size();
+        self.frame
+            .set_min_size(size(min.width, min.height + px(slack)));
+    }
+
+    fn pin(&mut self, user_sizing: bool) -> bool {
+        if self.pinned.is_some() || !user_sizing {
+            return false;
+        }
+        let Some(press) = self.press.take() else {
+            return false;
+        };
+        self.pinned = Some(press);
+        true
+    }
+
+    fn finish(&mut self, showing: bool, viewport: Size<Pixels>) -> Option<Size<Pixels>> {
+        let press = self.pinned.take()?;
+        let min = window_memory::min_size();
+        self.frame.set_min_size(min);
+        if !showing {
+            return None;
+        }
+        let user = user_size_after_drag(press, viewport, min)?;
+        self.user = Some(user);
+        self.requested = Some(user);
+        Some(user)
     }
 }
 
@@ -118,56 +160,20 @@ impl LauncherView {
     }
 
     pub(super) fn note_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let viewport = window.viewport_size();
-        let slack = (f32::from(viewport.height) - self.sizing.drawn_height).max(0.0);
-        self.sizing.press = Some(Press { slack, viewport });
-        let min = window_memory::min_size();
-        self.sizing
-            .frame
-            .set_min_size(size(min.width, min.height + px(slack)));
-        cx.defer_in(window, |this, window, cx| this.pin_if_sizing(window, cx));
-    }
-
-    fn pin_if_sizing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.sizing.pinned.is_some() || !self.sizing.frame.is_user_sizing() {
-            return;
-        }
-        let Some(press) = self.sizing.press.take() else {
-            return;
-        };
-        self.sizing.pinned = Some(press);
-        cx.spawn_in(window, async move |view, cx| loop {
-            cx.background_executor().timer(SIZING_POLL).await;
-            let sizing = view
-                .update_in(cx, |view, window, cx| {
-                    if view.is_showing && view.sizing.frame.is_user_sizing() {
-                        return true;
-                    }
-                    view.finish_user_sizing(window, cx);
-                    false
-                })
-                .unwrap_or(false);
-            if !sizing {
-                break;
+        self.sizing.pressed(window.viewport_size());
+        cx.defer_in(window, |this, _, cx| {
+            if this.sizing.pin(this.sizing.frame.is_user_sizing()) {
+                cx.notify();
             }
-        })
-        .detach();
-        cx.notify();
+        });
     }
 
     fn finish_user_sizing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(press) = self.sizing.pinned.take() else {
-            return;
-        };
-        let min = window_memory::min_size();
-        self.sizing.frame.set_min_size(min);
         cx.notify();
         let viewport = window.viewport_size();
-        let Some(user) = user_size_after_drag(press, viewport, min) else {
+        let Some(user) = self.sizing.finish(self.is_showing, viewport) else {
             return;
         };
-        self.sizing.user = Some(user);
-        self.sizing.requested = Some(user);
         if user != viewport {
             self.sizing.frame.end_user_sizing();
             window.resize(user);
@@ -198,14 +204,161 @@ fn moved(was: Pixels, now: Pixels) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use gpui::{px, size};
+    use gpui::{px, size, Pixels, Size};
 
-    use super::{user_size_after_drag, window_memory, Press};
+    use super::{user_size_after_drag, window_memory, CardSizing, Press};
 
     fn press(slack: f32, width: f32, height: f32) -> Press {
         Press {
             slack,
             viewport: size(px(width), px(height)),
+        }
+    }
+
+    fn at(width: f32, height: f32) -> Size<Pixels> {
+        size(px(width), px(height))
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Press(f32, f32),
+        Pin(bool),
+        Hide,
+        Finish(bool, f32, f32),
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct After {
+        pressed: bool,
+        pinned: bool,
+        min_height: f32,
+        remembered: Option<Size<Pixels>>,
+        user: Option<Size<Pixels>>,
+    }
+
+    fn run(drawn: f32, steps: &[Step]) -> After {
+        let mut sizing = CardSizing::new("launcher".into());
+        sizing.drawn(drawn);
+        let mut remembered = None;
+        for step in steps {
+            match *step {
+                Step::Press(width, height) => sizing.pressed(at(width, height)),
+                Step::Pin(user_sizing) => {
+                    sizing.pin(user_sizing);
+                }
+                Step::Hide => sizing.release(),
+                Step::Finish(showing, width, height) => {
+                    remembered = sizing.finish(showing, at(width, height));
+                }
+            }
+        }
+        After {
+            pressed: sizing.press.is_some(),
+            pinned: sizing.pinned.is_some(),
+            min_height: f32::from(sizing.frame.min_size().height),
+            remembered,
+            user: sizing.user,
+        }
+    }
+
+    #[test]
+    fn press_pin_and_finish_transitions() {
+        let min = window_memory::min_size();
+        let base = f32::from(min.height);
+        let cases: [(&str, &[Step], After); 7] = [
+            (
+                "a press records the slack and widens the minimum by it",
+                &[Step::Press(840.0, 682.0)],
+                After {
+                    pressed: true,
+                    pinned: false,
+                    min_height: base + 282.0,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+            (
+                "a press that starts no sizing never pins",
+                &[Step::Press(840.0, 682.0), Step::Pin(false)],
+                After {
+                    pressed: true,
+                    pinned: false,
+                    min_height: base + 282.0,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+            (
+                "a press that starts sizing pins once",
+                &[Step::Press(840.0, 682.0), Step::Pin(true), Step::Pin(true)],
+                After {
+                    pressed: false,
+                    pinned: true,
+                    min_height: base + 282.0,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+            (
+                "a finished drag remembers the card size under the pointer",
+                &[
+                    Step::Press(840.0, 682.0),
+                    Step::Pin(true),
+                    Step::Finish(true, 840.0, 882.0),
+                ],
+                After {
+                    pressed: false,
+                    pinned: false,
+                    min_height: base,
+                    remembered: Some(at(840.0, 600.0)),
+                    user: Some(at(840.0, 600.0)),
+                },
+            ),
+            (
+                "a finish without a pin remembers nothing",
+                &[Step::Press(840.0, 682.0), Step::Finish(true, 840.0, 882.0)],
+                After {
+                    pressed: true,
+                    pinned: false,
+                    min_height: base + 282.0,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+            (
+                "hiding mid-drag drops the pin and the press without remembering",
+                &[
+                    Step::Press(840.0, 682.0),
+                    Step::Pin(true),
+                    Step::Hide,
+                    Step::Finish(true, 840.0, 882.0),
+                ],
+                After {
+                    pressed: false,
+                    pinned: false,
+                    min_height: base,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+            (
+                "a drag that ends while hidden remembers nothing",
+                &[
+                    Step::Press(840.0, 682.0),
+                    Step::Pin(true),
+                    Step::Finish(false, 840.0, 882.0),
+                ],
+                After {
+                    pressed: false,
+                    pinned: false,
+                    min_height: base,
+                    remembered: None,
+                    user: None,
+                },
+            ),
+        ];
+        for (name, steps, want) in cases {
+            assert_eq!(run(400.0, steps), want, "{name}");
         }
     }
 

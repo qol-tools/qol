@@ -191,7 +191,7 @@ impl WindowGeometrySession {
 
     pub fn pressed(&self) -> Option<bool> {
         let pointer = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
-        Some(button_pressed(&pointer))
+        Some(u16::from(pointer.mask) & u16::from(KeyButMask::BUTTON1) != 0)
     }
 
     pub fn set_input_region(&self, x: i16, y: i16, width: u16, height: u16) -> bool {
@@ -1009,7 +1009,7 @@ fn window_presentation_is_normal(conn: &impl Connection, wid: u32) -> bool {
         .any(|atom| states.contains(&atom))
 }
 
-pub fn configure_overlay_window(title: &str) -> bool {
+pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -1019,7 +1019,9 @@ pub fn configure_overlay_window(title: &str) -> bool {
     };
 
     set_window_manager_decorations(&conn, wid, false);
-    lock_window_size(&conn, wid);
+    if !resizable {
+        lock_window_size(&conn, wid);
+    }
     add_window_state(&conn, root, wid);
     let _ = conn.flush();
     activate_window(&conn, root, wid);

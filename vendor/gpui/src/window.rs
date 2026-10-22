@@ -1723,6 +1723,16 @@ impl Window {
         self.platform_window.set_window_min_size(size);
     }
 
+    /// Returns whether the user is resizing this window through the operating system right now.
+    pub fn is_live_resizing(&self) -> bool {
+        self.platform_window.is_live_resizing()
+    }
+
+    /// Prepare the renderer for a resize the client drives itself, one size change per frame.
+    pub fn expect_live_resize(&self) {
+        self.platform_window.expect_live_resize();
+    }
+
     /// Returns whether or not the window is currently fullscreen
     pub fn is_fullscreen(&self) -> bool {
         self.platform_window.is_fullscreen()
