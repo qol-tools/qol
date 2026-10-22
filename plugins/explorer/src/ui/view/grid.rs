@@ -8,6 +8,7 @@ use qol_gpui::theme::{
 };
 
 use super::pictogram::PictogramSize;
+use crate::config::ViewSize;
 use crate::ui::keys::Resize;
 
 pub(super) const ACROSS: f32 = SPACE_INSET + SPACE_STACK;
@@ -46,6 +47,16 @@ impl Stop {
             Resize::Bigger => Self::at(self.index() + 1),
             Resize::Smaller => Self::at(self.index().saturating_sub(1)),
             Resize::To(index) => Self::at(index),
+        }
+    }
+
+    pub(super) fn view_size(self) -> ViewSize {
+        match self {
+            Self::Compact => ViewSize::Compact,
+            Self::List => ViewSize::List,
+            Self::Roomy => ViewSize::Roomy,
+            Self::Icons => ViewSize::Icons,
+            Self::BigIcons => ViewSize::BigIcons,
         }
     }
 
@@ -101,6 +112,18 @@ impl Stop {
             Self::Roomy => HEIGHT_SETTING_ROW,
             Self::Icons => ICONS_CELL.1 + SPACE_INSET,
             Self::BigIcons => BIG_ICONS_CELL.1 + SPACE_INSET,
+        }
+    }
+}
+
+impl From<ViewSize> for Stop {
+    fn from(size: ViewSize) -> Self {
+        match size {
+            ViewSize::Compact => Self::Compact,
+            ViewSize::List => Self::List,
+            ViewSize::Roomy => Self::Roomy,
+            ViewSize::Icons => Self::Icons,
+            ViewSize::BigIcons => Self::BigIcons,
         }
     }
 }

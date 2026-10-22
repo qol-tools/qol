@@ -59,7 +59,7 @@ fn wait_within(
 }
 
 fn opened(folder: &Path) -> Browser {
-    let mut browser = Browser::new(folder.to_path_buf(), folder.to_path_buf());
+    let mut browser = Browser::new(folder.to_path_buf(), folder.to_path_buf(), false);
     settle(&mut browser);
     browser
 }
@@ -104,7 +104,7 @@ fn abc_folder() -> tempfile::TempDir {
 #[test]
 fn a_folder_that_sends_nothing_for_a_while_counts_as_stalled() {
     let temp = abc_folder();
-    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf());
+    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf(), false);
     let now = Instant::now();
     assert!(browser.arriving());
     assert!(!browser.stalled(now));
@@ -691,7 +691,7 @@ fn typing_jumps_to_the_first_name_that_starts_with_the_run() {
 fn a_folder_that_cannot_be_read_settles_at_the_top() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing");
-    let mut browser = Browser::new(missing, temp.path().to_path_buf());
+    let mut browser = Browser::new(missing, temp.path().to_path_buf(), false);
     let settled = settle(&mut browser);
     assert_eq!(settled.scroll, Some(0.0));
     assert_eq!(browser.row_count(), 0);
@@ -975,7 +975,7 @@ fn going_up_or_to_an_ancestor_lands_on_the_folder_left() {
     let inner = make_folder(temp.path(), "inner");
     make_folder(&inner, "before");
     let deeper = make_folder(&inner, "deeper");
-    let mut browser = Browser::new(deeper, temp.path().to_path_buf());
+    let mut browser = Browser::new(deeper, temp.path().to_path_buf(), false);
     settle(&mut browser);
 
     assert!(browser.up(0.0));
@@ -1010,7 +1010,7 @@ fn a_refresh_reports_how_far_the_cursor_row_moved() {
 #[test]
 fn the_count_waits_for_the_listing() {
     let temp = abc_folder();
-    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf());
+    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf(), false);
     assert_eq!(browser.note().count, "");
     settle(&mut browser);
     assert_eq!(browser.note().count, "4 items");

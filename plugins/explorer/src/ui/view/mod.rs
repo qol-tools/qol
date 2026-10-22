@@ -26,6 +26,7 @@ use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
+use crate::config::{ConfigSaver, ExplorerConfig};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
@@ -63,18 +64,20 @@ pub struct ExplorerView {
     dismisser: SurfaceDismisser,
     wake_at: Option<Instant>,
     folds_open: bool,
+    saver: ConfigSaver,
 }
 
 impl ExplorerView {
     pub fn new(
         start: PathBuf,
         home: PathBuf,
+        config: ExplorerConfig,
         dismisser: SurfaceDismisser,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
-            browser: Browser::new(start, home),
+            browser: Browser::new(start, home, config.show_hidden),
             places: places::places(),
             devices: places::devices(),
             scroll: UniformListScrollHandle::new(),
@@ -82,7 +85,7 @@ impl ExplorerView {
             focus_handle: cx.focus_handle(),
             frame_height: 0.0,
             list_width: 0.0,
-            stop: Stop::default(),
+            stop: Stop::from(config.view_size),
             wheeled: 0.0,
             slider_hovered: false,
             slider_dragging: false,
@@ -92,6 +95,7 @@ impl ExplorerView {
             dismisser,
             wake_at: None,
             folds_open: false,
+            saver: ConfigSaver::start(),
         };
         view.listen(cx);
         view
@@ -194,6 +198,7 @@ impl ExplorerView {
             return false;
         }
         self.stop = stop;
+        self.saver.save("view_size", stop.view_size());
         self.reveal_cursor();
         true
     }
@@ -354,7 +359,11 @@ impl ExplorerView {
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
             Action::Unpick => self.browser.dismiss(),
-            Action::ToggleHidden => self.revealed(Browser::toggle_hidden),
+            Action::ToggleHidden => {
+                let changed = self.revealed(Browser::toggle_hidden);
+                self.saver.save("show_hidden", self.browser.shows_hidden());
+                changed
+            }
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),

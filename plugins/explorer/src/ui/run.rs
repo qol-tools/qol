@@ -4,13 +4,14 @@ use std::rc::Rc;
 
 use gpui::{px, size, App, Application, AsyncApp};
 use qol_gpui::monitor::MonitorTracker;
-use qol_gpui::surface::{Surface, SurfaceKind};
+use qol_gpui::surface::{Surface, SurfaceKind, WindowMemory};
 
 use super::view::{ExplorerView, WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 use crate::ui::PLUGIN_ID;
 
 pub fn open(start: PathBuf) -> anyhow::Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| start.clone());
+    let config = crate::config::load();
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();
     Application::new().run(move |cx: &mut App| {
@@ -22,8 +23,11 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+            .remember(WindowMemory::reopened_by_action(
+                PLUGIN_ID, PLUGIN_ID, "open",
+            ))
             .show_focused(&tracker, cx, move |dismisser, _window, cx| {
-                ExplorerView::new(start, home, dismisser, cx)
+                ExplorerView::new(start, home, config, dismisser, cx)
             });
         if let Err(error) = opened {
             reported_failure.borrow_mut().replace(error);

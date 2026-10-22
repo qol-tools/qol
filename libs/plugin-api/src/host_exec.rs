@@ -57,6 +57,20 @@ pub fn post_to_daemon_with_timeout(
     Ok((response.status, response.body))
 }
 
+pub fn save_plugin_config_keys(plugin_id: &str, keys: &serde_json::Value) -> io::Result<()> {
+    let body = serde_json::to_string(keys)?;
+    let route = format!("/api/plugins/{plugin_id}/config");
+    let response = daemon_client(DAEMON_IO_TIMEOUT)?.request(Method::Put, &route, Some(&body))?;
+    if response.status == 200 {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "tray refused the config save ({}): {}",
+        response.status,
+        response.body.trim()
+    )))
+}
+
 fn daemon_client(timeout: Duration) -> io::Result<Client> {
     Ok(Client::tray(read_auth_token()?).with_io_timeout(timeout))
 }

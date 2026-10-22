@@ -87,7 +87,7 @@ pub struct Browser {
 }
 
 impl Browser {
-    pub fn new(start: PathBuf, home: PathBuf) -> Self {
+    pub fn new(start: PathBuf, home: PathBuf, show_hidden: bool) -> Self {
         let (wake, wakes) = mpsc::unbounded();
         let mut browser = Self {
             home,
@@ -98,7 +98,7 @@ impl Browser {
             cursor: 0,
             picks: Picks::new(),
             jump: Jump::new(),
-            show_hidden: false,
+            show_hidden,
             arriving: None,
             progressed_at: Instant::now(),
             landing: None,

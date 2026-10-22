@@ -76,15 +76,24 @@ fn doctor_checks() -> Vec<DoctorCheck> {
         ),
         DoctorCheck::new(
             "config_readable",
-            "Verify the plugin can run without persistent config.",
-            || {
-                Ok(DoctorCheckResult::ok(
-                    "config_readable",
-                    "No persistent config is required.",
-                ))
-            },
+            "Read and validate the Explorer view settings without changing them.",
+            || Ok(config_readable_result()),
         ),
     ]
+}
+
+fn config_readable_result() -> DoctorCheckResult {
+    match crate::config::inspect() {
+        Ok(inspection) => DoctorCheckResult::ok(
+            "config_readable",
+            inspection.source.map_or_else(
+                || "No saved view settings; Explorer opens with the defaults.".to_string(),
+                |path| format!("View settings at {} are valid.", path.display()),
+            ),
+        ),
+        Err(error) => DoctorCheckResult::fail("config_readable", error.to_string())
+            .with_fix("Change the view settings on Explorer's settings page to rewrite them."),
+    }
 }
 
 fn platform_supported_result(os: Option<Os>) -> DoctorCheckResult {

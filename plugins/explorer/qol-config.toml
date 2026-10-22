@@ -1,0 +1,32 @@
+schema_version = 1
+title = "Explorer"
+description = "Browse and pick files from the keyboard."
+
+[section.view]
+label = "View"
+description = "How Explorer shows a folder when it opens."
+actions = ["open"]
+
+[field.view_size]
+type = "select"
+config_key = "view_size"
+label = "Size"
+description = "Row or icon size. Ctrl+1 to Ctrl+5, Ctrl+wheel and the slider change it too."
+section = "view"
+default = "list"
+options = ["compact", "list", "roomy", "icons", "big_icons"]
+
+[field.view_size.option_labels]
+compact = "Compact"
+list = "List"
+roomy = "Roomy"
+icons = "Icons"
+big_icons = "Big icons"
+
+[field.show_hidden]
+type = "boolean"
+config_key = "show_hidden"
+label = "Show hidden files"
+description = "Show entries whose names start with a dot. Ctrl+H changes it too."
+section = "view"
+default = false
