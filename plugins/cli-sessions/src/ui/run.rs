@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use gpui::{px, size, App, AppContext, Application, AsyncApp};
+use gpui::{px, size, App, AppContext, Application, AsyncApp, Bounds, Pixels, Size};
 use qol_gpui::surface::{OpenedSurface, Surface, SurfaceKind, WindowMemory};
 use qol_terminal_sessions::cli::CliSessionInterpreter;
 use qol_terminal_sessions::{SessionBinding, SessionId};
@@ -22,7 +22,7 @@ use crate::session::service::{SharedSnapshotCache, SystemServiceProbe};
 use crate::session::status::Status;
 use crate::storage::{paths, persist};
 use crate::ui::placement::{Corner, CORNER_MARGIN};
-use crate::ui::{trace, SessionsView, WINDOW_TITLE};
+use crate::ui::{collapse, fold_memory, trace, SessionsView, WINDOW_TITLE};
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 
@@ -173,10 +173,12 @@ fn open_panel(
     corner: Corner,
     cx: &mut App,
 ) -> Option<OpenedSurface<SessionsView>> {
+    let unfolded = fold_memory::load();
     let result = Surface::new(SurfaceKind::OverlayPanel)
         .title(WINDOW_TITLE)
         .app_id(APP_ID)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
+        .min_size(opening_min_size(unfolded))
         .placement(qol_gpui::placement::MonitorPlacement::corner(
             corner,
             CORNER_MARGIN,
@@ -187,7 +189,7 @@ fn open_panel(
             move || registry.lock().is_ok_and(|reg| reg.session_holds_focus())
         })
         .show_focused(tracker, cx, move |dismisser, window, cx| {
-            SessionsView::new(registry, host, corner, dismisser, window, cx)
+            SessionsView::new(registry, host, corner, unfolded, dismisser, window, cx)
         });
     let opened = match result {
         Ok(opened) => opened,
@@ -202,6 +204,11 @@ fn open_panel(
     qol_runtime::probe!("CLI_SESSIONS_OPENPANEL", "opened=true title={WINDOW_TITLE}");
     cx.activate(true);
     Some(opened)
+}
+
+fn opening_min_size(unfolded: Option<Bounds<Pixels>>) -> Size<Pixels> {
+    let min_size = collapse::unfolded_min_size();
+    unfolded.map_or(min_size, |unfolded| min_size.max(&unfolded.size))
 }
 
 fn spawn_reconcile_timer(
@@ -524,6 +531,24 @@ fn next_attention_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_minimum_fits_inside_the_designed_opening_size() {
+        let min_size = collapse::unfolded_min_size();
+        assert!(min_size.width <= px(WINDOW_WIDTH));
+        assert!(min_size.height <= px(WINDOW_HEIGHT));
+        assert!(min_size.height > px(collapse::STRIP_HEIGHT));
+    }
+
+    #[test]
+    fn a_panel_closed_folded_reopens_at_least_at_its_unfolded_size() {
+        let min_size = collapse::unfolded_min_size();
+        assert_eq!(opening_min_size(None), min_size);
+        let tall = Bounds::new(gpui::point(px(40.0), px(30.0)), size(px(520.0), px(760.0)));
+        assert_eq!(opening_min_size(Some(tall)), tall.size);
+        let short = Bounds::new(gpui::point(px(40.0), px(30.0)), size(px(300.0), px(100.0)));
+        assert_eq!(opening_min_size(Some(short)), min_size);
+    }
 
     #[test]
     fn open_action_expands_only_a_collapsed_panel() {

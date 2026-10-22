@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, px, rgb, rgba, AnyElement, ClickEvent, Context, CursorStyle, KeyDownEvent, KeyUpEvent,
-    Modifiers, SharedString, Window,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, SharedString, Window,
 };
 use qol_gpui::kit::Chip;
 use qol_gpui::surface::{DragGestureState, PanelDragArea};
@@ -161,8 +161,8 @@ fn panel_controls(collapsed: bool, cx: &mut Context<SessionsView>) -> impl IntoE
         .child(header_control(
             "hide-panel-button",
             qol_gpui::kit::WindowControlIcon::Close,
-            |this, _, cx| {
-                this.dismiss_with_reason("hide-button", cx);
+            |this, window, cx| {
+                this.dismiss_with_reason("hide-button", window, cx);
             },
             cx,
         ))
@@ -446,6 +446,21 @@ impl SessionsView {
             .tab_stop(true)
             .flex()
             .flex_col()
+            .capture_any_mouse_down(cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                if this.blocks_press(ev.position, window.viewport_size()) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_any_mouse_up(cx.listener(|this, _: &MouseUpEvent, _, _| this.end_press()))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.end_press()),
+            )
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, _| {
+                if ev.pressed_button.is_none() {
+                    this.end_press();
+                }
+            }))
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 if this.is_collapsed() && ev.keystroke.key != "tab" {
                     match strip_key_action(&ev.keystroke.key, &ev.keystroke.modifiers) {
@@ -457,7 +472,7 @@ impl SessionsView {
                             cx.stop_propagation();
                         }
                         Some(StripAction::Dismiss) => {
-                            this.dismiss_with_reason(STRIP_ESCAPE_REASON, cx);
+                            this.dismiss_with_reason(STRIP_ESCAPE_REASON, window, cx);
                         }
                         None => {}
                     }
@@ -502,7 +517,7 @@ impl SessionsView {
                         }
                     }
                     "w" if ev.keystroke.modifiers.platform => {
-                        this.dismiss_with_reason(CLOSE_KEY_REASON, cx);
+                        this.dismiss_with_reason(CLOSE_KEY_REASON, window, cx);
                     }
                     "w" => {
                         if ev.keystroke.modifiers == Modifiers::default()
@@ -516,7 +531,7 @@ impl SessionsView {
                         cx.notify();
                     }
                     "escape" => {
-                        this.dismiss_with_reason(ESCAPE_REASON, cx);
+                        this.dismiss_with_reason(ESCAPE_REASON, window, cx);
                     }
                     _ => {}
                 }
@@ -561,7 +576,8 @@ impl SessionsView {
 impl Render for SessionsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = self.rows();
-        let body_visible = window.viewport_size().height > px(collapse::STRIP_HEIGHT);
+        let body_visible =
+            !self.is_collapsed() && window.viewport_size().height > px(collapse::STRIP_HEIGHT);
         let active = body_visible && rows.iter().any(|row| row.status.is_active());
         let content = self.render_panel(&rows, body_visible, cx);
         qol_gpui::activity_animation::ActivityAnimation::new(
