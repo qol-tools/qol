@@ -901,6 +901,7 @@ jobs:
       - tag_and_dispatch
     if: >-
       ${{
+        !cancelled() &&
         needs.tag_and_dispatch.result == 'success' &&
         needs.prepare.outputs.qol_tray_tag != ''
       }}
@@ -924,6 +925,7 @@ jobs:
       - tag_and_dispatch
     if: >-
       ${{
+        !cancelled() &&
         needs.tag_and_dispatch.result == 'success' &&
         needs.prepare.outputs.qol_tray_tag != ''
       }}
@@ -947,6 +949,7 @@ jobs:
       - tag_and_dispatch
     if: >-
       ${{
+        !cancelled() &&
         needs.tag_and_dispatch.result == 'success' &&
         needs.prepare.outputs.qol_tray_tag != ''
       }}

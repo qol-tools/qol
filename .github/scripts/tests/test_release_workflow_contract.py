@@ -809,6 +809,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 needs = job.split("    needs:\n", 1)[1].split("    if:", 1)[0]
                 self.assertEqual(needs.split(), ["-", "prepare", "-", "tag_and_dispatch"])
                 self.assertIn("needs.tag_and_dispatch.result == 'success'", job)
+                self.assertIn("!cancelled() &&", job)
                 self.assertIn("uses: ./.github/workflows/qol-tray-host-publish.yml", job)
                 self.assertIn(f"os: {platform}", job)
         attest = publish.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
