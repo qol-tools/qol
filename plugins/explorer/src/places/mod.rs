@@ -90,9 +90,19 @@ pub fn places_in(home: &Path, pins: &[Pin]) -> Vec<Place> {
 }
 
 pub fn pin_for(folder: &Path, home: &Path) -> Pin {
+    pin_in(folder, home, &platform::user_folders(home))
+}
+
+fn pin_in(folder: &Path, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Pin {
+    let mut path = pin_path(folder, home);
+    if let Some(kind) = usual_folder(&path) {
+        if user_folder(kind, known, home) != folder {
+            path = folder.to_string_lossy().into_owned();
+        }
+    }
     Pin {
         name: pin_name(folder, home),
-        path: pin_path(folder, home),
+        path,
     }
 }
 

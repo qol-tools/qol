@@ -154,6 +154,36 @@ fn a_pin_for_a_folder_names_and_places_it_by_its_home() {
 }
 
 #[test]
+fn a_usual_folder_that_user_dirs_moved_elsewhere_pins_by_absolute_path() {
+    let home = Path::new("/home/me");
+    let desktop = home.join("Desktop");
+    let moved = [(PlaceKind::Desktop, home.join("Schreibtisch"))];
+
+    let pin = pin_in(&desktop, home, &moved);
+
+    assert_eq!(pin.name, "Desktop");
+    assert_eq!(pin.path, desktop.to_string_lossy());
+    let place = place(0, &pin, home, &moved).unwrap();
+    assert_eq!(place.path, desktop);
+}
+
+#[test]
+fn a_usual_folder_where_user_dirs_agrees_pins_as_the_usual_path() {
+    let home = Path::new("/home/me");
+    let desktop = home.join("Desktop");
+    let same = [(PlaceKind::Desktop, desktop.clone())];
+    let unlisted: [(PlaceKind, PathBuf); 0] = [];
+
+    for known in [&same[..], &unlisted[..]] {
+        let pin = pin_in(&desktop, home, known);
+        assert_eq!(
+            (pin.name.as_str(), pin.path.as_str()),
+            ("Desktop", "~/Desktop")
+        );
+    }
+}
+
+#[test]
 fn devices_start_with_this_computer() {
     let devices = devices();
 

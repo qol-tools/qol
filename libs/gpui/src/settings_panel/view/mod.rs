@@ -860,6 +860,7 @@ impl SettingsPanelView {
 
     fn pop_card(&mut self, cx: &mut Context<Self>) {
         self.drop_slider_press();
+        self.put_down();
         if self.closing {
             self.closing = false;
             self.finish_pop(cx);
@@ -2996,12 +2997,16 @@ impl SettingsPanelView {
             source.values.get("native_theme").cloned(),
             source.values.get("accent").cloned(),
         );
+        let fresh = self.fresh_values_for_save(source_index);
+        let Some(source) = self.sources.get(source_index) else {
+            return;
+        };
         let rows = self
             .root()
             .rows
             .iter()
             .filter(|row| row.source == source_index);
-        let merged = merged_config(&source.values, rows);
+        let merged = merged_config(fresh.as_ref().unwrap_or(&source.values), rows);
         let Some(source) = self.sources.get_mut(source_index) else {
             return;
         };
@@ -4028,6 +4033,9 @@ impl Render for SettingsPanelView {
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
         );
+        if !window.is_window_active() {
+            self.put_down();
+        }
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
         }

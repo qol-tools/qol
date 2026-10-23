@@ -1,8 +1,14 @@
+use std::collections::HashSet;
+
 use gpui::*;
 
 use super::super::persistence::{load_values, panel_base};
-use super::super::rows::{row_query_names, row_value_json, rows_from_resolved};
-use super::SettingsPanelView;
+use super::super::rows::{row_query_names, row_value_json, rows_from_resolved, Row};
+use super::{SettingsPanelView, SourceState};
+
+fn rereads_stored_values(source: &SourceState) -> bool {
+    source.pages.is_none() && !source.copy.is_empty()
+}
 
 impl SettingsPanelView {
     pub(in crate::settings_panel) fn reload_stored_values(&mut self, cx: &mut Context<Self>) {
@@ -11,7 +17,7 @@ impl SettingsPanelView {
             .sources
             .iter()
             .enumerate()
-            .filter(|(_, source)| source.pages.is_none() && !source.copy.is_empty())
+            .filter(|(_, source)| rereads_stored_values(source))
             .map(|(index, source)| (index, panel_base(&source.plugin_id), source.path.clone()))
             .collect();
         if reads.is_empty() {
@@ -51,26 +57,55 @@ impl SettingsPanelView {
         .detach();
     }
 
-    fn take_stored_values(&mut self, index: usize, values: serde_json::Value) -> bool {
-        let Some(source) = self.sources.get(index) else {
-            return false;
-        };
-        if source.values == values {
-            return false;
-        }
-        let Some(resolved) = self
+    pub(super) fn fresh_values_for_save(&mut self, index: usize) -> Option<serde_json::Value> {
+        let source = self
+            .sources
+            .get(index)
+            .filter(|source| rereads_stored_values(source))?;
+        let fresh = load_values(&panel_base(&source.plugin_id), source.path.as_deref());
+        let snapshot_rows = self.resolved_rows(index, &source.values)?;
+        let fresh_rows = self.resolved_rows(index, &fresh)?;
+        let edited = self.edited_row_ids(index, &snapshot_rows);
+        self.apply_fresh_rows(index, fresh_rows, &edited);
+        Some(fresh)
+    }
+
+    fn resolved_rows(&self, index: usize, values: &serde_json::Value) -> Option<Vec<Row>> {
+        let plugin_id = &self.sources.get(index)?.plugin_id;
+        let resolved = self
             .panel
             .sources
             .iter()
-            .find(|panel| panel.plugin_id == source.plugin_id)
+            .find(|panel| &panel.plugin_id == plugin_id)
             .and_then(|panel| qol_config::contract::parse_spec_str(&panel.contract).ok())
-            .and_then(|spec| qol_config::normalized::resolve_config(&spec, &values).ok())
-        else {
-            return false;
-        };
+            .and_then(|spec| qol_config::normalized::resolve_config(&spec, values).ok())?;
+        Some(rows_from_resolved(&resolved, index))
+    }
+
+    fn edited_row_ids(&self, index: usize, snapshot_rows: &[Row]) -> HashSet<String> {
+        snapshot_rows
+            .iter()
+            .filter(|snapshot| row_query_names(snapshot).is_empty())
+            .filter(|snapshot| {
+                self.root().rows.iter().any(|row| {
+                    row.source == index
+                        && row.id == snapshot.id
+                        && row_value_json(&row.control) != row_value_json(&snapshot.control)
+                })
+            })
+            .map(|snapshot| snapshot.id.clone())
+            .collect()
+    }
+
+    fn apply_fresh_rows(
+        &mut self,
+        index: usize,
+        fresh_rows: Vec<Row>,
+        skip: &HashSet<String>,
+    ) -> bool {
         let mut changed = false;
-        for fresh in rows_from_resolved(&resolved, index) {
-            if !row_query_names(&fresh).is_empty() {
+        for fresh in fresh_rows {
+            if !row_query_names(&fresh).is_empty() || skip.contains(&fresh.id) {
                 continue;
             }
             let Some(row) = self
@@ -86,6 +121,20 @@ impl SettingsPanelView {
                 changed = true;
             }
         }
+        changed
+    }
+
+    fn take_stored_values(&mut self, index: usize, values: serde_json::Value) -> bool {
+        let Some(source) = self.sources.get(index) else {
+            return false;
+        };
+        if source.values == values {
+            return false;
+        }
+        let Some(fresh_rows) = self.resolved_rows(index, &values) else {
+            return false;
+        };
+        let changed = self.apply_fresh_rows(index, fresh_rows, &HashSet::new());
         if let Some(source) = self.sources.get_mut(index) {
             source.values = values;
         }
