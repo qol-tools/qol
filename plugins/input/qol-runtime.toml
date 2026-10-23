@@ -5,11 +5,11 @@ description = "The mouse, touchpad and keyboard entries the settings list, one p
 poll_interval_ms = 2000
 
 [query.mouse]
-description = "Pointer speed from 0 to 100, acceleration, swapped buttons, double-click time in milliseconds and natural scrolling; null where this computer has no such setting"
+description = "Pointer speed from 0 to 100, acceleration, swapped buttons, double-click time in milliseconds and natural scrolling; null where this computer has no such setting, with the reason in unavailable"
 poll_interval_ms = 2000
 
 [query.touchpad]
-description = "Whether the touchpad is on, tap to click, natural scrolling and speed from 0 to 100; null values and the reason in missing when no touchpad can be set"
+description = "Whether the touchpad is on, tap to click, natural scrolling and speed from 0 to 100; null values and the reason in missing when no touchpad can be set, and the reason for each null value in unavailable"
 poll_interval_ms = 2000
 
 [query.keyboard]

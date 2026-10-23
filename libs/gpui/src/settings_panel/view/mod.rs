@@ -38,9 +38,10 @@ use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Int
 use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
-    answers_absent, apply_level_query, apply_runtime_query, filtered_list_items, level_query_names,
-    merged_config, query_flag_value, retire_number_holds, row_action, row_query_names, row_streams,
-    row_value_source, stream_gated, Row, RowControl, RowQueryState, RowSection, SliderHold,
+    absent_reason, answers_absent, apply_level_query, apply_runtime_query, filtered_list_items,
+    level_query_names, merged_config, query_flag_value, retire_number_holds, row_action,
+    row_query_names, row_streams, row_value_source, stream_gated, Row, RowControl, RowQueryState,
+    RowSection, SliderHold,
 };
 use super::{
     AttentionFeed, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
@@ -171,6 +172,19 @@ fn absent_when_null(
         return RowQueryState::Absent;
     }
     state
+}
+
+fn row_description(
+    row: &Row,
+    state: &RowQueryState,
+    applied: &AppliedQueryPayloads,
+) -> Option<SharedString> {
+    let reason = row_value_source(&row.control)
+        .filter(|_| *state == RowQueryState::Absent)
+        .and_then(|(query, path)| applied.absent_reason(row.source, query, path));
+    reason
+        .or(row.description.as_deref())
+        .map(|text| SharedString::from(text.to_owned()))
 }
 
 fn query_is_due(due: Option<std::time::Instant>, now: std::time::Instant) -> bool {
@@ -3620,7 +3634,7 @@ impl SettingsPanelView {
         let ground = RowGround::of(selected, self.body_has_focus());
         let label_group = settings_label_group(
             label,
-            row.description.clone().map(SharedString::from),
+            row_description(row, &self.query_state_of(row), &self.applied_query_payloads),
             ground,
             self.kit,
         );
@@ -5526,6 +5540,16 @@ impl AppliedQueryPayloads {
             && matches!(self.payloads.get(query), Some(Ok(value)) if answers_absent(value, path))
     }
 
+    fn absent_reason(&self, source: usize, query: &str, path: Option<&str>) -> Option<&str> {
+        if self.source != Some(source) {
+            return None;
+        }
+        match self.payloads.get(query) {
+            Some(Ok(value)) => absent_reason(value, path),
+            _ => None,
+        }
+    }
+
     fn changes(&self, source: usize, query: &str, result: &QueryResult) -> bool {
         self.source != Some(source) || self.payloads.get(query) != Some(result)
     }
@@ -6077,13 +6101,13 @@ mod tests {
         number_limit, number_preview, number_release, number_unit, parsed_color, parsed_number,
         pending_edit_on_scrub, pointer_keys, pop_level, pressed_slider, push_level, query_is_due,
         rail_child_index, rail_group_breaks, release_slider_dispatch, row_body_height,
-        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
-        source_window_height_for, stepped_number, text_or_placeholder, transition_in_flight,
-        transition_policy, type_number, widest_number, AppliedQueryPayloads, EscapeStep,
-        HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberCue, NumberFinishPlan,
-        NumberRelease, NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
-        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
-        SCRUB_SLOP,
+        row_description, schedule_slider_generation, slider_fraction, slider_generation_current,
+        slider_protected, source_window_height_for, stepped_number, text_or_placeholder,
+        transition_in_flight, transition_policy, type_number, widest_number, AppliedQueryPayloads,
+        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberCue,
+        NumberFinishPlan, NumberRelease, NumberSpec, ObjectArrayState, PendingEdit, Row,
+        RowControl, RowSection, SettingsDestination, SliderPress, SliderStyle, TransitionAction,
+        TransitionTracker, SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -7028,6 +7052,65 @@ active_value_from = "active"
     }
 
     /// One query can drive several rows, so only the rows whose own value came
+    #[test]
+    fn a_row_whose_value_answers_null_takes_the_reason_its_query_gives() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.touchpad]
+type = "action"
+description = "Off ignores every touch."
+action = "touchpad_on"
+active_action = "touchpad_off"
+active_query = "touchpad"
+active_value_from = "enabled"
+
+[field.tap_to_click]
+type = "action"
+description = "A light tap clicks."
+action = "tap_to_click_on"
+active_action = "tap_to_click_off"
+active_query = "touchpad"
+active_value_from = "tap_to_click"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let row = |id: &str| rows.iter().find(|row| row.id == id).unwrap();
+        let applied = AppliedQueryPayloads::seeded(
+            0,
+            vec![(
+                "touchpad".into(),
+                Ok(serde_json::json!({
+                    "enabled": null,
+                    "tap_to_click": null,
+                    "unavailable": { "enabled": "macOS has no switch for the touchpad." },
+                })),
+            )],
+        );
+        let description = |id: &str| {
+            let state = absent_when_null(RowQueryState::Ready, row(id), &applied);
+            row_description(row(id), &state, &applied).map(|text| text.to_string())
+        };
+        assert_eq!(
+            description("touchpad").as_deref(),
+            Some("macOS has no switch for the touchpad.")
+        );
+        assert_eq!(
+            description("tap_to_click").as_deref(),
+            Some("A light tap clicks.")
+        );
+        assert_eq!(
+            row_description(row("touchpad"), &RowQueryState::Ready, &applied)
+                .map(|text| text.to_string())
+                .as_deref(),
+            Some("Off ignores every touch.")
+        );
+    }
+
     /// back null go unavailable, and they come back once the value does.
     #[test]
     fn a_row_whose_value_answers_null_is_absent_and_refuses_its_action() {

@@ -9,17 +9,21 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 pub(super) use linux::{
-    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad, values,
+    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad,
+    unsupported, values,
 };
 #[cfg(target_os = "macos")]
 pub(super) use macos::{
-    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad, values,
+    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad,
+    unsupported, values,
 };
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(super) use unsupported::{
-    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad, values,
+    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad,
+    unsupported, values,
 };
 #[cfg(target_os = "windows")]
 pub(super) use windows::{
-    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad, values,
+    backend, capture, keyboard, mouse, owner, restore, set_level, set_switch, touchpad,
+    unsupported, values,
 };

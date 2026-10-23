@@ -458,11 +458,13 @@ mod tests {
                 swap_buttons: Some(true),
                 double_click: Some(400),
                 natural_scroll: None,
+                ..Default::default()
             },
             touchpad: Touchpad::default(),
             keyboard: Keyboard {
                 repeat_delay: Some(500),
                 repeat_rate: Some(33),
+                ..Default::default()
             },
         };
         let lines: Vec<String> = Setting::ALL

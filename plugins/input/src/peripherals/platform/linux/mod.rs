@@ -61,6 +61,10 @@ pub(crate) fn backend() -> Result<&'static str> {
     Ok(desktop()?.name)
 }
 
+pub(crate) fn unsupported(_setting: Setting) -> Option<&'static str> {
+    None
+}
+
 pub(crate) fn mouse() -> Result<Mouse> {
     let values = SchemaValues::read(desktop()?.mouse)?;
     Ok(Mouse {
@@ -71,6 +75,7 @@ pub(crate) fn mouse() -> Result<Mouse> {
         swap_buttons: values.flag("left-handed"),
         double_click: values.number("double-click").map(whole),
         natural_scroll: values.flag("natural-scroll"),
+        ..Default::default()
     })
 }
 
@@ -86,6 +91,7 @@ pub(crate) fn touchpad() -> Result<Touchpad> {
         natural_scroll: values.flag("natural-scroll"),
         speed: values.number("speed").map(speed_percent),
         missing: None,
+        ..Default::default()
     })
 }
 
@@ -96,6 +102,7 @@ pub(crate) fn keyboard() -> Result<Keyboard> {
         repeat_rate: values
             .number("repeat-interval")
             .and_then(rate_from_interval),
+        ..Default::default()
     })
 }
 
