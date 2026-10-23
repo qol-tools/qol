@@ -3,33 +3,23 @@ use std::collections::{BTreeSet, HashSet};
 use gpui::*;
 
 use super::super::persistence::{panel_base, read_values};
-use super::super::rows::{row_query_names, row_value_json, rows_from_resolved, Row};
+use super::super::rows::{merged_config, row_query_names, row_value_json, rows_from_resolved, Row};
 use super::{SettingsPanelView, SourceState};
 
 fn rereads_stored_values(source: &SourceState) -> bool {
     source.pages.is_none() && !source.copy.is_empty()
 }
 
-fn top_config_key(row: &Row) -> &str {
-    row.config_key
-        .split('.')
-        .next()
-        .unwrap_or(row.config_key.as_str())
-}
-
-pub(super) fn edited_top_keys(rows: &[Row], snapshot: &[Row], source: usize) -> BTreeSet<String> {
-    rows.iter()
-        .filter(|row| row.source == source && row_query_names(row).is_empty())
-        .filter(|row| {
-            snapshot.iter().any(|before| {
-                before.source == source
-                    && before.id == row.id
-                    && row_value_json(&before.control) != row_value_json(&row.control)
-            })
-        })
-        .map(top_config_key)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
+pub(super) fn changed_top_keys(
+    merged: &serde_json::Value,
+    baseline: &serde_json::Value,
+) -> BTreeSet<String> {
+    let Some(map) = merged.as_object() else {
+        return BTreeSet::new();
+    };
+    map.iter()
+        .filter(|(key, value)| baseline.get(key.as_str()) != Some(*value))
+        .map(|(key, _)| key.clone())
         .collect()
 }
 
@@ -94,10 +84,10 @@ impl SettingsPanelView {
         .detach();
     }
 
-    pub(super) fn edited_keys_for_save(&self, index: usize) -> Option<BTreeSet<String>> {
+    pub(super) fn saved_baseline(&self, index: usize) -> Option<serde_json::Value> {
         let source = self.sources.get(index)?;
         let snapshot = self.resolved_rows(index, &source.values)?;
-        Some(edited_top_keys(&self.root().rows, &snapshot, index))
+        Some(merged_config(&source.values, &snapshot))
     }
 
     fn resolved_rows(&self, index: usize, values: &serde_json::Value) -> Option<Vec<Row>> {
@@ -161,73 +151,35 @@ impl SettingsPanelView {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::super::super::rows::{LiveQuery, Row, RowControl};
-    use super::super::tests::rows;
-    use super::{edited_top_keys, subset};
-
-    fn row(id: &str, config_key: &str, source: usize, control: RowControl) -> Row {
-        let mut row = rows(&[false]).remove(0);
-        row.id = id.into();
-        row.config_key = config_key.into();
-        row.source = source;
-        row.control = control;
-        row
-    }
+    use super::{changed_top_keys, subset};
 
     fn keys(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|name| name.to_string()).collect()
     }
 
     #[test]
-    fn edited_row_is_included() {
-        let snapshot = vec![row("a", "alpha", 0, RowControl::Toggle(false))];
-        let current = vec![row("a", "alpha", 0, RowControl::Toggle(true))];
-        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["alpha"]));
-    }
-
-    #[test]
-    fn unedited_stale_row_is_excluded() {
-        let snapshot = vec![
-            row("a", "alpha", 0, RowControl::Toggle(false)),
-            row("pins", "pins", 0, RowControl::Text("old".into())),
+    fn changed_top_keys_names_only_the_values_that_moved() {
+        let baseline =
+            serde_json::json!({ "alpha": false, "capture": { "tags": ["a"] }, "pins": ["old"] });
+        let cases = [
+            (
+                serde_json::json!({ "alpha": true, "capture": { "tags": ["a"] }, "pins": ["old"] }),
+                keys(&["alpha"]),
+            ),
+            (
+                serde_json::json!({ "alpha": false, "capture": { "tags": ["b"] }, "pins": ["old"] }),
+                keys(&["capture"]),
+            ),
+            (
+                serde_json::json!({ "alpha": false, "capture": { "tags": ["a"] }, "pins": ["old"], "mode": "x" }),
+                keys(&["mode"]),
+            ),
+            (baseline.clone(), keys(&[])),
+            (serde_json::json!(null), keys(&[])),
         ];
-        let current = vec![
-            row("a", "alpha", 0, RowControl::Toggle(true)),
-            row("pins", "pins", 0, RowControl::Text("old".into())),
-        ];
-        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["alpha"]));
-    }
-
-    #[test]
-    fn nested_key_maps_to_its_top_key() {
-        let snapshot = vec![row("c", "capture.tags", 0, RowControl::Text("a".into()))];
-        let current = vec![row("c", "capture.tags", 0, RowControl::Text("b".into()))];
-        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["capture"]));
-    }
-
-    #[test]
-    fn query_rows_are_excluded() {
-        let live = |value| RowControl::Number {
-            value,
-            min: None,
-            max: None,
-            step: None,
-            live: Some(LiveQuery {
-                query: "level".into(),
-                value_from: None,
-            }),
-            level: None,
-        };
-        let snapshot = vec![row("n", "volume", 0, live(1.0))];
-        let current = vec![row("n", "volume", 0, live(2.0))];
-        assert!(edited_top_keys(&current, &snapshot, 0).is_empty());
-    }
-
-    #[test]
-    fn other_sources_are_ignored() {
-        let snapshot = vec![row("a", "alpha", 0, RowControl::Toggle(false))];
-        let current = vec![row("a", "alpha", 1, RowControl::Toggle(true))];
-        assert!(edited_top_keys(&current, &snapshot, 0).is_empty());
+        for (merged, expected) in cases {
+            assert_eq!(changed_top_keys(&merged, &baseline), expected, "{merged}");
+        }
     }
 
     #[test]

@@ -2999,7 +2999,7 @@ impl SettingsPanelView {
             source.values.get("native_theme").cloned(),
             source.values.get("accent").cloned(),
         );
-        let edited = self.edited_keys_for_save(source_index);
+        let baseline = self.saved_baseline(source_index);
         let Some(source) = self.sources.get(source_index) else {
             return;
         };
@@ -3009,23 +3009,27 @@ impl SettingsPanelView {
             .iter()
             .filter(|row| row.source == source_index);
         let merged = merged_config(&source.values, rows);
-        let changed = match &edited {
-            Some(keys) if keys.is_empty() => None,
-            Some(keys) => Some(stored_values::subset(&merged, keys)),
+        let changed = match &baseline {
+            Some(baseline) => {
+                let keys = stored_values::changed_top_keys(&merged, baseline);
+                (!keys.is_empty()).then(|| stored_values::subset(&merged, &keys))
+            }
             None => Some(merged.clone()),
         };
         let Some(source) = self.sources.get_mut(source_index) else {
             return;
         };
-        source.values = merged;
-        if let Some(changed) = changed {
-            self.save_error = save_values(
+        let saved = changed.map_or(Ok(()), |changed| {
+            save_values(
                 &panel_base(&source.plugin_id),
                 source.path.as_deref(),
                 &changed,
-                &source.values,
+                &merged,
             )
-            .err();
+        });
+        self.save_error = saved.err();
+        if self.save_error.is_none() {
+            source.values = merged;
         }
         if source.plugin_id == qol_conventions::CORE_PANEL_ID
             && (source.values.get("native_theme") != previous_theme.0.as_ref()

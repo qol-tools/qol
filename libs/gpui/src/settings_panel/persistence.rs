@@ -127,6 +127,25 @@ pub(super) fn read_values(base: &str, path: Option<&Path>) -> Option<serde_json:
         .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
+fn over_stored_file(
+    path: &Path,
+    changed: &serde_json::Value,
+    all: &serde_json::Value,
+) -> serde_json::Value {
+    let stored = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+    let (Some(serde_json::Value::Object(mut stored)), Some(changed)) =
+        (stored, changed.as_object())
+    else {
+        return all.clone();
+    };
+    for (key, value) in changed {
+        stored.insert(key.clone(), value.clone());
+    }
+    serde_json::Value::Object(stored)
+}
+
 pub(super) fn save_values(
     base: &str,
     path: Option<&Path>,
@@ -179,7 +198,7 @@ pub(super) fn save_values(
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let file_body = match serde_json::to_string(all) {
+    let file_body = match serde_json::to_string(&over_stored_file(path, changed, all)) {
         Ok(body) => body,
         Err(error) => {
             log::error!("[{base}] settings serialize failed: {error:#}");
@@ -311,9 +330,18 @@ mod tests {
             let values = serde_json::json!({ "dark": true, "pins": [] });
             let changed = serde_json::json!({ "dark": true });
             super::save_values("panel-test", Some(&path), &changed, &values).unwrap();
-            let written: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(written, values);
+            let read = || -> serde_json::Value {
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+            };
+            assert_eq!(read(), values);
+            std::fs::write(&path, r#"{ "dark": true, "pins": ["elsewhere"] }"#).unwrap();
+            let stale = serde_json::json!({ "dark": false, "pins": [] });
+            let changed = serde_json::json!({ "dark": false });
+            super::save_values("panel-test", Some(&path), &changed, &stale).unwrap();
+            assert_eq!(
+                read(),
+                serde_json::json!({ "dark": false, "pins": ["elsewhere"] })
+            );
             let _ = std::fs::remove_dir_all(&dir);
         });
     }
