@@ -62,17 +62,37 @@ pub enum Cap {
 
 pub fn caps(chord: &Chord) -> Option<Vec<Cap>> {
     let key = key_cap(chord.key)?;
-    let mut mods = chord.mods.iter().copied().collect::<Vec<_>>();
-    mods.sort_by_key(|modifier| platform::order(*modifier));
+    let mut caps = modifier_caps(&chord.mods);
+    push(&mut caps, key);
+    Some(caps)
+}
+
+pub fn modifier_caps(mods: &BTreeSet<ModifierToken>) -> Vec<Cap> {
     let mut caps = Vec::new();
-    for modifier in mods {
+    for modifier in ordered(mods) {
         push(&mut caps, platform::modifier_cap(modifier));
         if let Some(joiner) = platform::JOINER {
             push(&mut caps, Cap::Text(joiner.to_owned()));
         }
     }
-    push(&mut caps, key);
-    Some(caps)
+    caps
+}
+
+pub fn held_caps(mods: &BTreeSet<ModifierToken>) -> Vec<Cap> {
+    let mut caps = Vec::new();
+    for (index, modifier) in ordered(mods).into_iter().enumerate() {
+        if let Some(joiner) = platform::JOINER.filter(|_| index > 0) {
+            push(&mut caps, Cap::Text(joiner.to_owned()));
+        }
+        push(&mut caps, platform::modifier_cap(modifier));
+    }
+    caps
+}
+
+fn ordered(mods: &BTreeSet<ModifierToken>) -> Vec<ModifierToken> {
+    let mut mods = mods.iter().copied().collect::<Vec<_>>();
+    mods.sort_by_key(|modifier| platform::order(*modifier));
+    mods
 }
 
 pub fn caps_for(input: &str) -> Option<Vec<Cap>> {

@@ -9,7 +9,7 @@ use gpui::{
 };
 use qol_theme::{translucent, Alpha, TextStyle};
 
-use crate::kit::{float_shadow, Kit};
+use crate::kit::Kit;
 use crate::scroll_list::wheel_rows;
 use crate::scrollbar::ScrollSource;
 use crate::text::{laid_out_width, shaped_width, TextStyled};
@@ -368,7 +368,7 @@ fn fold_menu(
         })
         .collect();
     let shown = rows.len();
-    menu_frame(FOLD_MENU_WIDTH, kit)
+    kit.menu(FOLD_MENU_WIDTH)
         .children(rows)
         .child(kit.scroll_cue(
             ScrollSource::Window {
@@ -546,7 +546,7 @@ fn suggestion_menu(
             )
         });
     Some(
-        menu_frame(width, kit)
+        kit.menu(width)
             .children(rows)
             .child(kit.scroll_cue(
                 ScrollSource::Window {
@@ -568,20 +568,6 @@ fn suggestion_menu(
     )
 }
 
-fn menu_frame(width: f32, kit: Kit) -> Div {
-    div()
-        .occlude()
-        .relative()
-        .w(px(width))
-        .p(px(qol_theme::SPACE_TIGHT))
-        .border(px(qol_theme::LINE))
-        .border_color(rgba(kit.washes.hairline_strong.packed()))
-        .bg(rgb(kit.grounds.menu.bg))
-        .shadow(float_shadow(kit.washes.cast.rgb))
-        .flex()
-        .flex_col()
-}
-
 fn menu_row(
     id: ElementId,
     name: &str,
@@ -590,16 +576,7 @@ fn menu_row(
     on_click: Option<CrumbClick>,
     kit: Kit,
 ) -> AnyElement {
-    let row = div()
-        .id(id)
-        .h(px(qol_theme::HEIGHT_INLINE))
-        .px(px(qol_theme::SPACE_INSET))
-        .flex()
-        .items_center()
-        .text(TextStyle::ListName)
-        .text_color(rgb(kit.highlight_ground(selected).ink))
-        .child(div().flex_1().min_w_0().child(name.to_owned()));
-    let row = kit.highlight(row, selected);
+    let row = kit.menu_row(id, name.to_owned(), None, selected);
     match on_click {
         Some(on_click) => row
             .on_click(move |_, window, cx| {

@@ -22,6 +22,16 @@ Explorer remembers the row or icon size and whether hidden entries show, and ope
 
 Picks stay picked when you move to another folder, and the note beside the crumbs says how many sit in other folders. Enter opens a file in its default app, or says in red that no app could open it.
 
+## Pinned folders
+
+Pinned folders lead the sidebar. A new install pins Home, Desktop, Documents, Downloads, Music, Pictures and Videos, and any of them can be unpinned, renamed and reordered.
+
+Ctrl+D pins the folder you are in, or unpins it. Right-click a pin, or press the ⋯ on the pin you are in, to unpin, move or rename it, or to open the sidebar settings. The ⋯ at the end of the title band pins the folder you are in, edits the path, shows or hides hidden files and opens Explorer's settings.
+
+A pin on a drive that is not there shows "not connected" until the drive comes back.
+
+In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyboard. Enter or a click picks a pin up, Up and Down carry it, Enter puts it down and Esc puts it back. Ctrl+Up and Ctrl+Down carry it while Ctrl is held and put it down when Ctrl is released.
+
 ## Keys
 
 | Key | Does |
@@ -38,6 +48,8 @@ Picks stay picked when you move to another folder, and the note beside the crumb
 | Ctrl+A | Pick every row |
 | Esc | Drop the picks and the red note |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
+| Ctrl+D | Pin the folder you are in, or unpin it |
+| Ctrl+, | Open Explorer's settings |
 | Ctrl+G | Edit the path, selected so typing replaces it; Up and Down cycle through the suggested folders, Tab completes one, Enter or a click goes there |
 | Ctrl+= or Ctrl++, Ctrl+- | Make the rows or icons one size bigger or smaller; the slider in the title bar does the same |
 | Ctrl+1 to Ctrl+5 | Pick a size: compact, list, roomy, icons, big icons |

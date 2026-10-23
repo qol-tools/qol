@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use qol_config::contract::{FieldDefault, IndexMap, NestedListSpec};
+use qol_config::contract::{interpolate_row_template, FieldDefault, IndexMap, NestedListSpec};
 use qol_config::object_array::{
     group_item_fields, is_mod_array, pretty_label, ItemField, ItemFieldKind, KNOWN_MODS,
 };
@@ -140,6 +140,24 @@ impl ObjectArrayState {
             .filter_map(|(key, kind)| summary_part(key, kind, entry.fields.get(key)?, lists))
             .collect();
         parts.join(" \u{b7} ")
+    }
+
+    pub(super) fn labelled(
+        &self,
+        index: usize,
+        template: &str,
+        lists: &BTreeMap<String, NestedListSpec>,
+    ) -> Option<(String, String)> {
+        let entry = self.entries.get(index)?;
+        let data = serde_json::to_value(&entry.fields).ok()?;
+        let label = interpolate_row_template(template, &data);
+        let parts: Vec<String> = self
+            .schema
+            .iter()
+            .filter(|(key, _)| !template.contains(&format!("{{{key}}}")))
+            .filter_map(|(key, kind)| summary_part(key, kind, entry.fields.get(key)?, lists))
+            .collect();
+        Some((label, parts.join(" \u{b7} ")))
     }
 
     pub(super) fn chips(&self, index: usize) -> ItemChips {

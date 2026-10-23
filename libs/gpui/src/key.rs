@@ -11,6 +11,7 @@ enum Press {
     Arrows,
     Type,
     Drag,
+    Held,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +38,7 @@ impl Key {
     pub const ARROWS: Self = Self::press(Press::Arrows);
     pub const TYPE: Self = Self::press(Press::Type);
     pub const DRAG: Self = Self::press(Press::Drag);
+    pub const CTRL: Self = Self::press(Press::Held).ctrl();
 
     const fn press(press: Press) -> Self {
         Self { mods: 0, press }
@@ -96,20 +98,23 @@ impl Key {
     }
 
     pub fn caps(self) -> Vec<Cap> {
-        let glyphs = |glyphs: &[Glyph]| glyphs.iter().map(|glyph| Cap::Glyph(*glyph)).collect();
+        let mods = MODIFIERS
+            .into_iter()
+            .filter(|modifier| self.mods & bit(*modifier) != 0)
+            .collect::<BTreeSet<_>>();
+        let glyphs = |glyphs: &[Glyph]| {
+            let mut caps = chord::modifier_caps(&mods);
+            caps.extend(glyphs.iter().map(|glyph| Cap::Glyph(*glyph)));
+            caps
+        };
         match self.press {
-            Press::Key(key) => {
-                let mods = MODIFIERS
-                    .into_iter()
-                    .filter(|modifier| self.mods & bit(*modifier) != 0)
-                    .collect::<BTreeSet<_>>();
-                chord::caps(&Chord { mods, key }).unwrap_or_default()
-            }
+            Press::Key(key) => chord::caps(&Chord { mods, key }).unwrap_or_default(),
             Press::UpDown => glyphs(&[Glyph::Up, Glyph::Down]),
             Press::LeftRight => glyphs(&[Glyph::Left, Glyph::Right]),
             Press::Arrows => glyphs(&[Glyph::Left, Glyph::Right, Glyph::Up, Glyph::Down]),
             Press::Type => vec![Cap::Text("type".to_owned())],
             Press::Drag => vec![Cap::Text("drag".to_owned())],
+            Press::Held => chord::held_caps(&mods),
         }
     }
 }
@@ -160,5 +165,14 @@ mod tests {
             Key::letter('w').platform().caps(),
             [Cap::Text("super+w".into())]
         );
+        assert_eq!(
+            Key::UP_DOWN.ctrl().caps(),
+            [
+                Cap::Text("ctrl+".into()),
+                Cap::Glyph(Glyph::Up),
+                Cap::Glyph(Glyph::Down)
+            ]
+        );
+        assert_eq!(Key::CTRL.caps(), [Cap::Text("ctrl".into())]);
     }
 }

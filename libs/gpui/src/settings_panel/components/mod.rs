@@ -48,7 +48,7 @@ pub use placement_preview::{
     placement_caption, placement_hold_progress, placement_toast, PlacementHold,
 };
 pub(super) use qr_code::qr_code_display;
-pub use row::SettingsRow;
+pub use row::{settings_row_shade, SettingsRow};
 pub use text_field::SettingsTextField;
 pub use tile::{
     choose_hints, choose_step, settings_tile_rows, tile_arts, tile_grid_gap, tile_layout,

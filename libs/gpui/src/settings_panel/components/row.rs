@@ -28,6 +28,7 @@ pub struct SettingsRow {
     focused: bool,
     dimmed: bool,
     attention: bool,
+    lift: f32,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
 }
@@ -58,6 +59,7 @@ impl SettingsRow {
             focused: true,
             dimmed: false,
             attention: false,
+            lift: 0.0,
             children: Vec::new(),
             on_click: None,
         }
@@ -79,6 +81,11 @@ impl SettingsRow {
         self
     }
 
+    pub fn lifted(mut self, lift: f32) -> Self {
+        self.lift = lift.clamp(0.0, 1.0);
+        self
+    }
+
     pub fn child(mut self, child: impl IntoElement) -> Self {
         self.children.push(child.into_any_element());
         self
@@ -96,6 +103,17 @@ impl SettingsRow {
         self.on_click = Some(Box::new(handler));
         self
     }
+}
+
+pub fn settings_row_shade(lift: f32, kit: Kit) -> gpui::Div {
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(-qol_theme::SPACE_PAD))
+        .right(px(-(qol_theme::SPACE_PAD - qol_theme::SPACE_INSET)))
+        .bg(gpui::rgba(kit.grounds.pane.well.packed()))
+        .opacity(lift.clamp(0.0, 1.0))
 }
 
 impl RenderOnce for SettingsRow {
@@ -133,6 +151,13 @@ impl RenderOnce for SettingsRow {
             row = paint_settings_selection(row, self.kit);
         } else if attention {
             row = paint_settings_attention(row, self.kit);
+        }
+        if self.lift > 0.0 {
+            let mut shadow = crate::kit::float_shadow(self.kit.grounds.pane.ink);
+            for layer in &mut shadow {
+                layer.color.a *= self.lift;
+            }
+            row = row.shadow(shadow);
         }
         if let Some(on_click) = self.on_click {
             let ground = if self.selected && self.focused {

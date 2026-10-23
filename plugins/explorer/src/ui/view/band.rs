@@ -1,13 +1,17 @@
 use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder;
-use gpui::{div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Styled, Window};
+use gpui::{
+    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement, Styled, Window,
+};
+use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::{laid_out_width, TextStyled};
-use qol_gpui::theme::{TextStyle, LINE, SPACE_GUTTER};
-use qol_gpui::CrumbTrail;
+use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, RADIUS_CONTROL, SPACE_GUTTER};
+use qol_gpui::{CrumbTrail, Icon};
 
 use super::{slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
@@ -29,6 +33,8 @@ pub(super) fn render(
     let room = f32::from(window.viewport_size().width)
         - 2.0 * (LINE + SPACE_GUTTER)
         - slider::WIDTH
+        - SPACE_GUTTER
+        - HEIGHT_INLINE
         - SPACE_GUTTER;
     let limit = note_limit(room);
     let (note, note_width) = match editing {
@@ -105,6 +111,34 @@ pub(super) fn render(
     band.child(div().flex_1().min_w_0().child(crumb_trail))
         .when(note_width > 0.0, |band| band.child(note))
         .child(slider::render(view, cx))
+        .child(more_button(kit, cx))
+}
+
+fn more_button(kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
+    kit.pointable(
+        div()
+            .id("explorer-folder-more")
+            .flex_none()
+            .size(px(HEIGHT_INLINE))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(RADIUS_CONTROL))
+            .child(icon(
+                Icon::More,
+                TextStyle::Name.spec().size,
+                kit.grounds.rail.ink,
+            )),
+        rgb(kit.grounds.rail.lift),
+    )
+    .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|view, event: &MouseDownEvent, _window, cx| {
+            view.open_folder_menu(event.position, cx);
+            cx.stop_propagation();
+        }),
+    )
+    .into_any_element()
 }
 
 #[derive(Clone, Copy)]

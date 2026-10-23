@@ -155,6 +155,7 @@ fn validate_fields(spec: &ConfigSpec, errors: &mut Vec<ValidationError>) {
         validate_field_default(id, field, errors);
         validate_field_options(id, field, errors);
         validate_field_copy(id, field, errors);
+        validate_entries_card(id, field, errors);
         validate_option_pictures(id, field, errors);
         validate_lookup_label(id, field, errors);
         validate_lists(id, field, errors);
@@ -399,6 +400,56 @@ fn validate_field_copy(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationE
     }
     let path = format!("field.{id}.item_label");
     validate_item_label(&path, item_label, errors);
+}
+
+fn validate_entries_card(id: &str, field: &FieldSpec, errors: &mut Vec<ValidationError>) {
+    let entries_card = field.kind == FieldKind::ObjectArray
+        || (field.kind == FieldKind::StringArray
+            && field.options.is_empty()
+            && field.query.is_none());
+    for (key, set) in [
+        ("reorder", field.reorder.is_some()),
+        ("add_label", field.add_label.is_some()),
+    ] {
+        if set && !entries_card {
+            errors.push(ValidationError::new(
+                format!("field.{id}.{key}"),
+                format!(
+                    "{key} only supported for object_array fields and string_array fields without options or query"
+                ),
+            ));
+        }
+    }
+    if let Some(label) = field.add_label.as_deref().filter(|_| entries_card) {
+        validate_item_label(&format!("field.{id}.add_label"), label, errors);
+    }
+    if field.kind != FieldKind::ObjectArray {
+        return;
+    }
+    let Some(template) = field.row_label.as_deref() else {
+        return;
+    };
+    let names = template_names(template);
+    let known = |name: &&str| {
+        field
+            .item
+            .as_ref()
+            .is_some_and(|item| item.fields.contains_key(*name))
+    };
+    if names.is_empty() || !names.iter().all(known) {
+        errors.push(ValidationError::new(
+            format!("field.{id}.row_label"),
+            "row_label must name item fields in braces, like {name}",
+        ));
+    }
+}
+
+fn template_names(template: &str) -> Vec<&str> {
+    template
+        .split('{')
+        .skip(1)
+        .filter_map(|part| part.split_once('}').map(|(name, _)| name))
+        .collect()
 }
 
 fn validate_card_description(path: &str, description: &str, errors: &mut Vec<ValidationError>) {
@@ -1459,6 +1510,67 @@ kinds = {}
 "#,
         );
         assert_has_error(&empty, "devices.kinds", "at least one kind");
+    }
+
+    #[test]
+    fn reorder_add_label_and_entry_row_labels_belong_to_entries_cards() {
+        let valid = validate_contract(
+            r#"
+schema_version = 1
+
+[field.pins]
+type = "object_array"
+card_description = "The folders Explorer lists first."
+item_label = "folder"
+add_label = "Pin a folder"
+row_label = "{name}"
+reorder = true
+default = []
+
+[field.pins.item.fields]
+name = "string"
+path = "string"
+
+[field.paths]
+type = "string_array"
+reorder = true
+default = []
+"#,
+        );
+        assert!(valid.is_empty(), "{valid:?}");
+
+        let cases = [
+            (
+                "type = \"select\"\noptions = [\"a\"]\ndefault = \"a\"\nreorder = true",
+                "field.bad.reorder",
+                "only supported",
+            ),
+            (
+                "type = \"string_array\"\noptions = [\"a\"]\ndefault = []\nadd_label = \"Add one\"",
+                "field.bad.add_label",
+                "only supported",
+            ),
+            (
+                "type = \"object_array\"\ndefault = []\nadd_label = \"\"\n[field.bad.item.fields]\nname = \"string\"",
+                "field.bad.add_label",
+                "cannot be empty",
+            ),
+            (
+                "type = \"object_array\"\ndefault = []\nrow_label = \"{title}\"\n[field.bad.item.fields]\nname = \"string\"",
+                "field.bad.row_label",
+                "item fields",
+            ),
+            (
+                "type = \"object_array\"\ndefault = []\nrow_label = \"plain\"\n[field.bad.item.fields]\nname = \"string\"",
+                "field.bad.row_label",
+                "item fields",
+            ),
+        ];
+        for (field, path, message) in cases {
+            let errors =
+                validate_contract(&format!("schema_version = 1\n\n[field.bad]\n{field}\n"));
+            assert_has_error(&errors, path, message);
+        }
     }
 
     fn validate_contract(contract: &str) -> Vec<ValidationError> {

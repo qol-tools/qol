@@ -1,6 +1,7 @@
 mod band;
 mod grid;
 mod list;
+mod menu;
 mod pictogram;
 mod rail;
 mod slider;
@@ -17,21 +18,23 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, AsyncApp, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, Keystroke, ParentElement, Render, ScrollDelta, ScrollHandle, Styled,
-    UniformListScrollHandle, WeakEntity, Window,
+    IntoElement, KeyDownEvent, Keystroke, ParentElement, Pixels, Point, Render, ScrollDelta,
+    ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
+use qol_gpui::text_edit::{self, TextField};
 use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
-use crate::config::{ConfigSaver, ExplorerConfig, ViewSize};
+use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
 use crate::listing::ListingState;
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 use grid::Layout;
+use menu::{Command, Menu};
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
@@ -50,9 +53,19 @@ const PUMP: Duration = Duration::from_millis(16);
 const DRAG_THRESHOLD: f32 = 4.0;
 const WHEEL_STEP: f32 = HEIGHT_CONTROL;
 
+pub(super) struct Renaming {
+    pin: usize,
+    field: TextField,
+}
+
 pub struct ExplorerView {
     browser: Browser,
+    pins: Vec<Pin>,
     places: Vec<Place>,
+    menu: Option<Menu>,
+    renaming: Option<Renaming>,
+    pin_edits: u64,
+    was_active: bool,
     devices: Vec<Device>,
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
@@ -84,7 +97,12 @@ impl ExplorerView {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
             browser: Browser::new(start, home, config.show_hidden),
-            places: places::places(),
+            pins: config.pins.clone(),
+            places: places::places(&config.pins),
+            menu: None,
+            renaming: None,
+            pin_edits: 0,
+            was_active: true,
             devices: places::devices(),
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
@@ -116,6 +134,248 @@ impl ExplorerView {
                 .iter()
                 .map(|device| (device.label.as_str(), device.path.as_path())),
         )
+    }
+
+    fn change_pins(&mut self, pins: Vec<Pin>) {
+        self.pins = pins;
+        self.places = places::places(&self.pins);
+        self.pin_edits += 1;
+        self.saver.save("pins", &self.pins);
+    }
+
+    fn reload_pins(&mut self, cx: &mut Context<Self>) {
+        let Some(answer) = self.saver.reload() else {
+            return;
+        };
+        let edits = self.pin_edits;
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(config) = answer.await else {
+                return;
+            };
+            let _ = view.update(cx, |view, cx| view.adopt_pins(config.pins, edits, cx));
+        })
+        .detach();
+    }
+
+    fn adopt_pins(&mut self, pins: Vec<Pin>, edits: u64, cx: &mut Context<Self>) {
+        if self.pin_edits != edits || pins == self.pins {
+            return;
+        }
+        self.pins = pins;
+        self.places = places::places(&self.pins);
+        self.menu = None;
+        self.renaming = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_pin_menu(
+        &mut self,
+        place: usize,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(listed) = self.places.get(place) else {
+            return;
+        };
+        self.renaming = None;
+        self.menu = Some(Menu::pin(
+            place,
+            &listed.name,
+            place == 0,
+            place + 1 == self.places.len(),
+            at,
+        ));
+        cx.notify();
+    }
+
+    pub(super) fn open_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let folder = self.browser.folder();
+        let name = folder.file_name().map_or_else(
+            || folder.display().to_string(),
+            crate::listing::display_name,
+        );
+        let pinned_as = self
+            .places
+            .iter()
+            .find(|place| place.path == folder)
+            .map(|place| place.name.as_str());
+        self.renaming = None;
+        self.menu = Some(Menu::folder(
+            &name,
+            pinned_as,
+            self.browser.shows_hidden(),
+            at,
+        ));
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn menu_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        match keystroke.key.as_str() {
+            "up" | "down" => {
+                if let Some(menu) = &mut self.menu {
+                    menu.step(keystroke.key == "down");
+                }
+            }
+            "enter" | "space" => {
+                let command = self.menu.take().and_then(|menu| menu.selected_command());
+                if let Some(command) = command {
+                    self.run_command(command, cx);
+                }
+            }
+            _ => self.menu = None,
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        self.menu = None;
+        match command {
+            Command::Unpin(place) => self.unpin_place(place),
+            Command::MoveUp(place) => self.move_place(place, false),
+            Command::MoveDown(place) => self.move_place(place, true),
+            Command::Rename(place) => self.start_renaming(place),
+            Command::TogglePin => self.toggle_pin(),
+            Command::GoToPath => self.edit_path(cx),
+            Command::ToggleHidden => {
+                self.toggle_hidden();
+            }
+            Command::Settings => self.open_settings(cx),
+        }
+        cx.notify();
+    }
+
+    fn unpin_place(&mut self, place: usize) {
+        let Some(pin) = self.places.get(place).map(|place| place.pin) else {
+            return;
+        };
+        if pin >= self.pins.len() {
+            return;
+        }
+        let mut pins = self.pins.clone();
+        pins.remove(pin);
+        self.change_pins(pins);
+    }
+
+    fn move_place(&mut self, place: usize, down: bool) {
+        let neighbour = if down {
+            place + 1
+        } else {
+            let Some(before) = place.checked_sub(1) else {
+                return;
+            };
+            before
+        };
+        let (Some(here), Some(there)) = (self.places.get(place), self.places.get(neighbour)) else {
+            return;
+        };
+        let (here, there) = (here.pin, there.pin);
+        if here >= self.pins.len() || there >= self.pins.len() {
+            return;
+        }
+        let mut pins = self.pins.clone();
+        pins.swap(here, there);
+        self.change_pins(pins);
+    }
+
+    fn toggle_pin(&mut self) {
+        let folder = self.browser.folder();
+        let mut pins = self.pins.clone();
+        match self.places.iter().find(|place| place.path == folder) {
+            Some(place) if place.pin < pins.len() => {
+                pins.remove(place.pin);
+            }
+            Some(_) => return,
+            None => pins.push(places::pin_for(folder, self.browser.home())),
+        }
+        self.change_pins(pins);
+    }
+
+    fn start_renaming(&mut self, place: usize) {
+        let Some(pin) = self.places.get(place).map(|place| place.pin) else {
+            return;
+        };
+        let Some(name) = self.pins.get(pin).map(|pin| pin.name.clone()) else {
+            return;
+        };
+        self.renaming = Some(Renaming {
+            pin,
+            field: TextField::with_text(name),
+        });
+    }
+
+    fn renaming_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        match keystroke.key.as_str() {
+            "enter" => self.finish_renaming(),
+            "escape" => self.renaming = None,
+            _ => {
+                let paste = || cx.read_from_clipboard().and_then(|item| item.text());
+                if let Some(renaming) = &mut self.renaming {
+                    text_edit::apply_edit_key(&mut renaming.field, keystroke, paste);
+                }
+            }
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn finish_renaming(&mut self) {
+        let Some(renaming) = self.renaming.take() else {
+            return;
+        };
+        let name = renaming.field.text().trim().to_string();
+        let unchanged = self
+            .pins
+            .get(renaming.pin)
+            .is_none_or(|pin| pin.name == name);
+        if name.is_empty() || unchanged {
+            return;
+        }
+        let mut pins = self.pins.clone();
+        pins[renaming.pin].name = name;
+        self.change_pins(pins);
+    }
+
+    fn open_settings(&mut self, cx: &mut Context<Self>) {
+        let (sent, outcome) = oneshot::channel();
+        let spawned = thread::Builder::new()
+            .name("qol-explorer-settings".into())
+            .spawn(move || {
+                let id = qol_config::plugin_id_from_env(PLUGIN_ID);
+                let opened = qol_apps::desktop_integration::open_plugin_settings_via_tray(&id);
+                let _ = sent.send(opened);
+            });
+        if let Err(error) = spawned {
+            self.could_not_open_settings(&error);
+            return;
+        }
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let Ok(Err(error)) = outcome.await else {
+                return;
+            };
+            let _ = view.update(cx, |view, cx| {
+                view.could_not_open_settings(&error);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn could_not_open_settings(&mut self, error: &io::Error) {
+        log::warn!("[{PLUGIN_ID}] could not open settings: {error}");
+        self.browser.fail("Could not open settings".to_string());
+    }
+
+    fn toggle_hidden(&mut self) -> bool {
+        let changed = self.revealed(Browser::toggle_hidden);
+        self.saver.save("show_hidden", self.browser.shows_hidden());
+        changed
     }
 
     fn follow_title(&mut self, window: &mut Window) {
@@ -291,6 +551,14 @@ impl ExplorerView {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.menu.is_some() {
+            self.menu_key(&event.keystroke, cx);
+            return;
+        }
+        if self.renaming.is_some() {
+            self.renaming_key(&event.keystroke, cx);
+            return;
+        }
         if self.folds_open {
             self.show_folds(false, cx);
             if event.keystroke.key == "escape" {
@@ -366,10 +634,14 @@ impl ExplorerView {
             Action::Pick => self.browser.toggle_pick(),
             Action::PickAll => self.browser.pick_all(),
             Action::Unpick => self.browser.dismiss(),
-            Action::ToggleHidden => {
-                let changed = self.revealed(Browser::toggle_hidden);
-                self.saver.save("show_hidden", self.browser.shows_hidden());
-                changed
+            Action::ToggleHidden => self.toggle_hidden(),
+            Action::TogglePin => {
+                self.toggle_pin();
+                true
+            }
+            Action::Settings => {
+                self.open_settings(cx);
+                true
             }
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
@@ -549,6 +821,12 @@ impl Render for ExplorerView {
         self.rail_width = rail_width(f32::from(viewport.width));
         self.list_width = inner_width - self.rail_width;
         self.follow_title(window);
+        let active = window.is_window_active();
+        if active && !self.was_active {
+            self.reload_pins(cx);
+        }
+        self.was_active = active;
+        let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)
@@ -565,6 +843,7 @@ impl Render for ExplorerView {
                     .child(rail::render(self, cx))
                     .child(list::render(self, cx)),
             )
+            .children(menu)
     }
 }
 

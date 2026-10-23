@@ -34,6 +34,8 @@ pub enum Action {
     ToggleHidden,
     EditPath,
     PathField,
+    TogglePin,
+    Settings,
     Resize(Resize),
     Nothing,
 }
@@ -85,6 +87,8 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("a", (true, false, false)) => Action::PickAll,
         ("h", (true, false, false)) => Action::ToggleHidden,
         ("g", (true, false, false)) => Action::EditPath,
+        ("d", (true, false, false)) => Action::TogglePin,
+        (",", (true, false, false)) => Action::Settings,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
     }
 }
@@ -230,6 +234,14 @@ mod tests {
                 key("g", Modifiers::secondary_key(), Some("g")),
                 Action::EditPath,
             ),
+            (
+                key("d", Modifiers::secondary_key(), Some("d")),
+                Action::TogglePin,
+            ),
+            (
+                key(",", Modifiers::secondary_key(), Some(",")),
+                Action::Settings,
+            ),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
@@ -330,6 +342,8 @@ mod tests {
             key("a", Modifiers::none(), Some("a")),
             key("h", Modifiers::none(), Some("h")),
             key("g", Modifiers::secondary_key(), Some("g")),
+            key("d", Modifiers::secondary_key(), Some("d")),
+            key(",", Modifiers::secondary_key(), Some(",")),
         ] {
             assert_eq!(action(&keystroke, true), Action::PathField, "{keystroke:?}");
         }
@@ -357,6 +371,8 @@ mod tests {
             Action::Unpick,
             Action::ToggleHidden,
             Action::PathField,
+            Action::TogglePin,
+            Action::Settings,
         ];
         for action in on_rows {
             assert!(waits(action, true, false, false), "{action:?}");

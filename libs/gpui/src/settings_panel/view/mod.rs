@@ -1,8 +1,10 @@
 mod choose_card;
 mod display_layout_card;
+mod entries_carry;
 mod list_card;
 mod placement_card;
 mod slider_flights;
+mod stored_values;
 mod structured_list_editor;
 
 use crate::key::Key;
@@ -330,6 +332,7 @@ pub(super) struct SettingsPanelView {
     display_layout_motion: display_layout_card::DisplayLayoutMotion,
     attention: std::collections::HashSet<String>,
     attention_error_logged: bool,
+    values_generation: u64,
 }
 
 pub(super) struct SettingsPanelState {
@@ -537,6 +540,7 @@ impl SettingsPanelView {
             display_layout_motion: Default::default(),
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
+            values_generation: 0,
         };
         let change_link = Rc::clone(&parent_link);
         let on_change: CustomPanelInvalidator = Rc::new(move |app| {
@@ -2976,6 +2980,7 @@ impl SettingsPanelView {
 
     fn persist(&mut self) {
         self.height_revision += 1;
+        self.values_generation += 1;
         let Some(source_index) = self
             .root()
             .rows
@@ -3616,7 +3621,11 @@ impl SettingsPanelView {
         let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
 
         if self.level().entries.is_some() {
-            return container.child(self.render_entries_row(index, cx));
+            let offset = self.entries_offset(index, std::time::Instant::now());
+            return container
+                .relative()
+                .top(px(offset))
+                .child(self.render_entries_row(index, cx));
         }
         if self.level().form.is_some() {
             return container.child(self.render_form_row(index, cx));
@@ -4022,6 +4031,9 @@ impl Render for SettingsPanelView {
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
         }
+        if self.entries_moving() {
+            window.request_animation_frame();
+        }
         self.fit_lists();
         self.reconcile_focus(window, cx);
         let (rail, rail_dots): (Vec<AnyElement>, Vec<AnyElement>) = if self.rail_is_open() {
@@ -4097,6 +4109,7 @@ impl Render for SettingsPanelView {
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_modifiers_changed(cx.listener(Self::on_carry_modifiers))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, event: &MouseDownEvent, _, _| {

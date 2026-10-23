@@ -272,6 +272,16 @@ Per-kind rules (validated, not ignored):
   not end in `_mods` needs a `[field.<id>.lists.<key>]` entry carrying
   `item_label` and `card_description`; the description may use the literal
   placeholder `{entry}`.
+- Entries cards: an `object_array`, or a `string_array` with no `options` and no `query`, may set `reorder = true` and `add_label`.
+  `reorder = true` lets the user order the entries from the keyboard.
+  In the card, Enter or a click picks the entry up, Up and Down carry it, Enter puts it down, and Esc puts it back where it was.
+  Ctrl+Up and Ctrl+Down carry it while Ctrl is held and put it down when Ctrl is released.
+  The order saves when the entry is put down.
+  Entries in a reorder card open no edit form.
+  `add_label` names the add row as "+ {add_label}", and the row reads "+ Add" without one.
+  An `object_array` may also set `row_label`, a template that names item fields in braces, like `"{name}"`, and fills each entry's row.
+  Validation rejects a `row_label` that names no item field or names a field the item does not have.
+  It also rejects `reorder` or `add_label` on any other kind, and an `add_label` that fails the `item_label` rules.
 - A `list` with `[field.<id>.lead]` opens as a finder: one tall lead row
   (`label` names its group, `description`, `row_label` and `row_subtitle`
   interpolate the payload's `lead` object) above the items, which sit in a
@@ -669,6 +679,10 @@ host-owned settings process. Reopening the same plugin focuses the retained wind
 opening another plugin replaces the view in that window; closing it leaves the host
 ready to create one fresh window on the next request. Custom pickers, overlays, and
 toasts remain plugin-owned.
+
+The retained settings window rereads the stored values of every source each time it is presented.
+It updates the rows whose stored value changed, so a value saved elsewhere, such as Explorer's pinned folders, shows when the window is shown again.
+It skips the update while a card or an edit is open, and when a save ran after the read started.
 
 The rendering contract is the `libs/gpui` crate that such plugins depend on:
 

@@ -96,6 +96,10 @@ pub struct FieldSpec {
     #[serde(default)]
     pub lookup_label: Option<String>,
     #[serde(default)]
+    pub add_label: Option<String>,
+    #[serde(default)]
+    pub reorder: Option<bool>,
+    #[serde(default)]
     pub lists: IndexMap<String, NestedListSpec>,
     #[serde(default)]
     pub key_label: Option<String>,
