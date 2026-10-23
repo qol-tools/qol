@@ -4,9 +4,12 @@ uid = "37aae6d0-ae74-4487-946a-32a635a9ef03"
 name = "Remove App"
 icon = "remove-app"
 description = "Uninstall an app and its leftovers"
-version = "0.90.0"
+version = "0.91.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
+
+[config.scope]
+title_bar = "os"
 
 [runtime]
 command = "qol-removeapp"
@@ -14,6 +17,12 @@ command = "qol-removeapp"
 [action.open]
 label = "Open Remove App"
 args = ["open"]
+
+[action.settings]
+label = "Settings"
+kind = "settings"
+picture = "gear"
+args = ["settings"]
 
 [capabilities]
 gpui = true

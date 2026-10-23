@@ -38,6 +38,17 @@ where
                 .run_result(open),
         )
         .command(
+            Command::new("settings")
+                .about("Open the Remove App settings page in qol-tray.")
+                .usage(format!("{PLUGIN_ID} settings"))
+                .output("No stdout on success.")
+                .exit_behavior("Exits non-zero if qol-tray cannot open the settings page.")
+                .run_result(|_| {
+                    qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)?;
+                    Ok(CommandResult::success(""))
+                }),
+        )
+        .command(
             Command::new("scan")
                 .about("Print the read-only removal plan for one installed app.")
                 .usage(format!("{PLUGIN_ID} scan <app>"))

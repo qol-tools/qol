@@ -47,6 +47,7 @@ fn open_window(
 ) -> anyhow::Result<OpenedSurface<RemoveAppView>> {
     Surface::new(SurfaceKind::Panel)
         .title(WINDOW_TITLE)
+        .title_bar(crate::config::load().title_bar)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
         .min_size(size(px(WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT)))
         .remember(WindowMemory::reopened_by_action(
@@ -70,7 +71,18 @@ fn spawn_command_poll(
             match cmd {
                 Command::Open => {
                     let presented = cx
-                        .update(move |cx| panel.borrow_mut().present(&tracker, cx))
+                        .update(move |cx| {
+                            if panel.borrow().update_view(cx, |_, _, _| ()).is_some() {
+                                return panel.borrow_mut().present(&tracker, cx);
+                            }
+                            match open_window(&tracker, cx) {
+                                Ok(reopened) => {
+                                    *panel.borrow_mut() = reopened;
+                                    true
+                                }
+                                Err(_) => false,
+                            }
+                        })
                         .unwrap_or(false);
                     if !presented {
                         log::warn!("[{PLUGIN_ID}] panel activation failed");

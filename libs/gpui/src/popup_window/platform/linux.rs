@@ -553,6 +553,10 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_with_opacity(title, 0.0)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_window(title, 0.0, true)
+}
+
 static UNMAP_HIDE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_unmap_hide(enabled: bool) {
@@ -706,6 +710,10 @@ const HIDE_RESOLVE_ATTEMPTS: u32 = 6;
 const HIDE_RESOLVE_RETRY_MS: u64 = 5;
 
 fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
+    hide_window(title, opacity, unmap_hide_enabled())
+}
+
+fn hide_window(title: &str, opacity: f32, unmap: bool) -> bool {
     #[cfg(debug_assertions)]
     let reason = crate::popup_window::change_reason();
     #[cfg(not(debug_assertions))]
@@ -731,7 +739,7 @@ fn hide_window_with_opacity(title: &str, opacity: f32) -> bool {
         std::thread::sleep(Duration::from_millis(HIDE_RESOLVE_RETRY_MS));
     };
     release_input_focus(&conn, root, wid);
-    if opacity > 0.0 || !unmap_hide_enabled() {
+    if opacity > 0.0 || !unmap {
         if cached_card(title) == Some(target) {
             return true;
         }
@@ -1009,7 +1017,7 @@ fn window_presentation_is_normal(conn: &impl Connection, wid: u32) -> bool {
         .any(|atom| states.contains(&atom))
 }
 
-pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
+pub fn configure_overlay_window(title: &str, resizable: bool, decorated: bool) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -1018,7 +1026,9 @@ pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
         return false;
     };
 
-    set_window_manager_decorations(&conn, wid, false);
+    if !decorated {
+        set_window_manager_decorations(&conn, wid, false);
+    }
     if !resizable {
         lock_window_size(&conn, wid);
     }
@@ -1951,11 +1961,52 @@ fn find_window_by_title(
     utf8_atom: u32,
     title: &str,
 ) -> Option<u32> {
-    let mut ids = root_window_ids(conn, root, list_atom);
+    let clients = root_window_ids(conn, root, list_atom);
+    let mut ids = clients.clone();
     append_tree_window_ids(conn, root, &mut ids);
 
-    let titled: Vec<u32> = ids
-        .into_iter()
+    let pid_atom = intern(conn, b"_NET_WM_PID");
+    let current_pid = std::process::id();
+    let own_window = |candidates: &[u32]| {
+        pid_atom.and_then(|atom| {
+            candidates
+                .iter()
+                .copied()
+                .find(|&wid| window_pid_matches(conn, wid, atom, current_pid))
+        })
+    };
+
+    let mut titled = titled_windows(conn, &ids, name_atom, utf8_atom, title);
+    let mut pid_match = own_window(&titled);
+    if pid_match.is_none() {
+        let mut framed = Vec::new();
+        for &frame in ids.iter().filter(|wid| !clients.contains(wid)) {
+            append_tree_window_ids(conn, frame, &mut framed);
+        }
+        framed.retain(|wid| !ids.contains(wid));
+        let framed_titled = titled_windows(conn, &framed, name_atom, utf8_atom, title);
+        pid_match = own_window(&framed_titled);
+        titled.extend(framed_titled);
+    }
+    #[cfg(debug_assertions)]
+    if titled.len() > 1 {
+        log::debug!(
+            "title={title:?} candidates={:?} pid_match={pid_match:?}",
+            titled
+        );
+    }
+    pid_match.or_else(|| titled.into_iter().next())
+}
+
+fn titled_windows(
+    conn: &impl Connection,
+    ids: &[u32],
+    name_atom: u32,
+    utf8_atom: u32,
+    title: &str,
+) -> Vec<u32> {
+    ids.iter()
+        .copied()
         .filter(|&wid| {
             window_title_matches(conn, wid, name_atom, utf8_atom, title)
                 || window_title_matches(
@@ -1966,24 +2017,7 @@ fn find_window_by_title(
                     title,
                 )
         })
-        .collect();
-
-    let pid_atom = intern(conn, b"_NET_WM_PID");
-    let current_pid = std::process::id();
-    let pid_match = pid_atom.and_then(|atom| {
-        titled
-            .iter()
-            .copied()
-            .find(|&wid| window_pid_matches(conn, wid, atom, current_pid))
-    });
-    #[cfg(debug_assertions)]
-    if titled.len() > 1 {
-        log::debug!(
-            "title={title:?} candidates={:?} pid_match={pid_match:?}",
-            titled
-        );
-    }
-    pid_match.or_else(|| titled.into_iter().next())
+        .collect()
 }
 
 #[cfg(debug_assertions)]

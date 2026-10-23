@@ -715,6 +715,26 @@ fn config_scope_for_unlisted_field_returns_core_by_default() {
 }
 
 #[test]
+fn the_title_bar_switch_stays_on_this_machine_unless_a_scope_names_it() {
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config]
+default_scope = "device"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    assert_eq!(manifest.config.scope_for("title_bar"), ConfigScope::Os);
+    let toml = format!(
+        r#"{TRAITS_MANIFEST_HEAD}
+[config.scope]
+title_bar = "core"
+"#
+    );
+    let manifest: PluginManifest = toml::from_str(&toml).unwrap();
+    assert_eq!(manifest.config.scope_for("title_bar"), ConfigScope::Core);
+}
+
+#[test]
 fn manifest_rejects_unknown_config_scope_value() {
     let toml = format!(
         r#"{TRAITS_MANIFEST_HEAD}

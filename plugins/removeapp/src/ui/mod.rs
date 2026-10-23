@@ -19,7 +19,7 @@ use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text_edit::{self, CaretStyle, TextField, TextFieldElement};
 
-pub const WINDOW_TITLE: &str = env!("QOL_PLUGIN_ID");
+pub const WINDOW_TITLE: &str = "Remove App";
 pub const WINDOW_WIDTH: f32 = 460.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
 const SEARCH_H: f32 = qol_gpui::theme::HEIGHT_HINT_BAR;

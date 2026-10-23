@@ -4,7 +4,7 @@ pub use platform::show_normal_window_by_title;
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::runtime_config::load_gpui_runtime_config;
@@ -77,11 +77,11 @@ pub use platform::{
     capture_focus_return, compositor_active, configure_keepalive_window, configure_overlay_window,
     configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
     focus_window_by_title, grab_escape, grab_keyboard, hide_for_capture, hide_invisible,
-    hide_window_by_title, hide_windows_by_title_prefix, hold_input, input_held, join_all_spaces,
-    make_override_redirect, park_window_by_title, pinned_window_kind, pointer_on_window_by_title,
-    pointer_over_window_by_title, prepare_window_reveal_by_title, present_topmost,
-    register_native_display, release_focus_by_title, release_input, release_keyboard,
-    reposition_window_by_title, restore_composite, set_input_region_by_title,
+    hide_unmapped, hide_window_by_title, hide_windows_by_title_prefix, hold_input, input_held,
+    join_all_spaces, make_override_redirect, park_window_by_title, pinned_window_kind,
+    pointer_on_window_by_title, pointer_over_window_by_title, prepare_window_reveal_by_title,
+    present_topmost, register_native_display, release_focus_by_title, release_input,
+    release_keyboard, reposition_window_by_title, restore_composite, set_input_region_by_title,
     set_override_redirect_by_title, set_unmap_hide, set_window_type_dock_by_title,
     show_toast_window_by_title, show_window_by_title, show_window_interactive_by_title,
     show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
@@ -123,19 +123,20 @@ pub fn reassert_focus_until_held(
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
 ) {
-    reassert_focus_until_held_with(title, gen, commit_gen, show_window_by_title);
+    reassert_focus_until_held_with(
+        Arc::new(Mutex::new(title.to_string())),
+        gen,
+        commit_gen,
+        show_window_by_title,
+    );
 }
 
-pub(crate) fn reassert_normal_focus_until_held(
-    title: &str,
-    gen: &'static std::sync::atomic::AtomicU64,
-    commit_gen: u64,
-) {
-    reassert_focus_until_held_with(title, gen, commit_gen, show_normal_window_by_title);
+pub(crate) fn read_title(title: &Mutex<String>) -> String {
+    title.lock().map(|title| title.clone()).unwrap_or_default()
 }
 
-fn reassert_focus_until_held_with(
-    title: &str,
+pub(crate) fn reassert_focus_until_held_with(
+    title: Arc<Mutex<String>>,
     gen: &'static std::sync::atomic::AtomicU64,
     commit_gen: u64,
     show: fn(&str) -> bool,
@@ -143,8 +144,7 @@ fn reassert_focus_until_held_with(
     if !crate::platform::should_poll_focus() {
         return;
     }
-    let poll_title = title.to_string();
-    let assert_title = title.to_string();
+    let assert_shared = title.clone();
     let mut held_streak = 0u32;
     let started = Instant::now();
     crate::platform::spawn_reassert_driver(
@@ -152,6 +152,7 @@ fn reassert_focus_until_held_with(
         commit_gen,
         FOCUS_REASSERT_DELAYS_MS,
         move || {
+            let poll_title = read_title(&title);
             let focused = window_holds_input_focus(&poll_title) == Some(true);
             let visible = focused || visible_windows_by_title_prefix(&poll_title) != 0;
             let step = focus_reassert_step(&mut held_streak, focused, visible, started.elapsed());
@@ -172,6 +173,7 @@ fn reassert_focus_until_held_with(
             step
         },
         move || {
+            let assert_title = read_title(&assert_shared);
             let Some(shown) = reassert_if_current(gen, commit_gen, || show(&assert_title)) else {
                 qol_runtime::probe!("FOCUS_REASSERT", "title={assert_title} step=dismissed");
                 return;

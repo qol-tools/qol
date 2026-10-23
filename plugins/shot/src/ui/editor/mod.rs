@@ -443,6 +443,7 @@ pub(crate) fn open(
     let min_size = render::editor_min_size(layout);
     Surface::new(SurfaceKind::Panel)
         .title("QoL Shot Editor")
+        .title_bar(crate::config::load().title_bar)
         .size(size(px(layout.window.0), px(layout.window.1)))
         .min_size(size(px(min_size.0), px(min_size.1)))
         .remember(WindowMemory::size_and_place(WINDOW_MEMORY_KEY))

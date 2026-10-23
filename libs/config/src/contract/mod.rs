@@ -21,5 +21,5 @@ pub use runtime::{
 pub use v1::{
     parse_spec, parse_spec_str, ConfigSpec, ConfigSpecV1, DevicesSpec, FieldAlign, FieldDefault,
     FieldKind, FieldSpec, ItemSpec, ListLeadSpec, NestedListSpec, NumberConstraints, PagesSpec,
-    ParseSpecError, RowActionSpec, RowSliderSpec, SectionSpec,
+    ParseSpecError, RowActionSpec, RowSliderSpec, SectionSpec, WindowSpec, TITLE_BAR_KEY,
 };

@@ -23,7 +23,7 @@ use crate::session::registry::Registry;
 use crate::ui::placement::Corner;
 use crate::ui::selection::Selection;
 
-pub(crate) const WINDOW_TITLE: &str = "cli-sessions-panel";
+pub(crate) const WINDOW_TITLE: &str = "CLI Sessions";
 
 static CYCLE_FOCUS_GEN: AtomicU64 = AtomicU64::new(0);
 

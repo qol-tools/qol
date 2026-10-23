@@ -189,3 +189,6 @@ copy_path = "Copy path"
 [field.shortcuts_copy_command.option_pictures]
 copy_image = "copy-image"
 copy_path = "copy-path"
+
+[window]
+title_bar = true

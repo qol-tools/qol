@@ -34,6 +34,8 @@ pub struct ExplorerConfig {
     pub show_hidden: bool,
     #[serde(default = "default_pins")]
     pub pins: Vec<Pin>,
+    #[serde(default = "shows_title_bar")]
+    pub title_bar: bool,
 }
 
 impl Default for ExplorerConfig {
@@ -42,6 +44,7 @@ impl Default for ExplorerConfig {
             view_size: ViewSize::default(),
             show_hidden: false,
             pins: default_pins(),
+            title_bar: shows_title_bar(),
         }
     }
 }
@@ -62,6 +65,10 @@ pub fn default_pins() -> Vec<Pin> {
         path: path.to_string(),
     })
     .collect()
+}
+
+fn shows_title_bar() -> bool {
+    true
 }
 
 pub fn load() -> ExplorerConfig {

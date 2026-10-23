@@ -1,6 +1,6 @@
 [package]
 name = "qol-removeapp"
-version = "0.90.0"
+version = "0.91.0"
 edition = "2021"
 description = "Uninstall an app and its leftovers for QoL Tray"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -22,6 +22,7 @@ qol-platform.workspace = true
 qol-fs.workspace = true
 gpui.workspace = true
 qol-gpui.workspace = true
+qol-config.workspace = true
 workspace-hack.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

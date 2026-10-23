@@ -373,6 +373,10 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
     let pid = std::process::id();
     top_level_windows()
@@ -443,16 +447,18 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool, decorated: bool) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
-    apply_tool_window_style(hwnd);
+    if !decorated {
+        apply_tool_window_style(hwnd);
+    }
     place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE)
 }
 
 pub fn configure_pinned_window(title: &str) -> bool {
-    configure_overlay_window(title, false)
+    configure_overlay_window(title, false, false)
 }
 
 #[cfg(test)]

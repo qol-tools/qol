@@ -67,3 +67,6 @@ default = [
 [field.pins.item.fields]
 name = "string"
 path = "string"
+
+[window]
+title_bar = true
