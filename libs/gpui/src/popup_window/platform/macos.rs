@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
@@ -7,7 +8,7 @@ use std::sync::{Mutex, Once, OnceLock, PoisonError};
 use block2::{DynBlock, RcBlock};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver};
 use futures::StreamExt as _;
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::AnyThread;
 use objc2_app_kit::{
@@ -88,46 +89,62 @@ fn forget_window_number(title: &str) {
     }
 }
 
-static INPUT_REGIONS: Mutex<Option<HashMap<String, NSRect>>> = Mutex::new(None);
+struct InputRegion {
+    title: String,
+    rect: NSRect,
+    window: Option<Weak<NSWindow>>,
+}
 
-fn remember_input_region(title: &str, x: i16, y: i16, width: u16, height: u16) {
-    let region = NSRect::new(
-        NSPoint::new(f64::from(x), f64::from(y)),
-        NSSize::new(f64::from(width), f64::from(height)),
-    );
-    INPUT_REGIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get_or_insert_with(HashMap::new)
-        .insert(title.to_owned(), region);
-    REGION_GENERATION.fetch_add(1, Ordering::SeqCst);
+impl InputRegion {
+    fn window(&mut self) -> Option<Retained<NSWindow>> {
+        if let Some(window) = self.window.as_ref().and_then(Weak::load) {
+            return Some(window);
+        }
+        let window = resolve_window(&self.title)?;
+        self.window = Some(Weak::new(&window));
+        Some(window)
+    }
+}
+
+struct PointerWatch {
+    tokens: [Retained<AnyObject>; 2],
+    _global: RcBlock<dyn Fn(NonNull<NSEvent>)>,
+    _local: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>,
+}
+
+impl Drop for PointerWatch {
+    fn drop(&mut self) {
+        for token in &self.tokens {
+            unsafe { NSEvent::removeMonitor(token) };
+        }
+    }
+}
+
+thread_local! {
+    static INPUT_REGIONS: RefCell<Vec<InputRegion>> = const { RefCell::new(Vec::new()) };
+    static POINTER_WATCH: RefCell<Option<PointerWatch>> = const { RefCell::new(None) };
+}
+
+fn remember_input_region(title: &str, rect: NSRect) {
+    INPUT_REGIONS.with_borrow_mut(|regions| {
+        match regions.iter_mut().find(|region| region.title == title) {
+            Some(region) => region.rect = rect,
+            None => regions.push(InputRegion {
+                title: title.to_owned(),
+                rect,
+                window: None,
+            }),
+        }
+    });
 }
 
 fn input_region(title: &str) -> Option<NSRect> {
-    INPUT_REGIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .and_then(|regions| regions.get(title).copied())
-}
-
-fn region_titles() -> Vec<String> {
-    INPUT_REGIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-        .map(|regions| regions.keys().cloned().collect())
-        .unwrap_or_default()
-}
-
-fn forget_input_region(title: &str) {
-    if let Some(regions) = INPUT_REGIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_mut()
-    {
-        regions.remove(title);
-    }
+    INPUT_REGIONS.with_borrow(|regions| {
+        regions
+            .iter()
+            .find(|region| region.title == title)
+            .map(|region| region.rect)
+    })
 }
 
 fn pointer_in_region(frame: NSRect, region: NSRect, pointer: NSPoint) -> bool {
@@ -139,71 +156,100 @@ fn pointer_in_region(frame: NSRect, region: NSRect, pointer: NSPoint) -> bool {
         && y < region.origin.y + region.size.height
 }
 
-const REGION_POLL: std::time::Duration = std::time::Duration::from_millis(16);
-
-static REGION_POLLING: AtomicBool = AtomicBool::new(false);
-static REGION_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn apply_input_region(title: &str) -> bool {
-    let Some(region) = input_region(title) else {
-        return false;
-    };
-    let Some(window) = resolve_window(title) else {
-        forget_input_region(title);
-        return false;
-    };
-    if !window.isVisible() || window.alphaValue() <= 0.0 {
-        return false;
-    }
-    let inside = pointer_in_region(window.frame(), region, NSEvent::mouseLocation());
-    if window.ignoresMouseEvents() == inside {
-        window.setIgnoresMouseEvents(!inside);
-    }
-    true
+fn apply_input_regions() -> bool {
+    let pointer = NSEvent::mouseLocation();
+    let mut shown = false;
+    INPUT_REGIONS.with_borrow_mut(|regions| {
+        regions.retain_mut(|region| {
+            let Some(window) = region.window() else {
+                return false;
+            };
+            if window.isVisible() && window.alphaValue() > 0.0 {
+                shown = true;
+                let inside = pointer_in_region(window.frame(), region.rect, pointer);
+                if window.ignoresMouseEvents() == inside {
+                    window.setIgnoresMouseEvents(!inside);
+                    qol_runtime::probe!(
+                        "INPUT_REGION",
+                        "step=toggle title={} inside={inside}",
+                        region.title
+                    );
+                }
+            }
+            true
+        });
+    });
+    shown
 }
 
-fn apply_all_input_regions() -> bool {
-    let titles = region_titles();
-    titles
-        .iter()
-        .filter(|title| apply_input_region(title))
-        .count()
-        > 0
+const POINTER_MOVES: NSEventMask = NSEventMask(
+    NSEventMask::MouseMoved.0
+        | NSEventMask::LeftMouseDragged.0
+        | NSEventMask::RightMouseDragged.0
+        | NSEventMask::OtherMouseDragged.0,
+);
+
+fn on_pointer_moved() {
+    if !apply_input_regions() {
+        run_on_main(Box::new(stop_pointer_watch_when_hidden));
+    }
 }
 
-fn ensure_region_poll() {
-    if REGION_POLLING.swap(true, Ordering::SeqCst) {
+fn stop_pointer_watch_when_hidden() {
+    if apply_input_regions() {
         return;
     }
-    std::thread::spawn(|| loop {
-        std::thread::sleep(REGION_POLL);
-        let generation = REGION_GENERATION.load(Ordering::SeqCst);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        run_on_main(Box::new(move || {
-            let _ = sender.send(apply_all_input_regions());
-        }));
-        if !receiver.recv().unwrap_or(false) {
-            REGION_POLLING.store(false, Ordering::SeqCst);
-            // A region stored after this tick began saw the flag still set and spawned no poll.
-            if generation != REGION_GENERATION.load(Ordering::SeqCst)
-                && !REGION_POLLING.swap(true, Ordering::SeqCst)
-            {
-                continue;
-            }
-            qol_runtime::probe!("INPUT_REGION", "step=poll-stopped");
-            return;
-        }
+    if POINTER_WATCH.take().is_some() {
+        qol_runtime::probe!("INPUT_REGION", "step=watch-stopped");
+    }
+}
+
+fn watch_pointer_for_regions() {
+    if POINTER_WATCH.with_borrow(Option::is_some) {
+        return;
+    }
+    let global = RcBlock::new(|_event: NonNull<NSEvent>| on_pointer_moved());
+    let local = RcBlock::new(|event: NonNull<NSEvent>| {
+        on_pointer_moved();
+        event.as_ptr()
     });
-    qol_runtime::probe!("INPUT_REGION", "step=poll-started");
+    let global_ref: &DynBlock<dyn Fn(NonNull<NSEvent>)> = &global;
+    let local_ref: &DynBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent> = &local;
+    let Some(global_token) =
+        NSEvent::addGlobalMonitorForEventsMatchingMask_handler(POINTER_MOVES, global_ref)
+    else {
+        return;
+    };
+    let Some(local_token) = (unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(POINTER_MOVES, local_ref)
+    }) else {
+        unsafe { NSEvent::removeMonitor(&global_token) };
+        return;
+    };
+    POINTER_WATCH.set(Some(PointerWatch {
+        tokens: [global_token, local_token],
+        _global: global,
+        _local: local,
+    }));
+    qol_runtime::probe!("INPUT_REGION", "step=watch-started");
 }
 
 fn set_input_region_on_main(title: &str, x: i16, y: i16, width: u16, height: u16) -> bool {
-    remember_input_region(title, x, y, width, height);
+    let rect = NSRect::new(
+        NSPoint::new(f64::from(x), f64::from(y)),
+        NSSize::new(f64::from(width), f64::from(height)),
+    );
     let title = title.to_owned();
-    run_on_main(Box::new(move || {
-        apply_input_region(&title);
-    }));
-    ensure_region_poll();
+    let apply = move || {
+        remember_input_region(&title, rect);
+        apply_input_regions();
+        watch_pointer_for_regions();
+    };
+    if MainThreadMarker::new().is_some() {
+        apply();
+    } else {
+        run_on_main(Box::new(apply));
+    }
     true
 }
 
@@ -945,12 +991,9 @@ fn show_window_by_title_with_focus(
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(input_passthrough);
-    if !input_passthrough {
-        apply_input_region(title);
-        if input_region(title).is_some() {
-            REGION_GENERATION.fetch_add(1, Ordering::SeqCst);
-            ensure_region_poll();
-        }
+    if !input_passthrough && input_region(title).is_some() {
+        apply_input_regions();
+        watch_pointer_for_regions();
     }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
