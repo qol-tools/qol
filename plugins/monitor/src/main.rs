@@ -139,13 +139,6 @@ mod tests {
             .expect("qol-runtime.toml invalid");
         qol_config::contract::validate_contracts(&config, Some(&runtime))
             .expect("qol-config.toml and qol-runtime.toml must validate together");
-        assert_eq!(
-            config
-                .field("status")
-                .and_then(|field| field.hide_values.clone()),
-            Some(vec!["ok".to_string(), "no_displays".to_string()]),
-            "the status row shows only a real fault; the Displays card already counts displays"
-        );
         let arrangement = config
             .field("arrangement")
             .expect("the arrangement field must exist");

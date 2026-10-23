@@ -126,8 +126,33 @@ pub fn findings_payload(findings: &[Finding]) -> serde_json::Value {
             })
         })
         .collect::<Vec<_>>();
+    let state = rollup(findings);
+    let (summary, label, detail) = match state {
+        "attention" => (
+            format!(
+                "{} {} · Needs attention",
+                findings.len(),
+                if findings.len() == 1 {
+                    "finding"
+                } else {
+                    "findings"
+                }
+            ),
+            "Needs attention",
+            "Fix each problem below.",
+        ),
+        "ok" => ("Healthy".to_string(), "Healthy", "Nothing to fix."),
+        _ => (
+            "Nothing detected".to_string(),
+            "Nothing detected",
+            "The checks found nothing.",
+        ),
+    };
     serde_json::json!({
-        "state": rollup(findings),
+        "state": state,
+        "summary": summary,
+        "lead": { "label": label, "detail": detail },
+        "empty": { "title": "No problems found" },
         "message": message,
         "items": items,
     })
@@ -175,6 +200,8 @@ mod tests {
         ];
         let payload = findings_payload(&findings);
         assert_eq!(payload["state"], "attention");
+        assert_eq!(payload["summary"], "2 findings · Needs attention");
+        assert_eq!(payload["lead"]["label"], "Needs attention");
         assert_eq!(payload["message"], "Bluetooth service: rejecting audio");
         let first = &payload["items"][0];
         assert_eq!(first["id"], "wedged");

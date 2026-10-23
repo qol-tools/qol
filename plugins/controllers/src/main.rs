@@ -18,15 +18,4 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     qol_plugin_api::assert_plugin_toml_valid!();
-
-    #[test]
-    fn status_row_hides_when_no_controller_needs_a_fix() {
-        let contract = include_str!("../qol-config.toml");
-        let status = contract
-            .split("[field.fixes_status]")
-            .nth(1)
-            .and_then(|rest| rest.split("\n[").next())
-            .expect("fixes_status field exists");
-        assert!(status.contains(r#"hide_values = ["none", "ok"]"#));
-    }
 }

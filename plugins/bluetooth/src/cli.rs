@@ -525,7 +525,7 @@ fn host_fixes_command() -> Command {
         })
         .run_json(|context| {
             reject_args(context.args())?;
-            Ok(crate::hostfix::host_fixes_payload(
+            Ok(qol_host_fixes::findings_payload(
                 &BluetoothHostFixes.detect(),
             ))
         })

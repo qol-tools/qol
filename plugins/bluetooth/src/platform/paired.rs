@@ -3,7 +3,7 @@ use std::sync::{mpsc, LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_host_fixes::HostFixes;
+use qol_host_fixes::{findings_payload, HostFixes};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
@@ -16,7 +16,7 @@ use crate::bluetooth::{
     DeviceOption, DiscoveryState, ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
-use crate::hostfix::{host_fixes_payload, BluetoothHostFixes};
+use crate::hostfix::BluetoothHostFixes;
 
 pub(super) trait PairedStack {
     const TRUST_REFUSAL: &'static str;
@@ -314,9 +314,7 @@ fn parse_daemon_request<S: PairedStack>(request: &DaemonRequest) -> ReadResult<D
         "reconnect_trusted" => ReadResult::Command(DaemonCommand::ReconnectTrusted),
         "reload" => ReadResult::Command(DaemonCommand::Reload),
         "settings" => ReadResult::Command(DaemonCommand::Settings),
-        "host_fixes" => {
-            ReadResult::HandledWithData(host_fixes_payload(&BluetoothHostFixes.detect()))
-        }
+        "host_fixes" => ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect())),
         "apply_host_fix" => match host_fix_id(request) {
             Ok(id) => {
                 spawn_host_fix(id);

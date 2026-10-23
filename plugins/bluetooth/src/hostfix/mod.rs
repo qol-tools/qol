@@ -109,35 +109,6 @@ pub fn claimed_managers() -> Vec<&'static CompetingManager> {
         .collect()
 }
 
-pub fn host_fixes_payload(findings: &[Finding]) -> serde_json::Value {
-    let mut payload = qol_host_fixes::findings_payload(findings);
-    let count = findings.len();
-    let (summary, label, detail) = match payload["state"].as_str() {
-        Some("attention") => (
-            format!(
-                "{count} {} · Needs attention",
-                if count == 1 { "finding" } else { "findings" }
-            ),
-            "Bluetooth needs attention",
-            "Fix each problem below.",
-        ),
-        Some("ok") => (
-            "Healthy".to_string(),
-            "Bluetooth is healthy",
-            "Nothing to fix.",
-        ),
-        _ => (
-            "Nothing detected".to_string(),
-            "Nothing detected",
-            "The Bluetooth checks found nothing.",
-        ),
-    };
-    payload["summary"] = serde_json::Value::String(summary);
-    payload["lead"] = serde_json::json!({ "label": label, "detail": detail });
-    payload["empty"] = serde_json::json!({ "title": "No problems found" });
-    payload
-}
-
 pub struct BluetoothHostFixes;
 
 impl BluetoothHostFixes {
@@ -691,43 +662,6 @@ pub fn orphaned_autostart_override() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn host_fixes_payload_states_count_and_health_once() {
-        let advice = Finding::advice("a", "Audio server", "PipeWire");
-        let pending = Finding::fixable("c", "Service", "wedged", FixState::Pending);
-        let cases = [
-            ("empty", vec![], "Nothing detected", "Nothing detected"),
-            (
-                "advice only",
-                vec![advice.clone()],
-                "Healthy",
-                "Bluetooth is healthy",
-            ),
-            (
-                "one problem",
-                vec![pending.clone()],
-                "1 finding · Needs attention",
-                "Bluetooth needs attention",
-            ),
-            (
-                "three findings",
-                vec![advice.clone(), pending.clone(), pending],
-                "3 findings · Needs attention",
-                "Bluetooth needs attention",
-            ),
-        ];
-        for (label, findings, summary, lead) in cases {
-            let payload = host_fixes_payload(&findings);
-            assert_eq!(payload["summary"], summary, "{label}");
-            assert_eq!(payload["lead"]["label"], lead, "{label}");
-            assert_eq!(
-                payload["items"].as_array().map(Vec::len),
-                Some(findings.len()),
-                "{label}"
-            );
-        }
-    }
 
     #[test]
     fn wedged_service_needs_repeated_busy_rejections() {

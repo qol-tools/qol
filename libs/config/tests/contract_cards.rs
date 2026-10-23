@@ -100,6 +100,29 @@ fn every_shipped_contract_parses_and_validates() {
 }
 
 #[test]
+fn rows_never_repeat_their_section_description() {
+    let plain = |text: &str| text.trim().trim_end_matches('.').to_lowercase();
+    for (path, spec) in configs() {
+        for (id, field) in &spec.fields {
+            let caption = field
+                .section
+                .as_ref()
+                .and_then(|section| spec.sections.get(section))
+                .and_then(|section| section.description.as_deref());
+            let (Some(caption), Some(description)) = (caption, field.description.as_deref()) else {
+                continue;
+            };
+            assert_ne!(
+                plain(description),
+                plain(caption),
+                "{}: field.{id} repeats its section description",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn card_opening_fields_carry_a_card_description() {
     for (path, spec) in configs() {
         for (id, field) in &spec.fields {
