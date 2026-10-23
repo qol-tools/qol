@@ -925,6 +925,7 @@ impl SettingsPanelView {
             .iter()
             .copied()
             .filter(|row| super::rows::row_is_visible(&self.level().rows, *row))
+            .filter(|row| self.filtering() || !is_page_row(&self.level().rows, *row))
             .collect()
     }
 
@@ -5969,6 +5970,10 @@ fn rail_group_breaks(groups: &[PanelSourceGroup]) -> Vec<usize> {
         .collect()
 }
 
+fn is_page_row(rows: &[Row], index: usize) -> bool {
+    matches!(rows[index].control, RowControl::Page)
+}
+
 fn filtered_visible_rows(
     rows: &[Row],
     sections: &[RowSection],
@@ -5992,7 +5997,7 @@ fn filtered_visible_rows(
                 Some(needle) => {
                     out.extend(visible.filter(|index| row_matches(&rows[*index], needle)));
                 }
-                None => out.extend(visible),
+                None => out.extend(visible.filter(|index| !is_page_row(rows, *index))),
             }
         }
     }
@@ -6474,6 +6479,7 @@ mod tests {
             vec![1]
         );
         assert!(super::filtered_visible_rows(&rows, &sections, 2, Some("zzz"), 0).is_empty());
+        assert!(super::filtered_visible_rows(&rows, &sections, 2, None, 1).is_empty());
     }
 
     #[test]
