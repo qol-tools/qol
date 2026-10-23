@@ -6822,8 +6822,11 @@ default = "visible"
         let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../plugins/bluetooth/qol-config.toml");
         let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
-        let resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+        let mut resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
             .expect("bluetooth config");
+        for section in &mut resolved.sections {
+            section.platforms = None;
+        }
         let mut rows = rows_from_resolved(&resolved, 0);
         let payload = serde_json::json!({
             "summary": "1 problem",
