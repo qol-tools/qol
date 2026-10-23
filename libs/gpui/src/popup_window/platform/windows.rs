@@ -447,11 +447,13 @@ pub fn configure_popup_window(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str, _resizable: bool, _decorated: bool) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool, decorated: bool) -> bool {
     let Some(hwnd) = find_window(title).map(Window::handle) else {
         return false;
     };
-    apply_tool_window_style(hwnd);
+    if !decorated {
+        apply_tool_window_style(hwnd);
+    }
     place(hwnd, HWND_TOPMOST, SWP_NOACTIVATE)
 }
 

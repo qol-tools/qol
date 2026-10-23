@@ -624,6 +624,7 @@ impl Surface {
         );
         let build_dismisser = dismisser.clone();
         let window_title = title.clone();
+        let root_title = dismisser.state.title.clone();
         let follows_focus = self.takes_focus();
         let root_visible = visible.clone();
         let live_while = self.live_while.clone();
@@ -681,6 +682,7 @@ impl Surface {
                     resize_frame,
                     _bounds_subscription: bounds_subscription,
                     _activation_subscription: activation_subscription,
+                    _title: TitleRelease(root_title),
                 }
             })
         }) {
@@ -718,7 +720,6 @@ impl Surface {
                     }
                 }
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
-                release_surface_title(&dismiss_state.title.borrow());
             }));
         if let Some(timeout) = self.timeout {
             schedule_dismiss(dismisser.clone(), timeout, cx);
@@ -739,7 +740,6 @@ impl Surface {
             );
             if !shown {
                 crate::popup_window::restore_composite(&title);
-                release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                 return Err(anyhow!("surface could not present passive toast"));
             }
@@ -762,7 +762,6 @@ impl Surface {
                 bounds.origin.y.to_f64()
             );
             if !frame_scheduled {
-                release_surface_title(&title);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
                 return Err(anyhow!("surface could not prepare a fresh frame"));
             }
@@ -831,6 +830,15 @@ pub(crate) struct SurfaceRoot<V> {
     resize_frame: Option<ResizeFrame>,
     _bounds_subscription: Subscription,
     _activation_subscription: Subscription,
+    _title: TitleRelease,
+}
+
+struct TitleRelease(Rc<RefCell<String>>);
+
+impl Drop for TitleRelease {
+    fn drop(&mut self) {
+        release_surface_title(&self.0.borrow());
+    }
 }
 
 fn surface_look(follows_focus: bool, visible: bool, active: bool) -> WindowLook {
@@ -1189,7 +1197,6 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             let _ = cx.update(|cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             });
-            release_surface_title(&dismiss_state.title.borrow());
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reason=frame-not-ready",

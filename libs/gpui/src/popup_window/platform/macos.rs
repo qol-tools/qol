@@ -987,6 +987,9 @@ fn show_window_by_title_with_focus(
         return false;
     };
     let level = match presentation {
+        WindowPresentation::Overlay if window.styleMask().contains(NSWindowStyleMask::Titled) => {
+            NSFloatingWindowLevel
+        }
         WindowPresentation::Overlay => NSPopUpMenuWindowLevel,
         WindowPresentation::Notice => NSPopUpMenuWindowLevel - 1,
         WindowPresentation::Normal => NSNormalWindowLevel,
