@@ -291,7 +291,7 @@ fn configure_selector_window(title: String, origin: gpui::Point<Pixels>, cx: &mu
 
 fn configure_selector_window_now(title: &str, origin: gpui::Point<Pixels>) {
     let started = Instant::now();
-    let mapped = qol_gpui::popup_window::configure_overlay_window(title, false);
+    let mapped = qol_gpui::popup_window::configure_overlay_window(title, false, false);
     let positioned = mapped
         && qol_gpui::popup_window::reposition_window_by_title(
             title,

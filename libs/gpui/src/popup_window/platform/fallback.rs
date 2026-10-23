@@ -147,6 +147,10 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn park_window_by_title(_title: &str) -> bool {
     false
 }
@@ -223,7 +227,7 @@ pub fn set_window_type_dock_by_title(_title: &str) -> bool {
     false
 }
 
-pub fn configure_overlay_window(_title: &str, _resizable: bool) -> bool {
+pub fn configure_overlay_window(_title: &str, _resizable: bool, _decorated: bool) -> bool {
     false
 }
 

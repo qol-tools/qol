@@ -15,6 +15,7 @@ const ICON: &[u8] = include_bytes!("../../assets/icon-64.rgba");
 pub fn open(start: PathBuf) -> anyhow::Result<()> {
     let home = dirs::home_dir().unwrap_or_else(|| start.clone());
     let config = crate::config::load();
+    let title_bar = config.title_bar;
     let failure = Rc::new(RefCell::new(None));
     let reported_failure = failure.clone();
     Application::new().run(move |cx: &mut App| {
@@ -25,7 +26,7 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let tracker = MonitorTracker::start(cx);
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
-            .os_frame()
+            .title_bar(title_bar)
             .icon(ICON_SIDE, ICON)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
             .min_size(size(px(MIN_WIDTH), px(MIN_HEIGHT)))

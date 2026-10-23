@@ -175,6 +175,7 @@ fn open_panel(
 ) -> Option<OpenedSurface<SessionsView>> {
     let result = Surface::new(SurfaceKind::OverlayPanel)
         .title(WINDOW_TITLE)
+        .title_bar(config::load().title_bar)
         .app_id(APP_ID)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
         .min_size(collapse::unfolded_min_size())

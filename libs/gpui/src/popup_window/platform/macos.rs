@@ -768,6 +768,10 @@ pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn compositor_active() -> bool {
     true
 }
@@ -983,6 +987,9 @@ fn show_window_by_title_with_focus(
         return false;
     };
     let level = match presentation {
+        WindowPresentation::Overlay if window.styleMask().contains(NSWindowStyleMask::Titled) => {
+            NSFloatingWindowLevel
+        }
         WindowPresentation::Overlay => NSPopUpMenuWindowLevel,
         WindowPresentation::Notice => NSPopUpMenuWindowLevel - 1,
         WindowPresentation::Normal => NSNormalWindowLevel,
@@ -1354,14 +1361,16 @@ pub fn join_all_spaces(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool, decorated: bool) -> bool {
     if !configure_popup_window(title) {
         return false;
     }
     let Some(window) = resolve_window(title) else {
         return false;
     };
-    window.setStyleMask(NSWindowStyleMask::Borderless);
+    if !decorated {
+        window.setStyleMask(NSWindowStyleMask::Borderless);
+    }
     true
 }
 
