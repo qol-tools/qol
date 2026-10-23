@@ -121,16 +121,161 @@ fn a_missing_pin_outside_home_is_listed_as_not_connected() {
 }
 
 #[test]
-fn pin_paths_expand_against_home() {
+fn pin_paths_resolve_against_home() {
     let home = Path::new("/home/me");
     let cases = [
         ("~", PathBuf::from("/home/me")),
         ("~/Projects/qol", home.join("Projects/qol")),
+        ("~//Projects", home.join("Projects")),
         ("/srv/music", PathBuf::from("/srv/music")),
-        ("~other", PathBuf::from("~other")),
+        ("projects/qol", home.join("projects/qol")),
+        ("~other", home.join("~other")),
     ];
     for (pin_path, expected) in cases {
-        assert_eq!(expand(pin_path, home), expected, "{pin_path}");
+        let pin = pin("Pin", pin_path);
+        let place = place(0, &pin, home, &[]).unwrap();
+        assert_eq!(place.path, expected, "{pin_path}");
+    }
+}
+
+#[test]
+fn a_pin_with_a_blank_path_is_not_listed() {
+    let home = Path::new("/home/me");
+    for path in ["", "   ", "\t"] {
+        assert!(
+            place(0, &pin("Nowhere", path), home, &[]).is_none(),
+            "{path:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pin_with_a_blank_name_is_listed_under_its_folder() {
+    let home = Path::new("/home/me");
+    let cases = [
+        ("", "/srv/music", "music"),
+        ("  ", "~/Projects/qol", "qol"),
+        ("", "~", "Home"),
+    ];
+    for (name, path, expected) in cases {
+        let place = place(0, &pin(name, path), home, &[]).unwrap();
+        assert_eq!(place.name, expected, "{path:?}");
+    }
+}
+
+fn pin(name: &str, path: &str) -> Pin {
+    Pin {
+        name: name.to_string(),
+        path: path.to_string(),
+    }
+}
+
+fn listed(pin: usize, path: impl Into<PathBuf>) -> Place {
+    let path = path.into();
+    Place {
+        pin,
+        name: String::new(),
+        home: path == Path::new("/home/me"),
+        path,
+        connected: true,
+    }
+}
+
+fn pin_names(pins: &[Pin]) -> Vec<&str> {
+    pins.iter().map(|pin| pin.name.as_str()).collect()
+}
+
+fn hidden_between() -> (Vec<Pin>, Vec<Place>) {
+    let pins = vec![
+        pin("Home", "~"),
+        pin("Desktop", "~/Desktop"),
+        pin("Documents", "~/Documents"),
+    ];
+    let places = vec![listed(0, "/home/me"), listed(2, "/home/me/Documents")];
+    (pins, places)
+}
+
+#[test]
+fn unpin_removes_the_pin_behind_a_listed_place() {
+    let (pins, places) = hidden_between();
+    let cases: [(usize, Option<&[&str]>); 3] = [
+        (0, Some(&["Desktop", "Documents"])),
+        (1, Some(&["Home", "Desktop"])),
+        (2, None),
+    ];
+    for (place, expected) in cases {
+        let result = unpin(&pins, &places, place);
+        assert_eq!(
+            result.as_deref().map(pin_names).as_deref(),
+            expected,
+            "{place}"
+        );
+    }
+    assert!(unpin(&pins[..1], &places, 1).is_none());
+}
+
+#[test]
+fn move_pin_swaps_with_the_neighbouring_listed_place() {
+    let (pins, places) = hidden_between();
+    let cases: [(usize, bool, Option<&[&str]>); 5] = [
+        (0, true, Some(&["Documents", "Desktop", "Home"])),
+        (1, false, Some(&["Documents", "Desktop", "Home"])),
+        (0, false, None),
+        (1, true, None),
+        (5, true, None),
+    ];
+    for (place, down, expected) in cases {
+        let result = move_pin(&pins, &places, place, down);
+        assert_eq!(
+            result.as_deref().map(pin_names).as_deref(),
+            expected,
+            "{place} {down}"
+        );
+    }
+    assert!(move_pin(&pins[..2], &places, 0, true).is_none());
+}
+
+#[test]
+fn toggle_pin_removes_a_listed_folder_and_pins_an_unlisted_one() {
+    let (pins, places) = hidden_between();
+    let added = || pin("Music", "~/Music");
+    let cases: [(&str, Option<&[&str]>); 3] = [
+        ("/home/me/Documents", Some(&["Home", "Desktop"])),
+        ("/home/me", Some(&["Desktop", "Documents"])),
+        (
+            "/home/me/Music",
+            Some(&["Home", "Desktop", "Documents", "Music"]),
+        ),
+    ];
+    for (folder, expected) in cases {
+        let result = toggle_pin(&pins, &places, Path::new(folder), added);
+        assert_eq!(
+            result.as_deref().map(pin_names).as_deref(),
+            expected,
+            "{folder}"
+        );
+    }
+    assert!(toggle_pin(&pins[..1], &places, Path::new("/home/me/Documents"), added).is_none());
+}
+
+#[test]
+fn rename_pin_trims_and_ignores_blank_unchanged_or_missing() {
+    let (pins, _) = hidden_between();
+    let cases: [(usize, &str, Option<&[&str]>); 6] = [
+        (2, "Papers", Some(&["Home", "Desktop", "Papers"])),
+        (0, "  Base  ", Some(&["Base", "Desktop", "Documents"])),
+        (0, "   ", None),
+        (0, "", None),
+        (1, " Desktop ", None),
+        (3, "Nope", None),
+    ];
+    for (pin, name, expected) in cases {
+        let result = rename_pin(&pins, pin, name);
+        assert_eq!(
+            result.as_deref().map(pin_names).as_deref(),
+            expected,
+            "{pin} {name:?}"
+        );
     }
 }
 

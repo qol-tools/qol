@@ -5,10 +5,11 @@ mod tests;
 use std::ffi::OsStr;
 use std::fs::{DirEntry, FileType, Metadata};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{is_separator, Path, PathBuf};
 
 use crate::config::Pin;
 use crate::listing::{display_name, EntryKind};
+use crate::nav;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceKind {
@@ -94,7 +95,7 @@ pub fn pin_for(folder: &Path, home: &Path) -> Pin {
 }
 
 fn pin_in(folder: &Path, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Pin {
-    let mut path = pin_path(folder, home);
+    let mut path = nav::path::display_with_home(folder, home);
     if let Some(kind) = usual_folder(&path) {
         if user_folder(kind, known, home) != folder {
             path = folder.to_string_lossy().into_owned();
@@ -104,6 +105,58 @@ fn pin_in(folder: &Path, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Pin {
         name: pin_name(folder, home),
         path,
     }
+}
+
+pub fn unpin(pins: &[Pin], places: &[Place], place: usize) -> Option<Vec<Pin>> {
+    let pin = places.get(place)?.pin;
+    if pin >= pins.len() {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins.remove(pin);
+    Some(pins)
+}
+
+pub fn move_pin(pins: &[Pin], places: &[Place], place: usize, down: bool) -> Option<Vec<Pin>> {
+    let neighbour = if down {
+        place.checked_add(1)?
+    } else {
+        place.checked_sub(1)?
+    };
+    let (here, there) = (places.get(place)?.pin, places.get(neighbour)?.pin);
+    if here >= pins.len() || there >= pins.len() {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins.swap(here, there);
+    Some(pins)
+}
+
+pub fn toggle_pin(
+    pins: &[Pin],
+    places: &[Place],
+    folder: &Path,
+    pin: impl FnOnce() -> Pin,
+) -> Option<Vec<Pin>> {
+    let mut pins = pins.to_vec();
+    match places.iter().find(|place| place.path == folder) {
+        Some(place) if place.pin < pins.len() => {
+            pins.remove(place.pin);
+        }
+        Some(_) => return None,
+        None => pins.push(pin()),
+    }
+    Some(pins)
+}
+
+pub fn rename_pin(pins: &[Pin], pin: usize, name: &str) -> Option<Vec<Pin>> {
+    let name = name.trim();
+    if name.is_empty() || pins.get(pin)?.name == name {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins[pin].name = name.to_string();
+    Some(pins)
 }
 
 pub fn devices() -> Vec<Device> {
@@ -159,19 +212,27 @@ fn user_folder(kind: PlaceKind, known: &[(PlaceKind, PathBuf)], home: &Path) -> 
 }
 
 fn place(index: usize, pin: &Pin, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Option<Place> {
+    if pin.path.trim().is_empty() {
+        return None;
+    }
     let usual = usual_folder(&pin.path);
     let path = match usual {
         Some(kind) => user_folder(kind, known, home),
-        None => expand(&pin.path, home),
+        None => nav::path::resolve(&pin.path, home, home),
     };
     let connected = path.is_dir();
     let is_home = path == home;
     if usual.is_some() && (is_home || !connected) {
         return None;
     }
+    let name = if pin.name.trim().is_empty() {
+        pin_name(&path, home)
+    } else {
+        pin.name.clone()
+    };
     Some(Place {
         pin: index,
-        name: pin.name.clone(),
+        name,
         path,
         home: is_home,
         connected,
@@ -179,30 +240,10 @@ fn place(index: usize, pin: &Pin, home: &Path, known: &[(PlaceKind, PathBuf)]) -
 }
 
 fn usual_folder(pin_path: &str) -> Option<PlaceKind> {
-    let label = pin_path.strip_prefix("~/")?;
+    let label = pin_path.strip_prefix('~')?.strip_prefix(is_separator)?;
     PlaceKind::USER_FOLDERS
         .into_iter()
         .find(|kind| kind.label() == label)
-}
-
-fn expand(pin_path: &str, home: &Path) -> PathBuf {
-    if pin_path == "~" {
-        return home.to_path_buf();
-    }
-    match pin_path.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None => PathBuf::from(pin_path),
-    }
-}
-
-fn pin_path(folder: &Path, home: &Path) -> String {
-    if folder == home {
-        return "~".to_string();
-    }
-    match folder.strip_prefix(home) {
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => folder.to_string_lossy().into_owned(),
-    }
 }
 
 fn pin_name(folder: &Path, home: &Path) -> String {

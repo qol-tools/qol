@@ -28,7 +28,7 @@ Pinned folders lead the sidebar. A new install pins Home, Desktop, Documents, Do
 
 Ctrl+D pins the folder you are in, or unpins it. Right-click a pin, or press the ⋯ on the pin you are in, to unpin, move or rename it, or to open the sidebar settings. The ⋯ at the end of the title band pins the folder you are in, edits the path, shows or hides hidden files and opens Explorer's settings.
 
-A pin on a drive that is not there shows "not connected" until the drive comes back.
+A usual folder such as Desktop or Music that is missing is hidden until it exists. Any other pinned folder that is not there, such as one on a drive that is unplugged, shows "not connected" until it comes back.
 
 In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyboard. Enter or a click picks a pin up, Up and Down carry it, Enter puts it down and Esc puts it back. Ctrl+Up and Ctrl+Down carry it while Ctrl is held and put it down when Ctrl is released.
 

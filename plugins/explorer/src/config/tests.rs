@@ -46,6 +46,7 @@ fn a_saver_sends_every_key_and_the_last_value_of_each_wins() {
             sink.lock()
                 .unwrap()
                 .extend(keys.as_object().unwrap().clone());
+            Ok(())
         },
         ExplorerConfig::default,
     );
@@ -65,7 +66,10 @@ fn a_reload_queued_after_saves_answers_after_their_write() {
     let written = log.clone();
     let read = log.clone();
     let saver = ConfigSaver::with_writer(
-        move |keys| written.lock().unwrap().push(keys.clone()),
+        move |keys| {
+            written.lock().unwrap().push(keys.clone());
+            Ok(())
+        },
         move || {
             read.lock().unwrap().push(json!("read"));
             ExplorerConfig {
@@ -79,12 +83,16 @@ fn a_reload_queued_after_saves_answers_after_their_write() {
     let answer = saver.reload().expect("the saver is running");
     let config = futures::executor::block_on(answer).expect("the reload answers");
     assert!(config.show_hidden);
+    let log = log.lock().unwrap();
+    let (answer, writes) = log.split_last().expect("the saver logged");
+    assert_eq!(answer, &json!("read"));
+    let merged = writes
+        .iter()
+        .flat_map(|write| write.as_object().expect("writes are objects").clone())
+        .collect::<Map<String, Value>>();
     assert_eq!(
-        *log.lock().unwrap(),
-        [
-            json!({"view_size": "icons", "show_hidden": true}),
-            json!("read")
-        ]
+        Value::Object(merged),
+        json!({"view_size": "icons", "show_hidden": true})
     );
 }
 
@@ -94,7 +102,10 @@ fn saves_queued_after_a_reload_are_written_after_its_read() {
     let written = log.clone();
     let read = log.clone();
     let saver = ConfigSaver::with_writer(
-        move |keys| written.lock().unwrap().push(keys.clone()),
+        move |keys| {
+            written.lock().unwrap().push(keys.clone());
+            Ok(())
+        },
         move || {
             read.lock().unwrap().push(json!("read"));
             ExplorerConfig::default()
@@ -116,21 +127,46 @@ fn saves_queued_after_a_reload_are_written_after_its_read() {
 }
 
 #[test]
-fn default_pins_list_home_then_the_usual_folders() {
-    let pins: Vec<(String, String)> = default_pins()
-        .into_iter()
-        .map(|pin| (pin.name, pin.path))
-        .collect();
-    let expected: Vec<(String, String)> = [
-        ("Home", "~"),
-        ("Desktop", "~/Desktop"),
-        ("Documents", "~/Documents"),
-        ("Downloads", "~/Downloads"),
-        ("Music", "~/Music"),
-        ("Pictures", "~/Pictures"),
-        ("Videos", "~/Videos"),
-    ]
-    .map(|(name, path)| (name.to_string(), path.to_string()))
-    .to_vec();
-    assert_eq!(pins, expected);
+fn a_stored_pin_missing_its_name_or_path_still_loads_the_rest_of_the_config() {
+    let config: ExplorerConfig = serde_json::from_value(json!({
+        "view_size": "icons",
+        "show_hidden": true,
+        "pins": [{"name": "Only a name"}, {"path": "/srv/only-a-path"}, {}],
+    }))
+    .expect("a partial pin must not fail the config");
+    assert_eq!(config.view_size, ViewSize::Icons);
+    assert!(config.show_hidden);
+    let pin = |name: &str, path: &str| Pin {
+        name: name.to_string(),
+        path: path.to_string(),
+    };
+    assert_eq!(
+        config.pins,
+        [
+            pin("Only a name", ""),
+            pin("", "/srv/only-a-path"),
+            pin("", "")
+        ]
+    );
+}
+
+#[test]
+fn a_failed_save_names_its_keys_once_and_taking_them_clears_the_list() {
+    let saver = ConfigSaver::with_writer(
+        |keys| match keys.get("pins") {
+            Some(_) => Err("host refused".to_string()),
+            None => Ok(()),
+        },
+        ExplorerConfig::default,
+    );
+    saver.save("pins", Vec::<Pin>::new());
+    futures::executor::block_on(saver.reload().expect("the saver is running"))
+        .expect("the reload answers");
+    saver.save("view_size", ViewSize::Icons);
+    saver.save("pins", Vec::<Pin>::new());
+    futures::executor::block_on(saver.reload().expect("the saver is running"))
+        .expect("the reload answers");
+
+    assert_eq!(saver.take_failures(), ["pins"]);
+    assert!(saver.take_failures().is_empty());
 }

@@ -368,11 +368,109 @@ impl SettingsPanelView {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::{Duration, Instant};
 
+    use qol_config::contract::FieldDefault;
+    use qol_config::object_array::ItemFieldKind;
     use qol_theme::Motion;
 
-    use super::{moved_rows, CarryMotion};
+    use super::super::super::object_array_row::{Entry, Item, ObjectArrayState};
+    use super::super::structured_list_editor::EntriesCard;
+    use super::super::tests::level;
+    use super::{move_entry, moved_rows, CarryMotion, Level};
+
+    fn names() -> Vec<String> {
+        ["a", "b", "c", "d"].map(String::from).to_vec()
+    }
+
+    fn values_level() -> Level {
+        let mut level = level(1);
+        level.entries = Some(EntriesCard {
+            item_label: "entry".to_string(),
+            lists: BTreeMap::new(),
+            values: Some(names()),
+            owner_field: None,
+            add_label: None,
+            row_label: None,
+            reorder: true,
+            carry: None,
+            motion: CarryMotion::default(),
+        });
+        level
+    }
+
+    fn object_array_level() -> Level {
+        let entries = names()
+            .into_iter()
+            .map(|name| Entry {
+                key: None,
+                fields: Item::from_iter([("app".to_string(), FieldDefault::String(name))]),
+            })
+            .collect();
+        let mut level = values_level();
+        if let Some(card) = level.entries.as_mut() {
+            card.values = None;
+        }
+        level.object_array = Some(ObjectArrayState::from_entries(
+            None,
+            vec![("app".to_string(), ItemFieldKind::Text)],
+            entries,
+        ));
+        level
+    }
+
+    fn order(level: &Level) -> Vec<String> {
+        if let Some(values) = level.entries.as_ref().and_then(|card| card.values.as_ref()) {
+            return values.clone();
+        }
+        level
+            .object_array
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|entry| match entry.fields.get("app") {
+                Some(FieldDefault::String(name)) => name.clone(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn move_entry_reorders_one_based_rows_in_both_card_kinds() {
+        let cases = [
+            (1, 3, ["b", "c", "a", "d"]),
+            (3, 1, ["c", "a", "b", "d"]),
+            (4, 1, ["d", "a", "b", "c"]),
+            (2, 2, ["a", "b", "c", "d"]),
+        ];
+        for (from, to, expected) in cases {
+            for (kind, build) in [
+                ("values", values_level as fn() -> Level),
+                ("object_array", object_array_level),
+            ] {
+                let mut level = build();
+                assert!(move_entry(&mut level, from, to), "{kind} {from}->{to}");
+                assert_eq!(order(&level), expected, "{kind} {from}->{to}");
+            }
+        }
+    }
+
+    #[test]
+    fn move_entry_rejects_the_add_row_and_out_of_range_rows_without_moving() {
+        let cases = [(0, 2), (2, 0), (0, 0), (5, 1), (1, 5), (9, 9)];
+        for (from, to) in cases {
+            for (kind, build) in [
+                ("values", values_level as fn() -> Level),
+                ("object_array", object_array_level),
+            ] {
+                let mut level = build();
+                assert!(!move_entry(&mut level, from, to), "{kind} {from}->{to}");
+                assert_eq!(order(&level), names(), "{kind} {from}->{to}");
+            }
+        }
+    }
 
     #[test]
     fn a_move_names_every_row_that_changes_place() {

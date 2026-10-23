@@ -274,7 +274,8 @@ Per-kind rules (validated, not ignored):
   placeholder `{entry}`.
 - Entries cards: an `object_array`, or a `string_array` with no `options` and no `query`, may set `reorder = true` and `add_label`.
   `reorder = true` lets the user order the entries from the keyboard.
-  In the card, Enter or a click picks the entry up, Up and Down carry it, Enter puts it down, and Esc puts it back where it was.
+  In the card, Enter, Space or a click picks the entry up, Up and Down carry it, and Enter puts it down.
+  Leaving the card or the window keeps the entry where it was carried; only Esc puts it back where it was.
   Ctrl+Up and Ctrl+Down carry it while Ctrl is held and put it down when Ctrl is released.
   The order saves when the entry is put down.
   Entries in a reorder card open no edit form.

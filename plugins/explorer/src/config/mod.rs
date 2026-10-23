@@ -1,4 +1,5 @@
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use futures::channel::oneshot;
@@ -22,7 +23,9 @@ pub enum ViewSize {
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Pin {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub path: String,
 }
 
@@ -90,6 +93,7 @@ enum Job {
 pub struct ConfigSaver {
     jobs: Option<Sender<Job>>,
     worker: Option<JoinHandle<()>>,
+    failures: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl ConfigSaver {
@@ -97,27 +101,32 @@ impl ConfigSaver {
         Self::with_writer(
             |keys| {
                 let id = qol_config::plugin_id_from_env(PLUGIN_ID);
-                if let Err(error) = qol_plugin_api::host_exec::save_plugin_config_keys(&id, keys) {
+                qol_plugin_api::host_exec::save_plugin_config_keys(&id, keys).map_err(|error| {
+                    let error = error.to_string();
                     log::warn!("[explorer] settings were not saved: {error}");
-                }
+                    error
+                })
             },
             load,
         )
     }
 
     fn with_writer(
-        write: impl Fn(&Value) + Send + 'static,
+        write: impl Fn(&Value) -> Result<(), String> + Send + 'static,
         read: impl Fn() -> ExplorerConfig + Send + 'static,
     ) -> Self {
         let (jobs, received) = mpsc::channel();
+        let failures = Arc::new(Mutex::new(Vec::new()));
+        let failed = failures.clone();
         let worker = thread::Builder::new()
             .name("explorer-config-save".into())
-            .spawn(move || work_until_closed(&received, write, read))
+            .spawn(move || work_until_closed(&received, write, read, &failed))
             .map_err(|error| log::warn!("[explorer] config saver did not start: {error}"))
             .ok();
         Self {
             jobs: worker.is_some().then_some(jobs),
             worker,
+            failures,
         }
     }
 
@@ -126,6 +135,13 @@ impl ConfigSaver {
             return;
         };
         let _ = jobs.send(Job::Save(key, value));
+    }
+
+    pub fn take_failures(&self) -> Vec<&'static str> {
+        self.failures
+            .lock()
+            .map(|mut failures| std::mem::take(&mut *failures))
+            .unwrap_or_default()
     }
 
     pub fn reload(&self) -> Option<oneshot::Receiver<ExplorerConfig>> {
@@ -147,8 +163,9 @@ impl Drop for ConfigSaver {
 
 fn work_until_closed(
     received: &Receiver<Job>,
-    write: impl Fn(&Value),
+    write: impl Fn(&Value) -> Result<(), String>,
     read: impl Fn() -> ExplorerConfig,
+    failures: &Mutex<Vec<&'static str>>,
 ) {
     let mut next = received.recv().ok();
     while let Some(job) = next {
@@ -158,30 +175,53 @@ fn work_until_closed(
                 received.recv().ok()
             }
             Job::Save(key, value) => {
-                let (keys, pending) = batch_saves(key, value, received);
-                write(&Value::Object(keys));
+                let (batch, pending) = batch_saves(key, value, received);
+                if write(&Value::Object(batch.values)).is_err() {
+                    record_failures(failures, &batch.names);
+                }
                 pending.or_else(|| received.recv().ok())
             }
         };
     }
 }
 
-fn batch_saves(
-    key: &'static str,
-    value: Value,
-    received: &Receiver<Job>,
-) -> (Map<String, Value>, Option<Job>) {
-    let mut keys = Map::new();
-    keys.insert(key.to_string(), value);
-    while let Ok(job) = received.try_recv() {
-        match job {
-            Job::Save(key, value) => {
-                keys.insert(key.to_string(), value);
+fn record_failures(failures: &Mutex<Vec<&'static str>>, names: &[&'static str]) {
+    if let Ok(mut failures) = failures.lock() {
+        for name in names {
+            if !failures.contains(name) {
+                failures.push(name);
             }
-            reload => return (keys, Some(reload)),
         }
     }
-    (keys, None)
+}
+
+struct Batch {
+    values: Map<String, Value>,
+    names: Vec<&'static str>,
+}
+
+impl Batch {
+    fn add(&mut self, key: &'static str, value: Value) {
+        self.values.insert(key.to_string(), value);
+        if !self.names.contains(&key) {
+            self.names.push(key);
+        }
+    }
+}
+
+fn batch_saves(key: &'static str, value: Value, received: &Receiver<Job>) -> (Batch, Option<Job>) {
+    let mut batch = Batch {
+        values: Map::new(),
+        names: Vec::new(),
+    };
+    batch.add(key, value);
+    while let Ok(job) = received.try_recv() {
+        match job {
+            Job::Save(key, value) => batch.add(key, value),
+            reload => return (batch, Some(reload)),
+        }
+    }
+    (batch, None)
 }
 
 #[cfg(test)]

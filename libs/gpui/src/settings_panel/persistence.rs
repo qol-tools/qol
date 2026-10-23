@@ -130,9 +130,10 @@ pub(super) fn read_values(base: &str, path: Option<&Path>) -> Option<serde_json:
 pub(super) fn save_values(
     base: &str,
     path: Option<&Path>,
-    values: &serde_json::Value,
+    changed: &serde_json::Value,
+    all: &serde_json::Value,
 ) -> Result<(), String> {
-    let body = match serde_json::to_string(values) {
+    let body = match serde_json::to_string(changed) {
         Ok(body) => body,
         Err(error) => {
             log::error!("[{base}] settings serialize failed: {error:#}");
@@ -178,7 +179,14 @@ pub(super) fn save_values(
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Err(error) = std::fs::write(path, body) {
+    let file_body = match serde_json::to_string(all) {
+        Ok(body) => body,
+        Err(error) => {
+            log::error!("[{base}] settings serialize failed: {error:#}");
+            return Err(format!("settings serialize failed: {error:#}"));
+        }
+    };
+    if let Err(error) = std::fs::write(path, file_body) {
         qol_runtime::probe!(
             "SETTINGS_PERSIST",
             "panel={base} transport=file outcome=failed"
@@ -300,8 +308,9 @@ mod tests {
         without_token(|| {
             let dir = temp_dir("local-write");
             let path = dir.join("config.json");
-            let values = serde_json::json!({ "dark": true });
-            super::save_values("panel-test", Some(&path), &values).unwrap();
+            let values = serde_json::json!({ "dark": true, "pins": [] });
+            let changed = serde_json::json!({ "dark": true });
+            super::save_values("panel-test", Some(&path), &changed, &values).unwrap();
             let written: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(written, values);
@@ -312,7 +321,13 @@ mod tests {
     #[test]
     fn save_values_reports_missing_local_path_when_tray_unreachable() {
         without_token(|| {
-            let error = super::save_values("panel-test", None, &serde_json::json!({})).unwrap_err();
+            let error = super::save_values(
+                "panel-test",
+                None,
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+            )
+            .unwrap_err();
             assert!(
                 error.starts_with("tray unreachable, no local path to save:"),
                 "unexpected error: {error}"
@@ -324,8 +339,13 @@ mod tests {
     fn save_values_reports_local_write_failure() {
         without_token(|| {
             let dir = temp_dir("write-failure");
-            let error =
-                super::save_values("panel-test", Some(&dir), &serde_json::json!({})).unwrap_err();
+            let error = super::save_values(
+                "panel-test",
+                Some(&dir),
+                &serde_json::json!({}),
+                &serde_json::json!({}),
+            )
+            .unwrap_err();
             assert!(
                 error.starts_with("settings save failed:"),
                 "unexpected error: {error}"

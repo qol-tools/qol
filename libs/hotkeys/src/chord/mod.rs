@@ -235,4 +235,15 @@ mod tests {
         assert_eq!(caps_for("enter").unwrap(), [Cap::Glyph(Glyph::Enter)]);
         assert_eq!(caps_for("f5").unwrap(), [Cap::Text("f5".into())]);
     }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn held_caps_join_two_modifiers_with_the_platform_joiner() {
+        let mods = BTreeSet::from([ModifierToken::Shift, ModifierToken::Ctrl]);
+        assert_eq!(held_caps(&mods), [Cap::Text("ctrl+shift".into())]);
+        assert_eq!(
+            held_caps(&BTreeSet::from([ModifierToken::Ctrl])),
+            [Cap::Text("ctrl".into())]
+        );
+    }
 }

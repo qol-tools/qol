@@ -1,6 +1,6 @@
 use gpui::{
-    anchored, deferred, px, AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Point, StatefulInteractiveElement, Styled,
+    anchored, deferred, px, AnyElement, Context, InteractiveElement, IntoElement, MouseDownEvent,
+    ParentElement, Pixels, Point, StatefulInteractiveElement, Styled,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{OPACITY_DISABLED, SPACE_INSET};
@@ -22,6 +22,12 @@ pub(super) enum Command {
     Settings,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Owner {
+    Folder,
+    Pin(usize),
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Line {
     command: Command,
@@ -37,6 +43,7 @@ pub(super) enum Item {
 }
 
 pub(super) struct Menu {
+    owner: Owner,
     at: Point<Pixels>,
     items: Vec<Item>,
     selected: usize,
@@ -59,8 +66,9 @@ impl Line {
 }
 
 impl Menu {
-    pub(super) fn new(at: Point<Pixels>, items: Vec<Item>) -> Self {
+    pub(super) fn new(owner: Owner, at: Point<Pixels>, items: Vec<Item>) -> Self {
         let mut menu = Self {
+            owner,
             at,
             items,
             selected: 0,
@@ -78,6 +86,7 @@ impl Menu {
     ) -> Self {
         let line = |command, label: String, key| Item::Line(Line::new(command, label, key));
         Self::new(
+            Owner::Pin(place),
             at,
             vec![
                 line(Command::Unpin(place), format!("Unpin {name}"), None),
@@ -113,6 +122,7 @@ impl Menu {
             Item::Line(Line::new(command, label, Some(key.secondary())))
         };
         Self::new(
+            Owner::Folder,
             at,
             vec![
                 line(Command::TogglePin, pin_label, Key::letter('d')),
@@ -130,6 +140,10 @@ impl Menu {
                 ),
             ],
         )
+    }
+
+    pub(super) fn owner(&self) -> Owner {
+        self.owner
     }
 
     pub(super) fn step(&mut self, forward: bool) {
@@ -181,10 +195,9 @@ pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement 
             }
         })
         .collect();
-    let body = kit
-        .menu(WIDTH)
-        .children(rows)
-        .on_mouse_down_out(cx.listener(|view, _, _, cx| view.close_menu(cx)));
+    let body = kit.menu(WIDTH).children(rows).on_mouse_down_out(
+        cx.listener(|view, event: &MouseDownEvent, _, cx| view.close_menu(event.position, cx)),
+    );
     deferred(
         anchored()
             .position(menu.at)
@@ -198,7 +211,7 @@ pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement 
 mod tests {
     use gpui::{point, px};
 
-    use super::{Command, Menu};
+    use super::{Command, Item, Menu, Owner};
 
     fn at() -> gpui::Point<gpui::Pixels> {
         point(px(0.0), px(0.0))
@@ -230,5 +243,41 @@ mod tests {
         menu.step(true);
         menu.step(true);
         assert_eq!(menu.selected_command(), Some(Command::Settings));
+    }
+
+    #[test]
+    fn a_pin_menu_on_the_last_pin_cannot_move_it_down() {
+        let mut menu = Menu::pin(2, "Docs", false, true, at());
+        assert_eq!(menu.selected_command(), Some(Command::Unpin(2)));
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::MoveUp(2)));
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::Rename(2)));
+        menu.step(false);
+        assert_eq!(menu.selected_command(), Some(Command::MoveUp(2)));
+    }
+
+    #[test]
+    fn a_folder_menu_offers_unpin_when_the_folder_is_pinned() {
+        let label = |menu: &Menu| {
+            menu.items.iter().find_map(|item| match item {
+                Item::Line(line) if line.command == Command::TogglePin => Some(line.label.clone()),
+                _ => None,
+            })
+        };
+        let pinned = Menu::folder("Docs", Some("Papers"), false, at());
+        assert_eq!(label(&pinned).as_deref(), Some("Unpin Papers"));
+        let loose = Menu::folder("Docs", None, false, at());
+        assert_eq!(label(&loose).as_deref(), Some("Pin Docs"));
+    }
+
+    #[test]
+    fn a_menu_belongs_to_the_button_that_opened_it() {
+        let pin = Menu::pin(1, "Docs", false, false, at());
+        assert_eq!(pin.owner(), Owner::Pin(1));
+        assert_ne!(pin.owner(), Owner::Pin(2));
+        assert_ne!(pin.owner(), Owner::Folder);
+        let folder = Menu::folder("Docs", None, false, at());
+        assert_eq!(folder.owner(), Owner::Folder);
     }
 }

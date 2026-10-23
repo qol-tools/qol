@@ -1,13 +1,48 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use gpui::*;
 
-use super::super::persistence::{load_values, panel_base, read_values};
+use super::super::persistence::{panel_base, read_values};
 use super::super::rows::{row_query_names, row_value_json, rows_from_resolved, Row};
 use super::{SettingsPanelView, SourceState};
 
 fn rereads_stored_values(source: &SourceState) -> bool {
     source.pages.is_none() && !source.copy.is_empty()
+}
+
+fn top_config_key(row: &Row) -> &str {
+    row.config_key
+        .split('.')
+        .next()
+        .unwrap_or(row.config_key.as_str())
+}
+
+pub(super) fn edited_top_keys(rows: &[Row], snapshot: &[Row], source: usize) -> BTreeSet<String> {
+    rows.iter()
+        .filter(|row| row.source == source && row_query_names(row).is_empty())
+        .filter(|row| {
+            snapshot.iter().any(|before| {
+                before.source == source
+                    && before.id == row.id
+                    && row_value_json(&before.control) != row_value_json(&row.control)
+            })
+        })
+        .map(top_config_key)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub(super) fn subset(values: &serde_json::Value, keys: &BTreeSet<String>) -> serde_json::Value {
+    let Some(map) = values.as_object() else {
+        return values.clone();
+    };
+    serde_json::Value::Object(
+        map.iter()
+            .filter(|(key, _)| keys.contains(key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    )
 }
 
 impl SettingsPanelView {
@@ -27,7 +62,9 @@ impl SettingsPanelView {
         std::thread::spawn(move || {
             let values: Vec<_> = reads
                 .into_iter()
-                .map(|(index, base, path)| (index, load_values(&base, path.as_deref())))
+                .filter_map(|(index, base, path)| {
+                    read_values(&base, path.as_deref()).map(|values| (index, values))
+                })
                 .collect();
             let _ = sender.send(values);
         });
@@ -57,17 +94,10 @@ impl SettingsPanelView {
         .detach();
     }
 
-    pub(super) fn fresh_values_for_save(&mut self, index: usize) -> Option<serde_json::Value> {
-        let source = self
-            .sources
-            .get(index)
-            .filter(|source| rereads_stored_values(source))?;
-        let fresh = read_values(&panel_base(&source.plugin_id), source.path.as_deref())?;
-        let snapshot_rows = self.resolved_rows(index, &source.values)?;
-        let fresh_rows = self.resolved_rows(index, &fresh)?;
-        let edited = self.edited_row_ids(index, &snapshot_rows);
-        self.apply_fresh_rows(index, fresh_rows, &edited);
-        Some(fresh)
+    pub(super) fn edited_keys_for_save(&self, index: usize) -> Option<BTreeSet<String>> {
+        let source = self.sources.get(index)?;
+        let snapshot = self.resolved_rows(index, &source.values)?;
+        Some(edited_top_keys(&self.root().rows, &snapshot, index))
     }
 
     fn resolved_rows(&self, index: usize, values: &serde_json::Value) -> Option<Vec<Row>> {
@@ -80,21 +110,6 @@ impl SettingsPanelView {
             .and_then(|panel| qol_config::contract::parse_spec_str(&panel.contract).ok())
             .and_then(|spec| qol_config::normalized::resolve_config(&spec, values).ok())?;
         Some(rows_from_resolved(&resolved, index))
-    }
-
-    fn edited_row_ids(&self, index: usize, snapshot_rows: &[Row]) -> HashSet<String> {
-        snapshot_rows
-            .iter()
-            .filter(|snapshot| row_query_names(snapshot).is_empty())
-            .filter(|snapshot| {
-                self.root().rows.iter().any(|row| {
-                    row.source == index
-                        && row.id == snapshot.id
-                        && row_value_json(&row.control) != row_value_json(&snapshot.control)
-                })
-            })
-            .map(|snapshot| snapshot.id.clone())
-            .collect()
     }
 
     fn apply_fresh_rows(
@@ -139,5 +154,89 @@ impl SettingsPanelView {
             source.values = values;
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::super::super::rows::{LiveQuery, Row, RowControl};
+    use super::super::tests::rows;
+    use super::{edited_top_keys, subset};
+
+    fn row(id: &str, config_key: &str, source: usize, control: RowControl) -> Row {
+        let mut row = rows(&[false]).remove(0);
+        row.id = id.into();
+        row.config_key = config_key.into();
+        row.source = source;
+        row.control = control;
+        row
+    }
+
+    fn keys(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn edited_row_is_included() {
+        let snapshot = vec![row("a", "alpha", 0, RowControl::Toggle(false))];
+        let current = vec![row("a", "alpha", 0, RowControl::Toggle(true))];
+        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["alpha"]));
+    }
+
+    #[test]
+    fn unedited_stale_row_is_excluded() {
+        let snapshot = vec![
+            row("a", "alpha", 0, RowControl::Toggle(false)),
+            row("pins", "pins", 0, RowControl::Text("old".into())),
+        ];
+        let current = vec![
+            row("a", "alpha", 0, RowControl::Toggle(true)),
+            row("pins", "pins", 0, RowControl::Text("old".into())),
+        ];
+        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["alpha"]));
+    }
+
+    #[test]
+    fn nested_key_maps_to_its_top_key() {
+        let snapshot = vec![row("c", "capture.tags", 0, RowControl::Text("a".into()))];
+        let current = vec![row("c", "capture.tags", 0, RowControl::Text("b".into()))];
+        assert_eq!(edited_top_keys(&current, &snapshot, 0), keys(&["capture"]));
+    }
+
+    #[test]
+    fn query_rows_are_excluded() {
+        let live = |value| RowControl::Number {
+            value,
+            min: None,
+            max: None,
+            step: None,
+            live: Some(LiveQuery {
+                query: "level".into(),
+                value_from: None,
+            }),
+            level: None,
+        };
+        let snapshot = vec![row("n", "volume", 0, live(1.0))];
+        let current = vec![row("n", "volume", 0, live(2.0))];
+        assert!(edited_top_keys(&current, &snapshot, 0).is_empty());
+    }
+
+    #[test]
+    fn other_sources_are_ignored() {
+        let snapshot = vec![row("a", "alpha", 0, RowControl::Toggle(false))];
+        let current = vec![row("a", "alpha", 1, RowControl::Toggle(true))];
+        assert!(edited_top_keys(&current, &snapshot, 0).is_empty());
+    }
+
+    #[test]
+    fn subset_keeps_only_named_top_keys() {
+        let values = serde_json::json!({ "alpha": 1, "capture": { "tags": [] }, "pins": ["x"] });
+        assert_eq!(
+            subset(&values, &keys(&["alpha", "capture", "missing"])),
+            serde_json::json!({ "alpha": 1, "capture": { "tags": [] } })
+        );
+        assert_eq!(subset(&values, &keys(&[])), serde_json::json!({}));
     }
 }

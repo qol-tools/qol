@@ -5,20 +5,17 @@ use gpui::{
     MouseButton, MouseDownEvent, ParentElement, RenderOnce, StatefulInteractiveElement, Styled,
     Window,
 };
-use qol_gpui::icon::icon;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::scrollbar::{seek_handle, ScrollGrip, ScrollSource};
 use qol_gpui::settings_panel::components::rail_caption;
 use qol_gpui::text::{laid_out_width, TextStyled};
 use qol_gpui::text_edit::{visible_char_count, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{
-    TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, OPACITY_DISABLED, RADIUS_CONTROL, SPACE_GUTTER,
-    SPACE_INSET,
+    TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, OPACITY_DISABLED, SPACE_GUTTER, SPACE_INSET,
 };
-use qol_gpui::Icon;
 
 use super::pictogram::{rail_pictogram, RailGlyph};
-use super::ExplorerView;
+use super::{more_button, ExplorerView};
 use crate::ui::trail;
 
 const GLYPH_WIDTH: f32 = 16.0;
@@ -182,7 +179,7 @@ fn render_row(
         .child(label);
     if renaming {
         name = name.on_mouse_down_out(cx.listener(|view, _: &MouseDownEvent, _window, cx| {
-            view.finish_renaming();
+            view.finish_renaming(cx);
             cx.notify();
         }));
     }
@@ -215,7 +212,12 @@ fn render_row(
         );
     }
     if let Some(place) = more {
-        element = element.child(more_button(place, kit, cx));
+        element = element.child(more_button(
+            ("explorer-rail-more", place),
+            kit.grounds.band,
+            move |view, event, cx| view.toggle_pin_menu(place, event.position, cx),
+            cx,
+        ));
     }
     let element = element.on_click(cx.listener(move |view, _: &ClickEvent, _window, cx| {
         view.navigate(path.clone(), cx);
@@ -225,30 +227,6 @@ fn render_row(
     }
     kit.pointable(element, rgb(kit.grounds.rail.lift))
         .into_any_element()
-}
-
-fn more_button(place: usize, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
-    let band = kit.grounds.band;
-    kit.pointable(
-        div()
-            .id(("explorer-rail-more", place))
-            .flex_none()
-            .size(px(HEIGHT_INLINE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(RADIUS_CONTROL))
-            .child(icon(Icon::More, TextStyle::Name.spec().size, band.ink)),
-        rgb(band.lift),
-    )
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
-            view.open_pin_menu(place, event.position, cx);
-            cx.stop_propagation();
-        }),
-    )
-    .into_any_element()
 }
 
 #[derive(IntoElement)]

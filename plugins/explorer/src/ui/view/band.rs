@@ -1,19 +1,15 @@
 use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    div, px, rgb, AnyElement, Context, InteractiveElement, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, Styled, Window,
-};
-use qol_gpui::icon::icon;
+use gpui::{div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Styled, Window};
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::{laid_out_width, TextStyled};
-use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, RADIUS_CONTROL, SPACE_GUTTER};
-use qol_gpui::{CrumbTrail, Icon};
+use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER};
+use qol_gpui::CrumbTrail;
 
-use super::{slider, ExplorerView, BAND};
+use super::{more_button, slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
 use crate::ui::columns::left_to_right;
@@ -111,34 +107,12 @@ pub(super) fn render(
     band.child(div().flex_1().min_w_0().child(crumb_trail))
         .when(note_width > 0.0, |band| band.child(note))
         .child(slider::render(view, cx))
-        .child(more_button(kit, cx))
-}
-
-fn more_button(kit: Kit, cx: &mut Context<ExplorerView>) -> AnyElement {
-    kit.pointable(
-        div()
-            .id("explorer-folder-more")
-            .flex_none()
-            .size(px(HEIGHT_INLINE))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(RADIUS_CONTROL))
-            .child(icon(
-                Icon::More,
-                TextStyle::Name.spec().size,
-                kit.grounds.rail.ink,
-            )),
-        rgb(kit.grounds.rail.lift),
-    )
-    .on_mouse_down(
-        MouseButton::Left,
-        cx.listener(|view, event: &MouseDownEvent, _window, cx| {
-            view.open_folder_menu(event.position, cx);
-            cx.stop_propagation();
-        }),
-    )
-    .into_any_element()
+        .child(more_button(
+            "explorer-folder-more",
+            kit.grounds.rail,
+            |view, event, cx| view.toggle_folder_menu(event.position, cx),
+            cx,
+        ))
 }
 
 #[derive(Clone, Copy)]

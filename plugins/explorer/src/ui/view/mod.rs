@@ -17,14 +17,17 @@ use std::time::{Duration, Instant};
 use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
-    div, point, px, AsyncApp, ClickEvent, Context, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, KeyDownEvent, Keystroke, ParentElement, Pixels, Point, Render, ScrollDelta,
-    ScrollHandle, Styled, UniformListScrollHandle, WeakEntity, Window,
+    div, point, px, rgb, AnyElement, AsyncApp, ClickEvent, Context, ElementId, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, MouseButton,
+    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle, Styled,
+    Subscription, UniformListScrollHandle, WeakEntity, Window,
 };
+use qol_gpui::icon::icon;
 use qol_gpui::kit::kit;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
 use qol_gpui::text_edit::{self, TextField};
-use qol_gpui::theme::{HEIGHT_CONTROL, HEIGHT_INLINE, LINE};
+use qol_gpui::theme::{Ground, TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, LINE, RADIUS_CONTROL};
+use qol_gpui::Icon;
 
 use super::browse::{Browser, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
@@ -34,7 +37,7 @@ use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 use grid::Layout;
-use menu::{Command, Menu};
+use menu::{Command, Menu, Owner};
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
@@ -65,7 +68,9 @@ pub struct ExplorerView {
     menu: Option<Menu>,
     renaming: Option<Renaming>,
     pin_edits: u64,
-    was_active: bool,
+    places_for: u64,
+    closed_by: Option<(Owner, Point<Pixels>)>,
+    subscriptions: Vec<Subscription>,
     devices: Vec<Device>,
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
@@ -98,11 +103,13 @@ impl ExplorerView {
         let mut view = Self {
             browser: Browser::new(start, home, config.show_hidden),
             pins: config.pins.clone(),
-            places: places::places(&config.pins),
+            places: Vec::new(),
             menu: None,
             renaming: None,
-            pin_edits: 0,
-            was_active: true,
+            pin_edits: 1,
+            places_for: 0,
+            closed_by: None,
+            subscriptions: Vec::new(),
             devices: places::devices(),
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
@@ -123,6 +130,7 @@ impl ExplorerView {
             saver: ConfigSaver::start(),
         };
         view.listen(cx);
+        view.refresh_places(cx);
         view
     }
 
@@ -136,11 +144,37 @@ impl ExplorerView {
         )
     }
 
-    fn change_pins(&mut self, pins: Vec<Pin>) {
+    fn places_ready(&self) -> bool {
+        self.places_for == self.pin_edits
+    }
+
+    fn change_pins(&mut self, pins: Vec<Pin>, cx: &mut Context<Self>) {
         self.pins = pins;
-        self.places = places::places(&self.pins);
         self.pin_edits += 1;
         self.saver.save("pins", &self.pins);
+        self.refresh_places(cx);
+    }
+
+    fn refresh_places(&mut self, cx: &mut Context<Self>) {
+        let pins = self.pins.clone();
+        let edits = self.pin_edits;
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let places = cx
+                .background_executor()
+                .spawn(async move { places::places(&pins) })
+                .await;
+            let _ = view.update(cx, |view, cx| view.adopt_places(places, edits, cx));
+        })
+        .detach();
+    }
+
+    fn adopt_places(&mut self, places: Vec<Place>, edits: u64, cx: &mut Context<Self>) {
+        if self.pin_edits != edits {
+            return;
+        }
+        self.places = places;
+        self.places_for = edits;
+        cx.notify();
     }
 
     fn reload_pins(&mut self, cx: &mut Context<Self>) {
@@ -158,13 +192,22 @@ impl ExplorerView {
     }
 
     fn adopt_pins(&mut self, pins: Vec<Pin>, edits: u64, cx: &mut Context<Self>) {
-        if self.pin_edits != edits || pins == self.pins {
+        if self.pin_edits != edits {
+            self.reload_pins(cx);
             return;
         }
+        let failed = self.saver.take_failures().contains(&"pins");
+        if pins == self.pins {
+            return;
+        }
+        if failed {
+            self.browser.fail("Could not save the pins".to_string());
+        }
         self.pins = pins;
-        self.places = places::places(&self.pins);
+        self.pin_edits += 1;
         self.menu = None;
         self.renaming = None;
+        self.refresh_places(cx);
         cx.notify();
     }
 
@@ -174,6 +217,9 @@ impl ExplorerView {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        if !self.places_ready() {
+            return;
+        }
         let Some(listed) = self.places.get(place) else {
             return;
         };
@@ -188,7 +234,36 @@ impl ExplorerView {
         cx.notify();
     }
 
-    pub(super) fn open_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    pub(super) fn toggle_pin_menu(
+        &mut self,
+        place: usize,
+        at: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pressed_more_closes(Owner::Pin(place), at) {
+            self.drop_menu(cx);
+            return;
+        }
+        self.open_pin_menu(place, at, cx);
+    }
+
+    pub(super) fn toggle_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if self.pressed_more_closes(Owner::Folder, at) {
+            self.drop_menu(cx);
+            return;
+        }
+        self.open_folder_menu(at, cx);
+    }
+
+    fn pressed_more_closes(&mut self, owner: Owner, at: Point<Pixels>) -> bool {
+        let just_closed = self.closed_by.take() == Some((owner, at));
+        just_closed || self.menu.as_ref().is_some_and(|menu| menu.owner() == owner)
+    }
+
+    fn open_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if !self.places_ready() {
+            return;
+        }
         let folder = self.browser.folder();
         let name = folder.file_name().map_or_else(
             || folder.display().to_string(),
@@ -209,7 +284,14 @@ impl ExplorerView {
         cx.notify();
     }
 
-    fn close_menu(&mut self, cx: &mut Context<Self>) {
+    fn close_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+        if let Some(menu) = self.menu.take() {
+            self.closed_by = Some((menu.owner(), at));
+            cx.notify();
+        }
+    }
+
+    fn drop_menu(&mut self, cx: &mut Context<Self>) {
         if self.menu.take().is_some() {
             cx.notify();
         }
@@ -237,11 +319,11 @@ impl ExplorerView {
     fn run_command(&mut self, command: Command, cx: &mut Context<Self>) {
         self.menu = None;
         match command {
-            Command::Unpin(place) => self.unpin_place(place),
-            Command::MoveUp(place) => self.move_place(place, false),
-            Command::MoveDown(place) => self.move_place(place, true),
+            Command::Unpin(place) => self.unpin_place(place, cx),
+            Command::MoveUp(place) => self.move_place(place, false, cx),
+            Command::MoveDown(place) => self.move_place(place, true, cx),
             Command::Rename(place) => self.start_renaming(place),
-            Command::TogglePin => self.toggle_pin(),
+            Command::TogglePin => self.toggle_pin(cx),
             Command::GoToPath => self.edit_path(cx),
             Command::ToggleHidden => {
                 self.toggle_hidden();
@@ -251,53 +333,42 @@ impl ExplorerView {
         cx.notify();
     }
 
-    fn unpin_place(&mut self, place: usize) {
-        let Some(pin) = self.places.get(place).map(|place| place.pin) else {
-            return;
-        };
-        if pin >= self.pins.len() {
+    fn unpin_place(&mut self, place: usize, cx: &mut Context<Self>) {
+        if !self.places_ready() {
             return;
         }
-        let mut pins = self.pins.clone();
-        pins.remove(pin);
-        self.change_pins(pins);
+        if let Some(pins) = places::unpin(&self.pins, &self.places, place) {
+            self.change_pins(pins, cx);
+        }
     }
 
-    fn move_place(&mut self, place: usize, down: bool) {
-        let neighbour = if down {
-            place + 1
-        } else {
-            let Some(before) = place.checked_sub(1) else {
-                return;
-            };
-            before
-        };
-        let (Some(here), Some(there)) = (self.places.get(place), self.places.get(neighbour)) else {
-            return;
-        };
-        let (here, there) = (here.pin, there.pin);
-        if here >= self.pins.len() || there >= self.pins.len() {
+    fn move_place(&mut self, place: usize, down: bool, cx: &mut Context<Self>) {
+        if !self.places_ready() {
             return;
         }
-        let mut pins = self.pins.clone();
-        pins.swap(here, there);
-        self.change_pins(pins);
+        if let Some(pins) = places::move_pin(&self.pins, &self.places, place, down) {
+            self.change_pins(pins, cx);
+        }
     }
 
-    fn toggle_pin(&mut self) {
+    fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        if !self.places_ready() {
+            return;
+        }
         let folder = self.browser.folder();
-        let mut pins = self.pins.clone();
-        match self.places.iter().find(|place| place.path == folder) {
-            Some(place) if place.pin < pins.len() => {
-                pins.remove(place.pin);
-            }
-            Some(_) => return,
-            None => pins.push(places::pin_for(folder, self.browser.home())),
+        let home = self.browser.home();
+        let toggled = places::toggle_pin(&self.pins, &self.places, folder, || {
+            places::pin_for(folder, home)
+        });
+        if let Some(pins) = toggled {
+            self.change_pins(pins, cx);
         }
-        self.change_pins(pins);
     }
 
     fn start_renaming(&mut self, place: usize) {
+        if !self.places_ready() {
+            return;
+        }
         let Some(pin) = self.places.get(place).map(|place| place.pin) else {
             return;
         };
@@ -312,7 +383,7 @@ impl ExplorerView {
 
     fn renaming_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
         match keystroke.key.as_str() {
-            "enter" => self.finish_renaming(),
+            "enter" => self.finish_renaming(cx),
             "escape" => self.renaming = None,
             _ => {
                 let paste = || cx.read_from_clipboard().and_then(|item| item.text());
@@ -325,21 +396,13 @@ impl ExplorerView {
         cx.notify();
     }
 
-    fn finish_renaming(&mut self) {
+    fn finish_renaming(&mut self, cx: &mut Context<Self>) {
         let Some(renaming) = self.renaming.take() else {
             return;
         };
-        let name = renaming.field.text().trim().to_string();
-        let unchanged = self
-            .pins
-            .get(renaming.pin)
-            .is_none_or(|pin| pin.name == name);
-        if name.is_empty() || unchanged {
-            return;
+        if let Some(pins) = places::rename_pin(&self.pins, renaming.pin, renaming.field.text()) {
+            self.change_pins(pins, cx);
         }
-        let mut pins = self.pins.clone();
-        pins[renaming.pin].name = name;
-        self.change_pins(pins);
     }
 
     fn open_settings(&mut self, cx: &mut Context<Self>) {
@@ -636,7 +699,7 @@ impl ExplorerView {
             Action::Unpick => self.browser.dismiss(),
             Action::ToggleHidden => self.toggle_hidden(),
             Action::TogglePin => {
-                self.toggle_pin();
+                self.toggle_pin(cx);
                 true
             }
             Action::Settings => {
@@ -803,6 +866,35 @@ impl ExplorerView {
     }
 }
 
+pub(super) fn more_button(
+    id: impl Into<ElementId>,
+    ground: Ground,
+    on_down: impl Fn(&mut ExplorerView, &MouseDownEvent, &mut Context<ExplorerView>) + 'static,
+    cx: &mut Context<ExplorerView>,
+) -> AnyElement {
+    kit()
+        .pointable(
+            div()
+                .id(id)
+                .flex_none()
+                .size(px(HEIGHT_INLINE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(RADIUS_CONTROL))
+                .child(icon(Icon::More, TextStyle::Name.spec().size, ground.ink)),
+            rgb(ground.lift),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, event: &MouseDownEvent, _window, cx| {
+                on_down(view, event, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .into_any_element()
+}
+
 fn rail_width(window_width: f32) -> f32 {
     (RAIL + (window_width - WINDOW_WIDTH) / RAIL_GROWTH).clamp(RAIL_MIN, RAIL_MAX)
 }
@@ -821,11 +913,14 @@ impl Render for ExplorerView {
         self.rail_width = rail_width(f32::from(viewport.width));
         self.list_width = inner_width - self.rail_width;
         self.follow_title(window);
-        let active = window.is_window_active();
-        if active && !self.was_active {
-            self.reload_pins(cx);
+        if self.subscriptions.is_empty() {
+            self.subscriptions
+                .push(cx.observe_window_activation(window, |view, window, cx| {
+                    if window.is_window_active() {
+                        view.reload_pins(cx);
+                    }
+                }));
         }
-        self.was_active = active;
         let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
         let kit = kit();
         kit.window()

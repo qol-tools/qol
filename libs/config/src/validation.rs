@@ -1,5 +1,6 @@
 use crate::contract::{
-    is_picture_spec, ConfigSpec, FieldDefault, FieldKind, FieldSpec, CARD_DESCRIPTION_MAX,
+    is_picture_spec, row_template_keys, ConfigSpec, FieldDefault, FieldKind, FieldSpec,
+    CARD_DESCRIPTION_MAX,
 };
 use crate::platform::validate_platforms;
 use std::fmt;
@@ -429,12 +430,12 @@ fn validate_entries_card(id: &str, field: &FieldSpec, errors: &mut Vec<Validatio
     let Some(template) = field.row_label.as_deref() else {
         return;
     };
-    let names = template_names(template);
-    let known = |name: &&str| {
+    let names = row_template_keys(template);
+    let known = |name: &String| {
         field
             .item
             .as_ref()
-            .is_some_and(|item| item.fields.contains_key(*name))
+            .is_some_and(|item| item.fields.contains_key(name.as_str()))
     };
     if names.is_empty() || !names.iter().all(known) {
         errors.push(ValidationError::new(
@@ -442,14 +443,6 @@ fn validate_entries_card(id: &str, field: &FieldSpec, errors: &mut Vec<Validatio
             "row_label must name item fields in braces, like {name}",
         ));
     }
-}
-
-fn template_names(template: &str) -> Vec<&str> {
-    template
-        .split('{')
-        .skip(1)
-        .filter_map(|part| part.split_once('}').map(|(name, _)| name))
-        .collect()
 }
 
 fn validate_card_description(path: &str, description: &str, errors: &mut Vec<ValidationError>) {
@@ -1562,6 +1555,11 @@ default = []
             ),
             (
                 "type = \"object_array\"\ndefault = []\nrow_label = \"plain\"\n[field.bad.item.fields]\nname = \"string\"",
+                "field.bad.row_label",
+                "item fields",
+            ),
+            (
+                "type = \"object_array\"\ndefault = []\nrow_label = \"{name} {x-y}\"\n[field.bad.item.fields]\nname = \"string\"",
                 "field.bad.row_label",
                 "item fields",
             ),

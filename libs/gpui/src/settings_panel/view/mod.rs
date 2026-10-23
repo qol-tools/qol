@@ -312,6 +312,7 @@ pub(super) struct SettingsPanelView {
     /// because query names repeat across plugins.
     query_states: std::collections::HashMap<(usize, String), RowQueryState>,
     frame_pump_armed: bool,
+    subscriptions: Vec<Subscription>,
     motion_tick: Option<std::time::Instant>,
     sample_signal: Option<std::sync::Arc<SampleSignal>>,
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -521,6 +522,7 @@ impl SettingsPanelView {
             ),
             query_states: state.query_states,
             frame_pump_armed: false,
+            subscriptions: Vec::new(),
             motion_tick: None,
             sample_signal: None,
             sampler_stop: None,
@@ -2997,7 +2999,7 @@ impl SettingsPanelView {
             source.values.get("native_theme").cloned(),
             source.values.get("accent").cloned(),
         );
-        let fresh = self.fresh_values_for_save(source_index);
+        let edited = self.edited_keys_for_save(source_index);
         let Some(source) = self.sources.get(source_index) else {
             return;
         };
@@ -3006,17 +3008,25 @@ impl SettingsPanelView {
             .rows
             .iter()
             .filter(|row| row.source == source_index);
-        let merged = merged_config(fresh.as_ref().unwrap_or(&source.values), rows);
+        let merged = merged_config(&source.values, rows);
+        let changed = match &edited {
+            Some(keys) if keys.is_empty() => None,
+            Some(keys) => Some(stored_values::subset(&merged, keys)),
+            None => Some(merged.clone()),
+        };
         let Some(source) = self.sources.get_mut(source_index) else {
             return;
         };
         source.values = merged;
-        self.save_error = save_values(
-            &panel_base(&source.plugin_id),
-            source.path.as_deref(),
-            &source.values,
-        )
-        .err();
+        if let Some(changed) = changed {
+            self.save_error = save_values(
+                &panel_base(&source.plugin_id),
+                source.path.as_deref(),
+                &changed,
+                &source.values,
+            )
+            .err();
+        }
         if source.plugin_id == qol_conventions::CORE_PANEL_ID
             && (source.values.get("native_theme") != previous_theme.0.as_ref()
                 || source.values.get("accent") != previous_theme.1.as_ref())
@@ -4033,8 +4043,16 @@ impl Render for SettingsPanelView {
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
         );
-        if !window.is_window_active() {
-            self.put_down();
+        if self.subscriptions.is_empty() {
+            self.subscriptions
+                .push(cx.observe_window_activation(window, |view, window, cx| {
+                    if window.is_window_active() {
+                        view.reload_stored_values(cx);
+                    } else {
+                        view.put_down();
+                        cx.notify();
+                    }
+                }));
         }
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
