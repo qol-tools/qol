@@ -172,7 +172,8 @@ fn copy_then_remove(source: &Path, destination: &Path) -> io::Result<()> {
         .into_temp_path();
     fs::copy(source, &staged)?;
     staged.persist(destination).map_err(|error| error.error)?;
-    fs::remove_file(source)
+    let _ = fs::remove_file(source);
+    Ok(())
 }
 
 fn parent_dir(path: &Path) -> &Path {
@@ -495,6 +496,27 @@ mod tests {
         assert!(!destination.exists());
         assert!(source.exists());
         assert!(temp_files(destination.parent().unwrap(), "state.json").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_source_that_cannot_be_removed_still_completes_the_move() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("old");
+        let source = locked.join("state.json");
+        let destination = dir.path().join("new/state.json");
+        fs::create_dir_all(&locked).unwrap();
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&source, "ranking").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let moved = copy_then_remove(&source, &destination);
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        moved.unwrap();
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "ranking");
     }
 
     fn temp_files(parent: &Path, target_name: &str) -> Vec<std::path::PathBuf> {
