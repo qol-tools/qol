@@ -391,6 +391,7 @@ impl Surface {
             SurfaceKind::Toast => MonitorPlacement::corner(Corner::BottomRight, CORNER_MARGIN),
             SurfaceKind::Panel | SurfaceKind::OverlayPanel => MonitorPlacement::center(),
         };
+        let os_frame = matches!(kind, SurfaceKind::Panel);
         Self {
             kind,
             title: "qol-surface".into(),
@@ -402,7 +403,7 @@ impl Surface {
             retain_on_dismiss: false,
             memory: None,
             live_while: None,
-            os_frame: false,
+            os_frame,
             icon: None,
         }
     }
@@ -447,8 +448,8 @@ impl Surface {
         self
     }
 
-    pub fn os_frame(mut self) -> Self {
-        self.os_frame = true;
+    pub fn frameless(mut self) -> Self {
+        self.os_frame = false;
         self
     }
 
@@ -674,6 +675,7 @@ impl Surface {
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
         let lease_owner = title.clone();
+        let os_frame = self.os_frame;
         dismisser
             .state
             .close
@@ -687,8 +689,7 @@ impl Surface {
                     let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
                     let _presentation = crate::popup_window::presentation_guard();
-                    crate::popup_window::set_window_type_dock_by_title(&current_title);
-                    if crate::popup_window::hide_invisible(&current_title) {
+                    if hide_retained(&current_title, os_frame) {
                         return;
                     }
                 }
@@ -844,6 +845,14 @@ static LIVE_SURFACE_TITLES: LazyLock<Mutex<HashSet<String>>> =
 
 fn cancel_focus_reassert() {
     PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn hide_retained(title: &str, os_frame: bool) -> bool {
+    if os_frame {
+        return crate::popup_window::hide_unmapped(title);
+    }
+    crate::popup_window::set_window_type_dock_by_title(title);
+    crate::popup_window::hide_invisible(title)
 }
 
 fn reserve_surface_title(base: &str) -> String {
@@ -1828,6 +1837,27 @@ mod tests {
         assert_eq!(surface.placement, MonitorPlacement::center());
         assert!(surface.takes_focus());
         assert!(surface.resizable());
+    }
+
+    #[test]
+    fn only_panels_wear_the_os_frame_until_they_opt_out() {
+        let cases = [
+            (Surface::new(SurfaceKind::Panel), true, "a panel"),
+            (
+                Surface::new(SurfaceKind::Panel).frameless(),
+                false,
+                "a frameless panel",
+            ),
+            (
+                Surface::new(SurfaceKind::OverlayPanel),
+                false,
+                "an overlay panel",
+            ),
+            (Surface::new(SurfaceKind::Toast), false, "a toast"),
+        ];
+        for (surface, framed, case) in cases {
+            assert_eq!(surface.os_frame, framed, "{case}");
+        }
     }
 
     #[test]

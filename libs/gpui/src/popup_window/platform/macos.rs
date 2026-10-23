@@ -768,6 +768,10 @@ pub fn park_window_by_title(title: &str) -> bool {
     hide_invisible(title)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn compositor_active() -> bool {
     true
 }

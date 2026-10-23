@@ -373,6 +373,10 @@ pub fn hide_invisible(title: &str) -> bool {
     hide_window_by_title(title)
 }
 
+pub fn hide_unmapped(title: &str) -> bool {
+    hide_invisible(title)
+}
+
 pub fn visible_windows_by_title_prefix(prefix: &str) -> usize {
     let pid = std::process::id();
     top_level_windows()
