@@ -139,6 +139,7 @@ impl ConfigDeclarations {
         self.scope
             .get(field)
             .copied()
+            .or_else(|| (field == qol_config::contract::TITLE_BAR_KEY).then_some(ConfigScope::Os))
             .or(self.default_scope)
             .unwrap_or_default()
     }

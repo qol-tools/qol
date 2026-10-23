@@ -38,17 +38,29 @@ impl ConfigSpecV1 {
         self.sections.get(id)
     }
 
-    fn add_window_fields(&mut self) {
+    fn add_window_fields(&mut self) -> Result<(), toml::de::Error> {
         let Some(window) = &self.window else {
-            return;
+            return Ok(());
         };
         let shared = window_contract(window.title_bar);
-        for (id, section) in shared.sections {
-            self.sections.entry(id).or_insert(section);
+        let taken = shared
+            .sections
+            .keys()
+            .find(|id| self.sections.contains_key(*id))
+            .or_else(|| {
+                shared
+                    .fields
+                    .keys()
+                    .find(|id| self.fields.contains_key(*id))
+            });
+        if let Some(id) = taken {
+            return Err(serde::de::Error::custom(format!(
+                "[window] adds `{id}`, which this contract already declares"
+            )));
         }
-        for (id, field) in shared.fields {
-            self.fields.entry(id).or_insert(field);
-        }
+        self.sections.extend(shared.sections);
+        self.fields.extend(shared.fields);
+        Ok(())
     }
 }
 
@@ -403,7 +415,7 @@ pub fn parse_spec(path: impl AsRef<Path>) -> Result<ConfigSpec, ParseSpecError> 
 
 pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
     let mut spec: ConfigSpec = toml::from_str(input)?;
-    spec.add_window_fields();
+    spec.add_window_fields()?;
     Ok(spec)
 }
 
@@ -446,6 +458,20 @@ mod tests {
         }
         let plain = parse_spec_str("schema_version = 1\n").unwrap();
         assert!(plain.field(TITLE_BAR_KEY).is_none());
+    }
+
+    #[test]
+    fn a_window_table_refuses_a_contract_that_already_declares_its_switch() {
+        for own in [
+            "[field.title_bar]\ntype = \"boolean\"\nconfig_key = \"title_bar\"\nlabel = \"Mine\"\ndescription = \"Mine.\"\ndefault = true\n",
+            "[section.window]\nlabel = \"Mine\"\ndescription = \"Mine.\"\n",
+        ] {
+            let error = parse_spec_str(&format!(
+                "schema_version = 1\n\n[window]\ntitle_bar = true\n\n{own}"
+            ))
+            .unwrap_err();
+            assert!(error.to_string().contains("already declares"), "{error}");
+        }
     }
 
     #[test]

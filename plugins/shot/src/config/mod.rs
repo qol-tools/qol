@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub audio: AudioConfig,
@@ -16,6 +16,18 @@ pub struct Config {
     pub shortcuts: ShortcutsConfig,
     #[serde(default = "default_true")]
     pub title_bar: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            audio: AudioConfig::default(),
+            video: VideoConfig::default(),
+            capture: CaptureConfig::default(),
+            shortcuts: ShortcutsConfig::default(),
+            title_bar: default_true(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -160,5 +172,6 @@ mod tests {
         assert!(!defaults.capture.open_folder_after_save);
         assert_eq!(defaults.shortcuts.copy_command, CopyCommand::CopyImage);
         assert!(defaults.title_bar);
+        assert!(Config::default().title_bar);
     }
 }

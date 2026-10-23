@@ -1961,26 +1961,33 @@ fn find_window_by_title(
     utf8_atom: u32,
     title: &str,
 ) -> Option<u32> {
-    let mut ids = root_window_ids(conn, root, list_atom);
+    let clients = root_window_ids(conn, root, list_atom);
+    let mut ids = clients.clone();
     append_tree_window_ids(conn, root, &mut ids);
-
-    let mut titled = titled_windows(conn, &ids, name_atom, utf8_atom, title);
-    if titled.is_empty() {
-        let mut framed = Vec::new();
-        for &frame in &ids {
-            append_tree_window_ids(conn, frame, &mut framed);
-        }
-        titled = titled_windows(conn, &framed, name_atom, utf8_atom, title);
-    }
 
     let pid_atom = intern(conn, b"_NET_WM_PID");
     let current_pid = std::process::id();
-    let pid_match = pid_atom.and_then(|atom| {
-        titled
-            .iter()
-            .copied()
-            .find(|&wid| window_pid_matches(conn, wid, atom, current_pid))
-    });
+    let own_window = |candidates: &[u32]| {
+        pid_atom.and_then(|atom| {
+            candidates
+                .iter()
+                .copied()
+                .find(|&wid| window_pid_matches(conn, wid, atom, current_pid))
+        })
+    };
+
+    let mut titled = titled_windows(conn, &ids, name_atom, utf8_atom, title);
+    let mut pid_match = own_window(&titled);
+    if pid_match.is_none() {
+        let mut framed = Vec::new();
+        for &frame in ids.iter().filter(|wid| !clients.contains(wid)) {
+            append_tree_window_ids(conn, frame, &mut framed);
+        }
+        framed.retain(|wid| !ids.contains(wid));
+        let framed_titled = titled_windows(conn, &framed, name_atom, utf8_atom, title);
+        pid_match = own_window(&framed_titled);
+        titled.extend(framed_titled);
+    }
     #[cfg(debug_assertions)]
     if titled.len() > 1 {
         log::debug!(
