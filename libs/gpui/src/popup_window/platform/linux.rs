@@ -1964,19 +1964,14 @@ fn find_window_by_title(
     let mut ids = root_window_ids(conn, root, list_atom);
     append_tree_window_ids(conn, root, &mut ids);
 
-    let titled: Vec<u32> = ids
-        .into_iter()
-        .filter(|&wid| {
-            window_title_matches(conn, wid, name_atom, utf8_atom, title)
-                || window_title_matches(
-                    conn,
-                    wid,
-                    AtomEnum::WM_NAME.into(),
-                    AtomEnum::ANY.into(),
-                    title,
-                )
-        })
-        .collect();
+    let mut titled = titled_windows(conn, &ids, name_atom, utf8_atom, title);
+    if titled.is_empty() {
+        let mut framed = Vec::new();
+        for &frame in &ids {
+            append_tree_window_ids(conn, frame, &mut framed);
+        }
+        titled = titled_windows(conn, &framed, name_atom, utf8_atom, title);
+    }
 
     let pid_atom = intern(conn, b"_NET_WM_PID");
     let current_pid = std::process::id();
@@ -1994,6 +1989,28 @@ fn find_window_by_title(
         );
     }
     pid_match.or_else(|| titled.into_iter().next())
+}
+
+fn titled_windows(
+    conn: &impl Connection,
+    ids: &[u32],
+    name_atom: u32,
+    utf8_atom: u32,
+    title: &str,
+) -> Vec<u32> {
+    ids.iter()
+        .copied()
+        .filter(|&wid| {
+            window_title_matches(conn, wid, name_atom, utf8_atom, title)
+                || window_title_matches(
+                    conn,
+                    wid,
+                    AtomEnum::WM_NAME.into(),
+                    AtomEnum::ANY.into(),
+                    title,
+                )
+        })
+        .collect()
 }
 
 #[cfg(debug_assertions)]
