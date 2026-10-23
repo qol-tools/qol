@@ -157,10 +157,27 @@ pub struct OpenedSurface<V> {
 
 type CloseWindow = Box<dyn Fn(&mut App)>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Retention {
+    Closed,
+    Hidden,
+    Unmapped,
+}
+
+impl Retention {
+    fn of(retained: bool, os_frame: bool) -> Self {
+        match (retained, os_frame) {
+            (false, _) => Self::Closed,
+            (true, false) => Self::Hidden,
+            (true, true) => Self::Unmapped,
+        }
+    }
+}
+
 struct DismissState {
     close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
-    reusable: bool,
+    retention: Retention,
     title: Rc<RefCell<String>>,
     size: Cell<Size<Pixels>>,
     expected_viewport: Rc<Cell<Size<Pixels>>>,
@@ -240,7 +257,7 @@ pub struct SurfaceDismisser {
 
 impl SurfaceDismisser {
     fn new(
-        reusable: bool,
+        retention: Retention,
         title: String,
         size: Size<Pixels>,
         min_size: Option<Size<Pixels>>,
@@ -259,7 +276,7 @@ impl SurfaceDismisser {
             state: Rc::new(DismissState {
                 close: RefCell::new(None),
                 generation: Cell::new(0),
-                reusable,
+                retention,
                 title,
                 size: Cell::new(size),
                 expected_viewport: Rc::new(Cell::new(size)),
@@ -370,7 +387,7 @@ impl SurfaceDismisser {
         self.state
             .generation
             .set(self.state.generation.get().wrapping_add(1));
-        if self.state.reusable {
+        if self.state.retention != Retention::Closed {
             let state = self.state.clone();
             cx.defer(move |cx| {
                 if let Some(close) = state.close.borrow().as_ref() {
@@ -589,7 +606,7 @@ impl Surface {
         let visible = Rc::new(Cell::new(!native_reveal_gate && !passive_reveal_gate));
         let reveal_pending = Rc::new(Cell::new(native_reveal_gate));
         let dismisser = SurfaceDismisser::new(
-            retain_on_dismiss,
+            Retention::of(retain_on_dismiss, self.os_frame),
             title.clone(),
             bounds.size,
             min_size,
@@ -675,7 +692,6 @@ impl Surface {
         let dismiss_visible = visible.clone();
         let dismiss_reveal_pending = reveal_pending.clone();
         let lease_owner = title.clone();
-        let os_frame = self.os_frame;
         dismisser
             .state
             .close
@@ -689,7 +705,7 @@ impl Surface {
                     let current_title = dismiss_state.title.borrow().clone();
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
                     let _presentation = crate::popup_window::presentation_guard();
-                    if hide_retained(&current_title, os_frame) {
+                    if hide_retained(&current_title, dismiss_state.retention) {
                         return;
                     }
                 }
@@ -847,8 +863,8 @@ fn cancel_focus_reassert() {
     PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
-fn hide_retained(title: &str, os_frame: bool) -> bool {
-    if os_frame {
+fn hide_retained(title: &str, retention: Retention) -> bool {
+    if retention == Retention::Unmapped {
         return crate::popup_window::hide_unmapped(title);
     }
     crate::popup_window::set_window_type_dock_by_title(title);
@@ -1384,7 +1400,7 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
             self.dismisser.state.expected_viewport.set(bounds.size);
             let expected = self.dismisser.state.expected_viewport.clone();
             let Some(fresh_frame) = schedule_fresh_frame(self.handle, expected, cx) else {
-                let _ = crate::popup_window::hide_invisible(&title);
+                let _ = hide_retained(&title, self.dismisser.state.retention);
                 return false;
             };
             let fresh_frame =
@@ -1539,7 +1555,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
                 return;
             }
             let _reason = crate::popup_window::reason_scope("surface-reuse-timeout");
-            let _ = crate::popup_window::hide_invisible(&title);
+            let _ = hide_retained(&title, dismiss_state.retention);
             qol_runtime::probe!(
                 "SURFACE_REVEAL",
                 "title={title} phase=revealed moved={} layout_confirmed={} viewport_ready={} fresh_frame={} content_rendered={} attempts={attempts} shown=false reused=true reason=frame-not-ready",
@@ -1655,8 +1671,8 @@ mod tests {
     use super::{
         cancel_focus_reassert, held_look, native_min_size, panel_bounds, resolved_app_id,
         restore_size, reveal_cancelled, state_restore_needs_retry, surface_look, takes_user_size,
-        DragGestureState, RestoreSize, RevealReadiness, Surface, SurfaceDismisser, SurfaceKind,
-        PANEL_FOCUS_GENERATION,
+        DragGestureState, RestoreSize, Retention, RevealReadiness, Surface, SurfaceDismisser,
+        SurfaceKind, PANEL_FOCUS_GENERATION,
     };
     use crate::kit::WindowLook;
     use crate::placement::MonitorPlacement;
@@ -1861,6 +1877,23 @@ mod tests {
     }
 
     #[test]
+    fn a_retained_framed_panel_hides_unmapped_so_its_frame_takes_no_clicks() {
+        let cases = [
+            (false, false, Retention::Closed),
+            (false, true, Retention::Closed),
+            (true, false, Retention::Hidden),
+            (true, true, Retention::Unmapped),
+        ];
+        for (retained, os_frame, expected) in cases {
+            assert_eq!(
+                Retention::of(retained, os_frame),
+                expected,
+                "retained={retained} os_frame={os_frame}"
+            );
+        }
+    }
+
+    #[test]
     fn overlay_panels_are_normal_focusable_windows_centered_on_the_active_monitor() {
         let surface = Surface::new(SurfaceKind::OverlayPanel);
 
@@ -2054,7 +2087,7 @@ mod tests {
         let visible = Rc::new(Cell::new(false));
         let pending = Rc::new(Cell::new(true));
         let dismisser = SurfaceDismisser::new(
-            true,
+            Retention::Hidden,
             "test".to_owned(),
             size(px(10.0), px(10.0)),
             Some(size(px(10.0), px(10.0))),
@@ -2141,7 +2174,7 @@ mod tests {
     #[gpui::test]
     fn an_os_close_request_runs_the_surface_dismiss(cx: &mut gpui::TestAppContext) {
         let dismisser = SurfaceDismisser::new(
-            false,
+            Retention::Closed,
             "Close Request Panel".into(),
             size(px(100.0), px(100.0)),
             None,
