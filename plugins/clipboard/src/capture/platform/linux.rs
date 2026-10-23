@@ -265,9 +265,9 @@ impl X11Clipboard {
         };
         let content = match wanted {
             Wanted::Png => Content::Png(bytes),
-            Wanted::Files => Content::Files(crate::capture::uri::parse_uri_list(
-                &String::from_utf8_lossy(&bytes),
-            )),
+            Wanted::Files => {
+                Content::Files(super::uri::parse_uri_list(&String::from_utf8_lossy(&bytes)))
+            }
             Wanted::Text => Content::Text(String::from_utf8_lossy(&bytes).into_owned()),
         };
         Ok(Some(Capture {

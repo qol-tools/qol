@@ -25,6 +25,7 @@ pub(crate) fn open() -> Result<Arc<dyn Clipboard>, CaptureError> {
         seen: AtomicIsize::new(NSPasteboard::generalPasteboard().changeCount()),
         written: AtomicIsize::new(NO_WRITE),
         secret: Mutex::new(None),
+        pasteboard: Mutex::new(()),
     }))
 }
 
@@ -38,6 +39,7 @@ struct MacClipboard {
     seen: AtomicIsize,
     written: AtomicIsize,
     secret: Mutex<Option<Payload>>,
+    pasteboard: Mutex<()>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +59,7 @@ impl Clipboard for MacClipboard {
         loop {
             std::thread::sleep(CHANGE_POLL);
             let capture = autoreleasepool(|_| {
+                let _held = lock(&self.pasteboard);
                 let pasteboard = NSPasteboard::generalPasteboard();
                 let count = pasteboard.changeCount();
                 if self.seen.swap(count, Ordering::AcqRel) == count
@@ -74,6 +77,7 @@ impl Clipboard for MacClipboard {
 
     fn write(&self, payload: Payload) -> Result<(), CaptureError> {
         autoreleasepool(|_| {
+            let _held = lock(&self.pasteboard);
             let pasteboard = NSPasteboard::generalPasteboard();
             pasteboard.clearContents();
             let written = match &payload {
@@ -113,6 +117,7 @@ impl Clipboard for MacClipboard {
             *secret = None;
         }
         autoreleasepool(|_| {
+            let _held = lock(&self.pasteboard);
             let pasteboard = NSPasteboard::generalPasteboard();
             if pasteboard.changeCount() == self.written.load(Ordering::Acquire) {
                 pasteboard.clearContents();
@@ -179,7 +184,7 @@ fn file_paths(pasteboard: &NSPasteboard) -> Option<Vec<String>> {
         .filter_map(|item| item.stringForType(unsafe { NSPasteboardTypeFileURL }))
         .map(|url| format!("{url}\n"))
         .collect();
-    let paths = crate::capture::uri::parse_uri_list(&urls);
+    let paths = super::uri::parse_uri_list(&urls);
     (!paths.is_empty()).then_some(paths)
 }
 

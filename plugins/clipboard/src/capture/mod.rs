@@ -4,8 +4,6 @@ use std::time::Instant;
 
 mod echo;
 mod platform;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod uri;
 
 pub use echo::SecretEcho;
 
