@@ -4,10 +4,11 @@ use qol_config::pages::{Row, Tone};
 use super::last::line;
 use super::settings::{hours_value, rules};
 use super::updates::{failed_line, held_phrase, total};
-use super::words::{heading, join, night_of, plural, title};
+use super::words::{heading, join, night_of, title};
 use super::{Sheet, ROOT};
 use crate::session::Session;
 use crate::updates::Auto;
+use qol_config::text::plural;
 
 pub(super) fn page(session: &Session, now: NaiveDateTime) -> Sheet {
     let mut sheet = Sheet::new(ROOT, "Update Manager");
@@ -39,19 +40,10 @@ fn notes(sheet: &mut Sheet, session: &Session) {
         .flat_map(|updates| updates.problems.iter())
         .chain(session.host.problems.iter())
         .collect();
-    if !session.borrowed && !session.locked() && session.failed.is_none() && problems.is_empty() {
+    if !session.locked() && session.failed.is_none() && problems.is_empty() {
         return;
     }
     sheet.group("right now", "what is different on this computer.");
-    if session.borrowed {
-        sheet.row(
-            Row::info("borrowed", "Changes ask first")
-                .detail(
-                    "Keep settings in place is off in General, so qol changes nothing here unless you ask.",
-                )
-                .attention(true),
-        );
-    }
     if session.locked() {
         sheet.row(
             Row::info("locked", "You are not an administrator here")
@@ -192,18 +184,8 @@ fn owner(sheet: &mut Sheet, session: &Session) {
         return;
     };
     if session.locked() {
-        sheet.row(
-            Row::info("auto", "Install on their own")
-                .detail("Needs an administrator")
-                .value(auto_value(mint.auto))
-                .tag("locked"),
-        );
-        sheet.row(
-            Row::info("hours", "Update hours")
-                .detail("Needs an administrator")
-                .value(hours_value(session))
-                .tag("locked"),
-        );
+        sheet.row(Row::info("auto", "Install on their own").value(auto_value(mint.auto)));
+        sheet.row(Row::info("hours", "Update hours").value(hours_value(session)));
         return;
     }
     sheet.row(
@@ -243,12 +225,6 @@ fn auto_value(auto: Auto) -> String {
 
 pub(super) fn changed(session: &Session, now: NaiveDateTime) -> String {
     let mut items: Vec<String> = Vec::new();
-    if session.guarding() {
-        items.push("Wait while in use".into());
-    }
-    if session.holding_all() {
-        items.push("Hold all updates".into());
-    }
     if session.mint().is_some_and(|mint| mint.ours) {
         items.push("Update hours".into());
     }

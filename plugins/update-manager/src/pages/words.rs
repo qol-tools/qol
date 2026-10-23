@@ -1,6 +1,7 @@
 use chrono::{Duration, NaiveDateTime, Timelike};
 
 use crate::updates::day;
+use qol_config::text::plural;
 
 const EVENING: u32 = 18;
 const MORNING: u32 = 6;
@@ -18,10 +19,6 @@ pub(super) fn join(items: &[String]) -> String {
         ),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
-}
-
-pub(super) fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
 }
 
 pub(super) fn cap(text: &str) -> String {
@@ -95,8 +92,6 @@ mod tests {
             join(&names(&["a", "b", "c", "d", "e", "f"])),
             "a, b, c and 3 more"
         );
-        assert_eq!(plural(1, "package", "packages"), "1 package");
-        assert_eq!(plural(20, "package", "packages"), "20 packages");
         assert_eq!(cap("today"), "Today");
         assert_eq!(title("the Secure Boot list"), "The Secure Boot list");
         assert_eq!(size(299_000_000), "299.0 MB");

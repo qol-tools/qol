@@ -22,6 +22,7 @@ query = "status"
 value_from = "state"
 label_map = { ok = "Brightness ready", no_displays = "No displays detected", unavailable = "Brightness unavailable" }
 tone_map = { ok = "success", no_displays = "warning", unavailable = "danger" }
+hide_values = ["ok", "no_displays"]
 
 [field.night_status]
 type = "status"

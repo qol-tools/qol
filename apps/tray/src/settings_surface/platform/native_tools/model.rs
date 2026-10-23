@@ -423,6 +423,14 @@ pub(super) fn shortcut_is_managed(shortcut: &Shortcut) -> bool {
     matches!(shortcut.source, Some(ShortcutSource::PluginManifest { .. }))
 }
 
+pub(super) fn shortcut_kind_label(shortcut: &Shortcut) -> Option<String> {
+    if shortcut_is_managed(shortcut) {
+        None
+    } else {
+        Some(shortcut.action.kind().to_string())
+    }
+}
+
 pub(super) fn shortcut_summary(shortcut: &Shortcut) -> String {
     match &shortcut.action {
         ShortcutAction::OpenUrl { url, .. } => url.clone(),
@@ -598,6 +606,16 @@ mod tests {
             },
         };
         assert!(shortcut_is_managed(&shortcut));
+        assert_eq!(shortcut_kind_label(&shortcut), None);
+
+        let user_shortcut = Shortcut {
+            source: None,
+            ..shortcut.clone()
+        };
+        assert_eq!(
+            shortcut_kind_label(&user_shortcut).as_deref(),
+            Some("plugin_action")
+        );
 
         let mut draft = ShortcutDraft::from_shortcut(&shortcut);
         assert_eq!(

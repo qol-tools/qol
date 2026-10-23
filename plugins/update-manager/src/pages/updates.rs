@@ -2,10 +2,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use qol_config::pages::{Go, Row, Tone};
 
-use super::words::{join, plural, size, title};
+use super::words::{join, size, title};
 use super::Sheet;
 use crate::session::{position, Act, Session};
 use crate::updates::{Held, Update};
+use qol_config::text::plural;
 
 pub(super) fn total<'a>(updates: impl Iterator<Item = &'a Update>) -> usize {
     updates.map(Update::count).sum()
@@ -130,24 +131,18 @@ fn waiting(session: &Session) -> Vec<Sheet> {
     let available = session.available();
     if session.job.is_none() && !available.is_empty() {
         sheet.group("install", "asks before anything installs.");
-        let restarts = total(available.iter().copied().filter(|update| update.restart));
         let detail = if session.locked() {
-            "Then an administrator's password".to_string()
-        } else if restarts > 0 {
-            format!(
-                "{restarts} then need{} a restart",
-                if restarts == 1 { "s" } else { "" }
-            )
+            "Installing asks for an administrator's password."
         } else {
-            "Nothing restarts".to_string()
+            "Installing asks for your password."
         };
         sheet.row(
             Row::new(
                 "install",
-                format!("Install {} now", total(available.iter().copied())),
+                plural(total(available.iter().copied()), "update", "updates"),
             )
             .detail(detail)
-            .button("install")
+            .button("Install all")
             .open(install_all(session)),
         );
     }
@@ -157,18 +152,30 @@ fn waiting(session: &Session) -> Vec<Sheet> {
         (None, true) => 0,
         (None, false) => 1,
     });
+    let shared = list
+        .first()
+        .map(|update| update.tag.as_str())
+        .filter(|tag| list.iter().all(|update| update.tag == *tag))
+        .map(str::to_string);
     let rows = list
         .into_iter()
         .map(|update| {
             let id = format!("update:{}", update.id);
-            Row::new(id.clone(), update.label.as_str())
+            let row = Row::new(id.clone(), update.label.as_str())
                 .detail(job_detail(session, update).unwrap_or_else(|| update.wait()))
-                .tag(update.tag.as_str())
                 .dim(update.held.is_some())
-                .open(id)
+                .open(id);
+            match shared {
+                Some(_) => row,
+                None => row.tag(update.tag.as_str()),
+            }
         })
         .collect();
-    sheet.list("waiting", "each tagged with its updater.", rows)
+    let colophon = match &shared {
+        Some(tag) => format!("all from {}.", tag.to_lowercase()),
+        None => "each tagged with its updater.".to_string(),
+    };
+    sheet.list("waiting", &colophon, rows)
 }
 
 fn one(session: &Session, update: &Update) -> Vec<Sheet> {

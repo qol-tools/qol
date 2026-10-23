@@ -5,6 +5,8 @@ pub mod residency;
 pub mod takeover;
 pub mod udev;
 
+use qol_config::text::plural;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixState {
     Pending,
@@ -126,8 +128,27 @@ pub fn findings_payload(findings: &[Finding]) -> serde_json::Value {
             })
         })
         .collect::<Vec<_>>();
+    let state = rollup(findings);
+    let count = |matches: fn(&Finding) -> bool| findings.iter().filter(|f| matches(f)).count();
+    let actionable = count(|finding| finding.actionable);
+    let blocked = count(|finding| !finding.actionable && finding.state == Some(FixState::Pending));
+    let problems = actionable + blocked;
+    let blocked_detail = format!("Fix what you can below. {blocked} can't be fixed here.");
+    let (label, detail) = match (actionable, blocked) {
+        (0, 0) => ("Healthy", "Nothing to fix."),
+        (0, _) => (
+            "Can't fix here",
+            "Each problem below says what its fix needs.",
+        ),
+        (_, 0) => ("Needs attention", "Fix each problem below."),
+        _ => ("Needs attention", blocked_detail.as_str()),
+    };
     serde_json::json!({
-        "state": rollup(findings),
+        "state": state,
+        "summary": (problems > 0).then(|| plural(problems, "problem", "problems")),
+        "tone": (problems > 0).then_some("warning"),
+        "lead": { "label": label, "detail": detail },
+        "empty": { "title": "No problems found" },
         "message": message,
         "items": items,
     })
@@ -189,6 +210,65 @@ mod tests {
         assert_eq!(second["actionable"], false);
         assert_eq!(second["accent"], "muted");
         assert_eq!(second["badge"], "Info");
+    }
+
+    #[test]
+    fn summary_counts_problems_and_the_lead_says_what_to_do() {
+        let fixable = || Finding::fixable("w", "Service", "wedged", FixState::Pending);
+        let blocked = || fixable().unavailable("no pkexec");
+        let advice = || Finding::advice("a", "Audio server", "PipeWire");
+        let applied = || Finding::fixable("b", "Service", "healthy", FixState::Applied);
+        let null = serde_json::Value::Null;
+        let cases = [
+            (
+                "fixable and advice",
+                vec![fixable(), advice(), advice()],
+                serde_json::json!("1 problem"),
+                "Needs attention",
+                "Fix each problem below.",
+            ),
+            (
+                "two fixable",
+                vec![fixable(), fixable()],
+                serde_json::json!("2 problems"),
+                "Needs attention",
+                "Fix each problem below.",
+            ),
+            (
+                "fixable and blocked",
+                vec![fixable(), blocked()],
+                serde_json::json!("2 problems"),
+                "Needs attention",
+                "Fix what you can below. 1 can't be fixed here.",
+            ),
+            (
+                "blocked only",
+                vec![blocked(), blocked()],
+                serde_json::json!("2 problems"),
+                "Can't fix here",
+                "Each problem below says what its fix needs.",
+            ),
+            (
+                "applied and advice",
+                vec![applied(), advice()],
+                null.clone(),
+                "Healthy",
+                "Nothing to fix.",
+            ),
+            ("empty", vec![], null.clone(), "Healthy", "Nothing to fix."),
+        ];
+        for (case, findings, summary, label, detail) in cases {
+            let payload = findings_payload(&findings);
+            let tone = if summary.is_null() {
+                null.clone()
+            } else {
+                serde_json::json!("warning")
+            };
+            assert_eq!(payload["summary"], summary, "case: {case}");
+            assert_eq!(payload["tone"], tone, "case: {case}");
+            assert_eq!(payload["lead"]["label"], label, "case: {case}");
+            assert_eq!(payload["lead"]["detail"], detail, "case: {case}");
+        }
     }
 
     #[test]

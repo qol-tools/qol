@@ -27,6 +27,11 @@ query = "session_status"
 value_from = "state"
 label_map = { idle = "Not listening", listening = "Listening", stopping = "Stopping", failed = "Failed" }
 tone_map = { listening = "success", stopping = "warning", failed = "error" }
+hide_values = ["listening"]
+
+[field.session_status.show_when]
+field = "voice_enabled"
+equals = true
 
 [field.live_transcript]
 type = "list"

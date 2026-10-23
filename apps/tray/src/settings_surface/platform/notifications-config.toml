@@ -36,6 +36,7 @@ card_description = "Drag the toast where it should go."
 [field.do_not_disturb]
 type = "status"
 label = "Do not disturb"
+description = "Follows your system. While it is on, system notifications stay quiet; qol toasts still show."
 section = "notifications"
 query = "os_do_not_disturb"
 value_from = "value"

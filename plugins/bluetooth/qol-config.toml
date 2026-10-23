@@ -199,24 +199,20 @@ label = "System"
 description = "Whether Bluetooth is working properly on this computer."
 platforms = ["linux"]
 
-[field.host_status]
-type = "status"
-label = "Bluetooth health"
-section = "host"
-query = "host_fixes"
-value_from = "state"
-label_map = { none = "Nothing detected", ok = "Bluetooth is healthy", attention = "Bluetooth needs attention" }
-tone_map = { ok = "success", attention = "warning" }
-
 [field.host_findings]
 type = "list"
-label = "Findings"
+label = "Bluetooth health"
 section = "host"
 query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
-empty_message = "No Bluetooth problems found on this computer."
 card_description = "Problems found with Bluetooth."
+items_label = "findings"
+
+[field.host_findings.lead]
+label = "health"
+row_label = "{label}"
+row_subtitle = "{detail}"
 
 [field.host_findings.row_action]
 action = "apply_host_fix"

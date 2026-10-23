@@ -90,7 +90,6 @@ actions = ["snap-left", "snap-right", "snap-bottom"]
 [field.snap_fraction]
 type = "number"
 label = "Snap size"
-description = "How much of the screen a snapped window fills."
 section = "snap"
 default = 0.5
 min = 0.1
@@ -119,7 +118,6 @@ actions = ["glide-left", "glide-right", "glide-up", "glide-down"]
 [field.glide_speed_px_per_second]
 type = "number"
 label = "Glide speed"
-description = "How fast a window moves while you hold the keys."
 section = "glide"
 default = 1200
 min = 100

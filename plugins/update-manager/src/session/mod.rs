@@ -227,10 +227,6 @@ impl Session {
             .map_or_else(|| effective(self.hours(), self.time), Clock::of)
     }
 
-    pub(crate) fn guarding(&self) -> bool {
-        self.rules.guard && self.rules.helper == Helper::Ready
-    }
-
     pub(crate) fn holding_all(&self) -> bool {
         self.rules.hold && self.rules.helper == Helper::Ready
     }
@@ -654,7 +650,6 @@ mod tests {
         assert!(session.want_hold());
         session.rules.helper = Helper::Failed(Refusal::Dismissed);
         assert!(!session.want_helper());
-        assert!(!session.guarding());
         session.apply(&Act::Retry, now).expect("retry");
         assert!(session.rules.guard);
         assert_eq!(session.rules.helper, Helper::Off);

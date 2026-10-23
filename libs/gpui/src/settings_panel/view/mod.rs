@@ -3193,6 +3193,12 @@ impl SettingsPanelView {
             } => SettingsValueTone::Success,
             RowControl::Action { active, .. } => binary_state_tone(*active),
             RowControl::Status { .. } => SettingsValueTone::Normal,
+            RowControl::List {
+                finder: Some(finder),
+                ..
+            } => finder
+                .tone
+                .map_or(SettingsValueTone::Normal, list_card::value_tone),
             RowControl::List { .. } | RowControl::Gamepad { .. } => SettingsValueTone::Normal,
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
             RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
@@ -6809,6 +6815,47 @@ default = "visible"
             apply_runtime_query(&mut rows, 0, "nearby_devices", Ok(payload), &|_, _| false);
             assert_eq!(lead(&rows), (label.to_string(), vec![verb.to_string()]));
         }
+    }
+
+    #[test]
+    fn bluetooth_health_takes_its_summary_and_tone_from_the_findings() {
+        let contract = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/bluetooth/qol-config.toml");
+        let spec = qol_config::contract::parse_spec(&contract).expect("bluetooth contract");
+        let mut resolved = qol_config::normalized::resolve_config(&spec, &serde_json::json!({}))
+            .expect("bluetooth config");
+        for section in &mut resolved.sections {
+            section.platforms = None;
+        }
+        let mut rows = rows_from_resolved(&resolved, 0);
+        let payload = serde_json::json!({
+            "summary": "1 problem",
+            "tone": "warning",
+            "lead": { "label": "Needs attention", "detail": "Fix each problem below." },
+            "items": [],
+        });
+        apply_runtime_query(&mut rows, 0, "host_fixes", Ok(payload), &|_, _| false);
+        let row = rows
+            .iter()
+            .find(|row| row.id == "host_findings")
+            .expect("bluetooth health row");
+        let RowControl::List {
+            finder: Some(finder),
+            ..
+        } = &row.control
+        else {
+            panic!("bluetooth health is a finder list");
+        };
+        assert_eq!(finder.summary.as_deref(), Some("1 problem"));
+        assert_eq!(finder.label(), "Needs attention");
+        assert_eq!(
+            finder.subtitle().as_deref(),
+            Some("Fix each problem below.")
+        );
+        assert_eq!(
+            finder.tone.map(super::list_card::value_tone),
+            Some(crate::settings_panel::SettingsValueTone::Attention)
+        );
     }
 
     #[test]

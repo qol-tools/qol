@@ -2,10 +2,11 @@ use chrono::NaiveDateTime;
 use qol_config::pages::Row;
 
 use super::restart::finish_names;
-use super::words::{cap, heading, minutes, plural};
+use super::words::{cap, heading, minutes};
 use super::Sheet;
 use crate::session::{Act, Session};
 use crate::updates::{Run, RunBy};
+use qol_config::text::plural;
 
 const SHOWN: usize = 2;
 

@@ -60,6 +60,7 @@ pub(super) struct ListFinder {
     pub(super) items_label: String,
     pub(super) data: serde_json::Value,
     pub(super) summary: Option<String>,
+    pub(super) tone: Option<StatusTone>,
     pub(super) empty: Option<FinderEmpty>,
     pub(super) pending: bool,
     pub(super) error: Option<String>,
@@ -72,6 +73,7 @@ impl ListFinder {
             items_label,
             data: serde_json::Value::Null,
             summary: None,
+            tone: None,
             empty: None,
             pending: false,
             error: None,
@@ -84,6 +86,7 @@ impl ListFinder {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         self.summary = payload_text(value.get("summary"));
+        self.tone = list_item_tone(value, "tone");
         self.empty = value.get("empty").and_then(|empty| {
             Some(FinderEmpty {
                 title: payload_text(empty.get("title"))?,

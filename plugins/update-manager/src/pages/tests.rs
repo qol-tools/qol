@@ -272,13 +272,13 @@ fn every_page_is_consistent_in_every_state() {
     let pages = build(&session, now()).pages;
     assert_eq!(broken(&pages), Vec::<String>::new());
     assert!(pages.page("hours").is_none());
-    assert_eq!(
-        page(&pages, ROOT)
-            .row("hours")
-            .and_then(|row| row.tag.clone())
-            .as_deref(),
-        Some("locked")
-    );
+    let hours = page(&pages, ROOT).row("hours").expect("hours row");
+    assert_eq!(hours.tag, None);
+    assert_eq!(hours.detail, None);
+    assert!(page(&pages, ROOT).row("locked").is_some());
+    assert!(page(&pages, ROOT).row("borrowed").is_none());
+    assert!(page(&pages, "changes").row("guard").is_none());
+    assert!(page(&pages, "changes").row("hold").is_none());
 }
 
 #[test]
@@ -340,11 +340,28 @@ fn the_waiting_page_puts_restarts_first_and_held_last() {
             "update:apt:apparmor",
         ]
     );
-    assert_eq!(label(&pages, "waiting", "install"), "Install 30 now");
+    assert_eq!(label(&pages, "waiting", "install"), "30 updates");
     assert_eq!(
         detail(&pages, "waiting", "install"),
-        "21 then need a restart"
+        "Installing asks for your password."
     );
+    let mut locked = mint();
+    locked.host.admin = false;
+    assert_eq!(
+        detail(&build(&locked, now()).pages, "waiting", "install"),
+        "Installing asks for an administrator's password."
+    );
+    assert_eq!(
+        waiting.row("install").and_then(|row| row.control.clone()),
+        Some(Control::Button("Install all".into()))
+    );
+    assert_eq!(
+        page(&pages, "waiting").groups[1].colophon.as_deref(),
+        Some("each tagged with its updater.")
+    );
+    assert!(waiting
+        .row("update:apt:nvidia")
+        .is_some_and(|row| row.tag.as_deref() == Some("Update Manager")));
     assert!(waiting
         .row("update:apt:apparmor")
         .is_some_and(|row| row.dim));
@@ -360,6 +377,37 @@ fn the_waiting_page_puts_restarts_first_and_held_last() {
             .count(),
         20
     );
+}
+
+#[test]
+fn one_shared_updater_is_said_once() {
+    let mut session = mint();
+    let list: Vec<Update> = session
+        .list()
+        .iter()
+        .cloned()
+        .map(|mut update| {
+            update.tag = "Update Manager".into();
+            update
+        })
+        .collect();
+    session.apply_updates(
+        Updates {
+            list,
+            problems: Vec::new(),
+        },
+        at("2026-10-14 13:58"),
+    );
+    let pages = build(&session, now()).pages;
+    let waiting = page(&pages, "waiting");
+    assert_eq!(
+        waiting.groups[1].colophon.as_deref(),
+        Some("all from update manager.")
+    );
+    assert!(waiting
+        .rows()
+        .filter(|row| row.id.starts_with("update:"))
+        .all(|row| row.tag.is_none()));
 }
 
 #[test]
@@ -535,10 +583,7 @@ fn rules_and_changes_list_what_qol_holds() {
     session.rules.helper = Helper::Ready;
     session.host.restart_at = Some(at("2026-10-15 01:30"));
     let pages = build(&session, now()).pages;
-    assert_eq!(
-        detail(&pages, ROOT, "changes"),
-        "Wait while in use and Restart tonight"
-    );
+    assert_eq!(detail(&pages, ROOT, "changes"), "Restart tonight");
     assert_eq!(label(&pages, "changes", "restart"), "Restart tonight");
     let cancel = press(&mut session, "changes", "restart", now());
     assert_eq!(cancel.task, Some(Task::Restart(None)));
@@ -560,11 +605,6 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     assert_eq!(
         detail(&pages, ROOT, "hold"),
         "Waiting for the password, to hold Mint's run"
-    );
-    session.rules.helper = Helper::Ready;
-    assert_eq!(
-        detail(&build(&session, now()).pages, ROOT, "changes"),
-        "Hold all updates"
     );
     session.rules.helper = Helper::Failed(Refusal::Dismissed);
     let pages = build(&session, now()).pages;

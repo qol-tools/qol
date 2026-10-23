@@ -100,6 +100,53 @@ fn every_shipped_contract_parses_and_validates() {
 }
 
 #[test]
+fn rows_never_copy_their_section_description() {
+    let plain = |text: &str| text.trim().trim_end_matches('.').to_lowercase();
+    for (path, spec) in configs() {
+        for (id, field) in &spec.fields {
+            let caption = field
+                .section
+                .as_ref()
+                .and_then(|section| spec.sections.get(section))
+                .and_then(|section| section.description.as_deref());
+            let (Some(caption), Some(description)) = (caption, field.description.as_deref()) else {
+                continue;
+            };
+            assert_ne!(
+                plain(description),
+                plain(caption),
+                "{}: field.{id} repeats its section description",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn hidden_status_values_are_values_the_row_can_show() {
+    for (path, spec) in configs() {
+        for (id, field) in &spec.fields {
+            let Some(hidden) = field.hide_values.as_ref() else {
+                continue;
+            };
+            let labels = field.label_map.as_ref();
+            for value in hidden {
+                assert!(
+                    labels.is_some_and(|labels| labels.contains_key(value)),
+                    "{}: field.{id} hides {value}, which its label_map does not name",
+                    path.display()
+                );
+            }
+            assert!(
+                labels.is_some_and(|labels| labels.keys().any(|key| !hidden.contains(key))),
+                "{}: field.{id} hides every value it can show",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn card_opening_fields_carry_a_card_description() {
     for (path, spec) in configs() {
         for (id, field) in &spec.fields {

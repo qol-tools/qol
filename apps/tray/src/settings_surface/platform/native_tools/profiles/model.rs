@@ -233,11 +233,7 @@ pub(super) fn profile_rows(page: &Page<'_>) -> Vec<Row> {
     for (profile, art) in profiles.iter().zip(arts) {
         let plugins = plugins_text(profile.plugins);
         let row = if profile.active {
-            Row::new(
-                &profile.name,
-                format!("In use on this computer · {plugins}"),
-                None,
-            )
+            Row::new(&profile.name, plugins, None)
         } else {
             Row::new(
                 &profile.name,
@@ -995,10 +991,9 @@ mod tests {
             labels(&rows),
             ["profiles", "default", "work", "New profile"]
         );
-        assert_eq!(
-            rows[1].detail,
-            "In use on this computer · 11 plugins set up"
-        );
+        assert_eq!(rows[1].detail, "11 plugins set up");
+        assert!(matches!(&rows[1].value, Value::Choice { word, .. } if word == "in use here"));
+        assert!(matches!(&rows[2].value, Value::Choice { word, .. } if word.is_empty()));
         assert_eq!(rows[1].action, None);
         assert_eq!(rows[2].detail, "1 plugin set up");
         assert_eq!(rows[2].action, Some(Action::Use("work".to_string())));

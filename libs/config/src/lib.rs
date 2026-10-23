@@ -7,6 +7,7 @@ pub mod object_array;
 pub mod pages;
 pub mod placement;
 pub mod platform;
+pub mod text;
 pub mod validation;
 
 pub use defaults::{

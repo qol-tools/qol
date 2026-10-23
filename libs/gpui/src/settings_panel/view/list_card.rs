@@ -969,16 +969,19 @@ fn finder_pick_end(actions: &ListActions, item: &ListItem, band: bool) -> Finder
     if badge.is_empty() && !item.pending {
         return FinderPickEnd::None;
     }
-    let tone = match item.effective_badge_tone() {
+    FinderPickEnd::Word {
+        text: badge.into(),
+        tone: value_tone(item.effective_badge_tone()),
+        working: item.pending,
+    }
+}
+
+pub(super) fn value_tone(tone: StatusTone) -> SettingsValueTone {
+    match tone {
         StatusTone::Success => SettingsValueTone::Success,
         StatusTone::Danger => SettingsValueTone::Danger,
         StatusTone::Warning => SettingsValueTone::Attention,
         StatusTone::Accent | StatusTone::Muted => SettingsValueTone::Normal,
-    };
-    FinderPickEnd::Word {
-        text: badge.into(),
-        tone,
-        working: item.pending,
     }
 }
 
