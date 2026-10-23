@@ -114,14 +114,17 @@ pub(super) fn daemon_port(base: &str) -> Option<u16> {
 }
 
 pub(super) fn load_values(base: &str, path: Option<&Path>) -> serde_json::Value {
+    read_values(base, path).unwrap_or_else(|| serde_json::json!({}))
+}
+
+pub(super) fn read_values(base: &str, path: Option<&Path>) -> Option<serde_json::Value> {
     if let Ok((200, body)) = tray_http(Method::Get, &api_routes::config_route(base), None) {
         if let Ok(values) = serde_json::from_str(&body) {
-            return values;
+            return Some(values);
         }
     }
     path.and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| serde_json::json!({}))
 }
 
 pub(super) fn save_values(

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use gpui::*;
 
-use super::super::persistence::{load_values, panel_base};
+use super::super::persistence::{load_values, panel_base, read_values};
 use super::super::rows::{row_query_names, row_value_json, rows_from_resolved, Row};
 use super::{SettingsPanelView, SourceState};
 
@@ -62,7 +62,7 @@ impl SettingsPanelView {
             .sources
             .get(index)
             .filter(|source| rereads_stored_values(source))?;
-        let fresh = load_values(&panel_base(&source.plugin_id), source.path.as_deref());
+        let fresh = read_values(&panel_base(&source.plugin_id), source.path.as_deref())?;
         let snapshot_rows = self.resolved_rows(index, &source.values)?;
         let fresh_rows = self.resolved_rows(index, &fresh)?;
         let edited = self.edited_row_ids(index, &snapshot_rows);
