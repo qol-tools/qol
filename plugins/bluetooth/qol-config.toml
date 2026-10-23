@@ -206,7 +206,6 @@ section = "host"
 query = "host_fixes"
 row_label = "{title}"
 row_subtitle = "{detail}"
-empty_message = "No Bluetooth problems found on this computer."
 card_description = "Problems found with Bluetooth."
 items_label = "findings"
 

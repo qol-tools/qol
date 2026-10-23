@@ -613,8 +613,8 @@ mod tests {
             ..shortcut.clone()
         };
         assert_eq!(
-            shortcut_kind_label(&user_shortcut),
-            Some(user_shortcut.action.kind().to_string())
+            shortcut_kind_label(&user_shortcut).as_deref(),
+            Some("plugin_action")
         );
 
         let mut draft = ShortcutDraft::from_shortcut(&shortcut);

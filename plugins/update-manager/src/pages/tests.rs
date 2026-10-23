@@ -345,6 +345,12 @@ fn the_waiting_page_puts_restarts_first_and_held_last() {
         detail(&pages, "waiting", "install"),
         "Installing asks for your password."
     );
+    let mut locked = mint();
+    locked.host.admin = false;
+    assert_eq!(
+        detail(&build(&locked, now()).pages, "waiting", "install"),
+        "Installing asks for an administrator's password."
+    );
     assert_eq!(
         waiting.row("install").and_then(|row| row.control.clone()),
         Some(Control::Button("Install all".into()))
@@ -577,10 +583,7 @@ fn rules_and_changes_list_what_qol_holds() {
     session.rules.helper = Helper::Ready;
     session.host.restart_at = Some(at("2026-10-15 01:30"));
     let pages = build(&session, now()).pages;
-    assert_eq!(
-        detail(&pages, ROOT, "changes"),
-        "Wait while in use and Restart tonight"
-    );
+    assert_eq!(detail(&pages, ROOT, "changes"), "Restart tonight");
     assert_eq!(label(&pages, "changes", "restart"), "Restart tonight");
     let cancel = press(&mut session, "changes", "restart", now());
     assert_eq!(cancel.task, Some(Task::Restart(None)));
@@ -602,11 +605,6 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     assert_eq!(
         detail(&pages, ROOT, "hold"),
         "Waiting for the password, to hold Mint's run"
-    );
-    session.rules.helper = Helper::Ready;
-    assert_eq!(
-        detail(&build(&session, now()).pages, ROOT, "changes"),
-        "Hold all updates"
     );
     session.rules.helper = Helper::Failed(Refusal::Dismissed);
     let pages = build(&session, now()).pages;

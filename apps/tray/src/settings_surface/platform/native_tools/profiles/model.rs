@@ -992,6 +992,8 @@ mod tests {
             ["profiles", "default", "work", "New profile"]
         );
         assert_eq!(rows[1].detail, "11 plugins set up");
+        assert!(matches!(&rows[1].value, Value::Choice { word, .. } if word == "in use here"));
+        assert!(matches!(&rows[2].value, Value::Choice { word, .. } if word.is_empty()));
         assert_eq!(rows[1].action, None);
         assert_eq!(rows[2].detail, "1 plugin set up");
         assert_eq!(rows[2].action, Some(Action::Use("work".to_string())));

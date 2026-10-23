@@ -544,7 +544,9 @@ pub(crate) fn status_payload(
     control: &dyn MonitorControl,
     cache: &mut BTreeMap<String, BrightnessState>,
 ) -> serde_json::Value {
-    let handles = control.enumerate().unwrap_or_default();
+    let Ok(handles) = control.enumerate() else {
+        return serde_json::json!({ "state": "unavailable", "count": 0 });
+    };
     if handles.is_empty() {
         return serde_json::json!({ "state": "no_displays", "count": 0 });
     }
@@ -2764,6 +2766,7 @@ mod tests {
         gets: AtomicUsize,
         warned: StdMutex<bool>,
         refuse_get: bool,
+        refuse_enumerate: bool,
         selections: StdMutex<Vec<(String, BrightnessPolicy)>>,
         tints: StdMutex<Vec<(String, Tint)>>,
         fail_neutral: AtomicUsize,
@@ -2801,6 +2804,7 @@ mod tests {
                 gets: AtomicUsize::new(0),
                 warned: StdMutex::new(false),
                 refuse_get: false,
+                refuse_enumerate: false,
                 selections: StdMutex::new(Vec::new()),
                 tints: StdMutex::new(Vec::new()),
                 fail_neutral: AtomicUsize::new(0),
@@ -2986,6 +2990,12 @@ mod tests {
 
     impl DisplayControl for FakeControl {
         fn enumerate(&self) -> Result<Vec<DisplayHandle>, MonitorError> {
+            if self.refuse_enumerate {
+                return Err(MonitorError::Refused {
+                    capability: "enumerate",
+                    reason: "display listing failed".to_string(),
+                });
+            }
             Ok(self.displays.clone())
         }
 
@@ -6786,6 +6796,12 @@ mod tests {
         assert_eq!(
             status_payload(&refused, &mut BTreeMap::new()),
             serde_json::json!({ "state": "unavailable", "count": 1 })
+        );
+        let mut unlisted = FakeControl::new(Vec::new(), 0, BrightnessSource::Ddc);
+        unlisted.refuse_enumerate = true;
+        assert_eq!(
+            status_payload(&unlisted, &mut BTreeMap::new()),
+            serde_json::json!({ "state": "unavailable", "count": 0 })
         );
     }
 

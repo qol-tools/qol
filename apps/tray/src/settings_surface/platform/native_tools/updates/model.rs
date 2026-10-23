@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use qol_config::text::plural;
 use qol_connection_health::ConnectionHealth;
 use serde::Deserialize;
 
@@ -283,35 +284,44 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
     }
     let last_check = last_check_text(snapshot);
     let failed = pending_names(snapshot, &[TargetState::Failed]);
-    if !failed.is_empty() {
-        let count = pending_count(snapshot, TargetState::Failed);
-        return pending_summary(
-            snapshot,
-            update_count_label(count, "update failed", "updates failed"),
-            format!("{failed}. {last_check}"),
-            SummaryDot::Danger,
-            (count >= 2).then_some("Retry all"),
-        );
-    }
     let available = pending_names(snapshot, &[TargetState::Available]);
-    if !available.is_empty() {
-        let count = pending_count(snapshot, TargetState::Available);
-        return pending_summary(
-            snapshot,
-            update_count_label(count, "update waiting", "updates waiting"),
-            format!("{available}. {last_check}"),
-            SummaryDot::Warning,
-            (count >= 2).then_some("Update all"),
-        );
-    }
-    if !snapshot.checks_enabled {
+    let failed_count = pending_count(snapshot, TargetState::Failed);
+    let available_count = pending_count(snapshot, TargetState::Available);
+    if failed_count + available_count > 0 {
+        let (label, names, dot) = match (failed_count, available_count) {
+            (0, count) => (
+                plural(count, "update waiting", "updates waiting"),
+                available,
+                SummaryDot::Warning,
+            ),
+            (count, 0) => (
+                plural(count, "update failed", "updates failed"),
+                failed,
+                SummaryDot::Danger,
+            ),
+            (count, _) => (
+                plural(count, "update failed", "updates failed"),
+                format!("{failed} failed, {available} waiting"),
+                SummaryDot::Danger,
+            ),
+        };
+        let (action, action_label) = if failed_count + available_count >= 2 {
+            let verb = if available_count > 0 {
+                "Update all"
+            } else {
+                "Retry all"
+            };
+            (RowAction::UpdateAll, verb)
+        } else {
+            (RowAction::Check, check_label(snapshot))
+        };
         return Summary {
-            dot: None,
-            busy: false,
-            label: "Update checks are off".to_string(),
-            description: "Development builds update by rebuilding.".to_string(),
-            action: None,
-            action_label: None,
+            dot: (!snapshot.checking).then_some(dot),
+            busy: snapshot.checking,
+            label,
+            description: sentence(&names, &last_check),
+            action: (!snapshot.checking).then_some(action),
+            action_label: (!snapshot.checking).then_some(action_label),
         };
     }
     let check_failed = snapshot.check_error.is_some() && !snapshot.checking;
@@ -337,42 +347,41 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             .to_string(),
             description: last_check,
             action: Some(RowAction::Check),
-            action_label: Some(if check_failed {
-                "Try again"
-            } else {
-                "Check now"
-            }),
+            action_label: Some(check_label(snapshot)),
         };
     }
+    let plugins = plural(snapshot.plugins.len(), "plugin", "plugins");
+    let (label, checked) = if snapshot.checks_enabled {
+        (
+            "Everything is up to date",
+            format!("qol-tray {} and {plugins}", snapshot.host.current),
+        )
+    } else {
+        ("Plugins are up to date", plugins)
+    };
     Summary {
         dot: Some(SummaryDot::Success),
         busy: false,
-        label: "Everything is up to date".to_string(),
-        description: format!(
-            "qol-tray {} and {} {}. {last_check}",
-            snapshot.host.current,
-            snapshot.plugins.len(),
-            plural(snapshot.plugins.len(), "plugin")
-        ),
+        label: label.to_string(),
+        description: sentence(&checked, &last_check),
         action: Some(RowAction::Check),
         action_label: Some("Check now"),
     }
 }
 
-fn pending_summary(
-    snapshot: &UpdatesSnapshot,
-    label: String,
-    description: String,
-    dot: SummaryDot,
-    all_label: Option<&'static str>,
-) -> Summary {
-    Summary {
-        dot: (!snapshot.checking).then_some(dot),
-        busy: snapshot.checking,
-        label,
-        description,
-        action: all_label.map(|_| RowAction::UpdateAll),
-        action_label: all_label,
+fn check_label(snapshot: &UpdatesSnapshot) -> &'static str {
+    if snapshot.check_error.is_some() {
+        "Try again"
+    } else {
+        "Check now"
+    }
+}
+
+fn sentence(lead: &str, last_check: &str) -> String {
+    if last_check.is_empty() {
+        format!("{lead}.")
+    } else {
+        format!("{lead}. {last_check}")
     }
 }
 
@@ -383,8 +392,11 @@ fn last_check_text(snapshot: &UpdatesSnapshot) -> String {
             None => format!("{error}."),
         },
         None => match snapshot.last_checked_secs {
-            Some(secs) => format!("Checked {}.", age_text(Some(secs)).to_lowercase()),
-            None => "qol checks for updates by itself every 5 hours.".to_string(),
+            Some(secs) => format!("Checked {} ago.", long_age(secs)),
+            None if snapshot.checks_enabled => {
+                "qol checks for updates by itself every 5 hours.".to_string()
+            }
+            None => String::new(),
         },
     }
 }
@@ -400,7 +412,7 @@ fn unchecked_names(snapshot: &UpdatesSnapshot) -> String {
         names.push(snapshot.host.name.clone());
     }
     if plugins > 0 {
-        names.push(format!("{plugins} {}", plural(plugins, "plugin")));
+        names.push(plural(plugins, "plugin", "plugins"));
     }
     join_names(&names)
 }
@@ -437,34 +449,17 @@ fn unchecked_fold_text(total: usize, shown: usize, hidden: usize) -> String {
     }
 }
 
-pub(super) fn age_text(secs: Option<u64>) -> String {
-    let Some(secs) = secs else {
-        return "Never".to_string();
-    };
-    if secs < 60 {
-        "Just now".to_string()
-    } else if secs < 3600 {
-        format!("{} min ago", secs / 60)
-    } else if secs < 2 * 86_400 {
-        format!("{} h ago", secs / 3600)
-    } else {
-        let days = secs / 86_400;
-        format!("{days} {} ago", plural(days as usize, "day"))
-    }
-}
-
 pub(in super::super) fn long_age(secs: u64) -> String {
     if secs < 60 {
         "less than a minute".to_string()
     } else if secs < 3600 {
         let minutes = secs / 60;
-        format!("{minutes} {}", plural(minutes as usize, "minute"))
+        plural(minutes as usize, "minute", "minutes")
     } else if secs < 2 * 86_400 {
         let hours = secs / 3600;
-        format!("{hours} {}", plural(hours as usize, "hour"))
+        plural(hours as usize, "hour", "hours")
     } else {
-        let days = secs / 86_400;
-        format!("{days} {}", plural(days as usize, "day"))
+        plural((secs / 86_400) as usize, "day", "days")
     }
 }
 
@@ -499,14 +494,6 @@ fn pending_count(snapshot: &UpdatesSnapshot, state: TargetState) -> usize {
             .count()
 }
 
-fn update_count_label(count: usize, singular: &str, plural: &str) -> String {
-    if count == 1 {
-        format!("1 {singular}")
-    } else {
-        format!("{count} {plural}")
-    }
-}
-
 fn job_running(snapshot: &UpdatesSnapshot) -> bool {
     snapshot.running
         || matches!(
@@ -531,20 +518,12 @@ fn download_value(progress: Option<f64>) -> String {
     format!("Downloading {percent}%")
 }
 
-fn plural(count: usize, noun: &str) -> String {
-    if count == 1 {
-        noun.to_string()
-    } else {
-        format!("{noun}s")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        age_text, fold_text, host_row, join_names, long_age, page, plugin_rows, summary, RowAction,
+        fold_text, host_row, join_names, long_age, page, plugin_rows, summary, RowAction,
         SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
     };
 
@@ -595,26 +574,6 @@ mod tests {
             running: false,
             host,
             plugins,
-        }
-    }
-
-    #[test]
-    fn age_text_follows_the_display_tiers() {
-        let cases = [
-            (None, "Never"),
-            (Some(0), "Just now"),
-            (Some(59), "Just now"),
-            (Some(60), "1 min ago"),
-            (Some(719), "11 min ago"),
-            (Some(3600), "1 h ago"),
-            (Some(3 * 3600), "3 h ago"),
-            (Some(47 * 3600), "47 h ago"),
-            (Some(48 * 3600), "2 days ago"),
-            (Some(86_400), "24 h ago"),
-            (Some(4 * 86_400), "4 days ago"),
-        ];
-        for (secs, expected) in cases {
-            assert_eq!(age_text(secs), expected, "secs={secs:?}");
         }
     }
 
@@ -764,7 +723,7 @@ mod tests {
         assert!(checking.busy);
         assert_eq!(checking.dot, None);
         assert_eq!(checking.label, "Checking for updates");
-        assert_eq!(checking.description, "Checked 2 min ago.");
+        assert_eq!(checking.description, "Checked 2 minutes ago.");
         assert_eq!(checking.action, None);
 
         let fresh = snapshot(
@@ -773,7 +732,7 @@ mod tests {
         );
         let fresh = summary(&fresh);
         assert_eq!(fresh.label, "Not checked yet");
-        assert_eq!(fresh.description, "Checked 2 min ago.");
+        assert_eq!(fresh.description, "Checked 2 minutes ago.");
         assert_eq!(fresh.action_label, Some("Check now"));
 
         let plugin_only = snapshot(
@@ -845,7 +804,7 @@ mod tests {
         assert_eq!(failed_summary.label, "2 updates failed");
         assert_eq!(
             failed_summary.description,
-            "qol-tray and Bluetooth. Checked 2 min ago."
+            "qol-tray and Bluetooth. Checked 2 minutes ago."
         );
         assert_eq!(failed_summary.action, Some(RowAction::UpdateAll));
         assert_eq!(failed_summary.action_label, Some("Retry all"));
@@ -859,7 +818,7 @@ mod tests {
         assert_eq!(waiting_summary.label, "2 updates waiting");
         assert_eq!(
             waiting_summary.description,
-            "qol-tray and CLI Sessions. Checked 2 min ago."
+            "qol-tray and CLI Sessions. Checked 2 minutes ago."
         );
         assert_eq!(waiting_summary.action, Some(RowAction::UpdateAll));
         assert_eq!(waiting_summary.action_label, Some("Update all"));
@@ -873,7 +832,7 @@ mod tests {
         assert_eq!(current_summary.label, "Everything is up to date");
         assert_eq!(
             current_summary.description,
-            "qol-tray 1.0.0 and 1 plugin. Checked 2 min ago."
+            "qol-tray 1.0.0 and 1 plugin. Checked 2 minutes ago."
         );
         assert_eq!(current_summary.action, Some(RowAction::Check));
         assert_eq!(current_summary.action_label, Some("Check now"));
@@ -887,9 +846,9 @@ mod tests {
         );
         let one_failed = summary(&failed);
         assert_eq!(one_failed.label, "1 update failed");
-        assert_eq!(one_failed.description, "Bluetooth. Checked 2 min ago.");
-        assert_eq!(one_failed.action, None);
-        assert_eq!(one_failed.action_label, None);
+        assert_eq!(one_failed.description, "Bluetooth. Checked 2 minutes ago.");
+        assert_eq!(one_failed.action, Some(RowAction::Check));
+        assert_eq!(one_failed.action_label, Some("Check now"));
 
         let waiting = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -897,8 +856,30 @@ mod tests {
         );
         let one_waiting = summary(&waiting);
         assert_eq!(one_waiting.label, "1 update waiting");
-        assert_eq!(one_waiting.action, None);
-        assert_eq!(one_waiting.action_label, None);
+        assert_eq!(one_waiting.action, Some(RowAction::Check));
+        assert_eq!(one_waiting.action_label, Some("Check now"));
+
+        let offline = UpdatesSnapshot {
+            check_error: Some("Couldn't reach GitHub".to_string()),
+            ..waiting.clone()
+        };
+        assert_eq!(summary(&offline).action_label, Some("Try again"));
+
+        let mixed = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![
+                target("bt", "Bluetooth", TargetState::Failed),
+                target("cli", "CLI Sessions", TargetState::Available),
+            ],
+        );
+        let mixed = summary(&mixed);
+        assert_eq!(mixed.label, "1 update failed");
+        assert_eq!(
+            mixed.description,
+            "Bluetooth failed, CLI Sessions waiting. Checked 2 minutes ago."
+        );
+        assert_eq!(mixed.action, Some(RowAction::UpdateAll));
+        assert_eq!(mixed.action_label, Some("Update all"));
     }
 
     #[test]
@@ -969,21 +950,29 @@ mod tests {
             vec![target("cli", "CLI Sessions", TargetState::Unchecked)],
         );
         disabled.checks_enabled = false;
+        disabled.last_checked_secs = None;
         disabled.check_error = Some("No connection to GitHub".to_string());
         let row = summary(&disabled);
-        assert_eq!(row.label, "Update checks are off");
-        assert_eq!(row.description, "Development builds update by rebuilding.");
-        assert_eq!(row.dot, None);
-        assert_eq!(row.action, None);
-        assert_eq!(row.action_label, None);
+        assert_eq!(row.label, "Couldn't check for updates");
+        assert_eq!(row.action, Some(RowAction::Check));
+        assert_eq!(row.action_label, Some("Try again"));
 
+        disabled.check_error = None;
         disabled.plugins = vec![
             target("cli", "CLI Sessions", TargetState::Available),
             target("lights", "Lights", TargetState::Available),
         ];
         let row = summary(&disabled);
         assert_eq!(row.label, "2 updates waiting");
+        assert_eq!(row.description, "CLI Sessions and Lights.");
+        assert_eq!(row.action, Some(RowAction::UpdateAll));
         assert_eq!(row.action_label, Some("Update all"));
+
+        disabled.plugins = vec![target("cli", "CLI Sessions", TargetState::UpToDate)];
+        let row = summary(&disabled);
+        assert_eq!(row.label, "Plugins are up to date");
+        assert_eq!(row.description, "1 plugin.");
+        assert_eq!(row.action, Some(RowAction::Check));
 
         let failed = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),

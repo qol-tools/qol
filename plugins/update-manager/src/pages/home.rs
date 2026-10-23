@@ -4,10 +4,11 @@ use qol_config::pages::{Row, Tone};
 use super::last::line;
 use super::settings::{hours_value, rules};
 use super::updates::{failed_line, held_phrase, total};
-use super::words::{heading, join, night_of, plural, title};
+use super::words::{heading, join, night_of, title};
 use super::{Sheet, ROOT};
 use crate::session::Session;
 use crate::updates::Auto;
+use qol_config::text::plural;
 
 pub(super) fn page(session: &Session, now: NaiveDateTime) -> Sheet {
     let mut sheet = Sheet::new(ROOT, "Update Manager");
@@ -224,12 +225,6 @@ fn auto_value(auto: Auto) -> String {
 
 pub(super) fn changed(session: &Session, now: NaiveDateTime) -> String {
     let mut items: Vec<String> = Vec::new();
-    if session.guarding() {
-        items.push("Wait while in use".into());
-    }
-    if session.holding_all() {
-        items.push("Hold all updates".into());
-    }
     if session.mint().is_some_and(|mint| mint.ours) {
         items.push("Update hours".into());
     }

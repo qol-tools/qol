@@ -100,7 +100,7 @@ fn every_shipped_contract_parses_and_validates() {
 }
 
 #[test]
-fn rows_never_repeat_their_section_description() {
+fn rows_never_copy_their_section_description() {
     let plain = |text: &str| text.trim().trim_end_matches('.').to_lowercase();
     for (path, spec) in configs() {
         for (id, field) in &spec.fields {
@@ -116,6 +116,30 @@ fn rows_never_repeat_their_section_description() {
                 plain(description),
                 plain(caption),
                 "{}: field.{id} repeats its section description",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn hidden_status_values_are_values_the_row_can_show() {
+    for (path, spec) in configs() {
+        for (id, field) in &spec.fields {
+            let Some(hidden) = field.hide_values.as_ref() else {
+                continue;
+            };
+            let labels = field.label_map.as_ref();
+            for value in hidden {
+                assert!(
+                    labels.is_some_and(|labels| labels.contains_key(value)),
+                    "{}: field.{id} hides {value}, which its label_map does not name",
+                    path.display()
+                );
+            }
+            assert!(
+                labels.is_some_and(|labels| labels.keys().any(|key| !hidden.contains(key))),
+                "{}: field.{id} hides every value it can show",
                 path.display()
             );
         }

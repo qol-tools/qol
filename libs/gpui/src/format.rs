@@ -19,20 +19,11 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn plural(count: usize, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
-}
+pub use qol_config::text::plural;
 
 #[cfg(test)]
 mod tests {
-    use super::{format_bytes, plural};
-
-    #[test]
-    fn plural_picks_the_singular_only_for_one() {
-        for (count, expected) in [(0, "0 items"), (1, "1 item"), (2, "2 items")] {
-            assert_eq!(plural(count, "item", "items"), expected, "count: {count}");
-        }
-    }
+    use super::format_bytes;
 
     #[test]
     fn format_bytes_uses_decimal_units() {

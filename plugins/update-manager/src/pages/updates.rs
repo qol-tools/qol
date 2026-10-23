@@ -2,10 +2,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use qol_config::pages::{Go, Row, Tone};
 
-use super::words::{join, plural, size, title};
+use super::words::{join, size, title};
 use super::Sheet;
 use crate::session::{position, Act, Session};
 use crate::updates::{Held, Update};
+use qol_config::text::plural;
 
 pub(super) fn total<'a>(updates: impl Iterator<Item = &'a Update>) -> usize {
     updates.map(Update::count).sum()
