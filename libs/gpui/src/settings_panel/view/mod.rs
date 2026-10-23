@@ -1040,6 +1040,18 @@ impl SettingsPanelView {
         self.resync_scroll();
     }
 
+    fn land_on_page(&mut self, row: usize, cx: &mut Context<Self>) {
+        let Some(source) = self.level().rows.get(row).map(|row| row.source) else {
+            return;
+        };
+        self.filter.clear();
+        self.filter_open = false;
+        self.select_source(source, cx);
+        self.set_source_menu(false);
+        self.resync_scroll();
+        cx.notify();
+    }
+
     fn forget_last_visit(&mut self) {
         self.drop_slider_press();
         self.stack.truncate(1);
@@ -2241,6 +2253,7 @@ impl SettingsPanelView {
             return;
         };
         match &row.control {
+            RowControl::Page => self.land_on_page(selected, cx),
             RowControl::Toggle(_) => self.toggle(),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => {
                 self.open_choose_card(selected);
@@ -2426,7 +2439,8 @@ impl SettingsPanelView {
         let edit = match &row.control {
             RowControl::Text(value) => value.clone(),
             RowControl::Number { value, .. } => format_number(*value),
-            RowControl::Toggle(_)
+            RowControl::Page
+            | RowControl::Toggle(_)
             | RowControl::TextList(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
@@ -2526,7 +2540,8 @@ impl SettingsPanelView {
                     }
                 }
             }
-            RowControl::Toggle(_)
+            RowControl::Page
+            | RowControl::Toggle(_)
             | RowControl::TextList(_)
             | RowControl::Select { .. }
             | RowControl::MultiSelect { .. }
@@ -3086,6 +3101,7 @@ impl SettingsPanelView {
             }
         }
         match &self.level().rows[index].control {
+            RowControl::Page => String::new(),
             RowControl::Toggle(value) => binary_state_label(*value).into(),
             RowControl::Select { options, index, .. } => options
                 .get(*index)
@@ -3203,6 +3219,7 @@ impl SettingsPanelView {
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
             RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
             RowControl::Unsupported { .. } => SettingsValueTone::Muted,
+            RowControl::Page => SettingsValueTone::Normal,
         }
     }
 
@@ -3325,7 +3342,8 @@ impl SettingsPanelView {
                     self.kit,
                 );
             }
-            RowControl::Text(_)
+            RowControl::Page
+            | RowControl::Text(_)
             | RowControl::Color(_)
             | RowControl::Status { .. }
             | RowControl::List { .. }
@@ -4614,6 +4632,8 @@ impl SettingsPanelView {
                 .collect();
         }
         let mut groups = Vec::new();
+        let mut pages = Vec::new();
+        let mut pages_at = None;
         for source in 0..self.sources.len() {
             let mut rows = Vec::new();
             for section in 0..self.level().sections.len() {
@@ -4621,10 +4641,19 @@ impl SettingsPanelView {
                     rows.extend(self.section_filtered_rows(section));
                 }
             }
+            if self.panel.sources[source].custom {
+                pages_at.get_or_insert(groups.len());
+                pages.extend(rows);
+                continue;
+            }
             if rows.is_empty() {
                 continue;
             }
             groups.push((self.plugin_title(source), None, rows));
+        }
+        if !pages.is_empty() {
+            let at = pages_at.unwrap_or(groups.len());
+            groups.insert(at, ("pages".to_string(), None, pages));
         }
         groups
     }
@@ -4722,6 +4751,7 @@ impl SettingsPanelView {
         }
         let row = self.level().rows.get(self.level().selected)?;
         match &row.control {
+            RowControl::Page => Some("open"),
             RowControl::Toggle(_) => Some("flip"),
             RowControl::Action { .. } => Some("run"),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
@@ -5980,7 +6010,8 @@ fn opens_a_card(control: &RowControl) -> bool {
         | RowControl::QrCode { .. }
         | RowControl::Placement(_)
         | RowControl::TextList(_) => true,
-        RowControl::Toggle(_)
+        RowControl::Page
+        | RowControl::Toggle(_)
         | RowControl::Number { .. }
         | RowControl::Text(_)
         | RowControl::Color(_)
@@ -6039,6 +6070,7 @@ const VALUE_CELL_MAX_FRACTION: f32 = 0.5;
 
 fn value_cell_width(control: &RowControl) -> f32 {
     match control {
+        RowControl::Page => 0.0,
         RowControl::Toggle(_) => 92.0,
         RowControl::Number { .. } => 33.0,
         RowControl::Color(_) => 76.0,
@@ -6425,6 +6457,23 @@ mod tests {
             vec![0],
             "without a needle only the selected source's rows are visible"
         );
+    }
+
+    #[test]
+    fn filtering_finds_core_pages_by_their_heading() {
+        let rows = vec![
+            labeled_row("Reconnect", 0),
+            super::super::rows::page_row("__core-updates", "Updates", 1),
+        ];
+        let sections = vec![
+            source_section("Devices", 0, vec![0]),
+            source_section("Updates", 1, vec![1]),
+        ];
+        assert_eq!(
+            super::filtered_visible_rows(&rows, &sections, 2, Some("up"), 0),
+            vec![1]
+        );
+        assert!(super::filtered_visible_rows(&rows, &sections, 2, Some("zzz"), 0).is_empty());
     }
 
     #[test]

@@ -191,6 +191,7 @@ impl SelectOption {
 
 #[derive(Debug)]
 pub(super) enum RowControl {
+    Page,
     Toggle(bool),
     Select {
         options: Vec<SelectOption>,
@@ -325,6 +326,25 @@ pub(super) struct RowSection {
     pub(super) rows: Vec<usize>,
     pub(super) source: usize,
     pub(super) device_kind: Option<String>,
+}
+
+pub(super) fn page_row(plugin_id: &str, heading: &str, source: usize) -> Row {
+    Row {
+        id: format!("page:{plugin_id}"),
+        section_id: None,
+        section_label: None,
+        label: heading.to_string(),
+        description: None,
+        placeholder: None,
+        variant: None,
+        config_key: String::new(),
+        default: FieldDefault::Boolean(false),
+        stream: None,
+        action: None,
+        visibility: None,
+        control: RowControl::Page,
+        source,
+    }
 }
 
 pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<Row> {
@@ -948,6 +968,7 @@ pub(super) fn merged_config<'a>(
 
 fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
     match control {
+        RowControl::Page => None,
         RowControl::Toggle(value) => Some(serde_json::json!(value)),
         RowControl::Select {
             options,
@@ -998,6 +1019,7 @@ fn object_array_value(state: &ObjectArrayState) -> FieldDefault {
 
 fn row_value(control: &RowControl) -> Option<FieldDefault> {
     match control {
+        RowControl::Page => None,
         RowControl::Toggle(value) => Some(FieldDefault::Boolean(*value)),
         RowControl::Select { options, index, .. } => {
             Some(FieldDefault::String(options[*index].value.clone()))
