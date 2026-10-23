@@ -266,7 +266,11 @@ Details:
   spawn_surface setting in ~/.config/qol-tray/sessions.toml, then tab. An
   explicit --model override names the spawned session's model (appended to
   the harness launch as --model); a selected agent profile's declared model is
-  the default, and the spawn_model setting in the same file is the fallback.
+  the default, then a [spawn_defaults.<harness>] table in the same file, keyed
+  by the harness the spawning session runs (claude, pi, codex), fills the
+  tool, model and effort the spawn leaves out: its tool defaults to that same
+  harness, and its model and effort apply only when the spawn launches that
+  tool. The spawn_model setting in the same file is the last fallback.
   The tool_models mapping in the same file binds models to harnesses, and a
   pair it does not declare is refused before launch. An entry ending in *
   there or in allowed_models matches every model with that prefix

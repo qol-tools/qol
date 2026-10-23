@@ -305,7 +305,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "tool": {
                         "type": "string",
-                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi). Optional: it resolves from the selected agent profile's declared tool, or the harness tool_models declares for the chosen model",
+                        "description": "Registered CLI tool to spawn (codex, claude, pi, kimi). Optional: it resolves from the selected agent profile's declared tool, then the [spawn_defaults.<harness>] entry for the harness the calling session runs when no model is named, or the harness tool_models declares for the chosen model",
                     },
                     "cwd": {
                         "type": "string",
@@ -322,7 +322,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                     "model": {
                         "type": "string",
-                        "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the spawn_model config. The tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models remains the spending allowlist, because tiers are billed per token and only the person paying picks one",
+                        "description": "Model override for the spawned session. Omit it: a selected agent profile's declared model is the default, then the [spawn_defaults.<harness>] entry for the harness the calling session runs, then the spawn_model config. The tool/model pair must be declared in the sessions.toml tool_models mapping, and allowed_models remains the spending allowlist, because tiers are billed per token and only the person paying picks one",
                     },
                     "effort": effort_property(),
                     "title": {
