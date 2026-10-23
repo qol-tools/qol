@@ -1358,14 +1358,16 @@ pub fn join_all_spaces(title: &str) -> bool {
     true
 }
 
-pub fn configure_overlay_window(title: &str, _resizable: bool) -> bool {
+pub fn configure_overlay_window(title: &str, _resizable: bool, decorated: bool) -> bool {
     if !configure_popup_window(title) {
         return false;
     }
     let Some(window) = resolve_window(title) else {
         return false;
     };
-    window.setStyleMask(NSWindowStyleMask::Borderless);
+    if !decorated {
+        window.setStyleMask(NSWindowStyleMask::Borderless);
+    }
     true
 }
 

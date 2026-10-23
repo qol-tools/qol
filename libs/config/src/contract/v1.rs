@@ -25,6 +25,8 @@ pub struct ConfigSpecV1 {
     pub pages: Option<PagesSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices: Option<DevicesSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowSpec>,
 }
 
 impl ConfigSpecV1 {
@@ -35,6 +37,47 @@ impl ConfigSpecV1 {
     pub fn section(&self, id: &str) -> Option<&SectionSpec> {
         self.sections.get(id)
     }
+
+    fn add_window_fields(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let shared = window_contract(window.title_bar);
+        for (id, section) in shared.sections {
+            self.sections.entry(id).or_insert(section);
+        }
+        for (id, field) in shared.fields {
+            self.fields.entry(id).or_insert(field);
+        }
+    }
+}
+
+pub const TITLE_BAR_KEY: &str = "title_bar";
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WindowSpec {
+    pub title_bar: bool,
+}
+
+fn window_contract(title_bar: bool) -> ConfigSpecV1 {
+    toml::from_str(&format!(
+        r#"schema_version = 1
+
+[section.window]
+label = "Window"
+description = "How this plugin's window looks."
+
+[field.{TITLE_BAR_KEY}]
+type = "boolean"
+config_key = "{TITLE_BAR_KEY}"
+label = "System title bar"
+description = "Show the system's title bar and its buttons, and resize from the system's frame. Takes effect the next time the window opens."
+section = "window"
+default = {title_bar}
+"#
+    ))
+    .expect("the shared window contract parses")
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -359,7 +402,9 @@ pub fn parse_spec(path: impl AsRef<Path>) -> Result<ConfigSpec, ParseSpecError> 
 }
 
 pub fn parse_spec_str(input: &str) -> Result<ConfigSpec, toml::de::Error> {
-    toml::from_str(input)
+    let mut spec: ConfigSpec = toml::from_str(input)?;
+    spec.add_window_fields();
+    Ok(spec)
 }
 
 #[cfg(test)]
@@ -384,6 +429,23 @@ mod tests {
             };
             assert_eq!(bounds.clamp(value), expected, "{min:?}..{max:?} {value}");
         }
+    }
+
+    #[test]
+    fn a_window_table_adds_the_shared_title_bar_switch_with_its_default() {
+        for title_bar in [true, false] {
+            let spec = parse_spec_str(&format!(
+                "schema_version = 1\n\n[window]\ntitle_bar = {title_bar}\n"
+            ))
+            .unwrap();
+            let field = spec.field(TITLE_BAR_KEY).expect("title bar field");
+            assert_eq!(field.kind, FieldKind::Boolean);
+            assert_eq!(field.section.as_deref(), Some("window"));
+            assert_eq!(field.default, Some(FieldDefault::Boolean(title_bar)));
+            assert!(spec.section("window").is_some());
+        }
+        let plain = parse_spec_str("schema_version = 1\n").unwrap();
+        assert!(plain.field(TITLE_BAR_KEY).is_none());
     }
 
     #[test]

@@ -18,6 +18,7 @@ audio = "os"
 video = "os"
 capture = "os"
 shortcuts = "os"
+title_bar = "os"
 
 [runtime]
 command = "qol-shot"

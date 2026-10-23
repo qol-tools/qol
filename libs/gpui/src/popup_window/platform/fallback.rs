@@ -227,7 +227,7 @@ pub fn set_window_type_dock_by_title(_title: &str) -> bool {
     false
 }
 
-pub fn configure_overlay_window(_title: &str, _resizable: bool) -> bool {
+pub fn configure_overlay_window(_title: &str, _resizable: bool, _decorated: bool) -> bool {
     false
 }
 

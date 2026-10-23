@@ -38,3 +38,6 @@ label = "Show hidden files"
 description = "Show entries whose names start with a dot. Ctrl+H changes it too."
 section = "view"
 default = false
+
+[window]
+title_bar = true

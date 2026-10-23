@@ -13,6 +13,7 @@ corner = "core"
 service_commands = "core"
 switchboard_model = "core"
 switchboard_effort = "core"
+title_bar = "os"
 
 [runtime]
 command = "qol-cli-sessions"

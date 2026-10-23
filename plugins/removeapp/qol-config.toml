@@ -1,0 +1,6 @@
+schema_version = 1
+title = "Remove App"
+description = "How the Remove App window looks."
+
+[window]
+title_bar = true

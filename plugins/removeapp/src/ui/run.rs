@@ -47,6 +47,7 @@ fn open_window(
 ) -> anyhow::Result<OpenedSurface<RemoveAppView>> {
     Surface::new(SurfaceKind::Panel)
         .title(WINDOW_TITLE)
+        .title_bar(crate::config::load().title_bar)
         .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))
         .min_size(size(px(WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT)))
         .remember(WindowMemory::reopened_by_action(

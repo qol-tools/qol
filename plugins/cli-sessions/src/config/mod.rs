@@ -17,6 +17,7 @@ pub struct CliSessionsConfig {
     pub service_commands: Vec<String>,
     pub switchboard_model: Option<String>,
     pub switchboard_effort: Option<String>,
+    pub title_bar: bool,
 }
 
 impl CliSessionsConfig {

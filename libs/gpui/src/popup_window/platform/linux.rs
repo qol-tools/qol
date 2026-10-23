@@ -1017,7 +1017,7 @@ fn window_presentation_is_normal(conn: &impl Connection, wid: u32) -> bool {
         .any(|atom| states.contains(&atom))
 }
 
-pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
+pub fn configure_overlay_window(title: &str, resizable: bool, decorated: bool) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {
         return false;
@@ -1026,7 +1026,9 @@ pub fn configure_overlay_window(title: &str, resizable: bool) -> bool {
         return false;
     };
 
-    set_window_manager_decorations(&conn, wid, false);
+    if !decorated {
+        set_window_manager_decorations(&conn, wid, false);
+    }
     if !resizable {
         lock_window_size(&conn, wid);
     }

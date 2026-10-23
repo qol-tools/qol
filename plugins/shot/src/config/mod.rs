@@ -14,6 +14,8 @@ pub struct Config {
     pub capture: CaptureConfig,
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
+    #[serde(default = "default_true")]
+    pub title_bar: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -157,5 +159,6 @@ mod tests {
         assert_eq!(defaults.video.format, default_format());
         assert!(!defaults.capture.open_folder_after_save);
         assert_eq!(defaults.shortcuts.copy_command, CopyCommand::CopyImage);
+        assert!(defaults.title_bar);
     }
 }

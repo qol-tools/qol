@@ -19,12 +19,28 @@ pub enum ViewSize {
     BigIcons,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ExplorerConfig {
     #[serde(default)]
     pub view_size: ViewSize,
     #[serde(default)]
     pub show_hidden: bool,
+    #[serde(default = "shows_title_bar")]
+    pub title_bar: bool,
+}
+
+impl Default for ExplorerConfig {
+    fn default() -> Self {
+        Self {
+            view_size: ViewSize::default(),
+            show_hidden: false,
+            title_bar: shows_title_bar(),
+        }
+    }
+}
+
+fn shows_title_bar() -> bool {
+    true
 }
 
 pub fn load() -> ExplorerConfig {

@@ -80,3 +80,6 @@ medium = "letters:med"
 high = "letters:hi"
 xhigh = "letters:xhi"
 max = "letters:max"
+
+[window]
+title_bar = false
