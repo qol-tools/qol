@@ -4,6 +4,8 @@ use std::time::Instant;
 
 mod echo;
 mod platform;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod uri;
 
 pub use echo::SecretEcho;
 
@@ -28,6 +30,12 @@ pub enum Payload {
     Text(String),
     Secret { text: String, until: Instant },
     Png(Vec<u8>),
+}
+
+impl Payload {
+    pub fn is_expired_secret(&self) -> bool {
+        matches!(self, Payload::Secret { until, .. } if *until <= Instant::now())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,4 +75,38 @@ pub fn open() -> Result<Arc<dyn Clipboard>, CaptureError> {
 
 pub fn probe() -> Support {
     platform::probe()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::Payload;
+
+    #[test]
+    fn only_a_secret_past_its_time_is_expired() {
+        let past = Instant::now() - Duration::from_secs(1);
+        let future = Instant::now() + Duration::from_secs(30);
+        let cases = [
+            (Payload::Text("a".to_string()), false),
+            (Payload::Png(Vec::new()), false),
+            (
+                Payload::Secret {
+                    text: "a".to_string(),
+                    until: future,
+                },
+                false,
+            ),
+            (
+                Payload::Secret {
+                    text: "a".to_string(),
+                    until: past,
+                },
+                true,
+            ),
+        ];
+        for (payload, expired) in cases {
+            assert_eq!(payload.is_expired_secret(), expired, "payload: {payload:?}");
+        }
+    }
 }
