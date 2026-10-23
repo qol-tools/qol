@@ -355,19 +355,13 @@ pub(super) fn ensure_capture_work_dir() -> Result<PathBuf> {
 }
 
 pub(super) fn move_file(source: &Path, destination: &Path) -> Result<()> {
-    if fs::rename(source, destination).is_ok() {
-        return Ok(());
-    }
-
-    fs::copy(source, destination).with_context(|| {
+    qol_fs::move_file(source, destination).with_context(|| {
         format!(
             "failed to move {} to {}",
             source.display(),
             destination.display()
         )
-    })?;
-    let _ = fs::remove_file(source);
-    Ok(())
+    })
 }
 
 pub(super) fn paths_match(left: &Path, right: &Path) -> bool {
