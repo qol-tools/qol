@@ -1,4 +1,5 @@
 use crate::kit::{enter_window, WindowLook};
+use crate::popup_window::read_title;
 use crate::text::TextStyled;
 use qol_theme::TextStyle;
 use std::cell::{Cell, RefCell};
@@ -183,7 +184,7 @@ struct DismissState {
     close: RefCell<Option<CloseWindow>>,
     generation: Cell<u64>,
     chrome: WindowChrome,
-    title: Rc<RefCell<String>>,
+    title: Arc<Mutex<String>>,
     size: Cell<Size<Pixels>>,
     expected_viewport: Rc<Cell<Size<Pixels>>>,
     resize_frame: Option<ResizeFrame>,
@@ -270,10 +271,10 @@ impl SurfaceDismisser {
         reveal_pending: Rc<Cell<bool>>,
         remembered: Option<Rc<Remembered>>,
     ) -> Self {
-        let title = Rc::new(RefCell::new(title));
+        let title = Arc::new(Mutex::new(title));
         let frame_title = title.clone();
-        let resize_frame = min_size
-            .map(|min_size| ResizeFrame::new(move || frame_title.borrow().clone(), min_size));
+        let resize_frame =
+            min_size.map(|min_size| ResizeFrame::new(move || read_title(&frame_title), min_size));
         let user_sized = remembered
             .as_ref()
             .is_some_and(|remembered| remembered.user_sized());
@@ -370,7 +371,7 @@ impl SurfaceDismisser {
 
     /// The reserved window title; carries a "-N" suffix when the requested title was still live at open.
     pub fn current_title(&self) -> String {
-        self.state.title.borrow().clone()
+        read_title(&self.state.title)
     }
 
     pub fn is_visible(&self) -> bool {
@@ -378,10 +379,13 @@ impl SurfaceDismisser {
     }
 
     pub fn retitle(&self, window: &mut Window, title: String) {
-        release_surface_title(&self.state.title.borrow());
+        let Ok(mut current) = self.state.title.lock() else {
+            return;
+        };
+        release_surface_title(&current);
         let reserved = reserve_surface_title(&title);
         window.set_window_title(&reserved);
-        *self.state.title.borrow_mut() = reserved;
+        *current = reserved;
     }
 
     pub fn dismiss(&self, cx: &mut App) {
@@ -712,7 +716,7 @@ impl Surface {
                 let _ = handle.update(cx, |root, _, _| root.look = WindowLook::Live);
                 crate::popup_window::restore_composite(&lease_owner);
                 if retain_on_dismiss {
-                    let current_title = dismiss_state.title.borrow().clone();
+                    let current_title = read_title(&dismiss_state.title);
                     let _reason = crate::popup_window::reason_scope("surface-dismiss");
                     let _presentation = crate::popup_window::presentation_guard();
                     if hide_retained(&current_title, dismiss_state.chrome) {
@@ -833,11 +837,11 @@ pub(crate) struct SurfaceRoot<V> {
     _title: TitleRelease,
 }
 
-struct TitleRelease(Rc<RefCell<String>>);
+struct TitleRelease(Arc<Mutex<String>>);
 
 impl Drop for TitleRelease {
     fn drop(&mut self) {
-        release_surface_title(&self.0.borrow());
+        release_surface_title(&read_title(&self.0));
     }
 }
 
@@ -1085,18 +1089,20 @@ fn show_after_timeout(
     }
 }
 
-fn reassert_revealed_focus(title: &str, commit_gen: u64, kind: SurfaceKind) {
+fn reassert_revealed_focus(title: Arc<Mutex<String>>, commit_gen: u64, kind: SurfaceKind) {
     match kind {
-        SurfaceKind::OverlayPanel => crate::popup_window::reassert_focus_until_held(
+        SurfaceKind::OverlayPanel => crate::popup_window::reassert_focus_until_held_with(
             title,
             &PANEL_FOCUS_GENERATION,
             commit_gen,
+            crate::popup_window::show_window_by_title,
         ),
         SurfaceKind::Toast | SurfaceKind::Panel => {
-            crate::popup_window::reassert_normal_focus_until_held(
+            crate::popup_window::reassert_focus_until_held_with(
                 title,
                 &PANEL_FOCUS_GENERATION,
                 commit_gen,
+                crate::popup_window::show_normal_window_by_title,
             )
         }
     }
@@ -1255,7 +1261,7 @@ fn settle_then_reveal<V: Render + 'static>(pending: PendingReveal<V>, cx: &mut A
             }
         }
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        reassert_revealed_focus(&title, focus_commit, kind);
+        reassert_revealed_focus(dismiss_state.title.clone(), focus_commit, kind);
         for _ in 0..3 {
             if reveal_cancelled(&dismiss_state, dismiss_generation) {
                 break;
@@ -1625,7 +1631,7 @@ fn settle_then_reveal_reused<V: Render + Focusable + 'static>(
             readiness.content_rendered
         );
         let focus_commit = PANEL_FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-        reassert_revealed_focus(&title, focus_commit, kind);
+        reassert_revealed_focus(dismiss_state.title.clone(), focus_commit, kind);
         let _ = cx.update(|cx| trace_ready(title, true, cx));
     })
     .detach();
