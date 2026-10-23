@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use qol_config::contract::{FieldDefault, IndexMap, NestedListSpec};
+use qol_config::contract::{
+    interpolate_row_template, row_template_keys, FieldDefault, IndexMap, NestedListSpec,
+};
 use qol_config::object_array::{
     group_item_fields, is_mod_array, pretty_label, ItemField, ItemFieldKind, KNOWN_MODS,
 };
@@ -140,6 +142,25 @@ impl ObjectArrayState {
             .filter_map(|(key, kind)| summary_part(key, kind, entry.fields.get(key)?, lists))
             .collect();
         parts.join(" \u{b7} ")
+    }
+
+    pub(super) fn labelled(
+        &self,
+        index: usize,
+        template: &str,
+        lists: &BTreeMap<String, NestedListSpec>,
+    ) -> Option<(String, String)> {
+        let entry = self.entries.get(index)?;
+        let data = serde_json::to_value(&entry.fields).ok()?;
+        let label = interpolate_row_template(template, &data);
+        let named = row_template_keys(template);
+        let parts: Vec<String> = self
+            .schema
+            .iter()
+            .filter(|(key, _)| !named.contains(key))
+            .filter_map(|(key, kind)| summary_part(key, kind, entry.fields.get(key)?, lists))
+            .collect();
+        Some((label, parts.join(" \u{b7} ")))
     }
 
     pub(super) fn chips(&self, index: usize) -> ItemChips {
@@ -352,6 +373,60 @@ mod tests {
 
         assert_eq!(state.save(Some(9), replacement), 2);
         assert_eq!(state.entries.len(), 3);
+    }
+
+    #[test]
+    fn labelled_fills_the_template_and_summarises_the_unnamed_fields() {
+        let schema = vec![
+            ("name".to_string(), ItemFieldKind::Text),
+            ("path".to_string(), ItemFieldKind::Text),
+            ("pinned".to_string(), ItemFieldKind::Boolean),
+        ];
+        let entry = |fields: &[(&str, FieldDefault)]| Entry {
+            key: None,
+            fields: fields
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
+        };
+        let state = ObjectArrayState::from_entries(
+            None,
+            schema,
+            vec![
+                entry(&[
+                    ("name", FieldDefault::String("Docs".into())),
+                    ("path", FieldDefault::String("/home/docs".into())),
+                    ("pinned", FieldDefault::Boolean(true)),
+                ]),
+                entry(&[("path", FieldDefault::String("/tmp".into()))]),
+            ],
+        );
+        let lists = BTreeMap::new();
+        let cases = [
+            (0, "{name}", Some(("Docs", "/home/docs \u{b7} pinned"))),
+            (0, "{name} {path}", Some(("Docs /home/docs", "pinned"))),
+            (0, "{name}{path}", Some(("Docs/home/docs", "pinned"))),
+            (
+                0,
+                "{x-y} {name}",
+                Some(("{x-y} Docs", "/home/docs \u{b7} pinned")),
+            ),
+            (
+                0,
+                "plain",
+                Some(("plain", "Docs \u{b7} /home/docs \u{b7} pinned")),
+            ),
+            (1, "{name}", Some(("", "/tmp"))),
+            (1, "{path}", Some(("/tmp", ""))),
+            (2, "{name}", None),
+        ];
+        for (index, template, expected) in cases {
+            assert_eq!(
+                state.labelled(index, template, &lists),
+                expected.map(|(label, rest)| (label.to_string(), rest.to_string())),
+                "entry {index} template {template:?}"
+            );
+        }
     }
 
     #[test]

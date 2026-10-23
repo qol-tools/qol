@@ -1,7 +1,7 @@
 use gpui::prelude::*;
 use gpui::{
     div, linear_color_stop, linear_gradient, point, px, rgb, rgba, Background, BoxShadow, Div,
-    Rgba, SharedString,
+    ElementId, Rgba, SharedString, Stateful,
 };
 use qol_connection_health::Level;
 use qol_hotkeys::chord::Cap;
@@ -607,6 +607,54 @@ impl Kit {
             .flex_col()
             .items_end()
             .gap(px(qol_theme::SPACE_STACK))
+    }
+
+    pub fn menu(&self, width: f32) -> Div {
+        div()
+            .occlude()
+            .relative()
+            .w(px(width))
+            .p(px(qol_theme::SPACE_TIGHT))
+            .border(px(LINE))
+            .border_color(rgba(self.washes.hairline_strong.packed()))
+            .bg(rgb(self.grounds.menu.bg))
+            .shadow(float_shadow(self.washes.cast.rgb))
+            .flex()
+            .flex_col()
+    }
+
+    pub fn menu_row(
+        &self,
+        id: impl Into<ElementId>,
+        name: impl Into<SharedString>,
+        key: Option<Key>,
+        selected: bool,
+    ) -> Stateful<Div> {
+        let ground = self.highlight_ground(selected);
+        let row = div()
+            .id(id)
+            .flex_none()
+            .h(px(qol_theme::HEIGHT_INLINE))
+            .px(px(qol_theme::SPACE_INSET))
+            .flex()
+            .items_center()
+            .gap(px(qol_theme::SPACE_CELL))
+            .text(TextStyle::ListName)
+            .text_color(rgb(ground.ink))
+            .child(div().flex_1().min_w_0().child(name.into()))
+            .when_some(key, |row, key| {
+                row.child(self.key_name(&[key], ground.soft))
+            });
+        self.highlight(row, selected)
+    }
+
+    pub fn menu_rule(&self) -> Div {
+        div()
+            .flex_none()
+            .h(px(LINE))
+            .mx(px(qol_theme::SPACE_INSET))
+            .my(px(qol_theme::SPACE_TIGHT))
+            .bg(rgba(self.washes.separator.packed()))
     }
 
     pub fn row_separator(&self) -> Div {

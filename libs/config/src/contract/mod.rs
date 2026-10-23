@@ -12,7 +12,8 @@ pub use pictures::{
     audio_device_picture, is_picture_spec, AudioDirection, CARD_DESCRIPTION_MAX, PICTURE_NAMES,
 };
 pub use row_action::{
-    interpolate_row_template, resolve_row_actions, resolve_slider_action, ResolvedRowAction,
+    interpolate_row_template, resolve_row_actions, resolve_slider_action, row_template_keys,
+    ResolvedRowAction,
 };
 pub use runtime::{
     parse_runtime_spec, parse_runtime_spec_str, validate_runtime_spec, ActionSpec,

@@ -5,13 +5,14 @@ mod tests;
 use std::ffi::OsStr;
 use std::fs::{DirEntry, FileType, Metadata};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{is_separator, Path, PathBuf};
 
-use crate::listing::EntryKind;
+use crate::config::Pin;
+use crate::listing::{display_name, EntryKind};
+use crate::nav;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaceKind {
-    Home,
     Desktop,
     Documents,
     Downloads,
@@ -32,7 +33,6 @@ impl PlaceKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Home => "Home",
             Self::Desktop => "Desktop",
             Self::Documents => "Documents",
             Self::Downloads => "Downloads",
@@ -45,8 +45,11 @@ impl PlaceKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    pub kind: PlaceKind,
+    pub pin: usize,
+    pub name: String,
     pub path: PathBuf,
+    pub home: bool,
+    pub connected: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,30 +74,89 @@ pub struct Mount {
 
 const THIS_COMPUTER: &str = "This computer";
 
-pub fn places() -> Vec<Place> {
+pub fn places(pins: &[Pin]) -> Vec<Place> {
     let Some(home) = dirs::home_dir() else {
         log::warn!("the home folder is not known, so no places are listed");
         return Vec::new();
     };
-    places_in(&home)
+    places_in(&home, pins)
 }
 
-pub fn places_in(home: &Path) -> Vec<Place> {
+pub fn places_in(home: &Path, pins: &[Pin]) -> Vec<Place> {
     let known = platform::user_folders(home);
-    let mut places = vec![Place {
-        kind: PlaceKind::Home,
-        path: home.to_path_buf(),
-    }];
-    places.extend(
-        PlaceKind::USER_FOLDERS
-            .into_iter()
-            .map(|kind| Place {
-                kind,
-                path: user_folder(kind, &known, home),
-            })
-            .filter(|place| place.path != home && place.path.is_dir()),
-    );
-    places
+    pins.iter()
+        .enumerate()
+        .filter_map(|(index, pin)| place(index, pin, home, &known))
+        .collect()
+}
+
+pub fn pin_for(folder: &Path, home: &Path) -> Pin {
+    pin_in(folder, home, &platform::user_folders(home))
+}
+
+fn pin_in(folder: &Path, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Pin {
+    let mut path = nav::path::display_with_home(folder, home);
+    if let Some(kind) = usual_folder(&path) {
+        if user_folder(kind, known, home) != folder {
+            path = folder.to_string_lossy().into_owned();
+        }
+    }
+    Pin {
+        name: pin_name(folder, home),
+        path,
+    }
+}
+
+pub fn unpin(pins: &[Pin], places: &[Place], place: usize) -> Option<Vec<Pin>> {
+    let pin = places.get(place)?.pin;
+    if pin >= pins.len() {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins.remove(pin);
+    Some(pins)
+}
+
+pub fn move_pin(pins: &[Pin], places: &[Place], place: usize, down: bool) -> Option<Vec<Pin>> {
+    let neighbour = if down {
+        place.checked_add(1)?
+    } else {
+        place.checked_sub(1)?
+    };
+    let (here, there) = (places.get(place)?.pin, places.get(neighbour)?.pin);
+    if here >= pins.len() || there >= pins.len() {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins.swap(here, there);
+    Some(pins)
+}
+
+pub fn toggle_pin(
+    pins: &[Pin],
+    places: &[Place],
+    folder: &Path,
+    pin: impl FnOnce() -> Pin,
+) -> Option<Vec<Pin>> {
+    let mut pins = pins.to_vec();
+    match places.iter().find(|place| place.path == folder) {
+        Some(place) if place.pin < pins.len() => {
+            pins.remove(place.pin);
+        }
+        Some(_) => return None,
+        None => pins.push(pin()),
+    }
+    Some(pins)
+}
+
+pub fn rename_pin(pins: &[Pin], pin: usize, name: &str) -> Option<Vec<Pin>> {
+    let name = name.trim();
+    if name.is_empty() || pins.get(pin)?.name == name {
+        return None;
+    }
+    let mut pins = pins.to_vec();
+    pins[pin].name = name.to_string();
+    Some(pins)
 }
 
 pub fn devices() -> Vec<Device> {
@@ -147,6 +209,51 @@ fn user_folder(kind: PlaceKind, known: &[(PlaceKind, PathBuf)], home: &Path) -> 
         .find(|(known_kind, _)| *known_kind == kind)
         .map(|(_, path)| path.clone())
         .unwrap_or_else(|| home.join(kind.label()))
+}
+
+fn place(index: usize, pin: &Pin, home: &Path, known: &[(PlaceKind, PathBuf)]) -> Option<Place> {
+    if pin.path.trim().is_empty() {
+        return None;
+    }
+    let usual = usual_folder(&pin.path);
+    let path = match usual {
+        Some(kind) => user_folder(kind, known, home),
+        None => nav::path::resolve(&pin.path, home, home),
+    };
+    let connected = path.is_dir();
+    let is_home = path == home;
+    if usual.is_some() && (is_home || !connected) {
+        return None;
+    }
+    let name = if pin.name.trim().is_empty() {
+        pin_name(&path, home)
+    } else {
+        pin.name.clone()
+    };
+    Some(Place {
+        pin: index,
+        name,
+        path,
+        home: is_home,
+        connected,
+    })
+}
+
+fn usual_folder(pin_path: &str) -> Option<PlaceKind> {
+    let label = pin_path.strip_prefix('~')?.strip_prefix(is_separator)?;
+    PlaceKind::USER_FOLDERS
+        .into_iter()
+        .find(|kind| kind.label() == label)
+}
+
+fn pin_name(folder: &Path, home: &Path) -> String {
+    if folder == home {
+        return "Home".to_string();
+    }
+    match folder.file_name() {
+        Some(name) => display_name(name),
+        None => folder.to_string_lossy().into_owned(),
+    }
 }
 
 fn device(kind: DeviceKind, label: String, path: PathBuf) -> Device {

@@ -46,6 +46,10 @@ pub struct ResolvedField {
     pub item_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lookup_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub add_label: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reorder: bool,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub option_pictures: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -171,6 +175,8 @@ pub fn resolve_config(
             card_description: field.card_description.clone(),
             item_label: field.item_label.clone(),
             lookup_label: field.lookup_label.clone(),
+            add_label: field.add_label.clone(),
+            reorder: field.reorder.unwrap_or(false),
             option_pictures: field
                 .option_pictures
                 .iter()

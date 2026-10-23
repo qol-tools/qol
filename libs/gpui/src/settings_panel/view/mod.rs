@@ -1,8 +1,10 @@
 mod choose_card;
 mod display_layout_card;
+mod entries_carry;
 mod list_card;
 mod placement_card;
 mod slider_flights;
+mod stored_values;
 mod structured_list_editor;
 
 use crate::key::Key;
@@ -310,6 +312,7 @@ pub(super) struct SettingsPanelView {
     /// because query names repeat across plugins.
     query_states: std::collections::HashMap<(usize, String), RowQueryState>,
     frame_pump_armed: bool,
+    subscriptions: Vec<Subscription>,
     motion_tick: Option<std::time::Instant>,
     sample_signal: Option<std::sync::Arc<SampleSignal>>,
     sampler_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -330,6 +333,7 @@ pub(super) struct SettingsPanelView {
     display_layout_motion: display_layout_card::DisplayLayoutMotion,
     attention: std::collections::HashSet<String>,
     attention_error_logged: bool,
+    values_generation: u64,
 }
 
 pub(super) struct SettingsPanelState {
@@ -518,6 +522,7 @@ impl SettingsPanelView {
             ),
             query_states: state.query_states,
             frame_pump_armed: false,
+            subscriptions: Vec::new(),
             motion_tick: None,
             sample_signal: None,
             sampler_stop: None,
@@ -537,6 +542,7 @@ impl SettingsPanelView {
             display_layout_motion: Default::default(),
             attention: std::collections::HashSet::new(),
             attention_error_logged: false,
+            values_generation: 0,
         };
         let change_link = Rc::clone(&parent_link);
         let on_change: CustomPanelInvalidator = Rc::new(move |app| {
@@ -856,6 +862,7 @@ impl SettingsPanelView {
 
     fn pop_card(&mut self, cx: &mut Context<Self>) {
         self.drop_slider_press();
+        self.put_down();
         if self.closing {
             self.closing = false;
             self.finish_pop(cx);
@@ -2976,6 +2983,7 @@ impl SettingsPanelView {
 
     fn persist(&mut self) {
         self.height_revision += 1;
+        self.values_generation += 1;
         let Some(source_index) = self
             .root()
             .rows
@@ -2991,22 +2999,38 @@ impl SettingsPanelView {
             source.values.get("native_theme").cloned(),
             source.values.get("accent").cloned(),
         );
+        let baseline = self.saved_baseline(source_index);
+        let Some(source) = self.sources.get(source_index) else {
+            return;
+        };
         let rows = self
             .root()
             .rows
             .iter()
             .filter(|row| row.source == source_index);
         let merged = merged_config(&source.values, rows);
+        let changed = match &baseline {
+            Some(baseline) => {
+                let keys = stored_values::changed_top_keys(&merged, baseline);
+                (!keys.is_empty()).then(|| stored_values::subset(&merged, &keys))
+            }
+            None => Some(merged.clone()),
+        };
         let Some(source) = self.sources.get_mut(source_index) else {
             return;
         };
-        source.values = merged;
-        self.save_error = save_values(
-            &panel_base(&source.plugin_id),
-            source.path.as_deref(),
-            &source.values,
-        )
-        .err();
+        let saved = changed.map_or(Ok(()), |changed| {
+            save_values(
+                &panel_base(&source.plugin_id),
+                source.path.as_deref(),
+                &changed,
+                &merged,
+            )
+        });
+        self.save_error = saved.err();
+        if self.save_error.is_none() {
+            source.values = merged;
+        }
         if source.plugin_id == qol_conventions::CORE_PANEL_ID
             && (source.values.get("native_theme") != previous_theme.0.as_ref()
                 || source.values.get("accent") != previous_theme.1.as_ref())
@@ -3616,7 +3640,11 @@ impl SettingsPanelView {
         let mut container = div().flex().flex_col().gap(px(qol_theme::SPACE_TIGHT));
 
         if self.level().entries.is_some() {
-            return container.child(self.render_entries_row(index, cx));
+            let offset = self.entries_offset(index, std::time::Instant::now());
+            return container
+                .relative()
+                .top(px(offset))
+                .child(self.render_entries_row(index, cx));
         }
         if self.level().form.is_some() {
             return container.child(self.render_form_row(index, cx));
@@ -4019,8 +4047,22 @@ impl Render for SettingsPanelView {
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
         );
+        if self.subscriptions.is_empty() {
+            self.subscriptions
+                .push(cx.observe_window_activation(window, |view, window, cx| {
+                    if window.is_window_active() {
+                        view.reload_stored_values(cx);
+                    } else {
+                        view.put_down();
+                        cx.notify();
+                    }
+                }));
+        }
         if !self.frame_pump_armed {
             self.pump_frame_paced_samples(window, cx);
+        }
+        if self.entries_moving() {
+            window.request_animation_frame();
         }
         self.fit_lists();
         self.reconcile_focus(window, cx);
@@ -4097,6 +4139,7 @@ impl Render for SettingsPanelView {
             .id("settings-panel")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_modifiers_changed(cx.listener(Self::on_carry_modifiers))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_, event: &MouseDownEvent, _, _| {

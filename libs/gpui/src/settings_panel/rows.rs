@@ -966,7 +966,7 @@ pub(super) fn merged_config<'a>(
     config
 }
 
-fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
+pub(super) fn row_value_json(control: &RowControl) -> Option<serde_json::Value> {
     match control {
         RowControl::Page => None,
         RowControl::Toggle(value) => Some(serde_json::json!(value)),

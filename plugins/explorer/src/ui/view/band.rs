@@ -6,10 +6,10 @@ use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::{laid_out_width, TextStyled};
-use qol_gpui::theme::{TextStyle, LINE, SPACE_GUTTER};
+use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER};
 use qol_gpui::CrumbTrail;
 
-use super::{slider, ExplorerView, BAND};
+use super::{more_button, slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
 use crate::ui::columns::left_to_right;
@@ -29,6 +29,8 @@ pub(super) fn render(
     let room = f32::from(window.viewport_size().width)
         - 2.0 * (LINE + SPACE_GUTTER)
         - slider::WIDTH
+        - SPACE_GUTTER
+        - HEIGHT_INLINE
         - SPACE_GUTTER;
     let limit = note_limit(room);
     let (note, note_width) = match editing {
@@ -105,6 +107,12 @@ pub(super) fn render(
     band.child(div().flex_1().min_w_0().child(crumb_trail))
         .when(note_width > 0.0, |band| band.child(note))
         .child(slider::render(view, cx))
+        .child(more_button(
+            "explorer-folder-more",
+            kit.grounds.rail,
+            |view, event, cx| view.toggle_folder_menu(event.position, cx),
+            cx,
+        ))
 }
 
 #[derive(Clone, Copy)]

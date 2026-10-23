@@ -2,6 +2,10 @@ schema_version = 1
 title = "Explorer"
 description = "Browse and pick files from the keyboard."
 
+[section.sidebar]
+label = "Sidebar"
+description = "The folders Explorer lists on its left."
+
 [section.view]
 label = "View"
 description = "How Explorer shows a folder when it opens."
@@ -38,6 +42,31 @@ label = "Show hidden files"
 description = "Show entries whose names start with a dot. Ctrl+H changes it too."
 section = "view"
 default = false
+
+[field.pins]
+type = "object_array"
+config_key = "pins"
+label = "Pinned folders"
+description = "The folders Explorer lists first. Right-click one in Explorer to change it there."
+section = "sidebar"
+card_description = "The folders Explorer lists first."
+item_label = "folder"
+row_label = "{name}"
+reorder = true
+add_label = "Pin a folder…"
+default = [
+  { name = "Home", path = "~" },
+  { name = "Desktop", path = "~/Desktop" },
+  { name = "Documents", path = "~/Documents" },
+  { name = "Downloads", path = "~/Downloads" },
+  { name = "Music", path = "~/Music" },
+  { name = "Pictures", path = "~/Pictures" },
+  { name = "Videos", path = "~/Videos" },
+]
+
+[field.pins.item.fields]
+name = "string"
+path = "string"
 
 [window]
 title_bar = true

@@ -3,6 +3,7 @@ use crate::kit::Chip as KitChip;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::*;
 use qol_config::contract::NestedListSpec;
@@ -18,7 +19,8 @@ use super::super::object_array_row::{
     shared_key_chip, Chip, ChipTone, ItemChips, ObjectArrayState,
 };
 use super::super::rows::{Row, RowControl, RowSection};
-use super::super::SettingsDestination;
+use super::super::{FieldCopy, SettingsDestination};
+use super::entries_carry::{Carry, CarryMotion, Held};
 use super::{initial_card_selection, Level, LevelHeader, SettingsPanelView};
 use crate::text_edit;
 
@@ -27,6 +29,55 @@ pub(super) struct EntriesCard {
     pub(super) lists: BTreeMap<String, NestedListSpec>,
     pub(super) values: Option<Vec<String>>,
     pub(super) owner_field: Option<usize>,
+    pub(super) add_label: Option<String>,
+    pub(super) row_label: Option<String>,
+    pub(super) reorder: bool,
+    pub(super) carry: Option<Carry>,
+    pub(super) motion: CarryMotion,
+}
+
+impl EntriesCard {
+    fn new(item_label: String, lists: BTreeMap<String, NestedListSpec>) -> Self {
+        Self {
+            item_label,
+            lists,
+            values: None,
+            owner_field: None,
+            add_label: None,
+            row_label: None,
+            reorder: false,
+            carry: None,
+            motion: CarryMotion::default(),
+        }
+    }
+
+    fn copied(copy: Option<&FieldCopy>) -> Self {
+        let item_label = copy
+            .and_then(|copy| copy.item_label.clone())
+            .unwrap_or_else(|| "entry".to_string());
+        let lists = copy.map(|copy| copy.lists.clone()).unwrap_or_default();
+        Self {
+            add_label: copy.and_then(|copy| copy.add_label.clone()),
+            row_label: copy.and_then(|copy| copy.row_label.clone()),
+            reorder: copy.is_some_and(|copy| copy.reorder),
+            ..Self::new(item_label, lists)
+        }
+    }
+
+    fn add_text(&self) -> String {
+        format!("+ {}", self.add_label.as_deref().unwrap_or("Add"))
+    }
+
+    fn add_hint(&self) -> String {
+        let Some(label) = self.add_label.as_deref() else {
+            return "add".to_string();
+        };
+        let label = label.trim_end_matches(['…', '.']).trim();
+        let mut chars = label.chars();
+        chars.next().map_or_else(String::new, |first| {
+            first.to_lowercase().chain(chars).collect()
+        })
+    }
 }
 
 struct EntriesOrigin {
@@ -71,10 +122,7 @@ impl SettingsPanelView {
             .get(source)
             .and_then(|state| state.copy.get(&row_id));
         let description = copy.and_then(|copy| copy.card_description.clone());
-        let item_label = copy
-            .and_then(|copy| copy.item_label.clone())
-            .unwrap_or_else(|| "entry".to_string());
-        let lists = copy.map(|copy| copy.lists.clone()).unwrap_or_default();
+        let card = EntriesCard::copied(copy);
         let state = ObjectArrayState::from_entries(
             state.key_label.clone(),
             state.schema.clone(),
@@ -89,12 +137,7 @@ impl SettingsPanelView {
             source,
             EntriesOrigin {
                 object_array: Some(state),
-                card: EntriesCard {
-                    item_label,
-                    lists,
-                    values: None,
-                    owner_field: None,
-                },
+                card,
                 description,
                 origin_row: Some(row_index),
             },
@@ -121,10 +164,10 @@ impl SettingsPanelView {
             .get(source)
             .and_then(|state| state.copy.get(&row_id));
         let description = copy.and_then(|copy| copy.card_description.clone());
-        let item_label = copy
-            .and_then(|copy| copy.item_label.clone())
-            .unwrap_or_else(|| "entry".to_string());
-        let lists = copy.map(|copy| copy.lists.clone()).unwrap_or_default();
+        let card = EntriesCard {
+            values: Some(values),
+            ..EntriesCard::copied(copy)
+        };
         let Some(destination) = self.card_destination(&label, cx) else {
             return;
         };
@@ -134,12 +177,7 @@ impl SettingsPanelView {
             source,
             EntriesOrigin {
                 object_array: None,
-                card: EntriesCard {
-                    item_label,
-                    lists,
-                    values: Some(values),
-                    owner_field: None,
-                },
+                card,
                 description,
                 origin_row: Some(row_index),
             },
@@ -154,6 +192,9 @@ impl SettingsPanelView {
         event: &KeyDownEvent,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.on_carry_key(event) {
+            return true;
+        }
         let key = event.keystroke.key.as_str();
         if matches!(key, "enter" | "return" | "space") {
             let selected = self.level().selected;
@@ -291,48 +332,19 @@ impl SettingsPanelView {
         let level = self.level();
         let selected = index == level.selected;
         let focused = self.body_has_focus();
-        let ground = RowGround::of(selected, focused);
-        let mut row = SettingsRow::rule(("settings-entry", index), self.kit)
-            .selected(selected, focused)
-            .child(self.row_bounds_canvas(index));
-        if index == 0 {
-            row = row.child(settings_label_group("+ Add", None, ground, self.kit));
-            if level_entries_len(level) == 0 {
-                row = row.child(settings_value_text(
-                    "Empty",
-                    SettingsValueTone::Muted,
-                    ground,
-                    self.kit,
-                ));
-            }
-        } else if let Some(state) = level.object_array.as_ref() {
-            let entry = index - 1;
-            if state.key_label.is_some() {
-                let key = state
-                    .entries
-                    .get(entry)
-                    .and_then(|entry| entry.key.clone())
-                    .unwrap_or_default();
-                row = row.child(settings_label_group(key, None, ground, self.kit));
-                let summary = level
-                    .entries
-                    .as_ref()
-                    .map(|card| state.value_summary(entry, &card.lists))
-                    .unwrap_or_default();
-                if !summary.is_empty() {
-                    row = row.child(settings_value_text(
-                        summary,
-                        SettingsValueTone::Muted,
-                        ground,
-                        self.kit,
-                    ));
-                }
-            } else {
-                row = row.child(self.render_chip_row(chip_row_parts(&state.chips(entry)), ground));
-            }
-        } else if let Some(values) = level.entries.as_ref().and_then(|card| card.values.as_ref()) {
-            let value = values.get(index - 1).cloned().unwrap_or_default();
-            row = row.child(settings_mono_label(value, ground, self.kit));
+        let now = Instant::now();
+        let lifted = self.entries_lift(now);
+        let mut row = match lifted {
+            Some((carried, lift)) if carried == index => self.carried_slot(index, lift),
+            _ => SettingsRow::rule(("settings-entry", index), self.kit)
+                .selected(selected, focused)
+                .child(self.row_bounds_canvas(index))
+                .children(self.entries_row_content(index, RowGround::of(selected, focused))),
+        };
+        if let Some((carried, lift)) = lifted.filter(|_| index + 1 == level.rows.len()) {
+            let ground = RowGround::of(carried == level.selected, focused);
+            let content = self.entries_row_content(carried, ground);
+            row = row.child(self.carried_row(carried, lift, index, content, now));
         }
         row.on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if !event.standard_click() {
@@ -342,6 +354,63 @@ impl SettingsPanelView {
             cx.notify();
         }))
         .into_any_element()
+    }
+
+    fn entries_row_content(&self, index: usize, ground: RowGround) -> Vec<AnyElement> {
+        let level = self.level();
+        let mut content = Vec::new();
+        let Some(card) = level.entries.as_ref() else {
+            return content;
+        };
+        if index == 0 {
+            content.push(
+                settings_label_group(card.add_text(), None, ground, self.kit).into_any_element(),
+            );
+            if level_entries_len(level) == 0 {
+                content.push(
+                    settings_value_text("Empty", SettingsValueTone::Muted, ground, self.kit)
+                        .into_any_element(),
+                );
+            }
+            return content;
+        }
+        let entry = index - 1;
+        if let Some(state) = level.object_array.as_ref() {
+            let labelled = card
+                .row_label
+                .as_deref()
+                .filter(|_| state.key_label.is_none())
+                .and_then(|template| state.labelled(entry, template, &card.lists));
+            let (label, summary) = match labelled {
+                Some(labelled) => labelled,
+                None if state.key_label.is_some() => (
+                    state
+                        .entries
+                        .get(entry)
+                        .and_then(|entry| entry.key.clone())
+                        .unwrap_or_default(),
+                    state.value_summary(entry, &card.lists),
+                ),
+                None => {
+                    content.push(
+                        self.render_chip_row(chip_row_parts(&state.chips(entry)), ground)
+                            .into_any_element(),
+                    );
+                    return content;
+                }
+            };
+            content.push(settings_label_group(label, None, ground, self.kit).into_any_element());
+            if !summary.is_empty() {
+                content.push(
+                    settings_value_text(summary, SettingsValueTone::Muted, ground, self.kit)
+                        .into_any_element(),
+                );
+            }
+        } else if let Some(values) = card.values.as_ref() {
+            let value = values.get(entry).cloned().unwrap_or_default();
+            content.push(settings_mono_label(value, ground, self.kit).into_any_element());
+        }
+        content
     }
 
     pub(super) fn render_form_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -483,8 +552,8 @@ impl SettingsPanelView {
                 None => bar,
             };
         }
-        if level.entries.is_some() {
-            let (left, right) = entries_hints(level.selected == 0);
+        if let Some(card) = level.entries.as_ref() {
+            let (left, right) = entries_hints(card, level.selected == 0);
             return bar.left(left).right(right);
         }
         bar
@@ -641,10 +710,9 @@ impl SettingsPanelView {
             EntriesOrigin {
                 object_array: None,
                 card: EntriesCard {
-                    item_label,
-                    lists: BTreeMap::new(),
                     values: Some(values),
                     owner_field: Some(field_index),
+                    ..EntriesCard::new(item_label, BTreeMap::new())
                 },
                 description,
                 origin_row: None,
@@ -656,7 +724,21 @@ impl SettingsPanelView {
     }
 
     fn activate_entries_row(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.carrying().is_some() {
+            self.put_down();
+            return;
+        }
         self.level_mut().selected = index;
+        if index > 0
+            && self
+                .level()
+                .entries
+                .as_ref()
+                .is_some_and(|card| card.reorder)
+        {
+            self.pick_up(Held::Enter);
+            return;
+        }
         if index == 0 {
             self.open_entries_form(None, cx);
         } else {
@@ -761,7 +843,7 @@ impl SettingsPanelView {
         self.pop_card(cx);
     }
 
-    fn write_entries_back(&mut self, entries_index: usize) {
+    pub(super) fn write_entries_back(&mut self, entries_index: usize) {
         let owner = self
             .stack
             .get(entries_index)
@@ -906,7 +988,7 @@ fn entries_card_rows(
         true => "text_list_add",
         false => "object_array_add",
     };
-    let mut rows = vec![entries_row(add_id, "+ Add", config_key, source)];
+    let mut rows = vec![entries_row(add_id, &card.add_text(), config_key, source)];
     if let Some(state) = object_array {
         rows.extend((0..state.entries.len()).map(|index| {
             let label = match state.key_label.is_some() {
@@ -915,7 +997,11 @@ fn entries_card_rows(
                     .get(index)
                     .and_then(|entry| entry.key.clone())
                     .unwrap_or_default(),
-                false => state.summary(index),
+                false => card
+                    .row_label
+                    .as_deref()
+                    .and_then(|template| state.labelled(index, template, &card.lists))
+                    .map_or_else(|| state.summary(index), |(label, _)| label),
             };
             entries_row(
                 &format!("object_array_item_{index}"),
@@ -963,7 +1049,7 @@ fn entries_len(object_array: &Option<ObjectArrayState>, card: &EntriesCard) -> u
     object_array.as_ref().map_or(0, |state| state.entries.len())
 }
 
-fn level_entries_len(level: &Level) -> usize {
+pub(super) fn level_entries_len(level: &Level) -> usize {
     if let Some(values) = level.entries.as_ref().and_then(|card| card.values.as_ref()) {
         return values.len();
     }
@@ -973,7 +1059,7 @@ fn level_entries_len(level: &Level) -> usize {
         .map_or(0, |state| state.entries.len())
 }
 
-fn sync_entries_level(level: &mut Level) {
+pub(super) fn sync_entries_level(level: &mut Level) {
     let Some(card) = level.entries.as_ref() else {
         return;
     };
@@ -1031,7 +1117,13 @@ fn write_root_entries(root_rows: &mut [Row], level: &Level) -> bool {
     true
 }
 
-pub(super) fn entries_hints(on_add: bool) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
+pub(super) fn entries_hints(
+    card: &EntriesCard,
+    on_add: bool,
+) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
+    if card.reorder {
+        return reorder_hints(card, on_add);
+    }
     let left = vec![
         SettingsHint::new(
             Key::ENTER,
@@ -1045,6 +1137,42 @@ pub(super) fn entries_hints(on_add: bool) -> (Vec<SettingsHint>, Vec<SettingsHin
     ];
     let right = vec![SettingsHint::new(Key::ESC, "back")];
     (left, right)
+}
+
+fn reorder_hints(card: &EntriesCard, on_add: bool) -> (Vec<SettingsHint>, Vec<SettingsHint>) {
+    let back = |label: &'static str| vec![SettingsHint::new(Key::ESC, label)];
+    match card.carry.map(|carry| carry.held) {
+        Some(Held::Ctrl) => (
+            vec![
+                SettingsHint::new(Key::UP_DOWN.ctrl(), "carry it"),
+                SettingsHint::new(Key::CTRL, "let go to put it down"),
+            ],
+            Vec::new(),
+        ),
+        Some(Held::Enter) => (
+            vec![
+                SettingsHint::new(Key::UP_DOWN, "carry it"),
+                SettingsHint::new(Key::ENTER, "put it down"),
+            ],
+            back("put it back"),
+        ),
+        None if on_add => (
+            vec![
+                SettingsHint::new(Key::UP_DOWN, "move"),
+                SettingsHint::new(Key::ENTER, card.add_hint()),
+            ],
+            back("back"),
+        ),
+        None => (
+            vec![
+                SettingsHint::new(Key::UP_DOWN, "move"),
+                SettingsHint::new(Key::ENTER, "pick up"),
+                SettingsHint::new(Key::UP_DOWN.ctrl(), "move it"),
+                SettingsHint::new(Key::BACKSPACE, "remove"),
+            ],
+            back("back"),
+        ),
+    }
 }
 
 pub(super) fn form_hints(
@@ -1141,6 +1269,7 @@ mod tests {
     };
     use super::super::super::rows::RowControl;
     use super::super::super::SettingsDestination;
+    use super::super::entries_carry::{Carry, Held};
     use super::super::tests::{level, rows};
     use super::{
         entries_card_level, entries_hints, form_hints, sync_entries_level, write_root_entries,
@@ -1173,10 +1302,8 @@ mod tests {
 
     fn card(values: Option<Vec<String>>) -> EntriesCard {
         EntriesCard {
-            item_label: "entry".to_string(),
-            lists: BTreeMap::new(),
             values,
-            owner_field: None,
+            ..EntriesCard::new("entry".to_string(), BTreeMap::new())
         }
     }
 
@@ -1520,12 +1647,50 @@ mod tests {
 
     #[test]
     fn entries_hints_name_add_on_the_add_row_and_open_on_an_entry() {
-        let (left, right) = entries_hints(true);
+        let card = card(None);
+        let (left, right) = entries_hints(&card, true);
         assert_eq!(hint_labels(&left), vec!["add", "move", "add"]);
         assert_eq!(hint_labels(&right), vec!["back"]);
 
-        let (left, right) = entries_hints(false);
+        let (left, right) = entries_hints(&card, false);
         assert_eq!(hint_labels(&left), vec!["open", "move", "add"]);
         assert_eq!(hint_labels(&right), vec!["back"]);
+    }
+
+    #[test]
+    fn a_reorder_card_names_the_carry_in_every_state() {
+        let mut card = EntriesCard {
+            reorder: true,
+            add_label: Some("Pin a folder…".to_string()),
+            ..card(None)
+        };
+        let (left, right) = entries_hints(&card, true);
+        assert_eq!(hint_labels(&left), vec!["move", "pin a folder"]);
+        assert_eq!(hint_labels(&right), vec!["back"]);
+
+        let (left, _) = entries_hints(&card, false);
+        assert_eq!(
+            hint_labels(&left),
+            vec!["move", "pick up", "move it", "remove"]
+        );
+
+        card.carry = Some(Carry {
+            home: 2,
+            held: Held::Enter,
+        });
+        let (left, right) = entries_hints(&card, false);
+        assert_eq!(hint_labels(&left), vec!["carry it", "put it down"]);
+        assert_eq!(hint_labels(&right), vec!["put it back"]);
+
+        card.carry = Some(Carry {
+            home: 2,
+            held: Held::Ctrl,
+        });
+        let (left, right) = entries_hints(&card, false);
+        assert_eq!(
+            hint_labels(&left),
+            vec!["carry it", "let go to put it down"]
+        );
+        assert!(right.is_empty());
     }
 }

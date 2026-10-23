@@ -307,6 +307,9 @@ pub(super) struct FieldCopy {
     pub(super) card_description: Option<String>,
     pub(super) item_label: Option<String>,
     pub(super) lookup_label: Option<String>,
+    pub(super) add_label: Option<String>,
+    pub(super) row_label: Option<String>,
+    pub(super) reorder: bool,
     pub(super) lists: std::collections::BTreeMap<String, qol_config::contract::NestedListSpec>,
 }
 
@@ -543,11 +546,14 @@ impl SettingsWindowHost {
         };
         let resume_runtime_poll = !active.surface.is_visible();
         let updated = active.surface.present(tracker, cx);
-        if updated && resume_runtime_poll {
+        if updated {
             let _ = active.surface.handle.update(cx, |root, _, cx| {
                 root.inner.update(cx, |view, cx| {
-                    view.resume_runtime_poll(cx);
-                    view.answer_other_pages(cx);
+                    view.reload_stored_values(cx);
+                    if resume_runtime_poll {
+                        view.resume_runtime_poll(cx);
+                        view.answer_other_pages(cx);
+                    }
                 });
             });
         }
@@ -971,6 +977,9 @@ fn prepare_source(
                     card_description: field.card_description.clone(),
                     item_label: field.item_label.clone(),
                     lookup_label: field.lookup_label.clone(),
+                    add_label: field.add_label.clone(),
+                    row_label: field.row_label.clone(),
+                    reorder: field.reorder,
                     lists: field.lists.clone(),
                 },
             )

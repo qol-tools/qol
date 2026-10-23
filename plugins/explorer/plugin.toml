@@ -11,6 +11,7 @@ platforms = ["linux"]
 [config.scope]
 view_size = "core"
 show_hidden = "core"
+pins = "device"
 title_bar = "os"
 
 [runtime]

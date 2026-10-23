@@ -123,6 +123,25 @@ pub fn interpolate_row_template(template: &str, row: &Value) -> String {
     rendered
 }
 
+pub fn row_template_keys(template: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let tail = &rest[open + 1..];
+        let Some(close) = tail.find('}') else {
+            break;
+        };
+        let key = &tail[..close];
+        if !placeholder_key(key) {
+            rest = tail;
+            continue;
+        }
+        keys.push(key.to_string());
+        rest = &tail[close + 1..];
+    }
+    keys
+}
+
 fn row_value_text(value: &Value) -> String {
     value
         .as_str()
@@ -138,8 +157,8 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::{
-        interpolate_row_template, resolve_row_actions, resolve_slider_action, RowActionSpec,
-        RowSliderSpec,
+        interpolate_row_template, resolve_row_actions, resolve_slider_action, row_template_keys,
+        RowActionSpec, RowSliderSpec,
     };
 
     fn action(
@@ -261,6 +280,25 @@ mod tests {
                 interpolate_row_template(template, &row),
                 expected,
                 "{label}: template {template:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn row_template_keys_follow_the_renderer_rule() {
+        let cases: [(&str, &[&str]); 6] = [
+            ("{name} {x-y}", &["name"]),
+            ("{name}{path}", &["name", "path"]),
+            ("no placeholders", &[]),
+            ("{a{b}", &["b"]),
+            ("{abc", &[]),
+            ("{} { name }", &[]),
+        ];
+        for (template, expected) in cases {
+            assert_eq!(
+                row_template_keys(template),
+                expected,
+                "template {template:?}"
             );
         }
     }
