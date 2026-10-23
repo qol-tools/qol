@@ -1418,7 +1418,7 @@ fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_inside,
+        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_in_region, pointer_inside,
         primary_anchored_from_screen_relative, should_return_focus,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -1445,6 +1445,28 @@ mod tests {
 
     fn window() -> NSRect {
         NSRect::new(NSPoint::new(100.0, 200.0), NSSize::new(440.0, 600.0))
+    }
+
+    #[test]
+    fn only_the_painted_region_counts_as_inside_a_taller_window() {
+        let card = NSRect::new(NSPoint::new(20.0, 0.0), NSSize::new(400.0, 120.0));
+        let cases = [
+            (NSPoint::new(300.0, 790.0), true),
+            (NSPoint::new(300.0, 681.0), true),
+            (NSPoint::new(300.0, 679.0), false),
+            (NSPoint::new(300.0, 210.0), false),
+            (NSPoint::new(110.0, 790.0), false),
+            (NSPoint::new(530.0, 790.0), false),
+        ];
+        for (pointer, expected) in cases {
+            assert_eq!(
+                pointer_in_region(window(), card, pointer),
+                expected,
+                "pointer=({}, {})",
+                pointer.x,
+                pointer.y
+            );
+        }
     }
 
     #[test]
