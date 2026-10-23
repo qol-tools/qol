@@ -6,7 +6,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{ChatRole, ChatTurn, CliSessionInterpreter, CliToolId};
-use qol_terminal_sessions::{SessionBinding, SessionInventory, TerminalSessionService};
+use qol_terminal_sessions::{
+    SessionBinding, SessionFacts, SessionInventory, TerminalSessionService,
+};
 use serde::{Deserialize, Serialize};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
@@ -294,17 +296,30 @@ pub(super) fn render_chat(source: &str, tool: &str, turns: &[ChatTurn]) -> Strin
     rendered
 }
 
+fn parent_facts(terminals: &TerminalSessionService, parent: Option<&str>) -> Option<SessionFacts> {
+    let binding = parent?.parse::<SessionBinding>().ok()?;
+    super::bridge::resolve_target(terminals, &binding).ok()
+}
+
 pub(super) fn parent_model(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     parent: Option<&str>,
 ) -> Option<String> {
-    let binding = parent?.parse::<SessionBinding>().ok()?;
-    let facts = super::bridge::resolve_target(terminals, &binding).ok()?;
+    let facts = parent_facts(terminals, parent)?;
     if super::switchboard::holds_switchboard_key(&facts) {
         return None;
     }
     interpreter.current_model(&facts)
+}
+
+pub(super) fn parent_tool(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    parent: Option<&str>,
+) -> Option<String> {
+    let facts = parent_facts(terminals, parent)?;
+    Some(interpreter.describe(&facts).tool.id.to_string())
 }
 
 pub(super) fn resolve_chat_source(
@@ -313,8 +328,7 @@ pub(super) fn resolve_chat_source(
     parent: Option<&str>,
 ) -> Option<ForkChat> {
     let parent = parent?;
-    let binding = parent.parse::<SessionBinding>().ok()?;
-    let facts = super::bridge::resolve_target(terminals, &binding).ok()?;
+    let facts = parent_facts(terminals, Some(parent))?;
     let tool = interpreter.describe(&facts).tool.id.to_string();
     let turns = interpreter.chat_transcript(&facts)?;
     Some(ForkChat {
@@ -628,6 +642,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         choice,
         &defaults,
         &dispatch,
+        None,
     )?;
     let lineage = LineageStore::system()?;
     let parent_key = super::lineage::session_key(&terminals, parent.as_deref());

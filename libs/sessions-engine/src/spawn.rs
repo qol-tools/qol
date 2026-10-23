@@ -149,6 +149,8 @@ struct SpawnConfigFile {
     fork_remote_control: bool,
     #[serde(default)]
     spawn_remote_control: bool,
+    #[serde(default)]
+    spawn_defaults: std::collections::BTreeMap<String, super::launch::HarnessDefaults>,
     spawn_claude_settings: Option<toml::Table>,
     spawn_claude_mcp_servers: Option<toml::Table>,
 }
@@ -184,8 +186,21 @@ pub(super) fn config_launch_defaults() -> Result<super::launch::LaunchDefaults> 
     let encoded = fs::read_to_string(&path).context("failed to read the sessions config")?;
     let config: SpawnConfigFile =
         toml::from_str(&encoded).with_context(|| format!("failed to parse {}", path.display()))?;
+    if let Some((harness, model)) = config.spawn_defaults.iter().find_map(|(harness, entry)| {
+        entry
+            .model
+            .as_deref()
+            .filter(|model| model.contains('*'))
+            .map(|model| (harness, model))
+    }) {
+        bail!(
+            "spawn_defaults.{harness}.model must name a concrete model, not the pattern `{model}`, in {}",
+            path.display()
+        );
+    }
     Ok(super::launch::LaunchDefaults {
         aliases: config.aliases,
+        spawn_defaults: config.spawn_defaults,
         fork_model: config.fork_model,
         fork_effort: config.fork_effort,
         fork_surface: config.fork_surface,
@@ -796,11 +811,18 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
         surface: parsed.surface.take(),
         remote_control: parsed.remote_control.then_some(true),
     };
+    let terminals = TerminalSessionService::system();
+    let caller_tool = super::fork::parent_tool(
+        &terminals,
+        &CliSessionInterpreter::system(),
+        Some(super::bridge::driver_token(&terminals).as_str()),
+    );
     let launch = super::launch::resolve(
         super::launch::LaunchKind::Spawn,
         explicit,
         &config_launch_defaults()?,
         &dispatch,
+        caller_tool.as_deref(),
     )?;
     let tool = launch.tool;
     parsed.model = launch.model;
@@ -817,7 +839,6 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             cap.cpu_quota.as_deref().unwrap_or("-")
         );
     }
-    let terminals = TerminalSessionService::system();
     let surface = config_surface()?;
     let locks = SpawnLocks::system()?;
     let encoded = if parsed.lanes.is_empty() {
@@ -1035,7 +1056,7 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--remote-control] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, or the harness tool_models declares for the model; --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --remote-control starts a claude lane with Remote Control on, named after its key, so the user can follow it from claude.ai; spawn_remote_control in sessions.toml turns it on for every claude spawn, and a tool without Remote Control refuses the flag. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--remote-control] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, the [spawn_defaults.<harness>] entry for the harness the calling session runs when no model is named, or the harness tool_models declares for the model; --model and --effort fall back to that entry when the spawn launches its tool, then --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --remote-control starts a claude lane with Remote Control on, named after its key, so the user can follow it from claude.ai; spawn_remote_control in sessions.toml turns it on for every claude spawn, and a tool without Remote Control refuses the flag. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;

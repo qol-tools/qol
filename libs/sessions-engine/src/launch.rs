@@ -11,9 +11,18 @@ pub(super) enum LaunchKind {
     Spawn,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HarnessDefaults {
+    pub(super) tool: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LaunchDefaults {
     pub(super) aliases: BTreeMap<String, String>,
+    pub(super) spawn_defaults: BTreeMap<String, HarnessDefaults>,
     pub(super) fork_model: Option<String>,
     pub(super) fork_effort: Option<String>,
     pub(super) fork_surface: Option<String>,
@@ -54,6 +63,23 @@ impl LaunchDefaults {
     fn alias(&self, value: Option<String>) -> Option<String> {
         value.map(|value| self.aliases.get(&value).cloned().unwrap_or(value))
     }
+
+    fn harness(
+        &self,
+        kind: LaunchKind,
+        caller_tool: Option<&str>,
+        dispatch: &AgentDispatch,
+    ) -> Option<(String, &HarnessDefaults)> {
+        if kind != LaunchKind::Spawn || dispatch.is_constrained() {
+            return None;
+        }
+        let caller_tool = caller_tool?;
+        let entry = self.spawn_defaults.get(caller_tool)?;
+        let tool = self
+            .alias(entry.tool.clone())
+            .unwrap_or_else(|| caller_tool.to_owned());
+        Some((tool, entry))
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,12 +105,27 @@ pub(super) fn resolve(
     explicit: LaunchChoice,
     defaults: &LaunchDefaults,
     dispatch: &AgentDispatch,
+    caller_tool: Option<&str>,
 ) -> Result<Launch> {
-    let tool = defaults.alias(explicit.tool);
+    let harness = defaults.harness(kind, caller_tool, dispatch);
     let chosen = defaults.alias(explicit.model);
+    let tool = defaults.alias(explicit.tool).or_else(|| {
+        harness
+            .as_ref()
+            .filter(|_| chosen.is_none())
+            .map(|(tool, _)| tool.clone())
+    });
+    let entry_for = |tool: &str| {
+        harness
+            .as_ref()
+            .filter(|(harness_tool, _)| harness_tool == tool)
+            .map(|(_, entry)| *entry)
+    };
     let model = match tool.as_deref() {
         _ if chosen.is_some() || dispatch.is_constrained() => chosen,
-        Some(tool) => model_for_tool(tool, defaults.model(kind), &dispatch.policy),
+        Some(tool) => entry_for(tool)
+            .and_then(|entry| defaults.alias(entry.model.clone()))
+            .or_else(|| model_for_tool(tool, defaults.model(kind), &dispatch.policy)),
         None => defaults.model(kind).map(str::to_owned),
     };
     let tool = match tool {
@@ -92,10 +133,10 @@ pub(super) fn resolve(
         None => dispatch.resolve_launch_tool(None, model.as_deref())?,
     };
     let effort = defaults.alias(explicit.effort).or_else(|| {
-        defaults
-            .effort(kind)
+        entry_for(&tool)
+            .and_then(|entry| defaults.alias(entry.effort.clone()))
+            .or_else(|| defaults.effort(kind).map(str::to_owned))
             .filter(|_| takes_effort(&tool))
-            .map(str::to_owned)
     });
     let surface = defaults
         .alias(explicit.surface)
@@ -191,6 +232,7 @@ mod tests {
             fork_effort: Some("high".to_owned()),
             fork_surface: Some("tab".to_owned()),
             spawn_effort: Some("medium".to_owned()),
+            spawn_defaults: BTreeMap::new(),
             fork_remote_control: false,
             spawn_remote_control: false,
         }
@@ -271,8 +313,93 @@ mod tests {
             ),
         ];
         for (kind, choice, expected) in cases {
-            let resolved = resolve(kind, choice.clone(), &defaults(), &dispatch()).unwrap();
+            let resolved = resolve(kind, choice.clone(), &defaults(), &dispatch(), None).unwrap();
             assert_eq!(resolved, expected, "{kind:?} {choice:?}");
+        }
+    }
+
+    #[test]
+    fn a_spawn_takes_the_calling_harness_defaults_for_every_slot_it_leaves_out() {
+        let configured = LaunchDefaults {
+            spawn_defaults: BTreeMap::from([
+                (
+                    "claude".to_owned(),
+                    HarnessDefaults {
+                        tool: None,
+                        model: Some("opus".to_owned()),
+                        effort: Some("high".to_owned()),
+                    },
+                ),
+                (
+                    "pi".to_owned(),
+                    HarnessDefaults {
+                        tool: Some("cc".to_owned()),
+                        model: None,
+                        effort: Some("low".to_owned()),
+                    },
+                ),
+            ]),
+            ..defaults()
+        };
+        let cases = [
+            (
+                LaunchKind::Spawn,
+                Some("claude"),
+                ask(None, None, None, None),
+                launch("claude", Some("opus"), Some("high"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("claude"),
+                ask(None, Some("sonnet"), None, None),
+                launch("claude", Some("sonnet"), Some("high"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("claude"),
+                ask(None, None, Some("low"), None),
+                launch("claude", Some("opus"), Some("low"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("claude"),
+                ask(Some("pi"), None, None, None),
+                launch("pi", Some("flash"), Some("medium"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("claude"),
+                ask(None, Some("glm"), None, None),
+                launch("pi", Some("glm"), Some("medium"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("pi"),
+                ask(None, None, None, None),
+                launch("claude", Some("opus"), Some("low"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                Some("codex"),
+                ask(None, None, None, None),
+                launch("pi", None, Some("medium"), None),
+            ),
+            (
+                LaunchKind::Spawn,
+                None,
+                ask(None, None, None, None),
+                launch("pi", None, Some("medium"), None),
+            ),
+            (
+                LaunchKind::Fork,
+                Some("pi"),
+                ask(None, None, None, None),
+                launch("claude", Some("opus"), Some("high"), Some("tab")),
+            ),
+        ];
+        for (kind, caller, choice, expected) in cases {
+            let resolved = resolve(kind, choice.clone(), &configured, &dispatch(), caller).unwrap();
+            assert_eq!(resolved, expected, "{kind:?} {caller:?} {choice:?}");
         }
     }
 
@@ -317,7 +444,7 @@ mod tests {
         ];
         for (kind, mut choice, explicit, expected) in cases {
             choice.remote_control = explicit;
-            let resolved = resolve(kind, choice.clone(), &configured, &dispatch()).unwrap();
+            let resolved = resolve(kind, choice.clone(), &configured, &dispatch(), None).unwrap();
             assert_eq!(resolved.remote_control, expected, "{kind:?} {choice:?}");
         }
     }
