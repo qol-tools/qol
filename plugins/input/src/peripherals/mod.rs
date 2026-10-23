@@ -1,6 +1,8 @@
 mod platform;
 pub mod session;
 
+use std::collections::BTreeMap;
+
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -8,13 +10,15 @@ pub(crate) const NO_TOUCHPAD: &str = "no touchpad is connected";
 pub(crate) const TOUCHPAD_FIXED: &str =
     "this computer does not let apps turn the touchpad on or off";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Mouse {
     pub speed: Option<u32>,
     pub acceleration: Option<bool>,
     pub swap_buttons: Option<bool>,
     pub double_click: Option<u32>,
     pub natural_scroll: Option<bool>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub unavailable: BTreeMap<&'static str, String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -24,6 +28,8 @@ pub struct Touchpad {
     pub natural_scroll: Option<bool>,
     pub speed: Option<u32>,
     pub missing: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub unavailable: BTreeMap<&'static str, String>,
 }
 
 impl Touchpad {
@@ -35,10 +41,19 @@ impl Touchpad {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Keyboard {
     pub repeat_delay: Option<u32>,
     pub repeat_rate: Option<u32>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub unavailable: BTreeMap<&'static str, String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Peripheral {
+    Mouse,
+    Touchpad,
+    Keyboard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -326,6 +341,36 @@ impl Setting {
         self.key().replace('_', "-")
     }
 
+    pub fn peripheral(self) -> Peripheral {
+        match self {
+            Self::Level(Level::PointerSpeed | Level::DoubleClick)
+            | Self::Switch(
+                Switch::Acceleration | Switch::SwapButtons | Switch::MouseNaturalScroll,
+            ) => Peripheral::Mouse,
+            Self::Level(Level::TouchpadSpeed)
+            | Self::Switch(Switch::Touchpad | Switch::TapToClick | Switch::TouchpadNaturalScroll) => {
+                Peripheral::Touchpad
+            }
+            Self::Level(Level::RepeatDelay | Level::RepeatRate) => Peripheral::Keyboard,
+        }
+    }
+
+    pub fn field(self) -> &'static str {
+        match self {
+            Self::Level(Level::PointerSpeed | Level::TouchpadSpeed) => "speed",
+            Self::Level(Level::DoubleClick) => "double_click",
+            Self::Level(Level::RepeatDelay) => "repeat_delay",
+            Self::Level(Level::RepeatRate) => "repeat_rate",
+            Self::Switch(Switch::Acceleration) => "acceleration",
+            Self::Switch(Switch::SwapButtons) => "swap_buttons",
+            Self::Switch(Switch::MouseNaturalScroll | Switch::TouchpadNaturalScroll) => {
+                "natural_scroll"
+            }
+            Self::Switch(Switch::Touchpad) => "enabled",
+            Self::Switch(Switch::TapToClick) => "tap_to_click",
+        }
+    }
+
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
@@ -338,15 +383,49 @@ pub fn backend() -> Result<&'static str> {
 }
 
 pub fn mouse() -> Result<Mouse> {
-    platform::mouse()
+    let mut mouse = platform::mouse()?;
+    mouse.unavailable = unavailable(Peripheral::Mouse, None);
+    Ok(mouse)
 }
 
 pub fn touchpad() -> Result<Touchpad> {
-    platform::touchpad()
+    let mut touchpad = platform::touchpad()?;
+    touchpad.unavailable = unavailable(Peripheral::Touchpad, touchpad.missing.as_deref());
+    Ok(touchpad)
 }
 
 pub fn keyboard() -> Result<Keyboard> {
-    platform::keyboard()
+    let mut keyboard = platform::keyboard()?;
+    keyboard.unavailable = unavailable(Peripheral::Keyboard, None);
+    Ok(keyboard)
+}
+
+fn unavailable(peripheral: Peripheral, missing: Option<&str>) -> BTreeMap<&'static str, String> {
+    Setting::ALL
+        .into_iter()
+        .filter(|setting| setting.peripheral() == peripheral)
+        .filter_map(|setting| {
+            let reason = missing.or_else(|| platform::unsupported(setting))?;
+            Some((setting.field(), sentence(reason)))
+        })
+        .collect()
+}
+
+fn sentence(reason: &str) -> String {
+    let first_word = reason.split_whitespace().next().unwrap_or_default();
+    let mut text = if first_word.chars().all(|c| c.is_ascii_lowercase()) {
+        let mut chars = reason.chars();
+        chars
+            .next()
+            .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+            .unwrap_or_default()
+    } else {
+        reason.to_string()
+    };
+    if !text.ends_with('.') {
+        text.push('.');
+    }
+    text
 }
 
 pub fn devices() -> Vec<Device> {
@@ -406,7 +485,10 @@ pub fn toggle_touchpad() -> Result<bool> {
         bail!("{reason}");
     }
     let Some(enabled) = touchpad.enabled else {
-        bail!("{TOUCHPAD_FIXED}");
+        bail!(
+            "{}",
+            platform::unsupported(Setting::Switch(Switch::Touchpad)).unwrap_or(TOUCHPAD_FIXED)
+        );
     };
     session::claim(Setting::Switch(Switch::Touchpad))?;
     platform::set_switch(Switch::Touchpad, !enabled)?;
@@ -445,6 +527,75 @@ mod tests {
         assert_eq!(Setting::parse("speed"), None);
         assert_eq!(Setting::parse("pointer_speed-"), None);
         assert_eq!(Setting::parse(""), None);
+    }
+
+    #[test]
+    fn every_setting_names_a_field_its_peripheral_answers_with() {
+        let answers = [
+            (
+                Peripheral::Mouse,
+                serde_json::to_value(Mouse::default()).unwrap(),
+            ),
+            (
+                Peripheral::Touchpad,
+                serde_json::to_value(Touchpad::default()).unwrap(),
+            ),
+            (
+                Peripheral::Keyboard,
+                serde_json::to_value(Keyboard::default()).unwrap(),
+            ),
+        ];
+        for setting in Setting::ALL {
+            let (_, answer) = answers
+                .iter()
+                .find(|(peripheral, _)| *peripheral == setting.peripheral())
+                .unwrap();
+            assert!(answer.get(setting.field()).is_some(), "{setting:?}");
+        }
+    }
+
+    #[test]
+    fn a_missing_touchpad_explains_every_touchpad_setting_and_nothing_else() {
+        let reasons = unavailable(Peripheral::Touchpad, Some(NO_TOUCHPAD));
+        assert_eq!(
+            reasons.keys().copied().collect::<Vec<_>>(),
+            ["enabled", "natural_scroll", "speed", "tap_to_click"]
+        );
+        assert!(reasons
+            .values()
+            .all(|reason| reason == "No touchpad is connected."));
+    }
+
+    #[test]
+    fn a_reason_reads_as_a_sentence_without_breaking_a_product_name() {
+        let cases = [
+            ("no touchpad is connected", "No touchpad is connected."),
+            ("macOS has no setting", "macOS has no setting."),
+            ("Windows has no setting", "Windows has no setting."),
+            (
+                "this touchpad is not a Precision Touchpad",
+                "This touchpad is not a Precision Touchpad.",
+            ),
+            ("already a sentence.", "Already a sentence."),
+            ("", "."),
+        ];
+        for (reason, expected) in cases {
+            assert_eq!(sentence(reason), expected, "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_setting_this_platform_cannot_change_is_refused_with_the_reason_it_is_listed_with() {
+        for setting in Setting::ALL {
+            let Some(reason) = platform::unsupported(setting) else {
+                continue;
+            };
+            let refused = match setting {
+                Setting::Switch(switch) => platform::set_switch(switch, true),
+                Setting::Level(level) => platform::set_level(level, level.values().first()),
+            };
+            assert_eq!(refused.unwrap_err().to_string(), reason, "{setting:?}");
+        }
     }
 
     #[test]

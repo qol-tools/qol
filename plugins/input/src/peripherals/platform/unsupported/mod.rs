@@ -8,6 +8,10 @@ pub(crate) fn backend() -> Result<&'static str> {
     bail!(UNSUPPORTED)
 }
 
+pub(crate) fn unsupported(_setting: Setting) -> Option<&'static str> {
+    Some(UNSUPPORTED)
+}
+
 pub(crate) fn mouse() -> Result<Mouse> {
     bail!(UNSUPPORTED)
 }

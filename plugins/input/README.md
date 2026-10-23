@@ -44,6 +44,8 @@ On macOS:
 - Touchpad turns the touchpad on or off and sets tap to click, natural scrolling and pointer speed. Its rows read unavailable when no touchpad is connected.
 - Keyboard sets how long a held key waits before it repeats, and how fast it repeats.
 
+A setting this computer cannot change reads unavailable, and its row says why in place of its description: on macOS, the touchpad switch and swapped mouse buttons; on Windows, natural scrolling for a mouse; with no touchpad, every touchpad row.
+
 ## Hotkeys
 
 - Toggle Touchpad turns the touchpad off when it is on, and on when it is off.

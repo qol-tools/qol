@@ -1384,6 +1384,8 @@ pub(super) fn retire_number_holds(
 }
 
 /// The query and path a row reads its own value from, when the row has one.
+const UNAVAILABLE_REASONS: &str = "unavailable";
+
 pub(super) fn row_value_source(control: &RowControl) -> Option<(&str, Option<&str>)> {
     match control {
         RowControl::Number {
@@ -1400,6 +1402,17 @@ pub(super) fn row_value_source(control: &RowControl) -> Option<(&str, Option<&st
 
 pub(super) fn answers_absent(value: &serde_json::Value, path: Option<&str>) -> bool {
     query_value(value, path).is_some_and(serde_json::Value::is_null)
+}
+
+pub(super) fn absent_reason<'a>(
+    value: &'a serde_json::Value,
+    path: Option<&str>,
+) -> Option<&'a str> {
+    let path = path.filter(|path| !path.is_empty())?;
+    if !answers_absent(value, Some(path)) {
+        return None;
+    }
+    value.get(UNAVAILABLE_REASONS)?.get(path)?.as_str()
 }
 
 fn query_flag(value: &serde_json::Value, path: Option<&str>) -> bool {
@@ -1670,13 +1683,13 @@ fn set_config_value(root: &mut serde_json::Value, dotted_key: &str, value: serde
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_level_query, apply_runtime_query, begin_list_item_action, clear_slider_hold,
-        filtered_list_items, level_query_names, list_item_actions, list_items, list_slider_value,
-        merged_config, option_accent, options_from_value, parse_level, primary_list_item_action,
-        row_action, row_is_visible, row_streams, row_value_json, rows_from_resolved,
-        runtime_query_names, sections_from_resolved, selected_list_item, set_config_value,
-        stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem, ResolvedConfig,
-        Row, RowControl, SelectOption, SliderHold,
+        absent_reason, apply_level_query, apply_runtime_query, begin_list_item_action,
+        clear_slider_hold, filtered_list_items, level_query_names, list_item_actions, list_items,
+        list_slider_value, merged_config, option_accent, options_from_value, parse_level,
+        primary_list_item_action, row_action, row_is_visible, row_streams, row_value_json,
+        rows_from_resolved, runtime_query_names, sections_from_resolved, selected_list_item,
+        set_config_value, stream_gated, visible_row_indices, FieldDefault, ListActions, ListItem,
+        ResolvedConfig, Row, RowControl, SelectOption, SliderHold,
     };
     use crate::status_indicator::StatusTone;
     use qol_config::object_array::ItemFieldKind;
@@ -2553,6 +2566,29 @@ default = "System Default"
                 assert_eq!(options[*index].label, "alsa_output.usb_headset");
             }
             other => panic!("expected select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_null_value_takes_its_reason_from_the_answers_unavailable_object() {
+        let answer = serde_json::json!({
+            "enabled": null,
+            "speed": 15,
+            "tap_to_click": null,
+            "unavailable": { "enabled": "macOS has no switch for the touchpad.", "speed": "stale" },
+        });
+        let cases = [
+            (
+                Some("enabled"),
+                Some("macOS has no switch for the touchpad."),
+            ),
+            (Some("speed"), None),
+            (Some("tap_to_click"), None),
+            (Some("missing"), None),
+            (None, None),
+        ];
+        for (path, reason) in cases {
+            assert_eq!(absent_reason(&answer, path), reason, "{path:?}");
         }
     }
 

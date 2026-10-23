@@ -74,7 +74,15 @@ pub(crate) fn mouse() -> Result<Mouse> {
         swap_buttons: Some(read_flag(Switch::SwapButtons)?),
         double_click: Some(read_level(Level::DoubleClick)?),
         natural_scroll: None,
+        ..Default::default()
     })
+}
+
+pub(crate) fn unsupported(setting: Setting) -> Option<&'static str> {
+    match setting {
+        Setting::Switch(Switch::MouseNaturalScroll) => Some(NO_MOUSE_NATURAL_SCROLL),
+        _ => None,
+    }
 }
 
 pub(crate) fn touchpad() -> Result<Touchpad> {
@@ -90,6 +98,7 @@ pub(crate) fn keyboard() -> Result<Keyboard> {
     Ok(Keyboard {
         repeat_delay: Some(delay_ms(read_level(Level::RepeatDelay)?)),
         repeat_rate: Some(rate_from_step(read_level(Level::RepeatRate)?)),
+        ..Default::default()
     })
 }
 
@@ -237,6 +246,7 @@ fn touchpad_from(parameters: &TouchpadParameters) -> Touchpad {
         natural_scroll: Some(parameters.settings & SCROLL_DIRECTION_REVERSED == 0),
         speed: Some(step_percent(parameters.cursor_speed)),
         missing: None,
+        ..Default::default()
     }
 }
 
@@ -490,6 +500,7 @@ mod tests {
                 natural_scroll: Some(true),
                 speed: Some(50),
                 missing: None,
+                ..Default::default()
             }
         );
     }

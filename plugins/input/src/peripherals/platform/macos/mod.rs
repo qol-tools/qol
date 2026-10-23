@@ -5,11 +5,11 @@ use anyhow::{bail, Context, Result};
 
 use super::super::{
     Baseline, Keyboard, Level, Mouse, Setting, Steps, Switch, Touchpad, Values, NO_TOUCHPAD,
-    TOUCHPAD_FIXED,
 };
 use prefs::{Pref, Value};
 
 const NO_BUTTON_SWAP: &str = "macOS has no setting that swaps the buttons of a mouse";
+const NO_TOUCHPAD_SWITCH: &str = "macOS has no switch for the touchpad, so qol cannot turn it off";
 const FASTEST_SCALING: f64 = 3.0;
 const KEY_TICKS_PER_SECOND: f64 = 60.0;
 const DELAY_STEP_MS: u32 = 50;
@@ -40,6 +40,14 @@ pub(crate) fn backend() -> Result<&'static str> {
     Ok(qol_platform::Os::Macos.label())
 }
 
+pub(crate) fn unsupported(setting: Setting) -> Option<&'static str> {
+    match setting {
+        Setting::Switch(Switch::SwapButtons) => Some(NO_BUTTON_SWAP),
+        Setting::Switch(Switch::Touchpad) => Some(NO_TOUCHPAD_SWITCH),
+        _ => None,
+    }
+}
+
 pub(crate) fn mouse() -> Result<Mouse> {
     Ok(Mouse {
         speed: Some(scaling_percent(MOUSE_SCALING.read()?.number())),
@@ -47,6 +55,7 @@ pub(crate) fn mouse() -> Result<Mouse> {
         swap_buttons: None,
         double_click: Some(seconds_ms(DOUBLE_CLICK.read()?.number())),
         natural_scroll: Some(NATURAL_SCROLL.read()?.flag()),
+        ..Default::default()
     })
 }
 
@@ -60,6 +69,7 @@ pub(crate) fn touchpad() -> Result<Touchpad> {
         natural_scroll: Some(NATURAL_SCROLL.read()?.flag()),
         speed: Some(scaling_percent(TRACKPAD_SCALING.read()?.number())),
         missing: None,
+        ..Default::default()
     })
 }
 
@@ -67,6 +77,7 @@ pub(crate) fn keyboard() -> Result<Keyboard> {
     Ok(Keyboard {
         repeat_delay: Some(ticks_ms(INITIAL_KEY_REPEAT.read()?.number())),
         repeat_rate: Some(ticks_rate(KEY_REPEAT.read()?.number())),
+        ..Default::default()
     })
 }
 
@@ -78,7 +89,7 @@ pub(crate) fn set_switch(switch: Switch, on: bool) -> Result<()> {
             write(Setting::Switch(switch), &[Value::Bool(on)])
         }
         Switch::SwapButtons => bail!(NO_BUTTON_SWAP),
-        Switch::Touchpad => bail!(TOUCHPAD_FIXED),
+        Switch::Touchpad => bail!(NO_TOUCHPAD_SWITCH),
     }
 }
 
@@ -166,7 +177,7 @@ fn prefs(setting: Setting) -> Result<&'static [Pref]> {
         }
         Setting::Switch(Switch::TapToClick) => &TAP_TO_CLICK,
         Setting::Switch(Switch::SwapButtons) => bail!(NO_BUTTON_SWAP),
-        Setting::Switch(Switch::Touchpad) => bail!(TOUCHPAD_FIXED),
+        Setting::Switch(Switch::Touchpad) => bail!(NO_TOUCHPAD_SWITCH),
     })
 }
 
@@ -277,7 +288,7 @@ mod tests {
             .to_string();
         assert_eq!(error, NO_BUTTON_SWAP);
         let error = set_switch(Switch::Touchpad, false).unwrap_err().to_string();
-        assert_eq!(error, TOUCHPAD_FIXED);
+        assert_eq!(error, NO_TOUCHPAD_SWITCH);
         let error = restore(Setting::Level(Level::RepeatRate), Baseline::Number(5))
             .unwrap_err()
             .to_string();
