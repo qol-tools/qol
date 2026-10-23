@@ -281,16 +281,6 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             action_label: plugins_queued.then_some("Stop"),
         };
     }
-    if !snapshot.checks_enabled {
-        return Summary {
-            dot: None,
-            busy: false,
-            label: "Update checks are off".to_string(),
-            description: "Development builds update by rebuilding.".to_string(),
-            action: None,
-            action_label: None,
-        };
-    }
     let last_check = last_check_text(snapshot);
     let failed = pending_names(snapshot, &[TargetState::Failed]);
     if !failed.is_empty() {
@@ -313,6 +303,16 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             SummaryDot::Warning,
             (count >= 2).then_some("Update all"),
         );
+    }
+    if !snapshot.checks_enabled {
+        return Summary {
+            dot: None,
+            busy: false,
+            label: "Update checks are off".to_string(),
+            description: "Development builds update by rebuilding.".to_string(),
+            action: None,
+            action_label: None,
+        };
     }
     let check_failed = snapshot.check_error.is_some() && !snapshot.checking;
     if snapshot.checking {
@@ -976,6 +976,14 @@ mod tests {
         assert_eq!(row.dot, None);
         assert_eq!(row.action, None);
         assert_eq!(row.action_label, None);
+
+        disabled.plugins = vec![
+            target("cli", "CLI Sessions", TargetState::Available),
+            target("lights", "Lights", TargetState::Available),
+        ];
+        let row = summary(&disabled);
+        assert_eq!(row.label, "2 updates waiting");
+        assert_eq!(row.action_label, Some("Update all"));
 
         let failed = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),
