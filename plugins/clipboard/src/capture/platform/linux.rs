@@ -202,7 +202,7 @@ impl Clipboard for X11Clipboard {
     fn clear_expired_secret(&self) -> Result<(), CaptureError> {
         {
             let mut offer = lock(&self.offer);
-            if !offer.as_ref().is_some_and(expired_secret) {
+            if !offer.as_ref().is_some_and(Payload::is_expired_secret) {
                 return Ok(());
             }
             *offer = None;
@@ -265,7 +265,9 @@ impl X11Clipboard {
         };
         let content = match wanted {
             Wanted::Png => Content::Png(bytes),
-            Wanted::Files => Content::Files(parse_uri_list(&String::from_utf8_lossy(&bytes))),
+            Wanted::Files => {
+                Content::Files(super::uri::parse_uri_list(&String::from_utf8_lossy(&bytes)))
+            }
             Wanted::Text => Content::Text(String::from_utf8_lossy(&bytes).into_owned()),
         };
         Ok(Some(Capture {
@@ -436,7 +438,7 @@ impl X11Clipboard {
         property: Atom,
         payload: &Payload,
     ) -> Result<bool, CaptureError> {
-        if expired_secret(payload) {
+        if payload.is_expired_secret() {
             return Ok(false);
         }
         let text_targets = [
@@ -501,10 +503,6 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn expired_secret(payload: &Payload) -> bool {
-    matches!(payload, Payload::Secret { until, .. } if *until <= Instant::now())
-}
-
 fn atoms_of(raw: &[u8]) -> Vec<Atom> {
     let (chunks, _) = raw.as_chunks::<4>();
     chunks.iter().copied().map(u32::from_ne_bytes).collect()
@@ -529,68 +527,9 @@ fn choose_target(targets: &[(Atom, String)]) -> Option<(Atom, Wanted)> {
         .map(|atom| (atom, Wanted::Text))
 }
 
-fn parse_uri_list(list: &str) -> Vec<String> {
-    list.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|uri| percent_decode(uri.strip_prefix("file://").unwrap_or(uri)))
-        .collect()
-}
-
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let escape = bytes
-            .get(index + 1..index + 3)
-            .filter(|_| bytes[index] == b'%')
-            .and_then(|hex| std::str::from_utf8(hex).ok())
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        match escape {
-            Some(byte) => {
-                decoded.push(byte);
-                index += 3;
-            }
-            None => {
-                decoded.push(bytes[index]);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn only_a_secret_past_its_time_is_expired() {
-        let past = Instant::now() - Duration::from_secs(1);
-        let future = Instant::now() + Duration::from_secs(30);
-        let cases = [
-            (Payload::Text("a".to_string()), false),
-            (Payload::Png(Vec::new()), false),
-            (
-                Payload::Secret {
-                    text: "a".to_string(),
-                    until: future,
-                },
-                false,
-            ),
-            (
-                Payload::Secret {
-                    text: "a".to_string(),
-                    until: past,
-                },
-                true,
-            ),
-        ];
-        for (payload, expired) in cases {
-            assert_eq!(expired_secret(&payload), expired, "payload: {payload:?}");
-        }
-    }
 
     fn offered(names: &[&str]) -> Vec<(Atom, String)> {
         names
@@ -613,15 +552,5 @@ mod tests {
             let chosen = choose_target(&offered(names)).map(|(atom, _)| atom);
             assert_eq!(chosen, *atom, "names: {names:?}");
         }
-    }
-
-    #[test]
-    fn uri_lists_become_decoded_paths() {
-        let list = "# copied\r\nfile:///home/me/My%20File.txt\r\nfile:///tmp/a\r\n\r\n";
-        assert_eq!(
-            parse_uri_list(list),
-            vec!["/home/me/My File.txt".to_string(), "/tmp/a".to_string()]
-        );
-        assert_eq!(percent_decode("100%"), "100%");
     }
 }

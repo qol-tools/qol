@@ -4,6 +4,8 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod uri;
 #[cfg(target_os = "windows")]
 mod windows;
 
