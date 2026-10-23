@@ -32,4 +32,13 @@ mod tests {
     fn contract_defaults_match_the_typed_empty_config() {
         qol_config::validate_contract_defaults_match_type::<PluginConfig>(CONFIG_CONTRACT).unwrap();
     }
+
+    #[test]
+    fn connection_status_hides_while_running_and_shows_for_a_fault() {
+        let spec = qol_config::contract::parse_spec_str(CONFIG_CONTRACT).unwrap();
+        let field = spec.fields.get("connection_status").unwrap();
+        let hidden = field.hide_values.as_deref().unwrap_or_default();
+        assert_eq!(hidden, ["ok".to_string()]);
+        assert!(field.label_map.as_ref().unwrap().contains_key("offline"));
+    }
 }

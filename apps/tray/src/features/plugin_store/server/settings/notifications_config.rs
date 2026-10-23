@@ -240,4 +240,19 @@ mod tests {
         assert!(query_inner("os_do_not_disturb").is_ok());
         assert!(query_inner("profiles").is_err());
     }
+
+    #[test]
+    fn do_not_disturb_row_explains_what_it_mirrors() {
+        let spec = qol_config::contract::parse_spec_str(include_str!(
+            "../../../../settings_surface/platform/notifications-config.toml"
+        ))
+        .unwrap();
+        let field = spec.field("do_not_disturb").unwrap();
+        let description = field.description.as_deref().unwrap_or_default();
+        assert!(description.contains("Follows your system"), "{description}");
+        assert!(
+            description.contains("qol toasts still show"),
+            "{description}"
+        );
+    }
 }

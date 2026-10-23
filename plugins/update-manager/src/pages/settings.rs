@@ -370,11 +370,6 @@ fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
                 .detail("A setting you change here is listed until you set it back"),
         );
     }
-    sheet.group(
-        "ends when qol stops",
-        "qol's own rules. after a crash, they end at the next startup.",
-    );
-    rules(&mut sheet, session);
     sheet
 }
 

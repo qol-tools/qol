@@ -22,7 +22,7 @@ use qol_audio::attempts::{AudioWatchState, RepairDecision};
 use qol_audio::control::{self, Card, Sink, Source, SourceOutput};
 use qol_audio::devices::{AudioDevice, Direction, Identity, State};
 use qol_headless::DoctorCheckResult;
-use qol_host_fixes::{findings_payload, HostFixes};
+use qol_host_fixes::HostFixes;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_plugin_daemon::notification::send_notification;
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse};
@@ -37,7 +37,7 @@ use crate::bluetooth::{
     ReconnectFailure, ReconnectReport, ReconnectSelection,
 };
 use crate::config::ReconnectConfig;
-use crate::hostfix::BluetoothHostFixes;
+use crate::hostfix::{host_fixes_payload, BluetoothHostFixes};
 use crate::platform::audio;
 
 pub const CAPABILITIES: BackendCapabilities = BackendCapabilities {
@@ -1453,7 +1453,7 @@ fn dispatch_daemon_action(
         DaemonAction::Reload => ReadResult::Command(DaemonCommand::Reload),
         DaemonAction::Settings => ReadResult::Command(DaemonCommand::Settings),
         DaemonAction::HostFixes => {
-            ReadResult::HandledWithData(findings_payload(&BluetoothHostFixes.detect()))
+            ReadResult::HandledWithData(host_fixes_payload(&BluetoothHostFixes.detect()))
         }
         DaemonAction::ApplyHostFix => match host_fix_id(request) {
             Ok(id) => {

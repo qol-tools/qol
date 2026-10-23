@@ -12,6 +12,7 @@ label = "Status"
 section = "controllers"
 query = "controllers_snapshot"
 value_from = "state"
+hide_values = ["none", "ok"]
 label_map = { none = "No controllers detected", ok = "Controllers ready", optional_fix = "Optional fix available", not_responding = "Controller not responding", fixing = "Fixing controller" }
 tone_map = { ok = "success", optional_fix = "warning", not_responding = "danger", fixing = "warning" }
 

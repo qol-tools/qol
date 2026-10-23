@@ -24,8 +24,7 @@ use qol_gpui::surface::SurfaceDismisser;
 
 use super::data;
 use super::model::{
-    page, CheckRow, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
-    ValueTone,
+    page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot, ValueTone,
 };
 
 const MAX_VISIBLE: usize = 10;
@@ -36,7 +35,6 @@ const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
 enum Selection {
     None,
     Summary,
-    Check,
     Host,
     Plugin(String),
 }
@@ -44,7 +42,6 @@ enum Selection {
 enum PageRow {
     Header { title: String, detail: &'static str },
     Summary(Summary),
-    Check(CheckRow),
     Host(TargetRow),
     Plugin(TargetRow),
 }
@@ -54,7 +51,6 @@ impl PageRow {
         match self {
             PageRow::Header { .. } => None,
             PageRow::Summary(summary) => summary.action.as_ref(),
-            PageRow::Check(check) => check.action.as_ref(),
             PageRow::Host(target) | PageRow::Plugin(target) => target.action.as_ref(),
         }
     }
@@ -63,7 +59,6 @@ impl PageRow {
         Some(match self {
             PageRow::Header { .. } => return None,
             PageRow::Summary(_) => Selection::Summary,
-            PageRow::Check(_) => Selection::Check,
             PageRow::Host(_) => Selection::Host,
             PageRow::Plugin(target) => Selection::Plugin(target.id.clone()),
         })
@@ -73,7 +68,6 @@ impl PageRow {
         match self {
             PageRow::Header { .. } => None,
             PageRow::Summary(summary) => summary.action_label,
-            PageRow::Check(check) => check.action_label,
             PageRow::Host(target) | PageRow::Plugin(target) => target.action_label,
         }
     }
@@ -223,7 +217,6 @@ impl UpdatesView {
                 detail: "What the last check found.",
             },
             PageRow::Summary(model.summary),
-            PageRow::Check(model.check),
             PageRow::Header {
                 title: "qol-tray".to_string(),
                 detail: "The tray itself.",
@@ -459,7 +452,6 @@ impl UpdatesView {
                     .into_any_element()
             }
             PageRow::Summary(summary) => self.render_summary(index, summary, cx),
-            PageRow::Check(check) => self.render_check(index, check, cx),
             PageRow::Host(target) => self.render_target(index, target, Selection::Host, cx),
             PageRow::Plugin(target) => {
                 let selection = Selection::Plugin(target.id.clone());
@@ -534,51 +526,6 @@ impl UpdatesView {
                 })),
             )
             .into_any_element()
-    }
-
-    fn render_check(&self, index: usize, check: &CheckRow, cx: &mut Context<Self>) -> AnyElement {
-        let kit = kit();
-        let ground = RowGround::of(self.selected == index, self.body_focused);
-        let row = SettingsRow::setting("updates-checked", kit)
-            .selected(self.selected == index, self.body_focused)
-            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                if event.standard_click() {
-                    this.select_row(index, Selection::Check, cx);
-                }
-            }));
-        row.child(settings_label_group(
-            check.label,
-            Some(check.description.clone().into()),
-            ground,
-            kit,
-        ))
-        .child(
-            settings_value_group()
-                .children(check.checking.then(|| {
-                    settings_connection_spinner(
-                        ("updates-checked-spinner", index),
-                        self.connection(),
-                        kit,
-                    )
-                }))
-                .child(settings_value_text(
-                    check.value.clone(),
-                    value_tone(check.tone),
-                    ground,
-                    kit,
-                ))
-                .children(check.action_label.map(|label| {
-                    settings_action_affordance(
-                        ("updates-checked-action", index),
-                        label,
-                        None,
-                        false,
-                        ground,
-                        kit,
-                    )
-                })),
-        )
-        .into_any_element()
     }
 
     fn render_target(
@@ -751,7 +698,7 @@ fn value_tone(tone: ValueTone) -> SettingsValueTone {
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{CheckRow, Summary, TargetRow, TargetState, ValueTone};
+    use super::super::model::{Summary, TargetRow, TargetState, ValueTone};
     use super::{fade_opacity, finished, navigable, nearest_navigable, PageRow, Selection};
     use std::time::Duration;
 
@@ -779,18 +726,6 @@ mod tests {
             description: "No updates are waiting".to_string(),
             action: None,
             action_label: None,
-        }
-    }
-
-    fn check() -> CheckRow {
-        CheckRow {
-            label: "Update checks",
-            value: "Off".to_string(),
-            tone: ValueTone::Muted,
-            description: "Development builds do not check for updates.".to_string(),
-            action: None,
-            action_label: None,
-            checking: false,
         }
     }
 
@@ -843,7 +778,6 @@ mod tests {
                 detail: "What the last check found.",
             },
             PageRow::Summary(summary()),
-            PageRow::Check(check()),
             PageRow::Header {
                 title: "qol-tray".to_string(),
                 detail: "The tray itself.",
@@ -853,11 +787,7 @@ mod tests {
         let navigable = navigable(&rows);
         assert_eq!(
             navigable,
-            vec![
-                (1, Selection::Summary),
-                (2, Selection::Check),
-                (4, Selection::Host),
-            ]
+            vec![(1, Selection::Summary), (3, Selection::Host)]
         );
     }
 
@@ -865,7 +795,7 @@ mod tests {
     fn nearest_navigable_keeps_the_cursor_close_when_a_row_disappears() {
         let navigable = [
             (2usize, Selection::Summary),
-            (5, Selection::Check),
+            (5, Selection::Plugin("bt".to_string())),
             (9, Selection::Host),
         ];
         let cases = [(0, 0), (2, 0), (3, 1), (5, 1), (8, 2), (40, 2)];

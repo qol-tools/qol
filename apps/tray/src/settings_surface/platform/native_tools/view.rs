@@ -31,8 +31,8 @@ use crate::shortcuts::model::Shortcut;
 use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
     available_actions, chord_from_keystroke, modifier_is_secondary, question_text,
-    shortcut_is_managed, shortcut_summary, AppRefKind, EditorQuestion, HotkeyDraft,
-    ShortcutActionKind, ShortcutDraft, ToolKind,
+    shortcut_is_managed, shortcut_kind_label, shortcut_summary, AppRefKind, EditorQuestion,
+    HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind,
 };
 
 const MAX_VISIBLE: usize = 9;
@@ -1101,11 +1101,7 @@ impl NativeToolsView {
         };
         let selected = self.list().selected == item + 1;
         let row = RowGround::of(selected, self.body_focused);
-        let kind = if shortcut_is_managed(shortcut) {
-            "Plugin \u{b7} managed".to_string()
-        } else {
-            shortcut.action.kind().to_string()
-        };
+        let kind = shortcut_kind_label(shortcut);
         SettingsRow::setting(("native-shortcut-row", item), kit)
             .selected(selected, self.body_focused)
             .dimmed(!shortcut.enabled)
@@ -1120,7 +1116,11 @@ impl NativeToolsView {
                 row,
                 kit,
             ))
-            .child(settings_value_group().child(kit.value(kind)))
+            .children(kind.map(|kind| {
+                settings_value_group()
+                    .child(kit.value(kind))
+                    .into_any_element()
+            }))
             .child(deck::bounds_recorder(
                 Rc::clone(&self.list_bounds),
                 item + 1,

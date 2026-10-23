@@ -228,4 +228,15 @@ mod tests {
         );
         assert_eq!(defaults.listen_config(), ListenConfig::default());
     }
+
+    #[test]
+    fn session_status_hides_states_the_enable_toggle_already_shows() {
+        let block = CONFIG_CONTRACT
+            .split("[field.session_status]")
+            .nth(1)
+            .and_then(|rest| rest.split("\n[").next())
+            .unwrap();
+
+        assert!(block.contains("hide_values = [\"idle\", \"listening\"]"));
+    }
 }

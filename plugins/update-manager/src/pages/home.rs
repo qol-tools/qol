@@ -39,19 +39,10 @@ fn notes(sheet: &mut Sheet, session: &Session) {
         .flat_map(|updates| updates.problems.iter())
         .chain(session.host.problems.iter())
         .collect();
-    if !session.borrowed && !session.locked() && session.failed.is_none() && problems.is_empty() {
+    if !session.locked() && session.failed.is_none() && problems.is_empty() {
         return;
     }
     sheet.group("right now", "what is different on this computer.");
-    if session.borrowed {
-        sheet.row(
-            Row::info("borrowed", "Changes ask first")
-                .detail(
-                    "Keep settings in place is off in General, so qol changes nothing here unless you ask.",
-                )
-                .attention(true),
-        );
-    }
     if session.locked() {
         sheet.row(
             Row::info("locked", "You are not an administrator here")
@@ -192,18 +183,8 @@ fn owner(sheet: &mut Sheet, session: &Session) {
         return;
     };
     if session.locked() {
-        sheet.row(
-            Row::info("auto", "Install on their own")
-                .detail("Needs an administrator")
-                .value(auto_value(mint.auto))
-                .tag("locked"),
-        );
-        sheet.row(
-            Row::info("hours", "Update hours")
-                .detail("Needs an administrator")
-                .value(hours_value(session))
-                .tag("locked"),
-        );
+        sheet.row(Row::info("auto", "Install on their own").value(auto_value(mint.auto)));
+        sheet.row(Row::info("hours", "Update hours").value(hours_value(session)));
         return;
     }
     sheet.row(
