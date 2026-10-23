@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Mutex, Once, OnceLock, PoisonError};
 
 use block2::{DynBlock, RcBlock};
@@ -1012,11 +1012,13 @@ pub fn grab_keyboard(_window: &gpui::Window) -> bool {
 pub fn release_keyboard(_window: &gpui::Window) {}
 
 static INPUT_HELD: AtomicBool = AtomicBool::new(false);
-static HOLD_REASSERTS: AtomicU8 = AtomicU8::new(0);
+static HOLD_REASSERTS: AtomicU64 = AtomicU64::new(0);
+static HOLD_LAST_REASSERT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static HOLD_RETRY_PENDING: AtomicBool = AtomicBool::new(false);
 static HELD_TITLE: Mutex<Option<String>> = Mutex::new(None);
 static HOLD_OBSERVER: AtomicPtr<objc2::runtime::AnyObject> = AtomicPtr::new(std::ptr::null_mut());
 
-const HOLD_REASSERT_LIMIT: u8 = 3;
+const HOLD_REASSERT_SPACING: std::time::Duration = std::time::Duration::from_millis(100);
 
 objc2::define_class!(
     #[unsafe(super(NSObject))]
@@ -1082,6 +1084,9 @@ pub fn hold_input(title: &str) -> bool {
         .unwrap_or_else(PoisonError::into_inner)
         .replace(title.to_owned());
     HOLD_REASSERTS.store(0, Ordering::Relaxed);
+    *HOLD_LAST_REASSERT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = None;
     INPUT_HELD.store(true, Ordering::Release);
     qol_runtime::probe!(
         "HOLD_IN",
@@ -1095,6 +1100,9 @@ pub fn hold_input(title: &str) -> bool {
 pub fn release_input(title: &str) {
     INPUT_HELD.store(false, Ordering::Release);
     HOLD_REASSERTS.store(0, Ordering::Relaxed);
+    *HOLD_LAST_REASSERT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = None;
     HELD_TITLE
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -1117,28 +1125,73 @@ pub fn input_held() -> bool {
     INPUT_HELD.load(Ordering::Acquire)
 }
 
-fn reassert_held_input(reason: &str) {
+fn reassert_delay(since_last: Option<std::time::Duration>) -> std::time::Duration {
+    match since_last {
+        Some(elapsed) if elapsed < HOLD_REASSERT_SPACING => HOLD_REASSERT_SPACING - elapsed,
+        _ => std::time::Duration::ZERO,
+    }
+}
+
+fn reassert_held_input(reason: &'static str) {
     if !INPUT_HELD.load(Ordering::Acquire) {
         return;
     }
-    if HOLD_REASSERTS.load(Ordering::Acquire) >= HOLD_REASSERT_LIMIT {
+    let since_last = HOLD_LAST_REASSERT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .map(|at| at.elapsed());
+    let delay = reassert_delay(since_last);
+    if delay.is_zero() {
+        reassert_held_input_now(reason);
         return;
     }
-    let attempt = HOLD_REASSERTS.fetch_add(1, Ordering::AcqRel) + 1;
-    let Some(mtm) = MainThreadMarker::new() else {
+    if HOLD_RETRY_PENDING.swap(true, Ordering::AcqRel) {
         return;
-    };
-    let Some(title) = HELD_TITLE
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        run_on_main(Box::new(move || {
+            HOLD_RETRY_PENDING.store(false, Ordering::Release);
+            if held_window_lost_focus() {
+                reassert_held_input(reason);
+            }
+        }));
+    });
+}
+
+fn held_title() -> Option<String> {
+    HELD_TITLE
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
         .cloned()
-    else {
+}
+
+fn held_window_lost_focus() -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(title) = held_title() else {
+        return false;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    !app.isActive() || find_window_by_title(mtm, &title).is_some_and(|window| !window.isKeyWindow())
+}
+
+fn reassert_held_input_now(reason: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(title) = held_title() else {
         return;
     };
     let Some(window) = find_window_by_title(mtm, &title) else {
         return;
     };
+    *HOLD_LAST_REASSERT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(std::time::Instant::now());
+    let attempt = HOLD_REASSERTS.fetch_add(1, Ordering::AcqRel) + 1;
     let app = NSApplication::sharedApplication(mtm);
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
@@ -1419,9 +1472,11 @@ fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
 mod tests {
     use super::{
         cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_in_region, pointer_inside,
-        primary_anchored_from_screen_relative, should_return_focus,
+        primary_anchored_from_screen_relative, reassert_delay, should_return_focus,
+        HOLD_REASSERT_SPACING,
     };
     use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use std::time::Duration;
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
 
@@ -1439,6 +1494,25 @@ mod tests {
                 should_return_focus(app_active, shown_key, process_frontmost),
                 expected,
                 "active={app_active} shown_key={shown_key} frontmost={process_frontmost}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_window_reasserts_at_once_unless_it_just_did() {
+        let spacing = HOLD_REASSERT_SPACING;
+        let cases = [
+            (None, Duration::ZERO),
+            (Some(spacing), Duration::ZERO),
+            (Some(spacing * 5), Duration::ZERO),
+            (Some(Duration::ZERO), spacing),
+            (Some(spacing / 4), spacing - spacing / 4),
+        ];
+        for (since_last, expected) in cases {
+            assert_eq!(
+                reassert_delay(since_last),
+                expected,
+                "since_last={since_last:?}"
             );
         }
     }
