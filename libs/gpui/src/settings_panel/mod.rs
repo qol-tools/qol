@@ -1036,6 +1036,25 @@ fn panel_monitor(
         .or_else(|| settings_surface().remembered_monitor(cx))
 }
 
+fn push_page_rows(panel: &SettingsPanel, rows: &mut Vec<Row>, sections: &mut Vec<RowSection>) {
+    for (source, entry) in panel
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.custom)
+    {
+        let index = rows.len();
+        rows.push(rows::page_row(&entry.plugin_id, &entry.heading, source));
+        sections.push(RowSection {
+            label: entry.heading.clone(),
+            description: None,
+            rows: vec![index],
+            source,
+            device_kind: None,
+        });
+    }
+}
+
 fn size_prepared_panel(
     prepared: PreparedSettingsPanel,
     monitor: Option<ActiveMonitor>,
@@ -1074,11 +1093,14 @@ fn size_prepared_panel(
         })
         .min(available);
     let min_size = panel_min_size(device_list + rail, size(px(width), px(height)));
+    let mut rows = prepared.rows;
+    let mut sections = prepared.sections;
+    push_page_rows(&prepared.panel, &mut rows, &mut sections);
     Ok(PreparedPanel {
         panel: prepared.panel,
         state: SettingsPanelState {
-            rows: prepared.rows,
-            sections: prepared.sections,
+            rows,
+            sections,
             sources: prepared.sources,
             query_states: prepared.query_states,
             opening_answers: prepared.opening_answers,
