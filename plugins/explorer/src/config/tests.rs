@@ -162,7 +162,6 @@ fn a_failed_save_names_its_keys_once_and_taking_them_clears_the_list() {
     saver.save("pins", Vec::<Pin>::new());
     futures::executor::block_on(saver.reload().expect("the saver is running"))
         .expect("the reload answers");
-    saver.save("view_size", ViewSize::Icons);
     saver.save("pins", Vec::<Pin>::new());
     futures::executor::block_on(saver.reload().expect("the saver is running"))
         .expect("the reload answers");

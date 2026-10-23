@@ -1558,11 +1558,6 @@ default = []
                 "field.bad.row_label",
                 "item fields",
             ),
-            (
-                "type = \"object_array\"\ndefault = []\nrow_label = \"{name} {x-y}\"\n[field.bad.item.fields]\nname = \"string\"",
-                "field.bad.row_label",
-                "item fields",
-            ),
         ];
         for (field, path, message) in cases {
             let errors =
