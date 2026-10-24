@@ -176,6 +176,11 @@ impl Browser {
         if trip.journaled && !done.placed.is_empty() {
             self.ops.journal.record(&done);
         }
+        if !trip.journaled {
+            self.ops
+                .returned
+                .extend(done.landed.iter().map(|(_, to)| to.clone()));
+        }
         let outcome = Outcome {
             verb: trip.verb,
             bytes: trip.bytes,

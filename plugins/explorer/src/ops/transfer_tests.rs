@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
-use super::{partial_name, start, survey, Done, Progress, Resolve, Room, Transfer, Verb};
+use super::{
+    partial_name, partial_of, start, survey, Done, Progress, Resolve, Room, Transfer, Verb,
+};
 
 fn write(path: &Path, text: &str, age_secs: u64) {
     if let Some(parent) = path.parent() {
@@ -327,8 +329,17 @@ fn partial_names_stay_within_a_file_name_limit() {
     let long = format!("{}a", "é".repeat(127));
     let partial = partial_name(&Path::new("/x").join(&long)).unwrap();
     let name = partial.file_name().unwrap().to_string_lossy().into_owned();
-    assert!(name.len() <= 240, "{}", name.len());
+    assert!(name.len() + " (99)".len() <= 255, "{}", name.len());
     assert!(name.ends_with(".qol-partial"));
+}
+
+#[test]
+fn a_numbered_partial_still_belongs_to_its_target() {
+    let target = Path::new("/x/a.txt");
+    assert!(partial_of(target, Path::new("/x/.a.txt.qol-partial")));
+    assert!(partial_of(target, Path::new("/x/.a.txt (2).qol-partial")));
+    assert!(!partial_of(target, Path::new("/y/.a.txt.qol-partial")));
+    assert!(!partial_of(target, Path::new("/x/.b.txt.qol-partial")));
 }
 
 #[cfg(unix)]

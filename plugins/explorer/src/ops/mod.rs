@@ -14,7 +14,7 @@ mod transfer;
 mod transfer_tests;
 
 pub use journal::{Journal, Undo};
-pub use run::{partial_name, start};
+pub use run::{partial_name, partial_of, start};
 pub use simple::{free_name, new_folder, rename, restore, trash, NameProblem};
 pub use transfer::{crosses, survey};
 

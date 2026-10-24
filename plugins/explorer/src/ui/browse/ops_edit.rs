@@ -238,8 +238,9 @@ impl Browser {
             self.begin_journaled(transfer, false);
             return;
         }
+        let returned = std::mem::take(&mut self.ops.returned);
         for (landed, original) in std::mem::take(&mut self.ops.renaming) {
-            if fs::symlink_metadata(&original).is_err() {
+            if returned.contains(&landed) && fs::symlink_metadata(&original).is_err() {
                 let _ = fs::rename(&landed, &original);
             }
         }

@@ -300,6 +300,18 @@ fn same_folder(src: &Path, into: &Path) -> bool {
     }
 }
 
+pub fn partial_of(target: &Path, entry: &Path) -> bool {
+    let Some(first) = partial_name(target) else {
+        return false;
+    };
+    let stem = |path: &Path| {
+        let name = path.file_name()?.to_str()?;
+        name.strip_suffix(PARTIAL_SUFFIX).map(str::to_owned)
+    };
+    entry.parent() == target.parent()
+        && matches!((stem(&first), stem(entry)), (Some(first), Some(found)) if found.starts_with(&first))
+}
+
 pub fn partial_name(target: &Path) -> Option<PathBuf> {
     let name = target.file_name()?.to_string_lossy();
     let mut cut = name.len().min(PARTIAL_NAME_BYTES);

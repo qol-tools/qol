@@ -68,6 +68,7 @@ pub(super) struct Ops {
     pub undoing: Vec<Transfer>,
     pub restoring: Vec<PathBuf>,
     pub renaming: Vec<(PathBuf, PathBuf)>,
+    pub returned: Vec<PathBuf>,
 }
 
 impl Ops {
@@ -75,6 +76,7 @@ impl Ops {
         self.undoing.clear();
         self.restoring.clear();
         self.renaming.clear();
+        self.returned.clear();
     }
 
     pub(super) fn new() -> Self {
@@ -97,6 +99,7 @@ impl Ops {
             undoing: Vec::new(),
             restoring: Vec::new(),
             renaming: Vec::new(),
+            returned: Vec::new(),
         }
     }
 
@@ -285,8 +288,8 @@ impl Browser {
     pub fn arriving_bytes(&self, entry: &Entry) -> Option<(u64, u64)> {
         let running = self.ops.running.as_ref()?;
         let arriving = running.arriving.as_ref()?;
-        let is_partial = ops::partial_name(arriving).is_some_and(|partial| entry.path == partial);
-        (entry.path == *arriving || is_partial).then_some((running.done, running.total))
+        (entry.path == *arriving || ops::partial_of(arriving, &entry.path))
+            .then_some((running.done, running.total))
     }
 
     pub(super) fn operands(&self) -> Vec<PathBuf> {
