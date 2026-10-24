@@ -155,7 +155,7 @@ impl RenderOnce for SettingsRow {
         if self.lift > 0.0 {
             let mut shadow = crate::kit::float_shadow(self.kit.grounds.pane.ink);
             for layer in &mut shadow {
-                layer.color.a *= self.lift;
+                layer.color = layer.color.opacity(self.lift);
             }
             row = row.shadow(shadow);
         }
