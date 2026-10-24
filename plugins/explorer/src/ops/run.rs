@@ -10,10 +10,13 @@ use std::time::{Duration, Instant};
 use super::copy::{copy_node, remove_all, same_content, same_link, Meter};
 use super::simple::plain;
 use super::{
-    free_name, next_job_id, trash, Done, Failure, Job, JobId, Progress, Resolve, Survey, Verb,
+    free_name, next_job_id, restore, trash, Done, Failure, Job, JobId, Progress, Resolve, Survey,
+    Verb,
 };
 
 const PULSE: Duration = Duration::from_millis(120);
+const PARTIAL_SUFFIX: &str = ".qol-partial";
+const PARTIAL_NAME_BYTES: usize = 230;
 
 pub fn start(survey: Survey, wake: impl Fn() + Send + 'static) -> Job {
     let id = next_job_id();
@@ -46,6 +49,7 @@ struct Run {
     last: Option<Instant>,
     placed: Vec<(PathBuf, PathBuf)>,
     landed: Vec<(PathBuf, PathBuf)>,
+    matched: Vec<(PathBuf, PathBuf)>,
     replaced: Vec<PathBuf>,
     kept_originals: Vec<PathBuf>,
     failures: Vec<Failure>,
@@ -77,6 +81,7 @@ impl Run {
             last: None,
             placed: Vec::new(),
             landed: Vec::new(),
+            matched: Vec::new(),
             replaced: Vec::new(),
             kept_originals: Vec::new(),
             failures: Vec::new(),
@@ -111,6 +116,8 @@ impl Run {
             verb: self.verb,
             placed: std::mem::take(&mut self.placed),
             landed: std::mem::take(&mut self.landed),
+            matched: std::mem::take(&mut self.matched),
+            trashed: false,
             replaced: std::mem::take(&mut self.replaced),
             kept_originals: std::mem::take(&mut self.kept_originals),
             failures: std::mem::take(&mut self.failures),
@@ -124,6 +131,7 @@ impl Run {
         };
         let moving = self.verb == Verb::Move && !copy_only;
         let existing = into.join(name);
+        let before = self.replaced.len();
         let spot = if same_folder(src, into) {
             if self.verb == Verb::Move {
                 return;
@@ -137,6 +145,7 @@ impl Run {
             Spot::Place(target) => {
                 self.send(Progress::Arriving(target.clone()));
                 if !self.place(src, &target, moving) {
+                    self.put_back(before);
                     return;
                 }
                 if !copy_only {
@@ -181,6 +190,13 @@ impl Run {
         clean
     }
 
+    fn put_back(&mut self, from: usize) {
+        let trashed: Vec<PathBuf> = self.replaced.drain(from..).collect();
+        if !trashed.is_empty() {
+            self.failures.extend(restore(&trashed));
+        }
+    }
+
     fn place(&mut self, src: &Path, target: &Path, moving: bool) -> bool {
         if moving {
             match fs::rename(src, target) {
@@ -192,10 +208,11 @@ impl Run {
                 }
             }
         }
-        let Some(partial) = partial_name(target) else {
+        let Some(partial) = partial_name(target)
+            .and_then(|partial| Some(free_name(partial.parent()?, partial.file_name()?)))
+        else {
             return false;
         };
-        let _ = remove_all(&partial);
         if let Err(error) = copy_node(src, &partial, self) {
             let _ = remove_all(&partial);
             self.fail(src, &error);
@@ -231,19 +248,25 @@ impl Run {
             let target = existing.join(&name);
             if self.identical(&path, &target) {
                 if moving {
-                    if let Err(error) = fs::remove_file(&path) {
-                        self.fail(&path, &error);
-                        emptied = false;
+                    match fs::remove_file(&path) {
+                        Ok(()) => self.matched.push((path, target)),
+                        Err(error) => {
+                            self.fail(&path, &error);
+                            emptied = false;
+                        }
                     }
                 } else {
                     emptied = false;
                 }
                 continue;
             }
+            let before = self.replaced.len();
             emptied &= match self.settle(&path, &target, existing, &name) {
                 Spot::Place(landing) => {
                     let placed = self.place(&path, &landing, moving);
-                    if placed && (moving || self.verb == Verb::Copy) {
+                    if !placed {
+                        self.put_back(before);
+                    } else if moving || self.verb == Verb::Copy {
                         self.landed.push((path.clone(), landing));
                     }
                     placed && moving
@@ -277,7 +300,11 @@ fn same_folder(src: &Path, into: &Path) -> bool {
     }
 }
 
-fn partial_name(target: &Path) -> Option<PathBuf> {
+pub fn partial_name(target: &Path) -> Option<PathBuf> {
     let name = target.file_name()?.to_string_lossy();
-    Some(target.with_file_name(format!(".{name}.qol-partial")))
+    let mut cut = name.len().min(PARTIAL_NAME_BYTES);
+    while !name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Some(target.with_file_name(format!(".{}{PARTIAL_SUFFIX}", &name[..cut])))
 }

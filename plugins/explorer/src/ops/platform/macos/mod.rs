@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use crate::ops::{Failure, NameProblem};
 
-const TRASH_DIRS: [&str; 2] = [".Trash", ".Trashes"];
 const NO_RESTORE: &str =
     "macOS does not let apps put things back from the Trash, use Put Back in Finder";
 
@@ -34,9 +33,4 @@ pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
             reason: NO_RESTORE.into(),
         })
         .collect()
-}
-
-pub(crate) fn in_trash(path: &Path) -> bool {
-    path.components()
-        .any(|part| TRASH_DIRS.iter().any(|dir| part.as_os_str() == *dir))
 }

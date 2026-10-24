@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
-use super::{start, survey, Done, Progress, Resolve, Room, Transfer, Verb};
+use super::{partial_name, start, survey, Done, Progress, Resolve, Room, Transfer, Verb};
 
 fn write(path: &Path, text: &str, age_secs: u64) {
     if let Some(parent) = path.parent() {
@@ -301,6 +301,50 @@ fn move_merge_removes_identical_and_moved_files_but_keeps_kept_ones() {
     assert_eq!(names(&from.join("docs")), vec!["clash"]);
     assert_eq!(names(&into.join("docs")), vec!["clash", "new", "same"]);
     assert_eq!(fs::read_to_string(into.join("docs/clash")).unwrap(), "here");
+    assert_eq!(
+        done.matched,
+        vec![(from.join("docs/same"), into.join("docs/same"))]
+    );
+}
+
+#[test]
+fn copy_leaves_an_existing_partial_named_file_alone() {
+    let (_root, from, into) = two_folders();
+    write(&from.join("a.txt"), "incoming", 10);
+    write(&into.join(".a.txt.qol-partial"), "mine", 10);
+    let found = survey(transfer(Verb::Copy, &[&from.join("a.txt")], &into)).unwrap();
+    let (done, _) = run(found);
+    assert!(done.failures.is_empty());
+    assert_eq!(fs::read_to_string(into.join("a.txt")).unwrap(), "incoming");
+    assert_eq!(
+        fs::read_to_string(into.join(".a.txt.qol-partial")).unwrap(),
+        "mine"
+    );
+}
+
+#[test]
+fn partial_names_stay_within_a_file_name_limit() {
+    let long = format!("{}a", "é".repeat(127));
+    let partial = partial_name(&Path::new("/x").join(&long)).unwrap();
+    let name = partial.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.len() <= 240, "{}", name.len());
+    assert!(name.ends_with(".qol-partial"));
+}
+
+#[cfg(unix)]
+#[test]
+fn replace_puts_the_original_back_when_the_incoming_file_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_root, from, into) = two_folders();
+    write(&from.join("a.txt"), "incoming", 10);
+    write(&into.join("a.txt"), "here", 100);
+    let mut found = survey(transfer(Verb::Copy, &[&from.join("a.txt")], &into)).unwrap();
+    found.clashes[0].choice = Resolve::Replace;
+    fs::set_permissions(from.join("a.txt"), fs::Permissions::from_mode(0o000)).unwrap();
+    let (done, _) = run(found);
+    assert!(!done.failures.is_empty());
+    assert!(done.replaced.is_empty());
+    assert_eq!(fs::read_to_string(into.join("a.txt")).unwrap(), "here");
 }
 
 #[test]

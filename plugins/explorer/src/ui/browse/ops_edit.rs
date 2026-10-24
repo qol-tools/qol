@@ -211,8 +211,13 @@ impl Browser {
         self.failure = None;
         self.ops.notice = Some("Undone.".to_string());
         match undo {
-            Undo::Transfer { back, restore } => {
+            Undo::Transfer {
+                back,
+                renames,
+                restore,
+            } => {
                 self.ops.undoing = back;
+                self.ops.renaming = renames;
                 self.ops.restoring = restore;
                 self.continue_undo();
             }
@@ -232,6 +237,11 @@ impl Browser {
             let _ = fs::create_dir_all(&transfer.into);
             self.begin_journaled(transfer, false);
             return;
+        }
+        for (landed, original) in std::mem::take(&mut self.ops.renaming) {
+            if fs::symlink_metadata(&original).is_err() {
+                let _ = fs::rename(&landed, &original);
+            }
         }
         let restore = std::mem::take(&mut self.ops.restoring);
         if !restore.is_empty() {

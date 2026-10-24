@@ -81,11 +81,11 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
-fn crosses(source: &Path, into: &Path) -> bool {
+pub fn crosses(source: &Path, into: &Path) -> bool {
     !same_volume(source.parent().unwrap_or(source), into)
 }
 
-pub fn same_volume(a: &Path, b: &Path) -> bool {
+fn same_volume(a: &Path, b: &Path) -> bool {
     let volume = |path: &Path| {
         let nearest = path.ancestors().find(|ancestor| ancestor.exists())?;
         platform::volume_of(nearest).ok()

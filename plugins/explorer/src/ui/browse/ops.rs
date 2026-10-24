@@ -67,12 +67,14 @@ pub(super) struct Ops {
     pub queued: VecDeque<(Survey, Trip)>,
     pub undoing: Vec<Transfer>,
     pub restoring: Vec<PathBuf>,
+    pub renaming: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Ops {
     pub(super) fn stop_undo(&mut self) {
         self.undoing.clear();
         self.restoring.clear();
+        self.renaming.clear();
     }
 
     pub(super) fn new() -> Self {
@@ -94,6 +96,7 @@ impl Ops {
             queued: VecDeque::new(),
             undoing: Vec::new(),
             restoring: Vec::new(),
+            renaming: Vec::new(),
         }
     }
 
@@ -163,7 +166,7 @@ impl Browser {
     }
 
     pub fn drop_on(&self, sources: Vec<PathBuf>, into: PathBuf, copy: bool) -> Transfer {
-        let same_drive = sources.iter().all(|source| ops::same_volume(source, &into));
+        let same_drive = !sources.iter().any(|source| ops::crosses(source, &into));
         let verb = if copy || !same_drive {
             Verb::Copy
         } else {
@@ -282,9 +285,7 @@ impl Browser {
     pub fn arriving_bytes(&self, entry: &Entry) -> Option<(u64, u64)> {
         let running = self.ops.running.as_ref()?;
         let arriving = running.arriving.as_ref()?;
-        let partial = ops_text::name_of(arriving);
-        let is_partial = entry.path.parent() == arriving.parent()
-            && entry.display == format!(".{partial}.qol-partial");
+        let is_partial = ops::partial_name(arriving).is_some_and(|partial| entry.path == partial);
         (entry.path == *arriving || is_partial).then_some((running.done, running.total))
     }
 

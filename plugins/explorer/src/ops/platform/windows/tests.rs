@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use super::*;
 
 fn forbidden(name: &str) -> String {
@@ -46,10 +44,4 @@ fn free_bytes_and_volume_work_on_a_real_folder() {
         volume_of(dir.path()).unwrap(),
         volume_of(&dir.path().join("not-yet")).unwrap()
     );
-}
-
-#[test]
-fn in_trash_recognises_the_recycle_bin() {
-    assert!(in_trash(Path::new("C:\\$Recycle.Bin\\S-1-5\\$RABC.txt")));
-    assert!(!in_trash(Path::new("C:\\Users\\me\\a.txt")));
 }

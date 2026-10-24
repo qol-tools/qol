@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{platform, Done, Transfer, Verb};
+use super::{Done, Transfer, Verb};
 
 const KEPT: usize = 100;
 
@@ -10,6 +10,7 @@ const KEPT: usize = 100;
 pub enum Undo {
     Transfer {
         back: Vec<Transfer>,
+        renames: Vec<(PathBuf, PathBuf)>,
         restore: Vec<PathBuf>,
     },
     Rename {
@@ -31,7 +32,7 @@ pub struct Journal {
 
 impl Journal {
     pub fn record(&mut self, done: &Done) {
-        if done.landed.is_empty() {
+        if done.landed.is_empty() && done.matched.is_empty() {
             return;
         }
         let arrived: Vec<PathBuf> = done.landed.iter().map(|(_, to)| to.clone()).collect();
@@ -41,11 +42,14 @@ impl Journal {
                 copies: arrived,
                 restore,
             }),
-            Verb::Move if done.landed.iter().all(|(from, to)| trashed(from, to)) => {
-                self.push(Undo::Restore(arrived));
-            }
+            Verb::Move if done.trashed => self.push(Undo::Restore(arrived)),
             Verb::Move => self.push(Undo::Transfer {
-                back: moves_back(&done.landed),
+                back: [
+                    back_to_origin(&done.landed, Verb::Move),
+                    back_to_origin(&done.matched, Verb::Copy),
+                ]
+                .concat(),
+                renames: renamed(&done.landed),
                 restore,
             }),
         }
@@ -75,7 +79,7 @@ impl Journal {
     }
 }
 
-fn moves_back(landed: &[(PathBuf, PathBuf)]) -> Vec<Transfer> {
+fn back_to_origin(landed: &[(PathBuf, PathBuf)], verb: Verb) -> Vec<Transfer> {
     let mut by_folder: BTreeMap<&Path, Vec<PathBuf>> = BTreeMap::new();
     for (from, to) in landed {
         let folder = from.parent().unwrap_or(Path::new(""));
@@ -84,15 +88,19 @@ fn moves_back(landed: &[(PathBuf, PathBuf)]) -> Vec<Transfer> {
     by_folder
         .into_iter()
         .map(|(folder, sources)| Transfer {
-            verb: Verb::Move,
+            verb,
             sources,
             into: folder.to_path_buf(),
         })
         .collect()
 }
 
-fn trashed(from: &Path, to: &Path) -> bool {
-    from == to || platform::in_trash(to)
+fn renamed(landed: &[(PathBuf, PathBuf)]) -> Vec<(PathBuf, PathBuf)> {
+    landed
+        .iter()
+        .filter(|(from, to)| from.file_name() != to.file_name())
+        .filter_map(|(from, to)| Some((from.parent()?.join(to.file_name()?), from.clone())))
+        .collect()
 }
 
 fn empty_folder(path: &Path) -> bool {

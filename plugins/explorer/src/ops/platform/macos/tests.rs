@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use super::*;
 use crate::ops::platform::name_problem;
 use crate::ops::NameProblem;
@@ -25,10 +23,4 @@ fn restore_says_plainly_that_it_cannot() {
     let failures = restore_trashed(&[PathBuf::from("/Users/me/.Trash/a")]);
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].reason, NO_RESTORE);
-}
-
-#[test]
-fn in_trash_recognises_the_user_trash() {
-    assert!(in_trash(Path::new("/Users/me/.Trash/a.md")));
-    assert!(!in_trash(Path::new("/Users/me/a.md")));
 }

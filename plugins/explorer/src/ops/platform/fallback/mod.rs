@@ -57,7 +57,3 @@ pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
         })
         .collect()
 }
-
-pub(crate) fn in_trash(_path: &Path) -> bool {
-    false
-}

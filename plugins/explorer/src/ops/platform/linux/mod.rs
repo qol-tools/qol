@@ -26,7 +26,7 @@ pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
     bin::restore(paths, trash_dirs::items_near(paths), locate)
 }
 
-pub(crate) fn in_trash(path: &Path) -> bool {
+fn in_trash(path: &Path) -> bool {
     let names: Vec<_> = path.components().map(|part| part.as_os_str()).collect();
     names.windows(2).any(|pair| {
         let folder = pair[0].to_string_lossy();

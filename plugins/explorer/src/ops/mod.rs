@@ -14,9 +14,9 @@ mod transfer;
 mod transfer_tests;
 
 pub use journal::{Journal, Undo};
-pub use run::start;
+pub use run::{partial_name, start};
 pub use simple::{free_name, new_folder, rename, restore, trash, NameProblem};
-pub use transfer::{same_volume, survey};
+pub use transfer::{crosses, survey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
@@ -100,6 +100,8 @@ pub struct Done {
     pub verb: Verb,
     pub placed: Vec<(PathBuf, PathBuf)>,
     pub landed: Vec<(PathBuf, PathBuf)>,
+    pub matched: Vec<(PathBuf, PathBuf)>,
+    pub trashed: bool,
     pub replaced: Vec<PathBuf>,
     pub kept_originals: Vec<PathBuf>,
     pub failures: Vec<Failure>,

@@ -49,6 +49,8 @@ pub fn trash(paths: &[PathBuf]) -> Done {
         id: next_job_id(),
         verb: Verb::Move,
         landed: placed.clone(),
+        matched: Vec::new(),
+        trashed: true,
         placed,
         replaced: Vec::new(),
         kept_originals: Vec::new(),

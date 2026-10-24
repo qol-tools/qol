@@ -10,6 +10,8 @@ fn done(verb: Verb, placed: Vec<(PathBuf, PathBuf)>) -> Done {
         id: JobId(1),
         verb,
         landed: placed.clone(),
+        matched: Vec::new(),
+        trashed: false,
         placed,
         replaced: Vec::new(),
         kept_originals: Vec::new(),
@@ -193,10 +195,57 @@ fn journal_undoes_a_move_in_one_step_per_original_folder() {
                     into: "/b".into(),
                 },
             ],
+            renames: Vec::new(),
             restore: Vec::new(),
         })
     );
     assert_eq!(journal.undo(), None);
+}
+
+#[test]
+fn journal_undo_of_a_keep_both_move_returns_the_original_name() {
+    let mut journal = Journal::default();
+    journal.record(&done(Verb::Move, vec![("/a/x".into(), "/c/x (2)".into())]));
+    assert_eq!(
+        journal.undo(),
+        Some(Undo::Transfer {
+            back: vec![Transfer {
+                verb: Verb::Move,
+                sources: vec!["/c/x (2)".into()],
+                into: "/a".into(),
+            }],
+            renames: vec![("/a/x (2)".into(), "/a/x".into())],
+            restore: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn journal_undo_of_a_merging_move_copies_back_the_files_that_matched() {
+    let mut journal = Journal::default();
+    let mut moved = done(Verb::Move, Vec::new());
+    moved.matched = vec![("/a/docs/same".into(), "/c/docs/same".into())];
+    journal.record(&moved);
+    assert_eq!(
+        journal.undo(),
+        Some(Undo::Transfer {
+            back: vec![Transfer {
+                verb: Verb::Copy,
+                sources: vec!["/c/docs/same".into()],
+                into: "/a/docs".into(),
+            }],
+            renames: Vec::new(),
+            restore: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn journal_undoes_a_move_into_a_folder_named_like_the_trash_as_a_move() {
+    let mut journal = Journal::default();
+    let into = "/home/me/Trash/files/x";
+    journal.record(&done(Verb::Move, vec![("/a/x".into(), into.into())]));
+    assert!(matches!(journal.undo(), Some(Undo::Transfer { .. })));
 }
 
 #[test]
@@ -217,7 +266,9 @@ fn journal_undo_of_a_copy_puts_back_what_it_replaced() {
 #[test]
 fn journal_undoes_a_trash_whose_location_is_unknown_as_restore() {
     let mut journal = Journal::default();
-    journal.record(&done(Verb::Move, vec![("/a/x".into(), "/a/x".into())]));
+    let mut trashed = done(Verb::Move, vec![("/a/x".into(), "/a/x".into())]);
+    trashed.trashed = true;
+    journal.record(&trashed);
     assert_eq!(journal.undo(), Some(Undo::Restore(vec!["/a/x".into()])));
 }
 

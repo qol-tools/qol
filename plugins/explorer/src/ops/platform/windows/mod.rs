@@ -18,7 +18,6 @@ use crate::ops::{Failure, NameProblem};
 
 const MAX_NAME_UNITS: usize = 255;
 const ROOT_BUFFER: usize = 261;
-const RECYCLE_BIN: &str = "$Recycle.Bin";
 const RESERVED_CHARS: &str = "<>:\"/\\|?*";
 const RESERVED_NAMES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
 const NUMBERED_RESERVED: [&str; 2] = ["COM", "LPT"];
@@ -151,11 +150,6 @@ pub(crate) fn trash_locations(originals: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> 
 
 pub(crate) fn restore_trashed(paths: &[PathBuf]) -> Vec<Failure> {
     bin::restore(paths, trash::os_limited::list(), locate)
-}
-
-pub(crate) fn in_trash(path: &Path) -> bool {
-    path.components()
-        .any(|part| part.as_os_str().eq_ignore_ascii_case(RECYCLE_BIN))
 }
 
 fn os_error(_error: &Error) -> Option<String> {

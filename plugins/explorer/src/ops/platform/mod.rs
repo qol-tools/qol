@@ -17,13 +17,13 @@ mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(crate) use fallback::{
-    copy_link, free_bytes, in_trash, name_problem, removable, restore_trashed, trash_locations,
-    trash_one, volume_of,
+    copy_link, free_bytes, name_problem, removable, restore_trashed, trash_locations, trash_one,
+    volume_of,
 };
 #[cfg(target_os = "linux")]
-pub(crate) use linux::{in_trash, restore_trashed, trash_locations, trash_one};
+pub(crate) use linux::{restore_trashed, trash_locations, trash_one};
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{in_trash, name_problem, restore_trashed, trash_locations, trash_one};
+pub(crate) use macos::{name_problem, restore_trashed, trash_locations, trash_one};
 #[cfg(not(unix))]
 pub(crate) use portable::{keep_mode, new_dir, new_file, open_dir};
 #[cfg(target_os = "linux")]
@@ -34,6 +34,6 @@ pub(crate) use unix::{
 };
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
-    copy_link, free_bytes, in_trash, name_problem, removable, restore_trashed, trash_locations,
-    trash_one, volume_of,
+    copy_link, free_bytes, name_problem, removable, restore_trashed, trash_locations, trash_one,
+    volume_of,
 };
