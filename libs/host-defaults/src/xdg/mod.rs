@@ -37,7 +37,7 @@ pub fn desktops_from(raw: &str) -> Vec<String> {
 }
 
 fn absolute(value: Option<String>) -> Option<PathBuf> {
-    value.map(PathBuf::from).filter(|path| path.is_absolute())
+    value.map(PathBuf::from).filter(|path| path.has_root())
 }
 
 fn dir_list(value: Option<String>, defaults: &[&str]) -> Vec<PathBuf> {
@@ -45,7 +45,7 @@ fn dir_list(value: Option<String>, defaults: &[&str]) -> Vec<PathBuf> {
         .iter()
         .flat_map(|value| value.split(':'))
         .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
+        .filter(|path| path.has_root())
         .collect::<Vec<_>>();
     if !listed.is_empty() {
         return listed;

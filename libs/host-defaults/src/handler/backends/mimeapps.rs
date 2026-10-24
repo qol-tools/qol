@@ -340,13 +340,10 @@ mod tests {
     #[test]
     fn the_cascade_follows_the_spec_order() {
         let desktops = vec!["x-cinnamon".to_string(), "ubuntu".to_string()];
-        let paths = cascade_paths(&dirs(), &desktops)
-            .into_iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>();
+        let paths = cascade_paths(&dirs(), &desktops);
         assert_eq!(
             paths,
-            vec![
+            [
                 "/home/u/.config/x-cinnamon-mimeapps.list",
                 "/home/u/.config/ubuntu-mimeapps.list",
                 "/home/u/.config/mimeapps.list",
@@ -360,6 +357,7 @@ mod tests {
                 "/usr/share/applications/ubuntu-mimeapps.list",
                 "/usr/share/applications/mimeapps.list",
             ]
+            .map(PathBuf::from)
         );
     }
 

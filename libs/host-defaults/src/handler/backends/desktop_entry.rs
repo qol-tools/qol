@@ -111,7 +111,16 @@ fn program_token<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<&'a s
     if basename(first) != "env" {
         return Some(first);
     }
-    tokens.find(|token| !token.starts_with('-') && !token.contains('='))
+    while let Some(token) = tokens.next() {
+        if matches!(token, "-u" | "--unset" | "-C" | "--chdir") {
+            tokens.next();
+            continue;
+        }
+        if !token.starts_with('-') && !token.contains('=') {
+            return Some(token);
+        }
+    }
+    None
 }
 
 fn flatpak_stem<'a>(mut tokens: impl Iterator<Item = &'a str>) -> Option<String> {
