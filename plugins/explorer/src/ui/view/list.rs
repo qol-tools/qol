@@ -4,8 +4,8 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     canvas, div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, DispatchPhase, Div,
-    InteractiveElement, IntoElement, ParentElement, ScrollWheelEvent, StatefulInteractiveElement,
-    Styled, Window,
+    ExternalPaths, InteractiveElement, IntoElement, ParentElement, ScrollWheelEvent,
+    StatefulInteractiveElement, Styled, Window,
 };
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
@@ -15,6 +15,7 @@ use qol_gpui::theme::{
     SPACE_INSET, SPACE_STACK,
 };
 
+use super::drag;
 use super::grid::{Layout, ACROSS};
 use super::pictogram::entry_pictogram;
 use super::{ExplorerView, HEAD, ICON};
@@ -49,6 +50,9 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         .child(body)
         .when(loading, |list| list.child(reading_line(view, kit)))
         .child(wheel_resize(cx))
+        .on_drop(cx.listener(|view, paths: &ExternalPaths, _window, cx| {
+            view.drop_in(paths.paths(), cx);
+        }))
 }
 
 fn header(kit: Kit) -> impl IntoElement {
@@ -257,6 +261,10 @@ fn render_row(
                         .child(detail_text(shown.size, ground)),
                 )
         })
+        .on_drag(path.clone(), {
+            let view = cx.weak_entity();
+            move |path, grab, window, cx| drag::start(&view, path, grab, window, cx)
+        })
         .on_click(cx.listener(move |view, event: &ClickEvent, _window, cx| {
             view.click_row(&path, event, cx);
         }));
@@ -332,6 +340,10 @@ fn render_cell(
                 .child(div().w_full().flex().flex_row().child(name))
                 .child(detail_text(shown.size, ground)),
         )
+        .on_drag(path.clone(), {
+            let view = cx.weak_entity();
+            move |path, grab, window, cx| drag::start(&view, path, grab, window, cx)
+        })
         .on_click(cx.listener(move |view, event: &ClickEvent, _window, cx| {
             view.click_row(&path, event, cx);
         }));

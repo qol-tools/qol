@@ -815,6 +815,27 @@ impl Frame {
     }
 }
 
+#[allow(missing_docs)]
+#[derive(Clone)]
+pub struct DragImage {
+    pub image: Arc<RenderImage>,
+    pub offset: Point<Pixels>,
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(any(target_os = "linux", target_os = "freebsd"), feature = "x11")
+))]
+pub(crate) fn premultiplied(bgra: &[u8]) -> Vec<u8> {
+    bgra.chunks_exact(4)
+        .flat_map(|pixel| {
+            let alpha = u16::from(pixel[3]);
+            let scale = |channel: u8| ((u16::from(channel) * alpha + 127) / 255) as u8;
+            [scale(pixel[0]), scale(pixel[1]), scale(pixel[2]), pixel[3]]
+        })
+        .collect()
+}
+
 /// Holds the state for a specific window.
 pub struct Window {
     pub(crate) handle: AnyWindowHandle,
@@ -1786,6 +1807,11 @@ impl Window {
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)
     pub fn show_window_menu(&self, position: Point<Pixels>) {
         self.platform_window.show_window_menu(position)
+    }
+
+    #[allow(missing_docs)]
+    pub fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>, image: Option<DragImage>) {
+        self.platform_window.offer_dragged_paths(paths, image)
     }
 
     /// Tells the compositor to take control of window movement (Wayland and X11)

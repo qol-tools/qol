@@ -1,4 +1,5 @@
 mod band;
+mod drag;
 mod grid;
 mod list;
 mod menu;
@@ -839,6 +840,13 @@ impl ExplorerView {
         if self.browser.edit_path() {
             cx.notify();
         }
+    }
+
+    fn drop_in(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let count = qol_gpui::plural(paths.len(), "item", "items");
+        self.browser
+            .fail(format!("Explorer cannot copy the {count} you dropped yet"));
+        cx.notify();
     }
 
     fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {

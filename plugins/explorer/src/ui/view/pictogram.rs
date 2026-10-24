@@ -20,6 +20,7 @@ const HOME: &str = include_str!("../../../assets/pictograms/home-16.svg");
 const DRIVE: &str = include_str!("../../../assets/pictograms/drive-16.svg");
 const SVG_END: &str = "</svg>";
 const TAG_INK: u32 = 0x16171a;
+const HALO_WIDTH: f32 = 2.6;
 const RAIL_SIZE: f32 = 16.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,6 +76,48 @@ pub(super) fn entry_pictogram(entry: &Entry, size: PictogramSize, selected: bool
     .into_any_element()
 }
 
+pub(super) fn lifted_pictogram(entry: &Entry, size: f32) -> AnyElement {
+    let Lifted { name, markup, ink } = lifted_source(entry);
+    Pictogram {
+        name,
+        markup,
+        size,
+        ink,
+    }
+    .into_any_element()
+}
+
+pub(super) struct Lifted {
+    pub name: String,
+    pub markup: String,
+    pub ink: u32,
+}
+
+pub(super) fn lifted_source(entry: &Entry) -> Lifted {
+    let kit = kit();
+    let pane = kit.grounds.pane;
+    let (name, markup, ink) = if entry.opens_as_folder {
+        (
+            "explorer-folder".to_string(),
+            FOLDER.to_string(),
+            kit.palette.accent,
+        )
+    } else {
+        let kind = kind_of(&entry.display, entry.executable);
+        let tag = tag_text(&entry.display, kind);
+        (
+            format!("explorer-{}-{tag}", kind.asset_stem()),
+            tagged(outline(kind)[PictogramSize::Large.index()], kind, &tag),
+            pane.soft,
+        )
+    };
+    Lifted {
+        name: format!("{name}-lifted-{:06x}", pane.bg),
+        markup: lifted(&markup, pane.bg),
+        ink,
+    }
+}
+
 pub(super) fn rail_pictogram(glyph: RailGlyph, selected: bool) -> AnyElement {
     let kit = kit();
     let ink = if selected {
@@ -113,6 +156,17 @@ fn tagged(outline: &str, kind: FileKind, tag: &str) -> String {
         &outline[..end],
         kind.tag_color(),
         font_display(),
+    )
+}
+
+fn lifted(markup: &str, halo: u32) -> String {
+    let open = markup.find('>').map_or(0, |end| end + 1);
+    let close = markup.rfind(SVG_END).unwrap_or(markup.len());
+    let body = &markup[open..close];
+    let edge = body.replace(r#" stroke="none""#, "");
+    format!(
+        r##"{}<g fill="#{halo:06x}" stroke="#{halo:06x}" stroke-width="{HALO_WIDTH}">{edge}</g>{body}{SVG_END}"##,
+        &markup[..open],
     )
 }
 
@@ -166,7 +220,7 @@ impl RenderOnce for Pictogram {
 
 #[cfg(test)]
 mod tests {
-    use super::{outline, tagged, PictogramSize, DRIVE, FOLDER, HOME};
+    use super::{lifted, outline, tagged, PictogramSize, DRIVE, FOLDER, HOME};
     use crate::ui::kind::{tag_text, FileKind};
 
     #[test]
@@ -191,6 +245,27 @@ mod tests {
                 assert!(image.is_some(), "{kind:?} {index}");
             }
         }
+    }
+
+    #[test]
+    fn every_lifted_pictogram_rasterizes_under_its_edge() {
+        for kind in FileKind::ALL {
+            let source = lifted(
+                &tagged(outline(kind)[2], kind, &tag_text("file", kind)),
+                0xfffefb,
+            );
+            assert!(source.starts_with("<svg"), "{kind:?}");
+            assert!(source.contains(r##"stroke="#fffefb""##), "{kind:?}");
+            assert!(source.ends_with("</svg>"), "{kind:?}");
+            let name = format!("explorer-test-lifted-{}", kind.asset_stem());
+            let image = qol_gpui::pictures::icon(&name, &source, 0x8b8880, 40);
+            assert!(image.is_some(), "{kind:?}");
+        }
+        let folder = lifted(FOLDER, 0xfffefb);
+        assert!(
+            qol_gpui::pictures::icon("explorer-test-lifted-folder", &folder, 0x8b8880, 40)
+                .is_some()
+        );
     }
 
     #[test]

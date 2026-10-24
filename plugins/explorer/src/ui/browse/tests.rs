@@ -1490,3 +1490,24 @@ fn proc_is_read_again_while_shown_and_an_exited_process_folder_reports_it() {
         matches!(browser.listing().state(), ListingState::Failed(_))
     });
 }
+
+#[test]
+fn a_drag_carries_every_pick_from_a_picked_row_and_only_its_own_row_otherwise() {
+    let temp = abc_folder();
+    let inner = make_folder(temp.path(), "inner");
+    touch(&inner, "x.txt");
+    let mut browser = opened(&inner);
+    browser.toggle_pick();
+    browser.up(0.0);
+    settle(&mut browser);
+    browser.set_cursor(1);
+    browser.toggle_pick();
+    let a = temp.path().join("a.txt");
+    let b = temp.path().join("b.txt");
+    let x = inner.join("x.txt");
+
+    let mut carried = browser.drag_paths(&a);
+    carried.sort();
+    assert_eq!(carried, [a.clone(), x]);
+    assert_eq!(browser.drag_paths(&b), [b]);
+}

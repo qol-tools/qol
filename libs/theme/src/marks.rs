@@ -19,6 +19,7 @@ pub enum Mark {
     CliSessions,
     Controllers,
     Display,
+    Explorer,
     Input,
     KeyRemap,
     Launcher,
@@ -44,7 +45,7 @@ pub enum Mark {
 const LINE_LIFT: f32 = 0.25;
 
 impl Mark {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::Qol,
         Self::Settings,
         Self::Shortcuts,
@@ -62,6 +63,7 @@ impl Mark {
         Self::CliSessions,
         Self::Controllers,
         Self::Display,
+        Self::Explorer,
         Self::Input,
         Self::KeyRemap,
         Self::Launcher,
@@ -103,6 +105,7 @@ impl Mark {
             Self::CliSessions => "cli-sessions",
             Self::Controllers => "controllers",
             Self::Display => "display",
+            Self::Explorer => "explorer",
             Self::Input => "input",
             Self::KeyRemap => "key-remap",
             Self::Launcher => "launcher",
@@ -199,6 +202,9 @@ impl Mark {
             }
             Self::Display => {
                 r#"<rect x="4" y="7" width="40" height="28" rx="4"/><path d="M17 41h14M24 35v6"/><circle cx="24" cy="21" r="4"/><path stroke-width="2.5" d="M31.5 21L33.5 21M29.3 26.3L30.7 27.7M24 28.5L24 30.5M18.7 26.3L17.3 27.7M16.5 21L14.5 21M18.7 15.7L17.3 14.3M24 13.5L24 11.5M29.3 15.7L30.7 14.3"/>"#
+            }
+            Self::Explorer => {
+                r#"<path d="M6 13a4 4 0 0 1 4-4h9l5 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/><path stroke-width="2.5" d="M30 21L22 25L18 33L26 29Z"/><circle cx="24" cy="27" r="0.4" stroke-width="3"/>"#
             }
             Self::Input => {
                 r#"<rect x="11" y="4" width="26" height="40" rx="13"/><path d="M24 11v8"/>"#
