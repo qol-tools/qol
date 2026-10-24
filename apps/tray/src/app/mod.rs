@@ -140,6 +140,7 @@ pub(crate) fn run() -> Result<()> {
 
         owns_host_surface = true;
         log_binding_restore("startup", hotkeys::restore_desktop_bindings());
+        features::host_defaults::release_portable_on_start();
     }
 
     std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
@@ -161,6 +162,7 @@ pub(crate) fn run() -> Result<()> {
 
     hotkeys::release_held_keys();
     if owns_host_surface {
+        features::host_defaults::release_portable_on_exit();
         log_binding_restore("shutdown", hotkeys::restore_desktop_bindings_on_exit());
     }
     if let Err(error) = &outcome {

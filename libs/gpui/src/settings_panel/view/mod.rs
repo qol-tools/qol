@@ -4811,6 +4811,7 @@ impl SettingsPanelView {
         match &row.control {
             RowControl::Page => Some("open"),
             RowControl::Toggle(_) => Some("flip"),
+            RowControl::Action { .. } if row.variant.as_deref() == Some("toggle") => Some("flip"),
             RowControl::Action { .. } => Some("run"),
             RowControl::Select { .. } | RowControl::MultiSelect { .. } => Some("choose"),
             RowControl::Color(_) => Some("pick"),

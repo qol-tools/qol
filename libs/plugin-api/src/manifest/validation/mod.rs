@@ -1,5 +1,6 @@
 mod action_rules;
 mod command_rules;
+mod default_for_rules;
 mod dependency_rules;
 mod identity_rules;
 mod launcher_rules;

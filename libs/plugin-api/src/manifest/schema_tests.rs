@@ -863,3 +863,61 @@ value = 1
         })
     );
 }
+
+#[test]
+fn parse_default_for_declarations() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "P"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [[default_for]]
+        role = "slot.screenshot"
+        action = "screenshot"
+
+        [[default_for]]
+        role = "folder.open"
+        action = "open"
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+
+    assert_eq!(
+        manifest.default_for,
+        vec![
+            DefaultFor {
+                role: "slot.screenshot".to_string(),
+                action: "screenshot".to_string(),
+            },
+            DefaultFor {
+                role: "folder.open".to_string(),
+                action: "open".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn default_for_defaults_to_empty() {
+    let toml = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "P"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(toml).unwrap();
+
+    assert!(manifest.default_for.is_empty());
+}

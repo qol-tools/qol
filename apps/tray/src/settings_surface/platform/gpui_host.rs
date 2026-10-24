@@ -14,9 +14,11 @@ use qol_gpui::settings_panel::{
     SettingsPanel, SettingsRuntime, SettingsWindowHost,
 };
 use qol_gpui::toast::{Toast, ToastHost, ToastLayout, ToastTone};
+use qol_host_defaults::RowControl;
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, NotificationLayout};
 
+use crate::features::host_defaults::{self, PluginRow};
 use crate::settings_surface::{CoreTool, HostBoot};
 #[derive(Debug)]
 enum Command {
@@ -857,8 +859,15 @@ fn notifications_source() -> (PanelSource, SettingsRuntime) {
 }
 
 fn load_plugin_panel(plugin_id: &str) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
+    load_plugin_panel_with(plugin_id, &host_defaults::row_for_plugin)
+}
+
+fn load_plugin_panel_with(
+    plugin_id: &str,
+    host_rows: HostRows<'_>,
+) -> anyhow::Result<(SettingsPanel, SettingsRuntime)> {
     let plugin_root = crate::plugins::paths::resolve_plugin_root(plugin_id)?;
-    let (source, runtime) = load_plugin_source_from_root(plugin_id, &plugin_root)?;
+    let (source, runtime) = load_plugin_source_from_root(plugin_id, &plugin_root, host_rows)?;
     let mut panel = SettingsPanel::single(
         plugin_id.to_string(),
         source.contract,
@@ -875,20 +884,47 @@ struct PluginSettingsSource {
     mark: qol_theme::Mark,
 }
 
+type HostRows<'a> = &'a dyn Fn(&str) -> Option<PluginRow>;
+
+const HOST_DEFAULT_ID: &str = qol_gpui::settings_panel::LEAD_SECTION_ID;
+const HOST_DEFAULT_POLL: Duration = Duration::from_secs(2);
+const HOST_DEFAULT_READ_ONLY_LABEL: &str = "Kept by the system";
+const BARE_CONTRACT: &str = "schema_version = 1\n";
+
+fn plugin_host_row(
+    manifest: &crate::plugins::manifest::PluginManifest,
+    plugin_id: &str,
+    host_rows: HostRows<'_>,
+) -> Option<PluginRow> {
+    if manifest.default_for.is_empty() {
+        return None;
+    }
+    host_rows(plugin_id)
+}
+
 fn load_plugin_source_from_root(
     plugin_id: &str,
     plugin_root: &Path,
+    host_rows: HostRows<'_>,
 ) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
     let manifest = crate::plugins::manifest::PluginManifest::read_from_dir(plugin_root)?;
-    let Some((_, runtime_contract)) =
-        crate::plugins::config::load_combined_contracts_from_root(plugin_root)?
-    else {
-        bail!("plugin has no settings contract");
-    };
-    let contract =
-        std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
-            .context("failed to read the plugin settings contract")?;
+    let row = plugin_host_row(&manifest, plugin_id, host_rows);
+    load_plugin_source(plugin_id, plugin_root, &manifest, row.as_ref())
+}
+
+fn load_plugin_source(
+    plugin_id: &str,
+    plugin_root: &Path,
+    manifest: &crate::plugins::manifest::PluginManifest,
+    row: Option<&PluginRow>,
+) -> anyhow::Result<(PluginSettingsSource, SettingsRuntime)> {
+    let loaded = crate::plugins::config::load_combined_contracts_from_root(plugin_root)?;
+    let contract = settings_contract(plugin_root, loaded.is_some(), row)?;
+    let runtime_contract = loaded.and_then(|(_, runtime_contract)| runtime_contract);
     let mut runtime = SettingsRuntime::tray(plugin_id);
+    if row.is_some() {
+        runtime = runtime.poll_query_every(host_defaults::ROW_QUERY, HOST_DEFAULT_POLL);
+    }
     if let Some(runtime_contract) = runtime_contract.as_ref() {
         for (name, query) in &runtime_contract.queries {
             runtime = runtime.poll_query_every(name, Duration::from_millis(query.poll_interval_ms));
@@ -900,14 +936,132 @@ fn load_plugin_source_from_root(
     Ok((
         PluginSettingsSource {
             contract,
-            heading: rail_label(&manifest),
-            mark: crate::features::launcher_apps::icon::manifest_mark(plugin_id, &manifest),
+            heading: rail_label(manifest),
+            mark: crate::features::launcher_apps::icon::manifest_mark(plugin_id, manifest),
         },
         runtime,
     ))
 }
 
+fn settings_contract(
+    plugin_root: &Path,
+    has_contract: bool,
+    row: Option<&PluginRow>,
+) -> anyhow::Result<String> {
+    if !has_contract {
+        let Some(row) = row else {
+            bail!("plugin has no settings contract");
+        };
+        return with_host_default_row(BARE_CONTRACT, row);
+    }
+    let contract =
+        std::fs::read_to_string(crate::plugins::paths::config_contract_path(plugin_root))
+            .context("failed to read the plugin settings contract")?;
+    match row {
+        Some(row) => with_host_default_row(&contract, row),
+        None => Ok(contract),
+    }
+}
+
+fn with_host_default_row(contract: &str, row: &PluginRow) -> anyhow::Result<String> {
+    let mut table: toml::Table =
+        toml::from_str(contract).context("the plugin settings contract is not valid TOML")?;
+    put_first(&mut table, "section", host_default_section(row))?;
+    put_first(&mut table, "field", host_default_field(row))?;
+    toml::to_string(&table).context("failed to write the plugin settings contract")
+}
+
+fn put_first(table: &mut toml::Table, kind: &str, entry: toml::Table) -> anyhow::Result<()> {
+    let slot = table
+        .entry(kind)
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let toml::Value::Table(entries) = slot else {
+        bail!("the plugin settings contract declares `{kind}` as something other than a table");
+    };
+    if entries.contains_key(HOST_DEFAULT_ID) {
+        bail!("the plugin settings contract already declares {kind} `{HOST_DEFAULT_ID}`");
+    }
+    let rest = std::mem::take(entries);
+    entries.insert(HOST_DEFAULT_ID.to_string(), toml::Value::Table(entry));
+    for (id, value) in rest {
+        entries.insert(id, value);
+    }
+    Ok(())
+}
+
+fn text(value: &str) -> toml::Value {
+    toml::Value::String(value.to_string())
+}
+
+fn host_default_section(row: &PluginRow) -> toml::Table {
+    toml::Table::from_iter([("label".to_string(), text(&row.label))])
+}
+
+fn host_default_field(row: &PluginRow) -> toml::Table {
+    let mut field = toml::Table::from_iter([
+        ("label".to_string(), text(&row.label)),
+        ("description".to_string(), text(&row.description)),
+        ("section".to_string(), text(HOST_DEFAULT_ID)),
+    ]);
+    let control = match &row.control {
+        RowControl::Switch { .. } => switch_control(),
+        RowControl::Button { label } => button_control(label),
+        RowControl::ReadOnly => read_only_control(),
+    };
+    field.extend(control);
+    field
+}
+
+fn switch_control() -> toml::Table {
+    toml::Table::from_iter([
+        ("type".to_string(), text("action")),
+        ("action".to_string(), text(host_defaults::ROW_ACTION)),
+        ("active_action".to_string(), text(host_defaults::ROW_ACTION)),
+        ("active_query".to_string(), text(host_defaults::ROW_QUERY)),
+        ("active_value_from".to_string(), text("on")),
+        ("variant".to_string(), text("toggle")),
+    ])
+}
+
+fn button_control(label: &str) -> toml::Table {
+    let labels = toml::Table::from_iter([
+        ("false".to_string(), text(label)),
+        ("true".to_string(), text(label)),
+    ]);
+    toml::Table::from_iter([
+        ("type".to_string(), text("action")),
+        ("action".to_string(), text(host_defaults::ROW_ACTION)),
+        ("active_query".to_string(), text(host_defaults::ROW_QUERY)),
+        ("active_value_from".to_string(), text("on")),
+        ("label_map".to_string(), toml::Value::Table(labels)),
+    ])
+}
+
+fn read_only_control() -> toml::Table {
+    let labels =
+        toml::Table::from_iter([("read_only".to_string(), text(HOST_DEFAULT_READ_ONLY_LABEL))]);
+    toml::Table::from_iter([
+        ("type".to_string(), text("status")),
+        ("query".to_string(), text(host_defaults::ROW_QUERY)),
+        ("value_from".to_string(), text("control")),
+        ("label_map".to_string(), toml::Value::Table(labels)),
+    ])
+}
+
 fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)> {
+    load_unified_panel_with(&host_defaults::row_for_plugin)
+}
+
+struct EligiblePlugin {
+    label: String,
+    resolved: crate::plugins::resolver::ResolvedPlugin,
+    manifest: crate::plugins::manifest::PluginManifest,
+    row: Option<PluginRow>,
+}
+
+fn load_unified_panel_with(
+    host_rows: HostRows<'_>,
+) -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)> {
     let (core_panel, core_runtime) = load_core_panel();
     let mut sources = vec![core_panel
         .sources
@@ -952,17 +1106,30 @@ fn load_unified_panel() -> anyhow::Result<(SettingsPanel, Vec<SettingsRuntime>)>
                 continue;
             }
         };
-        if !manifest.plugin.supports_current_platform()
-            || !crate::plugins::paths::has_config(&resolved.path)
-        {
+        if !manifest.plugin.supports_current_platform() {
             continue;
         }
-        eligible.push((rail_label(&manifest), resolved));
+        let row = plugin_host_row(&manifest, resolved.id.as_str(), host_rows);
+        if row.is_none() && !crate::plugins::paths::has_config(&resolved.path) {
+            continue;
+        }
+        eligible.push(EligiblePlugin {
+            label: rail_label(&manifest),
+            resolved,
+            manifest,
+            row,
+        });
     }
-    eligible.sort_by(|left, right| left.0.cmp(&right.0));
-    for (_, resolved) in eligible {
+    eligible.sort_by(|left, right| left.label.cmp(&right.label));
+    for EligiblePlugin {
+        resolved,
+        manifest,
+        row,
+        ..
+    } in eligible
+    {
         let plugin_id = resolved.id.to_string();
-        match load_plugin_source_from_root(&plugin_id, &resolved.path) {
+        match load_plugin_source(&plugin_id, &resolved.path, &manifest, row.as_ref()) {
             Ok((source, runtime)) => {
                 sources.push(PanelSource {
                     plugin_id,
@@ -1385,6 +1552,192 @@ action = "lock"
             refused.is_some_and(|error| format!("{error:#}").contains("no settings contract")),
             "opening its settings directly finds no page either"
         );
+    }
+
+    const HOST_ROW_CONTRACT: &str = r#"schema_version = 1
+title = "Files"
+
+[section.tools]
+label = "Tools"
+
+[field.enabled]
+type = "boolean"
+label = "Enabled"
+default = true
+
+[field.tool]
+type = "boolean"
+label = "Tool"
+section = "tools"
+default = false
+"#;
+
+    fn host_row_manifest(plugin_id: &str, declares_role: bool) -> String {
+        let role = if declares_role {
+            "\n[[default_for]]\nrole = \"folder.open\"\naction = \"open\"\n"
+        } else {
+            ""
+        };
+        format!(
+            "[plugin]\nid = \"{plugin_id}\"\nname = \"Files\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"Files\"\nitems = []\n\n[action.open]\nlabel = \"Open\"\nargs = [\"open\"]\n{role}"
+        )
+    }
+
+    fn host_row(control: qol_host_defaults::RowControl) -> super::PluginRow {
+        super::PluginRow {
+            label: "Use instead of Nemo".to_string(),
+            description: "Opens folders in qol.".to_string(),
+            control,
+        }
+    }
+
+    fn switch_row() -> super::PluginRow {
+        host_row(qol_host_defaults::RowControl::Switch { on: false })
+    }
+
+    fn keys<V>(map: &qol_config::contract::IndexMap<String, V>) -> Vec<&str> {
+        map.keys().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn a_host_row_is_the_first_section_and_field_of_a_plugin_with_a_contract() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-files",
+            &host_row_manifest("plugin-files", true),
+            Some(HOST_ROW_CONTRACT),
+        );
+
+        let (unified, _) = super::load_unified_panel_with(&|_| Some(switch_row())).unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-files")
+            .expect("plugin-files is listed");
+        let spec = qol_config::contract::parse_spec_str(&listed.contract).unwrap();
+        assert_eq!(keys(&spec.sections), ["host_default", "tools"]);
+        assert_eq!(keys(&spec.fields), ["host_default", "enabled", "tool"]);
+        let field = spec.field("host_default").unwrap();
+        assert_eq!(field.kind, qol_config::contract::FieldKind::Action);
+        assert_eq!(field.label.as_deref(), Some("Use instead of Nemo"));
+        assert_eq!(field.section.as_deref(), Some("host_default"));
+        assert_eq!(
+            field.action.as_deref(),
+            Some(super::host_defaults::ROW_ACTION)
+        );
+        assert_eq!(
+            field.active_query.as_deref(),
+            Some(super::host_defaults::ROW_QUERY)
+        );
+        assert_eq!(field.active_value_from.as_deref(), Some("on"));
+        assert_eq!(field.variant.as_deref(), Some("toggle"));
+        assert!(
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).is_ok(),
+            "the injected contract resolves"
+        );
+        assert_eq!(
+            spec.section("tools").unwrap().label.as_deref(),
+            Some("Tools")
+        );
+    }
+
+    #[test]
+    fn a_plugin_that_declares_a_role_without_a_contract_gets_a_one_row_page() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-files",
+            &host_row_manifest("plugin-files", true),
+            None,
+        );
+
+        let (unified, runtimes) = super::load_unified_panel_with(&|_| Some(switch_row())).unwrap();
+        let index = unified
+            .sources
+            .iter()
+            .position(|source| source.plugin_id == "plugin-files")
+            .expect("the rail lists the plugin");
+        assert_eq!(runtimes.len(), unified.sources.len());
+        let spec = qol_config::contract::parse_spec_str(&unified.sources[index].contract).unwrap();
+        assert_eq!(keys(&spec.sections), ["host_default"]);
+        assert_eq!(keys(&spec.fields), ["host_default"]);
+
+        let (single, _) = super::load_plugin_panel_with("plugin-files", &|_| Some(switch_row()))
+            .expect("opening its settings directly finds the page");
+        assert_eq!(single.sources[0].contract, unified.sources[index].contract);
+
+        let (without_row, _) = super::load_unified_panel_with(&|_| None).unwrap();
+        assert!(
+            without_row
+                .sources
+                .iter()
+                .all(|source| source.plugin_id != "plugin-files"),
+            "a role the host cannot show leaves no page"
+        );
+        let refused = super::load_plugin_panel_with("plugin-files", &|_| None).err();
+        assert!(refused.is_some_and(|error| format!("{error:#}").contains("no settings contract")));
+    }
+
+    #[test]
+    fn a_plugin_without_a_declared_role_keeps_its_contract_untouched() {
+        let root = tempfile::TempDir::new().unwrap();
+        let _paths = crate::paths::push_test_path_root(root.path());
+        install_test_plugin(
+            root.path(),
+            "plugin-files",
+            &host_row_manifest("plugin-files", false),
+            Some(HOST_ROW_CONTRACT),
+        );
+
+        let (unified, _) = super::load_unified_panel_with(&|_| Some(switch_row())).unwrap();
+        let listed = unified
+            .sources
+            .iter()
+            .find(|source| source.plugin_id == "plugin-files")
+            .expect("plugin-files is listed");
+        assert_eq!(listed.contract, HOST_ROW_CONTRACT);
+    }
+
+    #[test]
+    fn a_button_row_and_a_read_only_row_map_to_their_own_fields() {
+        use qol_config::contract::FieldKind;
+        use qol_host_defaults::RowControl;
+
+        let button = host_row(RowControl::Button {
+            label: "Allow".to_string(),
+        });
+        let contract = super::with_host_default_row(HOST_ROW_CONTRACT, &button).unwrap();
+        let spec = qol_config::contract::parse_spec_str(&contract).unwrap();
+        let field = spec.field("host_default").unwrap();
+        assert_eq!(field.kind, FieldKind::Action);
+        assert_eq!(field.variant, None);
+        let labels = field.label_map.as_ref().unwrap();
+        assert_eq!(labels.get("false").map(String::as_str), Some("Allow"));
+        assert_eq!(labels.get("true").map(String::as_str), Some("Allow"));
+        assert!(qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).is_ok());
+
+        let read_only = host_row(RowControl::ReadOnly);
+        let contract = super::with_host_default_row(HOST_ROW_CONTRACT, &read_only).unwrap();
+        let spec = qol_config::contract::parse_spec_str(&contract).unwrap();
+        let field = spec.field("host_default").unwrap();
+        assert_eq!(field.kind, FieldKind::Status);
+        assert_eq!(
+            field.query.as_deref(),
+            Some(super::host_defaults::ROW_QUERY)
+        );
+        assert_eq!(field.action, None);
+        assert!(qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).is_ok());
+    }
+
+    #[test]
+    fn a_contract_that_already_declares_the_host_row_is_refused() {
+        let contract = format!(
+            "{HOST_ROW_CONTRACT}\n[field.host_default]\ntype = \"boolean\"\ndefault = false\n"
+        );
+        assert!(super::with_host_default_row(&contract, &switch_row()).is_err());
     }
 
     #[test]

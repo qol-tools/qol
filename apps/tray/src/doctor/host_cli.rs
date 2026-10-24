@@ -30,6 +30,7 @@ where
 {
     let app = HeadlessApp::new("qol-tray", binary_name)
         .about("Quality of Life Tray host.")
+        .doctor_check(super::checks::host_defaults_check())
         .doctor_aggregate_provider(provider);
     if binary_name == "qol-tray-doctor" {
         return app
@@ -117,6 +118,18 @@ mod tests {
                 .contains("fix [--id <CHECK_ID>] [--apply-host-fixes]"));
             assert!(fix.stdout.contains("Supports --json"));
         }
+    }
+
+    #[test]
+    fn a_host_check_is_addressable_by_its_id() {
+        let named = app_with_provider("qol-tray", || Ok(sample_report()))
+            .execute(args(&["doctor", "host_defaults"]));
+        assert!(
+            !named.stderr.contains("Unknown doctor check"),
+            "{}",
+            named.stderr
+        );
+        assert!(named.stdout.contains("host_defaults"), "{}", named.stdout);
     }
 
     #[test]

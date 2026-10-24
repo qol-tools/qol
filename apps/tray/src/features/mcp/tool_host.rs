@@ -218,6 +218,7 @@ mod tests {
     fn manifest_for(plugin_id: &str) -> PluginManifest {
         PluginManifest {
             manifest_version: CURRENT_MANIFEST_VERSION,
+            default_for: Vec::new(),
             plugin: PluginInfo {
                 id: Some(PluginId::new(plugin_id)),
                 uid: Some(PluginUid::new(format!("uid-{plugin_id}"))),

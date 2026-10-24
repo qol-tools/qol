@@ -351,13 +351,30 @@ pub(super) fn rows_from_resolved(config: &ResolvedConfig, source: usize) -> Vec<
     let config = &config.for_this_platform();
     let field_values = resolved_field_values(config);
     let mut rows = Vec::new();
+    for section in leads(&config.sections) {
+        push_section_rows(&mut rows, section, &field_values, source);
+    }
     for field in &config.fields {
         push_row(&mut rows, None, None, field, &field_values, source);
     }
-    for section in &config.sections {
+    for section in followers(&config.sections) {
         push_section_rows(&mut rows, section, &field_values, source);
     }
     rows
+}
+
+pub const LEAD_SECTION_ID: &str = "host_default";
+
+fn leads(sections: &[ResolvedSection]) -> impl Iterator<Item = &ResolvedSection> {
+    sections
+        .iter()
+        .filter(|section| section.id == LEAD_SECTION_ID)
+}
+
+fn followers(sections: &[ResolvedSection]) -> impl Iterator<Item = &ResolvedSection> {
+    sections
+        .iter()
+        .filter(|section| section.id != LEAD_SECTION_ID)
 }
 
 pub(super) fn sections_from_resolved(
@@ -365,24 +382,8 @@ pub(super) fn sections_from_resolved(
     rows: &[Row],
     source: usize,
 ) -> Vec<RowSection> {
-    let mut sections = Vec::new();
     let nested = item_card_row_ids(rows);
-    let root_rows = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| row.section_id.is_none() && !nested.contains(row.id.as_str()))
-        .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    if !root_rows.is_empty() {
-        sections.push(RowSection {
-            label: "General".into(),
-            description: config.description.clone(),
-            rows: root_rows,
-            source,
-            device_kind: None,
-        });
-    }
-    sections.extend(config.sections.iter().filter_map(|section| {
+    let section_of = |section: &ResolvedSection| {
         let section_rows = rows
             .iter()
             .enumerate()
@@ -402,8 +403,25 @@ pub(super) fn sections_from_resolved(
             source,
             device_kind: section.device_kind.clone(),
         })
-    }));
-    sections
+    };
+    let root_rows = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.section_id.is_none() && !nested.contains(row.id.as_str()))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let root = (!root_rows.is_empty()).then(|| RowSection {
+        label: "General".into(),
+        description: config.description.clone(),
+        rows: root_rows,
+        source,
+        device_kind: None,
+    });
+    leads(&config.sections)
+        .filter_map(section_of)
+        .chain(root)
+        .chain(followers(&config.sections).filter_map(section_of))
+        .collect()
 }
 
 /// Rows a list shows inside each item's card instead of on the page. They stay
@@ -1833,6 +1851,50 @@ default = "202322"
 
     fn option(value: &str, label: &str) -> SelectOption {
         SelectOption::plain(value, label)
+    }
+
+    #[test]
+    fn the_lead_section_comes_before_root_fields_and_other_sections() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"schema_version = 1
+
+[section.capture]
+label = "Capture"
+
+[section.host_default]
+label = "Use instead of Tool"
+
+[field.root_flag]
+type = "boolean"
+label = "Root flag"
+default = false
+
+[field.capture_flag]
+type = "boolean"
+label = "Capture flag"
+section = "capture"
+default = false
+
+[field.host_default]
+type = "action"
+label = "Use instead of Tool"
+section = "host_default"
+action = "host_default_toggle"
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let rows = rows_from_resolved(&resolved, 0);
+        let order = rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+        assert_eq!(order, ["host_default", "root_flag", "capture_flag"]);
+        let sections = sections_from_resolved(&resolved, &rows, 0);
+        let labels = sections
+            .iter()
+            .map(|section| section.label.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["Use instead of Tool", "General", "Capture"]);
+        assert_eq!(sections[0].rows, [0]);
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub(super) enum Invocation {
     Exec { target: String, action: String },
     ResidentPolicy(Vec<String>),
     ResidentPolicyHidden(Vec<String>),
+    Defaults(Vec<String>),
     Invalid,
 }
 
@@ -46,6 +47,7 @@ pub(super) fn dispatch(invocation: Invocation) -> Option<i32> {
         Invocation::ResidentPolicyHidden(args) => {
             Some(qol_tray::features::resident_policy::run_hidden(&args))
         }
+        Invocation::Defaults(args) => Some(qol_tray::features::host_defaults::run_cli(&args)),
         Invocation::Exec { target, action } => Some(
             match qol_plugin_api::host_exec::run_exec(&target, &action) {
                 Ok(()) => 0,
@@ -91,6 +93,9 @@ fn print_usage() {
     println!(
         "    qol-tray resident-policy <op>        Inspect or manage the durable NVIDIA residency policy; residency --resident|--portable toggles this device"
     );
+    println!(
+        "    qol-tray defaults <op>                Inspect or hand host defaults (folders, system keys) to plugins; list|probe|claim|release|open, --json"
+    );
     println!("    qol-tray --write-mode=<dev|prod>      Write mode.json then run the tray");
     println!("    qol-tray --version, -V                Print version and exit");
     println!("    qol-tray help, --help, -h             Print this message and exit");
@@ -118,6 +123,9 @@ fn classify(args: Vec<String>) -> Invocation {
     }
     if matches!(args.first().map(String::as_str), Some("resident-policy")) {
         return Invocation::ResidentPolicy(args[1..].to_vec());
+    }
+    if let Some(rest) = defaults_args(&args) {
+        return Invocation::Defaults(rest);
     }
     if args
         .first()
@@ -151,6 +159,22 @@ fn classify(args: Vec<String>) -> Invocation {
             Invocation::WriteMode(mode["--write-mode=".len()..].to_string())
         }
         _ => Invocation::Invalid,
+    }
+}
+
+fn defaults_args(args: &[String]) -> Option<Vec<String>> {
+    match args {
+        [command, rest @ ..] if command == "defaults" => Some(rest.to_vec()),
+        [help, command, rest @ ..]
+            if matches!(help.as_str(), "help" | "--help" | "-h") && command == "defaults" =>
+        {
+            Some(
+                std::iter::once("help".to_string())
+                    .chain(rest.iter().cloned())
+                    .collect(),
+            )
+        }
+        _ => None,
     }
 }
 
@@ -231,6 +255,30 @@ mod tests {
             ])),
             "the hidden route carries the raw argv for strict parsing at the boundary"
         );
+    }
+
+    #[test]
+    fn classifies_defaults_routes_with_every_help_form() {
+        let cases = [
+            (vec!["defaults"], vec![]),
+            (vec!["defaults", "list", "--json"], vec!["list", "--json"]),
+            (vec!["defaults", "help"], vec!["help"]),
+            (vec!["defaults", "claim", "help"], vec!["claim", "help"]),
+            (vec!["defaults", "--help"], vec!["--help"]),
+            (vec!["help", "defaults"], vec!["help"]),
+            (vec!["--help", "defaults", "claim"], vec!["help", "claim"]),
+            (
+                vec!["defaults", "open", "folder.open", "file:///tmp"],
+                vec!["open", "folder.open", "file:///tmp"],
+            ),
+        ];
+        for (values, expected) in cases {
+            assert_eq!(
+                classify(args(&values)),
+                Invocation::Defaults(args(&expected)),
+                "{values:?}"
+            );
+        }
     }
 
     #[test]
