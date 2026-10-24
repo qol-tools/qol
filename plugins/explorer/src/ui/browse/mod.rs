@@ -27,7 +27,7 @@ use super::keys::Step;
 use crate::listing::{
     self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass,
 };
-use crate::nav::{History, Jump, Picks, Spot};
+use crate::nav::{merged, History, Jump, Picks, Spot};
 use counts::LiveCounts;
 pub use ops::{Held, MoveRecord, MoveState};
 pub(crate) use ops_text::{copy_only_note, label_of, short_note};
@@ -65,6 +65,12 @@ pub struct Drained {
 pub struct Note {
     pub count: String,
     pub failure: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Selection {
+    picks: Picks,
+    cursor: usize,
 }
 
 pub struct Browser {
@@ -168,10 +174,55 @@ impl Browser {
     }
 
     pub fn drag_paths(&self, path: &Path) -> Vec<PathBuf> {
+        self.carried(path, false)
+    }
+
+    pub fn carried(&self, path: &Path, additive: bool) -> Vec<PathBuf> {
         if self.picks.is_picked(path) {
             return self.picks.paths().map(Path::to_path_buf).collect();
         }
-        vec![path.to_path_buf()]
+        self.picks
+            .paths()
+            .filter(|_| additive)
+            .map(Path::to_path_buf)
+            .chain(std::iter::once(path.to_path_buf()))
+            .collect()
+    }
+
+    pub fn lift(&mut self, row: usize, additive: bool, scroll: f32) -> bool {
+        let Some(path) = self.entry(row).map(|entry| entry.path.clone()) else {
+            return false;
+        };
+        if !self.picks.is_picked(&path) {
+            self.picks.set(self.carried(&path, additive));
+        }
+        self.place_cursor(row, scroll);
+        true
+    }
+
+    pub fn selection(&self) -> Selection {
+        Selection {
+            picks: self.picks.clone(),
+            cursor: self.cursor,
+        }
+    }
+
+    pub fn restore(&mut self, selection: &Selection, scroll: f32) {
+        self.picks = selection.picks.clone();
+        self.place_cursor(selection.cursor, scroll);
+    }
+
+    pub fn pick_boxed(&mut self, base: &Selection, touched: &[usize], additive: bool) {
+        let boxed: Vec<PathBuf> = touched
+            .iter()
+            .filter_map(|&row| self.entry(row).map(|entry| entry.path.clone()))
+            .collect();
+        let kept = base.picks.paths().map(Path::to_path_buf);
+        self.picks.set(merged(kept, boxed, additive));
+    }
+
+    pub fn clear_picks(&mut self) {
+        self.picks.clear();
     }
 
     pub fn is_picked(&self, entry: &Entry) -> bool {

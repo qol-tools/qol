@@ -9,6 +9,7 @@ use qol_gpui::theme::{
 
 use super::pictogram::PictogramSize;
 use crate::config::ViewSize;
+use crate::ui::gesture::Tiles;
 use crate::ui::keys::Resize;
 
 pub(super) const ACROSS: f32 = SPACE_INSET + SPACE_STACK;
@@ -116,6 +117,25 @@ impl Layout {
         }
     }
 
+    pub(super) fn tiles(self, width: f32) -> Tiles {
+        match self.stop.cell() {
+            Some(size) => Tiles {
+                columns: self.columns,
+                pitch: self.pitch,
+                size,
+                origin: (SPACE_GUTTER, SPACE_INSET),
+                gap: ACROSS,
+            },
+            None => Tiles {
+                columns: 1,
+                pitch: self.pitch,
+                size: (width, self.pitch),
+                origin: (0.0, 0.0),
+                gap: 0.0,
+            },
+        }
+    }
+
     pub(super) fn line_of(self, entry: usize) -> usize {
         entry / self.columns
     }
@@ -154,9 +174,10 @@ impl Layout {
 
 #[cfg(test)]
 mod tests {
-    use super::Layout;
+    use super::{Layout, ACROSS};
     use crate::config::ViewSize;
     use crate::ui::keys::Resize;
+    use qol_gpui::theme::{SPACE_GUTTER, SPACE_INSET};
 
     #[test]
     fn stops_step_one_at_a_time_and_clamp_at_both_ends() {
@@ -239,6 +260,38 @@ mod tests {
         assert_eq!(layout.entries(3..4, 15), 15..15);
         assert_eq!(layout.shift(13, 6), 104.0);
         assert_eq!(layout.shift(13, 1), 0.0);
+    }
+
+    #[test]
+    fn tiles_sit_where_the_lines_and_cells_are_drawn() {
+        for stop in ViewSize::ALL {
+            let layout = Layout::new(stop, 838.0);
+            let tiles = layout.tiles(838.0);
+            for index in 0..60 {
+                let rect = tiles.rect(index);
+                let inset = if stop.is_grid() { SPACE_INSET } else { 0.0 };
+                assert_eq!(rect.top, layout.top(index) + inset, "{stop:?} {index}");
+                assert_eq!(rect.bottom - rect.top, tiles.size.1, "{stop:?} {index}");
+                assert_eq!(
+                    tiles.at(rect.left + 1.0, rect.top + 1.0, 60),
+                    Some(index),
+                    "{stop:?} {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_list_row_spans_the_width_and_a_cell_is_its_own_size_in_the_gutter() {
+        let list = Layout::new(ViewSize::List, 838.0).tiles(838.0);
+        assert_eq!((list.columns, list.size, list.gap), (1, (838.0, 36.0), 0.0));
+        let icons = Layout::new(ViewSize::Icons, 838.0).tiles(838.0);
+        assert_eq!(icons.columns, 6);
+        assert_eq!(icons.size, (120.0, 96.0));
+        assert_eq!(icons.origin, (SPACE_GUTTER, SPACE_INSET));
+        assert_eq!(icons.gap, ACROSS);
+        let right_edge = icons.rect(5).right;
+        assert!(right_edge <= 838.0 - SPACE_GUTTER + ACROSS, "{right_edge}");
     }
 
     #[test]

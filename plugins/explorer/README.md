@@ -46,7 +46,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Alt+Left, Alt+Right | Back and forward |
 | Space | Pick or unpick the row under the cursor, or add a space to the letters typed when a name goes on with one |
 | Ctrl+A | Pick every row |
-| Esc | Drop the picks, a cut and the red note; while dragging, cancel the drag |
+| Esc | Drop the picks, a cut and the red note; while dragging, cancel the drag; while drawing a selection box, put the picks back as they were |
 | Ctrl+C, Ctrl+X | Copy or cut the picks, or the row under the cursor when nothing is picked; cut rows fade until they are pasted |
 | Ctrl+V | Paste into the folder you are in |
 | Delete | Move the picks, or the row under the cursor, to the trash |
@@ -64,7 +64,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Left, Right | In the icon sizes, move the cursor one icon; Up and Down move a whole row |
 | Letters | Jump to the first name that starts with what you typed; a plain letter also matches its accented forms, an accented one only itself, and a letter that matches nothing is left out |
 
-Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
+Press anywhere in the list and move at once to draw a selection box: every row or icon it touches is picked while you drag, Ctrl or Shift keeps the picks you had, Esc puts them back, and the list scrolls when you pull past its top or bottom edge. A click on empty space drops the picks. Press a row and hold still for half a second and a circle grows beside the pointer, then the files lift and you can drag them. Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
 
 When a paste or a drop meets names that are already there, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a row, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A replaced file goes to the trash.
 

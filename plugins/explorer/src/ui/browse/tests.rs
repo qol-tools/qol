@@ -1511,3 +1511,117 @@ fn a_drag_carries_every_pick_from_a_picked_row_and_only_its_own_row_otherwise() 
     assert_eq!(carried, [a.clone(), x]);
     assert_eq!(browser.drag_paths(&b), [b]);
 }
+
+fn pick_rows(browser: &mut Browser, rows: &[usize]) {
+    for &row in rows {
+        browser.set_cursor(row);
+        browser.toggle_pick();
+    }
+}
+
+#[test]
+fn lifting_a_row_carries_the_picks_when_it_is_picked_and_otherwise_swaps_or_adds_to_them() {
+    let cases = [
+        (vec![0, 1], 1, false, vec!["a.txt", "b.txt"]),
+        (vec![0, 1], 1, true, vec!["a.txt", "b.txt"]),
+        (vec![0, 1], 2, false, vec!["c.txt"]),
+        (vec![0, 1], 2, true, vec!["a.txt", "b.txt", "c.txt"]),
+        (vec![], 3, false, vec!["d.txt"]),
+        (vec![], 3, true, vec!["d.txt"]),
+        (vec![0], 9, false, vec!["a.txt"]),
+    ];
+    for (picks, row, additive, want) in cases {
+        let temp = abc_folder();
+        let mut browser = opened(temp.path());
+        pick_rows(&mut browser, &picks);
+        let lifted = browser.lift(row, additive, 0.0);
+        assert_eq!(lifted, row < 4, "{picks:?} {row} {additive}");
+        assert_eq!(picked(&browser), want, "{picks:?} {row} {additive}");
+        if lifted {
+            assert_eq!(browser.cursor(), row, "{picks:?} {row} {additive}");
+        }
+    }
+}
+
+#[test]
+fn what_a_press_would_carry_matches_what_lifting_it_then_carries() {
+    let cases = [
+        (vec![0, 1], 1, false),
+        (vec![0, 1], 1, true),
+        (vec![0, 1], 2, false),
+        (vec![0, 1], 2, true),
+        (vec![], 3, false),
+        (vec![], 3, true),
+    ];
+    for (picks, row, additive) in cases {
+        let temp = abc_folder();
+        let mut browser = opened(temp.path());
+        pick_rows(&mut browser, &picks);
+        let path = browser.entry(row).unwrap().path.clone();
+        let mut predicted = browser.carried(&path, additive);
+        browser.lift(row, additive, 0.0);
+        let mut actual = browser.drag_paths(&path);
+        predicted.sort();
+        actual.sort();
+        assert_eq!(predicted, actual, "{picks:?} {row} {additive}");
+        assert!(predicted.contains(&path), "{picks:?} {row} {additive}");
+    }
+}
+
+#[test]
+fn a_box_replaces_the_picks_or_adds_to_the_ones_from_before_the_press() {
+    let cases = [
+        (vec![0], vec![1, 2], false, vec!["b.txt", "c.txt"]),
+        (vec![0], vec![1, 2], true, vec!["a.txt", "b.txt", "c.txt"]),
+        (vec![0], vec![0, 1], true, vec!["a.txt", "b.txt"]),
+        (vec![0], vec![], false, vec![]),
+        (vec![0], vec![], true, vec!["a.txt"]),
+        (vec![], vec![3], true, vec!["d.txt"]),
+        (vec![0, 3], vec![1, 9], false, vec!["b.txt"]),
+    ];
+    for (before, touched, additive, want) in cases {
+        let temp = abc_folder();
+        let mut browser = opened(temp.path());
+        pick_rows(&mut browser, &before);
+        let base = browser.selection();
+        browser.pick_boxed(&base, &touched, additive);
+        assert_eq!(picked(&browser), want, "{before:?} {touched:?} {additive}");
+        browser.pick_boxed(&base, &touched, additive);
+        assert_eq!(
+            picked(&browser),
+            want,
+            "{before:?} {touched:?} {additive} again"
+        );
+    }
+}
+
+#[test]
+fn growing_then_shrinking_a_box_always_starts_over_from_the_same_base() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    pick_rows(&mut browser, &[0]);
+    let base = browser.selection();
+    browser.pick_boxed(&base, &[1, 2, 3], true);
+    assert_eq!(picked(&browser).len(), 4);
+    browser.pick_boxed(&base, &[2], true);
+    assert_eq!(picked(&browser), ["a.txt", "c.txt"]);
+    browser.pick_boxed(&base, &[2], false);
+    assert_eq!(picked(&browser), ["c.txt"]);
+}
+
+#[test]
+fn restoring_a_selection_brings_back_its_picks_and_its_cursor() {
+    let temp = abc_folder();
+    let mut browser = opened(temp.path());
+    pick_rows(&mut browser, &[0, 2]);
+    browser.set_cursor(2);
+    let before = browser.selection();
+    browser.pick_boxed(&before, &[1, 3], false);
+    browser.place_cursor(3, 0.0);
+    assert_eq!(picked(&browser), ["b.txt", "d.txt"]);
+    assert_eq!(browser.cursor(), 3);
+
+    browser.restore(&before, 0.0);
+    assert_eq!(picked(&browser), ["a.txt", "c.txt"]);
+    assert_eq!(browser.cursor(), 2);
+}

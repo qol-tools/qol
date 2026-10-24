@@ -182,6 +182,29 @@ fn picks_are_counted_per_folder_through_every_change() {
     assert_eq!(picks.folder_count(), 0);
 }
 
+fn merged_set(items: &[&'static str]) -> std::collections::HashSet<&'static str> {
+    items.iter().copied().collect()
+}
+
+#[test]
+fn a_box_adds_to_the_picks_it_started_with_or_replaces_them() {
+    let cases = [
+        (&["a", "b"][..], &["b", "c"][..], true, &["a", "b", "c"][..]),
+        (&["a", "b"], &["b", "c"], false, &["b", "c"]),
+        (&["a", "b"], &[], true, &["a", "b"]),
+        (&["a", "b"], &[], false, &[]),
+        (&[], &["x"], true, &["x"]),
+        (&[], &["x"], false, &["x"]),
+        (&[], &[], true, &[]),
+        (&["a"], &["a", "a"], false, &["a"]),
+        (&["a", "a"], &["b"], true, &["a", "b"]),
+    ];
+    for (base, touched, additive, want) in cases {
+        let got = merged(base.iter().copied(), touched.iter().copied(), additive);
+        assert_eq!(got, merged_set(want), "{base:?} {touched:?} {additive}");
+    }
+}
+
 fn picked(picks: &Picks, rows: &[PathBuf]) -> Vec<bool> {
     rows.iter().map(|row| picks.is_picked(row)).collect()
 }

@@ -8,5 +8,5 @@ mod tests;
 
 pub use history::{History, Spot};
 pub use jump::{Jump, RUN_RESET};
-pub use picks::Picks;
+pub use picks::{merged, Picks};
 pub(crate) use prefix::{letter_count, starts_with_ignoring_case};

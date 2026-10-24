@@ -7,6 +7,7 @@ mod list;
 mod menu;
 mod moves;
 mod pictogram;
+mod press;
 mod rail;
 mod rename;
 mod slider;
@@ -95,6 +96,7 @@ pub struct ExplorerView {
     slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
     drag_gesture: Rc<RefCell<DragGestureState>>,
+    pressing: press::PressState,
     title: String,
     dismisser: SurfaceDismisser,
     wake_at: Option<Instant>,
@@ -138,6 +140,7 @@ impl ExplorerView {
             slider_dragging: false,
             waiting: VecDeque::new(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
+            pressing: press::PressState::new(),
             title: WINDOW_TITLE.to_string(),
             dismisser,
             wake_at: None,
@@ -299,9 +302,10 @@ impl ExplorerView {
         cx.notify();
     }
 
-    fn close_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn close_menu(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         if let Some(menu) = self.menu.take() {
-            self.closed_by = Some((menu.owner(), at));
+            self.closed_by =
+                (event.button == MouseButton::Left).then_some((menu.owner(), event.position));
             cx.notify();
         }
     }
@@ -613,6 +617,7 @@ impl ExplorerView {
             self.follow_rows(drained.cursor_shift);
         }
         if drained.changed {
+            self.rebox(true, cx);
             cx.notify();
         }
         if let Some(delay) = drained.wake_in {
@@ -633,6 +638,10 @@ impl ExplorerView {
             self.hover = None;
             cx.stop_propagation();
             cx.notify();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.cancel_press(cx) {
+            cx.stop_propagation();
             return;
         }
         if self.menu.is_some() {
@@ -891,6 +900,9 @@ impl ExplorerView {
     }
 
     fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {
+        if self.pressing.take_swallow() {
+            return;
+        }
         let click = keys::click(&event.modifiers(), event.click_count());
         if click != Click::Range {
             self.browser.end_range();
@@ -962,6 +974,7 @@ impl Render for ExplorerView {
         self.rail_width = rail_width(f32::from(viewport.width));
         self.list_width = inner_width - self.rail_width;
         self.follow_title(window);
+        self.animate_press(window);
         if self.hover.is_some() && !cx.has_active_drag() {
             self.hover = None;
         }
@@ -979,6 +992,7 @@ impl Render for ExplorerView {
             None if self.browser.moves_open() => Some(moves::render(self)),
             None => None,
         };
+        let held = self.press_overlay();
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)
@@ -1002,6 +1016,7 @@ impl Render for ExplorerView {
             )
             .children(sheet)
             .children(menu)
+            .children(held)
     }
 }
 
