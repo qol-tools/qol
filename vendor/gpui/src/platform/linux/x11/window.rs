@@ -424,6 +424,7 @@ pub struct X11WindowState {
     pub(crate) sync: SyncAck<sync::Int64>,
     pub(crate) press_root: Option<(i32, i32)>,
     pub(crate) drag_out: Option<DragOut>,
+    drag_copy_shown: bool,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
     renderer: BladeRenderer,
@@ -960,6 +961,7 @@ impl X11WindowState {
                 sync: SyncAck::new(),
                 press_root: None,
                 drag_out: None,
+                drag_copy_shown: false,
             })
         });
 
@@ -1165,7 +1167,11 @@ impl X11Window {
     fn drag_icon(&self, state: &X11WindowState, image: &crate::DragImage) -> Option<DragIcon> {
         let xcb = &self.0.xcb;
         let root = state.x_root_window;
-        let screen = xcb.setup().roots.iter().position(|screen| screen.root == root)?;
+        let screen = xcb
+            .setup()
+            .roots
+            .iter()
+            .position(|screen| screen.root == root)?;
         let visual = find_visuals(xcb, screen).transparent?;
         let size = image.image.size(0);
         let scale = state.scale_factor;
@@ -1248,7 +1254,7 @@ impl X11WindowStatePtr {
         }
     }
 
-    pub fn drag_out_status(&self, from: xproto::Window, flags: u32) {
+    pub fn drag_out_status(&self, from: xproto::Window, flags: u32, action: xproto::Atom) {
         let mut guard = self.state.borrow_mut();
         let state = &mut *guard;
         let Some(drag_out) = state.drag_out.as_mut() else {
@@ -1260,7 +1266,20 @@ impl X11WindowStatePtr {
             root: state.x_root_window,
             source: self.x_window,
         };
-        drag_out.status(&link, from, flags);
+        drag_out.status(&link, from, flags, action);
+    }
+
+    pub fn drag_cursor_change(&self) -> Option<bool> {
+        let mut state = self.state.borrow_mut();
+        let copy = state
+            .drag_out
+            .as_ref()
+            .and_then(DragOut::accepted_action)
+            .is_some_and(|action| action == state.atoms.XdndActionCopy);
+        (copy != state.drag_copy_shown).then(|| {
+            state.drag_copy_shown = copy;
+            copy
+        })
     }
 
     pub fn drag_out_finished(&self) {

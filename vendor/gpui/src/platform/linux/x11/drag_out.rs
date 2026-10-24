@@ -5,9 +5,9 @@ use util::ResultExt;
 use x11rb::{
     connection::Connection,
     protocol::xproto::{
-        self, AtomEnum, ClientMessageEvent, ColormapAlloc, ConfigureWindowAux,
-        ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, ImageFormat, PropMode,
-        SelectionNotifyEvent, SelectionRequestEvent, StackMode, WindowClass,
+        self, AtomEnum, ClientMessageEvent, ColormapAlloc, ConfigureWindowAux, ConnectionExt as _,
+        CreateGCAux, CreateWindowAux, EventMask, ImageFormat, PropMode, SelectionNotifyEvent,
+        SelectionRequestEvent, StackMode, WindowClass,
     },
     wrapper::ConnectionExt as _,
     xcb_ffi::XCBConnection,
@@ -30,6 +30,7 @@ struct Target {
     window: xproto::Window,
     proxy: xproto::Window,
     accepted: bool,
+    action: xproto::Atom,
     awaiting_status: bool,
     pending: Option<Position>,
 }
@@ -116,6 +117,7 @@ impl DragOut {
                     window,
                     proxy,
                     accepted: false,
+                    action: x11rb::NONE,
                     awaiting_status: false,
                     pending: None,
                 });
@@ -131,11 +133,12 @@ impl DragOut {
         send_position(link, target, position);
     }
 
-    pub fn status(&mut self, link: &Link, from: xproto::Window, flags: u32) {
+    pub fn status(&mut self, link: &Link, from: xproto::Window, flags: u32, action: xproto::Atom) {
         let Some(target) = self.target.as_mut().filter(|target| target.window == from) else {
             return;
         };
         target.accepted = flags & 1 == 1;
+        target.action = action;
         target.awaiting_status = false;
         if let Some(position) = target.pending.take() {
             send_position(link, target, position);
@@ -161,6 +164,16 @@ impl DragOut {
                 false
             }
         }
+    }
+
+    pub fn accepted_action(&self) -> Option<xproto::Atom> {
+        if self.dropped {
+            return None;
+        }
+        self.target
+            .as_ref()
+            .filter(|target| target.accepted)
+            .map(|target| target.action)
     }
 
     pub fn uri_list(&self) -> &str {
