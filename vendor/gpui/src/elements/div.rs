@@ -31,14 +31,14 @@ use smallvec::SmallVec;
 use stacksafe::{StackSafe, stacksafe};
 use std::{
     any::{Any, TypeId},
-    cell::RefCell,
+    cell::{Cell, RefCell},
     cmp::Ordering,
     fmt::Debug,
     marker::PhantomData,
     mem,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use util::ResultExt;
 
@@ -515,6 +515,14 @@ impl Interactivity {
                 constructor(value.downcast_ref().unwrap(), offset, window, cx).into()
             }),
         ));
+    }
+
+    /// Make this element's drag start only after the press has been held for `hold`. A move of more than
+    /// `slop` before then abandons the drag for that press, along with its click, so something else can use the
+    /// gesture. After the hold, the next move starts the drag as usual.
+    /// The imperative API equivalent to [`StatefulInteractiveElement::drag_after_hold`]
+    pub fn drag_after_hold(&mut self, hold: Duration, slop: Pixels) {
+        self.drag_hold = Some((hold, slop));
     }
 
     /// Bind the given callback on the hover start and end events of this element. Note that the boolean
@@ -1143,6 +1151,17 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Make this element's drag start only after the press has been held for `hold`. A move of more than
+    /// `slop` before then abandons the drag for that press, along with its click.
+    /// The fluent API equivalent to [`Interactivity::drag_after_hold`]
+    fn drag_after_hold(mut self, hold: Duration, slop: Pixels) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().drag_after_hold(hold, slop);
+        self
+    }
+
     /// Bind the given callback on the hover start and end events of this element. Note that the boolean
     /// passed to the callback is true when the hover starts and false when it ends.
     /// The fluent API equivalent to [`Interactivity::on_hover`]
@@ -1518,6 +1537,7 @@ pub struct Interactivity {
     pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: Vec<ClickListener>,
     pub(crate) drag_listener: Option<(Arc<dyn Any>, DragListener)>,
+    pub(crate) drag_hold: Option<(Duration, Pixels)>,
     pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
     pub(crate) window_control: Option<WindowControlArea>,
@@ -2082,6 +2102,7 @@ impl Interactivity {
         let drag_cursor_style = self.base_style.as_ref().mouse_cursor;
 
         let mut drag_listener = mem::take(&mut self.drag_listener);
+        let drag_hold = self.drag_hold;
         let drop_listeners = mem::take(&mut self.drop_listeners);
         let click_listeners = mem::take(&mut self.click_listeners);
         let can_drop_predicate = mem::take(&mut self.can_drop_predicate);
@@ -2131,8 +2152,16 @@ impl Interactivity {
                     .get_or_insert_with(Default::default)
                     .clone();
 
+                let pressed_at = drag_hold.map(|_| {
+                    element_state
+                        .pressed_at
+                        .get_or_insert_with(Default::default)
+                        .clone()
+                });
+
                 window.on_mouse_event({
                     let pending_mouse_down = pending_mouse_down.clone();
+                    let pressed_at = pressed_at.clone();
                     let hitbox = hitbox.clone();
                     move |event: &MouseDownEvent, phase, window, _cx| {
                         if phase == DispatchPhase::Bubble
@@ -2140,6 +2169,9 @@ impl Interactivity {
                             && hitbox.is_hovered(window)
                         {
                             *pending_mouse_down.borrow_mut() = Some(event.clone());
+                            if let Some(pressed_at) = &pressed_at {
+                                pressed_at.set(Some(Instant::now()));
+                            }
                             window.refresh();
                         }
                     }
@@ -2154,6 +2186,22 @@ impl Interactivity {
                         }
 
                         let mut pending_mouse_down = pending_mouse_down.borrow_mut();
+                        if let Some(mouse_down) = pending_mouse_down.as_ref()
+                            && let Some((hold, slop)) = drag_hold
+                            && !cx.has_active_drag()
+                            && pressed_at
+                                .as_ref()
+                                .and_then(|at| at.get())
+                                .is_none_or(|at| at.elapsed() < hold)
+                        {
+                            if (event.position - mouse_down.position).magnitude() > f64::from(slop)
+                            {
+                                pending_mouse_down.take();
+                                *clicked_state.borrow_mut() = ElementClickedState::default();
+                                window.refresh();
+                            }
+                            return;
+                        }
                         if let Some(mouse_down) = pending_mouse_down.clone()
                             && !cx.has_active_drag()
                             && (event.position - mouse_down.position).magnitude() > DRAG_THRESHOLD
@@ -2570,6 +2618,7 @@ pub struct InteractiveElementState {
     pub(crate) clicked_state: Option<Rc<RefCell<ElementClickedState>>>,
     pub(crate) hover_state: Option<Rc<RefCell<bool>>>,
     pub(crate) pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
+    pub(crate) pressed_at: Option<Rc<Cell<Option<Instant>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
 }

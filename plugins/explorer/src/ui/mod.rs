@@ -1,5 +1,6 @@
 mod browse;
 mod columns;
+mod gesture;
 mod keys;
 mod kind;
 mod run;

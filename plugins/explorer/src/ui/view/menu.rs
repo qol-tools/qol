@@ -196,7 +196,7 @@ pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement 
         })
         .collect();
     let body = kit.menu(WIDTH).children(rows).on_mouse_down_out(
-        cx.listener(|view, event: &MouseDownEvent, _, cx| view.close_menu(event.position, cx)),
+        cx.listener(|view, event: &MouseDownEvent, _, cx| view.close_menu(event, cx)),
     );
     deferred(
         anchored()
