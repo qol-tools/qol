@@ -318,6 +318,22 @@ impl Kit {
             .text_color(rgb(ground.soft))
     }
 
+    pub fn count_disc(&self, count: usize, ground: Ground) -> Div {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .min_w(px(CHIP_COUNT_HEIGHT))
+            .h(px(CHIP_COUNT_HEIGHT))
+            .px(px(qol_theme::SPACE_TIGHT))
+            .rounded_full()
+            .bg(rgb(count_disc(ground)))
+            .text(TextStyle::Label)
+            .text_color(rgb(ground.on_mark))
+            .child(count.to_string())
+    }
+
     pub fn chip(&self, chip: Chip, ground: Ground) -> Div {
         match chip {
             Chip::Key(key) => self
@@ -326,21 +342,10 @@ impl Kit {
             Chip::KeyText(text) => self.key_frame(ground).child(text),
             Chip::Count(count, label) => {
                 let inset = px((CHIP_HEIGHT - CHIP_COUNT_HEIGHT) / 2.0);
-                let chip = self.chip_frame(ground).pl(inset).child(
-                    div()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .min_w(px(CHIP_COUNT_HEIGHT))
-                        .h(px(CHIP_COUNT_HEIGHT))
-                        .px(px(qol_theme::SPACE_TIGHT))
-                        .rounded_full()
-                        .bg(rgb(count_disc(ground)))
-                        .text(TextStyle::Label)
-                        .text_color(rgb(ground.on_mark))
-                        .child(count.to_string()),
-                );
+                let chip = self
+                    .chip_frame(ground)
+                    .pl(inset)
+                    .child(self.count_disc(count, ground));
                 if label.is_empty() {
                     chip.pr(inset)
                 } else {

@@ -4,7 +4,7 @@ use gpui::{
     div, px, App, AppContext, Context, Entity, IntoElement, ParentElement, Pixels, Point, Render,
     Styled, WeakEntity, Window,
 };
-use qol_gpui::kit::{kit, Chip};
+use qol_gpui::kit::kit;
 
 use super::ExplorerView;
 
@@ -21,7 +21,7 @@ impl Render for DraggedPaths {
         div()
             .pl(self.grab.x + px(BESIDE_POINTER))
             .pt(self.grab.y + px(BESIDE_POINTER))
-            .child(kit.chip(Chip::Count(self.count, "".into()), kit.grounds.pane))
+            .child(kit.count_disc(self.count, kit.grounds.pane))
     }
 }
 
