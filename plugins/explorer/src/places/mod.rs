@@ -159,6 +159,14 @@ pub fn rename_pin(pins: &[Pin], pin: usize, name: &str) -> Option<Vec<Pin>> {
     Some(pins)
 }
 
+pub fn device_label(devices: &[Device], path: &Path) -> Option<String> {
+    devices
+        .iter()
+        .filter(|device| path.starts_with(&device.path))
+        .max_by_key(|device| device.path.components().count())
+        .map(|device| device.label.clone())
+}
+
 pub fn devices() -> Vec<Device> {
     let root = platform::system_root();
     let mut devices = vec![device(

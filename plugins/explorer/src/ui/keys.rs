@@ -36,6 +36,14 @@ pub enum Action {
     PathField,
     TogglePin,
     Settings,
+    Copy,
+    Cut,
+    Paste,
+    Trash,
+    Rename,
+    NewFolder,
+    Undo,
+    Moves,
     Resize(Resize),
     Nothing,
 }
@@ -89,6 +97,14 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("g", (true, false, false)) => Action::EditPath,
         ("d", (true, false, false)) => Action::TogglePin,
         (",", (true, false, false)) => Action::Settings,
+        ("c", (true, false, false)) => Action::Copy,
+        ("x", (true, false, false)) => Action::Cut,
+        ("v", (true, false, false)) => Action::Paste,
+        ("delete", (false, false, false)) => Action::Trash,
+        ("f2", (false, false, false)) => Action::Rename,
+        ("n", (true, false, true)) => Action::NewFolder,
+        ("z", (true, false, false)) => Action::Undo,
+        ("j", (true, false, false)) => Action::Moves,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
     }
 }
@@ -125,6 +141,12 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Jump(_)
                 | Action::Pick
                 | Action::PickAll
+                | Action::Copy
+                | Action::Cut
+                | Action::Paste
+                | Action::Trash
+                | Action::Rename
+                | Action::NewFolder
         )
 }
 
@@ -249,6 +271,63 @@ mod tests {
     }
 
     #[test]
+    fn every_file_operation_binding_maps_to_its_action() {
+        let secondary_shift = Modifiers {
+            shift: true,
+            ..Modifiers::secondary_key()
+        };
+        let cases = [
+            (
+                key("c", Modifiers::secondary_key(), Some("c")),
+                Action::Copy,
+            ),
+            (key("x", Modifiers::secondary_key(), Some("x")), Action::Cut),
+            (
+                key("v", Modifiers::secondary_key(), Some("v")),
+                Action::Paste,
+            ),
+            (plain("delete"), Action::Trash),
+            (plain("f2"), Action::Rename),
+            (key("n", secondary_shift, Some("N")), Action::NewFolder),
+            (
+                key("z", Modifiers::secondary_key(), Some("z")),
+                Action::Undo,
+            ),
+            (
+                key("j", Modifiers::secondary_key(), Some("j")),
+                Action::Moves,
+            ),
+        ];
+        for (keystroke, expected) in cases {
+            assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
+        }
+    }
+
+    #[test]
+    fn file_operation_keys_with_the_wrong_modifiers_do_nothing_or_jump() {
+        let cases = [
+            (key("c", Modifiers::none(), Some("c")), Action::Jump('c')),
+            (
+                key("n", Modifiers::secondary_key(), Some("n")),
+                Action::Nothing,
+            ),
+            (key("delete", shift(), None), Action::Nothing),
+            (key("f2", shift(), None), Action::Nothing),
+            (key("z", alt(), Some("z")), Action::Nothing),
+        ];
+        for (keystroke, expected) in cases {
+            assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
+        }
+        for keystroke in [
+            key("c", Modifiers::secondary_key(), Some("c")),
+            plain("delete"),
+            plain("f2"),
+        ] {
+            assert_eq!(action(&keystroke, true), Action::PathField, "{keystroke:?}");
+        }
+    }
+
+    #[test]
     fn printable_characters_type_to_jump() {
         let cases = [
             (key("a", Modifiers::none(), Some("a")), Action::Jump('a')),
@@ -265,7 +344,7 @@ mod tests {
     #[test]
     fn chords_and_unbound_keys_do_nothing() {
         let cases = [
-            key("x", control(), Some("x")),
+            key("q", control(), Some("q")),
             key("x", alt(), Some("x")),
             key("tab", Modifiers::none(), Some("\t")),
             key("f1", Modifiers::none(), None),
@@ -362,6 +441,12 @@ mod tests {
             Action::Jump('f'),
             Action::Pick,
             Action::PickAll,
+            Action::Copy,
+            Action::Cut,
+            Action::Paste,
+            Action::Trash,
+            Action::Rename,
+            Action::NewFolder,
         ];
         let leaving = [
             Action::Up,
@@ -373,6 +458,8 @@ mod tests {
             Action::PathField,
             Action::TogglePin,
             Action::Settings,
+            Action::Undo,
+            Action::Moves,
         ];
         for action in on_rows {
             assert!(waits(action, true, false, false), "{action:?}");

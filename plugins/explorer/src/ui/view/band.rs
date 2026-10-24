@@ -1,18 +1,22 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{div, px, rgb, AnyElement, Context, IntoElement, ParentElement, Styled, Window};
+use qol_gpui::crumb_trail::CRUMB_MAX_WIDTH;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::settings_panel::components::settings_band_bar;
 use qol_gpui::surface::PanelDragArea;
 use qol_gpui::text::{laid_out_width, TextStyled};
-use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER};
+use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_TIGHT};
 use qol_gpui::CrumbTrail;
 
+use super::targets::{self, Span};
 use super::{more_button, slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
 use crate::ui::browse::Note;
 use crate::ui::columns::left_to_right;
+use crate::ui::trail::Crumb;
 
 const FAILURE_MAX_WIDTH: f32 = 380.0;
 const TRAIL_FLOOR: f32 = 240.0;
@@ -24,7 +28,13 @@ pub(super) fn render(
 ) -> impl IntoElement {
     let kit = kit();
     let browser = &view.browser;
-    let note = browser.note();
+    let note = match view.drag_note() {
+        Some(count) => Note {
+            count,
+            failure: None,
+        },
+        None => browser.note(),
+    };
     let editing = browser.path_edit();
     let room = f32::from(window.viewport_size().width)
         - 2.0 * (LINE + SPACE_GUTTER)
@@ -60,6 +70,11 @@ pub(super) fn render(
         0.0
     };
     let width = room - note_room;
+    let spans = Rc::new(if editing.is_none() {
+        crumb_spans(&crumbs, width, window)
+    } else {
+        Vec::new()
+    });
     let mut crumb_trail = CrumbTrail::new(
         "explorer-trail",
         crumbs.iter().map(|crumb| left_to_right(&crumb.label)),
@@ -104,7 +119,8 @@ pub(super) fn render(
         }
         None => band.panel_drag_after(&view.drag_gesture),
     };
-    band.child(div().flex_1().min_w_0().child(crumb_trail))
+    let trail = targets::trail(div().flex_1().min_w_0(), spans, cx);
+    band.child(trail.child(crumb_trail))
         .when(note_width > 0.0, |band| band.child(note))
         .child(slider::render(view, cx))
         .child(more_button(
@@ -113,6 +129,41 @@ pub(super) fn render(
             |view, event, cx| view.toggle_folder_menu(event.position, cx),
             cx,
         ))
+}
+
+fn crumb_spans(crumbs: &[Crumb], width: f32, window: &mut Window) -> Vec<Span> {
+    let separator = laid_out_width(window, "/", TextStyle::Heading) + 2.0 * SPACE_TIGHT;
+    let last = crumbs.len().saturating_sub(1);
+    let widths: Vec<f32> = crumbs
+        .iter()
+        .enumerate()
+        .map(|(index, crumb)| {
+            let label = laid_out_width(window, &left_to_right(&crumb.label), TextStyle::Heading);
+            if index == last {
+                label
+            } else {
+                label.min(CRUMB_MAX_WIDTH)
+            }
+        })
+        .collect();
+    let shown = widths.iter().sum::<f32>() + separator * last as f32;
+    if shown > width && crumbs.len() >= 3 {
+        return Vec::new();
+    }
+    let mut at = 0.0;
+    crumbs
+        .iter()
+        .zip(widths)
+        .map(|(crumb, extent)| {
+            let span = Span {
+                from: at,
+                to: at + extent,
+                path: crumb.path.clone(),
+            };
+            at += extent + separator;
+            span
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy)]

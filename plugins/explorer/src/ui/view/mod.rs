@@ -1,11 +1,16 @@
 mod band;
+mod choices;
+mod clash;
 mod drag;
 mod grid;
 mod list;
 mod menu;
+mod moves;
 mod pictogram;
 mod rail;
+mod rename;
 mod slider;
+mod targets;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -19,18 +24,19 @@ use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
     div, point, px, rgb, AnyElement, AsyncApp, ClickEvent, Context, ElementId, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle, Styled,
-    Subscription, UniformListScrollHandle, WeakEntity, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle,
+    Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
 };
 use qol_gpui::icon::icon;
 use qol_gpui::kit::kit;
+use qol_gpui::scroll_list::SelectionScroll;
 use qol_gpui::surface::{DragGestureState, SurfaceDismisser};
 use qol_gpui::text_edit::{self, TextField};
 use qol_gpui::theme::{Ground, TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, LINE, RADIUS_CONTROL};
 use qol_gpui::Icon;
 
-use super::browse::{Browser, Opening, PathStep};
+use super::browse::{Browser, Held, Opening, PathStep};
 use super::keys::{self, Action, Click, Resize};
 use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
 use crate::listing::ListingState;
@@ -73,6 +79,10 @@ pub struct ExplorerView {
     closed_by: Option<(Owner, Point<Pixels>)>,
     subscriptions: Vec<Subscription>,
     devices: Vec<Device>,
+    hover: Option<targets::Hover>,
+    clash_row: usize,
+    clash_scroll: UniformListScrollHandle,
+    moves_scroll: SelectionScroll,
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
     focus_handle: FocusHandle,
@@ -112,6 +122,10 @@ impl ExplorerView {
             closed_by: None,
             subscriptions: Vec::new(),
             devices: places::devices(),
+            hover: None,
+            clash_row: 0,
+            clash_scroll: UniformListScrollHandle::new(),
+            moves_scroll: SelectionScroll::new(),
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
@@ -614,13 +628,27 @@ impl ExplorerView {
         .detach();
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" && cx.stop_active_drag(window) {
+            self.hover = None;
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         if self.menu.is_some() {
             self.menu_key(&event.keystroke, cx);
             return;
         }
         if self.renaming.is_some() {
             self.renaming_key(&event.keystroke, cx);
+            return;
+        }
+        if self.browser.rename_field().is_some() {
+            self.rename_pressed(&event.keystroke, cx);
+            return;
+        }
+        if self.browser.surveyed().is_some() {
+            self.clash_key(&event.keystroke, cx);
             return;
         }
         if self.folds_open {
@@ -631,6 +659,10 @@ impl ExplorerView {
             }
         }
         let action = keys::action(&event.keystroke, self.browser.path_open());
+        if self.browser.moves_open() && !matches!(action, Action::Unpick | Action::Moves) {
+            cx.stop_propagation();
+            return;
+        }
         let stalled = self.browser.stalled(Instant::now());
         if keys::waits(
             action,
@@ -710,8 +742,24 @@ impl ExplorerView {
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),
+            Action::Copy => self.browser.hold(Held::Copied),
+            Action::Cut => self.browser.hold(Held::Cut),
+            Action::Paste => self.paste(),
+            Action::Trash => self.browser.trash_picks(),
+            Action::Rename => self.browser.rename_open(),
+            Action::NewFolder => self.revealed(Browser::new_folder),
+            Action::Undo => self.browser.undo(),
+            Action::Moves => self.browser.toggle_moves(),
             Action::Nothing => false,
         }
+    }
+
+    fn paste(&mut self) -> bool {
+        let Some(transfer) = self.browser.paste() else {
+            return false;
+        };
+        self.browser.begin(transfer);
+        true
     }
 
     fn revealed(&mut self, change: impl FnOnce(&mut Browser) -> bool) -> bool {
@@ -842,13 +890,6 @@ impl ExplorerView {
         }
     }
 
-    fn drop_in(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        let count = qol_gpui::plural(paths.len(), "item", "items");
-        self.browser
-            .fail(format!("Explorer cannot copy the {count} you dropped yet"));
-        cx.notify();
-    }
-
     fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {
         let click = keys::click(&event.modifiers(), event.click_count());
         if click != Click::Range {
@@ -921,6 +962,9 @@ impl Render for ExplorerView {
         self.rail_width = rail_width(f32::from(viewport.width));
         self.list_width = inner_width - self.rail_width;
         self.follow_title(window);
+        if self.hover.is_some() && !cx.has_active_drag() {
+            self.hover = None;
+        }
         if self.subscriptions.is_empty() {
             self.subscriptions
                 .push(cx.observe_window_activation(window, |view, window, cx| {
@@ -930,10 +974,20 @@ impl Render for ExplorerView {
                 }));
         }
         let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
+        let sheet = match self.browser.surveyed() {
+            Some(survey) => Some(clash::render(self, survey, cx)),
+            None if self.browser.moves_open() => Some(moves::render(self)),
+            None => None,
+        };
         let kit = kit();
         kit.window()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
+            .on_modifiers_changed(cx.listener(
+                |view, event: &ModifiersChangedEvent, _window, cx| {
+                    view.drop_modifiers_changed(event.modifiers.control, cx);
+                },
+            ))
             .flex()
             .flex_col()
             .child(band::render(self, window, cx))
@@ -946,6 +1000,7 @@ impl Render for ExplorerView {
                     .child(rail::render(self, cx))
                     .child(list::render(self, cx)),
             )
+            .children(sheet)
             .children(menu)
     }
 }
