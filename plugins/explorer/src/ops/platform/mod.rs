@@ -25,11 +25,13 @@ pub(crate) use linux::{in_trash, restore_trashed, trash_locations, trash_one};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{in_trash, name_problem, restore_trashed, trash_locations, trash_one};
 #[cfg(not(unix))]
-pub(crate) use portable::{keep_mode, new_dir, new_file};
+pub(crate) use portable::{keep_mode, new_dir, new_file, open_dir};
 #[cfg(target_os = "linux")]
 pub(crate) use unix::name_problem;
 #[cfg(unix)]
-pub(crate) use unix::{copy_link, free_bytes, keep_mode, new_dir, new_file, removable, volume_of};
+pub(crate) use unix::{
+    copy_link, free_bytes, keep_mode, new_dir, new_file, open_dir, removable, volume_of,
+};
 #[cfg(target_os = "windows")]
 pub(crate) use windows::{
     copy_link, free_bytes, in_trash, name_problem, removable, restore_trashed, trash_locations,

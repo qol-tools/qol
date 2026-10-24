@@ -8,6 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use trash::{Error, TrashItem};
 
+use super::super::unix::{euid, STICKY};
 use super::in_trash;
 
 const INFO: &str = "info";
@@ -15,7 +16,6 @@ const INFO_SUFFIX: &str = ".trashinfo";
 const PATH_KEY: &str = "Path=";
 const SHARED_TRASH: &str = ".Trash";
 const HOME_TRASH: &str = "Trash";
-const STICKY: u32 = 0o1000;
 
 pub(super) fn items_near(paths: &[PathBuf]) -> Result<Vec<TrashItem>, Error> {
     let roots: BTreeSet<PathBuf> = paths
@@ -57,11 +57,6 @@ fn data_home() -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
-}
-
-fn euid() -> u32 {
-    // SAFETY: geteuid has no preconditions and cannot fail.
-    unsafe { libc::geteuid() }
 }
 
 fn trusted(root: &Path) -> bool {

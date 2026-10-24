@@ -12,7 +12,7 @@ const OWNER_ONLY_FILE: u32 = 0o600;
 const OWNER_ONLY_DIR: u32 = 0o700;
 const PLAIN_BITS: u32 = 0o777;
 const MAX_NAME_BYTES: usize = 255;
-const STICKY: u32 = 0o1000;
+pub(super) const STICKY: u32 = 0o1000;
 const PASSWD_BUFFER: usize = 4096;
 
 pub(crate) fn new_file(path: &Path) -> io::Result<File> {
@@ -27,9 +27,21 @@ pub(crate) fn new_dir(path: &Path) -> io::Result<()> {
     DirBuilder::new().mode(OWNER_ONLY_DIR).create(path)
 }
 
-pub(crate) fn keep_mode(path: &Path, source: &Metadata) -> io::Result<()> {
+pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+}
+
+pub(crate) fn keep_mode(file: &File, source: &Metadata) -> io::Result<()> {
     let mode = source.permissions().mode() & PLAIN_BITS;
-    fs::set_permissions(path, Permissions::from_mode(mode))
+    file.set_permissions(Permissions::from_mode(mode))
+}
+
+pub(super) fn euid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }
 
 pub(crate) fn free_bytes(path: &Path) -> io::Result<u64> {
@@ -52,7 +64,7 @@ pub(crate) fn removable(path: &Path) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "it is the top of the drive".to_string())?;
     let parent_metadata = fs::metadata(parent).map_err(|error| plain(&error))?;
-    let me = unsafe { libc::geteuid() };
+    let me = euid();
     if me == 0 {
         return Ok(());
     }

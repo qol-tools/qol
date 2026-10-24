@@ -10,6 +10,10 @@ pub(crate) fn new_dir(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
 }
 
-pub(crate) fn keep_mode(path: &Path, source: &Metadata) -> io::Result<()> {
-    fs::set_permissions(path, source.permissions())
+pub(crate) fn open_dir(path: &Path) -> io::Result<File> {
+    File::open(path)
+}
+
+pub(crate) fn keep_mode(file: &File, source: &Metadata) -> io::Result<()> {
+    file.set_permissions(source.permissions())
 }

@@ -30,9 +30,11 @@ pub(super) fn copy_node(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Re
     for child in children {
         copy_node(&child.path(), &dst.join(child.file_name()), meter)?;
     }
-    platform::keep_mode(dst, &meta)?;
-    if let (Ok(modified), Ok(handle)) = (meta.modified(), File::open(dst)) {
-        let _ = handle.set_modified(modified);
+    if let Ok(handle) = platform::open_dir(dst) {
+        platform::keep_mode(&handle, &meta)?;
+        if let Ok(modified) = meta.modified() {
+            let _ = handle.set_modified(modified);
+        }
     }
     Ok(())
 }
@@ -64,9 +66,8 @@ fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<(
     if let Ok(modified) = meta.modified() {
         writer.set_modified(modified)?;
     }
-    drop(writer);
-    platform::keep_mode(dst, &meta)?;
-    if written != meta.len() || fs::metadata(dst)?.len() != written {
+    platform::keep_mode(&writer, &meta)?;
+    if written != meta.len() || writer.metadata()?.len() != written {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "the copy came out a different size",
