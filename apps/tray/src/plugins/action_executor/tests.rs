@@ -18,6 +18,7 @@ fn make_plugin(
 ) -> Plugin {
     let manifest = PluginManifest {
         manifest_version: CURRENT_MANIFEST_VERSION,
+        default_for: Vec::new(),
         plugin: PluginInfo {
             id: Some("test-plugin".into()),
             uid: None,

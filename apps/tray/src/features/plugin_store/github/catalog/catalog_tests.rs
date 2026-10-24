@@ -7,6 +7,7 @@ use qol_platform::Os;
 fn make_manifest(id: &str, name: &str, version: &str) -> PluginManifest {
     PluginManifest {
         manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
+        default_for: Vec::new(),
         plugin: PluginInfo {
             id: Some(id.into()),
             uid: None,

@@ -158,6 +158,7 @@ mod tests {
             PluginId::new(id),
             PluginManifest {
                 manifest_version: CURRENT_MANIFEST_VERSION,
+                default_for: Vec::new(),
                 plugin: PluginInfo {
                     id: Some(id.into()),
                     uid: None,

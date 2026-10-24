@@ -57,6 +57,10 @@ doctor = true
 label = "Voice"
 items = []
 
+[[default_for]]
+role = "slot.dictation"
+action = "toggle_activation"
+
 [[dependencies.binaries]]
 name = "qol-voice"
 repo = "qol-tools/qol-voice"

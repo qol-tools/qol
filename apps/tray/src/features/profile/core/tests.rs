@@ -2002,6 +2002,7 @@ fn test_plugin(
         PluginId::new(id),
         PluginManifest {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
+            default_for: Vec::new(),
             plugin: PluginInfo {
                 id: Some(id.into()),
                 uid: None,
@@ -2109,6 +2110,7 @@ fn test_plugin_with_uid(
         PluginId::new(id),
         PluginManifest {
             manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
+            default_for: Vec::new(),
             plugin: PluginInfo {
                 id: Some(id.into()),
                 uid: Some(PluginUid::new(uid)),

@@ -23,6 +23,7 @@ impl PluginManifest {
             self.runtime.as_ref(),
         )?;
         super::shortcut_rules::validate_shortcuts(&self.shortcuts, executable_action_ids)?;
+        super::default_for_rules::validate_default_for(&self.default_for, executable_action_ids)?;
         super::launcher_rules::validate_optional_launcher(
             self.launcher.as_ref(),
             executable_action_ids,

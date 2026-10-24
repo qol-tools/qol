@@ -6855,6 +6855,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "qol-host-defaults"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "qol-desktop-settings",
+ "qol-fs",
+ "qol-hotkeys",
+ "qol-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "workspace-hack",
+]
+
+[[package]]
 name = "qol-host-fixes"
 version = "1.0.0"
 dependencies = [
@@ -7619,6 +7634,7 @@ dependencies = [
  "qol-fs",
  "qol-gpui",
  "qol-headless",
+ "qol-host-defaults",
  "qol-host-fixes",
  "qol-hotkeys",
  "qol-log",

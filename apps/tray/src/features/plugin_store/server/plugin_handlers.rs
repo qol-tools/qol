@@ -4,6 +4,7 @@ use super::types::{
     AppState, ExecuteActionResult, InstalledPluginsResponse, PluginPermissionsResponse,
     PluginsQuery, PluginsResponse,
 };
+use crate::features::host_defaults::{self, PluginRow};
 use crate::plugins::action_executor::ActionExecutionError;
 use crate::plugins::capabilities::{PermissionState, PermissionStatus};
 use axum::{
@@ -78,6 +79,9 @@ pub(super) async fn query_plugin_handler(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     validate_plugin_id_bad_request(&id)?;
     tokio::task::spawn_blocking(move || {
+        if query == host_defaults::ROW_QUERY {
+            return host_default_query_response(host_defaults::row_for_plugin(&id));
+        }
         load_query_contract(&id, &query)?;
         crate::plugins::action_executor::dispatch_query(&state.plugin_manager, &id, &query)
             .map(Json)
@@ -96,6 +100,9 @@ pub(super) async fn query_plugin_with_input_handler(
     validate_plugin_id_bad_request(&id)?;
     let agent_home = crate::features::agents::header_agent_home(&headers);
     tokio::task::spawn_blocking(move || {
+        if query == host_defaults::ROW_QUERY {
+            return host_default_query_response(host_defaults::row_for_plugin(&id));
+        }
         let runtime = load_query_contract(&id, &query)?;
         let input = amend_input_with_agent_home(
             input,
@@ -174,6 +181,13 @@ pub(super) async fn execute_plugin_action(
     if validate_plugin_id(&id).is_err() {
         return invalid_plugin_id_action_result();
     }
+    if action == host_defaults::ROW_ACTION {
+        return toggle_host_default(id).await;
+    }
+    if host_defaults::is_change_action(&action) {
+        let request = input.map(|Json(value)| value).unwrap_or_default();
+        return change_host_default(id, action, request).await;
+    }
     let plugin_manager = state.plugin_manager.clone();
     let worker_id = id.clone();
     let worker_action = action.clone();
@@ -235,6 +249,115 @@ pub(super) async fn execute_plugin_action(
             )
         }
     }
+}
+
+fn host_default_query_response(
+    row: Option<PluginRow>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    row.map(|row| Json(host_defaults::row_json(&row)))
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                "this plugin has no host default".to_string(),
+            )
+        })
+}
+
+async fn toggle_host_default(id: String) -> (StatusCode, Json<ExecuteActionResult>) {
+    match tokio::task::spawn_blocking(move || host_defaults::toggle_for_plugin(&id)).await {
+        Ok(toggled) => host_default_toggle_response(toggled),
+        Err(error) => {
+            log::error!("host default toggle handler crashed: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: "Handler crashed".to_string(),
+                    data: None,
+                }),
+            )
+        }
+    }
+}
+
+async fn change_host_default(
+    id: String,
+    action: String,
+    request: serde_json::Value,
+) -> (StatusCode, Json<ExecuteActionResult>) {
+    let changed =
+        tokio::task::spawn_blocking(move || host_defaults::apply_change(&id, &action, &request))
+            .await;
+    match changed {
+        Ok(changed) => host_default_change_response(changed),
+        Err(error) => {
+            log::error!("host default change handler crashed: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ExecuteActionResult {
+                    success: false,
+                    message: "Handler crashed".to_string(),
+                    data: None,
+                }),
+            )
+        }
+    }
+}
+
+fn host_default_change_response(
+    changed: anyhow::Result<serde_json::Value>,
+) -> (StatusCode, Json<ExecuteActionResult>) {
+    let (status, success, message, data) = match changed {
+        Ok(data) => (
+            StatusCode::OK,
+            true,
+            "Host default changed".to_string(),
+            Some(data),
+        ),
+        Err(error) => {
+            log::warn!("host default change refused: {error:#}");
+            (StatusCode::CONFLICT, false, error.to_string(), None)
+        }
+    };
+    (
+        status,
+        Json(ExecuteActionResult {
+            success,
+            message,
+            data,
+        }),
+    )
+}
+
+fn host_default_toggle_response(
+    toggled: anyhow::Result<Option<PluginRow>>,
+) -> (StatusCode, Json<ExecuteActionResult>) {
+    let (status, success, message, data) = match toggled {
+        Ok(Some(row)) => (
+            StatusCode::OK,
+            true,
+            "Host default changed".to_string(),
+            Some(host_defaults::row_json(&row)),
+        ),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            false,
+            "this plugin has no host default".to_string(),
+            None,
+        ),
+        Err(error) => {
+            log::warn!("host default toggle refused: {error:#}");
+            (StatusCode::CONFLICT, false, error.to_string(), None)
+        }
+    };
+    (
+        status,
+        Json(ExecuteActionResult {
+            success,
+            message,
+            data,
+        }),
+    )
 }
 
 pub(super) async fn open_settings_surface(Path(id): Path<String>) -> (StatusCode, String) {
@@ -413,6 +536,56 @@ input = { question = "Question", agent_home = "Agent home id" }
 description = "does it"
 input = { question = "Question", agent_home = "Agent home id" }
 "#;
+
+    fn switch_row(on: bool) -> PluginRow {
+        PluginRow {
+            label: "Use instead of Nemo".to_string(),
+            description: "Opens folders in qol.".to_string(),
+            control: qol_host_defaults::RowControl::Switch { on },
+        }
+    }
+
+    #[test]
+    fn the_host_default_query_answers_the_row_or_a_404() {
+        let Json(value) = host_default_query_response(Some(switch_row(true))).unwrap();
+        assert_eq!(value, host_defaults::row_json(&switch_row(true)));
+        assert_eq!(value["on"], true);
+        let (status, _) = host_default_query_response(None).unwrap_err();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_host_default_toggle_returns_the_new_row_or_the_refusal() {
+        let (status, Json(result)) = host_default_toggle_response(Ok(Some(switch_row(true))));
+        assert_eq!(status, StatusCode::OK);
+        assert!(result.success);
+        assert_eq!(result.data.unwrap()["on"], true);
+
+        let (status, Json(result)) = host_default_toggle_response(Ok(None));
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(!result.success && result.data.is_none());
+
+        let (status, Json(result)) =
+            host_default_toggle_response(Err(anyhow::anyhow!("Nemo keeps the desktop")));
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(!result.success);
+        assert_eq!(result.message, "Nemo keeps the desktop");
+    }
+
+    #[test]
+    fn a_host_default_change_answers_its_data_or_the_refusal() {
+        let (status, Json(result)) =
+            host_default_change_response(Ok(serde_json::json!({"outcome": "restored"})));
+        assert_eq!(status, StatusCode::OK);
+        assert!(result.success);
+        assert_eq!(result.data.unwrap()["outcome"], "restored");
+
+        let (status, Json(result)) =
+            host_default_change_response(Err(anyhow::anyhow!("Print already opens X")));
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(!result.success && result.data.is_none());
+        assert_eq!(result.message, "Print already opens X");
+    }
 
     #[test]
     fn query_input_copies_agent_home_only_when_declared_and_header_present() {

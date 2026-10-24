@@ -47,6 +47,10 @@ doctor = true
 label = "Launcher"
 items = []
 
+[[default_for]]
+role = "slot.launcher"
+action = "open"
+
 [[dependencies.binaries]]
 name = "qol-launcher"
 repo = "qol-tools/qol-launcher"

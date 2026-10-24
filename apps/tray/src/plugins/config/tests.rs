@@ -1222,6 +1222,7 @@ mod scoped_io {
         };
         PluginManifest {
             manifest_version: 1,
+            default_for: Vec::new(),
             plugin: PluginInfo {
                 id: Some("test-plugin".into()),
                 uid: None,

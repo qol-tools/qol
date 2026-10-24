@@ -33,6 +33,7 @@ use crate::monitor::{ActiveMonitor, MonitorTracker};
 use crate::surface::{OpenedSurface, Surface, SurfaceDismisser, SurfaceKind, WindowMemory};
 
 const SETTINGS_WINDOW_KEY: &str = "settings";
+pub use rows::LEAD_SECTION_ID;
 use rows::{
     apply_runtime_query, rows_from_resolved, runtime_query_names, sections_from_resolved, Row,
     RowControl, RowQueryState, RowSection,
