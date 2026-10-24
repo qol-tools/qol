@@ -858,7 +858,15 @@ impl X11Client {
                     window
                         .handle_input(PlatformInput::FileDrop(FileDropEvent::Submit { position }));
                     self.0.borrow_mut().xdnd_state = Xdnd::default();
+                } else if event.type_ == state.atoms.XdndStatus {
+                    window.drag_out_status(atom, arg1);
+                } else if event.type_ == state.atoms.XdndFinished {
+                    window.drag_out_finished();
                 }
+            }
+            Event::SelectionRequest(event) => {
+                let window = self.get_window(event.owner)?;
+                window.drag_out_answer(&event);
             }
             Event::SelectionNotify(event) => {
                 let window = self.get_window(event.requestor)?;
@@ -871,7 +879,7 @@ impl X11Client {
                         state.atoms.XDND_DATA,
                         AtomEnum::ANY,
                         0,
-                        1024,
+                        u32::MAX,
                     ),
                 )
                 .log_err();
@@ -1116,6 +1124,7 @@ impl X11Client {
                 }
                 match button_or_scroll_from_event_detail(event.detail) {
                     Some(ButtonOrScroll::Button(button)) => {
+                        window.drag_out_pressed();
                         let click_elapsed = state.last_click.elapsed();
                         if click_elapsed < DOUBLE_CLICK_INTERVAL
                             && state
@@ -1181,6 +1190,7 @@ impl X11Client {
                     Some(ButtonOrScroll::Button(button)) => {
                         let click_count = state.current_count;
                         drop(state);
+                        window.drag_out_released(event.time);
                         window.handle_input(PlatformInput::MouseUp(crate::MouseUpEvent {
                             button,
                             position,
@@ -1210,6 +1220,14 @@ impl X11Client {
                         pressed_button,
                         modifiers,
                     }));
+                    if pressed_button.is_some() {
+                        window.drag_out_motion(
+                            (event.root_x >> 16) as i16,
+                            (event.root_y >> 16) as i16,
+                            event.time,
+                            modifiers.shift,
+                        );
+                    }
                 }
 
                 state = self.0.borrow_mut();

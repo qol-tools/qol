@@ -157,6 +157,13 @@ impl Browser {
         self.show_hidden
     }
 
+    pub fn drag_paths(&self, path: &Path) -> Vec<PathBuf> {
+        if self.picks.is_picked(path) {
+            return self.picks.paths().map(Path::to_path_buf).collect();
+        }
+        vec![path.to_path_buf()]
+    }
+
     pub fn is_picked(&self, entry: &Entry) -> bool {
         self.picks.is_picked(&entry.path)
     }

@@ -1788,6 +1788,11 @@ impl Window {
         self.platform_window.show_window_menu(position)
     }
 
+    #[allow(missing_docs)]
+    pub fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>) {
+        self.platform_window.offer_dragged_paths(paths)
+    }
+
     /// Tells the compositor to take control of window movement (Wayland and X11)
     ///
     /// Events may not be received during a move operation.

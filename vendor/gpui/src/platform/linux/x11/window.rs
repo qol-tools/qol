@@ -33,7 +33,10 @@ use std::{
     sync::Arc,
 };
 
-use super::{X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES};
+use super::{
+    X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES,
+    drag_out::{DragOut, Link, Position},
+};
 
 x11rb::atom_manager! {
     pub XcbAtoms: AtomsCookie {
@@ -48,6 +51,9 @@ x11rb::atom_manager! {
         XdndFinished,
         XdndTypeList,
         XdndActionCopy,
+        XdndActionMove,
+        XdndProxy,
+        TARGETS,
         TextUriList: b"text/uri-list",
         UTF8_STRING,
         TEXT,
@@ -417,6 +423,7 @@ pub struct X11WindowState {
     pub(crate) counter_id: sync::Counter,
     pub(crate) sync: SyncAck<sync::Int64>,
     pub(crate) press_root: Option<(i32, i32)>,
+    pub(crate) drag_out: Option<DragOut>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
     renderer: BladeRenderer,
@@ -952,6 +959,7 @@ impl X11WindowState {
                 counter_id: sync_request_counter,
                 sync: SyncAck::new(),
                 press_root: None,
+                drag_out: None,
             })
         });
 
@@ -1154,6 +1162,107 @@ impl X11Window {
 }
 
 impl X11WindowStatePtr {
+    pub fn drag_out_pressed(&self) {
+        let mut state = self.state.borrow_mut();
+        if !state.drag_out.as_ref().is_some_and(DragOut::is_dropped) {
+            state.drag_out = None;
+        }
+    }
+
+    pub fn drag_out_motion(&self, root_x: i16, root_y: i16, time: u32, move_files: bool) {
+        let mut guard = self.state.borrow_mut();
+        let state = &mut *guard;
+        let Some(drag_out) = state.drag_out.as_mut() else {
+            return;
+        };
+        let inside = match get_reply(
+            || "X11 TranslateCoordinates for drag out failed.",
+            self.xcb
+                .translate_coordinates(state.x_root_window, self.x_window, root_x, root_y),
+        ) {
+            Ok(reply) => {
+                let size = state.bounds.size.scale(state.scale_factor);
+                (0..size.width.0 as i32).contains(&(reply.dst_x as i32))
+                    && (0..size.height.0 as i32).contains(&(reply.dst_y as i32))
+            }
+            Err(_) => return,
+        };
+        let action = if move_files {
+            state.atoms.XdndActionMove
+        } else {
+            state.atoms.XdndActionCopy
+        };
+        let link = Link {
+            xcb: &self.xcb,
+            atoms: &state.atoms,
+            root: state.x_root_window,
+            source: self.x_window,
+        };
+        drag_out.motion(
+            &link,
+            inside,
+            Position {
+                root_x,
+                root_y,
+                time,
+                action,
+            },
+        );
+    }
+
+    pub fn drag_out_released(&self, time: u32) {
+        let mut guard = self.state.borrow_mut();
+        let state = &mut *guard;
+        let Some(drag_out) = state.drag_out.as_mut() else {
+            return;
+        };
+        let link = Link {
+            xcb: &self.xcb,
+            atoms: &state.atoms,
+            root: state.x_root_window,
+            source: self.x_window,
+        };
+        if !drag_out.release(&link, time) {
+            state.drag_out = None;
+        }
+    }
+
+    pub fn drag_out_status(&self, from: xproto::Window, flags: u32) {
+        let mut guard = self.state.borrow_mut();
+        let state = &mut *guard;
+        let Some(drag_out) = state.drag_out.as_mut() else {
+            return;
+        };
+        let link = Link {
+            xcb: &self.xcb,
+            atoms: &state.atoms,
+            root: state.x_root_window,
+            source: self.x_window,
+        };
+        drag_out.status(&link, from, flags);
+    }
+
+    pub fn drag_out_finished(&self) {
+        let mut state = self.state.borrow_mut();
+        if state.drag_out.as_ref().is_some_and(DragOut::is_dropped) {
+            state.drag_out = None;
+        }
+    }
+
+    pub fn drag_out_answer(&self, request: &xproto::SelectionRequestEvent) {
+        let state = self.state.borrow();
+        let link = Link {
+            xcb: &self.xcb,
+            atoms: &state.atoms,
+            root: state.x_root_window,
+            source: self.x_window,
+        };
+        match state.drag_out.as_ref() {
+            Some(drag_out) => drag_out.answer(&link, request),
+            None => DragOut::new(&[]).answer(&link, request),
+        }
+    }
+
     pub fn should_close(&self) -> bool {
         let mut cb = self.callbacks.borrow_mut();
         if let Some(mut should_close) = cb.should_close.take() {
@@ -1817,6 +1926,13 @@ impl PlatformWindow for X11Window {
             ),
         )
         .log_err();
+    }
+
+    fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>) {
+        let mut state = self.0.state.borrow_mut();
+        if state.press_root.is_some() {
+            state.drag_out = Some(DragOut::new(&paths));
+        }
     }
 
     fn start_window_move(&self) {
