@@ -4,7 +4,7 @@ uid = "5cc75f62-2e3b-463c-ac7b-ae269cff1ef1"
 name = "Launcher"
 icon = "launcher"
 description = "Search apps and files, then open them from the keyboard."
-version = "1.106.0"
+version = "1.107.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
