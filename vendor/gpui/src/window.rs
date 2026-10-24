@@ -822,6 +822,20 @@ pub struct DragImage {
     pub offset: Point<Pixels>,
 }
 
+#[cfg(any(
+    target_os = "windows",
+    all(any(target_os = "linux", target_os = "freebsd"), feature = "x11")
+))]
+pub(crate) fn premultiplied(bgra: &[u8]) -> Vec<u8> {
+    bgra.chunks_exact(4)
+        .flat_map(|pixel| {
+            let alpha = u16::from(pixel[3]);
+            let scale = |channel: u8| ((u16::from(channel) * alpha + 127) / 255) as u8;
+            [scale(pixel[0]), scale(pixel[1]), scale(pixel[2]), pixel[3]]
+        })
+        .collect()
+}
+
 /// Holds the state for a specific window.
 pub struct Window {
     pub(crate) handle: AnyWindowHandle,

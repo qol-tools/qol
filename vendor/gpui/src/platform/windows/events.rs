@@ -26,6 +26,7 @@ pub(crate) const WM_GPUI_DOCK_MENU_ACTION: u32 = WM_USER + 4;
 pub(crate) const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = WM_USER + 5;
 pub(crate) const WM_GPUI_KEYBOARD_LAYOUT_CHANGED: u32 = WM_USER + 6;
 pub(crate) const WM_GPUI_GPU_DEVICE_LOST: u32 = WM_USER + 7;
+pub(crate) const WM_GPUI_DRAG_OUT: u32 = WM_USER + 8;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
 const AUTO_HIDE_TASKBAR_THICKNESS_PX: i32 = 1;
@@ -111,6 +112,7 @@ impl WindowsWindowInner {
             WM_GPUI_CURSOR_STYLE_CHANGED => self.handle_cursor_changed(lparam),
             WM_GPUI_FORCE_UPDATE_WINDOW => self.draw_window(handle, true),
             WM_GPUI_GPU_DEVICE_LOST => self.handle_device_lost(lparam),
+            WM_GPUI_DRAG_OUT => self.handle_drag_out_msg(),
             _ => None,
         };
         if let Some(n) = handled {
@@ -316,6 +318,9 @@ impl WindowsWindowInner {
         });
         let handled = !func(input).propagate;
         self.state.borrow_mut().callbacks.input = Some(func);
+        if pressed_button == Some(MouseButton::Left) {
+            self.start_drag_out_if_outside(handle, x as i32, y as i32);
+        }
 
         if handled { Some(0) } else { Some(1) }
     }
@@ -508,6 +513,9 @@ impl WindowsWindowInner {
         lparam: LPARAM,
     ) -> Option<isize> {
         unsafe { ReleaseCapture().log_err() };
+        if button == MouseButton::Left {
+            self.clear_drag_out_offer();
+        }
         let mut lock = self.state.borrow_mut();
         let Some(mut func) = lock.callbacks.input.take() else {
             return Some(1);

@@ -3,7 +3,9 @@
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroIsize,
+    os::windows::ffi::OsStrExt,
     path::PathBuf,
+    ptr,
     rc::{Rc, Weak},
     str::FromStr,
     sync::{Arc, Once},
@@ -21,10 +23,18 @@ use windows::{
         Foundation::*,
         Graphics::Gdi::*,
         System::{Com::*, LibraryLoader::*, Ole::*, SystemServices::*},
-        UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+        UI::{
+            Controls::*,
+            HiDpi::*,
+            Input::KeyboardAndMouse::*,
+            Shell::{Common::ITEMIDLIST, *},
+            WindowsAndMessaging::*,
+        },
     },
     core::*,
 };
+
+use crate::window::premultiplied;
 
 use crate::*;
 
@@ -55,6 +65,7 @@ pub struct WindowsWindowState {
     pub current_cursor: Option<HCURSOR>,
     pub nc_button_pressed: Option<u32>,
     pub in_size_move: bool,
+    pub drag_out: DragOut,
 
     pub display: WindowsDisplay,
     fullscreen: Option<StyleAndBounds>,
@@ -121,6 +132,7 @@ impl WindowsWindowState {
         let click_state = ClickState::new();
         let nc_button_pressed = None;
         let in_size_move = false;
+        let drag_out = DragOut::default();
         let fullscreen = None;
         let initial_placement = None;
 
@@ -146,6 +158,7 @@ impl WindowsWindowState {
             current_cursor,
             nc_button_pressed,
             in_size_move,
+            drag_out,
             display,
             fullscreen,
             initial_placement,
@@ -912,6 +925,10 @@ impl PlatformWindow for WindowsWindow {
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {
         // There is no such thing on Windows.
     }
+
+    fn offer_dragged_paths(&self, paths: Vec<PathBuf>, image: Option<DragImage>) {
+        self.0.offer_drag_out(paths, image);
+    }
 }
 
 #[implement(IDropTarget)]
@@ -919,12 +936,7 @@ struct WindowsDragDropHandler(pub Rc<WindowsWindowInner>);
 
 impl WindowsDragDropHandler {
     fn handle_drag_drop(&self, input: PlatformInput) {
-        let mut lock = self.0.state.borrow_mut();
-        if let Some(mut func) = lock.callbacks.input.take() {
-            drop(lock);
-            func(input);
-            self.0.state.borrow_mut().callbacks.input = Some(func);
-        }
+        self.0.dispatch_input(input);
     }
 }
 
@@ -937,6 +949,11 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         pt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
+        if self.0.drag_out_is_active() {
+            unsafe { *pdweffect = DROPEFFECT_NONE };
+            self.0.drag_out_move(POINT { x: pt.x, y: pt.y });
+            return Ok(());
+        }
         unsafe {
             let idata_obj = pdataobj.ok()?;
             let config = FORMATETC {
@@ -994,6 +1011,11 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         pt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
+        if self.0.drag_out_is_active() {
+            unsafe { *pdweffect = DROPEFFECT_NONE };
+            self.0.drag_out_move(POINT { x: pt.x, y: pt.y });
+            return Ok(());
+        }
         let mut cursor_position = POINT { x: pt.x, y: pt.y };
         unsafe {
             *pdweffect = DROPEFFECT_COPY;
@@ -1019,6 +1041,9 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
     }
 
     fn DragLeave(&self) -> windows::core::Result<()> {
+        if self.0.drag_out_is_active() {
+            return Ok(());
+        }
         unsafe {
             self.0.drop_target_helper.DragLeave().log_err();
         }
@@ -1035,6 +1060,11 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
         pt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
+        if self.0.drag_out_is_active() {
+            unsafe { *pdweffect = DROPEFFECT_NONE };
+            self.0.drag_out_release(POINT { x: pt.x, y: pt.y });
+            return Ok(());
+        }
         let idata_obj = pdataobj.ok()?;
         let mut cursor_position = POINT { x: pt.x, y: pt.y };
         unsafe {
@@ -1059,6 +1089,261 @@ impl IDropTarget_Impl for WindowsDragDropHandler_Impl {
 
         Ok(())
     }
+}
+
+#[derive(Default)]
+pub(crate) struct DragOut {
+    offer: Option<DragOutOffer>,
+    active: bool,
+    released: bool,
+}
+
+struct DragOutOffer {
+    paths: Vec<PathBuf>,
+    image: Option<DragImage>,
+}
+
+#[implement(IDropSource)]
+struct DragOutSource;
+
+#[allow(non_snake_case)]
+impl IDropSource_Impl for DragOutSource_Impl {
+    fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: MODIFIERKEYS_FLAGS) -> HRESULT {
+        if fescapepressed.as_bool() {
+            DRAGDROP_S_CANCEL
+        } else if !grfkeystate.contains(MK_LBUTTON) {
+            DRAGDROP_S_DROP
+        } else {
+            S_OK
+        }
+    }
+
+    fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+impl WindowsWindowInner {
+    pub(crate) fn offer_drag_out(&self, paths: Vec<PathBuf>, image: Option<DragImage>) {
+        if unsafe { GetKeyState(VK_LBUTTON.0 as i32) } >= 0 {
+            return;
+        }
+        let mut lock = self.state.borrow_mut();
+        if lock.drag_out.active {
+            return;
+        }
+        lock.drag_out.offer = Some(DragOutOffer { paths, image });
+        lock.drag_out.released = false;
+    }
+
+    pub(crate) fn clear_drag_out_offer(&self) {
+        let mut lock = self.state.borrow_mut();
+        if !lock.drag_out.active {
+            lock.drag_out.offer = None;
+        }
+    }
+
+    pub(crate) fn start_drag_out_if_outside(&self, handle: HWND, x: i32, y: i32) {
+        {
+            let lock = self.state.borrow();
+            if lock.drag_out.offer.is_none() || lock.drag_out.active {
+                return;
+            }
+        }
+        let mut client = RECT::default();
+        unsafe { GetClientRect(handle, &mut client) }.log_err();
+        let inside = x >= client.left && x < client.right && y >= client.top && y < client.bottom;
+        if inside {
+            return;
+        }
+        self.state.borrow_mut().drag_out.active = true;
+        unsafe { PostMessageW(Some(handle), WM_GPUI_DRAG_OUT, WPARAM(0), LPARAM(0)) }.log_err();
+    }
+
+    pub(crate) fn handle_drag_out_msg(&self) -> Option<isize> {
+        let (offer, scale_factor) = {
+            let mut lock = self.state.borrow_mut();
+            (lock.drag_out.offer.take(), lock.scale_factor)
+        };
+        if let Some(offer) = offer {
+            unsafe { ReleaseCapture() }.log_err();
+            drag_files_out(&offer, scale_factor).log_err();
+        }
+        let released = {
+            let mut lock = self.state.borrow_mut();
+            lock.drag_out.active = false;
+            std::mem::take(&mut lock.drag_out.released)
+        };
+        if !released {
+            let mut cursor = POINT::default();
+            unsafe { GetCursorPos(&mut cursor) }.log_err();
+            self.drag_out_release(cursor);
+        }
+        Some(0)
+    }
+
+    fn drag_out_is_active(&self) -> bool {
+        self.state.borrow().drag_out.active
+    }
+
+    fn drag_out_move(&self, screen: POINT) {
+        let position = self.client_position(screen);
+        self.dispatch_input(PlatformInput::MouseMove(MouseMoveEvent {
+            position,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: current_modifiers(),
+        }));
+    }
+
+    fn drag_out_release(&self, screen: POINT) {
+        let position = self.client_position(screen);
+        let click_count = {
+            let mut lock = self.state.borrow_mut();
+            lock.drag_out.released = true;
+            lock.click_state.current_count
+        };
+        self.dispatch_input(PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: current_modifiers(),
+            click_count,
+        }));
+    }
+
+    fn dispatch_input(&self, input: PlatformInput) {
+        let mut lock = self.state.borrow_mut();
+        if let Some(mut func) = lock.callbacks.input.take() {
+            drop(lock);
+            func(input);
+            self.state.borrow_mut().callbacks.input = Some(func);
+        }
+    }
+
+    fn client_position(&self, screen: POINT) -> Point<Pixels> {
+        let mut client = screen;
+        unsafe { ScreenToClient(self.hwnd, &mut client) }
+            .ok()
+            .log_err();
+        let scale_factor = self.state.borrow().scale_factor;
+        logical_point(client.x as f32, client.y as f32, scale_factor)
+    }
+}
+
+fn drag_files_out(offer: &DragOutOffer, scale_factor: f32) -> windows::core::Result<()> {
+    let data = shell_data_object(&offer.paths)?;
+    if let Some(image) = &offer.image {
+        attach_drag_image(&data, image, scale_factor).log_err();
+    }
+    let source: IDropSource = DragOutSource.into();
+    let mut effect = DROPEFFECT_NONE;
+    unsafe {
+        DoDragDrop(
+            &data,
+            &source,
+            DROPEFFECT_COPY | DROPEFFECT_MOVE,
+            &mut effect,
+        )
+    }
+    .ok()
+}
+
+fn shell_data_object(paths: &[PathBuf]) -> windows::core::Result<IDataObject> {
+    let mut pidls = Vec::with_capacity(paths.len());
+    for path in paths {
+        let wide = path
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<u16>>();
+        let mut pidl: *mut ITEMIDLIST = ptr::null_mut();
+        let parsed = unsafe {
+            SHParseDisplayName(PCWSTR(wide.as_ptr()), None::<&IBindCtx>, &mut pidl, 0, None)
+        };
+        if parsed.log_err().is_some() {
+            pidls.push(pidl);
+        }
+    }
+    let data = items_data_object(&pidls);
+    for pidl in pidls {
+        unsafe { CoTaskMemFree(Some(pidl as *const _)) };
+    }
+    data
+}
+
+fn items_data_object(pidls: &[*mut ITEMIDLIST]) -> windows::core::Result<IDataObject> {
+    if pidls.is_empty() {
+        return Err(E_FAIL.into());
+    }
+    let items = pidls
+        .iter()
+        .map(|pidl| *pidl as *const ITEMIDLIST)
+        .collect::<Vec<_>>();
+    let array = unsafe { SHCreateShellItemArrayFromIDLists(&items) }?;
+    unsafe { array.BindToHandler(None::<&IBindCtx>, &BHID_DataObject) }
+}
+
+fn attach_drag_image(
+    data: &IDataObject,
+    image: &DragImage,
+    scale_factor: f32,
+) -> windows::core::Result<()> {
+    let size = image.image.size(0);
+    let width = size.width.0.max(0) as usize;
+    let height = size.height.0.max(0) as usize;
+    let source = image
+        .image
+        .as_bytes(0)
+        .filter(|bytes| width > 0 && height > 0 && bytes.len() >= width * height * 4)
+        .ok_or(windows::core::Error::from(E_FAIL))?;
+    let source = premultiplied(&source[..width * height * 4]);
+    let pad_x = (image.offset.x.0 * scale_factor).round().max(0.) as usize;
+    let pad_y = (image.offset.y.0 * scale_factor).round().max(0.) as usize;
+    let bitmap_width = width + pad_x;
+    let bitmap_height = height + pad_y;
+
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: bitmap_width as i32,
+            biHeight: -(bitmap_height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits = ptr::null_mut();
+    let bitmap = unsafe { CreateDIBSection(None, &info, DIB_RGB_COLORS, &mut bits, None, 0) }?;
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(bits as *mut u8, bitmap_width * bitmap_height * 4)
+    };
+    pixels.fill(0);
+    for row in 0..height {
+        let from = &source[row * width * 4..(row + 1) * width * 4];
+        let start = ((row + pad_y) * bitmap_width + pad_x) * 4;
+        pixels[start..start + width * 4].copy_from_slice(from);
+    }
+
+    let drag_image = SHDRAGIMAGE {
+        sizeDragImage: SIZE {
+            cx: bitmap_width as i32,
+            cy: bitmap_height as i32,
+        },
+        ptOffset: POINT { x: 0, y: 0 },
+        hbmpDragImage: bitmap,
+        crColorKey: COLORREF(CLR_NONE as u32),
+    };
+    let attached = unsafe {
+        let helper: IDragSourceHelper2 =
+            CoCreateInstance(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER)?;
+        helper.SetFlags(DSH_ALLOWDROPDESCRIPTIONTEXT.0 as u32)?;
+        helper.InitializeFromBitmap(&drag_image, data)
+    };
+    if attached.is_err() {
+        unsafe { DeleteObject(bitmap.into()) }.ok().log_err();
+    }
+    attached
 }
 
 #[derive(Debug, Clone, Copy)]

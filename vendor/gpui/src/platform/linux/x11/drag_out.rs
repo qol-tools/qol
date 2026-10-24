@@ -1,5 +1,6 @@
 use std::{path::PathBuf, rc::Rc};
 
+use crate::window::premultiplied;
 use http_client::Url;
 use util::ResultExt;
 use x11rb::{
@@ -305,16 +306,6 @@ impl Drop for DragIcon {
         self.xcb.free_colormap(self.colormap).log_err();
         self.xcb.flush().log_err();
     }
-}
-
-fn premultiplied(bgra: &[u8]) -> Vec<u8> {
-    bgra.chunks_exact(4)
-        .flat_map(|pixel| {
-            let alpha = u16::from(pixel[3]);
-            let scale = |channel: u8| ((u16::from(channel) * alpha + 127) / 255) as u8;
-            [scale(pixel[0]), scale(pixel[1]), scale(pixel[2]), pixel[3]]
-        })
-        .collect()
 }
 
 pub(crate) fn answer(link: &Link, request: &SelectionRequestEvent, uri_list: Option<&str>) {
