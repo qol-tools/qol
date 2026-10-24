@@ -4,8 +4,8 @@ use std::time::Instant;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     canvas, div, px, rgb, rgba, uniform_list, AnyElement, ClickEvent, Context, DispatchPhase, Div,
-    ExternalPaths, InteractiveElement, IntoElement, ParentElement, ScrollWheelEvent,
-    StatefulInteractiveElement, Styled, Window,
+    ExternalPaths, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
+    ScrollWheelEvent, StatefulInteractiveElement, Styled, Window,
 };
 use qol_gpui::kit::{kit, Chip, Kit};
 use qol_gpui::scrollbar::{ScrollGrip, ScrollSource};
@@ -19,11 +19,13 @@ use super::drag;
 use super::grid::{Layout, ACROSS};
 use super::moves::progress_label;
 use super::pictogram::entry_pictogram;
+use super::press;
 use super::rename::row_name_room;
 use super::targets::{self, Zone};
 use super::{ExplorerView, HEAD, ICON};
 use crate::listing::{Entry, ListingState};
 use crate::ui::columns::{kind_label, left_to_right, size_label, typed_split};
+use crate::ui::gesture::{HOLD, SLOP};
 
 const KIND_WIDTH: f32 = 110.0;
 const SIZE_WIDTH: f32 = 90.0;
@@ -130,6 +132,10 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
         .flex_1()
         .min_h_0()
         .relative()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|view, event: &MouseDownEvent, _window, cx| view.press_down(event, cx)),
+        )
         .child(
             uniform_list(
                 "explorer-rows",
@@ -152,6 +158,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
             .size_full()
             .track_scroll(view.scroll.clone()),
         )
+        .children(view.marquee_box())
         .child(kit.scroll_cue(source.clone(), kit.grounds.pane))
         .child(ScrollGrip::new(
             "explorer-rows-grip",
@@ -160,6 +167,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
                 let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
             },
         ))
+        .child(press::tracker(view.rows_area.clone(), cx))
         .into_any_element()
 }
 
@@ -317,6 +325,7 @@ fn render_row(
                         .child(detail_text(shown.size, ground)),
                 )
         })
+        .drag_after_hold(HOLD, px(SLOP))
         .on_drag(path.clone(), {
             let view = cx.weak_entity();
             move |path, grab, window, cx| drag::start(&view, path, grab, window, cx)
@@ -412,6 +421,7 @@ fn render_cell(
                 .child(div().w_full().flex().flex_row().child(name))
                 .child(detail_text(shown.size, ground)),
         )
+        .drag_after_hold(HOLD, px(SLOP))
         .on_drag(path.clone(), {
             let view = cx.weak_entity();
             move |path, grab, window, cx| drag::start(&view, path, grab, window, cx)

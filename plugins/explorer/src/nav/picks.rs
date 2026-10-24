@@ -62,6 +62,13 @@ impl Picks {
         }
     }
 
+    pub fn set(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        self.clear();
+        for path in paths {
+            self.insert(path);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.range = None;
         self.picked.clear();
