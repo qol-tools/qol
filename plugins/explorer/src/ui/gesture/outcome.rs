@@ -142,7 +142,10 @@ mod tests {
             (Some(399.0), 0.0, Standing::Keeps),
             (Some(400.0), 0.0, Standing::OffScreen),
             (Some(401.0), 0.0, Standing::OffScreen),
-            (Some(1000.0), 600.0, Standing::Keeps),
+            (Some(999.0), 600.0, Standing::Keeps),
+            (Some(1000.0), 600.0, Standing::OffScreen),
+            (Some(571.0), 600.0, Standing::Keeps),
+            (Some(570.0), 600.0, Standing::OffScreen),
             (Some(100.0), 600.0, Standing::OffScreen),
         ];
         for (top, scroll, want) in cases {
