@@ -11,6 +11,7 @@ use tempfile::TempDir;
 fn manifest(id: &str, uid: Option<&str>) -> PluginManifest {
     PluginManifest {
         manifest_version: crate::plugins::manifest::CURRENT_MANIFEST_VERSION,
+        default_for: Vec::new(),
         plugin: crate::plugins::manifest::PluginInfo {
             id: Some(PluginId::new(id)),
             uid: uid.map(PluginUid::new),

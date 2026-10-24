@@ -78,7 +78,7 @@ Three independent files, three independent validators, plus one cross-validator
 Schema structs in `libs/plugin-api/src/manifest/schema.rs`
 (`PluginManifest`, `PluginInfo`, `ActionDeclaration`, `MenuConfig`, `MenuItem`,
 `ActionType`, `RuntimeConfig`, `DaemonConfig`, `Capabilities`, `Dependencies`,
-`ShortcutDeclaration`, `ConfigDeclarations`). Current manifest version is 3
+`ShortcutDeclaration`, `DefaultFor`, `ConfigDeclarations`). Current manifest version is 3
 (`mod.rs`); the accepted range 1..=3 is enforced in `validation/manifest_rules.rs`.
 
 Sections:
@@ -114,6 +114,11 @@ Sections:
   `export_to_launcher` (default true), `action` (default `"open"`). `action` must
   reference an existing executable `[action.<id>]` entry when the catalog is
   present, otherwise an existing executable menu action id.
+- `[[default_for]]` (`DefaultFor`): `role` and `action`. Declares a host job the plugin
+  can take over (for example `slot.screenshot`); the tray claims it on the plugin's
+  behalf and runs `action` when the host job fires. `action` must reference an
+  executable action like `shortcut.action`; `role` must be non-empty and unique within
+  the manifest. Role names are checked by the tray, not by manifest validation.
 - `[launcher]` (`LauncherSpec`): optional launcher integration. `kind` is `app`
   (the default host behavior is unchanged) or `flow` (the launcher keeps focus
   and runs a runtime query while the user types). `title` is required and names
@@ -145,7 +150,7 @@ Sections:
 #### Validation invariants (the part that bites)
 
 `PluginManifest::validate()` (`validation/manifest_rules.rs`) runs in order:
-version, identity, menu, runtime, shortcuts, daemon, dependencies.
+version, identity, menu, runtime, shortcuts, default_for, launcher, daemon, dependencies.
 
 - **Prefer `[action.<id>]` for every new plugin.** It is the one-stop declaration
   for plugin actions exposed to the dashboard, hotkeys, shortcuts, and runtime
@@ -171,6 +176,8 @@ version, identity, menu, runtime, shortcuts, daemon, dependencies.
 - **`shortcut.action` must reference an executable action id** from the catalog
   when present, otherwise an executable menu action id. Unknown references fail;
   duplicate shortcut ids fail.
+- **`default_for.action` must reference an executable action id**, and `default_for.role`
+  must be non-empty and unique within the manifest.
 
 Minimal `plugin.toml`:
 

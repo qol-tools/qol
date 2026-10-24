@@ -7,6 +7,7 @@ use qol_apps::desktop::{
     desktop_field, escape_desktop_entry_value, format_desktop_exec_command, AppEntry,
     DesktopExecArg,
 };
+use qol_host_defaults::handler::backends::desktop_entry::OPENER_ID;
 use qol_theme::Mark;
 use std::cell::OnceCell;
 use std::collections::HashSet;
@@ -138,6 +139,10 @@ fn write_executable(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_kept_entry(name: &str) -> bool {
+    name == OPENER_ID || INSTALLER_DESKTOP_ENTRIES.contains(&name)
+}
+
 fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -152,7 +157,7 @@ fn clean_stale(dir: &Path, expected: &HashSet<String>) -> Result<()> {
         if !name_str.starts_with(DESKTOP_PREFIX) || !name_str.ends_with(".desktop") {
             continue;
         }
-        if expected.contains(name_str) || INSTALLER_DESKTOP_ENTRIES.contains(&name_str) {
+        if expected.contains(name_str) || is_kept_entry(name_str) {
             continue;
         }
         let _ = std::fs::remove_file(entry.path());
@@ -339,6 +344,22 @@ mod tests {
             assert!(dir.path().join(name).exists(), "{name} was removed");
         }
         assert!(dir.path().join("qol-command-kept.desktop").exists());
+        assert!(!dir.path().join("qol-shortcut-gone.desktop").exists());
+    }
+
+    #[test]
+    fn stale_cleanup_keeps_the_host_default_opener() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(OPENER_ID), "[Desktop Entry]\n").unwrap();
+        std::fs::write(
+            dir.path().join("qol-shortcut-gone.desktop"),
+            "[Desktop Entry]\n",
+        )
+        .unwrap();
+
+        clean_stale(dir.path(), &HashSet::new()).unwrap();
+
+        assert!(dir.path().join(OPENER_ID).exists());
         assert!(!dir.path().join("qol-shortcut-gone.desktop").exists());
     }
 

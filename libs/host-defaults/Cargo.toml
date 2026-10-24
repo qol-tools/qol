@@ -1,0 +1,22 @@
+[package]
+name = "qol-host-defaults"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host defaults a qol plugin can take over: handler roles, key slots and the claim ledger"
+
+[dependencies]
+anyhow = "1"
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1"
+qol-desktop-settings.workspace = true
+qol-fs.workspace = true
+qol-platform.workspace = true
+workspace-hack.workspace = true
+
+[dev-dependencies]
+qol-hotkeys.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

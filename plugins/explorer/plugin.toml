@@ -40,6 +40,10 @@ name = "Explorer"
 action = "open"
 export_to_launcher = true
 
+[[default_for]]
+role = "folder.open"
+action = "open"
+
 [[dependencies.binaries]]
 name = "qol-explorer"
 repo = "qol-tools/qol-explorer"

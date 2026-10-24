@@ -14,6 +14,7 @@ mod doctor_sizes;
 #[cfg(feature = "dev")]
 mod fingerprint_health;
 mod gpu_driver_sync;
+mod host_defaults;
 mod hotkey_capture_backend;
 mod hotkey_shadows;
 mod hotkey_virtual_keyboard;
@@ -44,6 +45,9 @@ pub(super) use dev_link_paths::relocate_dev_link;
 #[cfg(feature = "dev")]
 pub(super) use plugin_staleness::stale_running_daemons;
 
+pub(super) use host_defaults::headless_check as host_defaults_check;
+pub(super) use hotkey_shadows::{shadows_for_combos, ShadowKind};
+
 use super::framework::DoctorCheck;
 
 pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
@@ -59,6 +63,7 @@ pub(super) fn registry() -> Vec<Box<dyn DoctorCheck>> {
         Box::new(hotkey_capture_backend::HotkeyCaptureBackendCheck),
         Box::new(hotkey_shadows::HotkeyShadowsCheck),
         Box::new(hotkey_virtual_keyboard::HotkeyVirtualKeyboardCheck),
+        Box::new(host_defaults::HostDefaultsCheck),
         Box::new(plugin_uid_table::PluginUidTableCheck),
         Box::new(orphan_plugin_configs::OrphanPluginConfigsCheck),
         Box::new(config_parse_failures::ConfigParseFailuresCheck),

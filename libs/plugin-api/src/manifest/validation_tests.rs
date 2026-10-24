@@ -37,6 +37,7 @@ fn base_manifest() -> PluginManifest {
         config: ConfigDeclarations::default(),
         shortcuts: Vec::new(),
         launcher: None,
+        default_for: Vec::new(),
     }
 }
 
@@ -881,6 +882,111 @@ mod shortcut_rules {
         };
 
         assert!(manifest.validate().is_err());
+    }
+}
+
+mod default_for_rules {
+    use super::*;
+
+    const HEADER: &str = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "P"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [action.open]
+        label = "Open"
+        args = ["open"]
+    "#;
+
+    fn with_default_for(tables: &str) -> String {
+        format!("{HEADER}\n{tables}")
+    }
+
+    #[test]
+    fn accepts_declared_action() {
+        let toml = with_default_for(
+            r#"
+            [[default_for]]
+            role = "slot.launcher"
+            action = "open"
+            "#,
+        );
+
+        assert!(validate_toml(&toml).is_ok());
+    }
+
+    #[test]
+    fn accepts_absent_section() {
+        let manifest = manifest_from_toml(HEADER);
+
+        assert!(manifest.default_for.is_empty());
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_action() {
+        let toml = with_default_for(
+            r#"
+            [[default_for]]
+            role = "slot.launcher"
+            action = "missing"
+            "#,
+        );
+
+        assert!(validate_toml(&toml).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_role() {
+        let toml = with_default_for(
+            r#"
+            [[default_for]]
+            role = "slot.launcher"
+            action = "open"
+
+            [[default_for]]
+            role = "slot.launcher"
+            action = "open"
+            "#,
+        );
+
+        assert!(validate_toml(&toml).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_role() {
+        let toml = with_default_for(
+            r#"
+            [[default_for]]
+            role = "  "
+            action = "open"
+            "#,
+        );
+
+        assert!(validate_toml(&toml).is_err());
+    }
+
+    #[test]
+    fn accepts_distinct_roles_for_one_action() {
+        let toml = with_default_for(
+            r#"
+            [[default_for]]
+            role = "slot.launcher"
+            action = "open"
+
+            [[default_for]]
+            role = "slot.window_switcher"
+            action = "open"
+            "#,
+        );
+
+        assert!(validate_toml(&toml).is_ok());
     }
 }
 

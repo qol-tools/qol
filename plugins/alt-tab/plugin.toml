@@ -58,6 +58,10 @@ neighbors = 1
 [traits.atmosphere]
 preset = "spacecraft"
 
+[[default_for]]
+role = "slot.window_switcher"
+action = "open"
+
 [[dependencies.binaries]]
 name = "qol-alt-tab"
 repo = "qol-tools/qol-alt-tab"

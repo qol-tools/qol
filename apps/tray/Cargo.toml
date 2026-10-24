@@ -117,6 +117,7 @@ qol-apps.workspace = true
 qol-app-icon.workspace = true
 qol-artifact.workspace = true
 qol-host-fixes.workspace = true
+qol-host-defaults = { path = "../../libs/host-defaults" }
 qol-hotkeys.workspace = true
 png = "0.17"
 qol-config.workspace = true

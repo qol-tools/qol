@@ -485,13 +485,48 @@ fn withdrawn_custom_list(
     })
 }
 
+pub(crate) fn restore_combos(combos: &[String]) -> RestoreSummary {
+    let Some(root) = ledger::claims_dir() else {
+        return RestoreSummary::default();
+    };
+    let compositor_started_at = platform::compositor().map(|found| found.started_at);
+    restore_combos_in(&root, &mut HostStore, combos, compositor_started_at)
+}
+
+fn restore_combos_in(
+    root: &std::path::Path,
+    store: &mut dyn BindingStore,
+    combos: &[String],
+    compositor_started_at: Option<SystemTime>,
+) -> RestoreSummary {
+    restore_matching_in(root, store, compositor_started_at, &|claim| {
+        claim_combos(claim).all(|held| combos.iter().any(|combo| combo == held))
+    })
+}
+
+fn claim_combos(claim: &ledger::Claim) -> impl Iterator<Item = &str> {
+    claim.qol_combo.split(", ").map(str::trim)
+}
+
 fn restore_all_in(
     root: &std::path::Path,
     store: &mut dyn BindingStore,
     compositor_started_at: Option<SystemTime>,
 ) -> RestoreSummary {
+    restore_matching_in(root, store, compositor_started_at, &|_| true)
+}
+
+fn restore_matching_in(
+    root: &std::path::Path,
+    store: &mut dyn BindingStore,
+    compositor_started_at: Option<SystemTime>,
+    selected: &dyn Fn(&ledger::Claim) -> bool,
+) -> RestoreSummary {
     let mut summary = RestoreSummary::default();
-    for claim in ledger::outstanding(root) {
+    for claim in ledger::outstanding(root)
+        .into_iter()
+        .filter(|claim| selected(claim))
+    {
         let full_key = dconf::full_key(&claim.dir, &claim.key);
         let current = store.read(&full_key).ok();
         let decision = ledger::decide_restore(&claim, current.as_deref(), compositor_started_at);
@@ -664,6 +699,53 @@ mod tests {
 
     fn full_key() -> String {
         dconf::full_key(ORPHAN_DIR, "binding")
+    }
+
+    fn other_mutation() -> BindingMutation {
+        BindingMutation {
+            dir: "/org/cinnamon/desktop/keybindings/media-keys/".into(),
+            key: "screenshot".into(),
+            next: "@as []".into(),
+            qol_combo: "Print".into(),
+            reach: BindingReach::Managed,
+        }
+    }
+
+    #[test]
+    fn restoring_combos_puts_back_only_the_claims_made_for_them() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let other_key = dconf::full_key(&other_mutation().dir, &other_mutation().key);
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+        store.values.insert(other_key.clone(), "['Print']".into());
+        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
+        take_over_in(root.path(), &mut store, &other_mutation()).expect("take over");
+
+        let summary = restore_combos_in(root.path(), &mut store, &["Print".to_string()], None);
+
+        assert_eq!(summary.restored, 1);
+        assert_eq!(store.get(&other_key), Some("['Print']"));
+        assert_eq!(
+            store.get(&full_key()),
+            Some("@as []"),
+            "a claim for another combo stays freed"
+        );
+        assert_eq!(ledger::outstanding(root.path()).len(), 1);
+    }
+
+    #[test]
+    fn restoring_combos_keeps_a_claim_that_still_frees_another_combo() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let mut store = FakeStore::with(&full_key(), ORIGINAL);
+        let shared = BindingMutation {
+            qol_combo: "Shift+Super+S, Super+S".into(),
+            ..managed_mutation()
+        };
+        take_over_in(root.path(), &mut store, &shared).expect("take over");
+
+        let summary = restore_combos_in(root.path(), &mut store, &["Super+S".to_string()], None);
+
+        assert_eq!(summary, RestoreSummary::default());
+        assert_eq!(store.get(&full_key()), Some("@as []"));
     }
 
     #[test]

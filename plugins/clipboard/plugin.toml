@@ -82,6 +82,10 @@ input = { id = "{id}" }
 label = "Clipboard"
 items = []
 
+[[default_for]]
+role = "slot.clipboard_history"
+action = "open"
+
 [[dependencies.binaries]]
 name = "qol-clipboard"
 repo = "qol-tools/qol-clipboard"

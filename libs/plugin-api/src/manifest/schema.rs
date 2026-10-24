@@ -56,6 +56,8 @@ pub struct PluginManifest {
     pub shortcuts: Vec<ShortcutDeclaration>,
     #[serde(default)]
     pub launcher: Option<LauncherSpec>,
+    #[serde(default)]
+    pub default_for: Vec<DefaultFor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +195,12 @@ pub struct ActionDeclaration {
 
 fn default_action_kind() -> ActionType {
     ActionType::Run
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct DefaultFor {
+    pub role: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

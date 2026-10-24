@@ -64,6 +64,10 @@ inherit_listener = true
 command = "qol-shot"
 socket = "/tmp/qol-shot.sock"
 
+[[default_for]]
+role = "slot.screenshot"
+action = "screenshot"
+
 [[dependencies.binaries]]
 name = "qol-shot"
 repo = "qol-tools/qol-shot"

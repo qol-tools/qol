@@ -138,6 +138,7 @@ mod tests {
         };
         let manifest = PluginManifest {
             manifest_version: 1,
+            default_for: Vec::new(),
             plugin: plugin_info,
             menu: MenuConfig {
                 label: String::new(),

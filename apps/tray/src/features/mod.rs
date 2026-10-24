@@ -3,6 +3,7 @@ pub mod auth;
 pub mod connection_health;
 pub mod github_auth;
 pub mod gpu_driver_sync;
+pub mod host_defaults;
 pub mod launcher_apps;
 pub mod linked_devices;
 pub mod mcp;
