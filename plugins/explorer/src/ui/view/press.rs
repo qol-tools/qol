@@ -1,4 +1,6 @@
 use std::cell::Cell;
+use std::mem;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -13,21 +15,70 @@ use qol_gpui::theme::{translucent, Alpha, LINE};
 use super::drag::{self, Carry};
 use super::{ExplorerView, PUMP};
 use crate::listing::Entry;
-use crate::ui::browse::Selection;
-use crate::ui::gesture::{self, Hold, Move, Phase, Rect, CHARGE_FROM, HOLD};
+use crate::ui::browse::{Browser, Selection};
+use crate::ui::gesture::{
+    self, Hold, Move, Phase, Rect, Release, Standing, Start, CHARGE_FROM, HOLD,
+};
 use crate::ui::keys::{self, Click};
 
-pub(super) struct Press {
+pub(super) struct PressState {
+    active: Option<Press>,
+    serial: u64,
+    swallow_click: bool,
+    cancelled: bool,
+    area: Rc<Cell<Bounds<Pixels>>>,
+}
+
+impl PressState {
+    pub(super) fn new() -> Self {
+        Self {
+            active: None,
+            serial: 0,
+            swallow_click: false,
+            cancelled: false,
+            area: Rc::new(Cell::new(Bounds::default())),
+        }
+    }
+
+    pub(super) fn area(&self) -> Rc<Cell<Bounds<Pixels>>> {
+        self.area.clone()
+    }
+
+    pub(super) fn take_swallow(&mut self) -> bool {
+        mem::take(&mut self.swallow_click)
+    }
+}
+
+struct Press {
     hold: Hold,
     serial: u64,
     pointer: Point<Pixels>,
     anchor: (f32, f32),
-    row: Option<usize>,
+    path: Option<PathBuf>,
     additive: bool,
-    base: Selection,
+    base: Option<Selection>,
     carry: Option<Carry>,
     touched: Option<Vec<usize>>,
-    lifted: bool,
+}
+
+impl Press {
+    fn keep_base(&mut self, browser: &Browser) {
+        self.base.get_or_insert_with(|| browser.selection());
+    }
+
+    fn ensure_carry(&mut self, browser: &Browser) {
+        if self.carry.is_some() {
+            return;
+        }
+        if let Some(path) = &self.path {
+            self.carry = Some(drag::carry(browser, path, self.additive));
+        }
+    }
+}
+
+pub(super) struct Handed {
+    pub(super) path: PathBuf,
+    pub(super) stack: Vec<Entry>,
 }
 
 fn pair(point: Point<Pixels>) -> (f32, f32) {
@@ -36,19 +87,24 @@ fn pair(point: Point<Pixels>) -> (f32, f32) {
 
 impl ExplorerView {
     pub(super) fn press_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
-        self.swallow_click = false;
-        self.press_cancelled = false;
-        self.press = None;
-        if self
+        let pressed_at = Instant::now();
+        self.pressing.swallow_click = false;
+        self.pressing.cancelled = false;
+        self.pressing.active = None;
+        let closed_menu = self
             .closed_by
             .take_if(|(_, at)| *at == event.position)
-            .is_some()
-        {
-            return;
-        }
-        let area = self.rows_area.get();
-        if event.click_count != 1 || self.press_blocked() || !area.contains(&event.position) {
-            return;
+            .is_some();
+        let area = self.pressing.area.get();
+        let eligible =
+            event.click_count == 1 && !self.press_blocked() && area.contains(&event.position);
+        match gesture::start(closed_menu, eligible) {
+            Start::Ignore => return,
+            Start::Swallow => {
+                self.pressing.swallow_click = true;
+                return;
+            }
+            Start::Begin => {}
         }
         let anchor = gesture::content_point(
             pair(event.position),
@@ -60,44 +116,47 @@ impl ExplorerView {
             .layout()
             .tiles(self.list_width)
             .at(anchor.0, anchor.1, total);
-        let additive = keys::click(&event.modifiers, 1) != Click::Cursor;
-        let carry = row
+        let path = row
             .and_then(|row| self.browser.entry(row))
-            .map(|entry| drag::carry(&self.browser, &entry.path, additive));
-        self.press_serial += 1;
-        let serial = self.press_serial;
-        self.press = Some(Press {
-            hold: Hold::new(pair(event.position), Instant::now(), row.is_some()),
+            .map(|entry| entry.path.clone());
+        let additive = keys::click(&event.modifiers, 1) != Click::Cursor;
+        self.pressing.serial += 1;
+        let serial = self.pressing.serial;
+        let on_row = path.is_some();
+        self.pressing.active = Some(Press {
+            hold: Hold::new(pair(event.position), pressed_at, on_row),
             serial,
             pointer: event.position,
             anchor,
-            row,
+            path,
             additive,
-            base: self.browser.selection(),
-            carry,
+            base: None,
+            carry: None,
             touched: None,
-            lifted: false,
         });
-        if row.is_some() {
-            self.after(serial, CHARGE_FROM, |_, cx| cx.notify(), cx);
+        if on_row {
+            self.after(serial, CHARGE_FROM, |view, cx| view.begin_charge(cx), cx);
             self.after(serial, HOLD, |view, cx| view.apply_lift(cx), cx);
         }
     }
 
     pub(super) fn press_moved(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some(press) = self.press.as_mut() else {
-            return;
-        };
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.press = None;
-            cx.notify();
+        if self.pressing.active.is_none() {
             return;
         }
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.press_released(cx);
+            return;
+        }
+        let Some(press) = self.pressing.active.as_mut() else {
+            return;
+        };
         press.pointer = event.position;
         let moved = press.hold.moved(pair(event.position), Instant::now());
-        let (phase, on_row) = (press.hold.phase(), press.row.is_some());
+        let (phase, on_row) = (press.hold.phase(), press.path.is_some());
         match (moved, phase) {
             (Move::Box, _) => {
+                press.keep_base(&self.browser);
                 self.browser.end_range();
                 self.update_box(cx);
                 self.scroll_at_edges(cx);
@@ -105,7 +164,9 @@ impl ExplorerView {
             (Move::Stay, Phase::Boxing) => self.update_box(cx),
             (Move::Stay, Phase::Lifted) => {
                 self.apply_lift(cx);
-                cx.notify();
+                if !self.held_lost(cx) {
+                    cx.notify();
+                }
             }
             (Move::Stay, Phase::Pending) if on_row => cx.notify(),
             (Move::Stay, Phase::Pending) => {}
@@ -113,37 +174,45 @@ impl ExplorerView {
     }
 
     pub(super) fn press_released(&mut self, cx: &mut Context<Self>) {
-        let Some(press) = self.press.take() else {
+        let Some(press) = self.pressing.active.take() else {
             return;
         };
-        let clicked_empty = press.row.is_none() && press.hold.phase() == Phase::Pending;
-        if clicked_empty && !press.additive {
-            self.browser.close_path();
-            self.browser.clear_picks();
+        match gesture::release(press.hold.phase(), press.path.is_some(), press.additive) {
+            Release::Keep => {}
+            Release::Clear => {
+                self.browser.close_path();
+                self.browser.clear_picks();
+            }
+            Release::Restore => {
+                self.restore_base(&press);
+                self.pressing.swallow_click = false;
+            }
         }
         cx.notify();
     }
 
     pub(super) fn cancel_press(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(press) = self.press.take() else {
+        let Some(press) = self.pressing.active.take() else {
             return false;
         };
-        if press.hold.phase() == Phase::Boxing {
-            let scroll = self.scroll_offset();
-            self.browser.restore(&press.base, scroll);
+        if gesture::restores_on_cancel(press.hold.phase()) {
+            self.restore_base(&press);
         }
-        self.swallow_click = true;
-        self.press_cancelled = true;
+        self.pressing.swallow_click = true;
+        self.pressing.cancelled = true;
         cx.notify();
         true
     }
 
     pub(super) fn press_was_cancelled(&self) -> bool {
-        self.press_cancelled
+        self.pressing.cancelled
     }
 
     pub(super) fn rebox(&mut self, relisted: bool, cx: &mut Context<Self>) {
-        let Some(press) = self.press.as_mut() else {
+        if self.held_lost(cx) {
+            return;
+        }
+        let Some(press) = self.pressing.active.as_mut() else {
             return;
         };
         if press.hold.phase() != Phase::Boxing {
@@ -155,32 +224,36 @@ impl ExplorerView {
         self.update_box(cx);
     }
 
-    pub(super) fn hand_over(&mut self, cx: &mut Context<Self>) -> Option<Vec<Entry>> {
+    pub(super) fn hand_over(&mut self, cx: &mut Context<Self>) -> Option<Handed> {
         self.apply_lift(cx);
-        let press = self.press.take()?;
+        let press = self.pressing.active.take()?;
         cx.notify();
-        press
-            .carry
-            .filter(|_| press.lifted)
-            .map(|carry| carry.stack)
+        if !gesture::carries_on_hand_over(press.hold.phase()) {
+            return None;
+        }
+        Some(Handed {
+            path: press.path?,
+            stack: press.carry?.stack,
+        })
     }
 
     pub(super) fn press_overlay(&self) -> Option<AnyElement> {
-        let press = self.press.as_ref()?;
+        let press = self.pressing.active.as_ref()?;
         let carry = press.carry.as_ref()?;
         match press.hold.phase() {
-            Phase::Lifted if press.lifted => Some(drag::lifted(carry, press.pointer, press.serial)),
+            Phase::Lifted => Some(drag::lifted(carry, press.pointer, press.serial)),
             Phase::Pending => press
                 .hold
                 .charge(Instant::now())
                 .map(|progress| drag::charge(carry, press.pointer, progress)),
-            Phase::Boxing | Phase::Lifted => None,
+            Phase::Boxing => None,
         }
     }
 
     pub(super) fn animate_press(&self, window: &mut Window) {
         let charging = self
-            .press
+            .pressing
+            .active
             .as_ref()
             .is_some_and(|press| press.hold.charge(Instant::now()).is_some());
         if charging {
@@ -190,10 +263,11 @@ impl ExplorerView {
 
     pub(super) fn marquee_box(&self) -> Option<Div> {
         let press = self
-            .press
+            .pressing
+            .active
             .as_ref()
             .filter(|press| press.hold.phase() == Phase::Boxing)?;
-        let area = self.rows_area.get();
+        let area = self.pressing.area.get();
         let scroll = self.scroll_offset();
         let here = gesture::content_point(pair(press.pointer), pair(area.origin), scroll);
         let boxed = Rect::spanning(press.anchor, here);
@@ -241,7 +315,8 @@ impl ExplorerView {
             cx.background_executor().timer(delay).await;
             let _ = view.update(cx, |view, cx| {
                 if view
-                    .press
+                    .pressing
+                    .active
                     .as_ref()
                     .is_some_and(|press| press.serial == serial)
                 {
@@ -252,50 +327,92 @@ impl ExplorerView {
         .detach();
     }
 
-    fn apply_lift(&mut self, cx: &mut Context<Self>) {
-        let scroll = self.scroll_offset();
-        let Some(press) = self.press.as_mut() else {
-            return;
-        };
-        if !press.hold.settle(Instant::now()) || press.lifted {
-            return;
-        }
-        press.lifted = true;
-        let (row, additive) = (press.row, press.additive);
-        self.swallow_click = true;
-        if let Some(row) = row {
-            self.browser.lift(row, additive, scroll);
+    fn begin_charge(&mut self, cx: &mut Context<Self>) {
+        if let Some(press) = self.pressing.active.as_mut() {
+            press.ensure_carry(&self.browser);
         }
         cx.notify();
     }
 
+    fn apply_lift(&mut self, cx: &mut Context<Self>) {
+        let scroll = self.scroll_offset();
+        let Some(press) = self.pressing.active.as_mut() else {
+            return;
+        };
+        if !press.hold.settle(Instant::now()) {
+            return;
+        }
+        let Some(path) = press.path.clone() else {
+            return;
+        };
+        let additive = press.additive;
+        press.keep_base(&self.browser);
+        let Some(row) = self.browser.row_of(&path) else {
+            self.cancel_press(cx);
+            return;
+        };
+        press.ensure_carry(&self.browser);
+        self.pressing.swallow_click = true;
+        self.browser.lift(row, additive, scroll);
+        cx.notify();
+    }
+
+    fn held_lost(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(press) = self.pressing.active.as_ref() else {
+            return false;
+        };
+        let Some(path) = press
+            .path
+            .as_ref()
+            .filter(|_| press.hold.phase() == Phase::Lifted)
+        else {
+            return false;
+        };
+        let layout = self.layout();
+        let top = self.browser.row_of(path).map(|row| layout.top(row));
+        let standing =
+            gesture::standing(top, layout.pitch, self.scroll_offset(), self.list_height());
+        if standing == Standing::Keeps {
+            return false;
+        }
+        self.cancel_press(cx);
+        true
+    }
+
+    fn restore_base(&mut self, press: &Press) {
+        if let Some(base) = &press.base {
+            let scroll = self.scroll_offset();
+            self.browser.restore(base, scroll);
+        }
+    }
+
     fn update_box(&mut self, cx: &mut Context<Self>) {
         let scroll = self.scroll_offset();
-        let area = self.rows_area.get();
+        let area = self.pressing.area.get();
         let tiles = self.layout().tiles(self.list_width);
         let total = self.browser.row_count();
-        let Some(mut press) = self.press.take() else {
+        let Some(mut press) = self.pressing.active.take() else {
             return;
         };
         let here = gesture::content_point(pair(press.pointer), pair(area.origin), scroll);
         let touched = tiles.touched(Rect::spanning(press.anchor, here), total);
         let under = tiles.at(here.0, here.1, total);
-        let cursor =
-            gesture::cursor_row(&touched, under).filter(|&row| row != self.browser.cursor());
+        let cursor = under.filter(|&row| row != self.browser.cursor());
         if press.touched.as_ref() != Some(&touched) {
-            self.browser
-                .pick_boxed(&press.base, &touched, press.additive);
+            if let Some(base) = &press.base {
+                self.browser.pick_boxed(base, &touched, press.additive);
+            }
             press.touched = Some(touched);
         }
         if let Some(row) = cursor {
             self.browser.place_cursor(row, scroll);
         }
-        self.press = Some(press);
+        self.pressing.active = Some(press);
         cx.notify();
     }
 
     fn scroll_at_edges(&self, cx: &mut Context<Self>) {
-        let Some(serial) = self.press.as_ref().map(|press| press.serial) else {
+        let Some(serial) = self.pressing.active.as_ref().map(|press| press.serial) else {
             return;
         };
         cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -316,13 +433,14 @@ impl ExplorerView {
 
     fn edge_scrolled(&mut self, serial: u64, elapsed: Duration, cx: &mut Context<Self>) -> bool {
         let Some(press) = self
-            .press
+            .pressing
+            .active
             .as_ref()
             .filter(|press| press.serial == serial && press.hold.phase() == Phase::Boxing)
         else {
             return false;
         };
-        let area = self.rows_area.get();
+        let area = self.pressing.area.get();
         let distance = gesture::outside(
             f32::from(press.pointer.y),
             f32::from(area.top()),
@@ -344,8 +462,16 @@ pub(super) fn tracker(
     cx: &mut Context<ExplorerView>,
 ) -> impl IntoElement {
     let view = cx.weak_entity();
+    let resized = view.clone();
     canvas(
-        move |bounds, _, _| area.set(bounds),
+        move |bounds, window, cx| {
+            if area.replace(bounds) != bounds {
+                let resized = resized.clone();
+                window.defer(cx, move |_, cx| {
+                    let _ = resized.update(cx, |view, cx| view.rebox(false, cx));
+                });
+            }
+        },
         move |_, _, window, _| {
             let moves = view.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {

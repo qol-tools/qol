@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use gpui::prelude::FluentBuilder;
@@ -63,7 +64,7 @@ fn stack_view(stack: &[Entry], count: usize, disc_scale: f32) -> Div {
     let disc = (count >= COUNT_FROM).then(|| {
         div()
             .absolute()
-            .left(px(behind + COUNT_LEFT - grow * width / 2.0))
+            .left(px(disc_left(stack.len()) - grow * width / 2.0))
             .top(px(-grow * CHIP_COUNT_HEIGHT / 2.0))
             .child(
                 kit.count_disc(count, kit.grounds.pane)
@@ -90,16 +91,24 @@ pub(super) fn carry(browser: &Browser, path: &Path, additive: bool) -> Carry {
 }
 
 fn stack_of(entries: &[Entry], path: &Path, paths: &[PathBuf]) -> Vec<Entry> {
-    std::iter::once(path)
-        .chain(
-            paths
-                .iter()
-                .map(|path| path.as_path())
-                .filter(|&other| other != path),
-        )
-        .filter_map(|path| entries.iter().find(|entry| entry.path == path).cloned())
-        .take(STACKED)
-        .collect()
+    let others: HashSet<&Path> = paths
+        .iter()
+        .map(PathBuf::as_path)
+        .filter(|&other| other != path)
+        .collect();
+    let mut front = None;
+    let mut rest = Vec::new();
+    for entry in entries {
+        if entry.path == path {
+            front = Some(entry);
+        } else if rest.len() + 1 < STACKED && others.contains(entry.path.as_path()) {
+            rest.push(entry);
+        }
+        if front.is_some() && rest.len() + 1 == STACKED {
+            break;
+        }
+    }
+    front.into_iter().chain(rest).cloned().collect()
 }
 
 pub(super) fn lifted(carry: &Carry, at: Point<Pixels>, serial: u64) -> AnyElement {
@@ -164,9 +173,13 @@ pub(super) fn disc_width(count: usize) -> f32 {
     (digits as f32 * DIGIT_WIDTH + SPACE_TIGHT * 2.0).max(CHIP_COUNT_HEIGHT)
 }
 
+fn disc_left(depth: usize) -> f32 {
+    behind(depth) + COUNT_LEFT
+}
+
 pub(super) fn disc_centre(count: usize, depth: usize) -> (f32, f32) {
     (
-        BESIDE_POINTER + behind(depth) + COUNT_LEFT + disc_width(count) / 2.0,
+        BESIDE_POINTER + disc_left(depth) + disc_width(count) / 2.0,
         BESIDE_POINTER + CHIP_COUNT_HEIGHT / 2.0,
     )
 }
@@ -183,9 +196,13 @@ pub(super) fn start(
         .map(|view| {
             let handed = view.update(cx, |view, cx| view.hand_over(cx));
             let browser = &view.read(cx).browser;
+            let (held, stack) = handed.map_or((None, None), |handed| {
+                (Some(handed.path), Some(handed.stack))
+            });
+            let path = held.as_deref().unwrap_or(path);
             let paths = browser.drag_paths(path);
             let stack =
-                handed.unwrap_or_else(|| stack_of(browser.listing().entries(), path, &paths));
+                stack.unwrap_or_else(|| stack_of(browser.listing().entries(), path, &paths));
             (paths, stack)
         })
         .unwrap_or_else(|| (vec![path.to_path_buf()], Vec::new()));
@@ -280,7 +297,7 @@ fn count_markup(count: usize, left: f32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{disc_centre, disc_width, BESIDE_POINTER, CHIP_COUNT_HEIGHT, COUNT_LEFT, STEP};
+    use super::{disc_centre, disc_width};
 
     #[test]
     fn the_count_disc_is_as_wide_as_its_digits_but_never_narrower_than_it_is_tall() {
@@ -311,18 +328,6 @@ mod tests {
         ];
         for (count, depth, centre) in cases {
             assert_eq!(disc_centre(count, depth), centre, "{count} {depth}");
-        }
-    }
-
-    #[test]
-    fn the_centre_is_the_middle_of_the_disc_the_stack_draws() {
-        for count in [3, 10, 100, 1000] {
-            for depth in 1..=3 {
-                let (across, down) = disc_centre(count, depth);
-                let left = BESIDE_POINTER + (depth - 1) as f32 * STEP + COUNT_LEFT;
-                assert_eq!(across - left, disc_width(count) / 2.0, "{count} {depth}");
-                assert_eq!(down - BESIDE_POINTER, CHIP_COUNT_HEIGHT / 2.0, "{count}");
-            }
         }
     }
 }

@@ -23,12 +23,11 @@ use gpui::Keystroke;
 use qol_gpui::{PathEdit, PathKey};
 use qol_watch::WatchError;
 
-use super::gesture::merged;
 use super::keys::Step;
 use crate::listing::{
     self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass,
 };
-use crate::nav::{History, Jump, Picks, Spot};
+use crate::nav::{merged, History, Jump, Picks, Spot};
 use counts::LiveCounts;
 pub use ops::{Held, MoveRecord, MoveState};
 pub(crate) use ops_text::{copy_only_note, label_of, short_note};
@@ -175,10 +174,7 @@ impl Browser {
     }
 
     pub fn drag_paths(&self, path: &Path) -> Vec<PathBuf> {
-        if self.picks.is_picked(path) {
-            return self.picks.paths().map(Path::to_path_buf).collect();
-        }
-        vec![path.to_path_buf()]
+        self.carried(path, false)
     }
 
     pub fn carried(&self, path: &Path, additive: bool) -> Vec<PathBuf> {
@@ -198,10 +194,7 @@ impl Browser {
             return false;
         };
         if !self.picks.is_picked(&path) {
-            if !additive {
-                self.picks.clear();
-            }
-            self.picks.add(&path);
+            self.picks.set(self.carried(&path, additive));
         }
         self.place_cursor(row, scroll);
         true
@@ -228,10 +221,8 @@ impl Browser {
         self.picks.set(merged(kept, boxed, additive));
     }
 
-    pub fn clear_picks(&mut self) -> bool {
-        let had_picks = !self.picks.is_empty();
+    pub fn clear_picks(&mut self) {
         self.picks.clear();
-        had_picks
     }
 
     pub fn is_picked(&self, entry: &Entry) -> bool {

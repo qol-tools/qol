@@ -1625,14 +1625,3 @@ fn restoring_a_selection_brings_back_its_picks_and_its_cursor() {
     assert_eq!(picked(&browser), ["a.txt", "c.txt"]);
     assert_eq!(browser.cursor(), 2);
 }
-
-#[test]
-fn clearing_the_picks_says_whether_there_were_any() {
-    let temp = abc_folder();
-    let mut browser = opened(temp.path());
-    assert!(!browser.clear_picks());
-    pick_rows(&mut browser, &[1, 2]);
-    assert!(browser.clear_picks());
-    assert!(picked(&browser).is_empty());
-    assert!(!browser.clear_picks());
-}

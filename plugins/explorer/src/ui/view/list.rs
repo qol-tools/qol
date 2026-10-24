@@ -167,7 +167,7 @@ fn rows(view: &ExplorerView, kit: Kit, cx: &mut Context<ExplorerView>) -> AnyEle
                 let _ = seek.update(cx, |view, cx| view.seek_rows(at, cx));
             },
         ))
-        .child(press::tracker(view.rows_area.clone(), cx))
+        .child(press::tracker(view.pressing.area(), cx))
         .into_any_element()
 }
 

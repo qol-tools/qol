@@ -26,6 +26,7 @@ pub struct Hold {
     at: Instant,
     on_row: bool,
     phase: Phase,
+    announced: bool,
 }
 
 impl Hold {
@@ -35,6 +36,7 @@ impl Hold {
             at,
             on_row,
             phase: Phase::Pending,
+            announced: false,
         }
     }
 
@@ -43,15 +45,21 @@ impl Hold {
     }
 
     pub fn settle(&mut self, now: Instant) -> bool {
+        self.advance(now);
+        let lifted = self.phase == Phase::Lifted && !self.announced;
+        self.announced |= lifted;
+        lifted
+    }
+
+    fn advance(&mut self, now: Instant) {
         let held = now.saturating_duration_since(self.at) >= HOLD;
         if self.phase == Phase::Pending && self.on_row && held {
             self.phase = Phase::Lifted;
         }
-        self.phase == Phase::Lifted
     }
 
     pub fn moved(&mut self, to: (f32, f32), now: Instant) -> Move {
-        self.settle(now);
+        self.advance(now);
         let travelled = (to.0 - self.origin.0).hypot(to.1 - self.origin.1);
         if self.phase == Phase::Pending && travelled > SLOP {
             self.phase = Phase::Boxing;
@@ -167,6 +175,27 @@ mod tests {
             assert_eq!(hold.settle(ms(start, millis)), lifted, "{on_row} {millis}");
             assert_eq!(hold.phase() == Phase::Lifted, lifted, "{on_row} {millis}");
         }
+    }
+
+    #[test]
+    fn a_lift_is_reported_once_even_when_a_move_saw_it_first() {
+        let start = Instant::now();
+        let mut settled = Hold::new((0.0, 0.0), start, true);
+        let reports: Vec<bool> = [499, 500, 501, 900]
+            .into_iter()
+            .map(|millis| settled.settle(ms(start, millis)))
+            .collect();
+        assert_eq!(reports, [false, true, false, false]);
+
+        let mut moved = Hold::new((0.0, 0.0), start, true);
+        assert_eq!(moved.moved((1.0, 0.0), ms(start, 600)), Move::Stay);
+        assert_eq!(moved.phase(), Phase::Lifted);
+        assert!(moved.settle(ms(start, 601)));
+        assert!(!moved.settle(ms(start, 602)));
+
+        let mut empty = Hold::new((0.0, 0.0), start, false);
+        assert!(!empty.settle(ms(start, 600)));
+        assert!(!empty.settle(ms(start, 601)));
     }
 
     #[test]

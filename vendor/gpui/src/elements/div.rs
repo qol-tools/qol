@@ -2152,10 +2152,12 @@ impl Interactivity {
                     .get_or_insert_with(Default::default)
                     .clone();
 
-                let pressed_at = element_state
-                    .pressed_at
-                    .get_or_insert_with(Default::default)
-                    .clone();
+                let pressed_at = drag_hold.map(|_| {
+                    element_state
+                        .pressed_at
+                        .get_or_insert_with(Default::default)
+                        .clone()
+                });
 
                 window.on_mouse_event({
                     let pending_mouse_down = pending_mouse_down.clone();
@@ -2167,7 +2169,9 @@ impl Interactivity {
                             && hitbox.is_hovered(window)
                         {
                             *pending_mouse_down.borrow_mut() = Some(event.clone());
-                            pressed_at.set(Some(Instant::now()));
+                            if let Some(pressed_at) = &pressed_at {
+                                pressed_at.set(Some(Instant::now()));
+                            }
                             window.refresh();
                         }
                     }
@@ -2185,7 +2189,10 @@ impl Interactivity {
                         if let Some(mouse_down) = pending_mouse_down.as_ref()
                             && let Some((hold, slop)) = drag_hold
                             && !cx.has_active_drag()
-                            && pressed_at.get().is_none_or(|at| at.elapsed() < hold)
+                            && pressed_at
+                                .as_ref()
+                                .and_then(|at| at.get())
+                                .is_none_or(|at| at.elapsed() < hold)
                         {
                             if (event.position - mouse_down.position).magnitude() > f64::from(slop)
                             {

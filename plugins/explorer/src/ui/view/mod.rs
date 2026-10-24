@@ -13,10 +13,9 @@ mod rename;
 mod slider;
 mod targets;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io;
-use std::mem;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::thread;
@@ -25,7 +24,7 @@ use std::time::{Duration, Instant};
 use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
-    div, point, px, rgb, AnyElement, AsyncApp, Bounds, ClickEvent, Context, ElementId, FocusHandle,
+    div, point, px, rgb, AnyElement, AsyncApp, ClickEvent, Context, ElementId, FocusHandle,
     Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, ModifiersChangedEvent,
     MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollDelta, ScrollHandle,
     Styled, Subscription, UniformListScrollHandle, WeakEntity, Window,
@@ -97,11 +96,7 @@ pub struct ExplorerView {
     slider_dragging: bool,
     waiting: VecDeque<Keystroke>,
     drag_gesture: Rc<RefCell<DragGestureState>>,
-    press: Option<press::Press>,
-    press_serial: u64,
-    swallow_click: bool,
-    press_cancelled: bool,
-    rows_area: Rc<Cell<Bounds<Pixels>>>,
+    pressing: press::PressState,
     title: String,
     dismisser: SurfaceDismisser,
     wake_at: Option<Instant>,
@@ -145,11 +140,7 @@ impl ExplorerView {
             slider_dragging: false,
             waiting: VecDeque::new(),
             drag_gesture: Rc::new(RefCell::new(DragGestureState::new(DRAG_THRESHOLD))),
-            press: None,
-            press_serial: 0,
-            swallow_click: false,
-            press_cancelled: false,
-            rows_area: Rc::new(Cell::new(Bounds::default())),
+            pressing: press::PressState::new(),
             title: WINDOW_TITLE.to_string(),
             dismisser,
             wake_at: None,
@@ -908,7 +899,7 @@ impl ExplorerView {
     }
 
     fn click_row(&mut self, path: &Path, event: &ClickEvent, cx: &mut Context<Self>) {
-        if mem::take(&mut self.swallow_click) {
+        if self.pressing.take_swallow() {
             return;
         }
         let click = keys::click(&event.modifiers(), event.click_count());

@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-use std::hash::Hash;
-
 const EDGE_GAIN: f32 = 10.0;
 const EDGE_SLOWEST: f32 = 120.0;
 const EDGE_FASTEST: f32 = 1800.0;
@@ -27,49 +24,9 @@ pub fn edge_step(outside: f32, seconds: f32) -> f32 {
     speed * seconds * outside.signum()
 }
 
-pub fn cursor_row(touched: &[usize], under: Option<usize>) -> Option<usize> {
-    under.filter(|row| touched.contains(row))
-}
-
-pub fn merged<T: Eq + Hash>(
-    base: impl IntoIterator<Item = T>,
-    touched: impl IntoIterator<Item = T>,
-    additive: bool,
-) -> HashSet<T> {
-    base.into_iter()
-        .filter(|_| additive)
-        .chain(touched)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use super::{content_point, cursor_row, edge_step, merged, outside};
-
-    fn set(items: &[&'static str]) -> HashSet<&'static str> {
-        items.iter().copied().collect()
-    }
-
-    #[test]
-    fn a_box_adds_to_the_picks_it_started_with_or_replaces_them() {
-        let cases = [
-            (&["a", "b"][..], &["b", "c"][..], true, &["a", "b", "c"][..]),
-            (&["a", "b"], &["b", "c"], false, &["b", "c"]),
-            (&["a", "b"], &[], true, &["a", "b"]),
-            (&["a", "b"], &[], false, &[]),
-            (&[], &["x"], true, &["x"]),
-            (&[], &["x"], false, &["x"]),
-            (&[], &[], true, &[]),
-            (&["a"], &["a", "a"], false, &["a"]),
-            (&["a", "a"], &["b"], true, &["a", "b"]),
-        ];
-        for (base, touched, additive, want) in cases {
-            let got = merged(base.iter().copied(), touched.iter().copied(), additive);
-            assert_eq!(got, set(want), "{base:?} {touched:?} {additive}");
-        }
-    }
+    use super::{content_point, edge_step, outside};
 
     #[test]
     fn a_pointer_maps_into_content_coordinates_that_ignore_where_the_list_scrolled_to() {
@@ -134,23 +91,6 @@ mod tests {
         ];
         for (distance, seconds, want) in cases {
             assert_eq!(edge_step(distance, seconds), want, "{distance} {seconds}");
-        }
-    }
-
-    #[test]
-    fn the_cursor_follows_the_row_under_the_pointer_only_when_the_box_holds_it() {
-        let cases = [
-            (&[1, 2, 3][..], Some(2), Some(2)),
-            (&[1, 2, 3], Some(1), Some(1)),
-            (&[1, 2, 3], Some(3), Some(3)),
-            (&[1, 2, 3], Some(5), None),
-            (&[1, 2, 3], Some(0), None),
-            (&[1, 2, 3], None, None),
-            (&[], Some(0), None),
-            (&[], None, None),
-        ];
-        for (touched, under, want) in cases {
-            assert_eq!(cursor_row(touched, under), want, "{touched:?} {under:?}");
         }
     }
 }

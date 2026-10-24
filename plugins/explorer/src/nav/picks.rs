@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
@@ -57,16 +58,12 @@ impl Picks {
 
     pub fn all<T: AsRef<Path>>(&mut self, rows: &[T]) {
         self.range = None;
-        for row in rows {
-            self.insert(row.as_ref().to_path_buf());
-        }
+        self.insert_all(rows.iter().map(|row| row.as_ref().to_path_buf()));
     }
 
     pub fn set(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
         self.clear();
-        for path in paths {
-            self.insert(path);
-        }
+        self.insert_all(paths);
     }
 
     pub fn clear(&mut self) {
@@ -127,6 +124,12 @@ impl Picks {
         self.range = None;
     }
 
+    fn insert_all(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            self.insert(path);
+        }
+    }
+
     fn insert(&mut self, path: PathBuf) {
         if self.picked.contains(&path) {
             return;
@@ -159,6 +162,17 @@ impl Picks {
             tally(&mut self.folders, folder);
         }
     }
+}
+
+pub fn merged<T: Eq + Hash>(
+    base: impl IntoIterator<Item = T>,
+    touched: impl IntoIterator<Item = T>,
+    additive: bool,
+) -> HashSet<T> {
+    base.into_iter()
+        .filter(|_| additive)
+        .chain(touched)
+        .collect()
 }
 
 fn tally(folders: &mut HashMap<PathBuf, usize>, folder: &Path) {
