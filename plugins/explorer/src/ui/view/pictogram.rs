@@ -56,7 +56,23 @@ pub(super) enum RailGlyph {
 }
 
 pub(super) fn entry_pictogram(entry: &Entry, size: PictogramSize, selected: bool) -> AnyElement {
-    if entry.opens_as_folder {
+    named_pictogram(
+        &entry.display,
+        entry.opens_as_folder,
+        entry.executable,
+        size,
+        selected,
+    )
+}
+
+pub(super) fn named_pictogram(
+    name: &str,
+    folder_like: bool,
+    executable: bool,
+    size: PictogramSize,
+    selected: bool,
+) -> AnyElement {
+    if folder_like {
         return folder(size.px());
     }
     let kit = kit();
@@ -65,8 +81,8 @@ pub(super) fn entry_pictogram(entry: &Entry, size: PictogramSize, selected: bool
     } else {
         kit.grounds.pane.soft
     };
-    let kind = kind_of(&entry.display, entry.executable);
-    let tag = tag_text(&entry.display, kind);
+    let kind = kind_of(name, executable);
+    let tag = tag_text(name, kind);
     Pictogram {
         name: format!("explorer-{}-{}-{tag}", kind.asset_stem(), size.px()),
         markup: tagged(outline(kind)[size.index()], kind, &tag),

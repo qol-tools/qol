@@ -1,20 +1,21 @@
 use std::path::PathBuf;
 
 use gpui::{
-    div, px, rgb, AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, RenderOnce, StatefulInteractiveElement, Styled,
-    Window,
+    div, px, rgb, AnyElement, ClickEvent, Context, Div, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement, Styled,
 };
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::scrollbar::{seek_handle, ScrollGrip, ScrollSource};
 use qol_gpui::settings_panel::components::rail_caption;
-use qol_gpui::text::{laid_out_width, TextStyled};
-use qol_gpui::text_edit::{visible_char_count, CaretStyle, TextField, TextFieldElement};
+use qol_gpui::text::TextStyled;
+use qol_gpui::text_edit::TextField;
 use qol_gpui::theme::{
     TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, OPACITY_DISABLED, SPACE_GUTTER, SPACE_INSET,
 };
 
 use super::pictogram::{rail_pictogram, RailGlyph};
+use super::rename::RenameLabel;
+use super::targets::{self, Zone};
 use super::{more_button, ExplorerView};
 use crate::ui::trail;
 
@@ -74,11 +75,13 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
     let width = view.rail_width;
     children.push(header("Pinned", "Your folders", !in_devices));
     for (index, row) in places.into_iter().enumerate() {
+        let tag = view.drop_overlay(Zone::Rail(index), kit.grounds.rail);
         children.push(render_row(
             index,
             row,
             current == Some(index),
             width,
+            tag,
             kit,
             cx,
         ));
@@ -86,11 +89,13 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
     children.push(header("Devices", "Your drives", in_devices));
     for (offset, row) in devices.into_iter().enumerate() {
         let index = place_count + offset;
+        let tag = view.drop_overlay(Zone::Rail(index), kit.grounds.rail);
         children.push(render_row(
             index,
             row,
             current == Some(index),
             width,
+            tag,
             kit,
             cx,
         ));
@@ -137,6 +142,7 @@ fn render_row(
     row: RailRow,
     current: bool,
     rail_width: f32,
+    tag: Option<Div>,
     kit: Kit,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
@@ -148,7 +154,7 @@ fn render_row(
     let ink = if current { ground.ink } else { ground.soft };
     let path = row.path;
     let place = row.place;
-    let more = place.filter(|_| current);
+    let more = place.filter(|_| current && tag.is_none());
     let renaming = row.renaming.is_some();
     let label = match row.renaming {
         Some(field) => {
@@ -160,14 +166,8 @@ fn render_row(
                 } else {
                     0.0
                 };
-            RenameLabel {
-                field,
-                available: rail_width - taken,
-                ink: ground.ink,
-                mark: ground.mark,
-                on_mark: ground.on_mark,
-            }
-            .into_any_element()
+            RenameLabel::on_ground(field, rail_width - taken, TextStyle::Name, ground)
+                .into_any_element()
         }
         None => row.label.into_any_element(),
     };
@@ -219,6 +219,14 @@ fn render_row(
             cx,
         ));
     }
+    if let Some(tag) = tag {
+        element = element.relative().bg(rgb(kit.grounds.band.bg)).child(tag);
+    }
+    let element = if row.connected {
+        targets::target(element, Zone::Rail(index), path.clone(), cx)
+    } else {
+        element
+    };
     let element = element.on_click(cx.listener(move |view, _: &ClickEvent, _window, cx| {
         view.navigate(path.clone(), cx);
     }));
@@ -227,32 +235,4 @@ fn render_row(
     }
     kit.pointable(element, rgb(kit.grounds.rail.lift))
         .into_any_element()
-}
-
-#[derive(IntoElement)]
-struct RenameLabel {
-    field: TextField,
-    available: f32,
-    ink: u32,
-    mark: u32,
-    on_mark: u32,
-}
-
-impl RenderOnce for RenameLabel {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let advance = laid_out_width(window, "0", TextStyle::Name);
-        let visible = visible_char_count(self.available, advance);
-        TextFieldElement::new(&self.field, visible, advance)
-            .with_marks()
-            .measure(|shown| laid_out_width(window, shown, TextStyle::Name))
-            .selection(rgb(self.mark).into(), Some(rgb(self.on_mark).into()))
-            .caret(CaretStyle {
-                color: rgb(self.ink).into(),
-                width: 2.0,
-                height: 16.0,
-                top: 1.0,
-                radius: 1.0,
-            })
-            .render()
-    }
 }

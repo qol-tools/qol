@@ -1,4 +1,10 @@
 mod counts;
+mod ops;
+mod ops_edit;
+mod ops_job;
+#[cfg(test)]
+mod ops_tests;
+mod ops_text;
 mod pace;
 mod path_field;
 #[cfg(test)]
@@ -23,6 +29,8 @@ use crate::listing::{
 };
 use crate::nav::{History, Jump, Picks, Spot};
 use counts::LiveCounts;
+pub use ops::{Held, MoveRecord, MoveState};
+pub(crate) use ops_text::{copy_only_note, label_of, short_note};
 use pace::Pace;
 use path_field::PathField;
 use watch::FolderWatch;
@@ -84,6 +92,7 @@ pub struct Browser {
     watch: FolderWatch,
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
+    ops: ops::Ops,
 }
 
 impl Browser {
@@ -114,6 +123,7 @@ impl Browser {
             watch: FolderWatch::default(),
             wake,
             wakes: Some(wakes),
+            ops: ops::Ops::new(),
         };
         browser.arrive(Spot::at(start));
         browser
@@ -219,7 +229,9 @@ impl Browser {
     }
 
     pub fn note(&self) -> Note {
-        let count = if !self.picks.is_empty() {
+        let count = if let Some(text) = self.ops_note() {
+            text
+        } else if !self.picks.is_empty() {
             self.picked_note()
         } else if *self.listing.state() == ListingState::Done {
             qol_gpui::plural(self.rows.len(), "item", "items")
@@ -281,6 +293,7 @@ impl Browser {
             }
         }
         drained.changed |= self.apply_recounts(now);
+        drained.changed |= self.drain_ops();
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
@@ -428,7 +441,11 @@ impl Browser {
     }
 
     pub fn dismiss(&mut self) -> bool {
+        if self.moves_open() {
+            return self.toggle_moves();
+        }
         let changed = !self.picks.is_empty() || self.failure.is_some();
+        let changed = self.dismiss_ops() || changed;
         self.picks.clear();
         self.failure = None;
         changed
@@ -592,6 +609,7 @@ impl Browser {
         self.failure = None;
         self.path = None;
         self.landing = None;
+        self.ops.leave_folder();
         self.arriving = Some(spot);
         self.progressed_at = Instant::now();
     }

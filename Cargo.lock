@@ -6755,6 +6755,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "trash",
  "unicode-normalization",
  "windows-sys 0.59.0",
  "workspace-hack",

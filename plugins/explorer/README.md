@@ -46,7 +46,14 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Alt+Left, Alt+Right | Back and forward |
 | Space | Pick or unpick the row under the cursor, or add a space to the letters typed when a name goes on with one |
 | Ctrl+A | Pick every row |
-| Esc | Drop the picks and the red note |
+| Esc | Drop the picks, a cut and the red note; while dragging, cancel the drag |
+| Ctrl+C, Ctrl+X | Copy or cut the picks, or the row under the cursor when nothing is picked; cut rows fade until they are pasted |
+| Ctrl+V | Paste into the folder you are in |
+| Delete | Move the picks, or the row under the cursor, to the trash |
+| F2 | Rename the row under the cursor, with the name before its extension selected |
+| Ctrl+Shift+N | Make a new folder and rename it |
+| Ctrl+Z | Undo the last copy, move, rename, trash or new folder, putting back anything a copy replaced |
+| Ctrl+J | Show or hide today's moves |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
 | Ctrl+D | Pin the folder you are in, or unpin it |
 | Ctrl+, | Open Explorer's settings |
@@ -56,6 +63,10 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+wheel | Step the size up or down |
 | Left, Right | In the icon sizes, move the cursor one icon; Up and Down move a whole row |
 | Letters | Jump to the first name that starts with what you typed; a plain letter also matches its accented forms, an accented one only itself, and a letter that matches nothing is left out |
+
+Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
+
+When a paste or a drop meets names that are already there, a sheet asks first and nothing moves until you apply it. Left and Right choose Keep this, Replace or Keep both for a row, with Shift for every row; Up and Down move between rows; Enter applies and Esc cancels. A replaced file goes to the trash.
 
 ## License
 
