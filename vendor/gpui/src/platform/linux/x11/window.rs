@@ -35,7 +35,7 @@ use std::{
 
 use super::{
     X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES,
-    drag_out::{DragOut, Link, Position},
+    drag_out::{self, DragOut, Link, Position},
 };
 
 x11rb::atom_manager! {
@@ -1257,10 +1257,11 @@ impl X11WindowStatePtr {
             root: state.x_root_window,
             source: self.x_window,
         };
-        match state.drag_out.as_ref() {
-            Some(drag_out) => drag_out.answer(&link, request),
-            None => DragOut::new(&[]).answer(&link, request),
-        }
+        drag_out::answer(
+            &link,
+            request,
+            state.drag_out.as_ref().map(DragOut::uri_list),
+        );
     }
 
     pub fn should_close(&self) -> bool {

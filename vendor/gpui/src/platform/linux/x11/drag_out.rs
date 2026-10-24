@@ -81,9 +81,14 @@ impl DragOut {
             self.owns_selection = true;
         }
         let found = find_target(link, position.root_x, position.root_y);
-        if self.target.as_ref().map(|target| target.window) != found.map(|(window, _)| window) {
+        if self.target.as_ref().map(|target| target.window) != found.map(|found| found.window) {
             self.leave(link);
-            if let Some((window, proxy)) = found {
+            if let Some(Found {
+                window,
+                proxy,
+                version,
+            }) = found
+            {
                 send(
                     link,
                     window,
@@ -91,7 +96,7 @@ impl DragOut {
                     link.atoms.XdndEnter,
                     [
                         link.source,
-                        XDND_VERSION << 24,
+                        version << 24,
                         link.atoms.TextUriList,
                         link.atoms.UTF8_STRING,
                         link.atoms.TEXT_PLAIN,
@@ -147,62 +152,8 @@ impl DragOut {
         }
     }
 
-    pub fn answer(&self, link: &Link, request: &SelectionRequestEvent) {
-        let atoms = link.atoms;
-        let offered = [
-            atoms.TextUriList,
-            atoms.UTF8_STRING,
-            atoms.TEXT_PLAIN,
-            atoms.TEXT_PLAIN_UTF8,
-            atoms.STRING,
-            atoms.TEXT,
-        ];
-        let property = if request.property == x11rb::NONE {
-            request.target
-        } else {
-            request.property
-        };
-        let ours = request.selection == atoms.XdndSelection;
-        let answered = if ours && request.target == atoms.TARGETS {
-            let mut targets = vec![atoms.TARGETS];
-            targets.extend(offered);
-            link.xcb
-                .change_property32(
-                    PropMode::REPLACE,
-                    request.requestor,
-                    property,
-                    AtomEnum::ATOM,
-                    &targets,
-                )
-                .log_err()
-                .is_some()
-        } else {
-            ours && offered.contains(&request.target)
-                && link
-                    .xcb
-                    .change_property8(
-                        PropMode::REPLACE,
-                        request.requestor,
-                        property,
-                        request.target,
-                        self.uri_list.as_bytes(),
-                    )
-                    .log_err()
-                    .is_some()
-        };
-        let notify = SelectionNotifyEvent {
-            response_type: xproto::SELECTION_NOTIFY_EVENT,
-            sequence: 0,
-            time: request.time,
-            requestor: request.requestor,
-            selection: request.selection,
-            target: request.target,
-            property: if answered { property } else { x11rb::NONE },
-        };
-        link.xcb
-            .send_event(false, request.requestor, EventMask::NO_EVENT, notify)
-            .log_err();
-        link.xcb.flush().log_err();
+    pub fn uri_list(&self) -> &str {
+        &self.uri_list
     }
 
     fn leave(&mut self, link: &Link) {
@@ -216,6 +167,64 @@ impl DragOut {
             );
         }
     }
+}
+
+pub(crate) fn answer(link: &Link, request: &SelectionRequestEvent, uri_list: Option<&str>) {
+    let atoms = link.atoms;
+    let offered = [
+        atoms.TextUriList,
+        atoms.UTF8_STRING,
+        atoms.TEXT_PLAIN,
+        atoms.TEXT_PLAIN_UTF8,
+        atoms.STRING,
+        atoms.TEXT,
+    ];
+    let property = if request.property == x11rb::NONE {
+        request.target
+    } else {
+        request.property
+    };
+    let ours = request.selection == atoms.XdndSelection && uri_list.is_some();
+    let answered = if ours && request.target == atoms.TARGETS {
+        let mut targets = vec![atoms.TARGETS];
+        targets.extend(offered);
+        link.xcb
+            .change_property32(
+                PropMode::REPLACE,
+                request.requestor,
+                property,
+                AtomEnum::ATOM,
+                &targets,
+            )
+            .log_err()
+            .is_some()
+    } else {
+        ours && offered.contains(&request.target)
+            && link
+                .xcb
+                .change_property8(
+                    PropMode::REPLACE,
+                    request.requestor,
+                    property,
+                    request.target,
+                    uri_list.unwrap_or_default().as_bytes(),
+                )
+                .log_err()
+                .is_some()
+    };
+    let notify = SelectionNotifyEvent {
+        response_type: xproto::SELECTION_NOTIFY_EVENT,
+        sequence: 0,
+        time: request.time,
+        requestor: request.requestor,
+        selection: request.selection,
+        target: request.target,
+        property: if answered { property } else { x11rb::NONE },
+    };
+    link.xcb
+        .send_event(false, request.requestor, EventMask::NO_EVENT, notify)
+        .log_err();
+    link.xcb.flush().log_err();
 }
 
 fn send_position(link: &Link, target: &mut Target, position: Position) {
@@ -244,7 +253,14 @@ fn send(
     link.xcb.flush().log_err();
 }
 
-fn find_target(link: &Link, root_x: i16, root_y: i16) -> Option<(xproto::Window, xproto::Window)> {
+#[derive(Clone, Copy)]
+struct Found {
+    window: xproto::Window,
+    proxy: xproto::Window,
+    version: u32,
+}
+
+fn find_target(link: &Link, root_x: i16, root_y: i16) -> Option<Found> {
     let mut window = link.root;
     loop {
         let child = link
@@ -257,21 +273,24 @@ fn find_target(link: &Link, root_x: i16, root_y: i16) -> Option<(xproto::Window,
         if child == x11rb::NONE || child == link.source {
             return None;
         }
-        if xdnd_aware(link, child) {
-            let proxy = xdnd_proxy(link, child).unwrap_or(child);
-            return Some((child, proxy));
+        if let Some(version) = xdnd_version(link, child) {
+            return Some(Found {
+                window: child,
+                proxy: xdnd_proxy(link, child).unwrap_or(child),
+                version: version.min(XDND_VERSION),
+            });
         }
         window = child;
     }
 }
 
-fn xdnd_aware(link: &Link, window: xproto::Window) -> bool {
+fn xdnd_version(link: &Link, window: xproto::Window) -> Option<u32> {
     link.xcb
         .get_property(false, window, link.atoms.XdndAware, AtomEnum::ATOM, 0, 1)
         .ok()
         .and_then(|cookie| cookie.reply().ok())
         .and_then(|reply| reply.value32().and_then(|mut values| values.next()))
-        .is_some_and(|version| version >= 3)
+        .filter(|version| *version >= 3)
 }
 
 fn xdnd_proxy(link: &Link, window: xproto::Window) -> Option<xproto::Window> {
