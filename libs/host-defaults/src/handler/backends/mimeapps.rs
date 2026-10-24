@@ -12,6 +12,17 @@ pub fn user_list_path(dirs: &XdgDirs) -> PathBuf {
     dirs.config_home.join(LIST_FILE)
 }
 
+pub fn user_list_paths_setting(dirs: &XdgDirs, desktops: &[String], mime: &str) -> Vec<PathBuf> {
+    lists_in(&dirs.config_home, desktops)
+        .into_iter()
+        .filter(|path| {
+            *path == user_list_path(dirs)
+                || std::fs::read_to_string(path)
+                    .is_ok_and(|text| get_value(&text, DEFAULT_GROUP, mime).is_some())
+        })
+        .collect()
+}
+
 pub fn key_for(path: &Path, mime: &str) -> String {
     format!("{}{KEY_SEPARATOR}{mime}", path.display())
 }

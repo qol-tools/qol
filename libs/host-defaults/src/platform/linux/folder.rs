@@ -73,7 +73,14 @@ pub(super) fn claim_open(
     }
     let dirs = XdgDirs::from_env().context("the home folder could not be read")?;
     allow(&probe_open_in(&dirs, &session.desktops()), lifetime)?;
-    claim_open_in(&dirs, opener, plugin_id, lifetime, ledger)
+    claim_open_in(
+        &dirs,
+        &session.desktops(),
+        opener,
+        plugin_id,
+        lifetime,
+        ledger,
+    )
 }
 
 fn allow(report: &Report, lifetime: Lifetime) -> Result<()> {
@@ -92,6 +99,7 @@ fn allow(report: &Report, lifetime: Lifetime) -> Result<()> {
 
 pub(super) fn claim_open_in(
     dirs: &XdgDirs,
+    desktops: &[String],
     opener: &OpenerSpec,
     plugin_id: &str,
     lifetime: Lifetime,
@@ -112,18 +120,21 @@ pub(super) fn claim_open_in(
             applied: &entry,
         },
     )?;
-    let list_key = mimeapps::key_for(&mimeapps::user_list_path(dirs), DIRECTORY_MIME);
-    handler::claim_value(
-        ledger,
-        &Claim {
-            role: Role::FolderOpen,
-            plugin_id,
-            lifetime,
-            store: HandlerStore::Mimeapps,
-            key: &list_key,
-            applied: desktop_entry::OPENER_ID,
-        },
-    )
+    for list in mimeapps::user_list_paths_setting(dirs, desktops, DIRECTORY_MIME) {
+        let list_key = mimeapps::key_for(&list, DIRECTORY_MIME);
+        handler::claim_value(
+            ledger,
+            &Claim {
+                role: Role::FolderOpen,
+                plugin_id,
+                lifetime,
+                store: HandlerStore::Mimeapps,
+                key: &list_key,
+                applied: desktop_entry::OPENER_ID,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -239,6 +250,43 @@ mod tests {
     }
 
     #[test]
+    fn a_claim_also_takes_a_desktop_specific_list_that_sets_the_default() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = dirs(root.path());
+        install_system_entry(&dirs, "nemo.desktop", "Files");
+        install_system_entry(&dirs, "dolphin.desktop", "Dolphin");
+        std::fs::create_dir_all(&dirs.config_home).unwrap();
+        let desktop_list = dirs.config_home.join("x-cinnamon-mimeapps.list");
+        let original = "[Default Applications]\ninode/directory=dolphin.desktop\n";
+        std::fs::write(&desktop_list, original).unwrap();
+        let desktops = ["x-cinnamon".to_string()];
+        let ledger = Ledger::at(root.path().join("claims.json"));
+
+        claim_open_in(
+            &dirs,
+            &desktops,
+            &opener(),
+            "explorer",
+            Lifetime::PortableSession,
+            &ledger,
+        )
+        .unwrap();
+
+        let texts = mimeapps::cascade_paths(&dirs, &desktops)
+            .iter()
+            .filter_map(|path| std::fs::read_to_string(path).ok())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            mimeapps::effective_default(&texts, DIRECTORY_MIME, |_| true).as_deref(),
+            Some(desktop_entry::OPENER_ID)
+        );
+        assert_eq!(ledger.load().unwrap().len(), 3);
+
+        handler::release_role(Role::FolderOpen, &ledger).unwrap();
+        assert_eq!(std::fs::read_to_string(&desktop_list).unwrap(), original);
+    }
+
+    #[test]
     fn the_report_looks_through_qol_own_claim_to_the_real_file_manager() {
         let root = tempfile::tempdir().unwrap();
         let dirs = dirs(root.path());
@@ -247,6 +295,7 @@ mod tests {
         let ledger = Ledger::at(root.path().join("claims.json"));
         claim_open_in(
             &dirs,
+            &[],
             &opener(),
             "explorer",
             Lifetime::PortableSession,
@@ -269,6 +318,7 @@ mod tests {
 
         claim_open_in(
             &dirs,
+            &[],
             &opener(),
             "explorer",
             Lifetime::PortableSession,
