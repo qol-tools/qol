@@ -302,9 +302,10 @@ impl ExplorerView {
         cx.notify();
     }
 
-    fn close_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn close_menu(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         if let Some(menu) = self.menu.take() {
-            self.closed_by = Some((menu.owner(), at));
+            self.closed_by =
+                (event.button == MouseButton::Left).then_some((menu.owner(), event.position));
             cx.notify();
         }
     }
