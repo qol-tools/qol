@@ -923,6 +923,10 @@ items = []
             .unwrap()
             .has_pending_config_reload(NO_DAEMON_ID));
         assert!(plugin_dir.join("config.json").exists());
+        assert!(
+            !manager.lock().unwrap().reconcile_profile_generation().unwrap(),
+            "a saved config with no daemon to notify must not reload the plugin and kill its windows"
+        );
         manager.lock().unwrap().shutdown();
     }
 

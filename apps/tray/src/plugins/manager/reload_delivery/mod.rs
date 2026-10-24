@@ -157,26 +157,28 @@ impl ReloadDeliveries {
         let concurrent_pending = requests.len() > 1;
         let request = requests.remove(index);
         let decision = match outcome {
-            ReloadDeliveryOutcome::Handled => match request.generation {
-                Some(generation) => {
-                    qol_runtime::probe!(
+            ReloadDeliveryOutcome::Handled | ReloadDeliveryOutcome::NoDaemon => {
+                match request.generation {
+                    Some(generation) => {
+                        qol_runtime::probe!(
                         "PLUGIN_RELOAD",
                         "plugin={} stage=complete decision=acknowledged request_id={} published_generation={generation} acknowledged_generation={generation}",
                         ticket.plugin_id,
                         ticket.request_id
                     );
-                    DeliverySettlement::Acknowledged { generation }
-                }
-                None => {
-                    qol_runtime::probe!(
+                        DeliverySettlement::Acknowledged { generation }
+                    }
+                    None => {
+                        qol_runtime::probe!(
                         "PLUGIN_RELOAD",
                         "plugin={} stage=complete decision=superseded reason=unpublished request_id={} published_generation=none acknowledged_generation=none",
                         ticket.plugin_id,
                         ticket.request_id
                     );
-                    DeliverySettlement::Superseded
+                        DeliverySettlement::Superseded
+                    }
                 }
-            },
+            }
             ReloadDeliveryOutcome::Failed if concurrent_pending => {
                 qol_runtime::probe!(
                     "PLUGIN_RELOAD",
@@ -198,16 +200,6 @@ impl ReloadDeliveries {
                 DeliverySettlement::Restart {
                     generation: request.generation,
                 }
-            }
-            ReloadDeliveryOutcome::NoDaemon => {
-                qol_runtime::probe!(
-                    "PLUGIN_RELOAD",
-                    "plugin={} stage=complete decision=superseded reason=no-daemon request_id={} published_generation={} acknowledged_generation=none",
-                    ticket.plugin_id,
-                    ticket.request_id,
-                    generation_label(request.generation)
-                );
-                DeliverySettlement::Superseded
             }
             ReloadDeliveryOutcome::SaveFailed => {
                 qol_runtime::probe!(
