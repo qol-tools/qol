@@ -144,7 +144,10 @@ pub(super) fn holder_label(
         .find(|declared| declared.id == action)
         .map_or_else(|| action.to_string(), |declared| declared.label);
     let name = &plugin.manifest.plugin.name;
-    if label.to_lowercase().contains(&name.to_lowercase()) {
+    let names_plugin = label
+        .split_whitespace()
+        .any(|word| word.eq_ignore_ascii_case(name));
+    if names_plugin {
         return label;
     }
     format!("{name} {label}")

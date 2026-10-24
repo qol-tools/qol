@@ -897,6 +897,7 @@ mod default_for_rules {
 
         [menu]
         label = "M"
+        items = []
 
         [action.open]
         label = "Open"

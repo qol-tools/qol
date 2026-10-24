@@ -51,7 +51,8 @@ pub fn parse_exec(text: &str) -> Option<String> {
 }
 
 pub fn program_stem(exec: &str) -> Option<String> {
-    let mut tokens = exec.split_whitespace().map(|token| token.trim_matches('"'));
+    let words = exec_words(exec);
+    let mut tokens = words.iter().map(String::as_str);
     let program = program_token(&mut tokens)?;
     let stem = basename(program);
     if stem == "flatpak" {
@@ -80,6 +81,29 @@ pub fn entry_owner(dirs: &XdgDirs, id: &str) -> Option<String> {
         parse_name(&text),
         parse_exec(&text).and_then(|exec| program_stem(&exec)),
     )
+}
+
+fn exec_words(exec: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    let mut chars = exec.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => quoted = !quoted,
+            '\\' if quoted => word.extend(chars.next()),
+            ch if ch.is_whitespace() && !quoted => {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            }
+            ch => word.push(ch),
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
 }
 
 fn program_token<'a>(tokens: &mut impl Iterator<Item = &'a str>) -> Option<&'a str> {

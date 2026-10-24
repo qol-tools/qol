@@ -875,6 +875,7 @@ fn parse_default_for_declarations() {
 
         [menu]
         label = "M"
+        items = []
 
         [[default_for]]
         role = "slot.screenshot"
@@ -913,6 +914,7 @@ fn default_for_defaults_to_empty() {
 
         [menu]
         label = "M"
+        items = []
     "#;
 
     let manifest: PluginManifest = toml::from_str(toml).unwrap();
