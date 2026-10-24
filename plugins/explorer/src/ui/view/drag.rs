@@ -190,8 +190,17 @@ pub(super) fn start(
         })
         .unwrap_or_else(|| (vec![path.to_path_buf()], Vec::new()));
     let count = paths.len();
-    let image = drag_image(&stack, count, window.scale_factor());
-    window.offer_dragged_paths(paths, image);
+    let cancelled = view
+        .upgrade()
+        .is_some_and(|view| view.read(cx).press_was_cancelled());
+    if cancelled {
+        window.defer(cx, |window, cx| {
+            cx.stop_active_drag(window);
+        });
+    } else {
+        let image = drag_image(&stack, count, window.scale_factor());
+        window.offer_dragged_paths(paths, image);
+    }
     cx.new(|_| DraggedPaths { count, stack, grab })
 }
 

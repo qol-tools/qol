@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     canvas, div, px, rgb, rgba, AnyElement, AsyncApp, Bounds, Context, DispatchPhase, Div,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Styled,
-    WeakEntity, Window,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollWheelEvent, Styled, WeakEntity, Window,
 };
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{translucent, Alpha, LINE};
@@ -37,7 +37,15 @@ fn pair(point: Point<Pixels>) -> (f32, f32) {
 impl ExplorerView {
     pub(super) fn press_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         self.swallow_click = false;
+        self.press_cancelled = false;
         self.press = None;
+        if self
+            .closed_by
+            .take_if(|(_, at)| *at == event.position)
+            .is_some()
+        {
+            return;
+        }
         let area = self.rows_area.get();
         if event.click_count != 1 || self.press_blocked() || !area.contains(&event.position) {
             return;
@@ -125,8 +133,26 @@ impl ExplorerView {
             self.browser.restore(&press.base, scroll);
         }
         self.swallow_click = true;
+        self.press_cancelled = true;
         cx.notify();
         true
+    }
+
+    pub(super) fn press_was_cancelled(&self) -> bool {
+        self.press_cancelled
+    }
+
+    pub(super) fn rebox(&mut self, relisted: bool, cx: &mut Context<Self>) {
+        let Some(press) = self.press.as_mut() else {
+            return;
+        };
+        if press.hold.phase() != Phase::Boxing {
+            return;
+        }
+        if relisted {
+            press.touched = None;
+        }
+        self.update_box(cx);
     }
 
     pub(super) fn hand_over(&mut self, cx: &mut Context<Self>) -> Option<Vec<Entry>> {
@@ -325,6 +351,15 @@ pub(super) fn tracker(
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
                 if phase == DispatchPhase::Capture {
                     let _ = moves.update(cx, |view, cx| view.press_moved(event, cx));
+                }
+            });
+            let scrolls = view.clone();
+            window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, cx| {
+                if phase == DispatchPhase::Capture {
+                    let scrolls = scrolls.clone();
+                    window.defer(cx, move |_, cx| {
+                        let _ = scrolls.update(cx, |view, cx| view.rebox(false, cx));
+                    });
                 }
             });
             let view = view.clone();

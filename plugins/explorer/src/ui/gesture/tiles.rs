@@ -8,11 +8,12 @@ pub struct Rect {
 
 impl Rect {
     pub fn spanning(a: (f32, f32), b: (f32, f32)) -> Self {
+        let (left, top) = (a.0.min(b.0), a.1.min(b.1));
         Self {
-            left: a.0.min(b.0),
-            top: a.1.min(b.1),
-            right: a.0.max(b.0),
-            bottom: a.1.max(b.1),
+            left,
+            top,
+            right: a.0.max(b.0).max(left + 1.0),
+            bottom: a.1.max(b.1).max(top + 1.0),
         }
     }
 
@@ -126,6 +127,26 @@ mod tests {
             ((1.0, 9.0), (5.0, 2.0)),
         ];
         for (a, b) in cases {
+            assert_eq!(spanning(a, b), want, "{a:?} {b:?}");
+        }
+    }
+
+    #[test]
+    fn a_box_with_no_width_or_height_spans_at_least_one_pixel_each_way() {
+        let cases = [
+            ((10.0, 5.0), (10.0, 80.0), (10.0, 5.0, 11.0, 80.0)),
+            ((10.0, 80.0), (10.0, 5.0), (10.0, 5.0, 11.0, 80.0)),
+            ((3.0, 7.0), (90.0, 7.0), (3.0, 7.0, 90.0, 8.0)),
+            ((4.0, 4.0), (4.0, 4.0), (4.0, 4.0, 5.0, 5.0)),
+            ((4.0, 4.0), (4.5, 9.0), (4.0, 4.0, 5.0, 9.0)),
+        ];
+        for (a, b, (left, top, right, bottom)) in cases {
+            let want = Rect {
+                left,
+                top,
+                right,
+                bottom,
+            };
             assert_eq!(spanning(a, b), want, "{a:?} {b:?}");
         }
     }
@@ -268,7 +289,11 @@ mod tests {
             (spanning((10.0, 40.0), (20.0, 50.0)), 10, vec![1]),
             (spanning((10.0, 30.0), (20.0, 40.0)), 10, vec![0, 1]),
             (spanning((10.0, 36.0), (20.0, 36.0)), 10, vec![1]),
-            (spanning((10.0, 35.9), (20.0, 35.9)), 10, vec![0]),
+            (spanning((10.0, 35.9), (20.0, 35.9)), 10, vec![0, 1]),
+            (spanning((10.0, 34.0), (20.0, 34.0)), 10, vec![0]),
+            (spanning((10.0, 5.0), (10.0, 80.0)), 10, vec![0, 1, 2]),
+            (spanning((10.0, 80.0), (10.0, 5.0)), 10, vec![0, 1, 2]),
+            (spanning((10.0, 40.0), (500.0, 40.0)), 10, vec![1]),
             (spanning((-50.0, -50.0), (-40.0, -40.0)), 10, vec![]),
             (spanning((-50.0, -50.0), (5.0, 0.0)), 10, vec![0]),
             (spanning((0.0, 0.0), (5.0, 360.0)), 10, (0..10).collect()),
@@ -293,6 +318,9 @@ mod tests {
         let cases = [
             (spanning((30.0, 20.0), (40.0, 30.0)), 12, vec![0]),
             (spanning((30.0, 20.0), (150.0, 30.0)), 12, vec![0]),
+            (spanning((30.0, 20.0), (30.0, 150.0)), 12, vec![0, 4]),
+            (spanning((30.0, 20.0), (300.0, 20.0)), 12, vec![0, 1, 2]),
+            (spanning((30.0, 20.0), (30.0, 20.0)), 12, vec![0]),
             (spanning((30.0, 20.0), (154.0, 30.0)), 12, vec![0, 1]),
             (spanning((145.0, 20.0), (146.0, 30.0)), 12, vec![]),
             (spanning((30.0, 20.0), (300.0, 30.0)), 12, vec![0, 1, 2]),

@@ -100,6 +100,7 @@ pub struct ExplorerView {
     press: Option<press::Press>,
     press_serial: u64,
     swallow_click: bool,
+    press_cancelled: bool,
     rows_area: Rc<Cell<Bounds<Pixels>>>,
     title: String,
     dismisser: SurfaceDismisser,
@@ -147,6 +148,7 @@ impl ExplorerView {
             press: None,
             press_serial: 0,
             swallow_click: false,
+            press_cancelled: false,
             rows_area: Rc::new(Cell::new(Bounds::default())),
             title: WINDOW_TITLE.to_string(),
             dismisser,
@@ -623,6 +625,7 @@ impl ExplorerView {
             self.follow_rows(drained.cursor_shift);
         }
         if drained.changed {
+            self.rebox(true, cx);
             cx.notify();
         }
         if let Some(delay) = drained.wake_in {
