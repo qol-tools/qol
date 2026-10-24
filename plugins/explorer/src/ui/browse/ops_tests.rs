@@ -510,11 +510,11 @@ fn the_sheet_notes_name_the_problem_in_plain_words() {
     );
     assert_eq!(
         ops_text::short_note(&short, "This computer").as_deref(),
-        Some("windows-11 is 42.2 GB. This computer has 23 GB free.")
+        Some("windows-11 is 42 GB. This computer has 23 GB free.")
     );
     assert_eq!(
         ops_text::not_started_detail(&short),
-        "Not started. It is 42.2 GB and only 23 GB was free."
+        "Not started. It is 42 GB and only 23 GB was free."
     );
 
     let owned = survey_of(&["/ai/ollama"], Room::Enough, &["/ai/ollama"]);
