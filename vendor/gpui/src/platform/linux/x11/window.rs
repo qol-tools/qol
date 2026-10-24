@@ -35,7 +35,7 @@ use std::{
 
 use super::{
     X11Display, XINPUT_ALL_DEVICE_GROUPS, XINPUT_ALL_DEVICES,
-    drag_out::{self, DragOut, Link, Position},
+    drag_out::{self, DragIcon, DragOut, Link, Picture, Position},
 };
 
 x11rb::atom_manager! {
@@ -1161,6 +1161,27 @@ impl X11Window {
     }
 }
 
+impl X11Window {
+    fn drag_icon(&self, state: &X11WindowState, image: &crate::DragImage) -> Option<DragIcon> {
+        let xcb = &self.0.xcb;
+        let root = state.x_root_window;
+        let screen = xcb.setup().roots.iter().position(|screen| screen.root == root)?;
+        let visual = find_visuals(xcb, screen).transparent?;
+        let size = image.image.size(0);
+        let scale = state.scale_factor;
+        let picture = Picture {
+            bgra: image.image.as_bytes(0)?,
+            width: u16::try_from(size.width.0).ok()?,
+            height: u16::try_from(size.height.0).ok()?,
+            offset: (
+                (image.offset.x.0 * scale).round() as i16,
+                (image.offset.y.0 * scale).round() as i16,
+            ),
+        };
+        DragIcon::new(xcb, root, visual.id, picture)
+    }
+}
+
 impl X11WindowStatePtr {
     pub fn drag_out_pressed(&self) {
         let mut state = self.state.borrow_mut();
@@ -1929,10 +1950,11 @@ impl PlatformWindow for X11Window {
         .log_err();
     }
 
-    fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>) {
+    fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>, image: Option<crate::DragImage>) {
         let mut state = self.0.state.borrow_mut();
         if state.press_root.is_some() {
-            state.drag_out = Some(DragOut::new(&paths));
+            let icon = image.and_then(|image| self.drag_icon(&state, &image));
+            state.drag_out = Some(DragOut::new(&paths, icon));
         }
     }
 

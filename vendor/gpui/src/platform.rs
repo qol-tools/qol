@@ -542,7 +542,7 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn request_decorations(&self, _decorations: WindowDecorations) {}
     fn show_window_menu(&self, _position: Point<Pixels>) {}
     fn start_window_move(&self) {}
-    fn offer_dragged_paths(&self, _paths: Vec<std::path::PathBuf>) {}
+    fn offer_dragged_paths(&self, _paths: Vec<std::path::PathBuf>, _image: Option<crate::DragImage>) {}
     fn start_window_resize(&self, _edge: ResizeEdge) {}
     fn window_decorations(&self) -> Decorations {
         Decorations::Server

@@ -815,6 +815,13 @@ impl Frame {
     }
 }
 
+#[allow(missing_docs)]
+#[derive(Clone)]
+pub struct DragImage {
+    pub image: Arc<RenderImage>,
+    pub offset: Point<Pixels>,
+}
+
 /// Holds the state for a specific window.
 pub struct Window {
     pub(crate) handle: AnyWindowHandle,
@@ -1789,8 +1796,8 @@ impl Window {
     }
 
     #[allow(missing_docs)]
-    pub fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>) {
-        self.platform_window.offer_dragged_paths(paths)
+    pub fn offer_dragged_paths(&self, paths: Vec<std::path::PathBuf>, image: Option<DragImage>) {
+        self.platform_window.offer_dragged_paths(paths, image)
     }
 
     /// Tells the compositor to take control of window movement (Wayland and X11)

@@ -77,6 +77,23 @@ pub(super) fn entry_pictogram(entry: &Entry, size: PictogramSize, selected: bool
 }
 
 pub(super) fn lifted_pictogram(entry: &Entry, size: f32) -> AnyElement {
+    let Lifted { name, markup, ink } = lifted_source(entry);
+    Pictogram {
+        name,
+        markup,
+        size,
+        ink,
+    }
+    .into_any_element()
+}
+
+pub(super) struct Lifted {
+    pub name: String,
+    pub markup: String,
+    pub ink: u32,
+}
+
+pub(super) fn lifted_source(entry: &Entry) -> Lifted {
     let kit = kit();
     let pane = kit.grounds.pane;
     let (name, markup, ink) = if entry.opens_as_folder {
@@ -94,13 +111,11 @@ pub(super) fn lifted_pictogram(entry: &Entry, size: f32) -> AnyElement {
             pane.soft,
         )
     };
-    Pictogram {
+    Lifted {
         name: format!("{name}-lifted-{:06x}", pane.bg),
         markup: lifted(&markup, pane.bg),
-        size,
         ink,
     }
-    .into_any_element()
 }
 
 pub(super) fn rail_pictogram(glyph: RailGlyph, selected: bool) -> AnyElement {

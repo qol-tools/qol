@@ -1,12 +1,13 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use http_client::Url;
 use util::ResultExt;
 use x11rb::{
     connection::Connection,
     protocol::xproto::{
-        self, AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, PropMode,
-        SelectionNotifyEvent, SelectionRequestEvent,
+        self, AtomEnum, ClientMessageEvent, ColormapAlloc, ConfigureWindowAux,
+        ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, ImageFormat, PropMode,
+        SelectionNotifyEvent, SelectionRequestEvent, StackMode, WindowClass,
     },
     wrapper::ConnectionExt as _,
     xcb_ffi::XCBConnection,
@@ -15,12 +16,14 @@ use x11rb::{
 use super::XcbAtoms;
 
 const XDND_VERSION: u32 = 5;
+const ICON_DEPTH: u8 = 32;
 
 pub(crate) struct DragOut {
     uri_list: String,
     owns_selection: bool,
     target: Option<Target>,
     dropped: bool,
+    icon: Option<DragIcon>,
 }
 
 struct Target {
@@ -47,7 +50,7 @@ pub(crate) struct Link<'a> {
 }
 
 impl DragOut {
-    pub fn new(paths: &[PathBuf]) -> Self {
+    pub fn new(paths: &[PathBuf], icon: Option<DragIcon>) -> Self {
         let uri_list = paths
             .iter()
             .filter_map(|path| Url::from_file_path(path).ok())
@@ -59,6 +62,7 @@ impl DragOut {
             owns_selection: false,
             target: None,
             dropped: false,
+            icon,
         }
     }
 
@@ -71,8 +75,14 @@ impl DragOut {
             return;
         }
         if inside {
+            if let Some(icon) = self.icon.as_mut() {
+                icon.hide();
+            }
             self.leave(link);
             return;
+        }
+        if let Some(icon) = self.icon.as_mut() {
+            icon.follow(position.root_x, position.root_y);
         }
         if !self.owns_selection {
             link.xcb
@@ -133,6 +143,7 @@ impl DragOut {
     }
 
     pub fn release(&mut self, link: &Link, time: u32) -> bool {
+        self.icon = None;
         match self.target.as_ref() {
             Some(target) if target.accepted && !self.dropped => {
                 send(
@@ -167,6 +178,130 @@ impl DragOut {
             );
         }
     }
+}
+
+pub(crate) struct DragIcon {
+    xcb: Rc<XCBConnection>,
+    window: xproto::Window,
+    pixmap: xproto::Pixmap,
+    colormap: xproto::Colormap,
+    offset: (i16, i16),
+    shown: bool,
+}
+
+pub(crate) struct Picture<'a> {
+    pub bgra: &'a [u8],
+    pub width: u16,
+    pub height: u16,
+    pub offset: (i16, i16),
+}
+
+impl DragIcon {
+    pub fn new(
+        xcb: &Rc<XCBConnection>,
+        root: xproto::Window,
+        visual: xproto::Visualid,
+        picture: Picture,
+    ) -> Option<Self> {
+        let Picture {
+            bgra,
+            width,
+            height,
+            offset,
+        } = picture;
+        if width == 0 || height == 0 || bgra.len() != width as usize * height as usize * 4 {
+            return None;
+        }
+        let colormap = xcb.generate_id().log_err()?;
+        xcb.create_colormap(ColormapAlloc::NONE, colormap, root, visual)
+            .log_err()?;
+        let pixmap = xcb.generate_id().log_err()?;
+        xcb.create_pixmap(ICON_DEPTH, pixmap, root, width, height)
+            .log_err()?;
+        let gc = xcb.generate_id().log_err()?;
+        xcb.create_gc(gc, pixmap, &CreateGCAux::new()).log_err()?;
+        xcb.put_image(
+            ImageFormat::Z_PIXMAP,
+            pixmap,
+            gc,
+            width,
+            height,
+            0,
+            0,
+            0,
+            ICON_DEPTH,
+            &premultiplied(bgra),
+        )
+        .log_err()?;
+        xcb.free_gc(gc).log_err();
+        let window = xcb.generate_id().log_err()?;
+        xcb.create_window(
+            ICON_DEPTH,
+            window,
+            root,
+            0,
+            0,
+            width,
+            height,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            visual,
+            &CreateWindowAux::new()
+                .background_pixmap(pixmap)
+                .border_pixel(0)
+                .override_redirect(1)
+                .colormap(colormap),
+        )
+        .log_err()?;
+        Some(Self {
+            xcb: xcb.clone(),
+            window,
+            pixmap,
+            colormap,
+            offset,
+            shown: false,
+        })
+    }
+
+    fn follow(&mut self, root_x: i16, root_y: i16) {
+        let aux = ConfigureWindowAux::new()
+            .x(i32::from(root_x) + i32::from(self.offset.0))
+            .y(i32::from(root_y) + i32::from(self.offset.1))
+            .stack_mode(StackMode::ABOVE);
+        self.xcb.configure_window(self.window, &aux).log_err();
+        if !self.shown {
+            self.xcb.map_window(self.window).log_err();
+            self.shown = true;
+        }
+        self.xcb.flush().log_err();
+    }
+
+    fn hide(&mut self) {
+        if self.shown {
+            self.xcb.unmap_window(self.window).log_err();
+            self.xcb.flush().log_err();
+            self.shown = false;
+        }
+    }
+}
+
+impl Drop for DragIcon {
+    fn drop(&mut self) {
+        self.xcb.destroy_window(self.window).log_err();
+        self.xcb.free_pixmap(self.pixmap).log_err();
+        self.xcb.free_colormap(self.colormap).log_err();
+        self.xcb.flush().log_err();
+    }
+}
+
+fn premultiplied(bgra: &[u8]) -> Vec<u8> {
+    bgra.chunks_exact(4)
+        .flat_map(|pixel| {
+            let alpha = u16::from(pixel[3]);
+            let scale = |channel: u8| ((u16::from(channel) * alpha + 127) / 255) as u8;
+            [scale(pixel[0]), scale(pixel[1]), scale(pixel[2]), pixel[3]]
+        })
+        .collect()
 }
 
 pub(crate) fn answer(link: &Link, request: &SelectionRequestEvent, uri_list: Option<&str>) {
@@ -301,4 +436,22 @@ fn xdnd_proxy(link: &Link, window: xproto::Window) -> Option<xproto::Window> {
         .ok()?
         .value32()?
         .next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::premultiplied;
+
+    #[test]
+    fn premultiplies_each_channel_by_alpha_and_keeps_alpha() {
+        let cases = [
+            ([200, 100, 50, 255], [200, 100, 50, 255]),
+            ([200, 100, 50, 0], [0, 0, 0, 0]),
+            ([255, 255, 255, 128], [128, 128, 128, 128]),
+            ([10, 20, 30, 51], [2, 4, 6, 51]),
+        ];
+        for (pixel, expected) in cases {
+            assert_eq!(premultiplied(&pixel), expected, "{pixel:?}");
+        }
+    }
 }
