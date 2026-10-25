@@ -40,7 +40,7 @@ pub(super) fn probe(session: &Session, role: Role) -> Report {
         triggers,
         kept: Vec::new(),
         restore: Restore::Exact,
-        lifetimes: vec![Lifetime::PortableSession, Lifetime::ResidentPolicy],
+        lifetimes: vec![Lifetime::PortableSession],
     };
     match answer(session, role) {
         Answer::Route(route) => report(State::Silent, Owner::Named(route.owner), route.keys),
@@ -202,10 +202,7 @@ mod tests {
             assert_eq!(report.owner, Owner::Named(owner.to_string()));
             assert_eq!(report.triggers, vec![key.to_string()]);
             assert_eq!(report.restore, Restore::Exact);
-            assert_eq!(
-                report.lifetimes,
-                vec![Lifetime::PortableSession, Lifetime::ResidentPolicy]
-            );
+            assert_eq!(report.lifetimes, vec![Lifetime::PortableSession]);
         }
     }
 

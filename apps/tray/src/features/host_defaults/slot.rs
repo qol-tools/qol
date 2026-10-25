@@ -212,7 +212,7 @@ pub(super) fn claim_slot(
         return Err(error.context("saving the hotkey bindings"));
     }
     if let Err(error) = context.host.free(keys) {
-        if let Err(undo) = release_slot(context, declaration.role, keys) {
+        if let Err(undo) = release_slot(context, declaration.role, keys, &[]) {
             log::warn!("host defaults: could not undo a refused slot claim: {undo:#}");
         }
         return Err(error);
@@ -221,10 +221,32 @@ pub(super) fn claim_slot(
     Ok(())
 }
 
+pub(super) fn disable_declared(
+    bindings: &mut [HotkeyBinding],
+    declarations: &[Declaration],
+    route_keys: &[String],
+    normalize: impl Fn(&str) -> Option<String>,
+) -> usize {
+    let routed: BTreeSet<String> = route_keys.iter().filter_map(|key| normalize(key)).collect();
+    let mut disabled = 0;
+    for binding in bindings.iter_mut().filter(|binding| binding.enabled) {
+        let declared = declarations.iter().any(|declaration| {
+            declaration.uid == binding.plugin_uid && declaration.action == binding.action
+        });
+        let on_route = normalize(&binding.key).is_some_and(|key| routed.contains(&key));
+        if declared && on_route {
+            binding.enabled = false;
+            disabled += 1;
+        }
+    }
+    disabled
+}
+
 pub(super) fn release_slot(
     context: &SlotContext<'_>,
     role: Role,
     route_keys: &[String],
+    disable: &[Declaration],
 ) -> Result<ReleaseOutcome> {
     let records = hotkey_records(context.ledger, role)?;
     let mut config = context
@@ -240,7 +262,10 @@ pub(super) fn release_slot(
         expected.as_ref(),
     );
     config.hotkeys = undo.kept;
-    if undo.removed > 0 {
+    let disabled = disable_declared(&mut config.hotkeys, disable, route_keys, |combo| {
+        context.host.normalize(combo)
+    });
+    if undo.removed > 0 || disabled > 0 {
         context
             .layers
             .save(&config)
@@ -256,6 +281,9 @@ pub(super) fn release_slot(
         .collect();
     context.host.restore(&combos);
     context.host.reload();
+    if records.is_empty() && disabled > 0 {
+        return Ok(ReleaseOutcome::Restored);
+    }
     Ok(outcome_of(&records, undo.removed, undo.user_edited))
 }
 
@@ -574,7 +602,7 @@ mod tests {
             Some("qol-shot".to_string())
         );
 
-        let outcome = release_slot(&context, Role::SlotScreenshot, &route).expect("release");
+        let outcome = release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("release");
 
         assert!(matches!(outcome, ReleaseOutcome::Restored));
         assert!(layers.load().expect("load").hotkeys.is_empty());
@@ -632,9 +660,84 @@ mod tests {
         layers.save(&config).expect("save");
 
         let outcome =
-            release_slot(&context, Role::SlotScreenshot, &keys(&["Print"])).expect("release");
+            release_slot(&context, Role::SlotScreenshot, &keys(&["Print"]), &[]).expect("release");
 
         assert!(matches!(outcome, ReleaseOutcome::LeftUserChange));
         assert_eq!(layers.load().expect("load").hotkeys.len(), 1);
+    }
+
+    fn seed_own_binding(layers: &HotkeyLayers) {
+        let mut config = layers.load().expect("load");
+        config.hotkeys.push(binding(
+            "shot-default",
+            "Print",
+            "uid-shot",
+            "screenshot",
+            true,
+        ));
+        layers.save(&config).expect("save");
+    }
+
+    #[test]
+    fn a_user_release_disables_the_plugins_own_binding_on_the_route() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        let outcome = release_slot(
+            &context,
+            Role::SlotScreenshot,
+            &keys(&["Print"]),
+            &[declaration()],
+        )
+        .expect("release");
+
+        assert!(matches!(outcome, ReleaseOutcome::Restored));
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].enabled);
+    }
+
+    #[test]
+    fn a_session_end_release_leaves_the_plugins_own_binding_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        release_slot(&context, Role::SlotScreenshot, &keys(&["Print"]), &[]).expect("release");
+
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].enabled);
+    }
+
+    #[test]
+    fn disabling_touches_only_declared_bindings_on_a_route_key() {
+        let mut bindings = vec![
+            binding("own", "PRINT", "uid-shot", "screenshot", true),
+            binding("other-key", "Ctrl+P", "uid-shot", "screenshot", true),
+            binding("other-action", "Print", "uid-shot", "record", true),
+            binding("other-plugin", "Print", "uid-other", "screenshot", true),
+        ];
+
+        let disabled = disable_declared(&mut bindings, &[declaration()], &keys(&["Print"]), lower);
+
+        let enabled: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
+        assert_eq!(disabled, 1);
+        assert_eq!(enabled, vec![false, true, true, true]);
     }
 }

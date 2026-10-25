@@ -48,7 +48,7 @@ fn reclaim_intended_roles() {
     let ledger = store::ledger().ok();
     let results = intent::reclaim(
         &host,
-        store::current_lifetime(),
+        store::lifetime_for_role,
         &intents,
         |plugin_id, role| catalog::load_plugin(plugin_id)?.declaration_for(role),
         |declaration| service::is_held(&host, ledger.as_ref(), declaration),
@@ -112,7 +112,7 @@ pub(super) fn release_portable<H: HostDefaults>(env: &Env<'_, H>) -> Vec<String>
         }
     };
     for role in portable_slot_roles(&records) {
-        match claim::release_slot_role(env, role) {
+        match claim::release_slot_role(env, role, &[]) {
             Ok(outcome) => log::info!(
                 "[host-defaults] released portable claim {}: {}",
                 role.id(),

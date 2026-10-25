@@ -84,16 +84,22 @@ fn release_other_holder<H: HostDefaults>(
 ) -> Result<()> {
     let holder = env.ledger.holder(declaration.role)?;
     match holder {
-        Some(holder) if holder != declaration.plugin_id => release(env, declaration.role).map(drop),
+        Some(holder) if holder != declaration.plugin_id => {
+            release(env, declaration.role, &[]).map(drop)
+        }
         Some(_) | None => Ok(()),
     }
 }
 
-pub(super) fn release<H: HostDefaults>(env: &Env<'_, H>, role: Role) -> Result<ReleaseOutcome> {
+pub(super) fn release<H: HostDefaults>(
+    env: &Env<'_, H>,
+    role: Role,
+    disable: &[Declaration],
+) -> Result<ReleaseOutcome> {
     if !role.is_slot() {
         return env.host.release(role, env.ledger);
     }
-    let outcome = release_slot_role(env, role)?;
+    let outcome = release_slot_role(env, role, disable)?;
     if has_records(env.ledger, role)? {
         env.host.release(role, env.ledger)?;
     }
@@ -103,13 +109,14 @@ pub(super) fn release<H: HostDefaults>(env: &Env<'_, H>, role: Role) -> Result<R
 pub(super) fn release_slot_role<H: HostDefaults>(
     env: &Env<'_, H>,
     role: Role,
+    disable: &[Declaration],
 ) -> Result<ReleaseOutcome> {
     let keys = env
         .host
         .slot_route(role)
         .map(|route| route.keys)
         .unwrap_or_default();
-    slot::release_slot(&env.slot_context(), role, &keys)
+    slot::release_slot(&env.slot_context(), role, &keys, disable)
 }
 
 fn has_records(ledger: &Ledger, role: Role) -> Result<bool> {

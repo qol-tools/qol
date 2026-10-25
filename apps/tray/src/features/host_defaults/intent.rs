@@ -76,7 +76,7 @@ pub(super) enum Reclaim {
 
 pub(super) fn reclaim<H: HostDefaults>(
     host: &H,
-    lifetime: Lifetime,
+    lifetime_of: impl Fn(Role) -> Lifetime,
     intents: &Intents,
     declaration_of: impl Fn(&str, Role) -> Option<Declaration>,
     is_held: impl Fn(&Declaration) -> bool,
@@ -88,7 +88,7 @@ pub(super) fn reclaim<H: HostDefaults>(
         .map(|(role_id, plugin_id)| {
             let outcome = reclaim_one(
                 host,
-                lifetime,
+                &lifetime_of,
                 role_id,
                 plugin_id,
                 &declaration_of,
@@ -102,7 +102,7 @@ pub(super) fn reclaim<H: HostDefaults>(
 
 fn reclaim_one<H: HostDefaults>(
     host: &H,
-    lifetime: Lifetime,
+    lifetime_of: &impl Fn(Role) -> Lifetime,
     role_id: &str,
     plugin_id: &str,
     declaration_of: &impl Fn(&str, Role) -> Option<Declaration>,
@@ -119,7 +119,7 @@ fn reclaim_one<H: HostDefaults>(
         return Reclaim::AlreadyHeld;
     }
     let report = host.probe(role);
-    if let Err(error) = claim::admit(role, &report.state, &report.lifetimes, lifetime) {
+    if let Err(error) = claim::admit(role, &report.state, &report.lifetimes, lifetime_of(role)) {
         return Reclaim::Refused(format!("{error:#}"));
     }
     match claim(&declaration) {
@@ -214,7 +214,7 @@ mod tests {
     ) -> Vec<(String, Reclaim)> {
         reclaim(
             host,
-            Lifetime::PortableSession,
+            |_| Lifetime::PortableSession,
             intents,
             installed,
             |_| held,
@@ -360,7 +360,7 @@ mod tests {
         let claimed = RefCell::new(Vec::new());
         let results = reclaim(
             &FakeHost::allowing(Lifetime::PortableSession),
-            Lifetime::PortableSession,
+            |_| Lifetime::PortableSession,
             &intents(&[("slot.screenshot", "qol-gone")]),
             |_, _| None,
             |_| false,
@@ -390,7 +390,7 @@ mod tests {
     fn a_claim_the_host_rejects_is_reported_and_the_rest_still_run() {
         let results = reclaim(
             &FakeHost::allowing(Lifetime::PortableSession),
-            Lifetime::PortableSession,
+            |_| Lifetime::PortableSession,
             &intents(&[
                 ("folder.open", "qol-explorer"),
                 ("slot.screenshot", "qol-shot"),

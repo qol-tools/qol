@@ -24,7 +24,7 @@ pub(crate) fn row_for_plugin(plugin_id: &str) -> Option<PluginRow> {
     let ledger = store::ledger().ok();
     let held = is_held(&host, ledger.as_ref(), &declaration);
     let report = host.probe(declaration.role);
-    let text = row_text(&report, held, store::current_lifetime())?;
+    let text = row_text(&report, held, store::lifetime_for_role(declaration.role))?;
     Some(PluginRow {
         label: text.label,
         description: text.description,
@@ -89,7 +89,7 @@ pub(super) fn claim_on_host(declaration: &Declaration) -> Result<()> {
         layers: &layers,
         slots: &LiveSlots,
         exec: std::env::current_exe().context("locating the qol-tray binary")?,
-        lifetime: store::current_lifetime(),
+        lifetime: store::lifetime_for_role(declaration.role),
     };
     claim::claim(&env, declaration)
 }
@@ -104,9 +104,13 @@ fn release_on_host(role: Role) -> Result<ReleaseOutcome> {
         layers: &layers,
         slots: &LiveSlots,
         exec: std::path::PathBuf::new(),
-        lifetime: store::current_lifetime(),
+        lifetime: store::lifetime_for_role(role),
     };
-    claim::release(&env, role)
+    let declared: Vec<Declaration> = catalog::installed()
+        .iter()
+        .filter_map(|plugin| plugin.declaration_for(role))
+        .collect();
+    claim::release(&env, role, &declared)
 }
 
 pub(crate) fn row_json(row: &PluginRow) -> serde_json::Value {
@@ -176,6 +180,7 @@ fn slot_is_shadowed(host: &impl HostDefaults, declaration: &Declaration) -> bool
 mod tests {
     use super::*;
     use crate::plugins::PluginUid;
+    use qol_host_defaults::{Lifetime, Owner, Report, Restore, State};
 
     fn declaration() -> Declaration {
         Declaration {
@@ -247,6 +252,28 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(remembered(&store).len(), 1);
+    }
+
+    #[test]
+    fn a_slot_row_on_a_resident_host_says_it_goes_back() {
+        let report = Report {
+            role: Role::SlotWindowSwitcher,
+            state: State::Silent,
+            owner: Owner::Named("Cinnamon".to_string()),
+            triggers: vec!["Alt+Tab".to_string()],
+            kept: Vec::new(),
+            restore: Restore::Exact,
+            lifetimes: vec![Lifetime::PortableSession],
+        };
+        let lifetime = store::lifetime_for_role(report.role);
+
+        let row = row_text(&report, false, lifetime).expect("row");
+
+        assert_eq!(row.control, RowControl::Switch { on: false });
+        assert_eq!(
+            row.description,
+            "Takes over: Alt+Tab. Goes back when qol stops."
+        );
     }
 
     #[test]
