@@ -1,6 +1,6 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{canvas, div, point, px, rgb, rgba, PathBuilder};
+use gpui::{canvas, div, point, px, rgb, rgba, PathBuilder, SharedString};
 use qol_theme::TextStyle;
 
 use crate::deck::with_alpha;
@@ -40,13 +40,6 @@ impl SliderStyle {
         }
     }
 
-    fn value_slot(self) -> Option<f32> {
-        match self {
-            Self::Compact => None,
-            Self::Wide | Self::Level => Some(VALUE_SLOT),
-        }
-    }
-
     fn track_height(self) -> f32 {
         match self {
             Self::Compact => qol_theme::HEIGHT_INLINE,
@@ -65,7 +58,6 @@ pub(in crate::settings_panel) struct NumberCue {
 }
 
 const WIDE_THUMB: f32 = 16.0;
-const VALUE_SLOT: f32 = 80.0;
 const THUMB_RING: f32 = 3.0;
 const THUMB_HALO: f32 = 6.0;
 const CARET_WIDTH: f32 = 2.0;
@@ -304,9 +296,8 @@ fn nudge_chevron(points_right: bool, ink: u32, shown: bool) -> gpui::Div {
 
 fn number_value(
     text: NumberText,
-    unit: Option<&'static str>,
+    unit: Option<SharedString>,
     cue: &NumberCue,
-    slotted: bool,
     ground: Ground,
     hover: Option<Ground>,
     kit: Kit,
@@ -329,17 +320,12 @@ fn number_value(
                 .child(ground_text(div().text(TextStyle::Value), rgba(0), None).child(text.widest))
                 .child(shown.child(text.shown)),
         )
-        .when(caret || slotted, |digits| {
-            let caret_bar = div().flex_none().w(px(CARET_WIDTH)).h(px(CARET_HEIGHT));
-            digits.child(if caret {
-                ground_bg(
-                    caret_bar,
-                    rgb(ground.ink),
-                    hover.map(|hover| rgb(hover.ink)),
-                )
-            } else {
-                caret_bar
-            })
+        .when(caret, |digits| {
+            digits.child(ground_bg(
+                div().flex_none().w(px(CARET_WIDTH)).h(px(CARET_HEIGHT)),
+                rgb(ground.ink),
+                hover.map(|hover| rgb(hover.ink)),
+            ))
         });
     let faint = |style: TextStyle| {
         ground_text(
@@ -353,16 +339,11 @@ fn number_value(
         (None, Some(unit)) => Some(faint(TextStyle::Detail).child(unit)),
         (None, None) => None,
     };
-    let unit_gap = if slotted {
-        qol_theme::SPACE_TIGHT
-    } else {
-        qol_theme::SPACE_INSET
-    };
     div()
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(unit_gap))
+        .gap(px(qol_theme::SPACE_INSET))
         .child(digits)
         .children(after)
 }
@@ -408,7 +389,7 @@ fn scrub_field(
 
 pub(in crate::settings_panel) fn number_field(
     text: NumberText,
-    unit: Option<&'static str>,
+    unit: Option<SharedString>,
     track: Option<(f32, SliderStyle)>,
     cue: NumberCue,
     interact: impl FnOnce(gpui::Div) -> gpui::Div,
@@ -417,8 +398,7 @@ pub(in crate::settings_panel) fn number_field(
 ) -> gpui::Div {
     let ground = row.rest(kit);
     let hover = row.hover(kit);
-    let slot = track.and_then(|(_, style)| style.value_slot());
-    let value = number_value(text, unit, &cue, slot.is_some(), ground, hover, kit);
+    let value = number_value(text, unit, &cue, ground, hover, kit);
     let gap = track.map_or(qol_theme::SPACE_INSET, |_| qol_theme::SPACE_CELL);
     let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
@@ -453,7 +433,6 @@ pub(in crate::settings_panel) fn number_field(
         .h(px(qol_theme::HEIGHT_INLINE))
         .px(px(qol_theme::SPACE_INSET))
         .rounded(px(qol_theme::RADIUS_CONTROL))
-        .when_some(slot, |chip, slot| chip.min_w(px(slot)).justify_end())
         .child(value)
         .when(cue.editing, |chip| chip.shadow(kit.focus_ring(ground)));
     cell.child(ground_bg(
@@ -495,16 +474,6 @@ mod tests {
                 thumb_left(style.track_width()) + WIDE_THUMB,
                 style.track_width() + reach
             );
-        }
-    }
-
-    #[test]
-    fn every_thumbed_slider_shares_one_track_and_value_slot_so_sibling_tracks_line_up() {
-        assert_eq!(SliderStyle::Compact.value_slot(), None);
-        for style in [SliderStyle::Wide, SliderStyle::Level] {
-            assert_eq!(style.value_slot(), Some(VALUE_SLOT));
-            assert_eq!(style.track_width(), SliderStyle::Wide.track_width());
-            assert_eq!(style.thumb_reach(), SliderStyle::Wide.thumb_reach());
         }
     }
 

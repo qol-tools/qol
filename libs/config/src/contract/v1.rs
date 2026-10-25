@@ -185,6 +185,8 @@ pub struct FieldSpec {
     #[serde(default)]
     pub variant: Option<String>,
     #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
     pub row_label: Option<String>,

@@ -3589,7 +3589,7 @@ impl SettingsPanelView {
                 shown,
                 selected: self.edit_selects_all(index),
             },
-            number_unit(&self.level().rows[index].id),
+            number_unit(&self.level().rows[index]),
             track,
             cue,
             interact,
@@ -5473,7 +5473,17 @@ fn text_or_placeholder(value: &str, placeholder: Option<&str>) -> String {
     placeholder.unwrap_or("Empty").to_string()
 }
 
-fn number_unit(field_id: &str) -> Option<&'static str> {
+fn number_unit(row: &Row) -> Option<SharedString> {
+    if let RowControl::Number {
+        unit: Some(unit), ..
+    } = &row.control
+    {
+        return Some(SharedString::from(unit.clone()));
+    }
+    field_id_unit(&row.id).map(SharedString::from)
+}
+
+fn field_id_unit(field_id: &str) -> Option<&'static str> {
     if field_id.ends_with("_percent") {
         return Some("%");
     }
@@ -6305,6 +6315,7 @@ mod tests {
                 step: None,
                 live: None,
                 level: None,
+                unit: None,
             },
         };
         let dynamic = Row {
@@ -7844,6 +7855,7 @@ active_value_from = "active"
                 value_from: None,
             }),
             level: None,
+            unit: None,
         };
         row
     }
@@ -8105,8 +8117,20 @@ active_value_from = "active"
             ("count", None),
         ];
         for (field, expected) in unit_cases {
-            assert_eq!(number_unit(field), expected, "field: {field}");
+            assert_eq!(field_id_unit(field), expected, "field: {field}");
         }
+    }
+
+    #[test]
+    fn a_declared_unit_wins_over_the_field_id_suffix() {
+        let mut row = number_row(None, false);
+        assert_eq!(number_unit(&row), None);
+        row.id = "delay_ms".into();
+        assert_eq!(number_unit(&row), Some("ms".into()));
+        if let RowControl::Number { unit, .. } = &mut row.control {
+            *unit = Some("/s".into());
+        }
+        assert_eq!(number_unit(&row), Some("/s".into()));
     }
 
     #[test]

@@ -80,6 +80,8 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -213,6 +215,7 @@ pub fn resolve_config_for(
             level_query: field.level_query.clone(),
             level_value_from: field.level_value_from.clone(),
             variant: field.variant.clone(),
+            unit: field.unit.clone(),
             query: field.query.clone(),
             stream: field.stream.clone(),
             row_label: field.row_label.clone(),
@@ -764,6 +767,37 @@ level_value_from = "output"
         assert_eq!(field.variant.as_deref(), Some("level_slider"));
         assert_eq!(field.level_query.as_deref(), Some("levels"));
         assert_eq!(field.level_value_from.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn the_resolved_field_carries_the_declared_unit() {
+        let spec = parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.repeat_delay]
+type = "number"
+default = 500
+min = 100
+max = 1000
+unit = "ms"
+
+[field.count]
+type = "number"
+default = 3
+"#,
+        )
+        .unwrap();
+        let resolved = resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let unit = |id: &str| {
+            resolved
+                .fields
+                .iter()
+                .find(|field| field.id == id)
+                .and_then(|field| field.unit.clone())
+        };
+        assert_eq!(unit("repeat_delay").as_deref(), Some("ms"));
+        assert_eq!(unit("count"), None);
     }
 
     #[test]

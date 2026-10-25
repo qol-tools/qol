@@ -211,6 +211,7 @@ pub(super) enum RowControl {
         step: Option<f64>,
         live: Option<LiveQuery>,
         level: Option<NumberLevel>,
+        unit: Option<String>,
     },
     Text(String),
     TextList(Vec<String>),
@@ -582,6 +583,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                 step: field.number.step,
                 live: live_query(field),
                 level: number_level(field),
+                unit: field.unit.clone(),
             },
             _ => unsupported_mismatch(field),
         },
@@ -2788,6 +2790,7 @@ query = "modes"
                     step: Some(1.0),
                     live: None,
                     level: None,
+                    unit: None,
                 },
             },
         ];
@@ -2969,6 +2972,7 @@ level_value_from = "output"
                 step: Some(1.0),
                 live: None,
                 level: None,
+                unit: None,
             };
             assert_eq!(row_value_json(&control), Some(expected), "value: {value}");
         }
