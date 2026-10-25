@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::SystemTime;
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder;
@@ -24,7 +26,12 @@ const PLAY_GLYPH: f32 = 12.0;
 const PLAY_GLYPH_SMALL: f32 = 8.0;
 const SMALL_FRAME: f32 = 48.0;
 
-type Key = (PathBuf, Flavor);
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct Key {
+    path: PathBuf,
+    flavor: Flavor,
+    modified: Option<SystemTime>,
+}
 
 #[derive(Clone)]
 pub(super) struct Shot {
@@ -71,18 +78,22 @@ impl Previews {
             FileKind::Video => true,
             _ => return None,
         };
-        self.shot(&entry.path, Flavor::for_edge(edge))
-            .map(|shot| (shot, video))
+        let key = Key {
+            path: entry.path.clone(),
+            flavor: Flavor::for_edge(edge),
+            modified: entry.modified,
+        };
+        self.shot(key).map(|shot| (shot, video))
     }
 
-    fn shot(&self, path: &Path, flavor: Flavor) -> Option<Shot> {
-        let key = (path.to_path_buf(), flavor);
+    fn shot(&self, key: Key) -> Option<Shot> {
         let mut shared = lock(&self.shared);
         match shared.slots.get(&key) {
             Some(Slot::Ready(shot)) => return Some(shot.clone()),
             Some(Slot::Waiting | Slot::Missing) => return None,
             None => {}
         }
+        forget_older(&mut shared, &key);
         shared.slots.insert(key.clone(), Slot::Waiting);
         shared.queue.push(key);
         if shared.queue.len() > QUEUE_LIMIT {
@@ -99,7 +110,14 @@ impl Previews {
                 });
             match spawned {
                 Ok(_) => shared.workers += 1,
-                Err(error) => log::warn!("previews will not load: {error}"),
+                Err(error) if shared.workers == 0 => {
+                    log::warn!("previews will not load: {error}");
+                    let stranded = std::mem::take(&mut shared.queue);
+                    for key in stranded {
+                        shared.slots.insert(key, Slot::Missing);
+                    }
+                }
+                Err(error) => log::warn!("previews load on fewer threads: {error}"),
             }
         }
         None
@@ -116,29 +134,48 @@ fn work(shared: &Mutex<Shared>, ready: &UnboundedSender<()>) {
             };
             key
         };
-        let slot = match thumbs::thumbnail(&key.0, key.1) {
-            Ok(image) => match thumbs::image_size(&image) {
-                Some((width, height)) => Slot::Ready(Shot {
-                    image,
-                    width: width as f32,
-                    height: height as f32,
-                }),
-                None => {
-                    log::debug!("unreadable preview {}", image.display());
-                    Slot::Missing
-                }
-            },
-            Err(error) => {
-                log::debug!("no preview for {}: {error}", key.0.display());
+        let slot = panic::catch_unwind(AssertUnwindSafe(|| make(&key.path, key.flavor)))
+            .unwrap_or_else(|_| {
+                log::warn!("making the preview of {} failed", key.path.display());
                 Slot::Missing
-            }
-        };
+            });
         let shown = matches!(slot, Slot::Ready(_));
-        lock(shared).slots.insert(key, slot);
+        if let Some(waiting) = lock(shared).slots.get_mut(&key) {
+            *waiting = slot;
+        }
         if shown {
             let _ = ready.unbounded_send(());
         }
     }
+}
+
+fn make(path: &Path, flavor: Flavor) -> Slot {
+    match thumbs::thumbnail(path, flavor) {
+        Ok(image) => match thumbs::image_size(&image) {
+            Some((width, height)) => Slot::Ready(Shot {
+                image,
+                width: width as f32,
+                height: height as f32,
+            }),
+            None => {
+                log::debug!("unreadable preview {}", image.display());
+                Slot::Missing
+            }
+        },
+        Err(error) => {
+            log::debug!("no preview for {}: {error}", path.display());
+            Slot::Missing
+        }
+    }
+}
+
+fn forget_older(shared: &mut Shared, key: &Key) {
+    shared
+        .slots
+        .retain(|known, _| known.path != key.path || known.flavor != key.flavor);
+    shared
+        .queue
+        .retain(|queued| queued.path != key.path || queued.flavor != key.flavor);
 }
 
 pub(super) fn framed(shot: Shot, video: bool, room: (f32, f32)) -> AnyElement {
@@ -194,7 +231,34 @@ fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
 
 #[cfg(test)]
 mod tests {
-    use super::fit;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::*;
+
+    fn key(path: &str, flavor: Flavor, seconds: u64) -> Key {
+        Key {
+            path: PathBuf::from(path),
+            flavor,
+            modified: Some(UNIX_EPOCH + Duration::from_secs(seconds)),
+        }
+    }
+
+    #[test]
+    fn a_changed_file_drops_its_old_preview_and_keeps_the_others() {
+        let mut shared = Shared::default();
+        let old = key("/v/a.webm", Flavor::Normal, 1);
+        let large = key("/v/a.webm", Flavor::Large, 1);
+        let other = key("/v/b.webm", Flavor::Normal, 1);
+        for known in [&old, &large, &other] {
+            shared.slots.insert(known.clone(), Slot::Missing);
+            shared.queue.push(known.clone());
+        }
+        forget_older(&mut shared, &key("/v/a.webm", Flavor::Normal, 2));
+        assert!(!shared.slots.contains_key(&old));
+        assert!(shared.slots.contains_key(&large));
+        assert!(shared.slots.contains_key(&other));
+        assert_eq!(shared.queue, [large, other]);
+    }
 
     #[test]
     fn a_preview_fits_its_room_keeping_its_shape_and_never_grows() {
