@@ -2,6 +2,7 @@ use gpui::{
     anchored, deferred, px, AnyElement, Context, InteractiveElement, IntoElement, MouseDownEvent,
     ParentElement, Pixels, Point, StatefulInteractiveElement, Styled,
 };
+use qol_apps::desktop_integration::OpenHandler;
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{OPACITY_DISABLED, SPACE_INSET};
 use qol_gpui::Key;
@@ -20,12 +21,14 @@ pub(super) enum Command {
     GoToPath,
     ToggleHidden,
     Settings,
+    OpenWith(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Owner {
     Folder,
     Pin(usize),
+    OpenWith,
 }
 
 #[derive(Clone, Debug)]
@@ -142,6 +145,22 @@ impl Menu {
         )
     }
 
+    pub(super) fn open_with(handlers: &[OpenHandler], at: Point<Pixels>) -> Self {
+        let items = handlers
+            .iter()
+            .enumerate()
+            .map(|(index, handler)| {
+                let label = if handler.is_default {
+                    format!("{} (default)", handler.name)
+                } else {
+                    handler.name.clone()
+                };
+                Item::Line(Line::new(Command::OpenWith(index), label, None))
+            })
+            .collect();
+        Self::new(Owner::OpenWith, at, items)
+    }
+
     pub(super) fn owner(&self) -> Owner {
         self.owner
     }
@@ -211,6 +230,8 @@ pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement 
 mod tests {
     use gpui::{point, px};
 
+    use qol_apps::desktop_integration::OpenHandler;
+
     use super::{Command, Item, Menu, Owner};
 
     fn at() -> gpui::Point<gpui::Pixels> {
@@ -269,6 +290,36 @@ mod tests {
         assert_eq!(label(&pinned).as_deref(), Some("Unpin Papers"));
         let loose = Menu::folder("Docs", None, false, at());
         assert_eq!(label(&loose).as_deref(), Some("Pin Docs"));
+    }
+
+    #[test]
+    fn an_open_with_menu_starts_on_the_marked_default() {
+        let handlers = [
+            OpenHandler {
+                id: "a.desktop".into(),
+                name: "Editor".into(),
+                is_default: true,
+            },
+            OpenHandler {
+                id: "b.desktop".into(),
+                name: "Viewer".into(),
+                is_default: false,
+            },
+        ];
+        let mut menu = Menu::open_with(&handlers, at());
+        let labels: Vec<&str> = menu
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line(line) => Some(line.label.as_str()),
+                Item::Rule => None,
+            })
+            .collect();
+        assert_eq!(labels, ["Editor (default)", "Viewer"]);
+        assert_eq!(menu.owner(), Owner::OpenWith);
+        assert_eq!(menu.selected_command(), Some(Command::OpenWith(0)));
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::OpenWith(1)));
     }
 
     #[test]

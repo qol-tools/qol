@@ -42,6 +42,9 @@ pub enum Action {
     Trash,
     Rename,
     NewFolder,
+    OpenWith,
+    OpenTerminal,
+    CopyPath,
     Undo,
     Moves,
     Resize(Resize),
@@ -87,6 +90,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("left", (false, false, true)) => Action::Range(Step::Left),
         ("right", (false, false, true)) => Action::Range(Step::Right),
         ("enter", (false, false, false)) => Action::Open,
+        ("enter", (false, false, true)) => Action::OpenWith,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
         ("right", (false, true, false)) => Action::Forward,
@@ -103,6 +107,8 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("delete", (false, false, false)) => Action::Trash,
         ("f2", (false, false, false)) => Action::Rename,
         ("n", (true, false, true)) => Action::NewFolder,
+        ("t", (true, false, true)) => Action::OpenTerminal,
+        ("c", (true, false, true)) => Action::CopyPath,
         ("z", (true, false, false)) => Action::Undo,
         ("j", (true, false, false)) => Action::Moves,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
@@ -147,6 +153,8 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Trash
                 | Action::Rename
                 | Action::NewFolder
+                | Action::OpenWith
+                | Action::CopyPath
         )
 }
 
@@ -289,6 +297,9 @@ mod tests {
             (plain("delete"), Action::Trash),
             (plain("f2"), Action::Rename),
             (key("n", secondary_shift, Some("N")), Action::NewFolder),
+            (key("t", secondary_shift, Some("T")), Action::OpenTerminal),
+            (key("c", secondary_shift, Some("C")), Action::CopyPath),
+            (key("enter", shift(), None), Action::OpenWith),
             (
                 key("z", Modifiers::secondary_key(), Some("z")),
                 Action::Undo,
@@ -348,7 +359,6 @@ mod tests {
             key("x", alt(), Some("x")),
             key("tab", Modifiers::none(), Some("\t")),
             key("f1", Modifiers::none(), None),
-            key("enter", shift(), None),
             key("escape", shift(), None),
         ];
         for keystroke in cases {

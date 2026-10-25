@@ -3,6 +3,7 @@ mod choices;
 mod clash;
 mod drag;
 mod grid;
+mod launch;
 mod list;
 mod menu;
 mod moves;
@@ -74,6 +75,7 @@ pub struct ExplorerView {
     pins: Vec<Pin>,
     places: Vec<Place>,
     menu: Option<Menu>,
+    open_with: Option<launch::OpenWith>,
     renaming: Option<Renaming>,
     pin_edits: u64,
     places_for: u64,
@@ -118,6 +120,7 @@ impl ExplorerView {
             pins: config.pins.clone(),
             places: Vec::new(),
             menu: None,
+            open_with: None,
             renaming: None,
             pin_edits: 1,
             places_for: 0,
@@ -348,6 +351,7 @@ impl ExplorerView {
                 self.toggle_hidden();
             }
             Command::Settings => self.open_settings(cx),
+            Command::OpenWith(index) => self.open_with_choice(index, cx),
         }
         cx.notify();
     }
@@ -757,6 +761,9 @@ impl ExplorerView {
             Action::Trash => self.browser.trash_picks(),
             Action::Rename => self.browser.rename_open(),
             Action::NewFolder => self.revealed(Browser::new_folder),
+            Action::OpenWith => self.open_with(cx),
+            Action::OpenTerminal => self.open_terminal_here(),
+            Action::CopyPath => self.copy_path(cx),
             Action::Undo => self.browser.undo(),
             Action::Moves => self.browser.toggle_moves(),
             Action::Nothing => false,

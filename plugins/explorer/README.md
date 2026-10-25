@@ -42,6 +42,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Shift with any of those | Pick the rows from where the range started to the cursor, so moving back shrinks it |
 | Click | Move the cursor to the row; with Shift pick the rows from the cursor to it, with Ctrl add it to the picks; a double click opens it |
 | Enter | Open the folder or file under the cursor |
+| Shift+Enter | Choose the app to open the file under the cursor with, the default first; with picks of the same type it opens them all. Linux only for now |
 | Backspace, Alt+Up | Go to the parent folder, cursor on the folder you left |
 | Alt+Left, Alt+Right | Back and forward |
 | Space | Pick or unpick the row under the cursor, or add a space to the letters typed when a name goes on with one |
@@ -52,6 +53,8 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Delete | Move the picks, or the row under the cursor, to the trash |
 | F2 | Rename the row under the cursor, with the name before its extension selected |
 | Ctrl+Shift+N | Make a new folder and rename it |
+| Ctrl+Shift+T | Open your terminal in the folder you are in |
+| Ctrl+Shift+C | Copy the full path of each pick, or of the row under the cursor, one per line |
 | Ctrl+Z | Undo the last copy, move, rename, trash or new folder, putting back anything a copy replaced |
 | Ctrl+J | Show or hide today's moves |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
