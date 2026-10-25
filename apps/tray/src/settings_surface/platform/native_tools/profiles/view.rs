@@ -548,9 +548,7 @@ impl ProfilesView {
             Some(Intent::CommitEdit) => self.new_profile(cx),
             _ if self.naming => {
                 let mut next = self.field.clone();
-                text_edit::apply_edit_key(&mut next, &event.keystroke, || {
-                    cx.read_from_clipboard().and_then(|item| item.text())
-                });
+                text_edit::apply_edit_key(&mut next, &event.keystroke, cx);
                 if next.text().len() <= MAX_NAME_BYTES {
                     self.field = next;
                 }
