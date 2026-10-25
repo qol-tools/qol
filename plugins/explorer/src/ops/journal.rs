@@ -18,6 +18,7 @@ pub enum Undo {
         to: PathBuf,
     },
     Remove(PathBuf),
+    RemoveFile(PathBuf),
     Restore(Vec<PathBuf>),
     Trash {
         copies: Vec<PathBuf>,
@@ -38,7 +39,7 @@ impl Journal {
         let arrived: Vec<PathBuf> = done.landed.iter().map(|(_, to)| to.clone()).collect();
         let restore = done.replaced.clone();
         match done.verb {
-            Verb::Copy => self.push(Undo::Trash {
+            Verb::Copy | Verb::Duplicate => self.push(Undo::Trash {
                 copies: arrived,
                 restore,
             }),
@@ -63,10 +64,15 @@ impl Journal {
         self.push(Undo::Remove(made));
     }
 
+    pub fn record_new_file(&mut self, made: PathBuf) {
+        self.push(Undo::RemoveFile(made));
+    }
+
     pub fn undo(&mut self) -> Option<Undo> {
         let last = self.entries.pop()?;
         match last {
             Undo::Remove(made) if !empty_folder(&made) => None,
+            Undo::RemoveFile(made) if !empty_file(&made) => None,
             other => Some(other),
         }
     }
@@ -101,6 +107,10 @@ fn renamed(landed: &[(PathBuf, PathBuf)]) -> Vec<(PathBuf, PathBuf)> {
         .filter(|(from, to)| from.file_name() != to.file_name())
         .filter_map(|(from, to)| Some((from.parent()?.join(to.file_name()?), from.clone())))
         .collect()
+}
+
+fn empty_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == 0)
 }
 
 fn empty_folder(path: &Path) -> bool {

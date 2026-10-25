@@ -79,7 +79,14 @@ pub(super) fn render(
                 .when(newer > 0, |sheet| sheet.child(hint(kit, newer)))
         })
         .when(clashes == 0, |sheet| sheet.child(div().flex_1()))
-        .child(buttons(kit, apply, blocked, cx))
+        .child(buttons(
+            kit,
+            apply,
+            blocked,
+            ExplorerView::cancel_clash,
+            ExplorerView::apply_clash,
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -261,23 +268,27 @@ fn hint(kit: Kit, newer: usize) -> AnyElement {
         .into_any_element()
 }
 
-fn buttons(
+type Press = fn(&mut ExplorerView, &mut Context<ExplorerView>);
+
+pub(super) fn buttons(
     kit: Kit,
     apply: &'static str,
     blocked: bool,
+    on_cancel: Press,
+    on_apply: Press,
     cx: &mut Context<ExplorerView>,
 ) -> AnyElement {
     let cancel = kit
         .button_ghost("Cancel")
         .id("explorer-clash-cancel")
         .cursor_pointer()
-        .on_click(cx.listener(|view, _, _window, cx| view.cancel_clash(cx)));
+        .on_click(cx.listener(move |view, _, _window, cx| on_cancel(view, cx)));
     let go = kit
         .button_inked(kit.grounds.pane)
         .id("explorer-clash-apply")
         .when(!blocked, |go| {
             go.cursor_pointer()
-                .on_click(cx.listener(|view, _, _window, cx| view.apply_clash(cx)))
+                .on_click(cx.listener(move |view, _, _window, cx| on_apply(view, cx)))
         })
         .when(blocked, |go| go.opacity(qol_gpui::theme::OPACITY_DISABLED))
         .child(apply);

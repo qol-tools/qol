@@ -42,6 +42,7 @@ fn present(verb: Verb) -> &'static str {
     match verb {
         Verb::Copy => "Copying",
         Verb::Move => "Moving",
+        Verb::Duplicate => "Duplicating",
     }
 }
 
@@ -49,6 +50,7 @@ fn past(verb: Verb) -> &'static str {
     match verb {
         Verb::Copy => "copied",
         Verb::Move => "moved",
+        Verb::Duplicate => "duplicated",
     }
 }
 
@@ -126,6 +128,25 @@ pub(super) fn arrived_note(
 
 pub(super) fn trashed_note(count: usize) -> String {
     format!("{count} moved to the trash. ctrl+z puts them back.")
+}
+
+pub(super) fn erased_note(count: usize) -> String {
+    format!(
+        "{} deleted for good.",
+        qol_gpui::plural(count, "item", "items")
+    )
+}
+
+pub(crate) fn erase_lines(paths: &[std::path::PathBuf]) -> Vec<String> {
+    let count = qol_gpui::plural(paths.len(), "item", "items");
+    let head = match paths {
+        [one] => format!("Delete {count} permanently? {}", name_of(one)),
+        _ => format!("Delete {count} permanently?"),
+    };
+    vec![
+        head,
+        "They skip the trash and this cannot be undone.".to_string(),
+    ]
 }
 
 pub(crate) fn short_note(survey: &Survey, volume: &str) -> Option<String> {
@@ -209,7 +230,7 @@ pub(super) fn done_detail(outcome: &Outcome) -> String {
             outcome.from_volume
         ),
         (Verb::Move, 0) => format!("Moved from {}.", outcome.from_folder),
-        (Verb::Copy, 0) => format!("Copied {}.", format_bytes(outcome.bytes)),
+        (Verb::Copy | Verb::Duplicate, 0) => format!("Copied {}.", format_bytes(outcome.bytes)),
         (_, _) => format!(
             "Copied {}, as you chose. The originals belong to another user and stay in {}.",
             format_bytes(outcome.bytes),

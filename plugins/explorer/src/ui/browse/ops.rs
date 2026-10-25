@@ -42,6 +42,7 @@ pub(super) enum Work {
     Surveyed(u64, io::Result<Survey>),
     Trashed(Done, bool),
     Restored(Vec<Failure>),
+    Erased(usize, Vec<Failure>),
 }
 
 struct Waiting {
@@ -58,6 +59,7 @@ pub(super) struct Ops {
     pub notice: Option<String>,
     pub rename: Option<super::ops_edit::Renaming>,
     pub rename_after: Option<PathBuf>,
+    pub erasing: Option<Vec<PathBuf>>,
     sender: Sender<Work>,
     work: Receiver<Work>,
     serial: u64,
@@ -89,6 +91,7 @@ impl Ops {
             notice: None,
             rename: None,
             rename_after: None,
+            erasing: None,
             sender,
             work,
             serial: 0,
@@ -188,6 +191,28 @@ impl Browser {
             sources,
             into,
         }
+    }
+
+    pub fn duplicate_picks(&mut self) -> bool {
+        if self.loading() || self.path.is_some() {
+            return false;
+        }
+        let into = self.folder().to_path_buf();
+        let sources: Vec<PathBuf> = self
+            .operands()
+            .into_iter()
+            .filter(|path| path.parent() == Some(into.as_path()))
+            .collect();
+        if sources.is_empty() {
+            return false;
+        }
+        self.ops.notice = None;
+        self.begin(Transfer {
+            verb: Verb::Duplicate,
+            sources,
+            into,
+        });
+        true
     }
 
     pub fn drop_hint(copy: bool) -> &'static str {
@@ -373,6 +398,14 @@ impl Browser {
                 }
             }
             Work::Trashed(done, journaled) => self.trashed(done, journaled),
+            Work::Erased(removed, failures) => {
+                if removed > 0 {
+                    self.picks.clear();
+                    self.ops.notice = Some(ops_text::erased_note(removed));
+                }
+                self.failure = ops_text::failure_text(&failures);
+                self.reload();
+            }
             Work::Restored(failures) => {
                 self.failure = ops_text::failure_text(&failures);
                 if failures.is_empty() {

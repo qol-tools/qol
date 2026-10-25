@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use super::copy::{copy_node, remove_all, same_content, same_link, Meter};
 use super::simple::plain;
 use super::{
-    free_name, next_job_id, restore, trash, Done, Failure, Job, JobId, Progress, Resolve, Survey,
-    Verb,
+    copy_name, free_name, next_job_id, restore, trash, Done, Failure, Job, JobId, Progress,
+    Resolve, Survey, Verb,
 };
 
 const PULSE: Duration = Duration::from_millis(120);
@@ -136,7 +136,12 @@ impl Run {
             if self.verb == Verb::Move {
                 return;
             }
-            Spot::Place(free_name(into, name))
+            if self.verb == Verb::Duplicate {
+                let folder = fs::symlink_metadata(src).is_ok_and(|meta| meta.is_dir());
+                Spot::Place(copy_name(into, name, folder))
+            } else {
+                Spot::Place(free_name(into, name))
+            }
         } else {
             self.settle(src, &existing, into, name)
         };

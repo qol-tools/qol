@@ -50,9 +50,12 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+C, Ctrl+X | Copy or cut the picks, or the row under the cursor when nothing is picked; cut rows fade until they are pasted |
 | Ctrl+V | Paste into the folder you are in |
 | Delete | Move the picks, or the row under the cursor, to the trash |
+| Shift+Delete | Delete the picks, or the row under the cursor, for good after asking, since the trash cannot bring them back |
+| Ctrl+Alt+N | Make an empty file named New file, then rename it |
+| Ctrl+Shift+D | Copy the picks, or the row under the cursor, beside themselves as `name copy.ext`, then `name copy 2.ext` |
 | F2 | Rename the row under the cursor, with the name before its extension selected |
 | Ctrl+Shift+N | Make a new folder and rename it |
-| Ctrl+Z | Undo the last copy, move, rename, trash or new folder, putting back anything a copy replaced |
+| Ctrl+Z | Undo the last copy, duplicate, move, rename, trash, new file or new folder, putting back anything a copy replaced |
 | Ctrl+J | Show or hide today's moves |
 | Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |

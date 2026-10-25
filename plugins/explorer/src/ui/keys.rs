@@ -42,6 +42,9 @@ pub enum Action {
     Trash,
     Rename,
     NewFolder,
+    NewFile,
+    Duplicate,
+    Erase,
     Undo,
     Moves,
     ContextMenu,
@@ -104,6 +107,9 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("delete", (false, false, false)) => Action::Trash,
         ("f2", (false, false, false)) => Action::Rename,
         ("n", (true, false, true)) => Action::NewFolder,
+        ("n", (true, true, false)) => Action::NewFile,
+        ("d", (true, false, true)) => Action::Duplicate,
+        ("delete", (false, false, true)) => Action::Erase,
         ("z", (true, false, false)) => Action::Undo,
         ("j", (true, false, false)) => Action::Moves,
         ("menu", (false, false, false)) | ("f10", (false, false, true)) => Action::ContextMenu,
@@ -150,6 +156,9 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Rename
                 | Action::NewFolder
                 | Action::ContextMenu
+                | Action::NewFile
+                | Action::Duplicate
+                | Action::Erase
         )
 }
 
@@ -279,6 +288,10 @@ mod tests {
             shift: true,
             ..Modifiers::secondary_key()
         };
+        let secondary_alt = Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
         let cases = [
             (
                 key("c", Modifiers::secondary_key(), Some("c")),
@@ -292,6 +305,9 @@ mod tests {
             (plain("delete"), Action::Trash),
             (plain("f2"), Action::Rename),
             (key("n", secondary_shift, Some("N")), Action::NewFolder),
+            (key("n", secondary_alt, Some("n")), Action::NewFile),
+            (key("d", secondary_shift, Some("D")), Action::Duplicate),
+            (key("delete", shift(), None), Action::Erase),
             (
                 key("z", Modifiers::secondary_key(), Some("z")),
                 Action::Undo,
@@ -316,7 +332,6 @@ mod tests {
                 key("n", Modifiers::secondary_key(), Some("n")),
                 Action::Nothing,
             ),
-            (key("delete", shift(), None), Action::Nothing),
             (key("f2", shift(), None), Action::Nothing),
             (plain("f10"), Action::Nothing),
             (key("menu", shift(), None), Action::Nothing),
@@ -455,6 +470,9 @@ mod tests {
             Action::Rename,
             Action::NewFolder,
             Action::ContextMenu,
+            Action::NewFile,
+            Action::Duplicate,
+            Action::Erase,
         ];
         let leaving = [
             Action::Up,

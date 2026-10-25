@@ -580,3 +580,75 @@ fn the_kept_sentence_counts_newer_files_and_identical_ones() {
     );
     assert_eq!(ops_text::kept_sentence(&replaced, 0), "");
 }
+
+#[test]
+fn a_new_file_appears_empty_opens_for_rename_and_undo_removes_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut browser = opened(temp.path());
+
+    assert!(browser.new_file());
+    wait_until(&mut browser, "the rename field", |browser| {
+        browser.rename_field().is_some()
+    });
+    let made = temp.path().join("New file");
+    assert!(made.is_file());
+    assert_eq!(fs::metadata(&made).unwrap().len(), 0);
+    assert_eq!(browser.rename_field().unwrap().text(), "New file");
+
+    browser.rename_key(&key("escape", None));
+    assert!(browser.undo());
+    assert!(!made.exists());
+}
+
+#[test]
+fn duplicating_copies_beside_the_original_and_counts_up() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+
+    assert!(browser.duplicate_picks());
+    wait_until(&mut browser, "the copy", finished);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a copy.txt")).unwrap(),
+        "text"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "text");
+
+    point_at(&mut browser, &file);
+    assert!(browser.duplicate_picks());
+    wait_until(&mut browser, "the second copy", |_| {
+        temp.path().join("a copy 2.txt").exists()
+    });
+}
+
+#[test]
+fn deleting_permanently_asks_first_and_cancelling_keeps_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+
+    assert!(browser.erase_ask());
+    assert_eq!(browser.erasing().unwrap(), std::slice::from_ref(&file));
+    assert!(browser.erase_cancel());
+    assert!(browser.erasing().is_none());
+    assert!(file.exists());
+
+    assert!(browser.erase_ask());
+    assert!(browser.erase_confirm());
+    wait_until(&mut browser, "the delete", |_| !file.exists());
+    wait_until(&mut browser, "the note", |browser| {
+        browser.note().count == "1 item deleted for good."
+    });
+    assert!(!browser.undo());
+}
+
+#[test]
+fn the_delete_question_names_the_count_and_says_it_cannot_be_undone() {
+    let one = ops_text::erase_lines(&[PathBuf::from("/x/a.txt")]);
+    assert_eq!(one[0], "Delete 1 item permanently? a.txt");
+    let many = ops_text::erase_lines(&[PathBuf::from("/x/a"), PathBuf::from("/x/b")]);
+    assert_eq!(many[0], "Delete 2 items permanently?");
+    assert!(many[1].contains("cannot be undone"));
+}

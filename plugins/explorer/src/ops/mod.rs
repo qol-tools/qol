@@ -15,13 +15,16 @@ mod transfer_tests;
 
 pub use journal::{Journal, Undo};
 pub use run::{partial_name, partial_of, start};
-pub use simple::{free_name, new_folder, rename, restore, trash, NameProblem};
+pub use simple::{
+    copy_name, delete, free_name, new_file, new_folder, rename, restore, trash, NameProblem,
+};
 pub use transfer::{crosses, survey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
     Copy,
     Move,
+    Duplicate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
