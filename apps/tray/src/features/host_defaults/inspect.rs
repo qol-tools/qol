@@ -7,7 +7,7 @@ use crate::plugins::PluginUid;
 use qol_host_defaults::handler::backends::desktop_entry;
 use qol_host_defaults::handler::HandlerStore;
 use qol_host_defaults::xdg::XdgDirs;
-use qol_host_defaults::{host, HostDefaults, Role, SlotRoute, State};
+use qol_host_defaults::{host, Blocker, HostDefaults, Role, SlotRoute, State};
 use std::collections::BTreeSet;
 
 const OPENER_ROLE: Role = Role::FolderOpen;
@@ -22,6 +22,7 @@ pub(crate) struct Inspection {
     pub intents: Vec<IntendedRole>,
     pub intent_error: Option<String>,
     pub dead_keys: Vec<DeadKey>,
+    pub blockers: Vec<Blocker>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub(crate) struct DeadKey {
     pub role: String,
     pub key: String,
     pub owner: String,
+    pub freed_by: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +70,9 @@ pub(crate) fn inspect() -> Inspection {
     let mut inspection = Inspection {
         installed: plugins.iter().map(|plugin| plugin.id.clone()).collect(),
         unknown_probes: unknown_probes(&host, &plugins),
+        blockers: declared_blockers(host.blockers(), |role| {
+            !catalog::declaring(role, &plugins).is_empty()
+        }),
         ..Inspection::default()
     };
     match IntentStore::active().and_then(|store| store.load()) {
@@ -135,14 +140,26 @@ fn unknown_probes(
         .collect()
 }
 
+fn declared_blockers(blockers: Vec<Blocker>, is_declared: impl Fn(Role) -> bool) -> Vec<Blocker> {
+    blockers
+        .into_iter()
+        .filter_map(|blocker| {
+            let roles: Vec<Role> = blocker
+                .roles
+                .iter()
+                .copied()
+                .filter(|role| is_declared(*role))
+                .collect();
+            (!roles.is_empty()).then_some(Blocker { roles, ..blocker })
+        })
+        .collect()
+}
+
 fn dead_keys(
     host: &impl HostDefaults,
     plugins: &[catalog::InstalledPlugin],
     involved: &BTreeSet<String>,
 ) -> Vec<DeadKey> {
-    if !crate::doctor::host_bindings_readable() {
-        return Vec::new();
-    }
     let bindings = match HotkeyLayers::active().and_then(|layers| layers.load()) {
         Ok(config) => config.hotkeys,
         Err(error) => {
@@ -173,7 +190,7 @@ fn dead_keys(
         &routes,
         involved,
         &bindings,
-        crate::doctor::shadowed_combos,
+        crate::doctor::host_answers_in,
         crate::doctor::normalize_combo,
     )
 }
@@ -188,7 +205,7 @@ fn unanswered(
     routes: &[RoleRoute],
     involved: &BTreeSet<String>,
     bindings: &[HotkeyBinding],
-    host_answers: impl Fn(&[String]) -> Vec<String>,
+    host_answers: impl Fn(&[String], &[String]) -> Option<Vec<String>>,
     normalize: impl Fn(&str) -> Option<String>,
 ) -> Vec<DeadKey> {
     let bound: BTreeSet<String> = bindings
@@ -208,16 +225,28 @@ fn unanswered(
             .iter()
             .filter_map(|key| normalize(key))
             .collect();
-        let set_by_qol = involved.contains(role.id())
-            || bindings.iter().any(|binding| {
-                binding.enabled
-                    && declared_by.contains(&binding.plugin_uid)
-                    && normalize(&binding.key).is_some_and(|key| reached.contains(&key))
-            });
-        if !set_by_qol {
+        let on_reached_key = |binding: &&HotkeyBinding| {
+            binding.enabled && normalize(&binding.key).is_some_and(|key| reached.contains(&key))
+        };
+        let set_by_role = involved.contains(role.id())
+            || bindings
+                .iter()
+                .filter(on_reached_key)
+                .any(|binding| declared_by.contains(&binding.plugin_uid));
+        let other = bindings
+            .iter()
+            .filter(on_reached_key)
+            .find(|binding| !declared_by.contains(&binding.plugin_uid));
+        if !set_by_role && other.is_none() {
             continue;
         }
-        let answered = host_answers(&route.keys);
+        let freed_by = match other {
+            Some(binding) if !set_by_role => Some(format!("{} on {}", binding.action, binding.key)),
+            _ => None,
+        };
+        let Some(answered) = host_answers(&route.keys, &route.answered_in) else {
+            continue;
+        };
         for key in &route.keys {
             let by_qol = normalize(key).is_some_and(|key| bound.contains(&key));
             if !by_qol && !answered.contains(key) {
@@ -225,6 +254,7 @@ fn unanswered(
                     role: role.id().to_string(),
                     key: key.clone(),
                     owner: route.owner.clone(),
+                    freed_by: freed_by.clone(),
                 });
             }
         }
@@ -256,6 +286,7 @@ fn opener_missing(records: &[qol_host_defaults::ClaimRecord]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_host_defaults::BlockerKind;
 
     fn lower(combo: &str) -> Option<String> {
         Some(combo.to_lowercase())
@@ -268,6 +299,7 @@ mod tests {
                 keys: vec!["Alt+Tab".to_string()],
                 reaches: vec!["Alt+Tab".to_string(), "Alt+Shift+Tab".to_string()],
                 owner: "Cinnamon".to_string(),
+                answered_in: vec!["/org/cinnamon/".to_string()],
             },
             declared_by: vec![PluginUid::new("uid-alt-tab")],
         }]
@@ -288,6 +320,53 @@ mod tests {
         ids.iter().map(|id| (*id).to_string()).collect()
     }
 
+    fn blocker(kind: BlockerKind, roles: &[Role]) -> Blocker {
+        Blocker {
+            kind,
+            roles: roles.to_vec(),
+            detail: "why".to_string(),
+        }
+    }
+
+    #[test]
+    fn blockers_are_kept_only_for_roles_a_plugin_declares() {
+        let declared = |role: Role| matches!(role, Role::SlotLauncher | Role::FolderOpen);
+        let cases = [
+            (
+                "none declared",
+                blocker(BlockerKind::SecureInputHeld, &[Role::SlotScreenshot]),
+                None,
+            ),
+            (
+                "narrowed to the declared roles",
+                blocker(
+                    BlockerKind::SecureInputHeld,
+                    &[Role::SlotLauncher, Role::SlotScreenshot],
+                ),
+                Some(vec![Role::SlotLauncher]),
+            ),
+            (
+                "all declared",
+                blocker(BlockerKind::PolicyOverride, &[Role::FolderOpen]),
+                Some(vec![Role::FolderOpen]),
+            ),
+            (
+                "no roles",
+                blocker(BlockerKind::ShortcutPortalMissing, &[]),
+                None,
+            ),
+        ];
+        for (name, input, expected) in cases {
+            let kept = declared_blockers(vec![input.clone()], declared);
+            let roles = kept.first().map(|kept| kept.roles.clone());
+            assert_eq!(roles, expected, "{name}");
+            if let Some(kept) = kept.first() {
+                assert_eq!(kept.kind, input.kind, "{name}");
+                assert_eq!(kept.detail, input.detail, "{name}");
+            }
+        }
+    }
+
     #[test]
     fn a_route_key_qol_freed_and_nobody_answers_is_dead() {
         let cases = [
@@ -296,42 +375,82 @@ mod tests {
                 vec![binding("Alt+Shift+Tab", "uid-alt-tab", true)],
                 roles(&[]),
                 true,
-                1,
+                Some(None),
             ),
             (
                 "a claim freed it and its binding is off",
                 vec![binding("Alt+Tab", "uid-alt-tab", false)],
                 roles(&["slot.window_switcher"]),
                 true,
-                1,
+                Some(None),
             ),
             (
                 "bound by qol",
                 vec![binding("alt+tab", "uid-other", true)],
                 roles(&["slot.window_switcher"]),
                 true,
-                0,
+                None,
             ),
             (
-                "the user removed it without qol",
+                "another plugin's reverse key freed it",
                 vec![binding("Alt+Shift+Tab", "uid-other", true)],
                 roles(&[]),
                 true,
-                0,
+                Some(Some("open on Alt+Shift+Tab")),
+            ),
+            (
+                "no qol binding on any reached key",
+                vec![binding("Ctrl+K", "uid-other", true)],
+                roles(&[]),
+                true,
+                None,
             ),
             (
                 "the host still has it",
                 Vec::new(),
                 roles(&["slot.window_switcher"]),
                 false,
-                0,
+                None,
             ),
         ];
         for (name, bindings, involved, freed, expected) in cases {
-            let host_answers = |keys: &[String]| if freed { Vec::new() } else { keys.to_vec() };
+            let host_answers = |keys: &[String], _: &[String]| {
+                Some(if freed { Vec::new() } else { keys.to_vec() })
+            };
             let dead = unanswered(&switcher(), &involved, &bindings, host_answers, lower);
-            assert_eq!(dead.len(), expected, "{name}");
+            let freed_by: Option<Vec<Option<String>>> =
+                (!dead.is_empty()).then(|| dead.iter().map(|key| key.freed_by.clone()).collect());
+            let expected = expected.map(|by| vec![by.map(str::to_string)]);
+            assert_eq!(freed_by, expected, "{name}");
         }
+    }
+
+    #[test]
+    fn an_unreadable_host_scan_reports_nothing() {
+        let dead = unanswered(
+            &switcher(),
+            &roles(&["slot.window_switcher"]),
+            &[],
+            |_, _| None,
+            lower,
+        );
+        assert!(dead.is_empty());
+    }
+
+    #[test]
+    fn the_host_is_asked_under_the_route_owners_prefixes() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        unanswered(
+            &switcher(),
+            &roles(&["slot.window_switcher"]),
+            &[],
+            |_, prefixes| {
+                asked.borrow_mut().extend(prefixes.to_vec());
+                Some(Vec::new())
+            },
+            lower,
+        );
+        assert_eq!(*asked.borrow(), vec!["/org/cinnamon/".to_string()]);
     }
 
     #[test]
@@ -340,7 +459,7 @@ mod tests {
             &switcher(),
             &roles(&["slot.window_switcher"]),
             &[],
-            |_| Vec::new(),
+            |_, _| Some(Vec::new()),
             lower,
         );
         assert_eq!(
@@ -349,6 +468,7 @@ mod tests {
                 role: "slot.window_switcher".to_string(),
                 key: "Alt+Tab".to_string(),
                 owner: "Cinnamon".to_string(),
+                freed_by: None,
             }]
         );
     }

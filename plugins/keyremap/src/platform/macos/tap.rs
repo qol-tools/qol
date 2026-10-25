@@ -81,7 +81,7 @@ impl TapState {
 
     pub(crate) fn key_target_bundle_id(&self) -> String {
         self.app_tracker
-            .bundle_id_for_next_key(!super::secure_input::enabled())
+            .bundle_id_for_next_key(!qol_platform::secure_input_enabled())
     }
 }
 

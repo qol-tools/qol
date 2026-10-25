@@ -3,6 +3,7 @@ use super::super::framework::{
 };
 use crate::features::host_defaults::inspect::{inspect, CurrentValue, InspectedClaim, Inspection};
 use qol_headless::DoctorCheckResult;
+use qol_host_defaults::{Blocker, BlockerKind};
 
 const ID: &str = "host_defaults";
 const MIMEAPPS_STORE: &str = "mimeapps";
@@ -26,11 +27,15 @@ struct Finding {
 }
 
 pub(in crate::doctor) fn headless_check() -> qol_headless::DoctorCheck {
-    qol_headless::DoctorCheck::new(ID, "Host defaults match what qol claimed", || {
-        Ok(headless_result(
-            HostDefaultsCheck.run(&DoctorContext::new()),
-        ))
-    })
+    qol_headless::DoctorCheck::new(
+        ID,
+        "Host defaults match what qol claimed, and nothing blocks them: a policy that resets file handlers, Wayland without the GlobalShortcuts portal, or macOS secure input held",
+        || {
+            Ok(headless_result(
+                HostDefaultsCheck.run(&DoctorContext::new()),
+            ))
+        },
+    )
 }
 
 fn headless_result(report: CheckReport) -> DoctorCheckResult {
@@ -68,6 +73,7 @@ fn evaluate(inspection: &Inspection) -> CheckReport {
         .chain(changed_value_findings(inspection))
         .chain(opener_findings(inspection))
         .chain(dead_key_findings(inspection))
+        .chain(blocker_findings(inspection))
         .collect();
     if findings.is_empty() {
         return CheckReport::ok(ok_summary(&inspection.claims));
@@ -197,14 +203,57 @@ fn dead_key_findings(inspection: &Inspection) -> impl Iterator<Item = Finding> +
             "{} does nothing: {} no longer has it and no qol hotkey is on it ({})",
             dead.key, dead.owner, dead.role
         ),
-        hint: release_hint(&dead.role),
+        hint: match &dead.freed_by {
+            Some(label) => format!("move {label} to another key, or turn on {}", dead.role),
+            None => release_hint(&dead.role),
+        },
     })
+}
+
+fn blocker_findings(inspection: &Inspection) -> impl Iterator<Item = Finding> + '_ {
+    inspection.blockers.iter().map(|blocker| {
+        let roles = role_ids(blocker);
+        match blocker.kind {
+            BlockerKind::PolicyOverride => Finding {
+                message: format!("{roles} will be undone at sign-in: {}", blocker.detail),
+                hint: "remove the policy, or ask your IT administrator to".to_string(),
+            },
+            BlockerKind::SecureInputHeld => Finding {
+                message: format!(
+                    "slot keys stop while {} holds secure input ({roles})",
+                    blocker.detail
+                ),
+                hint: format!(
+                    "quit {}, or lock and unlock the screen to clear secure input",
+                    blocker.detail
+                ),
+            },
+            BlockerKind::ShortcutPortalMissing => Finding {
+                message: format!(
+                    "slot keys cannot work on this Wayland session: {} ({roles})",
+                    blocker.detail
+                ),
+                hint: "use an X11 session, or a desktop whose portal offers GlobalShortcuts"
+                    .to_string(),
+            },
+        }
+    })
+}
+
+fn role_ids(blocker: &Blocker) -> String {
+    blocker
+        .roles
+        .iter()
+        .map(|role| role.id())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::features::host_defaults::inspect::{IntendedRole, UnknownProbe};
+    use qol_host_defaults::Role;
 
     fn claim(role: &str, plugin: &str, store: &str, current: CurrentValue) -> InspectedClaim {
         InspectedClaim {
@@ -241,6 +290,7 @@ mod tests {
                 role: "slot.window_switcher".to_string(),
                 key: "Alt+Tab".to_string(),
                 owner: "Cinnamon".to_string(),
+                freed_by: None,
             }],
             ..Inspection::default()
         };
@@ -253,6 +303,99 @@ mod tests {
             report.advice,
             ["qol-tray defaults release slot.window_switcher"]
         );
+    }
+
+    #[test]
+    fn a_key_freed_by_another_binding_names_it_in_the_hint() {
+        let inspection = Inspection {
+            dead_keys: vec![crate::features::host_defaults::inspect::DeadKey {
+                role: "slot.window_switcher".to_string(),
+                key: "Alt+Tab".to_string(),
+                owner: "Cinnamon".to_string(),
+                freed_by: Some("open on Alt+Shift+Tab".to_string()),
+            }],
+            ..Inspection::default()
+        };
+        let report = evaluate(&inspection);
+        assert_eq!(
+            report.issues[0].message,
+            "Alt+Tab does nothing: Cinnamon no longer has it and no qol hotkey is on it (slot.window_switcher)"
+        );
+        assert_eq!(
+            report.advice,
+            ["move open on Alt+Shift+Tab to another key, or turn on slot.window_switcher"]
+        );
+    }
+
+    fn blocked(kind: BlockerKind, roles: &[Role], detail: &str) -> Inspection {
+        Inspection {
+            blockers: vec![Blocker {
+                kind,
+                roles: roles.to_vec(),
+                detail: detail.to_string(),
+            }],
+            ..Inspection::default()
+        }
+    }
+
+    #[test]
+    fn each_blocker_kind_warns_with_its_own_message_and_hint() {
+        let cases = [
+            (
+                "policy",
+                blocked(
+                    BlockerKind::PolicyOverride,
+                    &[Role::FolderOpen],
+                    r"the policy file C:\policy\associations.xml resets file associations at sign-in",
+                ),
+                r"folder.open will be undone at sign-in: the policy file C:\policy\associations.xml resets file associations at sign-in",
+                "remove the policy, or ask your IT administrator to",
+            ),
+            (
+                "secure input",
+                blocked(
+                    BlockerKind::SecureInputHeld,
+                    &[Role::SlotLauncher, Role::SlotScreenshot],
+                    "1Password",
+                ),
+                "slot keys stop while 1Password holds secure input (slot.launcher, slot.screenshot)",
+                "quit 1Password, or lock and unlock the screen to clear secure input",
+            ),
+            (
+                "wayland portal",
+                blocked(
+                    BlockerKind::ShortcutPortalMissing,
+                    &[Role::SlotWindowSwitcher],
+                    "xdg-desktop-portal does not offer org.freedesktop.portal.GlobalShortcuts on this session",
+                ),
+                "slot keys cannot work on this Wayland session: xdg-desktop-portal does not offer org.freedesktop.portal.GlobalShortcuts on this session (slot.window_switcher)",
+                "use an X11 session, or a desktop whose portal offers GlobalShortcuts",
+            ),
+        ];
+        for (name, inspection, message, hint) in cases {
+            let report = evaluate(&inspection);
+            assert_eq!(report.issues.len(), 1, "{name}");
+            assert_eq!(report.issues[0].severity, Severity::Warn, "{name}");
+            assert_eq!(report.issues[0].message, message, "{name}");
+            assert_eq!(report.advice, [hint], "{name}");
+        }
+    }
+
+    #[test]
+    fn no_blockers_leave_the_report_healthy() {
+        let report = evaluate(&matching());
+        assert!(report.issues.is_empty());
+    }
+
+    #[test]
+    fn a_blocker_sits_beside_the_other_findings() {
+        let mut inspection = matching();
+        inspection.opener_missing = true;
+        inspection.blockers =
+            blocked(BlockerKind::SecureInputHeld, &[Role::SlotLauncher], "kitty").blockers;
+        let report = evaluate(&inspection);
+        assert_eq!(report.issues.len(), 2);
+        assert!(report.summary.starts_with("2 host default problems: "));
     }
 
     #[test]

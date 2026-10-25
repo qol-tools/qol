@@ -1,3 +1,4 @@
+mod blockers;
 mod folder;
 mod session;
 mod slots;
@@ -7,7 +8,7 @@ use anyhow::Result;
 use crate::claims::{Ledger, ReleaseOutcome};
 use crate::handler;
 use crate::host::{HostDefaults, OpenerSpec};
-use crate::report::{Lifetime, Report, SlotRoute};
+use crate::report::{Blocker, Lifetime, Report, SlotRoute};
 use crate::role::Role;
 use session::Session;
 
@@ -28,6 +29,10 @@ impl HostDefaults for Platform {
 
     fn slot_route(&self, role: Role) -> Option<SlotRoute> {
         slots::route(&Session::current(), role)
+    }
+
+    fn blockers(&self) -> Vec<Blocker> {
+        blockers::current(&Session::current())
     }
 
     fn claim_handler(

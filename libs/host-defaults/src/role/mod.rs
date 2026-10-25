@@ -47,6 +47,13 @@ impl Role {
         }
     }
 
+    pub fn slot_roles() -> Vec<Role> {
+        Role::ALL
+            .into_iter()
+            .filter(|role| role.is_slot())
+            .collect()
+    }
+
     pub fn is_slot(self) -> bool {
         match self {
             Role::FolderOpen | Role::FolderReveal => false,
@@ -95,6 +102,17 @@ mod tests {
             assert_eq!(role.kind_noun(), noun, "noun of {role:?}");
             assert_eq!(role.is_slot(), slot, "slot flag of {role:?}");
         }
+    }
+
+    #[test]
+    fn slot_roles_are_exactly_the_slot_flagged_roles() {
+        let slots = Role::slot_roles();
+        assert_eq!(
+            slots.len(),
+            Role::ALL.iter().filter(|role| role.is_slot()).count()
+        );
+        assert!(slots.iter().all(|role| role.is_slot()));
+        assert!(!slots.contains(&Role::FolderOpen));
     }
 
     #[test]

@@ -144,7 +144,8 @@ mod tests {
     use crate::hotkeys::HotkeyBinding;
     use crate::plugins::PluginUid;
     use qol_host_defaults::{
-        ClaimState, Ledger, OpenerSpec, Owner, ReleaseOutcome, Report, Restore, SlotRoute, State,
+        Blocker, ClaimState, Ledger, OpenerSpec, Owner, ReleaseOutcome, Report, Restore, SlotRoute,
+        State,
     };
     use std::cell::RefCell;
 
@@ -168,7 +169,12 @@ mod tests {
                 keys: vec!["Print".to_string()],
                 reaches: vec!["Print".to_string()],
                 owner: "Cinnamon".to_string(),
+                answered_in: vec!["/org/cinnamon/".to_string()],
             })
+        }
+
+        fn blockers(&self) -> Vec<Blocker> {
+            Vec::new()
         }
 
         fn claim_handler(

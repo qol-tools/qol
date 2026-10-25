@@ -133,7 +133,7 @@ mod tests {
     use super::*;
     use crate::plugins::PluginUid;
     use qol_host_defaults::{
-        Ledger, OpenerSpec, Owner, ReleaseOutcome, Report, Restore, SlotRoute, State,
+        Blocker, Ledger, OpenerSpec, Owner, ReleaseOutcome, Report, Restore, SlotRoute, State,
     };
     use std::cell::RefCell;
 
@@ -166,6 +166,10 @@ mod tests {
 
         fn slot_route(&self, _role: Role) -> Option<SlotRoute> {
             None
+        }
+
+        fn blockers(&self) -> Vec<Blocker> {
+            Vec::new()
         }
 
         fn claim_handler(

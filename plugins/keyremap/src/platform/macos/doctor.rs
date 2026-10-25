@@ -2,18 +2,14 @@ use anyhow::Result;
 use qol_headless::DoctorCheckResult;
 use qol_plugin_api::manifest::{parse_version, PluginManifest, SystemDependency};
 
+pub(crate) use qol_platform::SecureInputHolder;
+
 use crate::cli::PLUGIN_ID;
 
 const MANIFEST: &str = include_str!("../../../plugin.toml");
 const DRIVER_NAME: &str = "Karabiner-DriverKit-VirtualHIDDevice";
 
 pub(crate) const INPUT_MONITORING_FIX: &str = "In System Settings > Privacy & Security > Input Monitoring, click +, press Cmd+Shift+G, open /Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper and turn it on. Then run: sudo launchctl kickstart -k system/com.qol-tools.keyremap.hid-helper";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SecureInputHolder {
-    pub(crate) pid: i32,
-    pub(crate) app: String,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Probe<T> {

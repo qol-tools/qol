@@ -12,6 +12,13 @@ pub(in crate::doctor::checks::hotkey_shadows) fn collect_shadows(
     collect_shadows_with_reader(qol_index, &mut reader)
 }
 
+pub(in crate::doctor::checks::hotkey_shadows) fn shadows_under(
+    _qol_index: &BTreeMap<String, String>,
+    _prefixes: &[String],
+) -> Option<Vec<DetectedShadow>> {
+    None
+}
+
 pub(crate) trait RegistryReader {
     fn read_app_keys(&mut self) -> Vec<AppKeyEntry>;
 }

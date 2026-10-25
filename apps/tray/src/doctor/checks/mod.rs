@@ -46,7 +46,7 @@ pub(super) use dev_link_paths::relocate_dev_link;
 pub(super) use plugin_staleness::stale_running_daemons;
 
 pub(super) use host_defaults::headless_check as host_defaults_check;
-pub(super) use hotkey_shadows::{shadows_for_combos, ShadowKind};
+pub(super) use hotkey_shadows::{shadows_for_combos, shadows_under_prefixes, ShadowKind};
 
 use super::framework::DoctorCheck;
 

@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use crate::claims::{Ledger, ReleaseOutcome};
 use crate::handler;
 use crate::host::{HostDefaults, OpenerSpec};
-use crate::report::{Lifetime, Report, SlotRoute};
+use crate::report::{Blocker, Lifetime, Report, SlotRoute};
 use crate::role::Role;
 
 const REASON: &str = "unsupported OS";
@@ -17,6 +17,10 @@ impl HostDefaults for Platform {
 
     fn slot_route(&self, _role: Role) -> Option<SlotRoute> {
         None
+    }
+
+    fn blockers(&self) -> Vec<Blocker> {
+        Vec::new()
     }
 
     fn claim_handler(

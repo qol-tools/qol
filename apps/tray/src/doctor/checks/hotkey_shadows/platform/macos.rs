@@ -12,6 +12,13 @@ pub(in crate::doctor::checks::hotkey_shadows) fn collect_shadows(
     collect_shadows_with_reader(qol_index, &mut DefaultsCli)
 }
 
+pub(in crate::doctor::checks::hotkey_shadows) fn shadows_under(
+    _qol_index: &BTreeMap<String, String>,
+    _prefixes: &[String],
+) -> Option<Vec<DetectedShadow>> {
+    None
+}
+
 pub(crate) trait SymbolicHotkeyReader {
     fn read_enabled_combos(&mut self) -> Vec<EnabledHotkey>;
 }
