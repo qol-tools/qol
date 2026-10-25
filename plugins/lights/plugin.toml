@@ -4,7 +4,7 @@ uid = "368871df-de60-4a7a-ab7c-8d33fcd22511"
 name = "Lights"
 icon = "lights"
 description = "Control your lights from your computer"
-version = "1.79.0"
+version = "1.79.1"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
