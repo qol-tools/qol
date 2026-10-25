@@ -889,6 +889,8 @@ type HostRows<'a> = &'a dyn Fn(&str) -> Option<PluginRow>;
 const HOST_DEFAULT_ID: &str = qol_gpui::settings_panel::LEAD_SECTION_ID;
 const HOST_DEFAULT_POLL: Duration = Duration::from_secs(2);
 const HOST_DEFAULT_READ_ONLY_LABEL: &str = "Kept by the system";
+const HOST_DEFAULT_SECTION_LABEL: &str = "Default";
+const HOST_DEFAULT_SECTION_DESCRIPTION: &str = "Whether qol or the system does this job.";
 const BARE_CONTRACT: &str = "schema_version = 1\n";
 
 fn plugin_host_row(
@@ -966,7 +968,7 @@ fn settings_contract(
 fn with_host_default_row(contract: &str, row: &PluginRow) -> anyhow::Result<String> {
     let mut table: toml::Table =
         toml::from_str(contract).context("the plugin settings contract is not valid TOML")?;
-    put_first(&mut table, "section", host_default_section(row))?;
+    put_first(&mut table, "section", host_default_section())?;
     put_first(&mut table, "field", host_default_field(row))?;
     toml::to_string(&table).context("failed to write the plugin settings contract")
 }
@@ -993,8 +995,14 @@ fn text(value: &str) -> toml::Value {
     toml::Value::String(value.to_string())
 }
 
-fn host_default_section(row: &PluginRow) -> toml::Table {
-    toml::Table::from_iter([("label".to_string(), text(&row.label))])
+fn host_default_section() -> toml::Table {
+    toml::Table::from_iter([
+        ("label".to_string(), text(HOST_DEFAULT_SECTION_LABEL)),
+        (
+            "description".to_string(),
+            text(HOST_DEFAULT_SECTION_DESCRIPTION),
+        ),
+    ])
 }
 
 fn host_default_field(row: &PluginRow) -> toml::Table {
@@ -1641,6 +1649,23 @@ default = false
             spec.section("tools").unwrap().label.as_deref(),
             Some("Tools")
         );
+    }
+
+    #[test]
+    fn the_host_default_section_has_its_own_label_and_a_description() {
+        let row = switch_row();
+        let contract = super::with_host_default_row(super::BARE_CONTRACT, &row).unwrap();
+        let spec = qol_config::contract::parse_spec_str(&contract).unwrap();
+        let section = spec.section("host_default").unwrap();
+        let field = spec.field("host_default").unwrap();
+        let section_label = section.label.as_deref().unwrap_or_default().trim();
+        let field_label = field.label.as_deref().unwrap_or_default().trim();
+        assert!(!section_label.is_empty());
+        assert!(!section_label.eq_ignore_ascii_case(field_label));
+        assert!(section
+            .description
+            .as_deref()
+            .is_some_and(|description| !description.trim().is_empty()));
     }
 
     #[test]
