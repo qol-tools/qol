@@ -516,6 +516,7 @@ fn parse_shortcut_declarations() {
         [[shortcuts]]
         id = "open"
         name = "Open Test"
+        app_window = true
 
         [[shortcuts]]
         id = "cleanup"
@@ -532,10 +533,12 @@ fn parse_shortcut_declarations() {
     assert_eq!(manifest.shortcuts[0].action, "open");
     assert!(manifest.shortcuts[0].enabled);
     assert!(manifest.shortcuts[0].export_to_launcher);
+    assert!(manifest.shortcuts[0].app_window);
     assert_eq!(manifest.shortcuts[1].id, "cleanup");
     assert_eq!(manifest.shortcuts[1].action, "open");
     assert!(!manifest.shortcuts[1].enabled);
     assert!(!manifest.shortcuts[1].export_to_launcher);
+    assert!(!manifest.shortcuts[1].app_window);
 }
 
 #[test]

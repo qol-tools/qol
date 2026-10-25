@@ -322,6 +322,7 @@ mod tests {
             exec_args: Vec::new(),
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Qol),
+            window_class: None,
         }
     }
 
@@ -334,6 +335,7 @@ mod tests {
             exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
             shortcut_action: Some(action),
             icon: LauncherIcon::Mark(Mark::Qol),
+            window_class: None,
         }
     }
 
@@ -346,6 +348,7 @@ mod tests {
             exec_args: vec!["exec".into(), "shortcut".into(), "browser".into()],
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Qol),
+            window_class: None,
         }
     }
 
@@ -555,6 +558,7 @@ mod tests {
             exec_args: vec!["open".into(), "shortcuts/add".into()],
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Qol),
+            window_class: None,
         };
         let script = build_script(
             Path::new("/Applications/qol-tray.app/Contents/MacOS/qol-tray"),
@@ -583,6 +587,7 @@ mod tests {
                 exec_args: Vec::new(),
                 shortcut_action: None,
                 icon: LauncherIcon::Mark(Mark::Qol),
+                window_class: None,
             });
 
             prop_assert!(!sanitized.is_empty());

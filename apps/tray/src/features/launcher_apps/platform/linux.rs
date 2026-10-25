@@ -114,7 +114,7 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path, icon: &s
     let comment = escape_desktop_entry_value(&entry.description);
     let icon = escape_desktop_entry_value(icon);
 
-    let content = format!(
+    let mut content = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name={}\n\
@@ -126,6 +126,12 @@ fn write_desktop_file(dir: &Path, entry: &LauncherEntry, target: &Path, icon: &s
          StartupNotify=false\n",
         name, comment, exec, icon
     );
+    if let Some(window_class) = &entry.window_class {
+        content.push_str(&format!(
+            "StartupWMClass={}\n",
+            escape_desktop_entry_value(window_class)
+        ));
+    }
 
     let path = dir.join(desktop_filename(entry));
     write_executable(&path, &content)?;
@@ -200,6 +206,30 @@ mod tests {
     }
 
     #[test]
+    fn desktop_file_links_only_an_app_window_to_its_window_class() {
+        let tmp = TempDir::new().unwrap();
+        let binary = tmp.path().join("qol-tray");
+        std::fs::write(&binary, "").unwrap();
+        let app_window = LauncherEntry {
+            file_stem: "shortcut-qol-explorer-open".to_string(),
+            window_class: Some("qol-explorer".to_string()),
+            ..entry(&["exec"])
+        };
+
+        write_desktop_file(tmp.path(), &app_window, &binary, ICON).unwrap();
+        write_desktop_file(tmp.path(), &entry(&["exec"]), &binary, ICON).unwrap();
+
+        let linked =
+            std::fs::read_to_string(tmp.path().join("qol-shortcut-qol-explorer-open.desktop"))
+                .unwrap();
+        let plain = std::fs::read_to_string(tmp.path().join("qol-shortcut-space.desktop")).unwrap();
+        assert!(linked
+            .lines()
+            .any(|line| line == "StartupWMClass=qol-explorer"));
+        assert!(!plain.contains("StartupWMClass"));
+    }
+
+    #[test]
     fn mark_icons_point_at_the_mark_file() {
         let marks = MarkFiles::in_dir(PathBuf::from("/marks"), 0);
 
@@ -251,6 +281,7 @@ mod tests {
             exec_args: exec_args.iter().map(|arg| arg.to_string()).collect(),
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Link),
+            window_class: None,
         }
     }
 
@@ -291,6 +322,7 @@ mod tests {
             exec_args: vec!["open".into(), "shortcuts/add".into()],
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Shortcuts),
+            window_class: None,
         };
 
         write_desktop_file(tmp.path(), &command_entry, &binary, ICON).unwrap();

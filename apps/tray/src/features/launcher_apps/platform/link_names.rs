@@ -93,6 +93,7 @@ mod tests {
             exec_args: vec!["exec".into(), "shortcut".into(), file_stem.into()],
             shortcut_action: None,
             icon: LauncherIcon::Mark(Mark::Shortcuts),
+            window_class: None,
         }
     }
 
