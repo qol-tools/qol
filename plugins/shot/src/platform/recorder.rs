@@ -47,8 +47,14 @@ pub fn encoder_args(config: &Config, realtime: bool) -> Vec<String> {
     args.extend(["-c:v", "libx264", "-crf"].map(str::to_string));
     args.push(config.video.crf.clamp(0, 51).to_string());
     args.extend(["-preset", normalized_h264_preset(&config.video.preset)].map(str::to_string));
-    args.extend(["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k"].map(str::to_string));
-    if matches!(format.as_str(), "mp4" | "mov") {
+    args.extend(["-pix_fmt", "yuv420p"].map(str::to_string));
+    args.extend(h264_container_args(&format));
+    args
+}
+
+pub fn h264_container_args(format: &str) -> Vec<String> {
+    let mut args = ["-c:a", "aac", "-b:a", "192k"].map(str::to_string).to_vec();
+    if matches!(format, "mp4" | "mov") {
         args.extend(["-movflags", "+faststart"].map(str::to_string));
     }
     args
