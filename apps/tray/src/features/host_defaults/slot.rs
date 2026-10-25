@@ -113,7 +113,7 @@ pub(super) fn add_bindings(
         plugin_uid: declaration.uid.clone(),
         action: declaration.action.clone(),
         enabled: true,
-        os_only: false,
+        os_only: true,
     }));
 }
 
@@ -174,12 +174,21 @@ pub(super) fn claim_slot(
     context: &SlotContext<'_>,
     declaration: &Declaration,
     keys: &[String],
+    reaches: &[String],
     lifetime: Lifetime,
 ) -> Result<()> {
     let mut config = context
         .layers
         .load()
         .context("reading the hotkey bindings")?;
+    let implied: Vec<String> = reaches
+        .iter()
+        .filter(|key| !keys.contains(key))
+        .cloned()
+        .collect();
+    let enabled = enable_declared(&mut config.hotkeys, declaration, &implied, |combo| {
+        context.host.normalize(combo)
+    });
     let planned = plan_bindings(
         &config.hotkeys,
         declaration,
@@ -211,8 +220,15 @@ pub(super) fn claim_slot(
         let _ = context.ledger.remove_store(declaration.role, HOTKEY_STORE);
         return Err(error.context("saving the hotkey bindings"));
     }
-    if let Err(error) = context.host.free(keys) {
-        if let Err(undo) = release_slot(context, declaration.role, keys) {
+    let freed: Vec<String> = keys
+        .iter()
+        .cloned()
+        .chain(enabled.iter().map(|binding| binding.key.clone()))
+        .collect();
+    if let Err(error) = context.host.free(&freed) {
+        let undone = release_slot(context, declaration.role, reaches, &[])
+            .and_then(|_| switch_off(context, &enabled));
+        if let Err(undo) = undone {
             log::warn!("host defaults: could not undo a refused slot claim: {undo:#}");
         }
         return Err(error);
@@ -221,10 +237,71 @@ pub(super) fn claim_slot(
     Ok(())
 }
 
+fn switch_off(context: &SlotContext<'_>, switched_on: &[HotkeyBinding]) -> Result<()> {
+    if switched_on.is_empty() {
+        return Ok(());
+    }
+    let mut config = context
+        .layers
+        .load()
+        .context("reading the hotkey bindings")?;
+    for binding in config.hotkeys.iter_mut() {
+        if switched_on.iter().any(|on| on.id == binding.id) {
+            binding.enabled = false;
+        }
+    }
+    context
+        .layers
+        .save(&config)
+        .context("saving the hotkey bindings")
+}
+
+pub(super) fn enable_declared(
+    bindings: &mut [HotkeyBinding],
+    declaration: &Declaration,
+    reaches: &[String],
+    normalize: impl Fn(&str) -> Option<String>,
+) -> Vec<HotkeyBinding> {
+    let reached: BTreeSet<String> = reaches.iter().filter_map(|key| normalize(key)).collect();
+    let mut enabled = Vec::new();
+    for binding in bindings.iter_mut() {
+        let switched_off = !binding.enabled && binding.os_only;
+        let on_reach = normalize(&binding.key).is_some_and(|key| reached.contains(&key));
+        if switched_off && on_reach && binding.plugin_uid == declaration.uid {
+            binding.enabled = true;
+            enabled.push(binding.clone());
+        }
+    }
+    enabled
+}
+
+pub(super) fn disable_declared(
+    bindings: &mut [HotkeyBinding],
+    declarations: &[Declaration],
+    route_keys: &[String],
+    normalize: impl Fn(&str) -> Option<String>,
+) -> usize {
+    let routed: BTreeSet<String> = route_keys.iter().filter_map(|key| normalize(key)).collect();
+    let mut disabled = 0;
+    for binding in bindings.iter_mut().filter(|binding| binding.enabled) {
+        let declared = declarations
+            .iter()
+            .any(|declaration| declaration.uid == binding.plugin_uid);
+        let on_route = normalize(&binding.key).is_some_and(|key| routed.contains(&key));
+        if declared && on_route {
+            binding.enabled = false;
+            binding.os_only = true;
+            disabled += 1;
+        }
+    }
+    disabled
+}
+
 pub(super) fn release_slot(
     context: &SlotContext<'_>,
     role: Role,
     route_keys: &[String],
+    disable: &[Declaration],
 ) -> Result<ReleaseOutcome> {
     let records = hotkey_records(context.ledger, role)?;
     let mut config = context
@@ -240,7 +317,10 @@ pub(super) fn release_slot(
         expected.as_ref(),
     );
     config.hotkeys = undo.kept;
-    if undo.removed > 0 {
+    let disabled = disable_declared(&mut config.hotkeys, disable, route_keys, |combo| {
+        context.host.normalize(combo)
+    });
+    if undo.removed > 0 || disabled > 0 {
         context
             .layers
             .save(&config)
@@ -256,6 +336,9 @@ pub(super) fn release_slot(
         .collect();
     context.host.restore(&combos);
     context.host.reload();
+    if disabled > 0 {
+        return Ok(ReleaseOutcome::Restored);
+    }
     Ok(outcome_of(&records, undo.removed, undo.user_edited))
 }
 
@@ -562,7 +645,14 @@ mod tests {
         };
         let route = keys(&["Print"]);
 
-        claim_slot(&context, &declaration(), &route, Lifetime::PortableSession).expect("claim");
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &route,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
 
         let saved = layers.load().expect("load").hotkeys;
         assert_eq!(saved.len(), 1);
@@ -574,7 +664,7 @@ mod tests {
             Some("qol-shot".to_string())
         );
 
-        let outcome = release_slot(&context, Role::SlotScreenshot, &route).expect("release");
+        let outcome = release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("release");
 
         assert!(matches!(outcome, ReleaseOutcome::Restored));
         assert!(layers.load().expect("load").hotkeys.is_empty());
@@ -601,12 +691,52 @@ mod tests {
             &context,
             &declaration(),
             &keys(&["Print"]),
+            &keys(&["Print"]),
             Lifetime::PortableSession,
         );
 
         assert!(result.is_err());
         assert!(layers.load().expect("load").hotkeys.is_empty());
         assert_eq!(ledger.holder(Role::SlotScreenshot).expect("holder"), None);
+    }
+
+    #[test]
+    fn a_refused_free_keeps_primary_bindings_and_turns_implied_ones_off_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots {
+            refuse: true,
+            ..FakeSlots::default()
+        };
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let mut config = layers.load().expect("load");
+        config.hotkeys = vec![
+            binding("shot-own", "Ctrl+Print", "uid-shot", "screenshot", true),
+            HotkeyBinding {
+                os_only: true,
+                ..binding("shot-reverse", "Shift+Print", "uid-shot", "record", false)
+            },
+        ];
+        layers.save(&config).expect("save");
+
+        let result = claim_slot(
+            &context,
+            &declaration(),
+            &keys(&["Ctrl+Print"]),
+            &keys(&["Ctrl+Print", "Shift+Print"]),
+            Lifetime::PortableSession,
+        );
+
+        assert!(result.is_err());
+        let saved = layers.load().expect("load").hotkeys;
+        let enabled = |id: &str| saved.iter().find(|b| b.id == id).expect(id).enabled;
+        assert!(enabled("shot-own"));
+        assert!(!enabled("shot-reverse"));
     }
 
     #[test]
@@ -624,6 +754,7 @@ mod tests {
             &context,
             &declaration(),
             &keys(&["Print"]),
+            &keys(&["Print"]),
             Lifetime::PortableSession,
         )
         .expect("claim");
@@ -632,9 +763,326 @@ mod tests {
         layers.save(&config).expect("save");
 
         let outcome =
-            release_slot(&context, Role::SlotScreenshot, &keys(&["Print"])).expect("release");
+            release_slot(&context, Role::SlotScreenshot, &keys(&["Print"]), &[]).expect("release");
 
         assert!(matches!(outcome, ReleaseOutcome::LeftUserChange));
         assert_eq!(layers.load().expect("load").hotkeys.len(), 1);
+    }
+
+    fn seed_own_binding(layers: &HotkeyLayers) {
+        let mut config = layers.load().expect("load");
+        config.hotkeys.push(binding(
+            "shot-default",
+            "Print",
+            "uid-shot",
+            "screenshot",
+            true,
+        ));
+        layers.save(&config).expect("save");
+    }
+
+    #[test]
+    fn a_user_release_disables_the_plugins_own_binding_on_the_route() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        let outcome = release_slot(
+            &context,
+            Role::SlotScreenshot,
+            &keys(&["Print"]),
+            &[declaration()],
+        )
+        .expect("release");
+
+        assert!(matches!(outcome, ReleaseOutcome::Restored));
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].enabled);
+        assert!(saved[0].os_only);
+        assert_eq!(host.restored.borrow().as_slice(), [keys(&["Print"])]);
+    }
+
+    fn layer_enabled(path: &std::path::Path, id: &str) -> Option<bool> {
+        let bytes = std::fs::read(path).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        value["hotkeys"]
+            .as_array()?
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .and_then(|entry| entry["enabled"].as_bool())
+    }
+
+    #[test]
+    fn a_user_release_disables_the_binding_on_this_os_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        release_slot(
+            &context,
+            Role::SlotScreenshot,
+            &keys(&["Print"]),
+            &[declaration()],
+        )
+        .expect("release");
+
+        assert_eq!(layer_enabled(&layers.core, "shot-default"), Some(true));
+        assert_eq!(layer_enabled(&layers.os, "shot-default"), Some(false));
+    }
+
+    #[test]
+    fn a_claim_after_a_user_release_survives_a_session_end_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        seed_own_binding(&layers);
+        release_slot(&context, Role::SlotScreenshot, &route, &[declaration()]).expect("release");
+
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &route,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
+
+        let claimed = layers.load().expect("load").hotkeys;
+        let own = claimed
+            .iter()
+            .find(|b| b.id == "shot-default")
+            .expect("own");
+        let host_default = claimed
+            .iter()
+            .find(|b| b.id == "host-default-slot.screenshot-1")
+            .expect("host default");
+        assert!(!own.enabled);
+        assert!(host_default.enabled && host_default.key == "Print");
+        assert_eq!(host.freed.borrow().as_slice(), std::slice::from_ref(&route));
+
+        release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("release");
+
+        let after = layers.load().expect("load").hotkeys;
+        assert!(after
+            .iter()
+            .all(|b| b.id != "host-default-slot.screenshot-1"));
+        let own = after.iter().find(|b| b.id == "shot-default").expect("own");
+        assert!(!own.enabled);
+    }
+
+    #[test]
+    fn a_session_end_release_after_a_user_release_frees_nothing_on_the_next_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        seed_own_binding(&layers);
+        release_slot(&context, Role::SlotScreenshot, &route, &[declaration()]).expect("release");
+
+        release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("start release");
+
+        assert_eq!(ledger.holder(Role::SlotScreenshot).expect("holder"), None);
+        assert!(host.freed.borrow().is_empty());
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].enabled);
+    }
+
+    #[test]
+    fn a_session_end_release_leaves_the_plugins_own_binding_enabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        release_slot(&context, Role::SlotScreenshot, &keys(&["Print"]), &[]).expect("release");
+
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].enabled);
+    }
+
+    #[test]
+    fn disabling_touches_only_declaring_plugins_on_a_reached_key() {
+        let mut bindings = vec![
+            binding("own", "PRINT", "uid-shot", "screenshot", true),
+            binding("other-key", "Ctrl+P", "uid-shot", "screenshot", true),
+            binding("other-action", "Shift+Print", "uid-shot", "record", true),
+            binding("other-plugin", "Print", "uid-other", "screenshot", true),
+        ];
+
+        let disabled = disable_declared(
+            &mut bindings,
+            &[declaration()],
+            &keys(&["Print", "Shift+Print"]),
+            lower,
+        );
+
+        let enabled: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
+        assert_eq!(disabled, 2);
+        assert_eq!(enabled, vec![false, true, false, true]);
+        assert!(bindings[0].os_only);
+        assert!(!bindings[1].os_only);
+    }
+
+    fn other_declaration() -> Declaration {
+        Declaration {
+            plugin_id: "qol-other".to_string(),
+            uid: PluginUid::new("uid-other"),
+            role: Role::SlotScreenshot,
+            action: "grab".to_string(),
+        }
+    }
+
+    #[test]
+    fn disabling_counts_by_declaration_and_key() {
+        type Case = (
+            &'static str,
+            Vec<HotkeyBinding>,
+            Vec<Declaration>,
+            fn(&str) -> Option<String>,
+            usize,
+            usize,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "an already disabled binding is not counted",
+                vec![binding("own", "Print", "uid-shot", "screenshot", false)],
+                vec![declaration()],
+                lower,
+                0,
+                0,
+            ),
+            (
+                "a key that does not normalize is not disabled",
+                vec![binding("own", "Print", "uid-shot", "screenshot", true)],
+                vec![declaration()],
+                |_| None,
+                0,
+                1,
+            ),
+            (
+                "two declarations disable one binding each",
+                vec![
+                    binding("own", "Print", "uid-shot", "screenshot", true),
+                    binding("theirs", "print", "uid-other", "grab", true),
+                ],
+                vec![declaration(), other_declaration()],
+                lower,
+                2,
+                0,
+            ),
+        ];
+        for (name, mut bindings, declarations, normalize, expected, still_enabled) in cases {
+            let route = keys(&["Print"]);
+            let disabled = disable_declared(&mut bindings, &declarations, &route, normalize);
+            assert_eq!(disabled, expected, "{name}");
+            assert_eq!(
+                bindings.iter().filter(|b| b.enabled).count(),
+                still_enabled,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn claiming_turns_back_on_only_switched_off_bindings_on_an_implied_key() {
+        let switched_off = |id: &str, key: &str, uid: &str| HotkeyBinding {
+            os_only: true,
+            ..binding(id, key, uid, "record", false)
+        };
+        let mut bindings = vec![
+            switched_off("own", "Shift+Print", "uid-shot"),
+            switched_off("other-plugin", "Shift+Print", "uid-other"),
+            switched_off("off-route", "Ctrl+P", "uid-shot"),
+            binding("user-off", "Shift+Print", "uid-shot", "record", false),
+        ];
+
+        let enabled = enable_declared(
+            &mut bindings,
+            &declaration(),
+            &keys(&["Shift+Print"]),
+            lower,
+        );
+
+        let on: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
+        let ids: Vec<&str> = enabled.iter().map(|binding| binding.id.as_str()).collect();
+        assert_eq!(ids, ["own"]);
+        assert_eq!(on, vec![true, false, false, false]);
+    }
+
+    #[test]
+    fn a_release_then_claim_round_trips_the_implied_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        let reaches = keys(&["Print", "Shift+Print"]);
+        let mut config = layers.load().expect("load");
+        config.hotkeys = vec![
+            binding("shot-default", "Print", "uid-shot", "screenshot", true),
+            binding("shot-reverse", "Shift+Print", "uid-shot", "record", true),
+        ];
+        layers.save(&config).expect("save");
+
+        release_slot(&context, Role::SlotScreenshot, &reaches, &[declaration()]).expect("release");
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &reaches,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
+
+        let saved = layers.load().expect("load").hotkeys;
+        let enabled = |id: &str| saved.iter().find(|b| b.id == id).expect(id).enabled;
+        assert!(!enabled("shot-default"));
+        assert!(enabled("shot-reverse"));
+        assert!(enabled("host-default-slot.screenshot-1"));
+        assert_eq!(
+            host.freed.borrow().as_slice(),
+            &[keys(&["Print", "Shift+Print"])]
+        );
     }
 }

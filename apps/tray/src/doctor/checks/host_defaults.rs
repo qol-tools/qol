@@ -67,6 +67,7 @@ fn evaluate(inspection: &Inspection) -> CheckReport {
         .chain(intent_findings(inspection))
         .chain(changed_value_findings(inspection))
         .chain(opener_findings(inspection))
+        .chain(dead_key_findings(inspection))
         .collect();
     if findings.is_empty() {
         return CheckReport::ok(ok_summary(&inspection.claims));
@@ -190,6 +191,16 @@ fn opener_findings(inspection: &Inspection) -> impl Iterator<Item = Finding> + '
     .into_iter()
 }
 
+fn dead_key_findings(inspection: &Inspection) -> impl Iterator<Item = Finding> + '_ {
+    inspection.dead_keys.iter().map(|dead| Finding {
+        message: format!(
+            "{} does nothing: {} no longer has it and no qol hotkey is on it ({})",
+            dead.key, dead.owner, dead.role
+        ),
+        hint: release_hint(&dead.role),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +232,27 @@ mod tests {
             )],
             ..Inspection::default()
         }
+    }
+
+    #[test]
+    fn a_dead_route_key_warns_with_the_release_command() {
+        let inspection = Inspection {
+            dead_keys: vec![crate::features::host_defaults::inspect::DeadKey {
+                role: "slot.window_switcher".to_string(),
+                key: "Alt+Tab".to_string(),
+                owner: "Cinnamon".to_string(),
+            }],
+            ..Inspection::default()
+        };
+        let report = evaluate(&inspection);
+        assert_eq!(
+            report.issues[0].message,
+            "Alt+Tab does nothing: Cinnamon no longer has it and no qol hotkey is on it (slot.window_switcher)"
+        );
+        assert_eq!(
+            report.advice,
+            ["qol-tray defaults release slot.window_switcher"]
+        );
     }
 
     #[test]

@@ -163,7 +163,7 @@ pub(crate) fn run() -> Result<()> {
     hotkeys::release_held_keys();
     if owns_host_surface {
         features::host_defaults::release_portable_on_exit();
-        log_binding_restore("shutdown", hotkeys::restore_desktop_bindings_on_exit());
+        log_binding_restore("shutdown", hotkeys::restore_desktop_bindings());
     }
     if let Err(error) = &outcome {
         log::error!("qol-tray could not start: {error:#}");

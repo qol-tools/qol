@@ -49,9 +49,11 @@ qol-tray defaults claim <role> --plugin <id> [--json]
 
 Hands the role to an installed plugin that declares it in [[default_for]].
 The claim is refused, naming the reason, unless the host allows it silently
-for the current lifetime (portable session, or resident policy on a resident
-host). Slot roles bind the plugin's action to the role's keys and free the
-system binding; handler roles register qol's opener.
+for the current lifetime. Slot roles are always a portable session: they bind
+the plugin's action to the role's keys and free the system binding, and the
+system binding comes back when qol stops, or on the next start after a
+crash. Handler roles register qol's opener and follow the host's residency
+(portable session, or resident policy on a resident host).
 
 JSON: {\"role\", \"plugin\", \"claimed\": true}
 EXIT: 0 claimed, 1 refused or failed, 2 for a malformed command line.";
@@ -60,7 +62,11 @@ const RELEASE: &str = "\
 qol-tray defaults release <role> [--json]
 
 Gives the role back to the host. Only what qol wrote is undone: a value or
-binding you changed since is left alone.
+binding you changed since is left alone. For a slot role it also turns off,
+on this OS only, the plugin's own enabled bindings on every key the system
+tool answers (Alt+Tab and Alt+Shift+Tab for the window switcher), so qol does
+not free the system key again on the next start. Claiming the role again turns
+the extra keys' bindings back on.
 
 JSON: {\"role\", \"outcome\": \"restored\" | \"left_user_change\" | \"already_gone\"}
 EXIT: 0, 1 when restoring failed.";

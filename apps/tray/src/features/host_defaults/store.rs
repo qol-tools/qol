@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use qol_host_defaults::{ClaimRecord, Ledger, Lifetime};
+use qol_host_defaults::{ClaimRecord, Ledger, Lifetime, Role};
 use qol_host_fixes::residency::HostResidency;
 
 const LEDGER_FILE: &str = "host-defaults.json";
@@ -11,6 +11,13 @@ pub(super) fn ledger() -> Result<Ledger> {
 
 pub(super) fn current_lifetime() -> Lifetime {
     lifetime_for(HostResidency::current())
+}
+
+pub(super) fn lifetime_for_role(role: Role) -> Lifetime {
+    if role.is_slot() {
+        return Lifetime::PortableSession;
+    }
+    current_lifetime()
 }
 
 pub(super) fn lifetime_for(residency: HostResidency) -> Lifetime {
@@ -38,5 +45,16 @@ mod tests {
             lifetime_for(HostResidency::Portable),
             Lifetime::PortableSession
         );
+    }
+
+    #[test]
+    fn a_slot_is_a_portable_session_whatever_the_residency() {
+        for role in Role::ALL.into_iter().filter(|role| role.is_slot()) {
+            assert_eq!(
+                lifetime_for_role(role),
+                Lifetime::PortableSession,
+                "{role:?}"
+            );
+        }
     }
 }

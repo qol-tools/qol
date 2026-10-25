@@ -10,6 +10,7 @@ const WAYLAND_REASON: &str =
 
 struct Tool {
     keys: &'static [&'static str],
+    implied: &'static [&'static str],
     owner: &'static str,
 }
 
@@ -40,7 +41,7 @@ pub(super) fn probe(session: &Session, role: Role) -> Report {
         triggers,
         kept: Vec::new(),
         restore: Restore::Exact,
-        lifetimes: vec![Lifetime::PortableSession, Lifetime::ResidentPolicy],
+        lifetimes: vec![Lifetime::PortableSession],
     };
     match answer(session, role) {
         Answer::Route(route) => report(State::Silent, Owner::Named(route.owner), route.keys),
@@ -99,6 +100,12 @@ fn answer(session: &Session, role: Role) -> Answer {
     }
     Answer::Route(SlotRoute {
         keys: tool.keys.iter().map(|key| key.to_string()).collect(),
+        reaches: tool
+            .keys
+            .iter()
+            .chain(tool.implied)
+            .map(|key| key.to_string())
+            .collect(),
         owner: tool.owner.to_string(),
     })
 }
@@ -114,14 +121,17 @@ fn cinnamon_tool(role: Role) -> Option<Tool> {
     match role {
         Role::SlotLauncher => Some(Tool {
             keys: &["Super"],
+            implied: &[],
             owner: "Cinnamon's menu",
         }),
         Role::SlotWindowSwitcher => Some(Tool {
             keys: &["Alt+Tab"],
+            implied: &["Alt+Shift+Tab"],
             owner: "Cinnamon",
         }),
         Role::SlotScreenshot => Some(Tool {
             keys: &["Print"],
+            implied: &[],
             owner: "GNOME Screenshot",
         }),
         Role::FolderOpen
@@ -135,14 +145,17 @@ fn gnome_tool(role: Role) -> Option<Tool> {
     match role {
         Role::SlotLauncher => Some(Tool {
             keys: &["Super"],
+            implied: &[],
             owner: "Activities",
         }),
         Role::SlotWindowSwitcher => Some(Tool {
             keys: &["Alt+Tab"],
+            implied: &["Alt+Shift+Tab"],
             owner: "GNOME Shell",
         }),
         Role::SlotScreenshot => Some(Tool {
             keys: &["Print"],
+            implied: &[],
             owner: "GNOME Screenshot",
         }),
         Role::FolderOpen
@@ -167,6 +180,19 @@ mod tests {
 
     fn x11(desktop: &str) -> Session {
         Session::from_parts(desktop, LinuxDisplayBackend::X11)
+    }
+
+    #[test]
+    fn the_window_switcher_reaches_its_reverse_key_too() {
+        for desktop in ["X-Cinnamon", "ubuntu:GNOME"] {
+            let route = route(&x11(desktop), Role::SlotWindowSwitcher).expect("route");
+            assert_eq!(route.keys, vec!["Alt+Tab".to_string()], "{desktop}");
+            assert_eq!(
+                route.reaches,
+                vec!["Alt+Tab".to_string(), "Alt+Shift+Tab".to_string()],
+                "{desktop}"
+            );
+        }
     }
 
     #[test]
@@ -202,10 +228,7 @@ mod tests {
             assert_eq!(report.owner, Owner::Named(owner.to_string()));
             assert_eq!(report.triggers, vec![key.to_string()]);
             assert_eq!(report.restore, Restore::Exact);
-            assert_eq!(
-                report.lifetimes,
-                vec![Lifetime::PortableSession, Lifetime::ResidentPolicy]
-            );
+            assert_eq!(report.lifetimes, vec![Lifetime::PortableSession]);
         }
     }
 
