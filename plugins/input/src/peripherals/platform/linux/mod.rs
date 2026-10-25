@@ -11,6 +11,9 @@ use super::super::{
 const UDEV_DATA: &str = "/run/udev/data";
 const INPUT_DEVICE_PREFIX: &str = "c13:";
 const TOUCHPAD_PROPERTY: &str = "E:ID_INPUT_TOUCHPAD=1";
+const LOGITECH_VENDOR_PROPERTY: &str = "E:ID_VENDOR_ID=046d";
+const INPUT_CHAR_DEVICES: &str = "/sys/dev/char";
+const RECEIVER_NAME_SUFFIX: &str = "Receiver";
 
 struct Desktop {
     name: &'static str,
@@ -212,17 +215,34 @@ fn touchpad_missing() -> Option<String> {
         }
     };
     let found = entries.flatten().any(|entry| {
-        entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(INPUT_DEVICE_PREFIX)
-            && std::fs::read_to_string(entry.path()).is_ok_and(|text| marks_touchpad(&text))
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Some(minor) = file_name.strip_prefix(INPUT_DEVICE_PREFIX) else {
+            return false;
+        };
+        let Ok(udev) = std::fs::read_to_string(entry.path()) else {
+            return false;
+        };
+        let name = std::fs::read_to_string(format!("{INPUT_CHAR_DEVICES}/13:{minor}/device/name"))
+            .unwrap_or_default();
+        is_real_touchpad(&udev, name.trim())
     });
     (!found).then(|| NO_TOUCHPAD.to_string())
 }
 
+fn is_real_touchpad(udev: &str, name: &str) -> bool {
+    marks_touchpad(udev) && !is_receiver_placeholder(udev, name)
+}
+
 fn marks_touchpad(udev: &str) -> bool {
-    udev.lines().any(|line| line.trim() == TOUCHPAD_PROPERTY)
+    has_property(udev, TOUCHPAD_PROPERTY)
+}
+
+fn is_receiver_placeholder(udev: &str, name: &str) -> bool {
+    has_property(udev, LOGITECH_VENDOR_PROPERTY) && name.ends_with(RECEIVER_NAME_SUFFIX)
+}
+
+fn has_property(udev: &str, property: &str) -> bool {
+    udev.lines().any(|line| line.trim() == property)
 }
 
 fn speed_percent(speed: f64) -> u32 {
@@ -404,5 +424,23 @@ mod tests {
         assert!(!marks_touchpad("E:ID_INPUT=1\nE:ID_INPUT_MOUSE=1\n"));
         assert!(!marks_touchpad("E:ID_INPUT_TOUCHPAD=0\n"));
         assert!(!marks_touchpad("E:ID_INPUT_TOUCHSCREEN=1\n"));
+    }
+
+    #[test]
+    fn a_logitech_receivers_own_touch_interface_is_not_a_connected_touchpad() {
+        let receiver =
+            "E:ID_INPUT=1\nE:ID_INPUT_TOUCHPAD=1\nE:ID_VENDOR_ID=046d\nE:ID_MODEL_ID=c548\n";
+        assert!(!is_real_touchpad(receiver, "Logitech USB Receiver"));
+        assert!(is_real_touchpad(receiver, "Logitech Wireless Touchpad"));
+        assert!(is_real_touchpad(receiver, "Logitech T650"));
+        let other_vendor = "E:ID_INPUT_TOUCHPAD=1\nE:ID_VENDOR_ID=1234\n";
+        assert!(is_real_touchpad(other_vendor, "2.4G Receiver"));
+        let laptop = "E:ID_INPUT_TOUCHPAD=1\nE:ID_INPUT_TOUCHPAD_INTEGRATION=internal\n";
+        assert!(is_real_touchpad(laptop, "SYNA2B2C:01 06CB:7F27 Touchpad"));
+        assert!(is_real_touchpad(laptop, ""));
+        assert!(!is_real_touchpad(
+            "E:ID_INPUT_MOUSE=1\nE:ID_VENDOR_ID=046d\n",
+            "Logitech USB Receiver Mouse"
+        ));
     }
 }
