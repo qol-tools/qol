@@ -76,9 +76,13 @@ impl KeyboardState {
         } else {
             usage
         };
-        let Some((page, usage)) =
-            self.substitute(page, usage, pressed, &context.config.modifier_keys)
-        else {
+        let Some((page, usage)) = self.substitute(
+            page,
+            usage,
+            pressed,
+            context.config.enabled,
+            &context.config.modifier_keys,
+        ) else {
             return outputs;
         };
         match page {
@@ -105,6 +109,7 @@ impl KeyboardState {
         page: u16,
         usage: u16,
         pressed: bool,
+        enabled: bool,
         keys: &ModifierKeys,
     ) -> Option<Usage> {
         let Some((source, right)) = modifier_source(page, usage) else {
@@ -119,6 +124,9 @@ impl KeyboardState {
                 Some(index) => self.substituted.remove(index).1,
                 None => Some((page, usage)),
             };
+        }
+        if !enabled {
+            return Some((page, usage));
         }
         let target = target_usage(keys.target_for(source), right);
         self.substituted.push(((page, usage), target));
@@ -633,6 +641,15 @@ mod tests {
         })));
         fixture.press(0xE0);
         assert_eq!(fixture.press(0x06), vec![down(0x06)]);
+    }
+
+    #[test]
+    fn a_disabled_config_leaves_modifier_keys_alone() {
+        let mut fixture = Fixture::new(config(json!({
+            "enabled": false,
+            "modifier_keys": { "caps_lock": "control" }
+        })));
+        assert!(!fixture.press(0x39).contains(&down(0xE0)));
     }
 
     #[test]

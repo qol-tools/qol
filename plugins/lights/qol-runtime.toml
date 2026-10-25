@@ -43,6 +43,10 @@ description = "Reconnect to the Zigbee coordinator"
 description = "All known Zigbee devices"
 poll_interval_ms = 3000
 
+[query.light_options]
+description = "Paired lights that can be the main light"
+poll_interval_ms = 3000
+
 [query.connection_status]
 description = "Current coordinator connection state"
 poll_interval_ms = 3000

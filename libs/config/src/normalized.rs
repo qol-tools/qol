@@ -100,8 +100,6 @@ pub struct ResolvedField {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_card_field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub search: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_from: Option<String>,
@@ -113,8 +111,6 @@ pub struct ResolvedField {
     pub hide_values: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub align: Option<FieldAlign>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub span: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -132,6 +128,14 @@ pub fn resolve_config(
     spec: &ConfigSpec,
     overrides: &serde_json::Value,
 ) -> Result<ResolvedConfig, Vec<ValidationError>> {
+    resolve_config_for(spec, overrides, cfg!(debug_assertions))
+}
+
+pub fn resolve_config_for(
+    spec: &ConfigSpec,
+    overrides: &serde_json::Value,
+    include_dev_only: bool,
+) -> Result<ResolvedConfig, Vec<ValidationError>> {
     let normalized_overrides = normalize_config(spec, overrides);
     let mut errors = validate_spec_collect(spec);
     validate_overrides_shape(&normalized_overrides, &mut errors);
@@ -140,7 +144,7 @@ pub fn resolve_config(
     }
 
     let mut root_fields = Vec::new();
-    let mut sections = build_sections(spec, cfg!(debug_assertions));
+    let mut sections = build_sections(spec, include_dev_only);
 
     for (id, field) in &spec.fields {
         let no_stored_value = !field.has_stored_value();
@@ -219,14 +223,12 @@ pub fn resolve_config(
             lead: field.lead.clone(),
             items_label: field.items_label.clone(),
             item_card_field: field.item_card_field.clone(),
-            search: field.search,
             empty_message: field.empty_message.clone(),
             value_from: field.value_from.clone(),
             label_map: field.label_map.clone(),
             tone_map: field.tone_map.clone(),
             hide_values: field.hide_values.clone(),
             align: field.align,
-            span: field.span,
         };
         push_resolved_field(
             &mut root_fields,
@@ -563,6 +565,17 @@ default = false
             .map(|section| section.id)
             .collect();
         assert_eq!(dev, ["main", "debug"]);
+
+        let section_ids = |include_dev_only: bool| -> Vec<String> {
+            resolve_config_for(&spec, &serde_json::json!({}), include_dev_only)
+                .unwrap()
+                .sections
+                .into_iter()
+                .map(|section| section.id)
+                .collect()
+        };
+        assert_eq!(section_ids(false), ["main"]);
+        assert_eq!(section_ids(true), ["main", "debug"]);
     }
 
     #[test]

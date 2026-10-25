@@ -114,11 +114,13 @@ default = true
 label = "Glide"
 description = "Continuous window movement speed while a glide hotkey is held."
 actions = ["glide-left", "glide-right", "glide-up", "glide-down"]
+platforms = ["linux", "windows"]
 
 [field.glide_speed_px_per_second]
 type = "number"
 label = "Glide speed"
 section = "glide"
+platforms = ["linux", "windows"]
 default = 1200
 min = 100
 max = 4000

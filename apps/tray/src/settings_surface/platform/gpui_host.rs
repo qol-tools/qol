@@ -875,6 +875,7 @@ fn load_plugin_panel_with(
     );
     panel.sources[0].heading = source.heading;
     panel.sources[0].mark = source.mark;
+    panel.dev = !crate::mode::is_production_mode();
     Ok((panel, runtime))
 }
 
@@ -1165,6 +1166,7 @@ fn load_unified_panel_with(
             }),
             version: Some(format!("Version {}", crate::updates::current_version()).into()),
             installed_plugins: Some(installed_plugins),
+            dev: !crate::mode::is_production_mode(),
         },
         runtimes,
     ))

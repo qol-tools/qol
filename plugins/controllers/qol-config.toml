@@ -30,13 +30,13 @@ item_card_field = "input_test"
 [[field.detected_pads.row_actions]]
 action = "apply_fixes"
 label = "Fix driver"
-description = "Applies the fix for this controller. Asks for your password once."
+description = "Fixes the driver for every supported controller on this computer. Asks for your password once."
 when = "fixable"
 
 [[field.detected_pads.row_actions]]
 action = "reclaim_controller"
 label = "Unstick"
-description = "Stops other apps grabbing it, then reconnects it. Press Home afterwards."
+description = "Stops other apps grabbing stuck Bluetooth controllers and disconnects them. Press Home on a controller to reconnect it."
 when = "reclaimable"
 
 [field.input_test]
