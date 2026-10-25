@@ -14,6 +14,10 @@ pub fn show_plugin_notification(
     layout: Option<NotificationLayout>,
     activate: Option<&DaemonRequest>,
 ) {
+    if !crate::features::notifications::enabled() {
+        log::info!("[surfaces] notifications are off, dropped: {title}");
+        return;
+    }
     let handler = crate::features::notifications::native_handler();
     let toast_shown = handler != NativeHandler::Os && {
         let (name, mark) = plugin_id.map_or_else(

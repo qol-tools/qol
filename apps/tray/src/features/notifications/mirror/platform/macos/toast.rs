@@ -7,6 +7,10 @@ pub(super) struct Mirrored {
 }
 
 pub(super) fn show(app_name: &str, notification: &Mirrored, mirror_banner_id: Option<&str>) {
+    if !crate::features::notifications::enabled() {
+        log::debug!("notification mirror: notifications are off, dropped one");
+        return;
+    }
     let (title, body) = toast_text(app_name, notification);
     let activate =
         mirror_banner_id.map(|id| crate::settings_surface::ToastActivate::MirrorBanner { id });

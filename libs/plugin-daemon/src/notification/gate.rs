@@ -11,14 +11,12 @@ pub enum NativeHandler {
 }
 
 pub fn stored_handler() -> NativeHandler {
-    let Some(path) = config_dir().map(|dir| dir.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE))
-    else {
-        return NativeHandler::Qol;
-    };
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return NativeHandler::Qol;
-    };
-    parse_config(&contents)
+    stored_config().map_or(NativeHandler::Qol, |contents| parse_config(&contents))
+}
+
+fn stored_config() -> Option<String> {
+    let path = config_dir()?.join(qol_conventions::NOTIFICATIONS_SETTINGS_FILE);
+    std::fs::read_to_string(path).ok()
 }
 
 pub fn native_allowed(handler: NativeHandler) -> bool {
@@ -26,7 +24,15 @@ pub fn native_allowed(handler: NativeHandler) -> bool {
 }
 
 pub fn native_allowed_now() -> bool {
-    native_allowed(stored_handler())
+    stored_config()
+        .is_some_and(|contents| parse_enabled(&contents) && native_allowed(parse_config(&contents)))
+}
+
+fn parse_enabled(contents: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(contents)
+        .ok()
+        .and_then(|value| value.get("enabled")?.as_bool())
+        .unwrap_or(true)
 }
 
 fn parse_config(contents: &str) -> NativeHandler {
@@ -113,6 +119,14 @@ mod tests {
     fn defaults_to_qol_when_unset() {
         let path = write_temp_config(r#"{}"#);
         assert_eq!(parse_file(&path), NativeHandler::Qol);
+    }
+
+    #[test]
+    fn notifications_stay_on_unless_turned_off() {
+        assert!(parse_enabled(r#"{"handler": "os"}"#));
+        assert!(parse_enabled(r#"{"enabled": true}"#));
+        assert!(parse_enabled(r#"{not json"#));
+        assert!(!parse_enabled(r#"{"handler": "both", "enabled": false}"#));
     }
 
     #[test]
