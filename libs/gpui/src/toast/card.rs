@@ -201,13 +201,11 @@ pub(super) fn message(row: &SlabSnapshotRow, banner: Banner, kit: Kit, host: Opt
         age: String::new(),
     };
     let mut words = div()
-        .flex_grow()
-        .min_h_0()
         .w_full()
         .flex()
         .flex_col()
         .items_center()
-        .justify_center()
+        .mt(px(qol_theme::SPACE_STACK))
         .gap(px(qol_theme::SPACE_STACK))
         .px(px(qol_theme::toast::CLOSE))
         .child(banner_title(row, &banner, ground));
