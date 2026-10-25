@@ -13,6 +13,8 @@ use crate::desktop::{desktop_field, linux_app_roots, scan_desktop_root};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 const QUERY_LIMIT: usize = 4096;
+const SHELLS: [&str; 7] = ["sh", "bash", "dash", "zsh", "ksh", "fish", "csh"];
+const FIELD_CODES: [&str; 4] = ["%f", "%u", "%F", "%U"];
 
 struct Candidate {
     id: String,
@@ -140,6 +142,17 @@ fn launch_commands(exec: &str, paths: &[PathBuf]) -> io::Result<Vec<Command>> {
         let codes = token.replace("%%", "");
         codes.contains("%f") || codes.contains("%u")
     });
+    let embeds = tokens.iter().any(|token| {
+        let codes = token.replace("%%", "");
+        !FIELD_CODES.contains(&token.as_str())
+            && FIELD_CODES.iter().any(|code| codes.contains(code))
+    });
+    if embeds && tokens.iter().any(|token| runs_shell(token)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the app's launcher hands the file name to a shell, where a crafted name could run commands",
+        ));
+    }
     let batches: Vec<&[PathBuf]> = if takes_many || !takes_one {
         vec![paths]
     } else {
@@ -168,6 +181,13 @@ fn expand(tokens: &[String], files: &[PathBuf]) -> io::Result<Command> {
     let mut command = Command::new(program);
     command.args(words);
     Ok(command)
+}
+
+fn runs_shell(token: &str) -> bool {
+    Path::new(token)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| SHELLS.contains(&name))
 }
 
 fn substitute(token: &str, file: Option<&PathBuf>) -> OsString {
@@ -285,7 +305,7 @@ mod tests {
     #[test]
     fn codes_inside_a_token_expand_and_uri_codes_get_file_uris() {
         let files = [PathBuf::from("/a b.txt"), PathBuf::from("/c.txt")];
-        let cases: [(&str, Vec<Vec<&str>>); 4] = [
+        let cases: [(&str, Vec<Vec<&str>>); 3] = [
             (
                 "viewer --file=%f",
                 vec![
@@ -296,13 +316,6 @@ mod tests {
             (
                 "browser %U",
                 vec![vec!["browser", "file:///a%20b.txt", "file:///c.txt"]],
-            ),
-            (
-                "sh -c \"viewer %u\"",
-                vec![
-                    vec!["sh", "-c", "viewer file:///a%20b.txt"],
-                    vec!["sh", "-c", "viewer file:///c.txt"],
-                ],
             ),
             ("tool %c --50%% %k", vec![vec!["tool", "--50%"]]),
         ];
@@ -321,5 +334,12 @@ mod tests {
     fn an_empty_or_broken_launcher_is_an_error() {
         assert!(launch_commands("", &[PathBuf::from("/a")]).is_err());
         assert!(launch_commands("\"unterminated %f", &[PathBuf::from("/a")]).is_err());
+        for exec in ["sh -c \"viewer %f\"", "/usr/bin/env bash -lc 'open %u'"] {
+            assert!(
+                launch_commands(exec, &[PathBuf::from("/a;b")]).is_err(),
+                "{exec}"
+            );
+        }
+        assert!(launch_commands("sh -c viewer %f", &[PathBuf::from("/a;b")]).is_ok());
     }
 }
