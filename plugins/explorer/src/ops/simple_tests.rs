@@ -2,7 +2,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 
-use super::{free_name, new_folder, rename, trash, NameProblem};
+use super::{copy_name, delete, free_name, new_file, new_folder, rename, trash, NameProblem};
 use crate::ops::{Done, JobId, Journal, Transfer, Undo, Verb};
 
 fn done(verb: Verb, placed: Vec<(PathBuf, PathBuf)>) -> Done {
@@ -305,4 +305,90 @@ fn journal_ignores_a_job_that_placed_nothing() {
     let mut journal = Journal::default();
     journal.record(&done(Verb::Copy, Vec::new()));
     assert_eq!(journal.undo(), None);
+}
+
+#[test]
+fn copy_name_adds_copy_before_the_extension_then_counts_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("a.md", false, "a copy.md"),
+        ("a.tar.gz", false, "a.tar copy.gz"),
+        (".bashrc", false, ".bashrc copy"),
+        ("v1.2", true, "v1.2 copy"),
+        ("notes", false, "notes copy"),
+    ];
+    for (name, folder, expected) in cases {
+        assert_eq!(
+            copy_name(dir.path(), OsStr::new(name), folder),
+            dir.path().join(expected),
+            "{name}"
+        );
+    }
+    fs::write(dir.path().join("a copy.md"), "").unwrap();
+    assert_eq!(
+        copy_name(dir.path(), OsStr::new("a.md"), false),
+        dir.path().join("a copy 2.md")
+    );
+    fs::write(dir.path().join("a copy 2.md"), "").unwrap();
+    assert_eq!(
+        copy_name(dir.path(), OsStr::new("a.md"), false),
+        dir.path().join("a copy 3.md")
+    );
+}
+
+#[test]
+fn new_file_creates_an_empty_file_and_refuses_a_taken_or_bad_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let made = new_file(dir.path(), "New file").unwrap();
+    assert!(made.is_file());
+    assert_eq!(fs::metadata(&made).unwrap().len(), 0);
+    assert_eq!(new_file(dir.path(), "New file"), Err(NameProblem::Taken));
+    assert_eq!(new_file(dir.path(), ""), Err(NameProblem::Empty));
+}
+
+#[test]
+fn delete_removes_files_and_folders_and_reports_what_is_gone() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.txt");
+    fs::write(&file, "a").unwrap();
+    let folder = dir.path().join("d");
+    fs::create_dir_all(folder.join("inner")).unwrap();
+    fs::write(folder.join("inner").join("b"), "b").unwrap();
+    let missing = dir.path().join("missing");
+
+    let failures = delete(&[file.clone(), folder.clone(), missing.clone()]);
+    assert!(!file.exists());
+    assert!(!folder.exists());
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].path, missing);
+}
+
+#[test]
+fn journal_undo_of_a_new_file_only_proceeds_while_it_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let empty = new_file(dir.path(), "a").unwrap();
+    let mut journal = Journal::default();
+    journal.record_new_file(empty.clone());
+    assert_eq!(journal.undo(), Some(Undo::RemoveFile(empty)));
+
+    let written = dir.path().join("b");
+    fs::write(&written, "text").unwrap();
+    journal.record_new_file(written);
+    assert_eq!(journal.undo(), None);
+}
+
+#[test]
+fn journal_undo_of_a_duplicate_trashes_the_copies() {
+    let mut journal = Journal::default();
+    journal.record(&done(
+        Verb::Duplicate,
+        vec![("/a/x".into(), "/a/x copy".into())],
+    ));
+    assert_eq!(
+        journal.undo(),
+        Some(Undo::Trash {
+            copies: vec!["/a/x copy".into()],
+            restore: Vec::new(),
+        })
+    );
 }

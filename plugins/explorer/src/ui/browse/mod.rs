@@ -30,7 +30,7 @@ use crate::listing::{
 use crate::nav::{merged, History, Jump, Picks, Spot};
 use counts::LiveCounts;
 pub use ops::{Held, MoveRecord, MoveState};
-pub(crate) use ops_text::{copy_only_note, label_of, short_note};
+pub(crate) use ops_text::{copy_only_note, erase_lines, label_of, short_note};
 use pace::Pace;
 use path_field::PathField;
 use watch::FolderWatch;

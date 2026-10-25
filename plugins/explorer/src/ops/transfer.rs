@@ -42,7 +42,7 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
             }
         }
         if parent == into {
-            if transfer.verb == Verb::Copy {
+            if transfer.verb != Verb::Move {
                 tally.bytes += tree_bytes(source);
             }
             continue;
@@ -57,7 +57,7 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
             Ok(here) => top_level(source, &existing, &meta, &here, &mut tally),
         }
     }
-    let need = if transfer.verb == Verb::Copy || crosses_volume {
+    let need = if transfer.verb != Verb::Move || crosses_volume {
         tally.bytes
     } else {
         0

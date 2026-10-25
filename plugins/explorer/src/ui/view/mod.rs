@@ -2,6 +2,7 @@ mod band;
 mod choices;
 mod clash;
 mod drag;
+mod erase;
 mod grid;
 mod list;
 mod menu;
@@ -656,6 +657,10 @@ impl ExplorerView {
             self.rename_pressed(&event.keystroke, cx);
             return;
         }
+        if self.browser.erasing().is_some() {
+            self.erase_key(&event.keystroke, cx);
+            return;
+        }
         if self.browser.surveyed().is_some() {
             self.clash_key(&event.keystroke, cx);
             return;
@@ -757,6 +762,9 @@ impl ExplorerView {
             Action::Trash => self.browser.trash_picks(),
             Action::Rename => self.browser.rename_open(),
             Action::NewFolder => self.revealed(Browser::new_folder),
+            Action::NewFile => self.revealed(Browser::new_file),
+            Action::Duplicate => self.browser.duplicate_picks(),
+            Action::Erase => self.browser.erase_ask(),
             Action::Undo => self.browser.undo(),
             Action::Moves => self.browser.toggle_moves(),
             Action::Nothing => false,
@@ -989,6 +997,7 @@ impl Render for ExplorerView {
         let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
         let sheet = match self.browser.surveyed() {
             Some(survey) => Some(clash::render(self, survey, cx)),
+            None if self.browser.erasing().is_some() => Some(erase::render(self, cx)),
             None if self.browser.moves_open() => Some(moves::render(self)),
             None => None,
         };
