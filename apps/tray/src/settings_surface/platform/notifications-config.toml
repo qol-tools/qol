@@ -6,6 +6,13 @@ description = "How qol tells you something happened."
 label = "Notifications"
 description = "How qol tells you something happened."
 
+[field.enabled]
+type = "boolean"
+label = "Show notifications"
+description = "Turn off to silence every qol notification. The tray menu's Mute notifications flips the same switch."
+section = "notifications"
+default = true
+
 [field.handler]
 type = "select"
 label = "Show notifications in"

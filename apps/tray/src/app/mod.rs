@@ -349,6 +349,7 @@ async fn async_init_inner(
     }
     let mut feature_registry = FeatureRegistry::new();
     feature_registry.register(Box::new(features::plugin_store::Plugins::new()));
+    feature_registry.register(Box::new(features::notifications::menu::MuteToggle));
     #[cfg(feature = "dev")]
     feature_registry.register(Box::new(features::mode_toggle::ModeToggle::new()));
     let feature_registry = Arc::new(feature_registry);

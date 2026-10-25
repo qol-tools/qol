@@ -1,3 +1,4 @@
+pub mod menu;
 pub(crate) mod mirror;
 
 use anyhow::{Context, Result};
@@ -9,6 +10,7 @@ pub use mirror::MirrorAccess;
 
 #[derive(Clone, Debug, Serialize)]
 struct NotificationSettings {
+    enabled: bool,
     #[serde(default)]
     use_system_notifications: bool,
     handler: NativeHandler,
@@ -21,6 +23,7 @@ struct NotificationSettings {
 impl Default for NotificationSettings {
     fn default() -> Self {
         Self {
+            enabled: true,
             use_system_notifications: false,
             handler: NativeHandler::Qol,
             message_stay_seconds: None,
@@ -36,6 +39,8 @@ impl<'de> Deserialize<'de> for NotificationSettings {
     {
         #[derive(Deserialize)]
         struct Raw {
+            #[serde(default)]
+            enabled: Option<bool>,
             #[serde(default)]
             use_system_notifications: bool,
             #[serde(default)]
@@ -54,6 +59,7 @@ impl<'de> Deserialize<'de> for NotificationSettings {
             NativeHandler::Qol
         });
         Ok(Self {
+            enabled: raw.enabled.unwrap_or(true),
             use_system_notifications: raw.use_system_notifications,
             handler,
             message_stay_seconds: qol_theme::stored_message_stay(
@@ -77,6 +83,14 @@ fn update_settings(update: impl FnOnce(&mut NotificationSettings)) -> Result<()>
     update(&mut settings);
     crate::file_io::write_pretty_json(&path, &settings)
         .context("failed to save notification settings")
+}
+
+pub fn enabled() -> bool {
+    settings().map(|settings| settings.enabled).unwrap_or(true)
+}
+
+pub fn set_enabled(enabled: bool) -> Result<()> {
+    update_settings(|settings| settings.enabled = enabled)
 }
 
 pub fn set_use_system_notifications(enabled: bool) -> Result<()> {
@@ -276,6 +290,23 @@ mod tests {
             5.0,
             "a deliberate older pick carries over"
         );
+    }
+
+    #[test]
+    fn notifications_stay_on_until_turned_off_and_keep_the_other_choices() {
+        let root = TempDir::new().unwrap();
+        let _guard = crate::paths::push_test_path_root(root.path());
+
+        assert!(enabled());
+        let path = settings_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"handler": "both"}"#).unwrap();
+        assert!(enabled(), "a file without the key keeps notifications on");
+        set_enabled(false).unwrap();
+        assert!(!enabled());
+        assert_eq!(native_handler(), NativeHandler::Both);
+        set_enabled(true).unwrap();
+        assert!(enabled());
     }
 
     #[test]

@@ -19,6 +19,7 @@ const DO_NOT_DISTURB_QUERY: &str = "os_do_not_disturb";
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 struct NotificationsConfig {
+    enabled: bool,
     handler: NativeHandler,
     placement: String,
     message_seconds: f64,
@@ -37,6 +38,7 @@ struct QueryResponse {
 
 fn current_config() -> NotificationsConfig {
     NotificationsConfig {
+        enabled: crate::features::notifications::enabled(),
         handler: crate::features::notifications::native_handler(),
         placement: crate::features::notifications::placement().token(),
         message_seconds: crate::features::notifications::message_seconds(),
@@ -94,6 +96,7 @@ fn query_inner(query: &str) -> HttpResult<Response> {
 }
 
 enum Change {
+    Enabled(bool),
     Handler(NativeHandler),
     Placement(Spot),
     MessageSeconds(f64),
@@ -102,6 +105,7 @@ enum Change {
 impl Change {
     fn apply(self) -> anyhow::Result<()> {
         match self {
+            Self::Enabled(enabled) => crate::features::notifications::set_enabled(enabled),
             Self::Handler(handler) => {
                 let previous = crate::features::notifications::native_handler();
                 if handler == previous {
@@ -121,6 +125,10 @@ impl Change {
 
 fn parsed_change(field: &str, value: &serde_json::Value) -> HttpResult<Change> {
     match field {
+        "enabled" => value
+            .as_bool()
+            .map(Change::Enabled)
+            .ok_or_else(|| Box::new(bad_request(&format!("{field} expects true or false")))),
         "handler" => match value.as_str() {
             Some("qol") => Ok(Change::Handler(NativeHandler::Qol)),
             Some("os") => Ok(Change::Handler(NativeHandler::Os)),
@@ -195,6 +203,7 @@ mod tests {
         assert_eq!(
             initial,
             NotificationsConfig {
+                enabled: true,
                 handler: NativeHandler::Qol,
                 placement: "top-right".into(),
                 message_seconds: qol_theme::STAY_MESSAGE.as_secs_f64(),
@@ -202,6 +211,7 @@ mod tests {
         );
         let saved = config_of(
             put(serde_json::json!({
+                "enabled": false,
                 "handler": "qol",
                 "placement": "0.2,0.7",
                 "message_seconds": 2.5,
@@ -209,6 +219,7 @@ mod tests {
             .unwrap(),
         )
         .await;
+        assert!(!saved.enabled);
         assert_eq!(saved.placement, "0.2,0.7");
         assert_eq!(saved.message_seconds, 2.5);
         let snapped = config_of(put(serde_json::json!({ "placement": "0,1" })).unwrap()).await;
@@ -227,6 +238,7 @@ mod tests {
             serde_json::json!({ "placement": "bottom-left", "message_seconds": 90 }),
             serde_json::json!({ "placement": "bottom-left", "handler": "pager" }),
             serde_json::json!({ "placement": "bottom-left", "theme": "slate" }),
+            serde_json::json!({ "placement": "bottom-left", "enabled": "off" }),
         ] {
             let refused = put(body.clone()).unwrap_err();
             assert_eq!(refused.status().as_u16(), 400, "{body}");
