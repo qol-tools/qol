@@ -563,7 +563,7 @@ fn a_name_contains_the_typed_text_anywhere_ignoring_case_and_accents() {
         ("notes.txt", "", true),
         ("notes.txt", "notes.txt.bak", false),
         ("notes.txt", "xt", true),
-        ("notes.txt", "tx", false),
+        ("notes.txt", "xn", false),
         ("", "a", false),
         ("", "", true),
     ];

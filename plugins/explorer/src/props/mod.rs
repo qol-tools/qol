@@ -288,7 +288,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("pic.png");
         fs::write(&path, [0u8; 10]).expect("file");
-        let props = Props::open(std::slice::from_ref(&path), "Text", || {}).expect("props");
+        let props = Props::open(std::slice::from_ref(&path), "PNG file", || {}).expect("props");
         let rows = props.rows();
         let labels: Vec<&str> = rows.iter().map(|fact| fact.label).collect();
         assert_eq!(
