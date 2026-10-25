@@ -29,6 +29,7 @@ pub(crate) struct DeadKey {
     pub role: String,
     pub key: String,
     pub owner: String,
+    pub freed_by: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,9 +141,6 @@ fn dead_keys(
     plugins: &[catalog::InstalledPlugin],
     involved: &BTreeSet<String>,
 ) -> Vec<DeadKey> {
-    if !crate::doctor::host_bindings_readable() {
-        return Vec::new();
-    }
     let bindings = match HotkeyLayers::active().and_then(|layers| layers.load()) {
         Ok(config) => config.hotkeys,
         Err(error) => {
@@ -173,7 +171,7 @@ fn dead_keys(
         &routes,
         involved,
         &bindings,
-        crate::doctor::shadowed_combos,
+        crate::doctor::host_answers_in,
         crate::doctor::normalize_combo,
     )
 }
@@ -188,7 +186,7 @@ fn unanswered(
     routes: &[RoleRoute],
     involved: &BTreeSet<String>,
     bindings: &[HotkeyBinding],
-    host_answers: impl Fn(&[String]) -> Vec<String>,
+    host_answers: impl Fn(&[String], &[String]) -> Option<Vec<String>>,
     normalize: impl Fn(&str) -> Option<String>,
 ) -> Vec<DeadKey> {
     let bound: BTreeSet<String> = bindings
@@ -208,16 +206,28 @@ fn unanswered(
             .iter()
             .filter_map(|key| normalize(key))
             .collect();
-        let set_by_qol = involved.contains(role.id())
-            || bindings.iter().any(|binding| {
-                binding.enabled
-                    && declared_by.contains(&binding.plugin_uid)
-                    && normalize(&binding.key).is_some_and(|key| reached.contains(&key))
-            });
-        if !set_by_qol {
+        let on_reached_key = |binding: &&HotkeyBinding| {
+            binding.enabled && normalize(&binding.key).is_some_and(|key| reached.contains(&key))
+        };
+        let set_by_role = involved.contains(role.id())
+            || bindings
+                .iter()
+                .filter(on_reached_key)
+                .any(|binding| declared_by.contains(&binding.plugin_uid));
+        let other = bindings
+            .iter()
+            .filter(on_reached_key)
+            .find(|binding| !declared_by.contains(&binding.plugin_uid));
+        if !set_by_role && other.is_none() {
             continue;
         }
-        let answered = host_answers(&route.keys);
+        let freed_by = match other {
+            Some(binding) if !set_by_role => Some(format!("{} on {}", binding.action, binding.key)),
+            _ => None,
+        };
+        let Some(answered) = host_answers(&route.keys, &route.answered_in) else {
+            continue;
+        };
         for key in &route.keys {
             let by_qol = normalize(key).is_some_and(|key| bound.contains(&key));
             if !by_qol && !answered.contains(key) {
@@ -225,6 +235,7 @@ fn unanswered(
                     role: role.id().to_string(),
                     key: key.clone(),
                     owner: route.owner.clone(),
+                    freed_by: freed_by.clone(),
                 });
             }
         }
@@ -268,6 +279,7 @@ mod tests {
                 keys: vec!["Alt+Tab".to_string()],
                 reaches: vec!["Alt+Tab".to_string(), "Alt+Shift+Tab".to_string()],
                 owner: "Cinnamon".to_string(),
+                answered_in: vec!["/org/cinnamon/".to_string()],
             },
             declared_by: vec![PluginUid::new("uid-alt-tab")],
         }]
@@ -296,42 +308,82 @@ mod tests {
                 vec![binding("Alt+Shift+Tab", "uid-alt-tab", true)],
                 roles(&[]),
                 true,
-                1,
+                Some(None),
             ),
             (
                 "a claim freed it and its binding is off",
                 vec![binding("Alt+Tab", "uid-alt-tab", false)],
                 roles(&["slot.window_switcher"]),
                 true,
-                1,
+                Some(None),
             ),
             (
                 "bound by qol",
                 vec![binding("alt+tab", "uid-other", true)],
                 roles(&["slot.window_switcher"]),
                 true,
-                0,
+                None,
             ),
             (
-                "the user removed it without qol",
+                "another plugin's reverse key freed it",
                 vec![binding("Alt+Shift+Tab", "uid-other", true)],
                 roles(&[]),
                 true,
-                0,
+                Some(Some("open on Alt+Shift+Tab")),
+            ),
+            (
+                "no qol binding on any reached key",
+                vec![binding("Ctrl+K", "uid-other", true)],
+                roles(&[]),
+                true,
+                None,
             ),
             (
                 "the host still has it",
                 Vec::new(),
                 roles(&["slot.window_switcher"]),
                 false,
-                0,
+                None,
             ),
         ];
         for (name, bindings, involved, freed, expected) in cases {
-            let host_answers = |keys: &[String]| if freed { Vec::new() } else { keys.to_vec() };
+            let host_answers = |keys: &[String], _: &[String]| {
+                Some(if freed { Vec::new() } else { keys.to_vec() })
+            };
             let dead = unanswered(&switcher(), &involved, &bindings, host_answers, lower);
-            assert_eq!(dead.len(), expected, "{name}");
+            let freed_by: Option<Vec<Option<String>>> =
+                (!dead.is_empty()).then(|| dead.iter().map(|key| key.freed_by.clone()).collect());
+            let expected = expected.map(|by| vec![by.map(str::to_string)]);
+            assert_eq!(freed_by, expected, "{name}");
         }
+    }
+
+    #[test]
+    fn an_unreadable_host_scan_reports_nothing() {
+        let dead = unanswered(
+            &switcher(),
+            &roles(&["slot.window_switcher"]),
+            &[],
+            |_, _| None,
+            lower,
+        );
+        assert!(dead.is_empty());
+    }
+
+    #[test]
+    fn the_host_is_asked_under_the_route_owners_prefixes() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        unanswered(
+            &switcher(),
+            &roles(&["slot.window_switcher"]),
+            &[],
+            |_, prefixes| {
+                asked.borrow_mut().extend(prefixes.to_vec());
+                Some(Vec::new())
+            },
+            lower,
+        );
+        assert_eq!(*asked.borrow(), vec!["/org/cinnamon/".to_string()]);
     }
 
     #[test]
@@ -340,7 +392,7 @@ mod tests {
             &switcher(),
             &roles(&["slot.window_switcher"]),
             &[],
-            |_| Vec::new(),
+            |_, _| Some(Vec::new()),
             lower,
         );
         assert_eq!(
@@ -349,6 +401,7 @@ mod tests {
                 role: "slot.window_switcher".to_string(),
                 key: "Alt+Tab".to_string(),
                 owner: "Cinnamon".to_string(),
+                freed_by: None,
             }]
         );
     }

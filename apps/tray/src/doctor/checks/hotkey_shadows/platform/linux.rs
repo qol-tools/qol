@@ -16,6 +16,30 @@ pub(in crate::doctor::checks::hotkey_shadows) fn collect_shadows(
     shadows_from_entries(qol_index, &scan.entries)
 }
 
+pub(in crate::doctor::checks::hotkey_shadows) fn shadows_under(
+    qol_index: &BTreeMap<String, String>,
+    prefixes: &[String],
+) -> Option<Vec<DetectedShadow>> {
+    let scan = takeover::scan();
+    if !scan.available {
+        return None;
+    }
+    Some(shadows_in_dirs(qol_index, &scan.entries, prefixes))
+}
+
+fn shadows_in_dirs(
+    qol_index: &BTreeMap<String, String>,
+    entries: &[BindingEntry],
+    prefixes: &[String],
+) -> Vec<DetectedShadow> {
+    let kept: Vec<BindingEntry> = entries
+        .iter()
+        .filter(|entry| prefixes.iter().any(|prefix| entry.dir.starts_with(prefix)))
+        .cloned()
+        .collect();
+    shadows_from_entries(qol_index, &kept)
+}
+
 pub(crate) fn shadows_from_entries(
     qol_index: &BTreeMap<String, String>,
     entries: &[BindingEntry],
@@ -262,6 +286,28 @@ mod tests {
                 "dump must not produce shadows: {dump}"
             );
         }
+    }
+
+    #[test]
+    fn only_entries_under_the_given_prefixes_answer() {
+        let dump = "[wm]\nswitch-windows=['<Alt>Tab']\n";
+        let cinnamon = dconf::parse_dump(CINNAMON, MatchPolicy::Subset, dump);
+        let gnome = dconf::parse_dump(
+            "/org/gnome/desktop/wm/keybindings/",
+            MatchPolicy::Subset,
+            "[/]\nswitch-applications=['<Alt>Tab']\n",
+        );
+        let entries: Vec<BindingEntry> = cinnamon.into_iter().chain(gnome).collect();
+        let all = shadows_from_entries(&index(&["Alt+Tab"]), &entries);
+        assert_eq!(all.len(), 2, "got: {all:?}");
+        let kept = shadows_in_dirs(
+            &index(&["Alt+Tab"]),
+            &entries,
+            &["/org/cinnamon/".to_string()],
+        );
+        assert_eq!(kept.len(), 1, "got: {kept:?}");
+        assert!(kept[0].source_label.starts_with("/org/cinnamon/"));
+        assert!(shadows_in_dirs(&index(&["Alt+Tab"]), &entries, &[]).is_empty());
     }
 
     #[test]

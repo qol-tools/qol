@@ -13,4 +13,4 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-pub(super) use imp::collect_shadows;
+pub(super) use imp::{collect_shadows, shadows_under};

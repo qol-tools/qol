@@ -64,6 +64,7 @@ pub struct SlotRoute {
     pub keys: Vec<String>,
     pub reaches: Vec<String>,
     pub owner: String,
+    pub answered_in: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

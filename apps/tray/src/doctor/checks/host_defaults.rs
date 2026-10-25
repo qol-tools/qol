@@ -197,7 +197,10 @@ fn dead_key_findings(inspection: &Inspection) -> impl Iterator<Item = Finding> +
             "{} does nothing: {} no longer has it and no qol hotkey is on it ({})",
             dead.key, dead.owner, dead.role
         ),
-        hint: release_hint(&dead.role),
+        hint: match &dead.freed_by {
+            Some(label) => format!("move {label} to another key, or turn on {}", dead.role),
+            None => release_hint(&dead.role),
+        },
     })
 }
 
@@ -241,6 +244,7 @@ mod tests {
                 role: "slot.window_switcher".to_string(),
                 key: "Alt+Tab".to_string(),
                 owner: "Cinnamon".to_string(),
+                freed_by: None,
             }],
             ..Inspection::default()
         };
@@ -252,6 +256,28 @@ mod tests {
         assert_eq!(
             report.advice,
             ["qol-tray defaults release slot.window_switcher"]
+        );
+    }
+
+    #[test]
+    fn a_key_freed_by_another_binding_names_it_in_the_hint() {
+        let inspection = Inspection {
+            dead_keys: vec![crate::features::host_defaults::inspect::DeadKey {
+                role: "slot.window_switcher".to_string(),
+                key: "Alt+Tab".to_string(),
+                owner: "Cinnamon".to_string(),
+                freed_by: Some("open on Alt+Shift+Tab".to_string()),
+            }],
+            ..Inspection::default()
+        };
+        let report = evaluate(&inspection);
+        assert_eq!(
+            report.issues[0].message,
+            "Alt+Tab does nothing: Cinnamon no longer has it and no qol hotkey is on it (slot.window_switcher)"
+        );
+        assert_eq!(
+            report.advice,
+            ["move open on Alt+Shift+Tab to another key, or turn on slot.window_switcher"]
         );
     }
 

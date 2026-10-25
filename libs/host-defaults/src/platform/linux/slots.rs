@@ -107,7 +107,16 @@ fn answer(session: &Session, role: Role) -> Answer {
             .map(|key| key.to_string())
             .collect(),
         owner: tool.owner.to_string(),
+        answered_in: answered_in(session.desktop),
     })
+}
+
+fn answered_in(desktop: DesktopEnvironment) -> Vec<String> {
+    match desktop {
+        DesktopEnvironment::Cinnamon => vec!["/org/cinnamon/".to_string()],
+        DesktopEnvironment::Gnome => vec!["/org/gnome/".to_string()],
+        DesktopEnvironment::Kde | DesktopEnvironment::Unknown => Vec::new(),
+    }
 }
 
 fn unsupported_desktop(raw: &str) -> String {
@@ -192,6 +201,20 @@ mod tests {
                 vec!["Alt+Tab".to_string(), "Alt+Shift+Tab".to_string()],
                 "{desktop}"
             );
+        }
+    }
+
+    #[test]
+    fn a_route_is_answered_only_under_its_own_desktop_settings() {
+        let cases = [
+            ("X-Cinnamon", "/org/cinnamon/"),
+            ("ubuntu:GNOME", "/org/gnome/"),
+        ];
+        for (desktop, prefix) in cases {
+            for role in [Role::SlotWindowSwitcher, Role::SlotScreenshot] {
+                let route = route(&x11(desktop), role).expect("route");
+                assert_eq!(route.answered_in, vec![prefix.to_string()], "{desktop}");
+            }
         }
     }
 

@@ -204,6 +204,17 @@ pub(in crate::doctor) fn shadows_for_combos(combos: &[String]) -> Vec<DetectedSh
     platform::collect_shadows(&index)
 }
 
+pub(in crate::doctor) fn shadows_under_prefixes(
+    combos: &[String],
+    prefixes: &[String],
+) -> Option<Vec<DetectedShadow>> {
+    let index: BTreeMap<String, String> = combos
+        .iter()
+        .filter_map(|combo| normalize_combo(combo).map(|normalized| (normalized, combo.clone())))
+        .collect();
+    platform::shadows_under(&index, prefixes)
+}
+
 pub(crate) fn build_qol_index(bindings: &[HotkeyBinding]) -> BTreeMap<String, String> {
     bindings
         .iter()
