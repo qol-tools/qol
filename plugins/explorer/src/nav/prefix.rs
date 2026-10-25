@@ -6,6 +6,20 @@ pub(crate) fn starts_with_ignoring_case(name: &str, prefix: &str) -> bool {
     letters(prefix).all(|wanted| name.next().is_some_and(|letter| letter.answers(&wanted)))
 }
 
+pub(crate) fn contains_ignoring_case(name: &str, needle: &str) -> bool {
+    let wanted: Vec<Letter> = letters(needle).collect();
+    if wanted.is_empty() {
+        return true;
+    }
+    let held: Vec<Letter> = letters(name).collect();
+    held.windows(wanted.len()).any(|window| {
+        window
+            .iter()
+            .zip(&wanted)
+            .all(|(letter, wanted)| letter.answers(wanted))
+    })
+}
+
 pub(crate) fn letter_count(text: &str) -> usize {
     text.nfd()
         .filter(|letter| !is_combining_mark(*letter))

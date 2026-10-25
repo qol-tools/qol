@@ -4,6 +4,7 @@ mod clash;
 mod context;
 mod drag;
 mod erase;
+mod filter;
 mod grid;
 mod list;
 mod menu;
@@ -40,9 +41,9 @@ use qol_gpui::theme::{Ground, TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, LINE, RA
 use qol_gpui::Icon;
 
 use super::browse::{Browser, Held, Opening, PathStep};
-use super::keys::{self, Action, Click, Resize};
+use super::keys::{self, Action, Click, Resize, Step};
 use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
-use crate::listing::ListingState;
+use crate::listing::{ListingState, SortBy, SortOrder};
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
@@ -116,7 +117,11 @@ impl ExplorerView {
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
-            browser: Browser::new(start, home, config.show_hidden),
+            browser: {
+                let mut browser = Browser::new(start, home, config.show_hidden);
+                browser.resort(SortOrder::new(config.sort_by, config.sort_descending));
+                browser
+            },
             pins: config.pins.clone(),
             places: Vec::new(),
             menu: None,
@@ -296,10 +301,18 @@ impl ExplorerView {
             .map(|place| place.name.as_str());
         self.renaming = None;
         let shows_hidden = self.browser.shows_hidden();
+        let order = self.browser.order();
         self.menu = Some(if background {
-            Menu::background(&name, pinned_as, shows_hidden, self.browser.holds(), at)
+            Menu::background(
+                &name,
+                pinned_as,
+                shows_hidden,
+                order,
+                self.browser.holds(),
+                at,
+            )
         } else {
-            Menu::folder(&name, pinned_as, shows_hidden, at)
+            Menu::folder(&name, pinned_as, shows_hidden, order, at)
         });
         cx.notify();
     }
@@ -348,6 +361,9 @@ impl ExplorerView {
             Command::GoToPath => self.edit_path(cx),
             Command::ToggleHidden => {
                 self.toggle_hidden();
+            }
+            Command::Sort(by) => {
+                self.sorted(by);
             }
             Command::Settings => self.open_settings(cx),
             Command::OpenItem => {
@@ -484,6 +500,38 @@ impl ExplorerView {
         let changed = self.revealed(Browser::toggle_hidden);
         self.saver.save("show_hidden", self.browser.shows_hidden());
         changed
+    }
+
+    fn sorted(&mut self, by: SortBy) -> bool {
+        let order = self.browser.order().chosen(by);
+        let changed = self.revealed(|browser| browser.resort(order));
+        self.saver.save("sort_by", order.by);
+        self.saver.save("sort_descending", order.descending);
+        changed
+    }
+
+    fn filter_yields(keystroke: &Keystroke) -> bool {
+        matches!(
+            keys::action(keystroke, false),
+            Action::Cursor(Step::Up | Step::Down | Step::PageUp | Step::PageDown)
+                | Action::Open
+                | Action::Sort(_)
+                | Action::ToggleHidden
+                | Action::Settings
+        )
+    }
+
+    fn filter_pressed(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        let changed = if keystroke.key == "escape" {
+            self.revealed(Browser::close_filter)
+        } else {
+            let paste = || cx.read_from_clipboard().and_then(|item| item.text());
+            self.revealed(|browser| browser.filter_key(keystroke, paste))
+        };
+        cx.stop_propagation();
+        if changed {
+            cx.notify();
+        }
     }
 
     fn follow_title(&mut self, window: &mut Window) {
@@ -697,6 +745,10 @@ impl ExplorerView {
                 return;
             }
         }
+        if self.browser.filter_open() && !Self::filter_yields(&event.keystroke) {
+            self.filter_pressed(&event.keystroke, cx);
+            return;
+        }
         let action = keys::action(&event.keystroke, self.browser.path_open());
         if self.browser.moves_open() && !matches!(action, Action::Unpick | Action::Moves) {
             cx.stop_propagation();
@@ -778,6 +830,8 @@ impl ExplorerView {
                 self.open_settings(cx);
                 true
             }
+            Action::Filter => self.browser.open_filter(),
+            Action::Sort(by) => self.sorted(by),
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),

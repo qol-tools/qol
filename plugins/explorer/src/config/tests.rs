@@ -38,6 +38,37 @@ fn every_view_size_round_trips_through_its_contract_option() {
 }
 
 #[test]
+fn every_sort_column_round_trips_through_its_contract_option() {
+    let cases = [
+        (SortBy::Name, "name"),
+        (SortBy::Size, "size"),
+        (SortBy::Modified, "modified"),
+        (SortBy::Kind, "kind"),
+    ];
+    let spec = qol_config::contract::parse_spec_str(CONFIG_CONTRACT).expect("contract parses");
+    let options = &spec.field("sort_by").expect("sort_by field").options;
+    assert_eq!(
+        options,
+        &cases.map(|(_, option)| option.to_string()).to_vec()
+    );
+    for (by, option) in cases {
+        assert_eq!(serde_json::to_value(by).unwrap(), json!(option));
+        assert_eq!(serde_json::from_value::<SortBy>(json!(option)).unwrap(), by);
+    }
+}
+
+#[test]
+fn a_stored_sort_loads_and_a_config_without_one_sorts_by_name_ascending() {
+    let stored: ExplorerConfig =
+        serde_json::from_value(json!({"sort_by": "size", "sort_descending": true})).unwrap();
+    assert_eq!(stored.sort_by, SortBy::Size);
+    assert!(stored.sort_descending);
+    let bare: ExplorerConfig = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(bare.sort_by, SortBy::Name);
+    assert!(!bare.sort_descending);
+}
+
+#[test]
 fn a_saver_sends_every_key_and_the_last_value_of_each_wins() {
     let written = Arc::new(Mutex::new(Map::new()));
     let sink = written.clone();

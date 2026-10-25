@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::SortKey;
 
@@ -34,6 +35,7 @@ pub struct Entry {
     pub hidden: bool,
     pub opens_as_folder: bool,
     pub executable: bool,
+    pub modified: Option<SystemTime>,
     pub sort_key: SortKey,
 }
 
@@ -67,6 +69,9 @@ impl Entry {
             hidden,
             opens_as_folder,
             executable,
+            modified: metadata
+                .as_ref()
+                .and_then(|metadata| metadata.modified().ok()),
         })
     }
 }

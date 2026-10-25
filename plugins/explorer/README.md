@@ -18,7 +18,7 @@ The list follows the folder on disk, so files that appear, change or vanish show
 
 The Kind column reads Folder, File, Link, Pipe, Socket, Device or Broken link, the last for a link whose target is gone or loops. Pipes, sockets, devices, broken links and files on the kernel filesystems show no size, since the size they report is not their content.
 
-Explorer remembers the row or icon size and whether hidden entries show, and opens with them next time on every machine your profile syncs to. Both are also on Explorer's settings page; a change there applies the next time Explorer opens. Drag any edge or corner to resize the window, down to 640 by 400, and it reopens where you left it at the size you left it. If Explorer is open when the tray restarts, it opens again afterwards. A wider window gives the sidebar and the Name column more room, up to a limit, so Kind and Size stay close to the names.
+Explorer remembers the row or icon size, whether hidden entries show and how the folder is sorted, and opens with them next time on every machine your profile syncs to. All of them are also on Explorer's settings page; a change there applies the next time Explorer opens. Drag any edge or corner to resize the window, down to 640 by 400, and it reopens where you left it at the size you left it. If Explorer is open when the tray restarts, it opens again afterwards. A wider window gives the sidebar and the Name column more room, up to a limit, so Kind and Size stay close to the names.
 
 Picks stay picked when you move to another folder, and the note beside the crumbs says how many sit in other folders. Enter opens a file in its default app, or says in red that no app could open it.
 
@@ -59,6 +59,8 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+J | Show or hide today's moves |
 | Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
+| Ctrl+Alt+1 to Ctrl+Alt+4 | Sort by name, size, date modified or kind; pressing the one you are already sorted by flips ascending and descending. Folders stay first, and the folder's menu marks the active sort |
+| Ctrl+F | Open a filter field beside the crumbs that narrows the list to names containing what you type, ignoring case and accents; Up, Down, Page Up, Page Down and Enter still work the list, Esc clears the filter and closes it, and the note says how many entries it hides. Moving to another folder closes it, and picks the filter hides are dropped |
 | Ctrl+D | Pin the folder you are in, or unpin it |
 | Ctrl+, | Open Explorer's settings |
 | Ctrl+G | Edit the path, selected so typing replaces it; Up and Down cycle through the suggested folders, Tab completes one, Enter or a click goes there |

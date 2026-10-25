@@ -707,3 +707,144 @@ fn start_streams_the_listing_from_a_background_thread() {
     assert_eq!(names(&listing), ["sub", "file"]);
     assert_eq!(listing.item_count(&temp.path().join("sub")), items(1));
 }
+
+fn kind_by_extension(entry: &Entry) -> &'static str {
+    match entry.path.extension().and_then(OsStr::to_str) {
+        Some("png") => "Image",
+        Some("md") => "Markdown",
+        _ => "Text",
+    }
+}
+
+fn arranged(listing: &Listing, order: SortOrder) -> Vec<&str> {
+    let rows = arrange(
+        listing.entries(),
+        listing.visible_indices(true),
+        order,
+        kind_by_extension,
+    );
+    rows.into_iter()
+        .map(|index| listing.entries()[index].display.as_str())
+        .collect()
+}
+
+fn sortable_folder() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "dir_a");
+    make_folder(temp.path(), "dir_b");
+    let files = [
+        ("a.txt", 5, 40),
+        ("b.md", 1, 10),
+        ("c.png", 3, 30),
+        ("d.txt", 3, 20),
+    ];
+    for (name, bytes, seconds) in files {
+        let file = fs::File::create(temp.path().join(name)).unwrap();
+        file.set_len(bytes).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(seconds))
+            .unwrap();
+    }
+    temp
+}
+
+#[test]
+fn every_sort_keeps_folders_first_and_orders_files_by_its_column() {
+    let temp = sortable_folder();
+    let listing = listing_of(temp.path());
+    let cases = [
+        (SortBy::Name, false, ["a.txt", "b.md", "c.png", "d.txt"]),
+        (SortBy::Name, true, ["d.txt", "c.png", "b.md", "a.txt"]),
+        (SortBy::Size, false, ["b.md", "c.png", "d.txt", "a.txt"]),
+        (SortBy::Size, true, ["a.txt", "c.png", "d.txt", "b.md"]),
+        (SortBy::Modified, false, ["b.md", "d.txt", "c.png", "a.txt"]),
+        (SortBy::Modified, true, ["a.txt", "c.png", "d.txt", "b.md"]),
+        (SortBy::Kind, false, ["c.png", "b.md", "a.txt", "d.txt"]),
+        (SortBy::Kind, true, ["a.txt", "d.txt", "b.md", "c.png"]),
+    ];
+    for (by, descending, files) in cases {
+        let shown = arranged(&listing, SortOrder::new(by, descending));
+        let (folders, rest) = shown.split_at(2);
+        let mut folders = folders.to_vec();
+        folders.sort();
+        assert_eq!(folders, ["dir_a", "dir_b"], "{by:?} {descending}");
+        assert_eq!(rest, files, "{by:?} {descending}");
+    }
+}
+
+#[test]
+fn folders_keep_name_order_under_a_size_sort_and_follow_the_direction_under_name() {
+    let temp = sortable_folder();
+    let listing = listing_of(temp.path());
+    let folders = |order| arranged(&listing, order)[..2].to_vec();
+    assert_eq!(
+        folders(SortOrder::new(SortBy::Size, true)),
+        ["dir_a", "dir_b"]
+    );
+    assert_eq!(
+        folders(SortOrder::new(SortBy::Name, true)),
+        ["dir_b", "dir_a"]
+    );
+}
+
+#[test]
+fn choosing_the_active_sort_again_flips_it_and_another_starts_ascending() {
+    let by_size = SortOrder::default().chosen(SortBy::Size);
+    assert_eq!(by_size, SortOrder::new(SortBy::Size, false));
+    let flipped = by_size.chosen(SortBy::Size);
+    assert_eq!(flipped, SortOrder::new(SortBy::Size, true));
+    assert_eq!(flipped.chosen(SortBy::Size), by_size);
+    assert_eq!(
+        flipped.chosen(SortBy::Kind),
+        SortOrder::new(SortBy::Kind, false)
+    );
+    assert_eq!(
+        SortOrder::default().chosen(SortBy::Name),
+        SortOrder::new(SortBy::Name, true)
+    );
+}
+
+#[test]
+fn a_hundred_thousand_entries_arrange_in_one_pass_per_column() {
+    let entries: Vec<Entry> = (0..100_000u64)
+        .map(|index| Entry {
+            name: format!("file{index}").into(),
+            display: format!("file{index}"),
+            path: PathBuf::from(format!("/f/file{index}")),
+            id: None,
+            kind: EntryKind::File,
+            size: Size::Bytes(index * 7919 % 10_007),
+            hidden: false,
+            opens_as_folder: index % 50 == 0,
+            executable: false,
+            modified: Some(std::time::UNIX_EPOCH + Duration::from_secs(index * 31 % 9973)),
+            sort_key: SortKey::new(OsStr::new(&format!("file{index}")), index % 50 == 0),
+        })
+        .collect();
+    let started = Instant::now();
+    for by in SortBy::MENU {
+        let kind = |entry: &Entry| {
+            if entry.size == Size::Bytes(0) {
+                "Text"
+            } else {
+                "Image"
+            }
+        };
+        let rows = arrange(
+            &entries,
+            (0..entries.len()).collect(),
+            SortOrder::new(by, true),
+            kind,
+        );
+        assert_eq!(rows.len(), entries.len());
+        let folders = rows
+            .iter()
+            .take_while(|&&index| entries[index].opens_as_folder)
+            .count();
+        assert_eq!(folders, 2_000, "{by:?}");
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
