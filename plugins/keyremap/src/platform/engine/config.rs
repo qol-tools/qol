@@ -201,6 +201,19 @@ mod tests {
     }
 
     #[test]
+    fn a_character_rule_with_unused_fields_omitted_picks_its_variant() {
+        let by_char: CharRule =
+            serde_json::from_str(r#"{ "from_char": "<", "to_char": "$", "global": false }"#)
+                .expect("by-character rule should parse");
+        assert!(matches!(by_char, CharRule::ByChar { ref from_char, .. } if from_char == "<"));
+        let by_key: CharRule = serde_json::from_str(
+            r#"{ "from_mods": ["alt"], "from_key": "e", "to_char": "x", "global": true }"#,
+        )
+        .expect("by-key rule should parse");
+        assert!(matches!(by_key, CharRule::ByKey { ref from_key, .. } if from_key == "e"));
+    }
+
+    #[test]
     fn parse_batch_rule() {
         let json = r#"{ "from_mods": ["ctrl"], "to_mods": ["cmd"], "keys": ["c", "v", "x"] }"#;
         let rule: KeyRule = serde_json::from_str(json).expect("batch rule should parse");

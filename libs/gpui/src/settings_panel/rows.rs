@@ -256,6 +256,7 @@ pub(super) enum RowControl {
         row_subtitle: Option<String>,
         actions: Box<ListActions>,
         item_card: Option<String>,
+        empty_message: Option<String>,
         slider: Option<Box<ListSlider>>,
         items: Vec<ListItem>,
         list: ScrollList,
@@ -693,6 +694,7 @@ fn control_for(field: &ResolvedField) -> RowControl {
                     additional: field.row_actions.clone(),
                 }),
                 item_card: field.item_card_field.clone(),
+                empty_message: field.empty_message.clone(),
                 slider: field.row_slider.clone().map(|spec| {
                     Box::new(ListSlider {
                         spec,
@@ -3085,6 +3087,11 @@ input = { address = "{address}" }
             qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
         let mut rows = rows_from_resolved(&resolved, 0);
         assert_eq!(runtime_query_names(&rows), ["devices", "search_status"]);
+        assert!(matches!(
+            &rows[1].control,
+            RowControl::List { empty_message: Some(message), items, .. }
+                if message == "No devices." && items.is_empty()
+        ));
 
         apply_query(
             &mut rows,

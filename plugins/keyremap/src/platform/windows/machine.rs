@@ -131,7 +131,7 @@ impl Machine {
             self.observe(vk, down);
             return Decision::pass();
         }
-        match self.substitute(vk, down, &event.config.modifier_keys) {
+        match self.substitute(vk, down, event.config.enabled, &event.config.modifier_keys) {
             None => Decision::swallow(Vec::new()),
             Some(target) if target == vk => self.route(vk, down, true, event),
             Some(target) => {
@@ -240,7 +240,13 @@ impl Machine {
         self.emitted_bits = self.physical_bits;
     }
 
-    fn substitute(&mut self, vk: u16, down: bool, modifier_keys: &ModifierKeys) -> Option<u16> {
+    fn substitute(
+        &mut self,
+        vk: u16,
+        down: bool,
+        enabled: bool,
+        modifier_keys: &ModifierKeys,
+    ) -> Option<u16> {
         let Some((source, right)) = keys::modifier_source(vk) else {
             return Some(vk);
         };
@@ -251,7 +257,7 @@ impl Machine {
                 self.substituted.remove(index).1
             };
         }
-        if !down {
+        if !down || !enabled {
             return Some(vk);
         }
         let target = keys::target_key(modifier_keys.target_for(source), right, vk);
@@ -687,6 +693,14 @@ mod tests {
                         true,
                         vec![key(VK_LCONTROL, false)],
                     ),
+                ],
+            ),
+            (
+                "a disabled config leaves modifier keys alone",
+                json!({ "enabled": false, "modifier_keys": { "caps_lock": "control" } }),
+                vec![
+                    (Input::Key(VK_CAPITAL, true), false, vec![]),
+                    (Input::Key(VK_CAPITAL, false), false, vec![]),
                 ],
             ),
             (

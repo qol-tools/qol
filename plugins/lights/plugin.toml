@@ -11,6 +11,11 @@ platforms = ["linux", "macos", "windows"]
 [config.scope]
 live_color_hex = "core"
 live_brightness = "core"
+live_mirek = "core"
+main_target_id = "device"
+"backend.serial_port" = "device"
+"backend.channel" = "device"
+presets = "core"
 
 [runtime]
 command = "qol-lights"

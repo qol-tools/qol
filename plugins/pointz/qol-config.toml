@@ -7,9 +7,8 @@ type = "status"
 label = "Status"
 query = "connection_status"
 value_from = "state"
-label_map = { ok = "Running", offline = "Offline" }
-tone_map = { ok = "success", offline = "danger" }
-hide_values = ["ok"]
+label_map = { ok = "Running" }
+tone_map = { ok = "success" }
 
 [field.begin_pairing]
 type = "action"
@@ -29,28 +28,24 @@ type = "status"
 label = "Control port"
 query = "connection_info"
 value_from = "command_port"
-span = 1
 
 [field.discovery_port]
 type = "status"
 label = "Discovery port"
 query = "connection_info"
 value_from = "discovery_port"
-span = 1
 
 [field.hostname]
 type = "status"
 label = "Hostname"
 query = "connection_info"
 value_from = "hostname"
-span = 1
 
 [field.ip]
 type = "status"
 label = "IP address"
 query = "connection_info"
 value_from = "ip"
-span = 1
 
 [field.download_qr]
 type = "qr_code"

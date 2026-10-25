@@ -4,7 +4,7 @@ schema_version = 1
 description = "Open the PointZerver settings window"
 
 [action.begin_pairing]
-description = "Allow a nearby PointZ client to pair for two minutes"
+description = "Allow a nearby PointZ client to pair for one minute"
 
 [query.connection_status]
 description = "Current qol-pointz daemon state"
