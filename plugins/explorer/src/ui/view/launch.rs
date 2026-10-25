@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use futures::channel::oneshot;
-use gpui::{point, px, AsyncApp, ClipboardItem, Context, WeakEntity};
+use gpui::{AsyncApp, ClipboardItem, Context, WeakEntity};
 use qol_apps::desktop_integration::{self, OpenHandler};
 
 use super::menu::Menu;
@@ -46,7 +46,7 @@ fn display(path: &Path) -> String {
 
 impl ExplorerView {
     pub(super) fn copy_path(&mut self, cx: &mut Context<Self>) -> bool {
-        let paths = self.browser.launch_paths();
+        let paths = self.browser.operands();
         if paths.is_empty() {
             return false;
         }
@@ -82,7 +82,7 @@ impl ExplorerView {
         let Some(cursor) = self.browser.cursor_file() else {
             return false;
         };
-        let picks = self.browser.launch_paths();
+        let picks = self.browser.operands();
         let (sent, found) = oneshot::channel::<Found>();
         let worker = cursor.clone();
         let spawned = thread::Builder::new()
@@ -119,7 +119,7 @@ impl ExplorerView {
     }
 
     fn show_open_with(&mut self, paths: Vec<PathBuf>, handlers: Vec<OpenHandler>) {
-        let at = point(px(self.rail_width + 24.0), px(96.0));
+        let at = self.cursor_point();
         self.menu = Some(Menu::open_with(&handlers, at));
         self.open_with = Some(OpenWith { paths, handlers });
     }

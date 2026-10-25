@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
-use qol_gpui::text_edit::{apply_edit_key, EditKey, TextField};
+use qol_gpui::text_edit::{apply_edit_key, Clipboard, EditKey, TextField};
 use qol_gpui::{PathEdit, PathKey};
 use qol_watch::WatchError;
 
@@ -608,15 +608,11 @@ impl Browser {
         true
     }
 
-    pub fn filter_key(
-        &mut self,
-        keystroke: &Keystroke,
-        paste: impl FnOnce() -> Option<String>,
-    ) -> bool {
+    pub fn filter_key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> bool {
         let Some(field) = self.filter.as_mut() else {
             return false;
         };
-        match apply_edit_key(field, keystroke, paste) {
+        match apply_edit_key(field, keystroke, clipboard) {
             EditKey::Changed => {
                 self.reshape(true);
                 true
@@ -667,13 +663,13 @@ impl Browser {
     pub fn path_key(
         &mut self,
         keystroke: &Keystroke,
-        paste: impl FnOnce() -> Option<String>,
+        clipboard: &dyn Clipboard,
         scroll: f32,
     ) -> PathStep {
         let Some(field) = self.path.as_mut() else {
             return PathStep::Closed;
         };
-        match field.key(keystroke, paste) {
+        match field.key(keystroke, clipboard) {
             PathKey::Changed => {
                 self.failure = None;
                 field.refresh(&self.home, self.show_hidden);

@@ -4,7 +4,7 @@ use std::path::{is_separator, Path, PathBuf, MAIN_SEPARATOR};
 use futures::channel::mpsc::UnboundedSender;
 use gpui::Keystroke;
 use qol_gpui::crumb_trail::SUGGESTION_ROWS;
-use qol_gpui::text_edit::marked;
+use qol_gpui::text_edit::{marked, Clipboard};
 use qol_gpui::{PathEdit, PathKey};
 
 use super::watch::FolderWatch;
@@ -55,12 +55,8 @@ impl PathField {
         self.read.is_some()
     }
 
-    pub(super) fn key(
-        &mut self,
-        keystroke: &Keystroke,
-        paste: impl FnOnce() -> Option<String>,
-    ) -> PathKey {
-        self.edit.key(keystroke, paste)
+    pub(super) fn key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> PathKey {
+        self.edit.key(keystroke, clipboard)
     }
 
     pub(super) fn pick(&mut self, index: usize) -> bool {

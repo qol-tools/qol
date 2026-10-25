@@ -68,6 +68,8 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+D | Pin the folder you are in, or unpin it |
 | Ctrl+, | Open Explorer's settings |
 | Ctrl+G | Edit the path, selected so typing replaces it; Up and Down cycle through the suggested folders, Tab completes one, Enter or a click goes there |
+| Ctrl+C, Ctrl+X, Ctrl+V | In the path, filter and rename fields, copy, cut and paste text through the system clipboard |
+| Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y | In those fields, undo a typed word, paste or cut, and redo it |
 | Ctrl+= or Ctrl++, Ctrl+- | Make the rows or icons one size bigger or smaller; the slider in the title bar does the same |
 | Ctrl+1 to Ctrl+5 | Pick a size: compact, list, roomy, icons, big icons |
 | Ctrl+wheel | Step the size up or down |

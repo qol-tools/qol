@@ -92,6 +92,7 @@ pub struct ExplorerView {
     moves_scroll: SelectionScroll,
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
+    props_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     frame_height: f32,
     list_width: f32,
@@ -141,6 +142,7 @@ impl ExplorerView {
             moves_scroll: SelectionScroll::new(),
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
+            props_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             frame_height: 0.0,
             list_width: 0.0,
@@ -395,6 +397,27 @@ impl ExplorerView {
                 self.browser.undo();
             }
             Command::OpenWith(index) => self.open_with_choice(index, cx),
+            Command::ChooseApp => {
+                self.open_with(cx);
+            }
+            Command::NewFile => {
+                self.revealed(Browser::new_file);
+            }
+            Command::Duplicate => {
+                self.browser.duplicate_picks();
+            }
+            Command::Erase => {
+                self.browser.erase_ask();
+            }
+            Command::CopyPath => {
+                self.copy_path(cx);
+            }
+            Command::Properties => {
+                self.browser.toggle_props();
+            }
+            Command::OpenTerminal => {
+                self.open_terminal_here();
+            }
         }
         cx.notify();
     }
@@ -452,9 +475,8 @@ impl ExplorerView {
             "enter" => self.finish_renaming(cx),
             "escape" => self.renaming = None,
             _ => {
-                let paste = || cx.read_from_clipboard().and_then(|item| item.text());
                 if let Some(renaming) = &mut self.renaming {
-                    text_edit::apply_edit_key(&mut renaming.field, keystroke, paste);
+                    text_edit::apply_edit_key(&mut renaming.field, keystroke, cx);
                 }
             }
         }
@@ -530,8 +552,7 @@ impl ExplorerView {
         let changed = if keystroke.key == "escape" {
             self.revealed(Browser::close_filter)
         } else {
-            let paste = || cx.read_from_clipboard().and_then(|item| item.text());
-            self.revealed(|browser| browser.filter_key(keystroke, paste))
+            self.revealed(|browser| browser.filter_key(keystroke, cx))
         };
         cx.stop_propagation();
         if changed {
@@ -890,8 +911,7 @@ impl ExplorerView {
 
     fn path_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
-        let paste = || cx.read_from_clipboard().and_then(|item| item.text());
-        let step = self.browser.path_key(keystroke, paste, scroll);
+        let step = self.browser.path_key(keystroke, cx, scroll);
         self.stepped(step)
     }
 

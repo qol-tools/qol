@@ -26,12 +26,18 @@ pub(super) fn open(target: &OsStr) -> io::Result<()> {
 
 pub(super) fn terminal_commands(folder: &Path) -> Vec<Command> {
     let mut terminal = Command::new("wt.exe");
-    terminal.arg("-d").arg(folder);
-    let mut console = Command::new("cmd.exe");
-    console
-        .args(["/c", "start", "", "cmd.exe"])
-        .current_dir(folder);
-    vec![terminal, console]
+    terminal.args(["-d", "."]).current_dir(folder);
+    let mut commands = vec![terminal];
+    if let Some(windows) = windows_directory() {
+        let shell = windows.join("System32").join("cmd.exe");
+        let mut console = Command::new(&shell);
+        console
+            .args(["/c", "start", ""])
+            .arg(&shell)
+            .current_dir(folder);
+        commands.push(console);
+    }
+    commands
 }
 
 pub(super) fn reveal_plan(path: &Path) -> RevealPlan {

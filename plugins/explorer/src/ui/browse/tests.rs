@@ -5,6 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{Keystroke, Modifiers};
+use qol_gpui::text_edit::MemoryClipboard;
 
 use super::counts::{self, LiveCounts};
 use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
@@ -89,7 +90,7 @@ fn key(name: &str, key_char: Option<&str>) -> Keystroke {
 fn type_text(browser: &mut Browser, text: &str) {
     for typed in text.chars() {
         let typed = typed.to_string();
-        browser.path_key(&key(&typed, Some(&typed)), || None, 0.0);
+        browser.path_key(&key(&typed, Some(&typed)), &MemoryClipboard::default(), 0.0);
     }
 }
 
@@ -630,7 +631,7 @@ fn closing_the_path_field_drops_its_red_note() {
     assert!(!browser.close_path());
     browser.edit_path();
     type_text(&mut browser, "zzz");
-    browser.path_key(&key("enter", None), || None, 0.0);
+    browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert!(browser.note().failure.is_some());
 
     assert!(browser.close_path());
@@ -747,21 +748,21 @@ fn submitting_a_folder_goes_there_and_anything_else_stays_in_the_field() {
 
     browser.edit_path();
     type_text(&mut browser, "file.txt");
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Stay { changed: true });
     assert!(browser.path_open());
     assert_eq!(browser.note().failure.as_deref(), Some("Not a folder"));
 
     type_text(&mut browser, "x");
     assert_eq!(browser.note().failure, None);
-    browser.path_key(&key("enter", None), || None, 0.0);
+    browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(browser.note().failure.as_deref(), Some("Does not exist"));
 
     for _ in 0.."file.txtx".len() {
-        browser.path_key(&key("backspace", None), || None, 0.0);
+        browser.path_key(&key("backspace", None), &MemoryClipboard::default(), 0.0);
     }
     type_text(&mut browser, "inner");
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert!(!browser.path_open());
     assert_eq!(browser.folder(), inner);
@@ -781,7 +782,7 @@ fn the_path_field_opens_selected_so_typing_replaces_it() {
         browser.path_edit().unwrap().text(),
         temp.path().display().to_string()
     );
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert_eq!(browser.folder(), temp.path());
 }
@@ -796,7 +797,7 @@ fn a_path_with_stray_spaces_around_it_still_goes_there() {
     browser.edit_path();
     type_text(&mut browser, " inner ");
     assert_eq!(
-        browser.path_key(&key("enter", None), || None, 0.0),
+        browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0),
         PathStep::Arrived
     );
     assert_eq!(browser.folder(), inner);
@@ -804,7 +805,7 @@ fn a_path_with_stray_spaces_around_it_still_goes_there() {
     browser.edit_path();
     type_text(&mut browser, &format!("..{MAIN_SEPARATOR} spaced "));
     assert_eq!(
-        browser.path_key(&key("enter", None), || None, 0.0),
+        browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0),
         PathStep::Arrived
     );
     assert_eq!(browser.folder(), temp.path().join(" spaced "));
@@ -837,17 +838,17 @@ fn backspacing_to_the_folder_level_makes_enter_go_to_the_typed_folder() {
         browser.path_edit().unwrap().text(),
         format!("~{MAIN_SEPARATOR}inner{MAIN_SEPARATOR}")
     );
-    browser.path_key(&key("end", None), || None, 0.0);
-    browser.path_key(&key("backspace", None), || None, 0.0);
+    browser.path_key(&key("end", None), &MemoryClipboard::default(), 0.0);
+    browser.path_key(&key("backspace", None), &MemoryClipboard::default(), 0.0);
     settle(&mut browser);
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
     assert_eq!(browser.path_edit().unwrap().selected(), Some(0));
     for _ in 0.."inner".len() {
-        browser.path_key(&key("backspace", None), || None, 0.0);
+        browser.path_key(&key("backspace", None), &MemoryClipboard::default(), 0.0);
     }
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["inner"]);
     assert_eq!(browser.path_edit().unwrap().selected(), None);
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert_eq!(browser.folder(), temp.path());
 }
@@ -872,7 +873,7 @@ fn dots_through_a_link_suggest_the_folder_that_enter_opens() {
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["a", "link"]);
 
     type_text(&mut browser, "a");
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert_eq!(browser.folder(), a);
 }
@@ -952,7 +953,7 @@ fn the_path_field_reaches_a_folder_whose_name_shows_a_mark() {
     );
     settle(&mut browser);
     assert_eq!(browser.path_edit().unwrap().suggestions(), ["sub"]);
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Closed);
     assert_eq!(browser.note().failure, None);
     assert_eq!(browser.folder(), odd);
@@ -960,7 +961,7 @@ fn the_path_field_reaches_a_folder_whose_name_shows_a_mark() {
     browser.edit_path();
     settle(&mut browser);
     type_text(&mut browser, "s");
-    let step = browser.path_key(&key("enter", None), || None, 0.0);
+    let step = browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Arrived);
     assert_eq!(browser.folder(), sub);
 }
@@ -971,9 +972,9 @@ fn escape_in_the_path_field_puts_the_trail_back() {
     let mut browser = opened(temp.path());
     browser.edit_path();
     type_text(&mut browser, "zzz");
-    browser.path_key(&key("enter", None), || None, 0.0);
+    browser.path_key(&key("enter", None), &MemoryClipboard::default(), 0.0);
     assert!(browser.note().failure.is_some());
-    let step = browser.path_key(&key("escape", None), || None, 0.0);
+    let step = browser.path_key(&key("escape", None), &MemoryClipboard::default(), 0.0);
     assert_eq!(step, PathStep::Closed);
     assert!(!browser.path_open());
     assert_eq!(browser.note().failure, None);
@@ -1629,7 +1630,7 @@ fn restoring_a_selection_brings_back_its_picks_and_its_cursor() {
 fn type_filter(browser: &mut Browser, text: &str) {
     for typed in text.chars() {
         let typed = typed.to_string();
-        browser.filter_key(&key(&typed, Some(&typed)), || None);
+        browser.filter_key(&key(&typed, Some(&typed)), &MemoryClipboard::default());
     }
 }
 

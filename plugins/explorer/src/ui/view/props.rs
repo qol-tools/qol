@@ -3,6 +3,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, StyledImage,
 };
 use qol_gpui::kit::kit;
+use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::text::TextStyled;
 use qol_gpui::theme::{
     TextStyle, HEIGHT_INLINE, LINE, SPACE_CELL, SPACE_GUTTER, SPACE_PAD, SPACE_STACK,
@@ -21,6 +22,8 @@ pub(super) fn render(view: &ExplorerView) -> AnyElement {
     let Some(props) = view.browser.props() else {
         return div().into_any_element();
     };
+    let facts = props.rows();
+    let rows = facts.len();
     div()
         .absolute()
         .top(px(BAND))
@@ -46,40 +49,53 @@ pub(super) fn render(view: &ExplorerView) -> AnyElement {
         )
         .child(
             div()
-                .id("explorer-props-body")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .flex()
-                .flex_col()
-                .gap(px(SPACE_PAD))
-                .px(px(SPACE_GUTTER))
-                .py(px(SPACE_PAD))
-                .children(preview(props))
-                .child(div().flex().flex_col().gap(px(SPACE_STACK)).children(
-                    props.rows().into_iter().map(|fact| {
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap(px(SPACE_CELL))
-                            .child(
+                .relative()
+                .child(
+                    div()
+                        .id("explorer-props-body")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&view.props_scroll)
+                        .flex()
+                        .flex_col()
+                        .gap(px(SPACE_PAD))
+                        .px(px(SPACE_GUTTER))
+                        .py(px(SPACE_PAD))
+                        .children(preview(props))
+                        .child(div().flex().flex_col().gap(px(SPACE_STACK)).children(
+                            facts.into_iter().map(|fact| {
                                 div()
-                                    .flex_none()
-                                    .w(px(LABEL_WIDTH))
-                                    .text(TextStyle::Detail)
-                                    .text_color(rgb(pane.faint))
-                                    .child(fact.label),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .whitespace_normal()
-                                    .text(TextStyle::ListName)
-                                    .text_color(rgb(pane.ink))
-                                    .child(fact.value),
-                            )
-                    }),
+                                    .flex()
+                                    .flex_row()
+                                    .gap(px(SPACE_CELL))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .w(px(LABEL_WIDTH))
+                                            .text(TextStyle::Detail)
+                                            .text_color(rgb(pane.faint))
+                                            .child(fact.label),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .whitespace_normal()
+                                            .text(TextStyle::ListName)
+                                            .text_color(rgb(pane.ink))
+                                            .child(fact.value),
+                                    )
+                            }),
+                        )),
+                )
+                .child(kit.scroll_cue(
+                    ScrollSource::Handle {
+                        handle: view.props_scroll.clone(),
+                        children: rows + usize::from(props.preview().is_some()),
+                    },
+                    pane,
                 )),
         )
         .into_any_element()

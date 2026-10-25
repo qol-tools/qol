@@ -3,10 +3,6 @@ use std::path::PathBuf;
 use super::Browser;
 
 impl Browser {
-    pub fn launch_paths(&self) -> Vec<PathBuf> {
-        self.operands()
-    }
-
     pub fn cursor_file(&self) -> Option<PathBuf> {
         if self.loading() {
             return None;

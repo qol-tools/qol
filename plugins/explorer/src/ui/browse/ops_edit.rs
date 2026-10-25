@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use gpui::{Keystroke, Modifiers};
+use qol_gpui::text_edit::{Clipboard, MemoryClipboard};
 use qol_gpui::{PathEdit, PathKey};
 
 use super::ops::Work;
@@ -27,7 +28,7 @@ impl Renaming {
             edit.select_all();
         } else {
             edit.place_caret(stem);
-            edit.key(&select_to_start(), || None);
+            edit.key(&select_to_start(), &MemoryClipboard::default());
         }
         Self {
             target: entry.path.clone(),
@@ -155,11 +156,11 @@ impl Browser {
             .is_some_and(|renaming| renaming.target == entry.path)
     }
 
-    pub fn rename_key(&mut self, keystroke: &Keystroke) -> bool {
+    pub fn rename_key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> bool {
         let Some(renaming) = self.ops.rename.as_mut() else {
             return false;
         };
-        match renaming.edit.key(keystroke, || None) {
+        match renaming.edit.key(keystroke, clipboard) {
             PathKey::Changed => {
                 self.failure = None;
                 true

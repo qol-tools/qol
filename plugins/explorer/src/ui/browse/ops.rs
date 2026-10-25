@@ -143,10 +143,6 @@ impl Browser {
         self.ops.holding.is_some()
     }
 
-    pub fn operand_count(&self) -> usize {
-        self.operands().len()
-    }
-
     pub fn is_cut(&self, entry: &Entry) -> bool {
         self.ops
             .holding
@@ -325,7 +321,7 @@ impl Browser {
             .then_some((running.done, running.total))
     }
 
-    pub(super) fn operands(&self) -> Vec<PathBuf> {
+    pub fn operands(&self) -> Vec<PathBuf> {
         if !self.picks.is_empty() {
             let mut paths: Vec<PathBuf> = self.picks.paths().map(Path::to_path_buf).collect();
             paths.sort();

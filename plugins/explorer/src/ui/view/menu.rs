@@ -32,6 +32,13 @@ pub(super) enum Command {
     NewFolder,
     Undo,
     OpenWith(usize),
+    ChooseApp,
+    NewFile,
+    Duplicate,
+    Erase,
+    CopyPath,
+    Properties,
+    OpenTerminal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,12 +103,18 @@ fn paste_line(can_paste: bool) -> Item {
     )
 }
 
-fn make_lines() -> [Item; 2] {
+fn make_lines() -> [Item; 3] {
     [
         entry(
             Command::NewFolder,
             "New folder",
             secondary(Key::letter('n').shift()),
+            true,
+        ),
+        entry(
+            Command::NewFile,
+            "New file",
+            secondary(Key::letter('n').alt()),
             true,
         ),
         entry(Command::Undo, "Undo", secondary(Key::letter('z')), true),
@@ -111,17 +124,56 @@ fn make_lines() -> [Item; 2] {
 fn edit_lines(can_paste: bool) -> Vec<Item> {
     let mut lines = vec![paste_line(can_paste)];
     lines.extend(make_lines());
+    lines.push(entry(
+        Command::OpenTerminal,
+        "Open terminal here",
+        secondary(Key::letter('t').shift()),
+        true,
+    ));
     lines
 }
 
-fn item_lines(can_paste: bool, single: bool) -> Vec<Item> {
+fn item_lines(can_paste: bool, single: bool, file: bool) -> Vec<Item> {
     let mut lines = vec![
         entry(Command::OpenItem, "Open", Some(Key::ENTER), true),
+        entry(
+            Command::ChooseApp,
+            "Open with\u{2026}",
+            Some(Key::ENTER.shift()),
+            file,
+        ),
+        Item::Rule,
         entry(Command::Cut, "Cut", secondary(Key::letter('x')), true),
         entry(Command::Copy, "Copy", secondary(Key::letter('c')), true),
         paste_line(can_paste),
+        entry(
+            Command::Duplicate,
+            "Duplicate",
+            secondary(Key::letter('d').shift()),
+            true,
+        ),
+        entry(
+            Command::CopyPath,
+            "Copy path",
+            secondary(Key::letter('c').shift()),
+            true,
+        ),
+        Item::Rule,
         entry(Command::RenameItem, "Rename", Key::parse("f2"), single),
         entry(Command::Trash, "Move to trash", Some(Key::DELETE), true),
+        entry(
+            Command::Erase,
+            "Delete permanently\u{2026}",
+            Some(Key::DELETE.shift()),
+            true,
+        ),
+        Item::Rule,
+        entry(
+            Command::Properties,
+            "Properties",
+            Some(Key::ENTER.alt()),
+            true,
+        ),
         Item::Rule,
     ];
     lines.extend(make_lines());
@@ -238,8 +290,8 @@ impl Menu {
         Self::new(Owner::Folder, at, items)
     }
 
-    pub(super) fn item(can_paste: bool, single: bool, at: Point<Pixels>) -> Self {
-        Self::new(Owner::Item, at, item_lines(can_paste, single))
+    pub(super) fn item(can_paste: bool, single: bool, file: bool, at: Point<Pixels>) -> Self {
+        Self::new(Owner::Item, at, item_lines(can_paste, single, file))
     }
 
     pub(super) fn open_with(handlers: &[OpenHandler], at: Point<Pixels>) -> Self {
@@ -501,26 +553,32 @@ mod tests {
     #[test]
     fn an_item_menu_lists_the_file_actions_with_paste_and_rename_gated() {
         let cases = [
-            (true, true, true, true),
-            (false, true, false, true),
-            (true, false, true, false),
-            (false, false, false, false),
+            (true, true, true),
+            (false, true, false),
+            (true, false, true),
+            (false, false, false),
         ];
-        for (can_paste, single, paste, rename) in cases {
-            let menu = Menu::item(can_paste, single, at());
+        for (can_paste, single, file) in cases {
+            let menu = Menu::item(can_paste, single, file, at());
             assert_eq!(
                 lines(&menu),
                 vec![
                     (Command::OpenItem, true),
+                    (Command::ChooseApp, file),
                     (Command::Cut, true),
                     (Command::Copy, true),
-                    (Command::Paste, paste),
-                    (Command::RenameItem, rename),
+                    (Command::Paste, can_paste),
+                    (Command::Duplicate, true),
+                    (Command::CopyPath, true),
+                    (Command::RenameItem, single),
                     (Command::Trash, true),
+                    (Command::Erase, true),
+                    (Command::Properties, true),
                     (Command::NewFolder, true),
+                    (Command::NewFile, true),
                     (Command::Undo, true),
                 ],
-                "{can_paste} {single}"
+                "{can_paste} {single} {file}"
             );
             assert_eq!(menu.owner(), Owner::Item);
         }
@@ -528,9 +586,9 @@ mod tests {
 
     #[test]
     fn an_item_menu_opens_on_open_and_steps_over_what_is_unavailable() {
-        let mut menu = Menu::item(false, false, at());
+        let mut menu = Menu::item(false, false, false, at());
         let mut walked = vec![menu.selected_command()];
-        for _ in 0..5 {
+        for _ in 0..10 {
             menu.step(true);
             walked.push(menu.selected_command());
         }
@@ -540,8 +598,13 @@ mod tests {
                 Some(Command::OpenItem),
                 Some(Command::Cut),
                 Some(Command::Copy),
+                Some(Command::Duplicate),
+                Some(Command::CopyPath),
                 Some(Command::Trash),
+                Some(Command::Erase),
+                Some(Command::Properties),
                 Some(Command::NewFolder),
+                Some(Command::NewFile),
                 Some(Command::Undo),
             ]
         );
@@ -557,7 +620,9 @@ mod tests {
             vec![
                 (Command::Paste, false),
                 (Command::NewFolder, true),
+                (Command::NewFile, true),
                 (Command::Undo, true),
+                (Command::OpenTerminal, true),
                 (Command::TogglePin, true),
                 (Command::GoToPath, true),
                 (Command::ToggleHidden, true),

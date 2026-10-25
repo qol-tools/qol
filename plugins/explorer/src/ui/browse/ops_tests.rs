@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{Keystroke, Modifiers};
+use qol_gpui::text_edit::MemoryClipboard;
 
 use super::ops_text;
 use super::{Browser, Held, MoveState};
@@ -96,11 +97,11 @@ fn the_menu_reads_what_is_held_and_how_many_rows_it_acts_on() {
     let mut browser = opened(temp.path());
     point_at(&mut browser, &first);
     assert!(!browser.holds());
-    assert_eq!(browser.operand_count(), 1);
+    assert_eq!(browser.operands().len(), 1);
 
     browser.add_pick(browser.row_of(&first).unwrap());
     browser.add_pick(browser.row_of(&second).unwrap());
-    assert_eq!(browser.operand_count(), 2);
+    assert_eq!(browser.operands().len(), 2);
 
     assert!(browser.hold(Held::Copied));
     assert!(browser.holds());
@@ -337,8 +338,8 @@ fn rename_selects_the_stem_and_enter_renames_the_file() {
     let entry = browser.entry(browser.row_of(&file).unwrap()).unwrap();
     assert!(browser.renaming(entry));
 
-    assert!(browser.rename_key(&key("b", Some("b"))));
-    assert!(browser.rename_key(&key("enter", None)));
+    assert!(browser.rename_key(&key("b", Some("b")), &MemoryClipboard::default()));
+    assert!(browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
     assert!(temp.path().join("b.txt").exists());
     assert!(!file.exists());
@@ -370,8 +371,8 @@ fn a_taken_name_keeps_the_field_open_and_says_why() {
     let mut browser = opened(temp.path());
     point_at(&mut browser, &file);
     browser.rename_open();
-    browser.rename_key(&key("b", Some("b")));
-    browser.rename_key(&key("enter", None));
+    browser.rename_key(&key("b", Some("b")), &MemoryClipboard::default());
+    browser.rename_key(&key("enter", None), &MemoryClipboard::default());
 
     assert!(browser.rename_field().is_some());
     assert!(browser
@@ -389,14 +390,14 @@ fn escape_closes_the_rename_field_and_an_unchanged_name_renames_nothing() {
     point_at(&mut browser, &file);
 
     browser.rename_open();
-    assert!(browser.rename_key(&key("escape", None)));
+    assert!(browser.rename_key(&key("escape", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
 
     browser.rename_open();
-    assert!(browser.rename_key(&key("enter", None)));
+    assert!(browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
     assert!(file.exists());
-    assert!(!browser.rename_key(&key("enter", None)));
+    assert!(!browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
 }
 
 #[test]
@@ -411,7 +412,7 @@ fn a_new_folder_appears_named_and_opens_for_rename() {
     assert!(temp.path().join("New folder").is_dir());
     assert_eq!(browser.rename_field().unwrap().text(), "New folder");
 
-    browser.rename_key(&key("escape", None));
+    browser.rename_key(&key("escape", None), &MemoryClipboard::default());
     assert!(browser.new_folder());
     wait_until(&mut browser, "the second field", |browser| {
         browser.rename_field().is_some()
@@ -595,7 +596,7 @@ fn a_new_file_appears_empty_opens_for_rename_and_undo_removes_it() {
     assert_eq!(fs::metadata(&made).unwrap().len(), 0);
     assert_eq!(browser.rename_field().unwrap().text(), "New file");
 
-    browser.rename_key(&key("escape", None));
+    browser.rename_key(&key("escape", None), &MemoryClipboard::default());
     assert!(browser.undo());
     assert!(!made.exists());
 }

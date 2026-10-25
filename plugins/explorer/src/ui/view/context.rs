@@ -33,12 +33,18 @@ impl ExplorerView {
             self.open_folder_menu(at, true, cx);
             return true;
         }
+        let at = self.cursor_point();
+        self.open_item_menu(row, at, cx);
+        true
+    }
+
+    pub(super) fn cursor_point(&mut self) -> Point<Pixels> {
+        let row = self.browser.cursor();
+        let area = self.pressing.area().get();
         self.reveal_cursor();
         let rect = self.layout().tiles(self.list_width).rect(row);
         let top = rect.top - self.scroll_offset() + (rect.bottom - rect.top) / 2.0;
-        let at = area.origin + point(px(rect.left + SPACE_GUTTER + ICON), px(top));
-        self.open_item_menu(row, at, cx);
-        true
+        area.origin + point(px(rect.left + SPACE_GUTTER + ICON), px(top))
     }
 
     fn open_item_menu(&mut self, row: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
@@ -49,7 +55,8 @@ impl ExplorerView {
         self.renaming = None;
         self.menu = Some(Menu::item(
             self.browser.holds(),
-            self.browser.operand_count() == 1,
+            self.browser.operands().len() == 1,
+            self.browser.cursor_file().is_some(),
             at,
         ));
         cx.notify();
