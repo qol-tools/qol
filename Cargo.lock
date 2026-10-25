@@ -6735,7 +6735,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7488,7 +7488,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.109.1"
+version = "1.109.2"
 dependencies = [
  "anyhow",
  "block2",
