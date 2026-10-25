@@ -14,7 +14,9 @@ pub mod trigger;
 use anyhow::Result;
 use diagnosis::{apply_fix, FixAction, FixApplicability};
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
-pub(crate) use host_bindings::{free_host_bindings, normalize_combo, shadowed_combos};
+pub(crate) use host_bindings::{
+    free_host_bindings, host_bindings_readable, normalize_combo, shadowed_combos,
+};
 pub use report::{FixReport, Outcome, OutcomeStatus, Report};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

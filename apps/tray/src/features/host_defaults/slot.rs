@@ -220,14 +220,15 @@ pub(super) fn claim_slot(
         let _ = context.ledger.remove_store(declaration.role, HOTKEY_STORE);
         return Err(error.context("saving the hotkey bindings"));
     }
-    let freed: Vec<String> = keys.iter().chain(&enabled).cloned().collect();
+    let freed: Vec<String> = keys
+        .iter()
+        .cloned()
+        .chain(enabled.iter().map(|binding| binding.key.clone()))
+        .collect();
     if let Err(error) = context.host.free(&freed) {
-        let disable = if enabled.is_empty() {
-            &[][..]
-        } else {
-            std::slice::from_ref(declaration)
-        };
-        if let Err(undo) = release_slot(context, declaration.role, reaches, disable) {
+        let undone = release_slot(context, declaration.role, reaches, &[])
+            .and_then(|_| switch_off(context, &enabled));
+        if let Err(undo) = undone {
             log::warn!("host defaults: could not undo a refused slot claim: {undo:#}");
         }
         return Err(error);
@@ -236,12 +237,31 @@ pub(super) fn claim_slot(
     Ok(())
 }
 
+fn switch_off(context: &SlotContext<'_>, switched_on: &[HotkeyBinding]) -> Result<()> {
+    if switched_on.is_empty() {
+        return Ok(());
+    }
+    let mut config = context
+        .layers
+        .load()
+        .context("reading the hotkey bindings")?;
+    for binding in config.hotkeys.iter_mut() {
+        if switched_on.iter().any(|on| on.id == binding.id) {
+            binding.enabled = false;
+        }
+    }
+    context
+        .layers
+        .save(&config)
+        .context("saving the hotkey bindings")
+}
+
 pub(super) fn enable_declared(
     bindings: &mut [HotkeyBinding],
     declaration: &Declaration,
     reaches: &[String],
     normalize: impl Fn(&str) -> Option<String>,
-) -> Vec<String> {
+) -> Vec<HotkeyBinding> {
     let reached: BTreeSet<String> = reaches.iter().filter_map(|key| normalize(key)).collect();
     let mut enabled = Vec::new();
     for binding in bindings.iter_mut() {
@@ -249,7 +269,7 @@ pub(super) fn enable_declared(
         let on_reach = normalize(&binding.key).is_some_and(|key| reached.contains(&key));
         if switched_off && on_reach && binding.plugin_uid == declaration.uid {
             binding.enabled = true;
-            enabled.push(binding.key.clone());
+            enabled.push(binding.clone());
         }
     }
     enabled
@@ -681,6 +701,45 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_free_keeps_primary_bindings_and_turns_implied_ones_off_again() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots {
+            refuse: true,
+            ..FakeSlots::default()
+        };
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let mut config = layers.load().expect("load");
+        config.hotkeys = vec![
+            binding("shot-own", "Ctrl+Print", "uid-shot", "screenshot", true),
+            HotkeyBinding {
+                os_only: true,
+                ..binding("shot-reverse", "Shift+Print", "uid-shot", "record", false)
+            },
+        ];
+        layers.save(&config).expect("save");
+
+        let result = claim_slot(
+            &context,
+            &declaration(),
+            &keys(&["Ctrl+Print"]),
+            &keys(&["Ctrl+Print", "Shift+Print"]),
+            Lifetime::PortableSession,
+        );
+
+        assert!(result.is_err());
+        let saved = layers.load().expect("load").hotkeys;
+        let enabled = |id: &str| saved.iter().find(|b| b.id == id).expect(id).enabled;
+        assert!(enabled("shot-own"));
+        assert!(!enabled("shot-reverse"));
+    }
+
+    #[test]
     fn releasing_leaves_a_binding_the_user_edited() {
         let dir = tempfile::tempdir().expect("tempdir");
         let layers = layers_in(dir.path());
@@ -981,7 +1040,8 @@ mod tests {
         );
 
         let on: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
-        assert_eq!(enabled, keys(&["Shift+Print"]));
+        let ids: Vec<&str> = enabled.iter().map(|binding| binding.id.as_str()).collect();
+        assert_eq!(ids, ["own"]);
         assert_eq!(on, vec![true, false, false, false]);
     }
 

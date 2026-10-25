@@ -53,7 +53,12 @@ pub fn is_os_only(binding: &Value) -> bool {
 }
 
 fn hides(local: &Value, shared: &Value) -> bool {
-    same_id(local, shared) || key(local).is_some_and(|local_key| Some(local_key) == key(shared))
+    let enabled = local
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    same_id(local, shared)
+        || (enabled && key(local).is_some_and(|local_key| Some(local_key) == key(shared)))
 }
 
 fn same_id(left: &Value, right: &Value) -> bool {
@@ -123,6 +128,21 @@ mod tests {
                 os_only(binding("a", "Super+X", "one")),
                 os_only(binding("d", "Super+B", "four")),
             ]
+        );
+    }
+
+    #[test]
+    fn a_disabled_os_binding_hides_a_shared_one_by_id_only() {
+        let mut off = binding("a", "Super+A", "one");
+        off["enabled"] = json!(false);
+        let core = [
+            binding("a", "Super+A", "one"),
+            binding("b", "Super+A", "two"),
+        ];
+
+        assert_eq!(
+            merge(&core, std::slice::from_ref(&off)),
+            vec![binding("b", "Super+A", "two"), os_only(off)]
         );
     }
 

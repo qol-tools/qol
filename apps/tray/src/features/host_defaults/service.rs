@@ -109,7 +109,7 @@ fn release_on_host(role: Role) -> Result<ReleaseOutcome> {
     claim::release(&env, role, &declarations_for(role, &catalog::installed()))
 }
 
-fn declarations_for(role: Role, plugins: &[InstalledPlugin]) -> Vec<Declaration> {
+pub(super) fn declarations_for(role: Role, plugins: &[InstalledPlugin]) -> Vec<Declaration> {
     plugins
         .iter()
         .filter_map(|plugin| plugin.declaration_for(role))

@@ -9,6 +9,10 @@ pub(crate) fn normalize_combo(combo: &str) -> Option<String> {
     de_bindings::normalize_combo(combo)
 }
 
+pub(crate) fn host_bindings_readable() -> bool {
+    crate::hotkeys::takeover::scan().available
+}
+
 pub(crate) fn shadowed_combos(combos: &[String]) -> Vec<String> {
     shadows_for_combos(combos)
         .into_iter()
