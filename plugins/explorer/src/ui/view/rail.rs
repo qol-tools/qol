@@ -1,16 +1,19 @@
 use std::path::PathBuf;
 
 use gpui::{
-    div, px, rgb, AnyElement, ClickEvent, Context, Div, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement, StatefulInteractiveElement, Styled,
+    div, px, rgb, rgba, AnimationExt as _, AnyElement, ClickEvent, Context, Div,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
+    StatefulInteractiveElement, Styled,
 };
-use qol_gpui::kit::{kit, Kit};
+use qol_gpui::kit::{float_shadow, kit, Kit};
+use qol_gpui::motion;
 use qol_gpui::scrollbar::{seek_handle, ScrollGrip, ScrollSource};
 use qol_gpui::settings_panel::components::rail_caption;
 use qol_gpui::text::TextStyled;
 use qol_gpui::text_edit::TextField;
 use qol_gpui::theme::{
-    TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, OPACITY_DISABLED, SPACE_GUTTER, SPACE_INSET,
+    Motion, TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, OPACITY_DISABLED, SPACE_CELL, SPACE_GUTTER,
+    SPACE_INSET, SPACE_TIGHT,
 };
 
 use super::pictogram::{rail_pictogram, RailGlyph};
@@ -74,9 +77,14 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
     let mut children: Vec<AnyElement> = Vec::new();
     let width = view.rail_width;
     children.push(header("Pinned", "Your folders", !in_devices));
+    let landing = view.pin_landing();
+    let mut pinned: Vec<AnyElement> = Vec::new();
     for (index, row) in places.into_iter().enumerate() {
+        if let Some((slot, name)) = landing.as_ref().filter(|(slot, _)| *slot == index) {
+            pinned.push(pin_slot(*slot, name.clone(), kit));
+        }
         let tag = view.drop_overlay(Zone::Rail(index), kit.grounds.rail);
-        children.push(render_row(
+        pinned.push(render_row(
             index,
             row,
             current == Some(index),
@@ -86,6 +94,14 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
             cx,
         ));
     }
+    if let Some((slot, name)) = landing.filter(|(slot, _)| *slot >= place_count) {
+        pinned.push(pin_slot(slot, name, kit));
+    }
+    children.push(
+        targets::pins(div().flex_none().flex().flex_col(), cx)
+            .children(pinned)
+            .into_any_element(),
+    );
     children.push(header("Devices", "Your drives", in_devices));
     for (offset, row) in devices.into_iter().enumerate() {
         let index = place_count + offset;
@@ -134,6 +150,43 @@ fn header(label: &'static str, colophon: &'static str, live: bool) -> AnyElement
         .flex_none()
         .px(px(SPACE_INSET))
         .child(rail_caption(label, Some(colophon.into()), live))
+        .into_any_element()
+}
+
+fn pin_slot(slot: usize, name: String, kit: Kit) -> AnyElement {
+    let pane = kit.grounds.pane;
+    let row = div()
+        .absolute()
+        .top(px(-SPACE_INSET))
+        .left(px(SPACE_CELL))
+        .right(px(-SPACE_TIGHT))
+        .h(px(HEIGHT_CONTROL))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(SPACE_INSET))
+        .px(px(SPACE_GUTTER))
+        .bg(rgb(pane.bg))
+        .shadow(float_shadow(pane.ink))
+        .child(rail_pictogram(RailGlyph::Folder, false))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text(TextStyle::Name)
+                .text_color(rgb(pane.ink))
+                .child(name),
+        );
+    div()
+        .flex_none()
+        .relative()
+        .bg(rgba(kit.grounds.rail.well.packed()))
+        .child(row)
+        .with_animation(
+            ("explorer-pin-slot", slot),
+            motion::animation(Motion::SETTLE),
+            |slot, delta| slot.h(px(HEIGHT_CONTROL * delta)),
+        )
         .into_any_element()
 }
 
@@ -222,7 +275,7 @@ fn render_row(
     if let Some(tag) = tag {
         element = element.relative().bg(rgb(kit.grounds.band.bg)).child(tag);
     }
-    let element = if row.connected {
+    let element = if row.connected && place.is_none() {
         targets::target(element, Zone::Rail(index), path.clone(), cx)
     } else {
         element
