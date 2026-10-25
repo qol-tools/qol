@@ -1,5 +1,6 @@
 mod cache;
 mod mime;
+mod sandbox;
 mod thumbnailers;
 
 use std::path::{Path, PathBuf};
@@ -49,4 +50,14 @@ fn data_dirs() -> Vec<PathBuf> {
         )
         .filter(|dir| dir.is_absolute())
         .collect()
+}
+
+fn on_path(program: &str) -> Option<PathBuf> {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
 }

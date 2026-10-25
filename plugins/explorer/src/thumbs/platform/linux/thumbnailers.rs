@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -9,6 +8,7 @@ use qol_process::BoundedCommandOutput;
 
 use super::super::super::{Flavor, ThumbError};
 use super::cache::Stamp;
+use super::sandbox;
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 4096;
@@ -54,16 +54,11 @@ impl Thumbnailer {
         Some(Self { exec, mimes })
     }
 
-    fn command(&self, input: &Path, uri: &str, size: u32, output: &Path) -> Option<Command> {
-        let words: Vec<OsString> = self
-            .exec
+    fn words(&self, input: &Path, uri: &str, size: u32, output: &Path) -> Vec<OsString> {
+        self.exec
             .iter()
             .map(|word| expand(word, input, uri, size, output))
-            .collect();
-        let (program, args) = words.split_first()?;
-        let mut command = Command::new(program);
-        command.args(args);
-        Some(command)
+            .collect()
     }
 
     pub(super) fn run(
@@ -85,9 +80,10 @@ impl Thumbnailer {
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("thumbnail")
         ));
-        let command = self
-            .command(input, &stamp.uri, flavor.px(), &partial)
-            .ok_or_else(|| failed("the thumbnailer has no command".into()))?;
+        let words = self.words(input, &stamp.uri, flavor.px(), &partial);
+        let command = sandbox::command(&words, input, folder).ok_or_else(|| {
+            failed("previews need bubblewrap (bwrap) to run thumbnailers sandboxed".into())
+        })?;
         let outcome =
             qol_process::run_owned_with_output_timeout(command, RUN_TIMEOUT, OUTPUT_LIMIT);
         let made = partial.metadata().is_ok_and(|meta| meta.len() > 0);
@@ -154,12 +150,7 @@ fn discover() -> Vec<Thumbnailer> {
 }
 
 fn installed(program: &str) -> bool {
-    let path = Path::new(program);
-    if path.is_absolute() {
-        return path.is_file();
-    }
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+    super::on_path(program).is_some()
 }
 
 fn expand(word: &str, input: &Path, uri: &str, size: u32, output: &Path) -> OsString {
@@ -184,8 +175,6 @@ fn expand(word: &str, input: &Path, uri: &str, size: u32, output: &Path) -> OsSt
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-
     use super::*;
 
     #[test]
@@ -198,18 +187,16 @@ mod tests {
             .to_vec(),
             mimes: vec![],
         };
-        let command = thumbnailer
-            .command(
-                Path::new("/v/a b.webm"),
-                "file:///v/a%20b.webm",
-                256,
-                Path::new("/c/o.png"),
-            )
-            .unwrap();
-        assert_eq!(command.get_program(), OsStr::new("sh"));
+        let words = thumbnailer.words(
+            Path::new("/v/a b.webm"),
+            "file:///v/a%20b.webm",
+            256,
+            Path::new("/c/o.png"),
+        );
         assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
+            words,
             [
+                "sh",
                 "-i",
                 "/v/a b.webm",
                 "-u",
@@ -221,7 +208,7 @@ mod tests {
                 "100%",
                 ""
             ]
-            .map(OsStr::new)
+            .map(OsString::from)
         );
     }
 
