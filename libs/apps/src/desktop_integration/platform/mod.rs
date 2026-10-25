@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(super) enum RevealPlan {
@@ -25,9 +25,13 @@ mod commands;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "linux")]
+mod handlers;
+#[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(not(target_os = "linux"))]
+mod unsupported;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -50,4 +54,24 @@ pub(super) fn open_checked(target: &OsStr) -> io::Result<()> {
 
 pub(super) fn reveal_plan(path: &std::path::Path) -> RevealPlan {
     imp::reveal_plan(path)
+}
+
+pub(super) fn open_with_supported() -> bool {
+    imp::open_with_supported()
+}
+
+pub(super) fn file_type(path: &Path) -> io::Result<String> {
+    imp::file_type(path)
+}
+
+pub(super) fn open_handlers(path: &Path) -> io::Result<Vec<super::OpenHandler>> {
+    imp::open_handlers(path)
+}
+
+pub(super) fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {
+    imp::open_with_handler(handler, paths)
+}
+
+pub(super) fn terminal_commands(folder: &Path) -> Vec<Command> {
+    imp::terminal_commands(folder)
 }

@@ -2,7 +2,7 @@ mod platform;
 
 use std::ffi::OsStr;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use platform::RevealPlan;
@@ -15,6 +15,48 @@ pub fn open_with_default_app(target: impl AsRef<OsStr>) -> io::Result<()> {
 
 pub fn open_with_default_app_checked(target: impl AsRef<OsStr>) -> io::Result<()> {
     platform::open_checked(target.as_ref())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenHandler {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+pub fn open_with_supported() -> bool {
+    platform::open_with_supported()
+}
+
+pub fn file_type(path: &Path) -> io::Result<String> {
+    platform::file_type(path)
+}
+
+pub fn open_handlers(path: &Path) -> io::Result<Vec<OpenHandler>> {
+    platform::open_handlers(path)
+}
+
+pub fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {
+    platform::open_with_handler(handler, paths)
+}
+
+pub fn open_terminal_in(folder: &Path) -> io::Result<()> {
+    if !folder.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("folder does not exist: {}", folder.display()),
+        ));
+    }
+    let mut last_error = io::Error::new(io::ErrorKind::NotFound, "no terminal is available");
+    for mut command in platform::terminal_commands(folder) {
+        prepare_external_command(&mut command);
+        command.current_dir(folder);
+        match qol_process::spawn_detached(&mut command) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
 }
 
 /// Asks the running tray to focus this plugin in the unified settings window.
@@ -70,6 +112,13 @@ mod tests {
     fn reveal_rejects_a_missing_path_before_launching() {
         let temp = tempfile::tempdir().unwrap();
         let error = reveal_in_file_manager(&temp.path().join("missing")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn terminal_rejects_a_missing_folder_before_launching() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = open_terminal_in(&temp.path().join("missing")).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

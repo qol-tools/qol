@@ -4,6 +4,15 @@ use std::process::Command;
 use super::RevealPlan;
 
 pub(super) use super::commands::{open, open_checked};
+pub(super) use super::unsupported::{
+    file_type, open_handlers, open_with_handler, open_with_supported,
+};
+
+pub(super) fn terminal_commands(folder: &Path) -> Vec<Command> {
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("-a").arg("Terminal").arg(folder);
+    vec![command]
+}
 
 pub(super) fn reveal_plan(path: &Path) -> RevealPlan {
     let mut command = Command::new("/usr/bin/open");
