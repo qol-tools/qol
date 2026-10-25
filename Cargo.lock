@@ -6735,7 +6735,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7370,7 +7370,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.93.0"
+version = "0.94.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7596,7 +7596,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.123.0"
+version = "3.124.0"
 dependencies = [
  "anyhow",
  "axum",
