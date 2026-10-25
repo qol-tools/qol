@@ -22,6 +22,42 @@ const CINNAMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const CINNAMON_POLL_INTERVAL: Duration = Duration::from_millis(40);
 static CINNAMON_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 const CINNAMON_VP8_THREADS: u32 = 4;
+const NVENC_ELEMENT: &str = "nvh264enc";
+const NVENC_MIN_SIZE: (i32, i32) = (145, 49);
+const NVENC_MAX_SIDE: i32 = 4096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CinnamonEncoder {
+    Nvenc,
+    Vp8,
+}
+
+impl CinnamonEncoder {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nvenc => NVENC_ELEMENT,
+            Self::Vp8 => "vp8enc",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Nvenc => "mkv",
+            Self::Vp8 => "webm",
+        }
+    }
+
+    fn from_capture_file(capture_file: &Path) -> Self {
+        if capture_file
+            .extension()
+            .is_some_and(|extension| extension == "mkv")
+        {
+            Self::Nvenc
+        } else {
+            Self::Vp8
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CinnamonCaptureRequest {
@@ -45,20 +81,27 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let rect = &even_dimensions(*rect);
     if cinnamon_desktop_session() {
-        match start_cinnamon_capture(rect, config, output_file) {
-            Ok(session) => {
-                qol_runtime::probe!(
-                    "SHOT_RECORD_START_BACKEND",
-                    "backend=cinnamon_after_paint outcome=ready"
-                );
-                return Ok(session);
-            }
-            Err(error) => {
-                qol_runtime::probe!(
-                    "SHOT_RECORD_START_BACKEND",
-                    "backend=cinnamon_after_paint outcome=fallback reason=start_failed"
-                );
-                log::warn!("Cinnamon synchronized capture unavailable, using x11grab: {error:#}");
+        for encoder in cinnamon_encoders(rect) {
+            match start_cinnamon_capture(rect, config, output_file, encoder) {
+                Ok(session) => {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_START_BACKEND",
+                        "backend=cinnamon_after_paint outcome=ready encoder={}",
+                        encoder.label()
+                    );
+                    return Ok(session);
+                }
+                Err(error) => {
+                    qol_runtime::probe!(
+                        "SHOT_RECORD_START_BACKEND",
+                        "backend=cinnamon_after_paint outcome=fallback reason=start_failed encoder={}",
+                        encoder.label()
+                    );
+                    log::warn!(
+                        "Cinnamon synchronized capture with {} unavailable: {error:#}",
+                        encoder.label()
+                    );
+                }
             }
         }
     }
@@ -75,12 +118,48 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
     start_x11grab_capture(rect, config, output_file)
 }
 
+fn cinnamon_encoders(rect: &Rect) -> Vec<CinnamonEncoder> {
+    let mut encoders = Vec::new();
+    if nvenc_accepts(rect) && cinnamon_has_element(NVENC_ELEMENT) {
+        encoders.push(CinnamonEncoder::Nvenc);
+    }
+    encoders.push(CinnamonEncoder::Vp8);
+    encoders
+}
+
+fn nvenc_accepts(rect: &Rect) -> bool {
+    (NVENC_MIN_SIZE.0..=NVENC_MAX_SIDE).contains(&rect.w)
+        && (NVENC_MIN_SIZE.1..=NVENC_MAX_SIDE).contains(&rect.h)
+}
+
+fn cinnamon_has_element(element: &str) -> bool {
+    let script = format!(
+        r#"(() => {{
+try {{
+    const Gst = imports.gi.Gst;
+    Gst.init(null);
+    return Gst.ElementFactory.find({element:?}) !== null;
+}} catch (error) {{
+    return false;
+}}
+}})()"#
+    );
+    match qol_cinnamon::Session::connect().and_then(|session| session.eval(&script)) {
+        Ok(found) => found == "true",
+        Err(error) => {
+            log::warn!("failed to look up the {element} GStreamer element in Cinnamon: {error}");
+            false
+        }
+    }
+}
+
 fn start_cinnamon_capture(
     rect: &Rect,
     config: &Config,
     output_file: &Path,
+    encoder: CinnamonEncoder,
 ) -> Result<CaptureSession> {
-    let capture_file = cinnamon_capture_file(output_file);
+    let capture_file = cinnamon_capture_file(output_file, encoder);
     if capture_file.symlink_metadata().is_ok() {
         return Err(anyhow!(
             "refusing to replace existing capture output {}",
@@ -95,20 +174,21 @@ fn start_cinnamon_capture(
         rect: *rect,
         framerate: config.video.framerate.clamp(1, 240),
         file_template: output.replace('%', "%%"),
-        pipeline: cinnamon_pipeline(config),
+        pipeline: cinnamon_pipeline(config, encoder),
     };
     let request_json =
         serde_json::to_string(&request).context("failed to encode capture request")?;
 
     qol_runtime::probe!(
         "SHOT_RECORD_START_PLAN",
-        "backend=cinnamon_after_paint rect={}x{}+{},{} fps={} format={} audio_inputs={} cursor=xfixes_actor_fallback_builtin cursor_update=before_paint",
+        "backend=cinnamon_after_paint rect={}x{}+{},{} fps={} format={} encoder={} audio_inputs={} cursor=xfixes_actor_fallback_builtin cursor_update=before_paint",
         rect.w,
         rect.h,
         rect.x,
         rect.y,
         request.framerate,
         format,
+        encoder.label(),
         audio_inputs(config).len()
     );
 
@@ -189,12 +269,12 @@ fn stop_failed_cinnamon_start(child: &mut Child) {
     }
 }
 
-fn cinnamon_capture_file(output_file: &Path) -> PathBuf {
+fn cinnamon_capture_file(output_file: &Path, encoder: CinnamonEncoder) -> PathBuf {
     let stem = output_file
         .file_stem()
         .map(|stem| stem.to_string_lossy())
         .unwrap_or_else(|| "recording".into());
-    output_file.with_file_name(format!(".{stem}.cinnamon.webm"))
+    output_file.with_file_name(format!(".{stem}.cinnamon.{}", encoder.extension()))
 }
 
 fn capture_session(
@@ -478,12 +558,23 @@ fn cinnamon_desktop_session() -> bool {
         .any(|desktop| desktop.to_ascii_lowercase().contains("cinnamon"))
 }
 
-fn cinnamon_pipeline(config: &Config) -> String {
-    let muxer = "webmmux";
-    let video = format!(
-        "vp8enc deadline=1 cpu-used=8 min-quantizer={quality} max-quantizer={quality} threads={CINNAMON_VP8_THREADS} ! queue",
-        quality = config.video.crf.clamp(0, 63)
-    );
+fn cinnamon_pipeline(config: &Config, encoder: CinnamonEncoder) -> String {
+    let (muxer, video) = match encoder {
+        CinnamonEncoder::Nvenc => (
+            "matroskamux",
+            format!(
+                "video/x-raw,format=BGRA ! {NVENC_ELEMENT} preset=low-latency-hq rc-mode=vbr const-quality={quality} zerolatency=true ! h264parse ! queue",
+                quality = config.video.crf.clamp(0, 51)
+            ),
+        ),
+        CinnamonEncoder::Vp8 => (
+            "webmmux",
+            format!(
+                "vp8enc deadline=1 cpu-used=8 min-quantizer={quality} max-quantizer={quality} threads={CINNAMON_VP8_THREADS} ! queue",
+                quality = config.video.crf.clamp(0, 63)
+            ),
+        ),
+    };
     let audio = "opusenc bitrate=192000";
     let inputs = audio_inputs(config);
     if inputs.is_empty() {
@@ -646,7 +737,7 @@ pub fn recording_stopped(session: &CaptureSession, config: &Config) -> Option<Sa
                 log::warn!("Cinnamon recording conversion failed: {error:#}");
                 send_notification(
                     "Recording conversion failed",
-                    "Saved the synchronized WebM recording instead",
+                    "Saved the unconverted recording instead",
                 );
                 capture_file.to_path_buf()
             }
@@ -712,7 +803,11 @@ fn cinnamon_conversion_args(
         "-i".to_string(),
         capture_file.to_string_lossy().to_string(),
     ];
-    args.extend(recorder::encoder_args(config, false));
+    let copied = match CinnamonEncoder::from_capture_file(capture_file) {
+        CinnamonEncoder::Nvenc => recorder::h264_copy_args(config),
+        CinnamonEncoder::Vp8 => None,
+    };
+    args.extend(copied.unwrap_or_else(|| recorder::encoder_args(config, false)));
     args.extend(["-fps_mode", "passthrough"].map(str::to_string));
     args.push(output_file.to_string_lossy().to_string());
     args
@@ -729,41 +824,69 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote,
-        CinnamonCaptureRequest,
+        cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote, nvenc_accepts,
+        CinnamonCaptureRequest, CinnamonEncoder,
     };
     use crate::{Config, Rect};
 
     #[test]
-    fn cinnamon_pipeline_uses_portable_webm_for_every_audio_shape() {
+    fn cinnamon_pipeline_fits_every_encoder_and_audio_shape() {
+        let encoders = [
+            (CinnamonEncoder::Vp8, "webmmux", "vp8enc deadline=1 cpu-used=8 min-quantizer=18 max-quantizer=18 threads=4 "),
+            (CinnamonEncoder::Nvenc, "matroskamux", "video/x-raw,format=BGRA ! nvh264enc preset=low-latency-hq rc-mode=vbr const-quality=18 zerolatency=true ! h264parse"),
+        ];
         let cases = [
             (false, &[][..], None),
             (true, &["mic"][..], Some("pulsesrc")),
             (true, &["mic", "system"][..], Some("audiomixer")),
             (true, &["system"][..], Some("opusenc")),
         ];
-        for (enabled, inputs, audio) in cases {
-            let mut config = Config::default();
-            config.audio.enabled = enabled;
-            config.audio.inputs = inputs.iter().map(|input| (*input).to_string()).collect();
-            let pipeline = cinnamon_pipeline(&config);
-            assert!(pipeline.contains("webmmux"), "{pipeline}");
-            assert!(pipeline.contains("vp8enc"), "{pipeline}");
-            assert!(pipeline.contains("threads=4 "), "{pipeline}");
-            if let Some(audio) = audio {
-                assert!(pipeline.contains(audio), "{pipeline}");
-            } else {
-                assert!(!pipeline.contains("pulsesrc"), "{pipeline}");
+        for (encoder, muxer, video) in encoders {
+            for (enabled, inputs, audio) in cases {
+                let mut config = Config::default();
+                config.video.crf = 18;
+                config.audio.enabled = enabled;
+                config.audio.inputs = inputs.iter().map(|input| (*input).to_string()).collect();
+                let pipeline = cinnamon_pipeline(&config, encoder);
+                assert!(pipeline.contains(muxer), "{pipeline}");
+                assert!(pipeline.contains(video), "{pipeline}");
+                if let Some(audio) = audio {
+                    assert!(pipeline.contains(audio), "{pipeline}");
+                } else {
+                    assert!(!pipeline.contains("pulsesrc"), "{pipeline}");
+                }
             }
         }
     }
 
     #[test]
-    fn cinnamon_capture_file_is_hidden_webm_beside_requested_output() {
-        assert_eq!(
-            cinnamon_capture_file(std::path::Path::new("/tmp/recording.mp4")),
-            std::path::Path::new("/tmp/.recording.cinnamon.webm")
-        );
+    fn cinnamon_capture_file_is_hidden_beside_requested_output_and_names_its_encoder() {
+        let output = std::path::Path::new("/tmp/recording.mp4");
+        for (encoder, expected) in [
+            (CinnamonEncoder::Vp8, "/tmp/.recording.cinnamon.webm"),
+            (CinnamonEncoder::Nvenc, "/tmp/.recording.cinnamon.mkv"),
+        ] {
+            let capture_file = cinnamon_capture_file(output, encoder);
+            assert_eq!(capture_file, std::path::Path::new(expected));
+            assert_eq!(CinnamonEncoder::from_capture_file(&capture_file), encoder);
+        }
+    }
+
+    #[test]
+    fn nvenc_accepts_only_sizes_its_sink_caps_allow() {
+        let cases = [
+            ((2560, 1440), true),
+            ((145, 49), true),
+            ((4096, 4096), true),
+            ((144, 1440), false),
+            ((2560, 48), false),
+            ((4480, 1440), false),
+            ((2560, 4098), false),
+        ];
+        for ((w, h), expected) in cases {
+            let rect = Rect { x: 0, y: 0, w, h };
+            assert_eq!(nvenc_accepts(&rect), expected, "{w}x{h}");
+        }
     }
 
     #[test]
@@ -818,6 +941,29 @@ mod tests {
 
         assert!(script.contains("const isolatedCursor = false"));
         assert!(script.contains("recorder.set_draw_cursor(!isolatedCursor)"));
+    }
+
+    #[test]
+    fn cinnamon_conversion_copies_nvenc_video_unless_the_target_is_webm() {
+        let cases = [
+            ("/tmp/.r.cinnamon.mkv", "mp4", "copy"),
+            ("/tmp/.r.cinnamon.mkv", "mkv", "copy"),
+            ("/tmp/.r.cinnamon.mkv", "webm", "libvpx-vp9"),
+            ("/tmp/.r.cinnamon.webm", "mp4", "libx264"),
+        ];
+        for (capture_file, format, codec) in cases {
+            let mut config = Config::default();
+            config.video.format = format.to_string();
+            let args = super::cinnamon_conversion_args(
+                std::path::Path::new(capture_file),
+                std::path::Path::new("/tmp/output"),
+                &config,
+            );
+            assert!(
+                args.windows(2).any(|pair| pair == ["-c:v", codec]),
+                "{capture_file} -> {format}: {args:?}"
+            );
+        }
     }
 
     #[test]
