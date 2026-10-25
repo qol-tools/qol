@@ -62,9 +62,10 @@ const RELEASE: &str = "\
 qol-tray defaults release <role> [--json]
 
 Gives the role back to the host. Only what qol wrote is undone: a value or
-binding you changed since is left alone. For a slot role it also turns off
-the plugin's own enabled binding on the role's keys, so qol does not free the
-system key again on the next start.
+binding you changed since is left alone. For a slot role it also turns off,
+on this OS only, the plugin's own enabled bindings on every key the system
+tool answers (Alt+Tab and Alt+Shift+Tab for the window switcher), so qol does
+not free the system key again on the next start.
 
 JSON: {\"role\", \"outcome\": \"restored\" | \"left_user_change\" | \"already_gone\"}
 EXIT: 0, 1 when restoring failed.";

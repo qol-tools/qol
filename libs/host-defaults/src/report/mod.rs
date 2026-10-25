@@ -62,6 +62,7 @@ impl Report {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotRoute {
     pub keys: Vec<String>,
+    pub reaches: Vec<String>,
     pub owner: String,
 }
 

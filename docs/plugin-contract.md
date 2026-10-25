@@ -122,8 +122,9 @@ Sections:
   Slot roles (freed host keys such as `slot.window_switcher`) are always a
   portable session: the system binding comes back when qol stops, or on the next
   start after a crash, because a freed key only works while qol runs. Turning the
-  row off also disables the plugin's own enabled binding on the role's keys, on
-  this OS only, so the next start does not free the key again. Handler roles
+  row off also disables, on this OS only, the plugin's own enabled bindings on
+  every key the system tool answers (Alt+Tab and Alt+Shift+Tab for the window
+  switcher), so the next start does not free the key again. Handler roles
   follow the host's residency.
 - `[launcher]` (`LauncherSpec`): optional launcher integration. `kind` is `app`
   (the default host behavior is unchanged) or `flow` (the launcher keeps focus

@@ -166,6 +166,7 @@ mod tests {
         fn slot_route(&self, _role: Role) -> Option<SlotRoute> {
             Some(SlotRoute {
                 keys: vec!["Print".to_string()],
+                reaches: vec!["Print".to_string()],
                 owner: "Cinnamon".to_string(),
             })
         }

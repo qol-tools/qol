@@ -230,9 +230,9 @@ pub(super) fn disable_declared(
     let routed: BTreeSet<String> = route_keys.iter().filter_map(|key| normalize(key)).collect();
     let mut disabled = 0;
     for binding in bindings.iter_mut().filter(|binding| binding.enabled) {
-        let declared = declarations.iter().any(|declaration| {
-            declaration.uid == binding.plugin_uid && declaration.action == binding.action
-        });
+        let declared = declarations
+            .iter()
+            .any(|declaration| declaration.uid == binding.plugin_uid);
         let on_route = normalize(&binding.key).is_some_and(|key| routed.contains(&key));
         if declared && on_route {
             binding.enabled = false;
@@ -828,19 +828,24 @@ mod tests {
     }
 
     #[test]
-    fn disabling_touches_only_declared_bindings_on_a_route_key() {
+    fn disabling_touches_only_declaring_plugins_on_a_reached_key() {
         let mut bindings = vec![
             binding("own", "PRINT", "uid-shot", "screenshot", true),
             binding("other-key", "Ctrl+P", "uid-shot", "screenshot", true),
-            binding("other-action", "Print", "uid-shot", "record", true),
+            binding("other-action", "Shift+Print", "uid-shot", "record", true),
             binding("other-plugin", "Print", "uid-other", "screenshot", true),
         ];
 
-        let disabled = disable_declared(&mut bindings, &[declaration()], &keys(&["Print"]), lower);
+        let disabled = disable_declared(
+            &mut bindings,
+            &[declaration()],
+            &keys(&["Print", "Shift+Print"]),
+            lower,
+        );
 
         let enabled: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
-        assert_eq!(disabled, 1);
-        assert_eq!(enabled, vec![false, true, true, true]);
+        assert_eq!(disabled, 2);
+        assert_eq!(enabled, vec![false, true, false, true]);
         assert!(bindings[0].os_only);
         assert!(!bindings[1].os_only);
     }

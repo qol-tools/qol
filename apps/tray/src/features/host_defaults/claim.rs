@@ -114,7 +114,7 @@ pub(super) fn release_slot_role<H: HostDefaults>(
     let keys = env
         .host
         .slot_route(role)
-        .map(|route| route.keys)
+        .map(|route| route.reaches)
         .unwrap_or_default();
     slot::release_slot(&env.slot_context(), role, &keys, disable)
 }
