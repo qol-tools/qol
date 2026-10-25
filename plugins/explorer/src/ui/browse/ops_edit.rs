@@ -96,11 +96,20 @@ impl Browser {
     }
 
     pub fn erase_ask(&mut self) -> bool {
-        if self.path.is_some() {
+        if self.path.is_some() || self.loading() {
             return false;
         }
-        let paths = self.operands();
+        let operands = self.operands();
+        let held = operands.len();
+        let paths: Vec<PathBuf> = operands
+            .into_iter()
+            .filter(|path| path.parent() == Some(self.folder()))
+            .collect();
         if paths.is_empty() {
+            if held > 0 {
+                self.ops.notice = Some(ops_text::erase_elsewhere_note());
+                return true;
+            }
             return false;
         }
         self.ops.notice = None;

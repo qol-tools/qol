@@ -1,5 +1,7 @@
+use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -84,6 +86,9 @@ fn candidates() -> Vec<Candidate> {
             let Ok(content) = fs::read_to_string(&entry.path) else {
                 continue;
             };
+            if desktop_field(&content, "Terminal=").as_deref() == Some("true") {
+                continue;
+            }
             let (Some(exec), Some(mimes)) = (
                 desktop_field(&content, "Exec="),
                 desktop_field(&content, "MimeType="),
@@ -131,7 +136,10 @@ fn launch_commands(exec: &str, paths: &[PathBuf]) -> io::Result<Vec<Command>> {
         )
     })?;
     let takes_many = tokens.iter().any(|token| token == "%F" || token == "%U");
-    let takes_one = tokens.iter().any(|token| token == "%f" || token == "%u");
+    let takes_one = tokens.iter().any(|token| {
+        let codes = token.replace("%%", "");
+        codes.contains("%f") || codes.contains("%u")
+    });
     let batches: Vec<&[PathBuf]> = if takes_many || !takes_one {
         vec![paths]
     } else {
@@ -144,12 +152,13 @@ fn launch_commands(exec: &str, paths: &[PathBuf]) -> io::Result<Vec<Command>> {
 }
 
 fn expand(tokens: &[String], files: &[PathBuf]) -> io::Result<Command> {
-    let mut words: Vec<std::ffi::OsString> = Vec::new();
+    let mut words: Vec<OsString> = Vec::new();
     for token in tokens {
         match token.as_str() {
-            "%f" | "%u" | "%F" | "%U" => words.extend(files.iter().map(|file| file.into())),
-            "%i" | "%c" | "%k" | "%d" | "%D" | "%n" | "%N" | "%v" | "%m" => {}
-            other => words.push(other.replace("%%", "%").into()),
+            "%f" | "%F" => words.extend(files.iter().map(OsString::from)),
+            "%u" | "%U" => words.extend(files.iter().map(|file| file_uri(file))),
+            "%i" | "%c" | "%k" => {}
+            _ => words.push(substitute(token, files.first())),
         }
     }
     let mut words = words.into_iter();
@@ -159,6 +168,36 @@ fn expand(tokens: &[String], files: &[PathBuf]) -> io::Result<Command> {
     let mut command = Command::new(program);
     command.args(words);
     Ok(command)
+}
+
+fn substitute(token: &str, file: Option<&PathBuf>) -> OsString {
+    let mut word = OsString::new();
+    let mut chars = token.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            word.push(ch.to_string());
+            continue;
+        }
+        match (chars.next(), file) {
+            (Some('%'), _) => word.push("%"),
+            (Some('f'), Some(file)) => word.push(file),
+            (Some('u'), Some(file)) => word.push(file_uri(file)),
+            _ => {}
+        }
+    }
+    word
+}
+
+fn file_uri(path: &Path) -> OsString {
+    let mut uri = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+            uri.push(char::from(byte));
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri.into()
 }
 
 #[cfg(test)]
@@ -241,6 +280,41 @@ mod tests {
             words(&bare[0]),
             ["tool", "--icon", "--100%"].map(OsStr::new)
         );
+    }
+
+    #[test]
+    fn codes_inside_a_token_expand_and_uri_codes_get_file_uris() {
+        let files = [PathBuf::from("/a b.txt"), PathBuf::from("/c.txt")];
+        let cases: [(&str, Vec<Vec<&str>>); 4] = [
+            (
+                "viewer --file=%f",
+                vec![
+                    vec!["viewer", "--file=/a b.txt"],
+                    vec!["viewer", "--file=/c.txt"],
+                ],
+            ),
+            (
+                "browser %U",
+                vec![vec!["browser", "file:///a%20b.txt", "file:///c.txt"]],
+            ),
+            (
+                "sh -c \"viewer %u\"",
+                vec![
+                    vec!["sh", "-c", "viewer file:///a%20b.txt"],
+                    vec!["sh", "-c", "viewer file:///c.txt"],
+                ],
+            ),
+            ("tool %c --50%% %k", vec![vec!["tool", "--50%"]]),
+        ];
+        for (exec, expected) in cases {
+            let commands = launch_commands(exec, &files).unwrap();
+            let got: Vec<Vec<&OsStr>> = commands.iter().map(words).collect();
+            let expected: Vec<Vec<&OsStr>> = expected
+                .iter()
+                .map(|command| command.iter().map(OsStr::new).collect())
+                .collect();
+            assert_eq!(got, expected, "{exec}");
+        }
     }
 
     #[test]

@@ -149,6 +149,11 @@ pub(crate) fn erase_lines(paths: &[std::path::PathBuf]) -> Vec<String> {
     ]
 }
 
+pub(crate) fn erase_elsewhere_note() -> String {
+    "Delete permanently only takes items in this folder, so open the folder that holds them first."
+        .to_string()
+}
+
 pub(crate) fn short_note(survey: &Survey, volume: &str) -> Option<String> {
     let Room::Short { need, free } = survey.room else {
         return None;

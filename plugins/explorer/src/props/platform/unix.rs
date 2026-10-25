@@ -13,6 +13,10 @@ pub(crate) fn facts(metadata: &Metadata) -> Vec<Fact> {
     ]
 }
 
+pub(crate) fn volume(metadata: &Metadata) -> Option<u64> {
+    Some(metadata.dev())
+}
+
 pub(super) fn permissions(mode: u32) -> String {
     let bit = |mask: u32, on: char| if mode & mask != 0 { on } else { '-' };
     let execute = |run: u32, special: u32, lower: char, upper: char| match (

@@ -17,6 +17,10 @@ const NAMED: [(u32, &str); 6] = [
     (FILE_ATTRIBUTE_ENCRYPTED, "Encrypted"),
 ];
 
+pub(crate) fn volume(_metadata: &Metadata) -> Option<u64> {
+    None
+}
+
 pub(crate) fn facts(metadata: &Metadata) -> Vec<Fact> {
     vec![Fact::new(
         "Attributes",

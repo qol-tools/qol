@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::platform;
+
 const REPORT_EVERY: Duration = Duration::from_millis(120);
 
 #[derive(Default)]
@@ -89,6 +91,7 @@ impl Pace {
 fn walk(path: &Path, totals: &Totals, pace: &mut Pace) {
     let mut pending = vec![path.to_path_buf()];
     let mut first = true;
+    let mut home = None;
     while let Some(next) = pending.pop() {
         if totals.cancelled.load(Ordering::Relaxed) {
             return;
@@ -98,6 +101,7 @@ fn walk(path: &Path, totals: &Totals, pace: &mut Pace) {
         } else {
             fs::symlink_metadata(&next)
         };
+        let root = first;
         first = false;
         let Ok(metadata) = metadata else {
             totals.unreadable.fetch_add(1, Ordering::Relaxed);
@@ -110,6 +114,12 @@ fn walk(path: &Path, totals: &Totals, pace: &mut Pace) {
             continue;
         }
         totals.folders.fetch_add(1, Ordering::Relaxed);
+        let volume = platform::volume(&metadata);
+        if root {
+            home = volume;
+        } else if volume != home {
+            continue;
+        }
         match fs::read_dir(&next) {
             Ok(items) => pending.extend(items.filter_map(Result::ok).map(|item| item.path())),
             Err(_) => {

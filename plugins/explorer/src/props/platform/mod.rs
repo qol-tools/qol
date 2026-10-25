@@ -6,8 +6,8 @@ mod unix;
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub(crate) use fallback::facts;
+pub(crate) use fallback::{facts, volume};
 #[cfg(unix)]
-pub(crate) use unix::facts;
+pub(crate) use unix::{facts, volume};
 #[cfg(target_os = "windows")]
-pub(crate) use windows::facts;
+pub(crate) use windows::{facts, volume};

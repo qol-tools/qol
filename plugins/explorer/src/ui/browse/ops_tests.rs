@@ -646,6 +646,36 @@ fn deleting_permanently_asks_first_and_cancelling_keeps_the_file() {
 }
 
 #[test]
+fn deleting_permanently_skips_picks_held_in_another_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    let sub = temp.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    let far = write(&sub, "far.txt", "text");
+    let mut browser = opened(temp.path());
+    visit(&mut browser, &sub);
+    point_at(&mut browser, &far);
+    assert!(browser.toggle_pick());
+    visit(&mut browser, temp.path());
+
+    assert!(browser.erase_ask());
+    assert!(browser.erasing().is_none());
+    assert_eq!(browser.note().count, ops_text::erase_elsewhere_note());
+    assert!(far.exists());
+}
+
+#[test]
+fn leaving_the_folder_drops_the_delete_question() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    fs::create_dir(temp.path().join("sub")).unwrap();
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+    assert!(browser.erase_ask());
+    visit(&mut browser, &temp.path().join("sub"));
+    assert!(browser.erasing().is_none());
+}
+
+#[test]
 fn the_delete_question_names_the_count_and_says_it_cannot_be_undone() {
     let one = ops_text::erase_lines(&[PathBuf::from("/x/a.txt")]);
     assert_eq!(one[0], "Delete 1 item permanently? a.txt");

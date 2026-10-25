@@ -114,6 +114,7 @@ impl Ops {
         self.notice = None;
         self.rename = None;
         self.rename_after = None;
+        self.erasing = None;
     }
 
     pub(super) fn record_at(&mut self, slot: usize) -> Option<&mut MoveRecord> {
