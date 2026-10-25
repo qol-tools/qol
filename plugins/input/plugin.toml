@@ -4,7 +4,7 @@ uid = "5332414d-b3c6-462d-b8b7-1e9527acead4"
 name = "Input"
 icon = "input"
 description = "Set how the mouse, touchpad and keyboard respond"
-version = "0.17.0"
+version = "0.18.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
