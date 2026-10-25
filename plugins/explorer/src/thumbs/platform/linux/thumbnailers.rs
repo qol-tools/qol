@@ -1,6 +1,8 @@
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, DirBuilder};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -13,6 +15,8 @@ use super::sandbox;
 const RUN_TIMEOUT: Duration = Duration::from_secs(15);
 const OUTPUT_LIMIT: usize = 4096;
 const ENTRY_HEADER: &str = "[Thumbnailer Entry]";
+const WORK_OUTPUT: &str = "preview.png";
+const WORK_MODE: u32 = 0o700;
 
 pub(super) struct Thumbnailer {
     exec: Vec<String>,
@@ -73,23 +77,34 @@ impl Thumbnailer {
             .parent()
             .ok_or_else(|| failed("the cache folder is not known".into()))?;
         fs::create_dir_all(folder).map_err(|error| failed(error.to_string()))?;
-        let partial = folder.join(format!(
-            ".{}.partial.png",
-            target
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("thumbnail")
-        ));
+        let work = work_folder(folder).map_err(|error| failed(error.to_string()))?;
+        let partial = work.join(WORK_OUTPUT);
         let words = self.words(input, &stamp.uri, flavor.px(), &partial);
-        let command = sandbox::command(&words, input, folder).ok_or_else(|| {
+        let result = self.make(&words, input, &work, &partial, target);
+        let _ = fs::remove_dir_all(&work);
+        result
+    }
+
+    fn make(
+        &self,
+        words: &[OsString],
+        input: &Path,
+        work: &Path,
+        partial: &Path,
+        target: &Path,
+    ) -> Result<(), ThumbError> {
+        let failed = |reason: String| ThumbError::Unavailable(reason);
+        let command = sandbox::command(words, input, work).ok_or_else(|| {
             failed("previews need bubblewrap (bwrap) to run thumbnailers sandboxed".into())
         })?;
         let outcome =
             qol_process::run_owned_with_output_timeout(command, RUN_TIMEOUT, OUTPUT_LIMIT);
-        let made = partial.metadata().is_ok_and(|meta| meta.len() > 0);
-        let result = match outcome {
+        let made = partial
+            .symlink_metadata()
+            .is_ok_and(|meta| meta.file_type().is_file() && meta.len() > 0);
+        match outcome {
             Ok(BoundedCommandOutput::Completed(output)) if output.status.success() && made => {
-                fs::rename(&partial, target).map_err(|error| failed(error.to_string()))
+                fs::rename(partial, target).map_err(|error| failed(error.to_string()))
             }
             Ok(BoundedCommandOutput::Completed(output)) => Err(failed(format!(
                 "the thumbnailer {} exited with {} and made no preview",
@@ -101,12 +116,19 @@ impl Thumbnailer {
                 RUN_TIMEOUT.as_secs()
             ))),
             Err(error) => Err(failed(format!("could not run {}: {error}", self.exec[0]))),
-        };
-        if result.is_err() {
-            let _ = fs::remove_file(&partial);
         }
-        result
     }
+}
+
+fn work_folder(folder: &Path) -> std::io::Result<PathBuf> {
+    static RUNS: AtomicU64 = AtomicU64::new(0);
+    let run = RUNS.fetch_add(1, Ordering::Relaxed);
+    let work = folder.join(format!(".work-{}-{run}", std::process::id()));
+    if work.symlink_metadata().is_ok() {
+        fs::remove_dir_all(&work)?;
+    }
+    DirBuilder::new().mode(WORK_MODE).create(&work)?;
+    Ok(work)
 }
 
 pub(super) fn for_mime(mime: &str) -> Option<&'static Thumbnailer> {
@@ -210,6 +232,21 @@ mod tests {
             ]
             .map(OsString::from)
         );
+    }
+
+    #[test]
+    fn every_run_gets_its_own_private_empty_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let first = work_folder(temp.path()).unwrap();
+        let second = work_folder(temp.path()).unwrap();
+        assert_ne!(first, second);
+        for work in [&first, &second] {
+            let meta = work.symlink_metadata().unwrap();
+            assert!(meta.is_dir(), "{work:?}");
+            assert_eq!(meta.permissions().mode() & 0o777, WORK_MODE, "{work:?}");
+            assert_eq!(fs::read_dir(work).unwrap().count(), 0, "{work:?}");
+        }
     }
 
     #[test]
