@@ -9,7 +9,6 @@ query = "connection_status"
 value_from = "state"
 label_map = { ok = "Running" }
 tone_map = { ok = "success" }
-hide_values = ["ok"]
 
 [field.begin_pairing]
 type = "action"

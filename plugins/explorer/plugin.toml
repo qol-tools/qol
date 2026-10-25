@@ -11,6 +11,8 @@ platforms = ["linux"]
 [config.scope]
 view_size = "core"
 show_hidden = "core"
+sort_by = "core"
+sort_descending = "core"
 pins = "device"
 title_bar = "os"
 
