@@ -6,10 +6,13 @@ use qol_headless::{Command, CommandResult, DoctorCheck, DoctorCheckResult, Headl
 use qol_platform::Os;
 
 use crate::nav::path;
+use crate::thumbs::{self, Flavor};
 
 pub(crate) const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const OPEN_COMMAND: &str = "open";
 const SETTINGS_COMMAND: &str = "settings";
+const THUMBNAIL_COMMAND: &str = "thumbnail";
+const LARGE_FLAG: &str = "--large";
 const SUPPORTED: [Os; 1] = [Os::Linux];
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
@@ -71,6 +74,37 @@ where
                     qol_apps::desktop_integration::open_plugin_settings_via_tray(PLUGIN_ID)
                         .context("failed to open the Explorer settings")?;
                     Ok(CommandResult::success(""))
+                }),
+        )
+        .command(
+            Command::new(THUMBNAIL_COMMAND)
+                .about("Print the path of a preview image for a file.")
+                .usage(format!("{PLUGIN_ID} {THUMBNAIL_COMMAND} <file> [{LARGE_FLAG}]"))
+                .detail("The preview is 128 px on its long side, or 256 px with --large.")
+                .detail("A preview another file manager already made is reused; otherwise an installed thumbnailer makes one in qol's cache folder.")
+                .output("The preview's PNG path on stdout.")
+                .exit_behavior(
+                    "Exits 64 without a file or on an unknown flag; non-zero if no preview can be made for the file.",
+                )
+                .run_result(|context| {
+                    let (file, flavor) = match context.args() {
+                        [file] => (file, Flavor::Normal),
+                        [file, flag] if flag == LARGE_FLAG => (file, Flavor::Large),
+                        [] => {
+                            return Ok(CommandResult::usage(format!(
+                                "{PLUGIN_ID}: {THUMBNAIL_COMMAND} needs a file"
+                            )))
+                        }
+                        [_, extra, ..] => {
+                            return Ok(CommandResult::usage(format!(
+                                "{PLUGIN_ID}: unexpected argument {extra:?}"
+                            )))
+                        }
+                    };
+                    let file = std::path::absolute(file).context("no current folder")?;
+                    let preview = thumbs::thumbnail(&file, flavor)
+                        .with_context(|| format!("no preview for {}", file.display()))?;
+                    Ok(CommandResult::success(format!("{}\n", preview.display())))
                 }),
         )
         .doctor_checks(doctor_checks())
