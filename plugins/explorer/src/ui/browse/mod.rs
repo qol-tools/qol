@@ -1,4 +1,5 @@
 mod counts;
+mod info;
 mod launch;
 mod ops;
 mod ops_edit;
@@ -30,6 +31,7 @@ use crate::listing::{
     self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass, SortOrder,
 };
 use crate::nav::{merged, History, Jump, Picks, Spot};
+use crate::props::Props;
 use counts::LiveCounts;
 pub use ops::{Held, MoveRecord, MoveState};
 pub(crate) use ops_text::{copy_only_note, erase_lines, label_of, short_note};
@@ -104,6 +106,7 @@ pub struct Browser {
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
     ops: ops::Ops,
+    props: Option<Props>,
 }
 
 impl Browser {
@@ -138,6 +141,7 @@ impl Browser {
             wake,
             wakes: Some(wakes),
             ops: ops::Ops::new(),
+            props: None,
         };
         browser.arrive(Spot::at(start));
         browser
@@ -372,6 +376,7 @@ impl Browser {
         }
         drained.changed |= self.apply_recounts(now);
         drained.changed |= self.drain_ops();
+        drained.changed |= self.refresh_props();
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
@@ -521,6 +526,9 @@ impl Browser {
     pub fn dismiss(&mut self) -> bool {
         if self.moves_open() {
             return self.toggle_moves();
+        }
+        if self.props.take().is_some() {
+            return true;
         }
         let changed = !self.picks.is_empty() || self.failure.is_some();
         let changed = self.dismiss_ops() || changed;

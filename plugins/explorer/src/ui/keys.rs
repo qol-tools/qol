@@ -55,6 +55,7 @@ pub enum Action {
     Undo,
     Moves,
     ContextMenu,
+    Props,
     Resize(Resize),
     Nothing,
 }
@@ -102,6 +103,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("right", (false, false, true)) => Action::Range(Step::Right),
         ("enter", (false, false, false)) => Action::Open,
         ("enter", (false, false, true)) => Action::OpenWith,
+        ("enter", (false, true, false)) => Action::Props,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
         ("right", (false, true, false)) => Action::Forward,
@@ -185,6 +187,7 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Erase
                 | Action::OpenWith
                 | Action::CopyPath
+                | Action::Props
         )
 }
 
@@ -348,6 +351,7 @@ mod tests {
             ),
             (plain("menu"), Action::ContextMenu),
             (key("f10", shift(), None), Action::ContextMenu),
+            (key("enter", alt(), None), Action::Props),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
@@ -537,6 +541,7 @@ mod tests {
             Action::NewFile,
             Action::Duplicate,
             Action::Erase,
+            Action::Props,
         ];
         let leaving = [
             Action::Up,

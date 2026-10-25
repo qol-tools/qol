@@ -61,6 +61,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+Z | Undo the last copy, duplicate, move, rename, trash, new file or new folder, putting back anything a copy replaced |
 | Ctrl+J | Show or hide today's moves |
 | Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
+| Alt+Enter | Show or hide properties for the row under the cursor, or a count and total size for the picks: kind, path, size (a folder's total is counted in the background), dates, permissions and owner on Linux and macOS or attributes on Windows, the link target, and a preview of png, jpg, gif, webp and svg images; Escape also closes it |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
 | Ctrl+Alt+1 to Ctrl+Alt+4 | Sort by name, size, date modified or kind; pressing the one you are already sorted by flips ascending and descending. Folders stay first, and the folder's menu marks the active sort |
 | Ctrl+F | Open a filter field beside the crumbs that narrows the list to names containing what you type, ignoring case and accents; Up, Down, Page Up, Page Down and Enter still work the list, Esc clears the filter and closes it, and the note says how many entries it hides. Moving to another folder closes it, and picks the filter hides are dropped |
