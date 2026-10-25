@@ -8,7 +8,7 @@ use gpui::{Keystroke, Modifiers};
 
 use super::counts::{self, LiveCounts};
 use super::{Browser, Drained, Opening, PathStep, REFRESH_QUIET, STALLED_AFTER};
-use crate::listing::{ItemCount, ListingState};
+use crate::listing::{ItemCount, ListingState, SortBy, SortOrder};
 use crate::ui::keys::Step;
 
 fn touch(folder: &Path, name: &str) {
@@ -1624,4 +1624,189 @@ fn restoring_a_selection_brings_back_its_picks_and_its_cursor() {
     browser.restore(&before, 0.0);
     assert_eq!(picked(&browser), ["a.txt", "c.txt"]);
     assert_eq!(browser.cursor(), 2);
+}
+
+fn type_filter(browser: &mut Browser, text: &str) {
+    for typed in text.chars() {
+        let typed = typed.to_string();
+        browser.filter_key(&key(&typed, Some(&typed)), || None);
+    }
+}
+
+fn filterable_folder() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    for name in [
+        "report.txt",
+        "R\u{e9}sum\u{e9}.md",
+        "notes.txt",
+        "photo.png",
+    ] {
+        touch(temp.path(), name);
+    }
+    make_folder(temp.path(), "Reports");
+    temp
+}
+
+#[test]
+fn the_filter_narrows_names_ignoring_case_and_accents_and_counts_what_it_hides() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    assert_eq!(browser.row_count(), 5);
+    assert!(browser.open_filter());
+    assert!(!browser.open_filter());
+    type_filter(&mut browser, "REP");
+    assert_eq!(names(&browser), ["Reports", "report.txt"]);
+    assert_eq!(browser.note().count, "2 items, 3 hidden by filter");
+    browser.close_filter();
+    browser.open_filter();
+    type_filter(&mut browser, "resume");
+    assert_eq!(names(&browser), ["R\u{e9}sum\u{e9}.md"]);
+    type_filter(&mut browser, "x");
+    assert!(names(&browser).is_empty());
+    assert_eq!(browser.note().count, "0 items, 5 hidden by filter");
+}
+
+#[test]
+fn closing_the_filter_clears_it_and_shows_every_row_again() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    browser.open_filter();
+    type_filter(&mut browser, "photo");
+    assert_eq!(names(&browser), ["photo.png"]);
+    assert!(browser.close_filter());
+    assert!(!browser.filter_open());
+    assert!(!browser.close_filter());
+    assert_eq!(browser.row_count(), 5);
+    assert_eq!(browser.note().count, "5 items");
+}
+
+#[test]
+fn the_cursor_and_picks_survive_for_entries_the_filter_still_shows() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    for name in ["report.txt", "notes.txt"] {
+        let row = browser.row_of(&temp.path().join(name)).unwrap();
+        browser.add_pick(row);
+    }
+    let row = browser.row_of(&temp.path().join("report.txt")).unwrap();
+    browser.place_cursor(row, 0.0);
+    browser.open_filter();
+    type_filter(&mut browser, "rep");
+    assert_eq!(picked(&browser), ["report.txt"]);
+    assert_eq!(
+        browser.entry(browser.cursor()).unwrap().display,
+        "report.txt"
+    );
+    type_filter(&mut browser, "o");
+    assert_eq!(picked(&browser), ["report.txt"]);
+    assert_eq!(
+        browser.entry(browser.cursor()).unwrap().display,
+        "report.txt"
+    );
+    browser.close_filter();
+    assert_eq!(picked(&browser), ["report.txt"]);
+    assert_eq!(
+        browser.entry(browser.cursor()).unwrap().display,
+        "report.txt"
+    );
+}
+
+#[test]
+fn the_cursor_goes_to_the_first_row_when_the_filter_hides_its_entry() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    let row = browser.row_of(&temp.path().join("photo.png")).unwrap();
+    browser.place_cursor(row, 0.0);
+    browser.open_filter();
+    type_filter(&mut browser, "rep");
+    assert_eq!(browser.cursor(), 0);
+}
+
+#[test]
+fn type_to_jump_works_again_once_the_filter_is_closed() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    browser.open_filter();
+    type_filter(&mut browser, "rep");
+    browser.close_filter();
+    browser.jump('p', Instant::now());
+    assert_eq!(
+        browser.entry(browser.cursor()).unwrap().display,
+        "photo.png"
+    );
+}
+
+#[test]
+fn a_filter_closes_when_the_browser_moves_to_another_folder() {
+    let temp = filterable_folder();
+    let mut browser = opened(temp.path());
+    browser.open_filter();
+    type_filter(&mut browser, "rep");
+    browser.go(temp.path().join("Reports"), 0.0);
+    assert!(!browser.filter_open());
+    settle(&mut browser);
+    assert_eq!(browser.note().count, "0 items");
+}
+
+fn sized_folder() -> tempfile::TempDir {
+    let temp = tempfile::tempdir().unwrap();
+    make_folder(temp.path(), "dir");
+    for (name, bytes) in [("a.txt", 30), ("b.txt", 10), ("c.txt", 20)] {
+        fs::write(temp.path().join(name), vec![b'x'; bytes]).unwrap();
+    }
+    temp
+}
+
+#[test]
+fn a_new_sort_reorders_the_rows_and_the_cursor_stays_on_its_entry() {
+    let temp = sized_folder();
+    let mut browser = opened(temp.path());
+    let row = browser.row_of(&temp.path().join("c.txt")).unwrap();
+    browser.place_cursor(row, 0.0);
+    let cases = [
+        (
+            SortOrder::new(SortBy::Size, false),
+            ["dir", "b.txt", "c.txt", "a.txt"],
+        ),
+        (
+            SortOrder::new(SortBy::Size, true),
+            ["dir", "a.txt", "c.txt", "b.txt"],
+        ),
+        (
+            SortOrder::new(SortBy::Name, true),
+            ["dir", "c.txt", "b.txt", "a.txt"],
+        ),
+        (SortOrder::default(), ["dir", "a.txt", "b.txt", "c.txt"]),
+    ];
+    for (order, expected) in cases {
+        assert!(browser.resort(order));
+        assert_eq!(names(&browser), expected, "{order:?}");
+        assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
+        assert!(!browser.resort(order));
+    }
+}
+
+#[test]
+fn a_sort_keeps_range_picks_and_jumps_in_the_order_shown() {
+    let temp = sized_folder();
+    let mut browser = opened(temp.path());
+    browser.resort(SortOrder::new(SortBy::Size, true));
+    browser.place_cursor(1, 0.0);
+    browser.range_to(3);
+    assert_eq!(picked(&browser), ["a.txt", "c.txt", "b.txt"]);
+    browser.jump('c', Instant::now());
+    assert_eq!(browser.entry(browser.cursor()).unwrap().display, "c.txt");
+}
+
+#[test]
+fn a_sort_applies_to_a_folder_that_is_still_loading_and_to_every_folder_after() {
+    let temp = sized_folder();
+    let mut browser = Browser::new(temp.path().to_path_buf(), temp.path().to_path_buf(), false);
+    browser.resort(SortOrder::new(SortBy::Size, true));
+    settle(&mut browser);
+    assert_eq!(names(&browser), ["dir", "a.txt", "c.txt", "b.txt"]);
+    let other = sized_folder();
+    browser.go(other.path().to_path_buf(), 0.0);
+    settle(&mut browser);
+    assert_eq!(names(&browser), ["dir", "a.txt", "c.txt", "b.txt"]);
 }

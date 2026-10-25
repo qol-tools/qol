@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::cli::PLUGIN_ID;
+use crate::listing::SortBy;
 
 const CONFIG_CONTRACT: &str = qol_config::plugin_config_contract!();
 
@@ -35,6 +36,10 @@ pub struct ExplorerConfig {
     pub view_size: ViewSize,
     #[serde(default)]
     pub show_hidden: bool,
+    #[serde(default)]
+    pub sort_by: SortBy,
+    #[serde(default)]
+    pub sort_descending: bool,
     #[serde(default = "default_pins")]
     pub pins: Vec<Pin>,
     #[serde(default = "shows_title_bar")]
@@ -46,6 +51,8 @@ impl Default for ExplorerConfig {
         Self {
             view_size: ViewSize::default(),
             show_hidden: false,
+            sort_by: SortBy::default(),
+            sort_descending: false,
             pins: default_pins(),
             title_bar: shows_title_bar(),
         }

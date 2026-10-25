@@ -7,6 +7,7 @@ use qol_gpui::theme::{OPACITY_DISABLED, SPACE_INSET};
 use qol_gpui::Key;
 
 use super::ExplorerView;
+use crate::listing::{SortBy, SortOrder};
 
 const WIDTH: f32 = 232.0;
 
@@ -19,6 +20,7 @@ pub(super) enum Command {
     TogglePin,
     GoToPath,
     ToggleHidden,
+    Sort(SortBy),
     Settings,
 }
 
@@ -107,6 +109,7 @@ impl Menu {
         folder_name: &str,
         pinned_as: Option<&str>,
         shows_hidden: bool,
+        order: SortOrder,
         at: Point<Pixels>,
     ) -> Self {
         let pin_label = match pinned_as {
@@ -121,25 +124,30 @@ impl Menu {
         let line = |command, label: String, key: Key| {
             Item::Line(Line::new(command, label, Some(key.secondary())))
         };
-        Self::new(
-            Owner::Folder,
-            at,
-            vec![
-                line(Command::TogglePin, pin_label, Key::letter('d')),
-                line(
-                    Command::GoToPath,
-                    "Go to a path\u{2026}".into(),
-                    Key::letter('g'),
-                ),
-                line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
-                Item::Rule,
-                line(
-                    Command::Settings,
-                    "Explorer settings\u{2026}".into(),
-                    Key::symbol(','),
-                ),
-            ],
-        )
+        let mut items = vec![
+            line(Command::TogglePin, pin_label, Key::letter('d')),
+            line(
+                Command::GoToPath,
+                "Go to a path\u{2026}".into(),
+                Key::letter('g'),
+            ),
+            line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
+            Item::Rule,
+        ];
+        items.extend(SortBy::MENU.into_iter().zip(1..).map(|(by, digit)| {
+            Item::Line(Line::new(
+                Command::Sort(by),
+                sort_label(by, order),
+                Key::parse(&format!("alt+{digit}")).map(Key::secondary),
+            ))
+        }));
+        items.push(Item::Rule);
+        items.push(line(
+            Command::Settings,
+            "Explorer settings\u{2026}".into(),
+            Key::symbol(','),
+        ));
+        Self::new(Owner::Folder, at, items)
     }
 
     pub(super) fn owner(&self) -> Owner {
@@ -168,6 +176,24 @@ impl Menu {
         };
         indices.into_iter().find(usable)
     }
+}
+
+fn sort_label(by: SortBy, order: SortOrder) -> String {
+    let name = match by {
+        SortBy::Name => "name",
+        SortBy::Size => "size",
+        SortBy::Modified => "date modified",
+        SortBy::Kind => "kind",
+    };
+    if order.by != by {
+        return format!("Sort by {name}");
+    }
+    let direction = if order.descending {
+        "descending"
+    } else {
+        "ascending"
+    };
+    format!("Sort by {name}, {direction}")
 }
 
 pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement {
@@ -212,6 +238,7 @@ mod tests {
     use gpui::{point, px};
 
     use super::{Command, Item, Menu, Owner};
+    use crate::listing::{SortBy, SortOrder};
 
     fn at() -> gpui::Point<gpui::Pixels> {
         point(px(0.0), px(0.0))
@@ -237,12 +264,52 @@ mod tests {
 
     #[test]
     fn a_folder_menu_steps_over_its_rule() {
-        let mut menu = Menu::folder("Docs", None, false, at());
+        let mut menu = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(menu.selected_command(), Some(Command::TogglePin));
         menu.step(true);
         menu.step(true);
         menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::Sort(SortBy::Name)));
+        for _ in 0..3 {
+            menu.step(true);
+        }
+        assert_eq!(menu.selected_command(), Some(Command::Sort(SortBy::Kind)));
+        menu.step(true);
         assert_eq!(menu.selected_command(), Some(Command::Settings));
+    }
+
+    #[test]
+    fn the_active_sort_line_names_its_direction() {
+        let labels = |order: SortOrder| -> Vec<String> {
+            Menu::folder("Docs", None, false, order, at())
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Line(line) if matches!(line.command, Command::Sort(_)) => {
+                        Some(line.label.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            labels(SortOrder::default()),
+            [
+                "Sort by name, ascending",
+                "Sort by size",
+                "Sort by date modified",
+                "Sort by kind"
+            ]
+        );
+        assert_eq!(
+            labels(SortOrder::new(SortBy::Modified, true)),
+            [
+                "Sort by name",
+                "Sort by size",
+                "Sort by date modified, descending",
+                "Sort by kind"
+            ]
+        );
     }
 
     #[test]
@@ -265,9 +332,9 @@ mod tests {
                 _ => None,
             })
         };
-        let pinned = Menu::folder("Docs", Some("Papers"), false, at());
+        let pinned = Menu::folder("Docs", Some("Papers"), false, SortOrder::default(), at());
         assert_eq!(label(&pinned).as_deref(), Some("Unpin Papers"));
-        let loose = Menu::folder("Docs", None, false, at());
+        let loose = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(label(&loose).as_deref(), Some("Pin Docs"));
     }
 
@@ -277,7 +344,7 @@ mod tests {
         assert_eq!(pin.owner(), Owner::Pin(1));
         assert_ne!(pin.owner(), Owner::Pin(2));
         assert_ne!(pin.owner(), Owner::Folder);
-        let folder = Menu::folder("Docs", None, false, at());
+        let folder = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(folder.owner(), Owner::Folder);
     }
 }

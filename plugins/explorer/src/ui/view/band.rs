@@ -11,6 +11,7 @@ use qol_gpui::text::{laid_out_width, TextStyled};
 use qol_gpui::theme::{TextStyle, HEIGHT_INLINE, LINE, SPACE_GUTTER, SPACE_TIGHT};
 use qol_gpui::CrumbTrail;
 
+use super::filter;
 use super::targets::{self, Span};
 use super::{more_button, slider, ExplorerView, BAND};
 use crate::listing::FailureReason;
@@ -36,12 +37,15 @@ pub(super) fn render(
         None => browser.note(),
     };
     let editing = browser.path_edit();
+    let filtering = browser.filter_field();
+    let filter_room = filtering.map_or(0.0, |_| filter::WIDTH + SPACE_GUTTER);
     let room = f32::from(window.viewport_size().width)
         - 2.0 * (LINE + SPACE_GUTTER)
         - slider::WIDTH
         - SPACE_GUTTER
         - HEIGHT_INLINE
-        - SPACE_GUTTER;
+        - SPACE_GUTTER
+        - filter_room;
     let limit = note_limit(room);
     let (note, note_width) = match editing {
         Some(_) => {
@@ -120,7 +124,9 @@ pub(super) fn render(
         None => band.panel_drag_after(&view.drag_gesture),
     };
     let trail = targets::trail(div().flex_1().min_w_0(), spans, cx);
+    let filter_field = filtering.map(|field| filter::render(field, window));
     band.child(trail.child(crumb_trail))
+        .children(filter_field)
         .when(note_width > 0.0, |band| band.child(note))
         .child(slider::render(view, cx))
         .child(more_button(

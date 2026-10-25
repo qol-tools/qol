@@ -43,6 +43,30 @@ description = "Show entries whose names start with a dot. Ctrl+H changes it too.
 section = "view"
 default = false
 
+[field.sort_by]
+type = "select"
+config_key = "sort_by"
+label = "Sort by"
+description = "What Explorer orders a folder by. Folders always come first. Ctrl+Alt+1 to Ctrl+Alt+4 change it too."
+section = "view"
+card_description = "Name, size, date modified or kind."
+default = "name"
+options = ["name", "size", "modified", "kind"]
+
+[field.sort_by.option_labels]
+name = "Name"
+size = "Size"
+modified = "Date modified"
+kind = "Kind"
+
+[field.sort_descending]
+type = "boolean"
+config_key = "sort_descending"
+label = "Sort descending"
+description = "Reverse the order, so the biggest, newest or last name comes first. Pressing a sort key twice flips it too."
+section = "view"
+default = false
+
 [field.pins]
 type = "object_array"
 config_key = "pins"

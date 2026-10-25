@@ -1,5 +1,7 @@
 use gpui::{Keystroke, Modifiers};
 
+use crate::listing::SortBy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Up,
@@ -32,6 +34,8 @@ pub enum Action {
     PickAll,
     Unpick,
     ToggleHidden,
+    Filter,
+    Sort(SortBy),
     EditPath,
     PathField,
     TogglePin,
@@ -66,6 +70,9 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
             _ => Action::PathField,
         };
     }
+    if let Some(by) = sort_by(keystroke.key.as_str(), chord) {
+        return Action::Sort(by);
+    }
     if let Some(resize) = resize(keystroke.key.as_str(), chord) {
         return Action::Resize(resize);
     }
@@ -94,6 +101,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("escape", (false, false, false)) => Action::Unpick,
         ("a", (true, false, false)) => Action::PickAll,
         ("h", (true, false, false)) => Action::ToggleHidden,
+        ("f", (true, false, false)) => Action::Filter,
         ("g", (true, false, false)) => Action::EditPath,
         ("d", (true, false, false)) => Action::TogglePin,
         (",", (true, false, false)) => Action::Settings,
@@ -106,6 +114,16 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("z", (true, false, false)) => Action::Undo,
         ("j", (true, false, false)) => Action::Moves,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
+    }
+}
+
+fn sort_by(key: &str, chord: (bool, bool, bool)) -> Option<SortBy> {
+    match (key, chord) {
+        ("1", (true, true, false)) => Some(SortBy::Name),
+        ("2", (true, true, false)) => Some(SortBy::Size),
+        ("3", (true, true, false)) => Some(SortBy::Modified),
+        ("4", (true, true, false)) => Some(SortBy::Kind),
+        _ => None,
     }
 }
 
@@ -181,6 +199,7 @@ mod tests {
     use gpui::{Keystroke, Modifiers};
 
     use super::{action, click, leaves, waits, Action, Click, Resize, Step};
+    use crate::listing::SortBy;
 
     fn key(key: &str, modifiers: Modifiers, key_char: Option<&str>) -> Keystroke {
         Keystroke {
@@ -325,6 +344,41 @@ mod tests {
         ] {
             assert_eq!(action(&keystroke, true), Action::PathField, "{keystroke:?}");
         }
+    }
+
+    #[test]
+    fn sort_chords_pick_a_column_and_filter_opens_on_ctrl_f() {
+        let chord = || Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
+        let cases = [
+            (key("1", chord(), Some("1")), Action::Sort(SortBy::Name)),
+            (key("2", chord(), Some("2")), Action::Sort(SortBy::Size)),
+            (key("3", chord(), Some("3")), Action::Sort(SortBy::Modified)),
+            (key("4", chord(), Some("4")), Action::Sort(SortBy::Kind)),
+            (key("5", chord(), Some("5")), Action::Nothing),
+            (key("0", chord(), Some("0")), Action::Nothing),
+            (
+                key("2", Modifiers::secondary_key(), Some("2")),
+                Action::Resize(Resize::To(1)),
+            ),
+            (key("2", alt(), Some("2")), Action::Nothing),
+            (key("2", Modifiers::none(), Some("2")), Action::Jump('2')),
+            (
+                key("f", Modifiers::secondary_key(), Some("f")),
+                Action::Filter,
+            ),
+            (key("f", Modifiers::none(), Some("f")), Action::Jump('f')),
+            (key("f", alt(), Some("f")), Action::Nothing),
+        ];
+        for (keystroke, expected) in cases {
+            assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
+        }
+        assert_eq!(
+            action(&key("2", chord(), Some("2")), true),
+            Action::PathField
+        );
     }
 
     #[test]
