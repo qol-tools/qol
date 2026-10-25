@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const ROOT_LINKS: [&str; 5] = ["/bin", "/lib", "/lib64", "/lib32", "/sbin"];
@@ -10,6 +10,25 @@ const SANDBOX_PATH: &str = "/usr/bin:/bin";
 pub(super) fn command(words: &[OsString], input: &Path, folder: &Path) -> Option<Command> {
     let bwrap = super::on_path("bwrap")?;
     Some(sandboxed(&bwrap, words, input, folder))
+}
+
+pub(super) fn finds(program: &str) -> bool {
+    let path = Path::new(program);
+    let candidates: Vec<PathBuf> = if path.is_absolute() {
+        vec![path.to_path_buf()]
+    } else {
+        std::env::split_paths(SANDBOX_PATH)
+            .map(|dir| dir.join(program))
+            .collect()
+    };
+    candidates
+        .iter()
+        .filter_map(|candidate| fs::canonicalize(candidate).ok())
+        .any(|real| real.is_file() && visible(&real))
+}
+
+fn visible(path: &Path) -> bool {
+    path.starts_with("/usr") || ROOT_LINKS.iter().any(|link| path.starts_with(link))
 }
 
 fn sandboxed(bwrap: &Path, words: &[OsString], input: &Path, folder: &Path) -> Command {
@@ -77,5 +96,22 @@ mod tests {
         assert!(args.ends_with(&["--", "ffmpegthumbnailer", "-i", "/v/a b.webm"].map(OsStr::new)));
         let envs: Vec<_> = command.get_envs().collect();
         assert_eq!(envs, [(OsStr::new("PATH"), Some(OsStr::new(SANDBOX_PATH)))]);
+    }
+
+    #[test]
+    fn only_programs_the_sandbox_can_see_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("thumbnailer");
+        fs::write(&outside, "#!/bin/sh\n").unwrap();
+        let outside = outside.to_str().unwrap();
+        let cases = [
+            ("sh", true),
+            ("/usr/bin/sh", true),
+            ("qol-no-such-tool", false),
+            (outside, false),
+        ];
+        for (program, expected) in cases {
+            assert_eq!(finds(program), expected, "{program}");
+        }
     }
 }
