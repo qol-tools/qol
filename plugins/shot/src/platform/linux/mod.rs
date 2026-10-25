@@ -15,6 +15,7 @@ use crate::{Monitor, Rect};
 
 mod clipboard;
 mod display;
+mod nvfbc;
 mod preview;
 mod preview_window;
 mod recording;
