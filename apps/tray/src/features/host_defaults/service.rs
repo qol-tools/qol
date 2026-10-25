@@ -1,4 +1,4 @@
-use super::catalog::{self, Declaration};
+use super::catalog::{self, Declaration, InstalledPlugin};
 use super::claim::{self, Env};
 use super::held;
 use super::intent::IntentStore;
@@ -106,11 +106,14 @@ fn release_on_host(role: Role) -> Result<ReleaseOutcome> {
         exec: std::path::PathBuf::new(),
         lifetime: store::lifetime_for_role(role),
     };
-    let declared: Vec<Declaration> = catalog::installed()
+    claim::release(&env, role, &declarations_for(role, &catalog::installed()))
+}
+
+fn declarations_for(role: Role, plugins: &[InstalledPlugin]) -> Vec<Declaration> {
+    plugins
         .iter()
         .filter_map(|plugin| plugin.declaration_for(role))
-        .collect();
-    claim::release(&env, role, &declared)
+        .collect()
 }
 
 pub(crate) fn row_json(row: &PluginRow) -> serde_json::Value {
@@ -274,6 +277,38 @@ mod tests {
             row.description,
             "Takes over: Alt+Tab. Goes back when qol stops."
         );
+    }
+
+    fn plugin_declaring(id: &str, roles: &[&str]) -> InstalledPlugin {
+        let declared: String = roles
+            .iter()
+            .map(|role| format!("\n[[default_for]]\nrole = \"{role}\"\naction = \"go\"\n"))
+            .collect();
+        let text = format!(
+            "[plugin]\nid = \"{id}\"\nname = \"{id}\"\ndescription = \"\"\nversion = \"1.0.0\"\n\n[menu]\nlabel = \"{id}\"\nitems = []\n\n[action.go]\nlabel = \"Go\"\nargs = [\"go\"]\n{declared}"
+        );
+        InstalledPlugin {
+            id: id.to_string(),
+            root: std::path::PathBuf::new(),
+            manifest: toml::from_str(&text).expect("manifest"),
+        }
+    }
+
+    #[test]
+    fn only_plugins_declaring_the_role_are_released_with_it() {
+        let plugins = [
+            plugin_declaring("qol-shot", &["slot.screenshot"]),
+            plugin_declaring("qol-launcher", &["slot.launcher"]),
+            plugin_declaring("qol-both", &["slot.launcher", "slot.screenshot"]),
+            plugin_declaring("qol-none", &[]),
+        ];
+
+        let declared = declarations_for(Role::SlotScreenshot, &plugins);
+
+        let ids: Vec<&str> = declared.iter().map(|d| d.plugin_id.as_str()).collect();
+        assert_eq!(ids, vec!["qol-shot", "qol-both"]);
+        assert!(declared.iter().all(|d| d.role == Role::SlotScreenshot));
+        assert!(declarations_for(Role::SlotDictation, &plugins).is_empty());
     }
 
     #[test]

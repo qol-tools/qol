@@ -111,7 +111,7 @@ pub(super) fn release_portable<H: HostDefaults>(env: &Env<'_, H>) -> Vec<String>
             return failures;
         }
     };
-    for role in portable_slot_roles(&records) {
+    for role in slot_roles(&records) {
         match claim::release_slot_role(env, role, &[]) {
             Ok(outcome) => log::info!(
                 "[host-defaults] released portable claim {}: {}",
@@ -124,7 +124,7 @@ pub(super) fn release_portable<H: HostDefaults>(env: &Env<'_, H>) -> Vec<String>
     failures
 }
 
-pub(super) fn portable_slot_roles(records: &[ClaimRecord]) -> Vec<Role> {
+pub(super) fn slot_roles(records: &[ClaimRecord]) -> Vec<Role> {
     let ids: BTreeSet<&str> = records
         .iter()
         .filter(|record| record.store == HOTKEY_STORE)
@@ -139,7 +139,125 @@ pub(super) fn portable_slot_roles(records: &[ClaimRecord]) -> Vec<Role> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qol_host_defaults::ClaimState;
+    use crate::features::host_defaults::catalog::Declaration;
+    use crate::features::host_defaults::slot::{self, SlotHost};
+    use crate::hotkeys::HotkeyBinding;
+    use crate::plugins::PluginUid;
+    use qol_host_defaults::{
+        ClaimState, Ledger, OpenerSpec, Owner, ReleaseOutcome, Report, Restore, SlotRoute, State,
+    };
+    use std::cell::RefCell;
+
+    struct RouteHost;
+
+    impl HostDefaults for RouteHost {
+        fn probe(&self, role: Role) -> Report {
+            Report {
+                role,
+                state: State::Silent,
+                owner: Owner::NoHostTool,
+                triggers: Vec::new(),
+                kept: Vec::new(),
+                restore: Restore::Exact,
+                lifetimes: vec![Lifetime::PortableSession],
+            }
+        }
+
+        fn slot_route(&self, _role: Role) -> Option<SlotRoute> {
+            Some(SlotRoute {
+                keys: vec!["Print".to_string()],
+                owner: "Cinnamon".to_string(),
+            })
+        }
+
+        fn claim_handler(
+            &self,
+            _role: Role,
+            _opener: &OpenerSpec,
+            _plugin_id: &str,
+            _lifetime: Lifetime,
+            _ledger: &Ledger,
+        ) -> Result<()> {
+            anyhow::bail!("not used")
+        }
+
+        fn release(&self, _role: Role, _ledger: &Ledger) -> Result<ReleaseOutcome> {
+            anyhow::bail!("not used")
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSlots {
+        freed: RefCell<Vec<Vec<String>>>,
+        restored: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl SlotHost for RecordingSlots {
+        fn normalize(&self, combo: &str) -> Option<String> {
+            Some(combo.to_lowercase())
+        }
+
+        fn free(&self, combos: &[String]) -> Result<()> {
+            self.freed.borrow_mut().push(combos.to_vec());
+            Ok(())
+        }
+
+        fn restore(&self, combos: &[String]) {
+            self.restored.borrow_mut().push(combos.to_vec());
+        }
+
+        fn reload(&self) {}
+
+        fn declared(&self, _plugin_id: &str, _role: Role) -> Option<Declaration> {
+            Some(shot_declaration())
+        }
+
+        fn holder_label(&self, uid: &PluginUid, action: &str) -> String {
+            format!("{} {action}", uid.as_str())
+        }
+    }
+
+    fn shot_declaration() -> Declaration {
+        Declaration {
+            plugin_id: "qol-shot".to_string(),
+            uid: PluginUid::new("uid-shot"),
+            role: Role::SlotScreenshot,
+            action: "screenshot".to_string(),
+        }
+    }
+
+    fn own_binding() -> HotkeyBinding {
+        HotkeyBinding {
+            id: "shot-default".to_string(),
+            key: "Print".to_string(),
+            plugin_uid: PluginUid::new("uid-shot"),
+            action: "screenshot".to_string(),
+            enabled: true,
+            os_only: false,
+        }
+    }
+
+    fn layers_in(dir: &std::path::Path) -> HotkeyLayers {
+        HotkeyLayers {
+            core: dir.join("core-hotkeys.json"),
+            os: dir.join("os-hotkeys.json"),
+        }
+    }
+
+    fn env_in<'a>(
+        layers: &'a HotkeyLayers,
+        ledger: &'a Ledger,
+        slots: &'a RecordingSlots,
+    ) -> Env<'a, RouteHost> {
+        Env {
+            host: &RouteHost,
+            ledger,
+            layers,
+            slots,
+            exec: std::path::PathBuf::new(),
+            lifetime: Lifetime::PortableSession,
+        }
+    }
 
     fn record(role: &str, store: &str, lifetime: Lifetime) -> ClaimRecord {
         ClaimRecord {
@@ -165,7 +283,7 @@ mod tests {
             record("slot.dictation", HOTKEY_STORE, Lifetime::PortableSession),
         ];
         assert_eq!(
-            portable_slot_roles(&records),
+            slot_roles(&records),
             vec![
                 Role::SlotLauncher,
                 Role::SlotScreenshot,
@@ -176,6 +294,73 @@ mod tests {
 
     #[test]
     fn an_empty_ledger_replays_nothing() {
-        assert!(portable_slot_roles(&[]).is_empty());
+        assert!(slot_roles(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_session_end_release_keeps_the_own_binding_enabled_and_restores_the_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let slots = RecordingSlots::default();
+        let env = env_in(&layers, &ledger, &slots);
+        let mut config = layers.load().expect("load");
+        config.hotkeys.push(own_binding());
+        config.hotkeys.push(HotkeyBinding {
+            id: slot::binding_id(Role::SlotScreenshot, 1),
+            os_only: true,
+            ..own_binding()
+        });
+        layers.save(&config).expect("save");
+        let mut claimed = record("slot.screenshot", HOTKEY_STORE, Lifetime::PortableSession);
+        claimed.key = slot::binding_id(Role::SlotScreenshot, 1);
+        claimed.applied = "Print".to_string();
+        ledger.insert(claimed).expect("record");
+
+        let failures = release_portable(&env);
+
+        assert!(failures.is_empty(), "{failures:?}");
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(saved[0].enabled && saved[0].id == "shot-default");
+        assert_eq!(
+            slots.restored.borrow().as_slice(),
+            [vec!["Print".to_string()]]
+        );
+    }
+
+    #[test]
+    fn the_start_after_a_user_release_claims_and_frees_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let slots = RecordingSlots::default();
+        let env = env_in(&layers, &ledger, &slots);
+        let mut config = layers.load().expect("load");
+        config.hotkeys.push(own_binding());
+        layers.save(&config).expect("save");
+        claim::release(&env, Role::SlotScreenshot, &[shot_declaration()]).expect("user release");
+
+        let failures = release_portable(&env);
+        let claimed = RefCell::new(Vec::new());
+        let results = intent::reclaim(
+            &RouteHost,
+            |_| Lifetime::PortableSession,
+            &intent::Intents::default(),
+            |_, _| Some(shot_declaration()),
+            |_| false,
+            |declaration| {
+                claimed.borrow_mut().push(declaration.plugin_id.clone());
+                Ok(())
+            },
+        );
+
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(results.is_empty());
+        assert!(claimed.borrow().is_empty());
+        assert!(slots.freed.borrow().is_empty());
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].enabled);
     }
 }

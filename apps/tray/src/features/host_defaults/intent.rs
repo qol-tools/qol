@@ -408,4 +408,59 @@ mod tests {
         );
         assert_eq!(results[1].1, Reclaim::Claimed);
     }
+
+    #[test]
+    fn a_mixed_batch_claims_each_role_under_its_own_lifetime() {
+        let claimed = RefCell::new(Vec::new());
+        let host = FakeHost {
+            state: State::Silent,
+            lifetimes: vec![Lifetime::ResidentPolicy, Lifetime::PortableSession],
+        };
+        let results = reclaim(
+            &host,
+            |role| {
+                if role.is_slot() {
+                    Lifetime::PortableSession
+                } else {
+                    Lifetime::ResidentPolicy
+                }
+            },
+            &intents(&[
+                ("folder.open", "qol-explorer"),
+                ("slot.screenshot", "qol-shot"),
+            ]),
+            installed,
+            |_| false,
+            |declaration| {
+                claimed.borrow_mut().push(declaration.role.id().to_string());
+                Ok(())
+            },
+        );
+        assert_eq!(
+            results,
+            vec![
+                ("folder.open".to_string(), Reclaim::Claimed),
+                ("slot.screenshot".to_string(), Reclaim::Claimed),
+            ]
+        );
+        assert_eq!(claimed.into_inner(), vec!["folder.open", "slot.screenshot"]);
+    }
+
+    #[test]
+    fn a_slot_given_a_resident_lifetime_on_a_portable_only_host_is_refused() {
+        let claimed = RefCell::new(Vec::new());
+        let results = reclaim(
+            &FakeHost::allowing(Lifetime::PortableSession),
+            |_| Lifetime::ResidentPolicy,
+            &intents(&[("slot.screenshot", "qol-shot")]),
+            installed,
+            |_| false,
+            |declaration| {
+                claimed.borrow_mut().push(declaration.plugin_id.clone());
+                Ok(())
+            },
+        );
+        assert!(matches!(&results[0].1, Reclaim::Refused(_)), "{results:?}");
+        assert!(claimed.borrow().is_empty());
+    }
 }

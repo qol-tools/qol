@@ -747,23 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn resident_exit_restores_bindings_and_clears_the_ledger_too() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let mut store = FakeStore::with(&full_key(), ORIGINAL);
-        take_over_in(root.path(), &mut store, &managed_mutation()).expect("take over");
-        assert_eq!(store.get(&full_key()), Some("@as []"));
-
-        let summary = restore_all_in(root.path(), &mut store, None);
-        assert_eq!(summary.restored, 1);
-        assert_eq!(
-            store.get(&full_key()),
-            Some(ORIGINAL),
-            "a freed key only works while qol runs, so every exit hands it back"
-        );
-        assert!(ledger::outstanding(root.path()).is_empty());
-    }
-
-    #[test]
     fn managed_take_over_then_restore_leaves_the_host_exactly_as_found() {
         let root = tempfile::tempdir().expect("tempdir");
         let mut store = FakeStore::with(&full_key(), ORIGINAL);

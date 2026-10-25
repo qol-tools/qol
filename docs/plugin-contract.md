@@ -120,10 +120,11 @@ Sections:
   executable action like `shortcut.action`; `role` must be non-empty and unique within
   the manifest. Role names are checked by the tray, not by manifest validation.
   Slot roles (freed host keys such as `slot.window_switcher`) are always a
-  portable session: the tray restores the system binding on every exit, resident
-  host or not, because a freed key only works while qol runs. Turning the row off
-  also disables the plugin's own enabled binding on the role's keys so the next
-  start does not free the key again. Handler roles follow the host's residency.
+  portable session: the system binding comes back when qol stops, or on the next
+  start after a crash, because a freed key only works while qol runs. Turning the
+  row off also disables the plugin's own enabled binding on the role's keys, on
+  this OS only, so the next start does not free the key again. Handler roles
+  follow the host's residency.
 - `[launcher]` (`LauncherSpec`): optional launcher integration. `kind` is `app`
   (the default host behavior is unchanged) or `flow` (the launcher keeps focus
   and runs a runtime query while the user types). `title` is required and names

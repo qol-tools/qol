@@ -113,7 +113,7 @@ pub(super) fn add_bindings(
         plugin_uid: declaration.uid.clone(),
         action: declaration.action.clone(),
         enabled: true,
-        os_only: false,
+        os_only: true,
     }));
 }
 
@@ -236,6 +236,7 @@ pub(super) fn disable_declared(
         let on_route = normalize(&binding.key).is_some_and(|key| routed.contains(&key));
         if declared && on_route {
             binding.enabled = false;
+            binding.os_only = true;
             disabled += 1;
         }
     }
@@ -281,7 +282,7 @@ pub(super) fn release_slot(
         .collect();
     context.host.restore(&combos);
     context.host.reload();
-    if records.is_empty() && disabled > 0 {
+    if disabled > 0 {
         return Ok(ReleaseOutcome::Restored);
     }
     Ok(outcome_of(&records, undo.removed, undo.user_edited))
@@ -703,6 +704,107 @@ mod tests {
         let saved = layers.load().expect("load").hotkeys;
         assert_eq!(saved.len(), 1);
         assert!(!saved[0].enabled);
+        assert!(saved[0].os_only);
+        assert_eq!(host.restored.borrow().as_slice(), [keys(&["Print"])]);
+    }
+
+    fn layer_enabled(path: &std::path::Path, id: &str) -> Option<bool> {
+        let bytes = std::fs::read(path).ok()?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        value["hotkeys"]
+            .as_array()?
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .and_then(|entry| entry["enabled"].as_bool())
+    }
+
+    #[test]
+    fn a_user_release_disables_the_binding_on_this_os_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        seed_own_binding(&layers);
+
+        release_slot(
+            &context,
+            Role::SlotScreenshot,
+            &keys(&["Print"]),
+            &[declaration()],
+        )
+        .expect("release");
+
+        assert_eq!(layer_enabled(&layers.core, "shot-default"), Some(true));
+        assert_eq!(layer_enabled(&layers.os, "shot-default"), Some(false));
+    }
+
+    #[test]
+    fn a_claim_after_a_user_release_survives_a_session_end_release() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        seed_own_binding(&layers);
+        release_slot(&context, Role::SlotScreenshot, &route, &[declaration()]).expect("release");
+
+        claim_slot(&context, &declaration(), &route, Lifetime::PortableSession).expect("claim");
+
+        let claimed = layers.load().expect("load").hotkeys;
+        let own = claimed
+            .iter()
+            .find(|b| b.id == "shot-default")
+            .expect("own");
+        let host_default = claimed
+            .iter()
+            .find(|b| b.id == "host-default-slot.screenshot-1")
+            .expect("host default");
+        assert!(!own.enabled);
+        assert!(host_default.enabled && host_default.key == "Print");
+        assert_eq!(host.freed.borrow().as_slice(), std::slice::from_ref(&route));
+
+        release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("release");
+
+        let after = layers.load().expect("load").hotkeys;
+        assert!(after
+            .iter()
+            .all(|b| b.id != "host-default-slot.screenshot-1"));
+        let own = after.iter().find(|b| b.id == "shot-default").expect("own");
+        assert!(!own.enabled);
+    }
+
+    #[test]
+    fn a_session_end_release_after_a_user_release_frees_nothing_on_the_next_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        seed_own_binding(&layers);
+        release_slot(&context, Role::SlotScreenshot, &route, &[declaration()]).expect("release");
+
+        release_slot(&context, Role::SlotScreenshot, &route, &[]).expect("start release");
+
+        assert_eq!(ledger.holder(Role::SlotScreenshot).expect("holder"), None);
+        assert!(host.freed.borrow().is_empty());
+        let saved = layers.load().expect("load").hotkeys;
+        assert_eq!(saved.len(), 1);
+        assert!(!saved[0].enabled);
     }
 
     #[test]
@@ -739,5 +841,67 @@ mod tests {
         let enabled: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
         assert_eq!(disabled, 1);
         assert_eq!(enabled, vec![false, true, true, true]);
+        assert!(bindings[0].os_only);
+        assert!(!bindings[1].os_only);
+    }
+
+    fn other_declaration() -> Declaration {
+        Declaration {
+            plugin_id: "qol-other".to_string(),
+            uid: PluginUid::new("uid-other"),
+            role: Role::SlotScreenshot,
+            action: "grab".to_string(),
+        }
+    }
+
+    #[test]
+    fn disabling_counts_by_declaration_and_key() {
+        type Case = (
+            &'static str,
+            Vec<HotkeyBinding>,
+            Vec<Declaration>,
+            fn(&str) -> Option<String>,
+            usize,
+            usize,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "an already disabled binding is not counted",
+                vec![binding("own", "Print", "uid-shot", "screenshot", false)],
+                vec![declaration()],
+                lower,
+                0,
+                0,
+            ),
+            (
+                "a key that does not normalize is not disabled",
+                vec![binding("own", "Print", "uid-shot", "screenshot", true)],
+                vec![declaration()],
+                |_| None,
+                0,
+                1,
+            ),
+            (
+                "two declarations disable one binding each",
+                vec![
+                    binding("own", "Print", "uid-shot", "screenshot", true),
+                    binding("theirs", "print", "uid-other", "grab", true),
+                ],
+                vec![declaration(), other_declaration()],
+                lower,
+                2,
+                0,
+            ),
+        ];
+        for (name, mut bindings, declarations, normalize, expected, still_enabled) in cases {
+            let route = keys(&["Print"]);
+            let disabled = disable_declared(&mut bindings, &declarations, &route, normalize);
+            assert_eq!(disabled, expected, "{name}");
+            assert_eq!(
+                bindings.iter().filter(|b| b.enabled).count(),
+                still_enabled,
+                "{name}"
+            );
+        }
     }
 }
