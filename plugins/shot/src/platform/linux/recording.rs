@@ -753,7 +753,7 @@ fn x11grab_args(
         args.extend(
             [
                 "-filter_complex",
-                "[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]",
+                "[1:a][2:a]amix=inputs=2:duration=longest,volume=2[aout]",
                 "-map",
                 "0:v",
                 "-map",
@@ -1089,7 +1089,7 @@ mod tests {
             let joined = args.join(" ");
             assert!(joined.contains(":0.0+1920,0"), "{joined}");
             assert!(
-                joined.contains("[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]"),
+                joined.contains("[1:a][2:a]amix=inputs=2:duration=longest,volume=2[aout]"),
                 "{joined}"
             );
             assert!(joined.contains(&expected.join(" ")), "{joined}");
