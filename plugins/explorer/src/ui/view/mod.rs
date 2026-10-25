@@ -12,6 +12,7 @@ mod menu;
 mod moves;
 mod pictogram;
 mod press;
+mod previews;
 mod props;
 mod rail;
 mod rename;
@@ -26,6 +27,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use futures::StreamExt;
 use gpui::{
@@ -51,6 +53,7 @@ use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
 use grid::Layout;
 use menu::{Command, Menu, Owner};
+use previews::Previews;
 
 pub const WINDOW_TITLE: &str = "Explorer";
 pub const WINDOW_WIDTH: f32 = 1040.0;
@@ -109,6 +112,7 @@ pub struct ExplorerView {
     wake_at: Option<Instant>,
     folds_open: bool,
     saver: ConfigSaver,
+    previews: Previews,
 }
 
 impl ExplorerView {
@@ -120,6 +124,7 @@ impl ExplorerView {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
+        let (previews, readies) = Previews::new();
         let mut view = Self {
             browser: {
                 let mut browser = Browser::new(start, home, config.show_hidden);
@@ -159,8 +164,10 @@ impl ExplorerView {
             wake_at: None,
             folds_open: false,
             saver: ConfigSaver::start(),
+            previews,
         };
         view.listen(cx);
+        Self::listen_previews(readies, cx);
         view.refresh_places(cx);
         view
     }
@@ -696,6 +703,19 @@ impl ExplorerView {
                 cx.background_executor().timer(PUMP).await;
                 while wakes.try_recv().is_ok() {}
                 if view.update(cx, |view, cx| view.drain(cx)).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn listen_previews(mut readies: UnboundedReceiver<()>, cx: &mut Context<Self>) {
+        cx.spawn(async move |view: WeakEntity<Self>, cx: &mut AsyncApp| {
+            while readies.next().await.is_some() {
+                cx.background_executor().timer(PUMP).await;
+                while readies.try_recv().is_ok() {}
+                if view.update(cx, |_, cx| cx.notify()).is_err() {
                     return;
                 }
             }

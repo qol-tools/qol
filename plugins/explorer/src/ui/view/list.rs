@@ -20,6 +20,7 @@ use super::grid::{Layout, ACROSS};
 use super::moves::progress_label;
 use super::pictogram::entry_pictogram;
 use super::press;
+use super::previews;
 use super::rename::row_name_room;
 use super::targets::{self, Zone};
 use super::{ExplorerView, HEAD, ICON};
@@ -287,11 +288,14 @@ fn render_row(
             element.child(cursor_wash(ground))
         })
         .children(tag)
-        .child(div().flex_none().w(px(ICON)).child(entry_pictogram(
-            entry,
-            stop.pictogram(),
-            shown.picked,
-        )))
+        .child(
+            div().flex_none().w(px(ICON)).child(
+                view.previews
+                    .of(entry, ICON * window.scale_factor())
+                    .map(|(shot, _)| previews::square(shot, ICON))
+                    .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+            ),
+        )
         .map(|element| {
             if !stop.two_lines() {
                 return element.child(name);
@@ -374,6 +378,7 @@ fn render_cell(
     let kit = kit();
     let stop = layout.stop;
     let (width, height) = stop.cell()?;
+    let room = preview_room(width, height, stop.name_style());
     let shown = shown(view, row, now)?;
     let entry = shown.entry;
     let ground = shown.ground;
@@ -414,7 +419,12 @@ fn render_cell(
             element.child(cursor_wash(ground))
         })
         .children(tag)
-        .child(entry_pictogram(entry, stop.pictogram(), shown.picked))
+        .child(
+            view.previews
+                .of(entry, room.0.max(room.1) * window.scale_factor())
+                .map(|(shot, video)| previews::framed(shot, video, room))
+                .unwrap_or_else(|| entry_pictogram(entry, stop.pictogram(), shown.picked)),
+        )
         .child(
             div()
                 .w_full()
@@ -435,6 +445,14 @@ fn render_cell(
         }));
     let element = folder_target(fade(element, cut, arriving), entry, row, cx);
     Some(kit.highlight(element, shown.picked).into_any_element())
+}
+
+fn preview_room(width: f32, height: f32, name: TextStyle) -> (f32, f32) {
+    let words = line_height(name) + SPACE_STACK + line_height(TextStyle::Detail);
+    (
+        width - 2.0 * SPACE_INSET,
+        height - 3.0 * SPACE_INSET - words,
+    )
 }
 
 fn kind_text(entry: &Entry) -> &'static str {

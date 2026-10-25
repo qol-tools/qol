@@ -18,6 +18,7 @@ macro_rules! sized_assets {
 const FOLDER: &str = include_str!("../../../assets/pictograms/folder.svg");
 const HOME: &str = include_str!("../../../assets/pictograms/home-16.svg");
 const DRIVE: &str = include_str!("../../../assets/pictograms/drive-16.svg");
+const PLAY: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path fill="currentColor" d="M4 2.5v7l5.5-3.5z"/></svg>"#;
 const SVG_END: &str = "</svg>";
 const TAG_INK: u32 = 0x16171a;
 const HALO_WIDTH: f32 = 2.6;
@@ -155,6 +156,16 @@ pub(super) fn rail_pictogram(glyph: RailGlyph, selected: bool) -> AnyElement {
     .into_any_element()
 }
 
+pub(super) fn play(size: f32) -> AnyElement {
+    Pictogram {
+        name: "explorer-play".to_string(),
+        markup: PLAY.to_string(),
+        size,
+        ink: kit().grounds.pane.ink,
+    }
+    .into_any_element()
+}
+
 fn folder(size: f32) -> AnyElement {
     Pictogram {
         name: "explorer-folder".to_string(),
@@ -236,7 +247,7 @@ impl RenderOnce for Pictogram {
 
 #[cfg(test)]
 mod tests {
-    use super::{lifted, outline, tagged, PictogramSize, DRIVE, FOLDER, HOME};
+    use super::{lifted, outline, tagged, PictogramSize, DRIVE, FOLDER, HOME, PLAY};
     use crate::ui::kind::{tag_text, FileKind};
 
     #[test]
@@ -286,7 +297,12 @@ mod tests {
 
     #[test]
     fn rail_and_folder_assets_rasterize() {
-        for (name, markup) in [("folder", FOLDER), ("home", HOME), ("drive", DRIVE)] {
+        for (name, markup) in [
+            ("folder", FOLDER),
+            ("home", HOME),
+            ("drive", DRIVE),
+            ("play", PLAY),
+        ] {
             let name = format!("explorer-test-{name}");
             assert!(
                 qol_gpui::pictures::icon(&name, markup, 0x8b8880, 16).is_some(),
