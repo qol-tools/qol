@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -391,6 +392,10 @@ fn start_nvfbc_capture(rect: &Rect, config: &Config, output_file: &Path) -> Resu
     }
 
     stop_failed_helper_start(&mut child);
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     if output_file.symlink_metadata().is_ok() {
         std::fs::remove_file(output_file).with_context(|| {
             format!(
@@ -441,12 +446,21 @@ fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
         "backend=nvfbc step=open output={}",
         capture.output_name()
     );
-    let mut ffmpeg = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command
         .args(&request.ffmpeg_args)
         .env_remove(NVFBC_HELPER_ENV)
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("failed to start ffmpeg")?;
+        .stdin(Stdio::piped());
+    // SAFETY: prctl is async-signal-safe and only changes the forked child before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut ffmpeg = command.spawn().context("failed to start ffmpeg")?;
     let stdin = ffmpeg
         .stdin
         .take()
