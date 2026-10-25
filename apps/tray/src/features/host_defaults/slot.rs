@@ -174,12 +174,21 @@ pub(super) fn claim_slot(
     context: &SlotContext<'_>,
     declaration: &Declaration,
     keys: &[String],
+    reaches: &[String],
     lifetime: Lifetime,
 ) -> Result<()> {
     let mut config = context
         .layers
         .load()
         .context("reading the hotkey bindings")?;
+    let implied: Vec<String> = reaches
+        .iter()
+        .filter(|key| !keys.contains(key))
+        .cloned()
+        .collect();
+    let enabled = enable_declared(&mut config.hotkeys, declaration, &implied, |combo| {
+        context.host.normalize(combo)
+    });
     let planned = plan_bindings(
         &config.hotkeys,
         declaration,
@@ -211,14 +220,39 @@ pub(super) fn claim_slot(
         let _ = context.ledger.remove_store(declaration.role, HOTKEY_STORE);
         return Err(error.context("saving the hotkey bindings"));
     }
-    if let Err(error) = context.host.free(keys) {
-        if let Err(undo) = release_slot(context, declaration.role, keys, &[]) {
+    let freed: Vec<String> = keys.iter().chain(&enabled).cloned().collect();
+    if let Err(error) = context.host.free(&freed) {
+        let disable = if enabled.is_empty() {
+            &[][..]
+        } else {
+            std::slice::from_ref(declaration)
+        };
+        if let Err(undo) = release_slot(context, declaration.role, reaches, disable) {
             log::warn!("host defaults: could not undo a refused slot claim: {undo:#}");
         }
         return Err(error);
     }
     context.host.reload();
     Ok(())
+}
+
+pub(super) fn enable_declared(
+    bindings: &mut [HotkeyBinding],
+    declaration: &Declaration,
+    reaches: &[String],
+    normalize: impl Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let reached: BTreeSet<String> = reaches.iter().filter_map(|key| normalize(key)).collect();
+    let mut enabled = Vec::new();
+    for binding in bindings.iter_mut() {
+        let switched_off = !binding.enabled && binding.os_only;
+        let on_reach = normalize(&binding.key).is_some_and(|key| reached.contains(&key));
+        if switched_off && on_reach && binding.plugin_uid == declaration.uid {
+            binding.enabled = true;
+            enabled.push(binding.key.clone());
+        }
+    }
+    enabled
 }
 
 pub(super) fn disable_declared(
@@ -591,7 +625,14 @@ mod tests {
         };
         let route = keys(&["Print"]);
 
-        claim_slot(&context, &declaration(), &route, Lifetime::PortableSession).expect("claim");
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &route,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
 
         let saved = layers.load().expect("load").hotkeys;
         assert_eq!(saved.len(), 1);
@@ -630,6 +671,7 @@ mod tests {
             &context,
             &declaration(),
             &keys(&["Print"]),
+            &keys(&["Print"]),
             Lifetime::PortableSession,
         );
 
@@ -652,6 +694,7 @@ mod tests {
         claim_slot(
             &context,
             &declaration(),
+            &keys(&["Print"]),
             &keys(&["Print"]),
             Lifetime::PortableSession,
         )
@@ -758,7 +801,14 @@ mod tests {
         seed_own_binding(&layers);
         release_slot(&context, Role::SlotScreenshot, &route, &[declaration()]).expect("release");
 
-        claim_slot(&context, &declaration(), &route, Lifetime::PortableSession).expect("claim");
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &route,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
 
         let claimed = layers.load().expect("load").hotkeys;
         let own = claimed
@@ -908,5 +958,71 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn claiming_turns_back_on_only_switched_off_bindings_on_an_implied_key() {
+        let switched_off = |id: &str, key: &str, uid: &str| HotkeyBinding {
+            os_only: true,
+            ..binding(id, key, uid, "record", false)
+        };
+        let mut bindings = vec![
+            switched_off("own", "Shift+Print", "uid-shot"),
+            switched_off("other-plugin", "Shift+Print", "uid-other"),
+            switched_off("off-route", "Ctrl+P", "uid-shot"),
+            binding("user-off", "Shift+Print", "uid-shot", "record", false),
+        ];
+
+        let enabled = enable_declared(
+            &mut bindings,
+            &declaration(),
+            &keys(&["Shift+Print"]),
+            lower,
+        );
+
+        let on: Vec<bool> = bindings.iter().map(|binding| binding.enabled).collect();
+        assert_eq!(enabled, keys(&["Shift+Print"]));
+        assert_eq!(on, vec![true, false, false, false]);
+    }
+
+    #[test]
+    fn a_release_then_claim_round_trips_the_implied_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = layers_in(dir.path());
+        let ledger = Ledger::at(dir.path().join("host-defaults.json"));
+        let host = FakeSlots::default();
+        let context = SlotContext {
+            layers: &layers,
+            ledger: &ledger,
+            host: &host,
+        };
+        let route = keys(&["Print"]);
+        let reaches = keys(&["Print", "Shift+Print"]);
+        let mut config = layers.load().expect("load");
+        config.hotkeys = vec![
+            binding("shot-default", "Print", "uid-shot", "screenshot", true),
+            binding("shot-reverse", "Shift+Print", "uid-shot", "record", true),
+        ];
+        layers.save(&config).expect("save");
+
+        release_slot(&context, Role::SlotScreenshot, &reaches, &[declaration()]).expect("release");
+        claim_slot(
+            &context,
+            &declaration(),
+            &route,
+            &reaches,
+            Lifetime::PortableSession,
+        )
+        .expect("claim");
+
+        let saved = layers.load().expect("load").hotkeys;
+        let enabled = |id: &str| saved.iter().find(|b| b.id == id).expect(id).enabled;
+        assert!(!enabled("shot-default"));
+        assert!(enabled("shot-reverse"));
+        assert!(enabled("host-default-slot.screenshot-1"));
+        assert_eq!(
+            host.freed.borrow().as_slice(),
+            &[keys(&["Print", "Shift+Print"])]
+        );
     }
 }

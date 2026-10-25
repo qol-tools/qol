@@ -65,7 +65,8 @@ Gives the role back to the host. Only what qol wrote is undone: a value or
 binding you changed since is left alone. For a slot role it also turns off,
 on this OS only, the plugin's own enabled bindings on every key the system
 tool answers (Alt+Tab and Alt+Shift+Tab for the window switcher), so qol does
-not free the system key again on the next start.
+not free the system key again on the next start. Claiming the role again turns
+the extra keys' bindings back on.
 
 JSON: {\"role\", \"outcome\": \"restored\" | \"left_user_change\" | \"already_gone\"}
 EXIT: 0, 1 when restoring failed.";

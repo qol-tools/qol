@@ -75,7 +75,13 @@ pub(super) fn claim<H: HostDefaults>(env: &Env<'_, H>, declaration: &Declaration
         .host
         .slot_route(role)
         .ok_or_else(|| anyhow!("{} has no key route on this computer", role.id()))?;
-    slot::claim_slot(&env.slot_context(), declaration, &route.keys, env.lifetime)
+    slot::claim_slot(
+        &env.slot_context(),
+        declaration,
+        &route.keys,
+        &route.reaches,
+        env.lifetime,
+    )
 }
 
 fn release_other_holder<H: HostDefaults>(
