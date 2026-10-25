@@ -5,7 +5,9 @@ use std::thread;
 
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use gpui::prelude::FluentBuilder;
-use gpui::{div, img, px, rgb, AnyElement, IntoElement, ObjectFit, ParentElement, Styled};
+use gpui::{
+    div, img, px, rgb, AnyElement, IntoElement, ObjectFit, ParentElement, Styled, StyledImage,
+};
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{SPACE_STACK, SPACE_TIGHT};
 
