@@ -8,6 +8,7 @@ mod menu;
 mod moves;
 mod pictogram;
 mod press;
+mod props;
 mod rail;
 mod rename;
 mod slider;
@@ -668,6 +669,10 @@ impl ExplorerView {
             }
         }
         let action = keys::action(&event.keystroke, self.browser.path_open());
+        if self.browser.props_open() && !matches!(action, Action::Unpick | Action::Props) {
+            cx.stop_propagation();
+            return;
+        }
         if self.browser.moves_open() && !matches!(action, Action::Unpick | Action::Moves) {
             cx.stop_propagation();
             return;
@@ -759,6 +764,7 @@ impl ExplorerView {
             Action::NewFolder => self.revealed(Browser::new_folder),
             Action::Undo => self.browser.undo(),
             Action::Moves => self.browser.toggle_moves(),
+            Action::Props => self.browser.toggle_props(),
             Action::Nothing => false,
         }
     }
@@ -989,6 +995,7 @@ impl Render for ExplorerView {
         let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
         let sheet = match self.browser.surveyed() {
             Some(survey) => Some(clash::render(self, survey, cx)),
+            None if self.browser.props_open() => Some(props::render(self)),
             None if self.browser.moves_open() => Some(moves::render(self)),
             None => None,
         };

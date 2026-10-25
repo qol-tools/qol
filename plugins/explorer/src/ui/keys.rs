@@ -44,6 +44,7 @@ pub enum Action {
     NewFolder,
     Undo,
     Moves,
+    Props,
     Resize(Resize),
     Nothing,
 }
@@ -87,6 +88,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("left", (false, false, true)) => Action::Range(Step::Left),
         ("right", (false, false, true)) => Action::Range(Step::Right),
         ("enter", (false, false, false)) => Action::Open,
+        ("enter", (false, true, false)) => Action::Props,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
         ("right", (false, true, false)) => Action::Forward,
@@ -147,6 +149,7 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Trash
                 | Action::Rename
                 | Action::NewFolder
+                | Action::Props
         )
 }
 
@@ -297,6 +300,7 @@ mod tests {
                 key("j", Modifiers::secondary_key(), Some("j")),
                 Action::Moves,
             ),
+            (key("enter", alt(), None), Action::Props),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
@@ -447,6 +451,7 @@ mod tests {
             Action::Trash,
             Action::Rename,
             Action::NewFolder,
+            Action::Props,
         ];
         let leaving = [
             Action::Up,

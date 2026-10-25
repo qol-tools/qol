@@ -54,6 +54,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+Shift+N | Make a new folder and rename it |
 | Ctrl+Z | Undo the last copy, move, rename, trash or new folder, putting back anything a copy replaced |
 | Ctrl+J | Show or hide today's moves |
+| Alt+Enter | Show or hide properties for the row under the cursor, or a count and total size for the picks: kind, path, size (a folder's total is counted in the background), dates, permissions and owner on Linux and macOS or attributes on Windows, the link target, and a preview of png, jpg, gif, webp and svg images; Escape also closes it |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
 | Ctrl+D | Pin the folder you are in, or unpin it |
 | Ctrl+, | Open Explorer's settings |
