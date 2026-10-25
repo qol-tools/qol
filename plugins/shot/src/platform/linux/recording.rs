@@ -1075,12 +1075,12 @@ mod tests {
         let cases = [
             (
                 X11grabEncoder::Nvenc,
-                &["h264_nvenc", "-cq", "18", "-b:v", "0"][..],
+                &[["-c:v", "h264_nvenc"], ["-cq", "18"], ["-b:v", "0"]][..],
                 "-pix_fmt",
             ),
             (
                 X11grabEncoder::X264,
-                &["libx264", "-crf", "18", "-pix_fmt", "yuv420p"][..],
+                &[["-c:v", "libx264"], ["-crf", "18"], ["-pix_fmt", "yuv420p"]][..],
                 "-cq",
             ),
         ];
@@ -1092,7 +1092,9 @@ mod tests {
                 joined.contains("[1:a][2:a]amix=inputs=2:duration=longest,volume=2[aout]"),
                 "{joined}"
             );
-            assert!(joined.contains(&expected.join(" ")), "{joined}");
+            for pair in expected {
+                assert!(args.windows(2).any(|window| window == pair), "{joined}");
+            }
             assert!(!args.iter().any(|arg| arg == absent), "{joined}");
             assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
         }
