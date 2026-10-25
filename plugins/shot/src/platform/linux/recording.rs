@@ -4,6 +4,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as XfixesExt;
@@ -25,6 +26,50 @@ const CINNAMON_VP8_THREADS: u32 = 4;
 const NVENC_ELEMENT: &str = "nvh264enc";
 const NVENC_MIN_SIZE: (i32, i32) = (145, 49);
 const NVENC_MAX_SIDE: i32 = 4096;
+const FFMPEG_NVENC: &str = "h264_nvenc";
+static FFMPEG_NVENC_WORKS: OnceLock<bool> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum X11grabEncoder {
+    Nvenc,
+    X264,
+}
+
+impl X11grabEncoder {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nvenc => FFMPEG_NVENC,
+            Self::X264 => "libx264",
+        }
+    }
+
+    fn args(self, config: &Config) -> Vec<String> {
+        match self {
+            Self::Nvenc => vec![
+                "-c:v".to_string(),
+                FFMPEG_NVENC.to_string(),
+                "-preset".to_string(),
+                "p4".to_string(),
+                "-rc".to_string(),
+                "vbr".to_string(),
+                "-cq".to_string(),
+                config.video.crf.clamp(0, 51).to_string(),
+                "-b:v".to_string(),
+                "0".to_string(),
+            ],
+            Self::X264 => vec![
+                "-c:v".to_string(),
+                "libx264".to_string(),
+                "-crf".to_string(),
+                config.video.crf.to_string(),
+                "-preset".to_string(),
+                config.video.preset.clone(),
+                "-pix_fmt".to_string(),
+                "yuv420p".to_string(),
+            ],
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CinnamonEncoder {
@@ -80,6 +125,13 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let rect = &even_dimensions(*rect);
+    if nvenc_accepts(rect) && ffmpeg_nvenc_available(config) {
+        qol_runtime::probe!(
+            "SHOT_RECORD_START_BACKEND",
+            "backend=x11grab outcome=ready reason=gpu_encoder encoder={FFMPEG_NVENC}"
+        );
+        return start_x11grab_capture(rect, config, output_file, X11grabEncoder::Nvenc);
+    }
     if cinnamon_desktop_session() {
         for encoder in cinnamon_encoders(rect) {
             match start_cinnamon_capture(rect, config, output_file, encoder) {
@@ -108,14 +160,45 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
 
     qol_runtime::probe!(
         "SHOT_RECORD_START_BACKEND",
-        "backend=x11grab outcome=ready reason={}",
+        "backend=x11grab outcome=ready reason={} encoder={}",
         if cinnamon_desktop_session() {
             "cinnamon_start_failed"
         } else {
             "non_cinnamon_session"
-        }
+        },
+        X11grabEncoder::X264.label()
     );
-    start_x11grab_capture(rect, config, output_file)
+    start_x11grab_capture(rect, config, output_file, X11grabEncoder::X264)
+}
+
+fn ffmpeg_nvenc_available(config: &Config) -> bool {
+    recording_format(&config.video.format) != "webm"
+        && *FFMPEG_NVENC_WORKS.get_or_init(ffmpeg_encodes_with_nvenc)
+}
+
+fn ffmpeg_encodes_with_nvenc() -> bool {
+    Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=256x256:d=0.1",
+            "-frames:v",
+            "1",
+            "-c:v",
+            FFMPEG_NVENC,
+            "-f",
+            "null",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn cinnamon_encoders(rect: &Rect) -> Vec<CinnamonEncoder> {
@@ -624,7 +707,30 @@ fn start_x11grab_capture(
     rect: &Rect,
     config: &Config,
     output_file: &Path,
+    encoder: X11grabEncoder,
 ) -> Result<CaptureSession> {
+    let args = x11grab_args(rect, config, output_file, encoder);
+    let log_file =
+        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
+    let stdout_log = log_file
+        .try_clone()
+        .context("failed to clone recording log file")?;
+    let child = Command::new("ffmpeg")
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(log_file))
+        .spawn()
+        .context("failed to start ffmpeg")?;
+    Ok(capture_session(child.id(), *rect, output_file, output_file))
+}
+
+fn x11grab_args(
+    rect: &Rect,
+    config: &Config,
+    output_file: &Path,
+    encoder: X11grabEncoder,
+) -> Vec<String> {
     let mut args = vec![
         "-thread_queue_size".to_string(),
         "512".to_string(),
@@ -647,7 +753,7 @@ fn start_x11grab_capture(
         args.extend(
             [
                 "-filter_complex",
-                "[1:a][2:a]amerge=inputs=2[aout]",
+                "[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]",
                 "-map",
                 "0:v",
                 "-map",
@@ -660,33 +766,10 @@ fn start_x11grab_capture(
         args.extend(["-c:a", "aac", "-b:a", "192k"].map(str::to_string));
     }
 
-    args.extend_from_slice(&[
-        "-c:v".to_string(),
-        "libx264".to_string(),
-        "-r".to_string(),
-        config.video.framerate.to_string(),
-        "-crf".to_string(),
-        config.video.crf.to_string(),
-        "-preset".to_string(),
-        config.video.preset.clone(),
-        "-pix_fmt".to_string(),
-        "yuv420p".to_string(),
-        output_file.to_string_lossy().to_string(),
-    ]);
-
-    let log_file =
-        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
-    let stdout_log = log_file
-        .try_clone()
-        .context("failed to clone recording log file")?;
-    let child = Command::new("ffmpeg")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout_log))
-        .stderr(Stdio::from(log_file))
-        .spawn()
-        .context("failed to start ffmpeg")?;
-    Ok(capture_session(child.id(), *rect, output_file, output_file))
+    args.extend(encoder.args(config));
+    args.extend(["-r".to_string(), config.video.framerate.to_string()]);
+    args.push(output_file.to_string_lossy().to_string());
+    args
 }
 
 pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
@@ -835,7 +918,7 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 mod tests {
     use super::{
         cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote, nvenc_accepts,
-        CinnamonCaptureRequest, CinnamonEncoder,
+        x11grab_args, CinnamonCaptureRequest, CinnamonEncoder, X11grabEncoder,
     };
     use crate::{Config, Rect};
 
@@ -973,6 +1056,45 @@ mod tests {
                 args.windows(2).any(|pair| pair == ["-c:v", codec]),
                 "{capture_file} -> {format}: {args:?}"
             );
+        }
+    }
+
+    #[test]
+    fn x11grab_args_pick_the_encoder_and_mix_both_audio_inputs() {
+        let rect = Rect {
+            x: 1920,
+            y: 0,
+            w: 2560,
+            h: 1440,
+        };
+        let mut config = Config::default();
+        config.video.crf = 18;
+        config.audio.enabled = true;
+        config.audio.inputs = vec!["mic".to_string(), "system".to_string()];
+        let output = std::path::Path::new("/tmp/out.mp4");
+        let cases = [
+            (
+                X11grabEncoder::Nvenc,
+                &["h264_nvenc", "-cq", "18", "-b:v", "0"][..],
+                "-pix_fmt",
+            ),
+            (
+                X11grabEncoder::X264,
+                &["libx264", "-crf", "18", "-pix_fmt", "yuv420p"][..],
+                "-cq",
+            ),
+        ];
+        for (encoder, expected, absent) in cases {
+            let args = x11grab_args(&rect, &config, output, encoder);
+            let joined = args.join(" ");
+            assert!(joined.contains(":0.0+1920,0"), "{joined}");
+            assert!(
+                joined.contains("[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]"),
+                "{joined}"
+            );
+            assert!(joined.contains(&expected.join(" ")), "{joined}");
+            assert!(!args.iter().any(|arg| arg == absent), "{joined}");
+            assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
         }
     }
 
