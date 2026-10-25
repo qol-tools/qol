@@ -128,7 +128,6 @@ pub(super) fn portable_slot_roles(records: &[ClaimRecord]) -> Vec<Role> {
     let ids: BTreeSet<&str> = records
         .iter()
         .filter(|record| record.store == HOTKEY_STORE)
-        .filter(|record| record.lifetime == Lifetime::PortableSession)
         .map(|record| record.role.as_str())
         .collect();
     Role::ALL
@@ -156,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn only_portable_hotkey_claims_are_replayed() {
+    fn every_slot_hotkey_claim_is_released_whatever_its_recorded_lifetime() {
         let records = [
             record("slot.screenshot", HOTKEY_STORE, Lifetime::PortableSession),
             record("slot.screenshot", HOTKEY_STORE, Lifetime::PortableSession),
@@ -167,7 +166,11 @@ mod tests {
         ];
         assert_eq!(
             portable_slot_roles(&records),
-            vec![Role::SlotScreenshot, Role::SlotDictation]
+            vec![
+                Role::SlotLauncher,
+                Role::SlotScreenshot,
+                Role::SlotDictation
+            ]
         );
     }
 

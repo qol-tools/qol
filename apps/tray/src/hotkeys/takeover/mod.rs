@@ -367,10 +367,6 @@ pub fn restore_all() -> RestoreSummary {
     restore_all_in(&root, &mut HostStore, compositor_started_at)
 }
 
-pub fn restore_on_exit() -> RestoreSummary {
-    restore_all()
-}
-
 fn take_over_in(
     root: &std::path::Path,
     store: &mut dyn BindingStore,
