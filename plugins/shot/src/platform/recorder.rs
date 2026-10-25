@@ -36,6 +36,7 @@ pub fn encoder_args(config: &Config, realtime: bool) -> Vec<String> {
     if format == "webm" {
         args.extend(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf"].map(str::to_string));
         args.push(config.video.crf.clamp(0, 63).to_string());
+        args.extend(["-pix_fmt", "yuv420p"].map(str::to_string));
         if realtime {
             args.extend(
                 ["-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"].map(str::to_string),
@@ -169,6 +170,7 @@ mod tests {
             assert!(has(["-c:a", audio]), "{format}: {args:?}");
             assert_eq!(has(["-movflags", "+faststart"]), faststart, "{format}");
             assert_eq!(has(["-deadline", "realtime"]), deadline, "{format}");
+            assert!(has(["-pix_fmt", "yuv420p"]), "{format}: {args:?}");
             if video == "libx264" {
                 assert!(has(["-preset", "veryfast"]), "{format}: {args:?}");
                 assert!(has(["-crf", "51"]), "{format}: {args:?}");

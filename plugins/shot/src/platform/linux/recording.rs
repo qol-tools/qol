@@ -1377,6 +1377,7 @@ mod tests {
             assert!(has(["-c:v", video]), "{format}: {args:?}");
             assert!(has(["-c:a", audio]), "{format}: {args:?}");
             assert!(has(["-crf", crf]), "{format}: {args:?}");
+            assert!(has(["-pix_fmt", "yuv420p"]), "{format}: {args:?}");
             assert_eq!(
                 args.iter().filter(|arg| *arg == "-c:a").count(),
                 1,
