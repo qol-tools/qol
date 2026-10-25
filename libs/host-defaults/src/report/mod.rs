@@ -59,6 +59,20 @@ impl Report {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockerKind {
+    PolicyOverride,
+    SecureInputHeld,
+    ShortcutPortalMissing,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blocker {
+    pub kind: BlockerKind,
+    pub roles: Vec<Role>,
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotRoute {
     pub keys: Vec<String>,

@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::claims::{Ledger, ReleaseOutcome};
 use crate::handler::HandlerStore;
 use crate::platform::Platform;
-use crate::report::{Lifetime, Report, SlotRoute};
+use crate::report::{Blocker, Lifetime, Report, SlotRoute};
 use crate::role::Role;
 
 pub struct OpenerSpec {
@@ -15,6 +15,7 @@ pub struct OpenerSpec {
 pub trait HostDefaults {
     fn probe(&self, role: Role) -> Report;
     fn slot_route(&self, role: Role) -> Option<SlotRoute>;
+    fn blockers(&self) -> Vec<Blocker>;
     fn claim_handler(
         &self,
         role: Role,
@@ -66,6 +67,10 @@ mod tests {
 
         fn slot_route(&self, _role: Role) -> Option<SlotRoute> {
             None
+        }
+
+        fn blockers(&self) -> Vec<Blocker> {
+            Vec::new()
         }
 
         fn claim_handler(

@@ -7,12 +7,19 @@ description = "Host defaults a qol plugin can take over: handler roles, key slot
 
 [dependencies]
 anyhow = "1"
+log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1"
 qol-desktop-settings.workspace = true
 qol-fs.workspace = true
 qol-platform.workspace = true
 workspace-hack.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.16.0", features = ["blocking-api"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
 
 [dev-dependencies]
 qol-hotkeys.workspace = true

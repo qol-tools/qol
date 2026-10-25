@@ -7,7 +7,7 @@ use crate::plugins::PluginUid;
 use qol_host_defaults::handler::backends::desktop_entry;
 use qol_host_defaults::handler::HandlerStore;
 use qol_host_defaults::xdg::XdgDirs;
-use qol_host_defaults::{host, HostDefaults, Role, SlotRoute, State};
+use qol_host_defaults::{host, Blocker, HostDefaults, Role, SlotRoute, State};
 use std::collections::BTreeSet;
 
 const OPENER_ROLE: Role = Role::FolderOpen;
@@ -22,6 +22,7 @@ pub(crate) struct Inspection {
     pub intents: Vec<IntendedRole>,
     pub intent_error: Option<String>,
     pub dead_keys: Vec<DeadKey>,
+    pub blockers: Vec<Blocker>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +70,9 @@ pub(crate) fn inspect() -> Inspection {
     let mut inspection = Inspection {
         installed: plugins.iter().map(|plugin| plugin.id.clone()).collect(),
         unknown_probes: unknown_probes(&host, &plugins),
+        blockers: declared_blockers(host.blockers(), |role| {
+            !catalog::declaring(role, &plugins).is_empty()
+        }),
         ..Inspection::default()
     };
     match IntentStore::active().and_then(|store| store.load()) {
@@ -132,6 +136,21 @@ fn unknown_probes(
                 | State::NeedsPermission { .. }
                 | State::Impossible { .. } => None,
             }
+        })
+        .collect()
+}
+
+fn declared_blockers(blockers: Vec<Blocker>, is_declared: impl Fn(Role) -> bool) -> Vec<Blocker> {
+    blockers
+        .into_iter()
+        .filter_map(|blocker| {
+            let roles: Vec<Role> = blocker
+                .roles
+                .iter()
+                .copied()
+                .filter(|role| is_declared(*role))
+                .collect();
+            (!roles.is_empty()).then_some(Blocker { roles, ..blocker })
         })
         .collect()
 }
@@ -267,6 +286,7 @@ fn opener_missing(records: &[qol_host_defaults::ClaimRecord]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qol_host_defaults::BlockerKind;
 
     fn lower(combo: &str) -> Option<String> {
         Some(combo.to_lowercase())
@@ -298,6 +318,53 @@ mod tests {
 
     fn roles(ids: &[&str]) -> BTreeSet<String> {
         ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    fn blocker(kind: BlockerKind, roles: &[Role]) -> Blocker {
+        Blocker {
+            kind,
+            roles: roles.to_vec(),
+            detail: "why".to_string(),
+        }
+    }
+
+    #[test]
+    fn blockers_are_kept_only_for_roles_a_plugin_declares() {
+        let declared = |role: Role| matches!(role, Role::SlotLauncher | Role::FolderOpen);
+        let cases = [
+            (
+                "none declared",
+                blocker(BlockerKind::SecureInputHeld, &[Role::SlotScreenshot]),
+                None,
+            ),
+            (
+                "narrowed to the declared roles",
+                blocker(
+                    BlockerKind::SecureInputHeld,
+                    &[Role::SlotLauncher, Role::SlotScreenshot],
+                ),
+                Some(vec![Role::SlotLauncher]),
+            ),
+            (
+                "all declared",
+                blocker(BlockerKind::PolicyOverride, &[Role::FolderOpen]),
+                Some(vec![Role::FolderOpen]),
+            ),
+            (
+                "no roles",
+                blocker(BlockerKind::ShortcutPortalMissing, &[]),
+                None,
+            ),
+        ];
+        for (name, input, expected) in cases {
+            let kept = declared_blockers(vec![input.clone()], declared);
+            let roles = kept.first().map(|kept| kept.roles.clone());
+            assert_eq!(roles, expected, "{name}");
+            if let Some(kept) = kept.first() {
+                assert_eq!(kept.kind, input.kind, "{name}");
+                assert_eq!(kept.detail, input.detail, "{name}");
+            }
+        }
     }
 
     #[test]

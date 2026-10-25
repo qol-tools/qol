@@ -66,7 +66,7 @@ impl PlatformAdapter for Adapter {
 
     fn secure_input(&self) -> DoctorCheckResult {
         doctor::secure_input_result(
-            &Probe::Known(secure_input::holder()),
+            &Probe::Known(qol_platform::secure_input_holder()),
             &hid_helper::query_status(),
         )
     }

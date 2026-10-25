@@ -4,12 +4,14 @@ pub mod native;
 pub mod os;
 mod permissions;
 mod platform;
+mod secure_input;
 pub mod utf16;
 pub mod windows_path;
 
 pub use os::Os;
 pub use permissions::{permission_status, request_permission, Permission, PermissionState};
 use platform::PlatformApi;
+pub use secure_input::{secure_input_enabled, secure_input_holder, SecureInputHolder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxDisplayBackend {
