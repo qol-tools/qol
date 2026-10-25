@@ -303,7 +303,7 @@ mod tests {
         let orphan = temp.path().join(format!("{WORK_PREFIX}{}-0", u32::MAX));
         let locked = orphan.join("locked");
         fs::create_dir_all(locked.join("inner")).unwrap();
-        fs::set_permissions(&locked, Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(&locked, Permissions::from_mode(0o000)).unwrap();
         let kept = temp.path().join("kept.png");
         fs::write(&kept, b"png").unwrap();
         let kept_mode = kept.metadata().unwrap().permissions().mode() & 0o777;
