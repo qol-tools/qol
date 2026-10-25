@@ -16,9 +16,28 @@ extern "system" {
 }
 
 pub(super) use self::open as open_checked;
+pub(super) use super::unsupported::{
+    file_type, open_handlers, open_with_handler, open_with_supported,
+};
 
 pub(super) fn open(target: &OsStr) -> io::Result<()> {
     crate::shell_execute::shell_execute(target, &[])
+}
+
+pub(super) fn terminal_commands(folder: &Path) -> Vec<Command> {
+    let mut terminal = Command::new("wt.exe");
+    terminal.args(["-d", "."]).current_dir(folder);
+    let mut commands = vec![terminal];
+    if let Some(windows) = windows_directory() {
+        let shell = windows.join("System32").join("cmd.exe");
+        let mut console = Command::new(&shell);
+        console
+            .args(["/c", "start", ""])
+            .arg(&shell)
+            .current_dir(folder);
+        commands.push(console);
+    }
+    commands
 }
 
 pub(super) fn reveal_plan(path: &Path) -> RevealPlan {

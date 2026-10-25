@@ -3,7 +3,7 @@ use std::path::{is_separator, MAIN_SEPARATOR};
 
 use gpui::Keystroke;
 
-use crate::text_edit::{apply_edit_key, EditKey, TextField};
+use crate::text_edit::{apply_edit_key, Clipboard, EditKey, TextField};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathKey {
@@ -147,11 +147,7 @@ impl PathEdit {
         target != first
     }
 
-    pub fn key(
-        &mut self,
-        keystroke: &Keystroke,
-        paste: impl FnOnce() -> Option<String>,
-    ) -> PathKey {
+    pub fn key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> PathKey {
         match keystroke.key.as_str() {
             "enter" => {
                 if self.selected().is_some() {
@@ -170,9 +166,7 @@ impl PathEdit {
                 self.select_next();
                 PathKey::Handled
             }
-            _ => match apply_edit_key(&mut self.field, keystroke, || {
-                paste().map(|text| pasted_path(&text).to_owned())
-            }) {
+            _ => match apply_edit_key(&mut self.field, keystroke, &PathClipboard(clipboard)) {
                 EditKey::Changed => {
                     self.picked = false;
                     PathKey::Changed
@@ -181,6 +175,18 @@ impl PathEdit {
                 EditKey::Ignored => PathKey::Ignored,
             },
         }
+    }
+}
+
+struct PathClipboard<'a>(&'a dyn Clipboard);
+
+impl Clipboard for PathClipboard<'_> {
+    fn read(&self) -> Option<String> {
+        self.0.read().map(|text| pasted_path(&text).to_owned())
+    }
+
+    fn write(&self, text: String) {
+        self.0.write(text);
     }
 }
 
@@ -205,6 +211,7 @@ fn segment_start(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{PathEdit, PathKey};
+    use crate::text_edit::MemoryClipboard;
     use gpui::{Keystroke, Modifiers};
     use std::path::MAIN_SEPARATOR;
 
@@ -258,7 +265,10 @@ mod tests {
     fn typing_drops_the_highlight_at_the_folder_level_and_an_arrow_pick_sticks() {
         let mut edit = edit("~/one/x", &["x"]);
         assert_eq!(edit.selected(), Some(0));
-        assert_eq!(edit.key(&key("backspace", None), || None), PathKey::Changed);
+        assert_eq!(
+            edit.key(&key("backspace", None), &MemoryClipboard::default()),
+            PathKey::Changed
+        );
         edit.set_suggestions(names(&["x"]));
         assert_eq!(edit.selected(), None);
         assert!(edit.select_next());
@@ -317,7 +327,7 @@ mod tests {
                 key_char: Some("v".to_string()),
             };
             assert_eq!(
-                edit.key(&ctrl_v, || Some(clipboard.to_string())),
+                edit.key(&ctrl_v, &MemoryClipboard::holding(clipboard)),
                 PathKey::Changed
             );
             assert_eq!(edit.text(), pasted, "{clipboard:?}");
@@ -339,8 +349,14 @@ mod tests {
     #[test]
     fn tab_completes_the_selected_suggestion_after_the_parent() {
         let mut edit = edit("~/Git/qo", &["qol-monorepo", "qol-skills"]);
-        assert_eq!(edit.key(&key("down", None), || None), PathKey::Handled);
-        assert_eq!(edit.key(&key("tab", None), || None), PathKey::Changed);
+        assert_eq!(
+            edit.key(&key("down", None), &MemoryClipboard::default()),
+            PathKey::Handled
+        );
+        assert_eq!(
+            edit.key(&key("tab", None), &MemoryClipboard::default()),
+            PathKey::Changed
+        );
         assert_eq!(edit.text(), format!("~/Git/qol-skills{MAIN_SEPARATOR}"));
         assert_eq!(edit.field().cursor(), edit.text().chars().count());
     }
@@ -356,33 +372,45 @@ mod tests {
     #[test]
     fn tab_without_suggestions_is_handled_and_changes_nothing() {
         let mut edit = edit("~/Git/qo", &[]);
-        assert_eq!(edit.key(&key("tab", None), || None), PathKey::Handled);
+        assert_eq!(
+            edit.key(&key("tab", None), &MemoryClipboard::default()),
+            PathKey::Handled
+        );
         assert_eq!(edit.text(), "~/Git/qo");
     }
 
     #[test]
     fn enter_takes_the_highlighted_suggestion_and_escape_cancels() {
         let mut edit = edit("~/Gi", &["Git"]);
-        assert_eq!(edit.key(&key("enter", None), || None), PathKey::Submit);
+        assert_eq!(
+            edit.key(&key("enter", None), &MemoryClipboard::default()),
+            PathKey::Submit
+        );
         assert_eq!(edit.text(), format!("~/Git{MAIN_SEPARATOR}"));
-        assert_eq!(edit.key(&key("escape", None), || None), PathKey::Cancel);
+        assert_eq!(
+            edit.key(&key("escape", None), &MemoryClipboard::default()),
+            PathKey::Cancel
+        );
         assert_eq!(edit.text(), format!("~/Git{MAIN_SEPARATOR}"));
     }
 
     #[test]
     fn enter_without_a_highlight_submits_the_text_as_typed() {
         let mut bare = edit("~/", &["Git", "Games"]);
-        assert_eq!(bare.key(&key("enter", None), || None), PathKey::Submit);
+        assert_eq!(
+            bare.key(&key("enter", None), &MemoryClipboard::default()),
+            PathKey::Submit
+        );
         assert_eq!(bare.text(), "~/");
 
         let mut unhighlighted = edit("~/Gi", &["Git"]);
         assert_eq!(
-            unhighlighted.key(&key("up", None), || None),
+            unhighlighted.key(&key("up", None), &MemoryClipboard::default()),
             PathKey::Handled
         );
         assert_eq!(unhighlighted.selected(), None);
         assert_eq!(
-            unhighlighted.key(&key("enter", None), || None),
+            unhighlighted.key(&key("enter", None), &MemoryClipboard::default()),
             PathKey::Submit
         );
         assert_eq!(unhighlighted.text(), "~/Gi");
@@ -391,12 +419,24 @@ mod tests {
     #[test]
     fn typing_and_backspace_edit_the_text() {
         let mut edit = edit("~/Gi", &["Git"]);
-        assert_eq!(edit.key(&key("t", Some("t")), || None), PathKey::Changed);
+        assert_eq!(
+            edit.key(&key("t", Some("t")), &MemoryClipboard::default()),
+            PathKey::Changed
+        );
         assert_eq!(edit.text(), "~/Git");
-        assert_eq!(edit.key(&key("backspace", None), || None), PathKey::Changed);
+        assert_eq!(
+            edit.key(&key("backspace", None), &MemoryClipboard::default()),
+            PathKey::Changed
+        );
         assert_eq!(edit.text(), "~/Gi");
-        assert_eq!(edit.key(&key("left", None), || None), PathKey::Handled);
-        assert_eq!(edit.key(&key("f1", None), || None), PathKey::Ignored);
+        assert_eq!(
+            edit.key(&key("left", None), &MemoryClipboard::default()),
+            PathKey::Handled
+        );
+        assert_eq!(
+            edit.key(&key("f1", None), &MemoryClipboard::default()),
+            PathKey::Ignored
+        );
     }
 
     #[test]

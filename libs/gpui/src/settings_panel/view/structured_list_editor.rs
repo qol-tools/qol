@@ -317,9 +317,7 @@ impl SettingsPanelView {
             FormKey::Edit => {
                 if let Some(form) = self.level_mut().form.as_mut() {
                     if let Some(field) = form.text_mut(selected) {
-                        text_edit::apply_edit_key(field, &event.keystroke, || {
-                            cx.read_from_clipboard().and_then(|item| item.text())
-                        });
+                        text_edit::apply_edit_key(field, &event.keystroke, cx);
                     }
                 }
             }

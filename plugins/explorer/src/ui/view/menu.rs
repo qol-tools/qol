@@ -2,11 +2,13 @@ use gpui::{
     anchored, deferred, px, AnyElement, Context, InteractiveElement, IntoElement, MouseDownEvent,
     ParentElement, Pixels, Point, StatefulInteractiveElement, Styled,
 };
+use qol_apps::desktop_integration::OpenHandler;
 use qol_gpui::kit::kit;
 use qol_gpui::theme::{OPACITY_DISABLED, SPACE_INSET};
 use qol_gpui::Key;
 
 use super::ExplorerView;
+use crate::listing::{SortBy, SortOrder};
 
 const WIDTH: f32 = 232.0;
 
@@ -19,13 +21,32 @@ pub(super) enum Command {
     TogglePin,
     GoToPath,
     ToggleHidden,
+    Sort(SortBy),
     Settings,
+    OpenItem,
+    Cut,
+    Copy,
+    Paste,
+    RenameItem,
+    Trash,
+    NewFolder,
+    Undo,
+    OpenWith(usize),
+    ChooseApp,
+    NewFile,
+    Duplicate,
+    Erase,
+    CopyPath,
+    Properties,
+    OpenTerminal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Owner {
     Folder,
     Pin(usize),
+    Item,
+    OpenWith,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +84,144 @@ impl Line {
         self.enabled = enabled;
         self
     }
+}
+
+fn entry(command: Command, label: &str, key: Option<Key>, enabled: bool) -> Item {
+    Item::Line(Line::new(command, label, key).enabled(enabled))
+}
+
+fn secondary(key: Key) -> Option<Key> {
+    Some(key.secondary())
+}
+
+fn paste_line(can_paste: bool) -> Item {
+    entry(
+        Command::Paste,
+        "Paste",
+        secondary(Key::letter('v')),
+        can_paste,
+    )
+}
+
+fn make_lines() -> [Item; 3] {
+    [
+        entry(
+            Command::NewFolder,
+            "New folder",
+            secondary(Key::letter('n').shift()),
+            true,
+        ),
+        entry(
+            Command::NewFile,
+            "New file",
+            secondary(Key::letter('n').alt()),
+            true,
+        ),
+        entry(Command::Undo, "Undo", secondary(Key::letter('z')), true),
+    ]
+}
+
+fn edit_lines(can_paste: bool) -> Vec<Item> {
+    let mut lines = vec![paste_line(can_paste)];
+    lines.extend(make_lines());
+    lines.push(entry(
+        Command::OpenTerminal,
+        "Open terminal here",
+        secondary(Key::letter('t').shift()),
+        true,
+    ));
+    lines
+}
+
+fn item_lines(can_paste: bool, single: bool, file: bool) -> Vec<Item> {
+    let mut lines = vec![
+        entry(Command::OpenItem, "Open", Some(Key::ENTER), true),
+        entry(
+            Command::ChooseApp,
+            "Open with\u{2026}",
+            Some(Key::ENTER.shift()),
+            file,
+        ),
+        Item::Rule,
+        entry(Command::Cut, "Cut", secondary(Key::letter('x')), true),
+        entry(Command::Copy, "Copy", secondary(Key::letter('c')), true),
+        paste_line(can_paste),
+        entry(
+            Command::Duplicate,
+            "Duplicate",
+            secondary(Key::letter('d').shift()),
+            true,
+        ),
+        entry(
+            Command::CopyPath,
+            "Copy path",
+            secondary(Key::letter('c').shift()),
+            true,
+        ),
+        Item::Rule,
+        entry(Command::RenameItem, "Rename", Key::parse("f2"), single),
+        entry(Command::Trash, "Move to trash", Some(Key::DELETE), true),
+        entry(
+            Command::Erase,
+            "Delete permanently\u{2026}",
+            Some(Key::DELETE.shift()),
+            true,
+        ),
+        Item::Rule,
+        entry(
+            Command::Properties,
+            "Properties",
+            Some(Key::ENTER.alt()),
+            true,
+        ),
+        Item::Rule,
+    ];
+    lines.extend(make_lines());
+    lines
+}
+
+fn folder_lines(
+    folder_name: &str,
+    pinned_as: Option<&str>,
+    shows_hidden: bool,
+    order: SortOrder,
+) -> Vec<Item> {
+    let pin_label = match pinned_as {
+        Some(name) => format!("Unpin {name}"),
+        None => format!("Pin {folder_name}"),
+    };
+    let hidden_label = if shows_hidden {
+        "Hide hidden files"
+    } else {
+        "Show hidden files"
+    };
+    let line = |command, label: String, key: Key| {
+        Item::Line(Line::new(command, label, Some(key.secondary())))
+    };
+    let mut items = vec![
+        line(Command::TogglePin, pin_label, Key::letter('d')),
+        line(
+            Command::GoToPath,
+            "Go to a path\u{2026}".into(),
+            Key::letter('g'),
+        ),
+        line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
+        Item::Rule,
+    ];
+    items.extend(SortBy::MENU.into_iter().zip(1..).map(|(by, digit)| {
+        Item::Line(Line::new(
+            Command::Sort(by),
+            sort_label(by, order),
+            Key::parse(&format!("alt+{digit}")).map(Key::secondary),
+        ))
+    }));
+    items.push(Item::Rule);
+    items.push(line(
+        Command::Settings,
+        "Explorer settings\u{2026}".into(),
+        Key::symbol(','),
+    ));
+    items
 }
 
 impl Menu {
@@ -107,39 +266,48 @@ impl Menu {
         folder_name: &str,
         pinned_as: Option<&str>,
         shows_hidden: bool,
+        order: SortOrder,
         at: Point<Pixels>,
     ) -> Self {
-        let pin_label = match pinned_as {
-            Some(name) => format!("Unpin {name}"),
-            None => format!("Pin {folder_name}"),
-        };
-        let hidden_label = if shows_hidden {
-            "Hide hidden files"
-        } else {
-            "Show hidden files"
-        };
-        let line = |command, label: String, key: Key| {
-            Item::Line(Line::new(command, label, Some(key.secondary())))
-        };
         Self::new(
             Owner::Folder,
             at,
-            vec![
-                line(Command::TogglePin, pin_label, Key::letter('d')),
-                line(
-                    Command::GoToPath,
-                    "Go to a path\u{2026}".into(),
-                    Key::letter('g'),
-                ),
-                line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
-                Item::Rule,
-                line(
-                    Command::Settings,
-                    "Explorer settings\u{2026}".into(),
-                    Key::symbol(','),
-                ),
-            ],
+            folder_lines(folder_name, pinned_as, shows_hidden, order),
         )
+    }
+
+    pub(super) fn background(
+        folder_name: &str,
+        pinned_as: Option<&str>,
+        shows_hidden: bool,
+        order: SortOrder,
+        can_paste: bool,
+        at: Point<Pixels>,
+    ) -> Self {
+        let mut items = edit_lines(can_paste);
+        items.push(Item::Rule);
+        items.extend(folder_lines(folder_name, pinned_as, shows_hidden, order));
+        Self::new(Owner::Folder, at, items)
+    }
+
+    pub(super) fn item(can_paste: bool, single: bool, file: bool, at: Point<Pixels>) -> Self {
+        Self::new(Owner::Item, at, item_lines(can_paste, single, file))
+    }
+
+    pub(super) fn open_with(handlers: &[OpenHandler], at: Point<Pixels>) -> Self {
+        let items = handlers
+            .iter()
+            .enumerate()
+            .map(|(index, handler)| {
+                let label = if handler.is_default {
+                    format!("{} (default)", handler.name)
+                } else {
+                    handler.name.clone()
+                };
+                Item::Line(Line::new(Command::OpenWith(index), label, None))
+            })
+            .collect();
+        Self::new(Owner::OpenWith, at, items)
     }
 
     pub(super) fn owner(&self) -> Owner {
@@ -168,6 +336,24 @@ impl Menu {
         };
         indices.into_iter().find(usable)
     }
+}
+
+fn sort_label(by: SortBy, order: SortOrder) -> String {
+    let name = match by {
+        SortBy::Name => "name",
+        SortBy::Size => "size",
+        SortBy::Modified => "date modified",
+        SortBy::Kind => "kind",
+    };
+    if order.by != by {
+        return format!("Sort by {name}");
+    }
+    let direction = if order.descending {
+        "descending"
+    } else {
+        "ascending"
+    };
+    format!("Sort by {name}, {direction}")
 }
 
 pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement {
@@ -211,7 +397,10 @@ pub(super) fn render(menu: &Menu, cx: &mut Context<ExplorerView>) -> AnyElement 
 mod tests {
     use gpui::{point, px};
 
+    use qol_apps::desktop_integration::OpenHandler;
+
     use super::{Command, Item, Menu, Owner};
+    use crate::listing::{SortBy, SortOrder};
 
     fn at() -> gpui::Point<gpui::Pixels> {
         point(px(0.0), px(0.0))
@@ -237,12 +426,52 @@ mod tests {
 
     #[test]
     fn a_folder_menu_steps_over_its_rule() {
-        let mut menu = Menu::folder("Docs", None, false, at());
+        let mut menu = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(menu.selected_command(), Some(Command::TogglePin));
         menu.step(true);
         menu.step(true);
         menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::Sort(SortBy::Name)));
+        for _ in 0..3 {
+            menu.step(true);
+        }
+        assert_eq!(menu.selected_command(), Some(Command::Sort(SortBy::Kind)));
+        menu.step(true);
         assert_eq!(menu.selected_command(), Some(Command::Settings));
+    }
+
+    #[test]
+    fn the_active_sort_line_names_its_direction() {
+        let labels = |order: SortOrder| -> Vec<String> {
+            Menu::folder("Docs", None, false, order, at())
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Line(line) if matches!(line.command, Command::Sort(_)) => {
+                        Some(line.label.clone())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            labels(SortOrder::default()),
+            [
+                "Sort by name, ascending",
+                "Sort by size",
+                "Sort by date modified",
+                "Sort by kind"
+            ]
+        );
+        assert_eq!(
+            labels(SortOrder::new(SortBy::Modified, true)),
+            [
+                "Sort by name",
+                "Sort by size",
+                "Sort by date modified, descending",
+                "Sort by kind"
+            ]
+        );
     }
 
     #[test]
@@ -265,10 +494,40 @@ mod tests {
                 _ => None,
             })
         };
-        let pinned = Menu::folder("Docs", Some("Papers"), false, at());
+        let pinned = Menu::folder("Docs", Some("Papers"), false, SortOrder::default(), at());
         assert_eq!(label(&pinned).as_deref(), Some("Unpin Papers"));
-        let loose = Menu::folder("Docs", None, false, at());
+        let loose = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(label(&loose).as_deref(), Some("Pin Docs"));
+    }
+
+    #[test]
+    fn an_open_with_menu_starts_on_the_marked_default() {
+        let handlers = [
+            OpenHandler {
+                id: "a.desktop".into(),
+                name: "Editor".into(),
+                is_default: true,
+            },
+            OpenHandler {
+                id: "b.desktop".into(),
+                name: "Viewer".into(),
+                is_default: false,
+            },
+        ];
+        let mut menu = Menu::open_with(&handlers, at());
+        let labels: Vec<&str> = menu
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line(line) => Some(line.label.as_str()),
+                Item::Rule => None,
+            })
+            .collect();
+        assert_eq!(labels, ["Editor (default)", "Viewer"]);
+        assert_eq!(menu.owner(), Owner::OpenWith);
+        assert_eq!(menu.selected_command(), Some(Command::OpenWith(0)));
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::OpenWith(1)));
     }
 
     #[test]
@@ -277,7 +536,106 @@ mod tests {
         assert_eq!(pin.owner(), Owner::Pin(1));
         assert_ne!(pin.owner(), Owner::Pin(2));
         assert_ne!(pin.owner(), Owner::Folder);
-        let folder = Menu::folder("Docs", None, false, at());
+        let folder = Menu::folder("Docs", None, false, SortOrder::default(), at());
         assert_eq!(folder.owner(), Owner::Folder);
+    }
+
+    fn lines(menu: &Menu) -> Vec<(Command, bool)> {
+        menu.items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line(line) => Some((line.command, line.enabled)),
+                Item::Rule => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_item_menu_lists_the_file_actions_with_paste_and_rename_gated() {
+        let cases = [
+            (true, true, true),
+            (false, true, false),
+            (true, false, true),
+            (false, false, false),
+        ];
+        for (can_paste, single, file) in cases {
+            let menu = Menu::item(can_paste, single, file, at());
+            assert_eq!(
+                lines(&menu),
+                vec![
+                    (Command::OpenItem, true),
+                    (Command::ChooseApp, file),
+                    (Command::Cut, true),
+                    (Command::Copy, true),
+                    (Command::Paste, can_paste),
+                    (Command::Duplicate, true),
+                    (Command::CopyPath, true),
+                    (Command::RenameItem, single),
+                    (Command::Trash, true),
+                    (Command::Erase, true),
+                    (Command::Properties, true),
+                    (Command::NewFolder, true),
+                    (Command::NewFile, true),
+                    (Command::Undo, true),
+                ],
+                "{can_paste} {single} {file}"
+            );
+            assert_eq!(menu.owner(), Owner::Item);
+        }
+    }
+
+    #[test]
+    fn an_item_menu_opens_on_open_and_steps_over_what_is_unavailable() {
+        let mut menu = Menu::item(false, false, false, at());
+        let mut walked = vec![menu.selected_command()];
+        for _ in 0..10 {
+            menu.step(true);
+            walked.push(menu.selected_command());
+        }
+        assert_eq!(
+            walked,
+            [
+                Some(Command::OpenItem),
+                Some(Command::Cut),
+                Some(Command::Copy),
+                Some(Command::Duplicate),
+                Some(Command::CopyPath),
+                Some(Command::Trash),
+                Some(Command::Erase),
+                Some(Command::Properties),
+                Some(Command::NewFolder),
+                Some(Command::NewFile),
+                Some(Command::Undo),
+            ]
+        );
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::Undo));
+    }
+
+    #[test]
+    fn a_background_menu_puts_the_edit_lines_before_the_folder_lines() {
+        let menu = Menu::background("Docs", None, true, SortOrder::default(), false, at());
+        assert_eq!(
+            lines(&menu),
+            vec![
+                (Command::Paste, false),
+                (Command::NewFolder, true),
+                (Command::NewFile, true),
+                (Command::Undo, true),
+                (Command::OpenTerminal, true),
+                (Command::TogglePin, true),
+                (Command::GoToPath, true),
+                (Command::ToggleHidden, true),
+                (Command::Sort(SortBy::Name), true),
+                (Command::Sort(SortBy::Size), true),
+                (Command::Sort(SortBy::Modified), true),
+                (Command::Sort(SortBy::Kind), true),
+                (Command::Settings, true),
+            ]
+        );
+        assert_eq!(menu.selected_command(), Some(Command::NewFolder));
+        assert_eq!(menu.owner(), Owner::Folder);
+        let held = Menu::background("Docs", None, true, SortOrder::default(), true, at());
+        assert_eq!(held.selected_command(), Some(Command::Paste));
     }
 }

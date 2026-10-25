@@ -1,13 +1,18 @@
 mod band;
 mod choices;
 mod clash;
+mod context;
 mod drag;
+mod erase;
+mod filter;
 mod grid;
+mod launch;
 mod list;
 mod menu;
 mod moves;
 mod pictogram;
 mod press;
+mod props;
 mod rail;
 mod rename;
 mod slider;
@@ -38,9 +43,9 @@ use qol_gpui::theme::{Ground, TextStyle, HEIGHT_CONTROL, HEIGHT_INLINE, LINE, RA
 use qol_gpui::Icon;
 
 use super::browse::{Browser, Held, Opening, PathStep};
-use super::keys::{self, Action, Click, Resize};
+use super::keys::{self, Action, Click, Resize, Step};
 use crate::config::{ConfigSaver, ExplorerConfig, Pin, ViewSize};
-use crate::listing::ListingState;
+use crate::listing::{ListingState, SortBy, SortOrder};
 use crate::places::{self, Device, Place};
 use crate::ui::trail::{self, Crumb};
 use crate::ui::PLUGIN_ID;
@@ -74,6 +79,7 @@ pub struct ExplorerView {
     pins: Vec<Pin>,
     places: Vec<Place>,
     menu: Option<Menu>,
+    open_with: Option<launch::OpenWith>,
     renaming: Option<Renaming>,
     pin_edits: u64,
     places_for: u64,
@@ -86,6 +92,7 @@ pub struct ExplorerView {
     moves_scroll: SelectionScroll,
     scroll: UniformListScrollHandle,
     rail_scroll: ScrollHandle,
+    props_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     frame_height: f32,
     list_width: f32,
@@ -114,10 +121,15 @@ impl ExplorerView {
     ) -> Self {
         cx.on_release(|_, cx| cx.quit()).detach();
         let mut view = Self {
-            browser: Browser::new(start, home, config.show_hidden),
+            browser: {
+                let mut browser = Browser::new(start, home, config.show_hidden);
+                browser.resort(SortOrder::new(config.sort_by, config.sort_descending));
+                browser
+            },
             pins: config.pins.clone(),
             places: Vec::new(),
             menu: None,
+            open_with: None,
             renaming: None,
             pin_edits: 1,
             places_for: 0,
@@ -130,6 +142,7 @@ impl ExplorerView {
             moves_scroll: SelectionScroll::new(),
             scroll: UniformListScrollHandle::new(),
             rail_scroll: ScrollHandle::new(),
+            props_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             frame_height: 0.0,
             list_width: 0.0,
@@ -270,7 +283,7 @@ impl ExplorerView {
             self.drop_menu(cx);
             return;
         }
-        self.open_folder_menu(at, cx);
+        self.open_folder_menu(at, false, cx);
     }
 
     fn pressed_more_closes(&mut self, owner: Owner, at: Point<Pixels>) -> bool {
@@ -278,7 +291,7 @@ impl ExplorerView {
         just_closed || self.menu.as_ref().is_some_and(|menu| menu.owner() == owner)
     }
 
-    fn open_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn open_folder_menu(&mut self, at: Point<Pixels>, background: bool, cx: &mut Context<Self>) {
         if !self.places_ready() {
             return;
         }
@@ -293,12 +306,20 @@ impl ExplorerView {
             .find(|place| place.path == folder)
             .map(|place| place.name.as_str());
         self.renaming = None;
-        self.menu = Some(Menu::folder(
-            &name,
-            pinned_as,
-            self.browser.shows_hidden(),
-            at,
-        ));
+        let shows_hidden = self.browser.shows_hidden();
+        let order = self.browser.order();
+        self.menu = Some(if background {
+            Menu::background(
+                &name,
+                pinned_as,
+                shows_hidden,
+                order,
+                self.browser.holds(),
+                at,
+            )
+        } else {
+            Menu::folder(&name, pinned_as, shows_hidden, order, at)
+        });
         cx.notify();
     }
 
@@ -347,7 +368,56 @@ impl ExplorerView {
             Command::ToggleHidden => {
                 self.toggle_hidden();
             }
+            Command::Sort(by) => {
+                self.sorted(by);
+            }
             Command::Settings => self.open_settings(cx),
+            Command::OpenItem => {
+                self.open(cx);
+            }
+            Command::Cut => {
+                self.browser.hold(Held::Cut);
+            }
+            Command::Copy => {
+                self.browser.hold(Held::Copied);
+            }
+            Command::Paste => {
+                self.paste();
+            }
+            Command::RenameItem => {
+                self.browser.rename_open();
+            }
+            Command::Trash => {
+                self.browser.trash_picks();
+            }
+            Command::NewFolder => {
+                self.revealed(Browser::new_folder);
+            }
+            Command::Undo => {
+                self.browser.undo();
+            }
+            Command::OpenWith(index) => self.open_with_choice(index, cx),
+            Command::ChooseApp => {
+                self.open_with(cx);
+            }
+            Command::NewFile => {
+                self.revealed(Browser::new_file);
+            }
+            Command::Duplicate => {
+                self.browser.duplicate_picks();
+            }
+            Command::Erase => {
+                self.browser.erase_ask();
+            }
+            Command::CopyPath => {
+                self.copy_path(cx);
+            }
+            Command::Properties => {
+                self.browser.toggle_props();
+            }
+            Command::OpenTerminal => {
+                self.open_terminal_here();
+            }
         }
         cx.notify();
     }
@@ -405,9 +475,8 @@ impl ExplorerView {
             "enter" => self.finish_renaming(cx),
             "escape" => self.renaming = None,
             _ => {
-                let paste = || cx.read_from_clipboard().and_then(|item| item.text());
                 if let Some(renaming) = &mut self.renaming {
-                    text_edit::apply_edit_key(&mut renaming.field, keystroke, paste);
+                    text_edit::apply_edit_key(&mut renaming.field, keystroke, cx);
                 }
             }
         }
@@ -458,6 +527,37 @@ impl ExplorerView {
         let changed = self.revealed(Browser::toggle_hidden);
         self.saver.save("show_hidden", self.browser.shows_hidden());
         changed
+    }
+
+    fn sorted(&mut self, by: SortBy) -> bool {
+        let order = self.browser.order().chosen(by);
+        let changed = self.revealed(|browser| browser.resort(order));
+        self.saver.save("sort_by", order.by);
+        self.saver.save("sort_descending", order.descending);
+        changed
+    }
+
+    fn filter_yields(keystroke: &Keystroke) -> bool {
+        matches!(
+            keys::action(keystroke, false),
+            Action::Cursor(Step::Up | Step::Down | Step::PageUp | Step::PageDown)
+                | Action::Open
+                | Action::Sort(_)
+                | Action::ToggleHidden
+                | Action::Settings
+        )
+    }
+
+    fn filter_pressed(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        let changed = if keystroke.key == "escape" {
+            self.revealed(Browser::close_filter)
+        } else {
+            self.revealed(|browser| browser.filter_key(keystroke, cx))
+        };
+        cx.stop_propagation();
+        if changed {
+            cx.notify();
+        }
     }
 
     fn follow_title(&mut self, window: &mut Window) {
@@ -656,6 +756,10 @@ impl ExplorerView {
             self.rename_pressed(&event.keystroke, cx);
             return;
         }
+        if self.browser.erasing().is_some() {
+            self.erase_key(&event.keystroke, cx);
+            return;
+        }
         if self.browser.surveyed().is_some() {
             self.clash_key(&event.keystroke, cx);
             return;
@@ -667,7 +771,15 @@ impl ExplorerView {
                 return;
             }
         }
+        if self.browser.filter_open() && !Self::filter_yields(&event.keystroke) {
+            self.filter_pressed(&event.keystroke, cx);
+            return;
+        }
         let action = keys::action(&event.keystroke, self.browser.path_open());
+        if self.browser.props_open() && !matches!(action, Action::Unpick | Action::Props) {
+            cx.stop_propagation();
+            return;
+        }
         if self.browser.moves_open() && !matches!(action, Action::Unpick | Action::Moves) {
             cx.stop_propagation();
             return;
@@ -748,6 +860,8 @@ impl ExplorerView {
                 self.open_settings(cx);
                 true
             }
+            Action::Filter => self.browser.open_filter(),
+            Action::Sort(by) => self.sorted(by),
             Action::EditPath => self.browser.edit_path(),
             Action::PathField => self.path_key(keystroke, cx),
             Action::Resize(resize) => self.resize(self.stop.resized(resize)),
@@ -757,8 +871,16 @@ impl ExplorerView {
             Action::Trash => self.browser.trash_picks(),
             Action::Rename => self.browser.rename_open(),
             Action::NewFolder => self.revealed(Browser::new_folder),
+            Action::NewFile => self.revealed(Browser::new_file),
+            Action::Duplicate => self.browser.duplicate_picks(),
+            Action::Erase => self.browser.erase_ask(),
+            Action::OpenWith => self.open_with(cx),
+            Action::OpenTerminal => self.open_terminal_here(),
+            Action::CopyPath => self.copy_path(cx),
             Action::Undo => self.browser.undo(),
             Action::Moves => self.browser.toggle_moves(),
+            Action::ContextMenu => self.open_cursor_menu(cx),
+            Action::Props => self.browser.toggle_props(),
             Action::Nothing => false,
         }
     }
@@ -789,8 +911,7 @@ impl ExplorerView {
 
     fn path_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) -> bool {
         let scroll = self.scroll_offset();
-        let paste = || cx.read_from_clipboard().and_then(|item| item.text());
-        let step = self.browser.path_key(keystroke, paste, scroll);
+        let step = self.browser.path_key(keystroke, cx, scroll);
         self.stepped(step)
     }
 
@@ -989,6 +1110,8 @@ impl Render for ExplorerView {
         let menu = self.menu.as_ref().map(|menu| menu::render(menu, cx));
         let sheet = match self.browser.surveyed() {
             Some(survey) => Some(clash::render(self, survey, cx)),
+            None if self.browser.erasing().is_some() => Some(erase::render(self, cx)),
+            None if self.browser.props_open() => Some(props::render(self)),
             None if self.browser.moves_open() => Some(moves::render(self)),
             None => None,
         };

@@ -354,9 +354,7 @@ impl PluginsView {
             Some(Intent::CancelEdit) => self.stop_naming(),
             Some(Intent::CommitEdit) => self.commit_source(cx),
             _ if self.naming => {
-                text_edit::apply_edit_key(&mut self.field, &event.keystroke, || {
-                    cx.read_from_clipboard().and_then(|item| item.text())
-                });
+                text_edit::apply_edit_key(&mut self.field, &event.keystroke, cx);
             }
             Some(Intent::Close) => {
                 self.escape(window, cx);

@@ -555,9 +555,7 @@ impl LinkedDevicesView {
             Some(Intent::CommitEdit) => self.finish_edit(cx),
             _ if editing => {
                 let mut next = self.field.clone();
-                text_edit::apply_edit_key(&mut next, &event.keystroke, || {
-                    cx.read_from_clipboard().and_then(|item| item.text())
-                });
+                text_edit::apply_edit_key(&mut next, &event.keystroke, cx);
                 if next.text().len() <= qol_peers::MAX_NAME_BYTES {
                     self.field = next;
                 }

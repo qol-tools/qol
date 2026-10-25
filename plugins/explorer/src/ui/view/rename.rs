@@ -90,13 +90,13 @@ impl ExplorerView {
 
     pub(super) fn commit_rename(&mut self, cx: &mut Context<Self>) {
         if let Ok(enter) = Keystroke::parse("enter") {
-            self.browser.rename_key(&enter);
+            self.browser.rename_key(&enter, cx);
         }
         cx.notify();
     }
 
     pub(super) fn rename_pressed(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        self.browser.rename_key(keystroke);
+        self.browser.rename_key(keystroke, cx);
         cx.stop_propagation();
         cx.notify();
     }

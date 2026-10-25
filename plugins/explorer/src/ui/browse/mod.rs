@@ -1,4 +1,6 @@
 mod counts;
+mod info;
+mod launch;
 mod ops;
 mod ops_edit;
 mod ops_job;
@@ -20,17 +22,19 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use gpui::Keystroke;
+use qol_gpui::text_edit::{apply_edit_key, Clipboard, EditKey, TextField};
 use qol_gpui::{PathEdit, PathKey};
 use qol_watch::WatchError;
 
 use super::keys::Step;
 use crate::listing::{
-    self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass,
+    self, Entry, EntryKind, Listing, ListingEvent, ListingRead, ListingState, Pass, SortOrder,
 };
 use crate::nav::{merged, History, Jump, Picks, Spot};
+use crate::props::Props;
 use counts::LiveCounts;
 pub use ops::{Held, MoveRecord, MoveState};
-pub(crate) use ops_text::{copy_only_note, label_of, short_note};
+pub(crate) use ops_text::{copy_only_note, erase_lines, label_of, short_note};
 use pace::Pace;
 use path_field::PathField;
 use watch::FolderWatch;
@@ -83,6 +87,9 @@ pub struct Browser {
     picks: Picks,
     jump: Jump,
     show_hidden: bool,
+    order: SortOrder,
+    filter: Option<TextField>,
+    filtered_out: usize,
     arriving: Option<Spot>,
     progressed_at: Instant,
     landing: Option<PathBuf>,
@@ -99,6 +106,7 @@ pub struct Browser {
     wake: UnboundedSender<()>,
     wakes: Option<UnboundedReceiver<()>>,
     ops: ops::Ops,
+    props: Option<Props>,
 }
 
 impl Browser {
@@ -114,6 +122,9 @@ impl Browser {
             picks: Picks::new(),
             jump: Jump::new(),
             show_hidden,
+            order: SortOrder::default(),
+            filter: None,
+            filtered_out: 0,
             arriving: None,
             progressed_at: Instant::now(),
             landing: None,
@@ -130,6 +141,7 @@ impl Browser {
             wake,
             wakes: Some(wakes),
             ops: ops::Ops::new(),
+            props: None,
         };
         browser.arrive(Spot::at(start));
         browser
@@ -171,6 +183,22 @@ impl Browser {
 
     pub fn shows_hidden(&self) -> bool {
         self.show_hidden
+    }
+
+    pub fn order(&self) -> SortOrder {
+        self.order
+    }
+
+    pub fn filter_field(&self) -> Option<&TextField> {
+        self.filter.as_ref()
+    }
+
+    pub fn filter_open(&self) -> bool {
+        self.filter.is_some()
+    }
+
+    fn filter_text(&self) -> &str {
+        self.filter.as_ref().map_or("", TextField::text)
     }
 
     pub fn drag_paths(&self, path: &Path) -> Vec<PathBuf> {
@@ -282,12 +310,15 @@ impl Browser {
     pub fn note(&self) -> Note {
         let count = if let Some(text) = self.ops_note() {
             text
-        } else if !self.picks.is_empty() {
-            self.picked_note()
-        } else if *self.listing.state() == ListingState::Done {
-            qol_gpui::plural(self.rows.len(), "item", "items")
         } else {
-            String::new()
+            let base = if !self.picks.is_empty() {
+                self.picked_note()
+            } else if *self.listing.state() == ListingState::Done {
+                qol_gpui::plural(self.rows.len(), "item", "items")
+            } else {
+                String::new()
+            };
+            hidden_by_filter(base, self.filter_text(), self.filtered_out)
         };
         Note {
             count,
@@ -345,6 +376,7 @@ impl Browser {
         }
         drained.changed |= self.apply_recounts(now);
         drained.changed |= self.drain_ops();
+        drained.changed |= self.refresh_props();
         let show_hidden = self.show_hidden;
         if let Some(field) = self.path.as_mut() {
             drained.changed |= field.drain(show_hidden);
@@ -459,7 +491,7 @@ impl Browser {
             return false;
         }
         self.jump.reset();
-        let rows = self.listing.visible(self.show_hidden);
+        let rows = Self::shown_of(&self.rows, &self.listing);
         self.picks.extend_range(&rows, self.cursor, row);
         self.cursor = row;
         true
@@ -486,7 +518,7 @@ impl Browser {
     }
 
     pub fn pick_all(&mut self) -> bool {
-        let rows = self.listing.visible(self.show_hidden);
+        let rows = Self::shown_of(&self.rows, &self.listing);
         self.picks.all(&rows);
         true
     }
@@ -494,6 +526,9 @@ impl Browser {
     pub fn dismiss(&mut self) -> bool {
         if self.moves_open() {
             return self.toggle_moves();
+        }
+        if self.props.take().is_some() {
+            return true;
         }
         let changed = !self.picks.is_empty() || self.failure.is_some();
         let changed = self.dismiss_ops() || changed;
@@ -523,7 +558,7 @@ impl Browser {
     }
 
     pub fn jump(&mut self, typed: char, now: Instant) -> bool {
-        let rows = self.listing.visible(self.show_hidden);
+        let rows = Self::shown_of(&self.rows, &self.listing);
         let found = self
             .jump
             .type_char(typed, now, &rows, self.cursor, |entry| {
@@ -536,15 +571,80 @@ impl Browser {
     }
 
     pub fn run_takes(&self, typed: char, now: Instant) -> bool {
-        let rows = self.listing.visible(self.show_hidden);
+        let rows = Self::shown_of(&self.rows, &self.listing);
         self.jump
             .continues(typed, now, &rows, |entry| entry.display.as_str())
+    }
+
+    fn shown_of<'a>(rows: &[usize], listing: &'a Listing) -> Vec<&'a Entry> {
+        rows.iter()
+            .map(|&index| &listing.entries()[index])
+            .collect()
+    }
+
+    pub fn resort(&mut self, order: SortOrder) -> bool {
+        if order == self.order {
+            return false;
+        }
+        self.order = order;
+        self.reshape(false);
+        true
+    }
+
+    pub fn open_filter(&mut self) -> bool {
+        if self.filter.is_some() || self.path.is_some() {
+            return false;
+        }
+        self.filter = Some(TextField::new());
+        self.jump.reset();
+        true
+    }
+
+    pub fn close_filter(&mut self) -> bool {
+        if self.filter.take().is_none() {
+            return false;
+        }
+        self.reshape(false);
+        true
+    }
+
+    pub fn filter_key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> bool {
+        let Some(field) = self.filter.as_mut() else {
+            return false;
+        };
+        match apply_edit_key(field, keystroke, clipboard) {
+            EditKey::Changed => {
+                self.reshape(true);
+                true
+            }
+            EditKey::Handled => true,
+            EditKey::Ignored => false,
+        }
+    }
+
+    fn reshape(&mut self, home_on_loss: bool) {
+        let at = self.entry(self.cursor).map(|entry| entry.path.clone());
+        self.picks.end_range();
+        self.jump.reset();
+        self.refresh_rows();
+        if *self.listing.state() == ListingState::Done {
+            self.forget_vanished_picks();
+        }
+        match at.and_then(|path| self.row_of(&path)) {
+            Some(row) => self.cursor = row,
+            None if home_on_loss => self.cursor = 0,
+            None => {}
+        }
+        if self.arriving.is_none() {
+            self.follow_counts();
+        }
     }
 
     pub fn edit_path(&mut self) -> bool {
         if self.path.is_some() {
             return false;
         }
+        self.close_filter();
         let mut field = PathField::open(self.folder(), &self.home, self.wake.clone());
         field.refresh(&self.home, self.show_hidden);
         self.path = Some(field);
@@ -563,13 +663,13 @@ impl Browser {
     pub fn path_key(
         &mut self,
         keystroke: &Keystroke,
-        paste: impl FnOnce() -> Option<String>,
+        clipboard: &dyn Clipboard,
         scroll: f32,
     ) -> PathStep {
         let Some(field) = self.path.as_mut() else {
             return PathStep::Closed;
         };
-        match field.key(keystroke, paste) {
+        match field.key(keystroke, clipboard) {
             PathKey::Changed => {
                 self.failure = None;
                 field.refresh(&self.home, self.show_hidden);
@@ -659,6 +759,8 @@ impl Browser {
         self.picks.end_range();
         self.failure = None;
         self.path = None;
+        self.filter = None;
+        self.filtered_out = 0;
         self.landing = None;
         self.ops.leave_folder();
         self.arriving = Some(spot);
@@ -864,7 +966,27 @@ impl Browser {
     }
 
     fn refresh_rows(&mut self) {
-        self.rows = self.listing.visible_indices(self.show_hidden);
+        let visible = self.listing.visible_indices(self.show_hidden);
+        let shown = visible.len();
+        let narrowed: Vec<usize> = match self.filter.as_ref().map(TextField::text) {
+            Some(text) if !text.is_empty() => {
+                let entries = self.listing.entries();
+                visible
+                    .into_iter()
+                    .filter(|&index| {
+                        crate::nav::contains_ignoring_case(&entries[index].display, text)
+                    })
+                    .collect()
+            }
+            _ => visible,
+        };
+        self.filtered_out = shown - narrowed.len();
+        self.rows = listing::arrange(
+            self.listing.entries(),
+            narrowed,
+            self.order,
+            super::columns::kind_label,
+        );
         self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
     }
 
@@ -904,6 +1026,18 @@ impl Browser {
             Step::Home => 0,
             Step::End => last,
         }
+    }
+}
+
+fn hidden_by_filter(base: String, text: &str, hidden: usize) -> String {
+    if text.is_empty() {
+        return base;
+    }
+    let hidden = format!("{hidden} hidden by filter");
+    if base.is_empty() {
+        hidden
+    } else {
+        format!("{base}, {hidden}")
     }
 }
 

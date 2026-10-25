@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use gpui::{Keystroke, Modifiers};
+use qol_gpui::text_edit::{Clipboard, MemoryClipboard};
 use qol_gpui::{PathEdit, PathKey};
 
 use super::ops::Work;
@@ -27,7 +28,7 @@ impl Renaming {
             edit.select_all();
         } else {
             edit.place_caret(stem);
-            edit.key(&select_to_start(), || None);
+            edit.key(&select_to_start(), &MemoryClipboard::default());
         }
         Self {
             target: entry.path.clone(),
@@ -94,6 +95,52 @@ impl Browser {
         self.reload();
     }
 
+    pub fn erase_ask(&mut self) -> bool {
+        if self.path.is_some() || self.loading() {
+            return false;
+        }
+        let operands = self.operands();
+        let held = operands.len();
+        let paths: Vec<PathBuf> = operands
+            .into_iter()
+            .filter(|path| path.parent() == Some(self.folder()))
+            .collect();
+        if paths.is_empty() {
+            if held > 0 {
+                self.ops.notice = Some(ops_text::erase_elsewhere_note());
+                return true;
+            }
+            return false;
+        }
+        self.ops.notice = None;
+        self.failure = None;
+        self.ops.erasing = Some(paths);
+        true
+    }
+
+    pub fn erasing(&self) -> Option<&[PathBuf]> {
+        self.ops.erasing.as_deref()
+    }
+
+    pub fn erase_cancel(&mut self) -> bool {
+        self.ops.erasing.take().is_some()
+    }
+
+    pub fn erase_confirm(&mut self) -> bool {
+        let Some(paths) = self.ops.erasing.take() else {
+            return false;
+        };
+        let sender = self.ops.sender();
+        let wake = self.waker();
+        thread::spawn(move || {
+            let failures = ops::delete(&paths);
+            let removed = paths.len() - failures.len();
+            let _ = sender.send(Work::Erased(removed, failures));
+            wake();
+        });
+        true
+    }
+
     pub fn rename_open(&mut self) -> bool {
         if self.path.is_some() || self.ops.rename.is_some() {
             return false;
@@ -118,11 +165,11 @@ impl Browser {
             .is_some_and(|renaming| renaming.target == entry.path)
     }
 
-    pub fn rename_key(&mut self, keystroke: &Keystroke) -> bool {
+    pub fn rename_key(&mut self, keystroke: &Keystroke, clipboard: &dyn Clipboard) -> bool {
         let Some(renaming) = self.ops.rename.as_mut() else {
             return false;
         };
-        match renaming.edit.key(keystroke, || None) {
+        match renaming.edit.key(keystroke, clipboard) {
             PathKey::Changed => {
                 self.failure = None;
                 true
@@ -168,16 +215,33 @@ impl Browser {
     }
 
     pub fn new_folder(&mut self) -> bool {
+        self.make_new("New folder", ops::new_folder, |journal, made| {
+            journal.record_new_folder(made)
+        })
+    }
+
+    pub fn new_file(&mut self) -> bool {
+        self.make_new("New file", ops::new_file, |journal, made| {
+            journal.record_new_file(made)
+        })
+    }
+
+    fn make_new(
+        &mut self,
+        base: &str,
+        make: fn(&Path, &str) -> Result<PathBuf, ops::NameProblem>,
+        record: fn(&mut ops::Journal, PathBuf),
+    ) -> bool {
         if self.loading() || self.path.is_some() {
             return false;
         }
         self.ops.rename = None;
         let folder = self.folder().to_path_buf();
-        let free = ops::free_name(&folder, OsStr::new("New folder"));
+        let free = ops::free_name(&folder, OsStr::new(base));
         let name = ops_text::name_of(&free);
-        match ops::new_folder(&folder, &name) {
+        match make(&folder, &name) {
             Ok(made) => {
-                self.ops.journal.record_new_folder(made.clone());
+                record(&mut self.ops.journal, made.clone());
                 self.ops.rename_after = Some(made);
                 self.failure = None;
                 self.reload();
@@ -223,6 +287,7 @@ impl Browser {
             }
             Undo::Rename { from, to } => self.undo_rename(&from, &to),
             Undo::Remove(made) => self.undo_new_folder(&made),
+            Undo::RemoveFile(made) => self.undo_new_file(&made),
             Undo::Restore(trashed) => self.restore_in_background(trashed),
             Undo::Trash { copies, restore } => {
                 self.ops.restoring = restore;
@@ -269,6 +334,19 @@ impl Browser {
             Err(problem) => {
                 self.ops.notice = None;
                 self.failure = Some(ops_text::problem_text(&problem, &name));
+            }
+        }
+    }
+
+    fn undo_new_file(&mut self, made: &Path) {
+        match fs::remove_file(made) {
+            Ok(()) => self.reload(),
+            Err(error) => {
+                self.ops.notice = None;
+                self.failure = Some(format!(
+                    "{} was not removed: {error}",
+                    ops_text::name_of(made)
+                ));
             }
         }
     }

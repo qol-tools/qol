@@ -550,3 +550,28 @@ fn folders_whose_names_show_a_mark_are_not_suggested() {
 
     assert_eq!(path::suggestions(&listing, "dir", false), ["dirt"]);
 }
+
+#[test]
+fn a_name_contains_the_typed_text_anywhere_ignoring_case_and_accents() {
+    let cases = [
+        ("Report final.txt", "final", true),
+        ("Report final.txt", "REPORT", true),
+        ("Report final.txt", "t f", true),
+        ("R\u{e9}sum\u{e9}.md", "resume", true),
+        ("Resume.md", "r\u{e9}sum\u{e9}", false),
+        ("R\u{e9}sum\u{e9}.md", "r\u{e9}s", true),
+        ("notes.txt", "", true),
+        ("notes.txt", "notes.txt.bak", false),
+        ("notes.txt", "xt", true),
+        ("notes.txt", "xn", false),
+        ("", "a", false),
+        ("", "", true),
+    ];
+    for (name, typed, expected) in cases {
+        assert_eq!(
+            contains_ignoring_case(name, typed),
+            expected,
+            "{name:?} {typed:?}"
+        );
+    }
+}

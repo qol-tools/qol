@@ -10,6 +10,21 @@ pub struct TextField {
     text: String,
     cursor: usize,
     anchor: Option<usize>,
+    history: History,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct History {
+    undone: Vec<Snapshot>,
+    redone: Vec<Snapshot>,
+    typing: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Snapshot {
+    text: String,
+    cursor: usize,
+    anchor: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -107,6 +122,7 @@ impl TextField {
             text,
             cursor,
             anchor: None,
+            history: History::default(),
         }
     }
 
@@ -122,12 +138,61 @@ impl TextField {
         self.text = single_line(&text.into());
         self.cursor = self.text.chars().count();
         self.anchor = None;
+        self.history = History::default();
     }
 
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
         self.anchor = None;
+        self.history = History::default();
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(earlier) = self.history.undone.pop() else {
+            return false;
+        };
+        let now = self.snapshot();
+        self.history.redone.push(now);
+        self.restore(earlier);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(later) = self.history.redone.pop() else {
+            return false;
+        };
+        let now = self.snapshot();
+        self.history.undone.push(now);
+        self.restore(later);
+        true
+    }
+
+    pub(super) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            anchor: self.anchor,
+        }
+    }
+
+    pub(super) fn remember(&mut self, before: Snapshot, typed: bool) {
+        if !(typed && self.history.typing) {
+            self.history.undone.push(before);
+        }
+        self.history.redone.clear();
+        self.history.typing = typed;
+    }
+
+    pub(super) fn end_typing(&mut self) {
+        self.history.typing = false;
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.text = snapshot.text;
+        self.cursor = snapshot.cursor;
+        self.anchor = snapshot.anchor;
+        self.history.typing = false;
     }
 
     pub fn is_empty(&self) -> bool {

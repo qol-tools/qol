@@ -828,11 +828,9 @@ impl NativeToolsView {
                         draft.selected = (draft.selected + 1).min(count.saturating_sub(1));
                         cx.notify();
                     } else {
-                        let changed = text_edit::apply_edit_key(
-                            &mut self.editor_text,
-                            &event.keystroke,
-                            || cx.read_from_clipboard().and_then(|item| item.text()),
-                        ) == text_edit::EditKey::Changed;
+                        let changed =
+                            text_edit::apply_edit_key(&mut self.editor_text, &event.keystroke, cx)
+                                == text_edit::EditKey::Changed;
                         if changed {
                             sync_shortcut_target(draft, &self.editor_text);
                             cx.notify();

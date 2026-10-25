@@ -6738,6 +6738,7 @@ name = "qol-explorer"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 6.0.0",
  "futures",
  "gpui",

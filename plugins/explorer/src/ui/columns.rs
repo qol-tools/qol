@@ -84,6 +84,7 @@ mod tests {
             hidden: false,
             opens_as_folder,
             executable: false,
+            modified: None,
         }
     }
 

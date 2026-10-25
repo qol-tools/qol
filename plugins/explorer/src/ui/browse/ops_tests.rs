@@ -4,6 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{Keystroke, Modifiers};
+use qol_gpui::text_edit::MemoryClipboard;
 
 use super::ops_text;
 use super::{Browser, Held, MoveState};
@@ -86,6 +87,26 @@ fn holding_a_cut_fades_the_rows_and_tells_how_to_paste() {
     let entry = browser.entry(browser.row_of(&first).unwrap()).unwrap();
     assert!(!browser.is_cut(entry));
     assert!(browser.paste().is_none());
+}
+
+#[test]
+fn the_menu_reads_what_is_held_and_how_many_rows_it_acts_on() {
+    let (temp, _dest) = two_folders();
+    let first = write(temp.path(), "a.txt", "a");
+    let second = write(temp.path(), "b.txt", "b");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &first);
+    assert!(!browser.holds());
+    assert_eq!(browser.operands().len(), 1);
+
+    browser.add_pick(browser.row_of(&first).unwrap());
+    browser.add_pick(browser.row_of(&second).unwrap());
+    assert_eq!(browser.operands().len(), 2);
+
+    assert!(browser.hold(Held::Copied));
+    assert!(browser.holds());
+    assert!(browser.dismiss());
+    assert!(!browser.holds());
 }
 
 #[test]
@@ -317,8 +338,8 @@ fn rename_selects_the_stem_and_enter_renames_the_file() {
     let entry = browser.entry(browser.row_of(&file).unwrap()).unwrap();
     assert!(browser.renaming(entry));
 
-    assert!(browser.rename_key(&key("b", Some("b"))));
-    assert!(browser.rename_key(&key("enter", None)));
+    assert!(browser.rename_key(&key("b", Some("b")), &MemoryClipboard::default()));
+    assert!(browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
     assert!(temp.path().join("b.txt").exists());
     assert!(!file.exists());
@@ -350,8 +371,8 @@ fn a_taken_name_keeps_the_field_open_and_says_why() {
     let mut browser = opened(temp.path());
     point_at(&mut browser, &file);
     browser.rename_open();
-    browser.rename_key(&key("b", Some("b")));
-    browser.rename_key(&key("enter", None));
+    browser.rename_key(&key("b", Some("b")), &MemoryClipboard::default());
+    browser.rename_key(&key("enter", None), &MemoryClipboard::default());
 
     assert!(browser.rename_field().is_some());
     assert!(browser
@@ -369,14 +390,14 @@ fn escape_closes_the_rename_field_and_an_unchanged_name_renames_nothing() {
     point_at(&mut browser, &file);
 
     browser.rename_open();
-    assert!(browser.rename_key(&key("escape", None)));
+    assert!(browser.rename_key(&key("escape", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
 
     browser.rename_open();
-    assert!(browser.rename_key(&key("enter", None)));
+    assert!(browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
     assert!(browser.rename_field().is_none());
     assert!(file.exists());
-    assert!(!browser.rename_key(&key("enter", None)));
+    assert!(!browser.rename_key(&key("enter", None), &MemoryClipboard::default()));
 }
 
 #[test]
@@ -391,7 +412,7 @@ fn a_new_folder_appears_named_and_opens_for_rename() {
     assert!(temp.path().join("New folder").is_dir());
     assert_eq!(browser.rename_field().unwrap().text(), "New folder");
 
-    browser.rename_key(&key("escape", None));
+    browser.rename_key(&key("escape", None), &MemoryClipboard::default());
     assert!(browser.new_folder());
     wait_until(&mut browser, "the second field", |browser| {
         browser.rename_field().is_some()
@@ -559,4 +580,106 @@ fn the_kept_sentence_counts_newer_files_and_identical_ones() {
         "The 3 were already the same."
     );
     assert_eq!(ops_text::kept_sentence(&replaced, 0), "");
+}
+
+#[test]
+fn a_new_file_appears_empty_opens_for_rename_and_undo_removes_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut browser = opened(temp.path());
+
+    assert!(browser.new_file());
+    wait_until(&mut browser, "the rename field", |browser| {
+        browser.rename_field().is_some()
+    });
+    let made = temp.path().join("New file");
+    assert!(made.is_file());
+    assert_eq!(fs::metadata(&made).unwrap().len(), 0);
+    assert_eq!(browser.rename_field().unwrap().text(), "New file");
+
+    browser.rename_key(&key("escape", None), &MemoryClipboard::default());
+    assert!(browser.undo());
+    assert!(!made.exists());
+}
+
+#[test]
+fn duplicating_copies_beside_the_original_and_counts_up() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+
+    assert!(browser.duplicate_picks());
+    wait_until(&mut browser, "the copy", finished);
+    assert_eq!(
+        fs::read_to_string(temp.path().join("a copy.txt")).unwrap(),
+        "text"
+    );
+    assert_eq!(fs::read_to_string(&file).unwrap(), "text");
+
+    point_at(&mut browser, &file);
+    assert!(browser.duplicate_picks());
+    wait_until(&mut browser, "the second copy", |_| {
+        temp.path().join("a copy 2.txt").exists()
+    });
+}
+
+#[test]
+fn deleting_permanently_asks_first_and_cancelling_keeps_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+
+    assert!(browser.erase_ask());
+    assert_eq!(browser.erasing().unwrap(), std::slice::from_ref(&file));
+    assert!(browser.erase_cancel());
+    assert!(browser.erasing().is_none());
+    assert!(file.exists());
+
+    assert!(browser.erase_ask());
+    assert!(browser.erase_confirm());
+    wait_until(&mut browser, "the delete", |_| !file.exists());
+    wait_until(&mut browser, "the note", |browser| {
+        browser.note().count == "1 item deleted for good."
+    });
+    assert!(!browser.undo());
+}
+
+#[test]
+fn deleting_permanently_skips_picks_held_in_another_folder() {
+    let temp = tempfile::tempdir().unwrap();
+    let sub = temp.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    let far = write(&sub, "far.txt", "text");
+    let mut browser = opened(temp.path());
+    visit(&mut browser, &sub);
+    point_at(&mut browser, &far);
+    assert!(browser.toggle_pick());
+    visit(&mut browser, temp.path());
+
+    assert!(browser.erase_ask());
+    assert!(browser.erasing().is_none());
+    assert_eq!(browser.note().count, ops_text::erase_elsewhere_note());
+    assert!(far.exists());
+}
+
+#[test]
+fn leaving_the_folder_drops_the_delete_question() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = write(temp.path(), "a.txt", "text");
+    fs::create_dir(temp.path().join("sub")).unwrap();
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &file);
+    assert!(browser.erase_ask());
+    visit(&mut browser, &temp.path().join("sub"));
+    assert!(browser.erasing().is_none());
+}
+
+#[test]
+fn the_delete_question_names_the_count_and_says_it_cannot_be_undone() {
+    let one = ops_text::erase_lines(&[PathBuf::from("/x/a.txt")]);
+    assert_eq!(one[0], "Delete 1 item permanently? a.txt");
+    let many = ops_text::erase_lines(&[PathBuf::from("/x/a"), PathBuf::from("/x/b")]);
+    assert_eq!(many[0], "Delete 2 items permanently?");
+    assert!(many[1].contains("cannot be undone"));
 }

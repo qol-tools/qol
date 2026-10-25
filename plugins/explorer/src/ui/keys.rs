@@ -1,5 +1,7 @@
 use gpui::{Keystroke, Modifiers};
 
+use crate::listing::SortBy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Up,
@@ -32,6 +34,8 @@ pub enum Action {
     PickAll,
     Unpick,
     ToggleHidden,
+    Filter,
+    Sort(SortBy),
     EditPath,
     PathField,
     TogglePin,
@@ -42,8 +46,16 @@ pub enum Action {
     Trash,
     Rename,
     NewFolder,
+    NewFile,
+    Duplicate,
+    Erase,
+    OpenWith,
+    OpenTerminal,
+    CopyPath,
     Undo,
     Moves,
+    ContextMenu,
+    Props,
     Resize(Resize),
     Nothing,
 }
@@ -66,6 +78,9 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
             _ => Action::PathField,
         };
     }
+    if let Some(by) = sort_by(keystroke.key.as_str(), chord) {
+        return Action::Sort(by);
+    }
     if let Some(resize) = resize(keystroke.key.as_str(), chord) {
         return Action::Resize(resize);
     }
@@ -87,6 +102,8 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("left", (false, false, true)) => Action::Range(Step::Left),
         ("right", (false, false, true)) => Action::Range(Step::Right),
         ("enter", (false, false, false)) => Action::Open,
+        ("enter", (false, false, true)) => Action::OpenWith,
+        ("enter", (false, true, false)) => Action::Props,
         ("backspace", (false, false, false)) | ("up", (false, true, false)) => Action::Up,
         ("left", (false, true, false)) => Action::Back,
         ("right", (false, true, false)) => Action::Forward,
@@ -94,6 +111,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("escape", (false, false, false)) => Action::Unpick,
         ("a", (true, false, false)) => Action::PickAll,
         ("h", (true, false, false)) => Action::ToggleHidden,
+        ("f", (true, false, false)) => Action::Filter,
         ("g", (true, false, false)) => Action::EditPath,
         ("d", (true, false, false)) => Action::TogglePin,
         (",", (true, false, false)) => Action::Settings,
@@ -103,9 +121,25 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("delete", (false, false, false)) => Action::Trash,
         ("f2", (false, false, false)) => Action::Rename,
         ("n", (true, false, true)) => Action::NewFolder,
+        ("n", (true, true, false)) => Action::NewFile,
+        ("d", (true, false, true)) => Action::Duplicate,
+        ("delete", (false, false, true)) => Action::Erase,
+        ("t", (true, false, true)) => Action::OpenTerminal,
+        ("c", (true, false, true)) => Action::CopyPath,
         ("z", (true, false, false)) => Action::Undo,
         ("j", (true, false, false)) => Action::Moves,
+        ("menu", (false, false, false)) | ("f10", (false, false, true)) => Action::ContextMenu,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
+    }
+}
+
+fn sort_by(key: &str, chord: (bool, bool, bool)) -> Option<SortBy> {
+    match (key, chord) {
+        ("1", (true, true, false)) => Some(SortBy::Name),
+        ("2", (true, true, false)) => Some(SortBy::Size),
+        ("3", (true, true, false)) => Some(SortBy::Modified),
+        ("4", (true, true, false)) => Some(SortBy::Kind),
+        _ => None,
     }
 }
 
@@ -147,6 +181,13 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Trash
                 | Action::Rename
                 | Action::NewFolder
+                | Action::ContextMenu
+                | Action::NewFile
+                | Action::Duplicate
+                | Action::Erase
+                | Action::OpenWith
+                | Action::CopyPath
+                | Action::Props
         )
 }
 
@@ -181,6 +222,7 @@ mod tests {
     use gpui::{Keystroke, Modifiers};
 
     use super::{action, click, leaves, waits, Action, Click, Resize, Step};
+    use crate::listing::SortBy;
 
     fn key(key: &str, modifiers: Modifiers, key_char: Option<&str>) -> Keystroke {
         Keystroke {
@@ -276,6 +318,10 @@ mod tests {
             shift: true,
             ..Modifiers::secondary_key()
         };
+        let secondary_alt = Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
         let cases = [
             (
                 key("c", Modifiers::secondary_key(), Some("c")),
@@ -289,6 +335,12 @@ mod tests {
             (plain("delete"), Action::Trash),
             (plain("f2"), Action::Rename),
             (key("n", secondary_shift, Some("N")), Action::NewFolder),
+            (key("n", secondary_alt, Some("n")), Action::NewFile),
+            (key("d", secondary_shift, Some("D")), Action::Duplicate),
+            (key("delete", shift(), None), Action::Erase),
+            (key("t", secondary_shift, Some("T")), Action::OpenTerminal),
+            (key("c", secondary_shift, Some("C")), Action::CopyPath),
+            (key("enter", shift(), None), Action::OpenWith),
             (
                 key("z", Modifiers::secondary_key(), Some("z")),
                 Action::Undo,
@@ -297,6 +349,9 @@ mod tests {
                 key("j", Modifiers::secondary_key(), Some("j")),
                 Action::Moves,
             ),
+            (plain("menu"), Action::ContextMenu),
+            (key("f10", shift(), None), Action::ContextMenu),
+            (key("enter", alt(), None), Action::Props),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
@@ -311,8 +366,9 @@ mod tests {
                 key("n", Modifiers::secondary_key(), Some("n")),
                 Action::Nothing,
             ),
-            (key("delete", shift(), None), Action::Nothing),
             (key("f2", shift(), None), Action::Nothing),
+            (plain("f10"), Action::Nothing),
+            (key("menu", shift(), None), Action::Nothing),
             (key("z", alt(), Some("z")), Action::Nothing),
         ];
         for (keystroke, expected) in cases {
@@ -325,6 +381,41 @@ mod tests {
         ] {
             assert_eq!(action(&keystroke, true), Action::PathField, "{keystroke:?}");
         }
+    }
+
+    #[test]
+    fn sort_chords_pick_a_column_and_filter_opens_on_ctrl_f() {
+        let chord = || Modifiers {
+            alt: true,
+            ..Modifiers::secondary_key()
+        };
+        let cases = [
+            (key("1", chord(), Some("1")), Action::Sort(SortBy::Name)),
+            (key("2", chord(), Some("2")), Action::Sort(SortBy::Size)),
+            (key("3", chord(), Some("3")), Action::Sort(SortBy::Modified)),
+            (key("4", chord(), Some("4")), Action::Sort(SortBy::Kind)),
+            (key("5", chord(), Some("5")), Action::Nothing),
+            (key("0", chord(), Some("0")), Action::Nothing),
+            (
+                key("2", Modifiers::secondary_key(), Some("2")),
+                Action::Resize(Resize::To(1)),
+            ),
+            (key("2", alt(), Some("2")), Action::Nothing),
+            (key("2", Modifiers::none(), Some("2")), Action::Jump('2')),
+            (
+                key("f", Modifiers::secondary_key(), Some("f")),
+                Action::Filter,
+            ),
+            (key("f", Modifiers::none(), Some("f")), Action::Jump('f')),
+            (key("f", alt(), Some("f")), Action::Nothing),
+        ];
+        for (keystroke, expected) in cases {
+            assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
+        }
+        assert_eq!(
+            action(&key("2", chord(), Some("2")), true),
+            Action::PathField
+        );
     }
 
     #[test]
@@ -348,7 +439,6 @@ mod tests {
             key("x", alt(), Some("x")),
             key("tab", Modifiers::none(), Some("\t")),
             key("f1", Modifiers::none(), None),
-            key("enter", shift(), None),
             key("escape", shift(), None),
         ];
         for keystroke in cases {
@@ -447,6 +537,11 @@ mod tests {
             Action::Trash,
             Action::Rename,
             Action::NewFolder,
+            Action::ContextMenu,
+            Action::NewFile,
+            Action::Duplicate,
+            Action::Erase,
+            Action::Props,
         ];
         let leaving = [
             Action::Up,

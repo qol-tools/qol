@@ -56,6 +56,10 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         .child(body)
         .when(loading, |list| list.child(reading_line(view, kit)))
         .child(wheel_resize(cx))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|view, event: &MouseDownEvent, _window, cx| view.context_down(event, cx)),
+        )
         .on_drop(cx.listener(|view, paths: &ExternalPaths, _window, cx| {
             view.drop_here(paths.paths().to_vec(), cx);
         }))
@@ -540,6 +544,7 @@ mod tests {
             hidden: false,
             opens_as_folder,
             executable: false,
+            modified: None,
         }
     }
 

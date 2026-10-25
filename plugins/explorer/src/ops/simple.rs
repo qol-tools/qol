@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::copy::remove_all;
 use super::{next_job_id, platform, Done, Failure, Verb};
 
 #[cfg(test)]
@@ -91,6 +92,57 @@ pub fn new_folder(into: &Path, name: &str) -> Result<PathBuf, NameProblem> {
     let made = into.join(name);
     fs::create_dir(&made).map_err(problem)?;
     Ok(made)
+}
+
+pub fn new_file(into: &Path, name: &str) -> Result<PathBuf, NameProblem> {
+    if let Some(problem) = platform::name_problem(name) {
+        return Err(problem);
+    }
+    let made = into.join(name);
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&made)
+        .map_err(problem)?;
+    Ok(made)
+}
+
+pub fn delete(paths: &[PathBuf]) -> Vec<Failure> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            remove_all(path).err().map(|error| Failure {
+                path: path.clone(),
+                reason: plain(&error),
+            })
+        })
+        .collect()
+}
+
+pub fn copy_name(into: &Path, name: &OsStr, folder: bool) -> PathBuf {
+    let (stem, extension) = if folder {
+        (name.to_os_string(), None)
+    } else {
+        split_extension(name)
+    };
+    let mut number = 1u32;
+    loop {
+        let mut candidate = stem.clone();
+        if number == 1 {
+            candidate.push(" copy");
+        } else {
+            candidate.push(format!(" copy {number}"));
+        }
+        if let Some(extension) = &extension {
+            candidate.push(".");
+            candidate.push(extension);
+        }
+        let path = into.join(candidate);
+        if !occupied(&path) {
+            return path;
+        }
+        number += 1;
+    }
 }
 
 pub fn free_name(into: &Path, name: &OsStr) -> PathBuf {
