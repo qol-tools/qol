@@ -171,14 +171,15 @@ fn clear(work: &Path) {
 }
 
 fn unlock(dir: &Path) {
+    if !dir.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
+        return;
+    }
     let _ = fs::set_permissions(dir, Permissions::from_mode(WORK_MODE));
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            unlock(&entry.path());
-        }
+        unlock(&entry.path());
     }
 }
 
@@ -305,9 +306,15 @@ mod tests {
         fs::set_permissions(&locked, Permissions::from_mode(0)).unwrap();
         let kept = temp.path().join("kept.png");
         fs::write(&kept, b"png").unwrap();
+        let kept_mode = kept.metadata().unwrap().permissions().mode() & 0o777;
+        std::os::unix::fs::symlink(&kept, orphan.join("link")).unwrap();
         sweep(temp.path());
         assert!(orphan.symlink_metadata().is_err());
         assert!(kept.is_file());
+        assert_eq!(
+            kept.metadata().unwrap().permissions().mode() & 0o777,
+            kept_mode
+        );
     }
 
     #[test]
