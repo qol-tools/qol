@@ -203,8 +203,6 @@ pub struct FieldSpec {
     #[serde(default)]
     pub item_card_field: Option<String>,
     #[serde(default)]
-    pub search: Option<bool>,
-    #[serde(default)]
     pub empty_message: Option<String>,
     #[serde(default)]
     pub value_from: Option<String>,
@@ -218,8 +216,6 @@ pub struct FieldSpec {
     pub hide_values: Option<Vec<String>>,
     #[serde(default)]
     pub align: Option<FieldAlign>,
-    #[serde(default)]
-    pub span: Option<u8>,
     #[serde(flatten)]
     pub number: NumberConstraints,
 }
@@ -628,7 +624,6 @@ label = "Paired Devices"
 query = "list_devices"
 row_label = "{name}"
 row_subtitle = "{ieee}"
-search = true
 empty_message = "No devices paired yet."
 "#;
         let spec = parse_spec_str(spec_str).expect("parse");
@@ -645,7 +640,6 @@ empty_message = "No devices paired yet."
             Some("{ieee}"),
             "row_subtitle"
         );
-        assert_eq!(field.search, Some(true), "search");
         assert_eq!(
             field.empty_message.as_deref(),
             Some("No devices paired yet."),

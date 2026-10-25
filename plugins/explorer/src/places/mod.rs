@@ -149,6 +149,27 @@ pub fn toggle_pin(
     Some(pins)
 }
 
+pub fn pin_at(pins: &[Pin], places: &[Place], slot: usize, added: Vec<Pin>) -> Option<Vec<Pin>> {
+    let mut fresh: Vec<Pin> = Vec::new();
+    for pin in added {
+        let known = pins.iter().chain(&fresh).any(|kept| kept.path == pin.path);
+        if !known {
+            fresh.push(pin);
+        }
+    }
+    if fresh.is_empty() {
+        return None;
+    }
+    let at = match places.get(slot) {
+        Some(place) => place.pin,
+        None => places.last().map_or(pins.len(), |place| place.pin + 1),
+    }
+    .min(pins.len());
+    let mut pins = pins.to_vec();
+    pins.splice(at..at, fresh);
+    Some(pins)
+}
+
 pub fn rename_pin(pins: &[Pin], pin: usize, name: &str) -> Option<Vec<Pin>> {
     let name = name.trim();
     if name.is_empty() || pins.get(pin)?.name == name {

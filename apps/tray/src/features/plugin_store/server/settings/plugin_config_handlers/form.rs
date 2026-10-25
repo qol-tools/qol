@@ -28,8 +28,12 @@ pub(super) fn load_plugin_config_form(
         });
     };
     let config = load_plugin_config_value(plugin_id)?;
-    let form = qol_config::normalized::resolve_config(&spec, &config)
-        .map_err(|errors| Box::new(contract_validation_response(errors)))?;
+    let form = qol_config::normalized::resolve_config_for(
+        &spec,
+        &config,
+        !crate::mode::is_production_mode(),
+    )
+    .map_err(|errors| Box::new(contract_validation_response(errors)))?;
     Ok(CombinedPluginForm {
         form,
         runtime,

@@ -54,5 +54,34 @@ mod tests {
             qol_config::typed_defaults_from_contract(CONFIG_CONTRACT).unwrap();
         assert_eq!(defaults.live_color_hex, "#FFFFFF");
         assert_eq!(defaults.live_brightness, 100);
+        assert_eq!(defaults.live_mirek, 300);
+        assert_eq!(defaults.main_target_id, "");
+        assert_eq!(defaults.backend.serial_port, "auto");
+        assert_eq!(defaults.backend.channel, 11);
+        assert_eq!(defaults.presets.preset_8.name, "Preset 8");
+        assert_eq!(defaults.presets.preset_8.color_hex, "#FFFFFF");
+        assert!(!defaults.presets.preset_1.enabled);
+    }
+
+    #[test]
+    fn contract_declares_every_preset_slot_field() {
+        let spec = qol_config::contract::parse_spec_str(CONFIG_CONTRACT).unwrap();
+        for slot in 1..=8 {
+            for key in [
+                "enabled",
+                "name",
+                "power_on",
+                "brightness",
+                "color_hex",
+                "mirek",
+            ] {
+                let id = format!("preset_{slot}_{key}");
+                let field = spec.field(&id).unwrap_or_else(|| panic!("missing {id}"));
+                assert_eq!(
+                    field.config_key.as_deref(),
+                    Some(format!("presets.preset_{slot}.{key}").as_str())
+                );
+            }
+        }
     }
 }

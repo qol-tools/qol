@@ -153,7 +153,7 @@ description = "Changing one display's brightness sets all connected displays to 
 [field.notify_on_change]
 type = "boolean"
 config_key = "notify_on_change"
-label = "Brightness notifications"
+label = "Notifications"
 section = "display"
 default = true
-description = "Show the new brightness level whenever it changes."
+description = "Show a notice when brightness, night mode, resolution or the primary display changes."

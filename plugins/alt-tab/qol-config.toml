@@ -27,11 +27,15 @@ sticky = "sticky"
 [field.open_behavior]
 type = "select"
 label = "Open behavior"
-description = "Pick whether opening moves to the next window."
+description = "Pick whether opening moves to the next window. Applies when Reset selection on open is on."
 section = "behavior"
 default = "cycle_once"
 card_description = "What opening the switcher does."
 options = ["cycle_once", "show_only"]
+
+[field.open_behavior.show_when]
+field = "reset_selection_on_open"
+equals = true
 
 [field.open_behavior.option_labels]
 cycle_once = "Cycle once"
@@ -161,9 +165,9 @@ default = false
 type = "color"
 config_key = "display.card_background_color"
 label = "Card background color"
-description = "Base color for picker cards; the panel, hover, and selected colors derive from this."
+description = "Base color for picker cards; the panel, hover, and selected colors derive from this. Theme follows the OS theme."
 section = "layout"
-default = "#202322"
+default = "theme"
 
 [field.display_card_background_brightness]
 type = "number"

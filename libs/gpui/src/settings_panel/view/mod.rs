@@ -3190,10 +3190,16 @@ impl SettingsPanelView {
                 filter,
                 error,
                 finder,
+                empty_message,
                 ..
             } => {
                 if error.is_some() {
                     "unavailable".into()
+                } else if let Some(message) = empty_message
+                    .as_ref()
+                    .filter(|_| items.is_empty() && finder.is_none() && filter.trim().is_empty())
+                {
+                    message.clone()
                 } else if let Some(finder) = finder {
                     finder
                         .summary
@@ -3254,6 +3260,12 @@ impl SettingsPanelView {
             } => finder
                 .tone
                 .map_or(SettingsValueTone::Normal, list_card::value_tone),
+            RowControl::List {
+                items,
+                filter,
+                empty_message: Some(_),
+                ..
+            } if items.is_empty() && filter.trim().is_empty() => SettingsValueTone::Muted,
             RowControl::List { .. } | RowControl::Gamepad { .. } => SettingsValueTone::Normal,
             RowControl::DisplayLayout(_) => SettingsValueTone::Normal,
             RowControl::QrCode { .. } | RowControl::Placement(_) => SettingsValueTone::Normal,
@@ -5447,7 +5459,7 @@ fn format_number(value: f64) -> String {
 }
 
 fn color_display(value: &str) -> String {
-    if value.starts_with('#') {
+    if value.starts_with('#') || value.eq_ignore_ascii_case(qol_theme::THEME_COLOR_SENTINEL) {
         value.to_string()
     } else {
         format!("#{value}")
@@ -6334,6 +6346,7 @@ mod tests {
             ("ff0000", "#ff0000"),
             ("#202322", "#202322"),
             ("#FFFFFF", "#FFFFFF"),
+            ("theme", "theme"),
         ];
         for (value, expected) in cases {
             assert_eq!(color_display(value), expected, "value: {value}");
@@ -6703,6 +6716,7 @@ mod tests {
                     additional: Vec::new(),
                 }),
                 item_card: None,
+                empty_message: None,
                 slider: None,
                 items: Vec::new(),
                 list: ScrollList::new(super::super::rows::LIST_MAX_VISIBLE),

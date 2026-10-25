@@ -61,11 +61,14 @@ impl X11grabEncoder {
                 "-b:v".to_string(),
                 "0".to_string(),
             ],
+            Self::X264 if recording_format(&config.video.format) == "webm" => {
+                recorder::encoder_args(config, true)
+            }
             Self::X264 => vec![
                 "-c:v".to_string(),
                 "libx264".to_string(),
                 "-crf".to_string(),
-                config.video.crf.to_string(),
+                config.video.crf.clamp(0, 51).to_string(),
                 "-preset".to_string(),
                 config.video.preset.clone(),
                 "-pix_fmt".to_string(),
@@ -982,7 +985,7 @@ fn ffmpeg_args(video_input: Vec<String>, config: &Config, encoder: X11grabEncode
             .map(str::to_string),
         );
     }
-    if !audio_inputs.is_empty() {
+    if !audio_inputs.is_empty() && recording_format(&config.video.format) != "webm" {
         args.extend(["-c:a", "aac", "-b:a", "192k"].map(str::to_string));
     }
 
@@ -1348,6 +1351,39 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-shortest"), "{joined}");
         assert!(!joined.contains("x11grab"), "{joined}");
         assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
+    }
+
+    #[test]
+    fn x11grab_args_use_container_codecs_and_clamp_crf() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 1280,
+            h: 720,
+        };
+        let cases = [
+            ("webm", "libvpx-vp9", "libopus", "63"),
+            ("mp4", "libx264", "aac", "51"),
+        ];
+        for (format, video, audio, crf) in cases {
+            let mut config = Config::default();
+            config.video.format = format.to_string();
+            config.video.crf = 99;
+            config.audio.enabled = true;
+            config.audio.inputs = vec!["mic".to_string()];
+            let output = std::path::Path::new("/tmp/out");
+            let args = x11grab_args(&rect, &config, output, X11grabEncoder::X264);
+            let has = |pair: [&str; 2]| args.windows(2).any(|window| window == pair);
+            assert!(has(["-c:v", video]), "{format}: {args:?}");
+            assert!(has(["-c:a", audio]), "{format}: {args:?}");
+            assert!(has(["-crf", crf]), "{format}: {args:?}");
+            assert_eq!(
+                args.iter().filter(|arg| *arg == "-c:a").count(),
+                1,
+                "{format}"
+            );
+            assert_eq!(args.iter().any(|arg| arg == "-preset"), format == "mp4");
+        }
     }
 
     #[test]

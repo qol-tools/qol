@@ -258,6 +258,42 @@ fn toggle_pin_removes_a_listed_folder_and_pins_an_unlisted_one() {
     assert!(toggle_pin(&pins[..1], &places, Path::new("/home/me/Documents"), added).is_none());
 }
 
+type PinAt = (usize, Vec<Pin>, Option<&'static [&'static str]>);
+
+#[test]
+fn pin_at_inserts_before_the_listed_place_in_that_slot() {
+    let (pins, places) = hidden_between();
+    let music = || vec![pin("Music", "~/Music")];
+    let cases: [PinAt; 6] = [
+        (0, music(), Some(&["Music", "Home", "Desktop", "Documents"])),
+        (1, music(), Some(&["Home", "Desktop", "Music", "Documents"])),
+        (2, music(), Some(&["Home", "Desktop", "Documents", "Music"])),
+        (9, music(), Some(&["Home", "Desktop", "Documents", "Music"])),
+        (1, vec![pin("Desk", "~/Desktop")], None),
+        (
+            1,
+            vec![
+                pin("Music", "~/Music"),
+                pin("Again", "~/Music"),
+                pin("Videos", "~/Videos"),
+            ],
+            Some(&["Home", "Desktop", "Music", "Videos", "Documents"]),
+        ),
+    ];
+    for (slot, added, expected) in cases {
+        let result = pin_at(&pins, &places, slot, added);
+        assert_eq!(
+            result.as_deref().map(pin_names).as_deref(),
+            expected,
+            "{slot}"
+        );
+    }
+    assert_eq!(
+        pin_at(&[], &[], 0, music()).as_deref().map(pin_names),
+        Some(vec!["Music"])
+    );
+}
+
 #[test]
 fn rename_pin_trims_and_ignores_blank_unchanged_or_missing() {
     let (pins, _) = hidden_between();

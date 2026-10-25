@@ -114,7 +114,9 @@ fn format_ieee(addr: &[u8; 8]) -> String {
 
 const CONNECTION_STATUS_QUERY: &str = "connection_status";
 const LIST_DEVICES_QUERY: &str = "list_devices";
+const LIGHT_OPTIONS_QUERY: &str = "light_options";
 const PING_ACTION: &str = "ping";
+const AUTOMATIC_LIGHT_LABEL: &str = "Automatic (one light only)";
 const NO_COORDINATOR_MESSAGE: &str = "No light dongle found. Plug one in, then scan again.";
 
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
@@ -168,17 +170,29 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         return DaemonOutcome::HandledWithData(serde_json::json!(devices));
     }
 
+    if action == LIGHT_OPTIONS_QUERY {
+        return light_options(runtime);
+    }
+
     if action == CONNECTION_STATUS_QUERY {
         let data = match runtime {
             DaemonRuntime::Ready(_) => serde_json::json!({
                 "state": "ok",
                 "can_pair": true,
             }),
-            DaemonRuntime::Unavailable(message) => serde_json::json!({
-                "state": "offline",
-                "can_pair": false,
-                "message": user_facing_unavailable_message(message),
-            }),
+            DaemonRuntime::Unavailable(message) => {
+                let user_message = user_facing_unavailable_message(message);
+                let state = if user_message == NO_COORDINATOR_MESSAGE {
+                    "no_target"
+                } else {
+                    "offline"
+                };
+                serde_json::json!({
+                    "state": state,
+                    "can_pair": false,
+                    "message": user_message,
+                })
+            }
         };
         return DaemonOutcome::HandledWithData(data);
     }
@@ -208,6 +222,34 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     start_background_services(&state);
     *runtime = DaemonRuntime::Ready(Box::new(state));
     DaemonOutcome::Handled
+}
+
+fn light_options(runtime: &DaemonRuntime) -> DaemonOutcome {
+    let DaemonRuntime::Ready(state) = runtime else {
+        return DaemonOutcome::HandledWithData(serde_json::json!([]));
+    };
+    let guard = state.shared_service();
+    let Ok(lock) = guard.lock() else {
+        return DaemonOutcome::Error("service lock poisoned".into());
+    };
+    let names = store::load()
+        .map(|config| config.devices)
+        .unwrap_or_default();
+    let mut options = vec![serde_json::json!({
+        "value": "",
+        "label": AUTOMATIC_LIGHT_LABEL,
+    })];
+    if let Some(svc) = lock.as_ref() {
+        options.extend(svc.backend().devices().iter().map(|device| {
+            let ieee = format_ieee(&device.ieee_address);
+            let label = names
+                .get(&ieee)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| ieee.clone());
+            serde_json::json!({ "value": ieee, "label": label })
+        }));
+    }
+    DaemonOutcome::HandledWithData(serde_json::json!(options))
 }
 
 fn user_facing_unavailable_message(message: &str) -> String {
@@ -280,9 +322,27 @@ mod tests {
             DaemonOutcome::HandledWithData(data) => assert_eq!(
                 data,
                 serde_json::json!({
-                    "state": "offline",
+                    "state": "no_target",
                     "can_pair": false,
                     "message": NO_COORDINATOR_MESSAGE,
+                })
+            ),
+            _ => panic!("expected status data"),
+        }
+    }
+
+    #[test]
+    fn unavailable_runtime_status_stays_offline_for_other_failures() {
+        let mut runtime = DaemonRuntime::Unavailable("permission denied".to_string());
+        let outcome = dispatch_action(&mut runtime, CONNECTION_STATUS_QUERY);
+
+        match outcome {
+            DaemonOutcome::HandledWithData(data) => assert_eq!(
+                data,
+                serde_json::json!({
+                    "state": "offline",
+                    "can_pair": false,
+                    "message": "permission denied",
                 })
             ),
             _ => panic!("expected status data"),

@@ -103,6 +103,7 @@ pub struct SettingsPanel {
     pub attention: Option<AttentionFeed>,
     pub version: Option<SharedString>,
     pub installed_plugins: Option<usize>,
+    pub dev: bool,
 }
 
 impl SettingsPanel {
@@ -126,6 +127,7 @@ impl SettingsPanel {
             attention: None,
             version: None,
             installed_plugins: None,
+            dev: cfg!(debug_assertions),
         }
     }
 
@@ -814,7 +816,7 @@ fn prepare_panel(
     let mut prepared_sources = Vec::new();
     let mut paged = Vec::new();
     for (index, (source, runtime)) in panel.sources.iter().zip(runtimes).enumerate() {
-        match prepare_source(source, runtime) {
+        match prepare_source(source, runtime, panel.dev) {
             Ok(prepared) => {
                 if prepared.state.pages.is_some() {
                     paged.push(index);
@@ -944,6 +946,7 @@ struct PreparedSource {
 fn prepare_source(
     source: &PanelSource,
     runtime: SettingsRuntime,
+    dev: bool,
 ) -> anyhow::Result<PreparedSource> {
     if source.custom {
         return Ok(bare_source(source, runtime, None));
@@ -960,7 +963,7 @@ fn prepare_source(
         None
     };
     let values = persistence::load_values(&base, path.as_deref());
-    let resolved = qol_config::normalized::resolve_config(&spec, &values)
+    let resolved = qol_config::normalized::resolve_config_for(&spec, &values, dev)
         .map_err(|errors| anyhow::anyhow!("contract resolve failed: {errors:?}"))?;
     let copy: std::collections::BTreeMap<String, FieldCopy> = resolved
         .fields
@@ -1811,7 +1814,7 @@ active_query = "status"
             custom: true,
             mark: qol_theme::Mark::Shortcuts,
         };
-        let prepared = super::prepare_source(&source, SettingsRuntime::empty()).unwrap();
+        let prepared = super::prepare_source(&source, SettingsRuntime::empty(), false).unwrap();
 
         assert!(prepared.rows.is_empty());
         assert!(prepared.sections.is_empty());
@@ -1844,6 +1847,7 @@ active_query = "status"
             attention: None,
             version: None,
             installed_plugins: None,
+            dev: false,
         };
 
         let prepared = super::prepare_panel(

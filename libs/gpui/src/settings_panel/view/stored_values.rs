@@ -92,13 +92,14 @@ impl SettingsPanelView {
 
     fn resolved_rows(&self, index: usize, values: &serde_json::Value) -> Option<Vec<Row>> {
         let plugin_id = &self.sources.get(index)?.plugin_id;
+        let dev = self.panel.dev;
         let resolved = self
             .panel
             .sources
             .iter()
             .find(|panel| &panel.plugin_id == plugin_id)
             .and_then(|panel| qol_config::contract::parse_spec_str(&panel.contract).ok())
-            .and_then(|spec| qol_config::normalized::resolve_config(&spec, values).ok())?;
+            .and_then(|spec| qol_config::normalized::resolve_config_for(&spec, values, dev).ok())?;
         Some(rows_from_resolved(&resolved, index))
     }
 

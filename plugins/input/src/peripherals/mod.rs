@@ -204,6 +204,21 @@ impl Values {
         }
     }
 
+    pub fn nearest(self, value: u32) -> u32 {
+        match self {
+            Self::Steps(Steps { first, last, step }) => {
+                let offset = value.clamp(first, last) - first;
+                let snapped = ((offset + step / 2) / step * step).min((last - first) / step * step);
+                first + snapped
+            }
+            Self::Only(values) => values
+                .iter()
+                .copied()
+                .min_by_key(|candidate| candidate.abs_diff(value))
+                .expect("a value list is never empty"),
+        }
+    }
+
     pub fn each(self) -> Vec<u32> {
         match self {
             Self::Steps(Steps { first, last, step }) => {
@@ -465,7 +480,7 @@ pub fn set_switch(switch: Switch, on: bool) -> Result<()> {
 }
 
 pub fn set_level(level: Level, value: u32) -> Result<()> {
-    if !level.values().contains(value) {
+    if !level.bounds().contains(value) {
         bail!(
             "the {} takes a value from {}",
             level.label(),
@@ -476,7 +491,7 @@ pub fn set_level(level: Level, value: u32) -> Result<()> {
         require_touchpad()?;
     }
     session::claim(Setting::Level(level))?;
-    platform::set_level(level, value)
+    platform::set_level(level, level.values().nearest(value))
 }
 
 pub fn toggle_touchpad() -> Result<bool> {
@@ -599,20 +614,58 @@ mod tests {
     }
 
     #[test]
-    fn a_level_outside_its_values_is_refused_before_the_host_is_touched() {
+    fn a_level_outside_its_bounds_is_refused_before_the_host_is_touched() {
         for level in Level::ALL {
-            let values = level.values();
-            for value in values
-                .first()
+            let bounds = level.bounds();
+            for value in bounds
+                .first
                 .checked_sub(1)
                 .into_iter()
-                .chain([values.last() + 1])
-                .chain(values.refused_between())
+                .chain([bounds.last + 1])
             {
                 let error = set_level(level, value).unwrap_err().to_string();
                 assert!(error.contains(level.label()), "{error}");
                 assert!(error.contains(&level.accepted()), "{error}");
             }
+        }
+    }
+
+    #[test]
+    fn a_requested_value_snaps_to_the_nearest_accepted_one() {
+        let quarters = Values::Steps(Steps {
+            first: 250,
+            last: 1000,
+            step: 250,
+        });
+        let fives = Values::Steps(Steps {
+            first: 5,
+            last: 100,
+            step: 5,
+        });
+        let rates = Values::Only(&[2, 3, 4, 5, 6, 10, 12, 15, 20, 30]);
+        let cases = [
+            (quarters, 100, 250),
+            (quarters, 300, 250),
+            (quarters, 375, 500),
+            (quarters, 1000, 1000),
+            (fives, 0, 5),
+            (fives, 12, 10),
+            (fives, 13, 15),
+            (fives, 100, 100),
+            (rates, 2, 2),
+            (rates, 8, 6),
+            (rates, 7, 6),
+            (rates, 11, 10),
+            (rates, 50, 30),
+            (Values::Steps(Steps::span(2, 50)), 33, 33),
+        ];
+        for (values, requested, expected) in cases {
+            assert_eq!(
+                values.nearest(requested),
+                expected,
+                "{values:?} {requested}"
+            );
+            assert!(values.contains(expected), "{values:?} {expected}");
         }
     }
 

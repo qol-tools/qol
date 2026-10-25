@@ -158,7 +158,7 @@ impl PresetSlot {
             name: name.into(),
             power_on: true,
             brightness: 100,
-            color_hex: "ffffff".into(),
+            color_hex: default_color(),
             mirek: 300,
         }
     }

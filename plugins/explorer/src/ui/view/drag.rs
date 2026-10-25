@@ -6,10 +6,10 @@ use gpui::{
     div, point, px, rgb, AnimationExt as _, AnyElement, App, AppContext, Context, Div, DragImage,
     Entity, IntoElement, ParentElement, Pixels, Point, Render, Styled, WeakEntity, Window,
 };
-use qol_gpui::kit::{kit, CHIP_COUNT_HEIGHT};
+use qol_gpui::kit::{kit, Chip, CHIP_COUNT_HEIGHT};
 use qol_gpui::motion;
 use qol_gpui::text::TextStyled;
-use qol_gpui::theme::{count_disc, font_ui, Motion, TextStyle, LINE, SPACE_TIGHT};
+use qol_gpui::theme::{count_disc, font_ui, Motion, TextStyle, LINE, SPACE_CELL, SPACE_TIGHT};
 
 use super::pictogram::{lifted_pictogram, lifted_source, Lifted};
 use super::ExplorerView;
@@ -27,6 +27,10 @@ const COUNT_RISE: f32 = 4.0;
 const DIGIT_WIDTH: f32 = 7.0;
 const SETTLE_FROM: f32 = 1.4;
 const CHARGE_RING: f32 = 2.0 * LINE;
+const TAG_LEFT: f32 = ICON + BESIDE_POINTER + SPACE_TIGHT;
+const TAG_DOWN: f32 = BESIDE_POINTER + SPACE_CELL;
+const LANDING_TAG_LEFT: f32 = BESIDE_POINTER + SPACE_TIGHT;
+const LANDING_TAG_DOWN: f32 = 2.0 * BESIDE_POINTER + SPACE_TIGHT;
 
 pub(super) struct Carry {
     pub(super) count: usize,
@@ -37,14 +41,40 @@ pub(super) struct DraggedPaths {
     count: usize,
     stack: Vec<Entry>,
     grab: Point<Pixels>,
+    view: WeakEntity<ExplorerView>,
 }
 
 impl Render for DraggedPaths {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tag = self
+            .view
+            .upgrade()
+            .and_then(|view| view.read(cx).pointer_tag());
+        let stack = div()
             .pl(self.grab.x + px(BESIDE_POINTER))
             .pt(self.grab.y + px(BESIDE_POINTER))
-            .child(stack_view(&self.stack, self.count, 1.0))
+            .child(stack_view(&self.stack, self.count, 1.0));
+        let Some(tag) = tag else {
+            return stack;
+        };
+        let (left, down) = if tag.landing {
+            (LANDING_TAG_LEFT, LANDING_TAG_DOWN)
+        } else {
+            (TAG_LEFT, TAG_DOWN)
+        };
+        let kit = kit();
+        let label = kit
+            .chip(Chip::KeyText(tag.text.into()), kit.grounds.pane)
+            .text(TextStyle::Hint)
+            .absolute()
+            .left(self.grab.x + px(left))
+            .top(self.grab.y + px(down));
+        let frame = div().relative().child(label);
+        if tag.landing {
+            frame
+        } else {
+            frame.child(stack)
+        }
     }
 }
 
@@ -218,7 +248,18 @@ pub(super) fn start(
         let image = drag_image(&stack, count, window.scale_factor());
         window.offer_dragged_paths(paths, image);
     }
-    cx.new(|_| DraggedPaths { count, stack, grab })
+    let owner = view.clone();
+    cx.new(|cx| {
+        if let Some(view) = owner.upgrade() {
+            cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        }
+        DraggedPaths {
+            count,
+            stack,
+            grab,
+            view: owner,
+        }
+    })
 }
 
 fn behind(stacked: usize) -> f32 {

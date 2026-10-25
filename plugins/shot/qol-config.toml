@@ -81,11 +81,11 @@ type = "number"
 variant = "slider"
 config_key = "video.crf"
 label = "Video quality"
-description = "Lower looks better but makes bigger files. 0 is lossless."
+description = "Lower looks better but makes bigger files. MP4 and other H.264 formats cap at 51; WebM goes up to 63."
 section = "video"
 default = 18
 min = 0
-max = 51
+max = 63
 step = 1
 
 [field.video_preset]

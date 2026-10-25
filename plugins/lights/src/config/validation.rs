@@ -55,9 +55,31 @@ fn validate_preset_slot(field: &str, slot: &PresetSlot) -> Result<(), String> {
 }
 
 fn is_hex_color(value: &str) -> bool {
+    let value = value.strip_prefix('#').unwrap_or(value);
     if value.len() != 6 {
         return false;
     }
 
     value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_colors_accept_an_optional_leading_hash() {
+        let cases = [
+            ("ffffff", true),
+            ("#FFFFFF", true),
+            ("#5fa8ff", true),
+            ("##ffffff", false),
+            ("#fff", false),
+            ("gggggg", false),
+            ("", false),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(is_hex_color(value), expected, "{value}");
+        }
+    }
 }

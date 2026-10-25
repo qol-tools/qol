@@ -59,6 +59,12 @@ size = "Size"
 modified = "Date modified"
 kind = "Kind"
 
+[field.sort_by.option_pictures]
+name = "letters:1"
+size = "letters:2"
+modified = "letters:3"
+kind = "letters:4"
+
 [field.sort_descending]
 type = "boolean"
 config_key = "sort_descending"

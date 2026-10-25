@@ -8,7 +8,11 @@ description = "Your light dongle and the lights paired with it."
 
 [section.controls]
 label = "Controls"
-description = "What every paired light does right now."
+description = "What the main light does right now."
+
+[section.advanced]
+label = "Advanced"
+description = "Only change these if Scan for dongle cannot find your dongle."
 
 [field.coordinator_status]
 type = "status"
@@ -45,9 +49,20 @@ row_subtitle = "{address}"
 empty_message = "No lights paired yet. Press Pair device to start."
 card_description = "The lights paired with your dongle."
 
+[field.main_target_id]
+type = "select"
+config_key = "main_target_id"
+label = "Main light"
+description = "The light that the controls below and the main light hotkeys drive. Needed once two or more lights are paired."
+section = "controls"
+default = ""
+query = "light_options"
+lookup_label = "lights"
+card_description = "The light these controls drive."
+
 [field.toggle_power]
 type = "action"
-label = "Turn lights on or off"
+label = "Turn main light on or off"
 description = "Switches the main light's power to the opposite of what it is now."
 section = "controls"
 action = "toggle_main"
@@ -57,7 +72,7 @@ variant = "primary"
 type = "color"
 config_key = "live_color_hex"
 label = "Color"
-description = "Pick the color your lights glow."
+description = "Pick the color the main light glows."
 section = "controls"
 default = "#FFFFFF"
 stream = "live_color"
@@ -66,7 +81,7 @@ stream = "live_color"
 type = "number"
 config_key = "live_brightness"
 label = "Brightness"
-description = "Drag the knob to set how bright the lights are."
+description = "Drag the knob to set how bright the main light is."
 section = "controls"
 default = 100
 min = 1
@@ -75,3 +90,515 @@ step = 1
 variant = "slider"
 stream = "live_color"
 action = "set_brightness_main"
+
+[field.live_mirek]
+type = "number"
+config_key = "live_mirek"
+label = "Color temperature"
+description = "Drag the knob to set how warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "controls"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+action = "set_colortemp_main"
+
+[field.serial_port]
+type = "string"
+config_key = "backend.serial_port"
+label = "Dongle port"
+description = "The serial port your dongle is on. Leave it as auto to find the dongle by itself. Applies the next time the plugin connects to the dongle."
+section = "advanced"
+default = "auto"
+
+[field.channel]
+type = "number"
+config_key = "backend.channel"
+label = "Zigbee channel"
+description = "The radio channel the lights use, from 11 to 26. Applies the next time the plugin connects to the dongle."
+section = "advanced"
+default = 11
+min = 11
+max = 26
+step = 1
+
+[section.preset_1]
+label = "Preset 1"
+description = "What the Preset 1 action does to the main light."
+
+[field.preset_1_enabled]
+type = "boolean"
+config_key = "presets.preset_1.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_1"
+default = false
+
+[field.preset_1_name]
+type = "string"
+config_key = "presets.preset_1.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_1"
+default = "Preset 1"
+
+[field.preset_1_power_on]
+type = "boolean"
+config_key = "presets.preset_1.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_1"
+default = true
+
+[field.preset_1_brightness]
+type = "number"
+config_key = "presets.preset_1.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_1"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_1_color_hex]
+type = "color"
+config_key = "presets.preset_1.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_1"
+default = "#FFFFFF"
+
+[field.preset_1_mirek]
+type = "number"
+config_key = "presets.preset_1.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_1"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_2]
+label = "Preset 2"
+description = "What the Preset 2 action does to the main light."
+
+[field.preset_2_enabled]
+type = "boolean"
+config_key = "presets.preset_2.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_2"
+default = false
+
+[field.preset_2_name]
+type = "string"
+config_key = "presets.preset_2.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_2"
+default = "Preset 2"
+
+[field.preset_2_power_on]
+type = "boolean"
+config_key = "presets.preset_2.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_2"
+default = true
+
+[field.preset_2_brightness]
+type = "number"
+config_key = "presets.preset_2.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_2"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_2_color_hex]
+type = "color"
+config_key = "presets.preset_2.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_2"
+default = "#FFFFFF"
+
+[field.preset_2_mirek]
+type = "number"
+config_key = "presets.preset_2.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_2"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_3]
+label = "Preset 3"
+description = "What the Preset 3 action does to the main light."
+
+[field.preset_3_enabled]
+type = "boolean"
+config_key = "presets.preset_3.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_3"
+default = false
+
+[field.preset_3_name]
+type = "string"
+config_key = "presets.preset_3.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_3"
+default = "Preset 3"
+
+[field.preset_3_power_on]
+type = "boolean"
+config_key = "presets.preset_3.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_3"
+default = true
+
+[field.preset_3_brightness]
+type = "number"
+config_key = "presets.preset_3.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_3"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_3_color_hex]
+type = "color"
+config_key = "presets.preset_3.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_3"
+default = "#FFFFFF"
+
+[field.preset_3_mirek]
+type = "number"
+config_key = "presets.preset_3.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_3"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_4]
+label = "Preset 4"
+description = "What the Preset 4 action does to the main light."
+
+[field.preset_4_enabled]
+type = "boolean"
+config_key = "presets.preset_4.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_4"
+default = false
+
+[field.preset_4_name]
+type = "string"
+config_key = "presets.preset_4.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_4"
+default = "Preset 4"
+
+[field.preset_4_power_on]
+type = "boolean"
+config_key = "presets.preset_4.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_4"
+default = true
+
+[field.preset_4_brightness]
+type = "number"
+config_key = "presets.preset_4.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_4"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_4_color_hex]
+type = "color"
+config_key = "presets.preset_4.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_4"
+default = "#FFFFFF"
+
+[field.preset_4_mirek]
+type = "number"
+config_key = "presets.preset_4.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_4"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_5]
+label = "Preset 5"
+description = "What the Preset 5 action does to the main light."
+
+[field.preset_5_enabled]
+type = "boolean"
+config_key = "presets.preset_5.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_5"
+default = false
+
+[field.preset_5_name]
+type = "string"
+config_key = "presets.preset_5.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_5"
+default = "Preset 5"
+
+[field.preset_5_power_on]
+type = "boolean"
+config_key = "presets.preset_5.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_5"
+default = true
+
+[field.preset_5_brightness]
+type = "number"
+config_key = "presets.preset_5.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_5"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_5_color_hex]
+type = "color"
+config_key = "presets.preset_5.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_5"
+default = "#FFFFFF"
+
+[field.preset_5_mirek]
+type = "number"
+config_key = "presets.preset_5.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_5"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_6]
+label = "Preset 6"
+description = "What the Preset 6 action does to the main light."
+
+[field.preset_6_enabled]
+type = "boolean"
+config_key = "presets.preset_6.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_6"
+default = false
+
+[field.preset_6_name]
+type = "string"
+config_key = "presets.preset_6.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_6"
+default = "Preset 6"
+
+[field.preset_6_power_on]
+type = "boolean"
+config_key = "presets.preset_6.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_6"
+default = true
+
+[field.preset_6_brightness]
+type = "number"
+config_key = "presets.preset_6.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_6"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_6_color_hex]
+type = "color"
+config_key = "presets.preset_6.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_6"
+default = "#FFFFFF"
+
+[field.preset_6_mirek]
+type = "number"
+config_key = "presets.preset_6.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_6"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_7]
+label = "Preset 7"
+description = "What the Preset 7 action does to the main light."
+
+[field.preset_7_enabled]
+type = "boolean"
+config_key = "presets.preset_7.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_7"
+default = false
+
+[field.preset_7_name]
+type = "string"
+config_key = "presets.preset_7.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_7"
+default = "Preset 7"
+
+[field.preset_7_power_on]
+type = "boolean"
+config_key = "presets.preset_7.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_7"
+default = true
+
+[field.preset_7_brightness]
+type = "number"
+config_key = "presets.preset_7.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_7"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_7_color_hex]
+type = "color"
+config_key = "presets.preset_7.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_7"
+default = "#FFFFFF"
+
+[field.preset_7_mirek]
+type = "number"
+config_key = "presets.preset_7.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_7"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
+
+[section.preset_8]
+label = "Preset 8"
+description = "What the Preset 8 action does to the main light."
+
+[field.preset_8_enabled]
+type = "boolean"
+config_key = "presets.preset_8.enabled"
+label = "Enabled"
+description = "A hotkey bound to a disabled preset shows an error instead of changing the light."
+section = "preset_8"
+default = false
+
+[field.preset_8_name]
+type = "string"
+config_key = "presets.preset_8.name"
+label = "Name"
+description = "What this preset is called in error messages."
+section = "preset_8"
+default = "Preset 8"
+
+[field.preset_8_power_on]
+type = "boolean"
+config_key = "presets.preset_8.power_on"
+label = "Light on"
+description = "Turn the main light on when the preset runs, or off when this is unchecked."
+section = "preset_8"
+default = true
+
+[field.preset_8_brightness]
+type = "number"
+config_key = "presets.preset_8.brightness"
+label = "Brightness"
+description = "How bright the main light gets, from 0 to 100."
+section = "preset_8"
+default = 100
+min = 0
+max = 100
+step = 1
+variant = "slider"
+
+[field.preset_8_color_hex]
+type = "color"
+config_key = "presets.preset_8.color_hex"
+label = "Color"
+description = "The color the main light glows."
+section = "preset_8"
+default = "#FFFFFF"
+
+[field.preset_8_mirek]
+type = "number"
+config_key = "presets.preset_8.mirek"
+label = "Color temperature"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "preset_8"
+default = 300
+min = 153
+max = 500
+step = 1
+variant = "slider"
