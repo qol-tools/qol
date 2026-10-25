@@ -26,7 +26,7 @@ Picks stay picked when you move to another folder, and the note beside the crumb
 
 Pinned folders lead the sidebar. A new install pins Home, Desktop, Documents, Downloads, Music, Pictures and Videos, and any of them can be unpinned, renamed and reordered.
 
-Ctrl+D pins the folder you are in, or unpins it. Right-click a pin, or press the ⋯ on the pin you are in, to unpin, move or rename it, or to open the sidebar settings. The ⋯ at the end of the title band pins the folder you are in, edits the path, shows or hides hidden files and opens Explorer's settings.
+Ctrl+D pins the folder you are in, or unpins it. Drag a folder between two pins, or above or below them, to pin it there: the folder turns into a floating pin row, the pins below make room and a tag under the pointer says where it lands, such as "pin 5th". Dropping a folder onto a pin itself still moves it into that folder, and the tag says "move into Documents". Right-click a pin, or press the ⋯ on the pin you are in, to unpin, move or rename it, or to open the sidebar settings. The ⋯ at the end of the title band pins the folder you are in, edits the path, shows or hides hidden files and opens Explorer's settings.
 
 A usual folder such as Desktop or Music that is missing is hidden until it exists. Any other pinned folder that is not there, such as one on a drive that is unplugged, shows "not connected" until it comes back.
 
