@@ -258,11 +258,13 @@ fn toggle_pin_removes_a_listed_folder_and_pins_an_unlisted_one() {
     assert!(toggle_pin(&pins[..1], &places, Path::new("/home/me/Documents"), added).is_none());
 }
 
+type PinAt = (usize, Vec<Pin>, Option<&'static [&'static str]>);
+
 #[test]
 fn pin_at_inserts_before_the_listed_place_in_that_slot() {
     let (pins, places) = hidden_between();
     let music = || vec![pin("Music", "~/Music")];
-    let cases: [(usize, Vec<Pin>, Option<&[&str]>); 6] = [
+    let cases: [PinAt; 6] = [
         (0, music(), Some(&["Music", "Home", "Desktop", "Documents"])),
         (1, music(), Some(&["Home", "Desktop", "Music", "Documents"])),
         (2, music(), Some(&["Home", "Desktop", "Documents", "Music"])),
