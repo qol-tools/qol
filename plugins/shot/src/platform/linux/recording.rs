@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
+use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,8 +21,10 @@ pub use super::super::recorder::recording_format;
 use qol_plugin_daemon::notification::send_notification;
 
 const CINNAMON_HELPER_ENV: &str = "QOL_SHOT_CINNAMON_CAPTURE_REQUEST";
-const CINNAMON_READY_TIMEOUT: Duration = Duration::from_secs(3);
-const CINNAMON_POLL_INTERVAL: Duration = Duration::from_millis(40);
+const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(3);
+const HELPER_POLL_INTERVAL: Duration = Duration::from_millis(40);
+const NVFBC_HELPER_ENV: &str = "QOL_SHOT_NVFBC_CAPTURE_REQUEST";
+const NVFBC_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 static CINNAMON_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 const CINNAMON_VP8_THREADS: u32 = 4;
 const NVENC_ELEMENT: &str = "nvh264enc";
@@ -115,7 +119,23 @@ struct CinnamonCaptureRequest {
     pipeline: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct NvfbcCaptureRequest {
+    rect: Rect,
+    framerate: u32,
+    ffmpeg_args: Vec<String>,
+}
+
 pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
+    if let Ok(request) = std::env::var(NVFBC_HELPER_ENV) {
+        return Some(match run_nvfbc_capture_helper(&request) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                log::error!("NvFBC capture helper failed: {error:#}");
+                ExitCode::FAILURE
+            }
+        });
+    }
     let request = std::env::var(CINNAMON_HELPER_ENV).ok()?;
     Some(match run_cinnamon_capture_helper(&request) {
         Ok(()) => ExitCode::SUCCESS,
@@ -129,6 +149,22 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let rect = &even_dimensions(*rect);
     if nvenc_accepts(rect) && ffmpeg_nvenc_available(config) {
+        match start_nvfbc_capture(rect, config, output_file) {
+            Ok(session) => {
+                qol_runtime::probe!(
+                    "SHOT_RECORD_START_BACKEND",
+                    "backend=nvfbc outcome=ready encoder={FFMPEG_NVENC}"
+                );
+                return Ok(session);
+            }
+            Err(error) => {
+                qol_runtime::probe!(
+                    "SHOT_RECORD_START_BACKEND",
+                    "backend=nvfbc outcome=fallback reason=start_failed"
+                );
+                log::warn!("NvFBC capture unavailable, using x11grab: {error:#}");
+            }
+        }
         qol_runtime::probe!(
             "SHOT_RECORD_START_BACKEND",
             "backend=x11grab outcome=ready reason=gpu_encoder encoder={FFMPEG_NVENC}"
@@ -292,7 +328,7 @@ fn start_cinnamon_capture(
         .spawn()
         .context("failed to start Cinnamon capture helper")?;
 
-    if wait_for_cinnamon_ready(&mut child, &capture_file)? {
+    if wait_for_helper_ready(&mut child, &capture_file, "cinnamon_after_paint")? {
         return Ok(capture_session(
             child.id(),
             *rect,
@@ -301,7 +337,7 @@ fn start_cinnamon_capture(
         ));
     }
 
-    stop_failed_cinnamon_start(&mut child);
+    stop_failed_helper_start(&mut child);
     if capture_file.symlink_metadata().is_ok() {
         std::fs::remove_file(&capture_file).with_context(|| {
             format!(
@@ -313,12 +349,190 @@ fn start_cinnamon_capture(
     Err(anyhow!("Cinnamon capture did not create its output file"))
 }
 
-fn wait_for_cinnamon_ready(child: &mut Child, output_file: &Path) -> Result<bool> {
-    let deadline = Instant::now() + CINNAMON_READY_TIMEOUT;
+fn start_nvfbc_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    if output_file.symlink_metadata().is_ok() {
+        return Err(anyhow!(
+            "refusing to replace existing capture output {}",
+            output_file.display()
+        ));
+    }
+    let framerate = config.video.framerate.clamp(1, 240);
+    let request = NvfbcCaptureRequest {
+        rect: *rect,
+        framerate,
+        ffmpeg_args: nvfbc_ffmpeg_args(rect, framerate, config, output_file),
+    };
+    let request_json =
+        serde_json::to_string(&request).context("failed to encode capture request")?;
+
+    qol_runtime::probe!(
+        "SHOT_RECORD_START_PLAN",
+        "backend=nvfbc rect={}x{}+{},{} fps={} encoder={FFMPEG_NVENC} audio_inputs={}",
+        rect.w,
+        rect.h,
+        rect.x,
+        rect.y,
+        framerate,
+        audio_inputs(config).len()
+    );
+
+    let log_file =
+        File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
+    let stdout_log = log_file
+        .try_clone()
+        .context("failed to clone recording log file")?;
+    let executable = std::env::current_exe().context("failed to resolve qol-shot executable")?;
+    let mut child = Command::new(executable)
+        .env(NVFBC_HELPER_ENV, request_json)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(log_file))
+        .spawn()
+        .context("failed to start NvFBC capture helper")?;
+
+    if wait_for_helper_ready(&mut child, output_file, "nvfbc")? {
+        return Ok(capture_session(child.id(), *rect, output_file, output_file));
+    }
+
+    stop_failed_helper_start(&mut child);
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    if output_file.symlink_metadata().is_ok() {
+        std::fs::remove_file(output_file).with_context(|| {
+            format!(
+                "failed to remove incomplete NvFBC capture {}",
+                output_file.display()
+            )
+        })?;
+    }
+    Err(anyhow!("NvFBC capture did not create its output file"))
+}
+
+fn nvfbc_ffmpeg_args(
+    rect: &Rect,
+    framerate: u32,
+    config: &Config,
+    output_file: &Path,
+) -> Vec<String> {
+    let input = vec![
+        "-thread_queue_size".to_string(),
+        "512".to_string(),
+        "-use_wallclock_as_timestamps".to_string(),
+        "1".to_string(),
+        "-f".to_string(),
+        "rawvideo".to_string(),
+        "-pix_fmt".to_string(),
+        "bgra".to_string(),
+        "-video_size".to_string(),
+        format!("{}x{}", rect.w, rect.h),
+        "-framerate".to_string(),
+        framerate.to_string(),
+        "-i".to_string(),
+        "pipe:0".to_string(),
+    ];
+    let mut args = ffmpeg_args(input, config, X11grabEncoder::Nvenc);
+    args.extend(["-fps_mode", "cfr", "-shortest"].map(str::to_string));
+    args.push(output_file.to_string_lossy().to_string());
+    args
+}
+
+fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
+    let request: NvfbcCaptureRequest =
+        serde_json::from_str(request_json).context("invalid NvFBC capture request")?;
+    let stop = qol_process::CancellationToken::install()
+        .context("failed to listen for the recording stop request")?;
+    let mut capture = super::nvfbc::Capture::open(&request.rect)?;
+    qol_runtime::probe!(
+        "SHOT_RECORD_HELPER",
+        "backend=nvfbc step=open output={}",
+        capture.output_name()
+    );
+    let mut command = Command::new("ffmpeg");
+    command
+        .args(&request.ffmpeg_args)
+        .env_remove(NVFBC_HELPER_ENV)
+        .stdin(Stdio::piped());
+    // SAFETY: prctl is async-signal-safe and only changes the forked child before exec.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut ffmpeg = command.spawn().context("failed to start ffmpeg")?;
+    let stdin = ffmpeg
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("ffmpeg has no frame input"))?;
+    let pumped = pump_nvfbc_frames(&mut capture, stdin, request.framerate, &stop);
+    drop(capture);
+    let finished = finish_nvfbc_ffmpeg(&mut ffmpeg);
+    let frames = pumped?;
+    qol_runtime::probe!(
+        "SHOT_RECORD_HELPER",
+        "backend=nvfbc step=exit frames={frames}"
+    );
+    finished
+}
+
+fn pump_nvfbc_frames(
+    capture: &mut super::nvfbc::Capture,
+    mut stdin: std::process::ChildStdin,
+    framerate: u32,
+    stop: &qol_process::CancellationToken,
+) -> Result<u64> {
+    let period = Duration::from_secs(1) / framerate;
+    let mut next = Instant::now();
+    let mut frames = 0;
+    while !stop.is_cancelled() {
+        let frame = capture.grab()?;
+        stdin
+            .write_all(frame)
+            .context("ffmpeg stopped reading frames")?;
+        frames += 1;
+        next += period;
+        let now = Instant::now();
+        if next > now {
+            std::thread::sleep(next - now);
+        } else if now - next > period {
+            next = now;
+        }
+    }
+    Ok(frames)
+}
+
+fn finish_nvfbc_ffmpeg(ffmpeg: &mut Child) -> Result<()> {
+    let deadline = Instant::now() + NVFBC_FINALIZE_TIMEOUT;
+    let mut interrupted = false;
+    loop {
+        if let Some(status) = ffmpeg.try_wait().context("failed to inspect ffmpeg")? {
+            if status.success() || interrupted {
+                return Ok(());
+            }
+            return Err(anyhow!("ffmpeg exited with {status}"));
+        }
+        if Instant::now() >= deadline {
+            if interrupted {
+                let _ = ffmpeg.kill();
+                return Err(anyhow!("ffmpeg did not finish the recording"));
+            }
+            interrupted = true;
+            let _ = super::super::unix::signal_process(ffmpeg.id(), libc::SIGINT);
+        }
+        std::thread::sleep(HELPER_POLL_INTERVAL);
+    }
+}
+
+fn wait_for_helper_ready(child: &mut Child, output_file: &Path, backend: &str) -> Result<bool> {
+    let deadline = Instant::now() + HELPER_READY_TIMEOUT;
     while Instant::now() < deadline {
         if child
             .try_wait()
-            .context("failed to inspect Cinnamon capture helper")?
+            .context("failed to inspect the capture helper")?
             .is_some()
         {
             return Ok(false);
@@ -329,19 +543,19 @@ fn wait_for_cinnamon_ready(child: &mut Child, output_file: &Path) -> Result<bool
             }
             qol_runtime::probe!(
                 "SHOT_RECORD_CAPTURE_READY",
-                "backend=cinnamon_after_paint len={}",
+                "backend={backend} len={}",
                 metadata.len()
             );
             true
         }) {
             return Ok(true);
         }
-        std::thread::sleep(CINNAMON_POLL_INTERVAL);
+        std::thread::sleep(HELPER_POLL_INTERVAL);
     }
     Ok(false)
 }
 
-fn stop_failed_cinnamon_start(child: &mut Child) {
+fn stop_failed_helper_start(child: &mut Child) {
     if child.try_wait().ok().flatten().is_some() {
         return;
     }
@@ -351,7 +565,7 @@ fn stop_failed_cinnamon_start(child: &mut Child) {
         if child.try_wait().ok().flatten().is_some() {
             return;
         }
-        std::thread::sleep(CINNAMON_POLL_INTERVAL);
+        std::thread::sleep(HELPER_POLL_INTERVAL);
     }
 }
 
@@ -398,7 +612,7 @@ fn run_cinnamon_capture_helper(request_json: &str) -> Result<()> {
         .map_err(anyhow::Error::msg)?;
 
     while !CINNAMON_STOP_REQUESTED.load(Ordering::Acquire) {
-        std::thread::sleep(CINNAMON_POLL_INTERVAL);
+        std::thread::sleep(HELPER_POLL_INTERVAL);
     }
 
     let cursor_stats = session
@@ -734,7 +948,7 @@ fn x11grab_args(
     output_file: &Path,
     encoder: X11grabEncoder,
 ) -> Vec<String> {
-    let mut args = vec![
+    let input = vec![
         "-thread_queue_size".to_string(),
         "512".to_string(),
         "-f".to_string(),
@@ -746,7 +960,13 @@ fn x11grab_args(
         "-i".to_string(),
         format!(":0.0+{},{}", rect.x, rect.y),
     ];
+    let mut args = ffmpeg_args(input, config, encoder);
+    args.push(output_file.to_string_lossy().to_string());
+    args
+}
 
+fn ffmpeg_args(video_input: Vec<String>, config: &Config, encoder: X11grabEncoder) -> Vec<String> {
+    let mut args = video_input;
     let audio_inputs = audio_inputs(config);
     for input in &audio_inputs {
         args.extend(["-thread_queue_size", "128", "-f", "pulse", "-i"].map(str::to_string));
@@ -771,7 +991,6 @@ fn x11grab_args(
 
     args.extend(encoder.args(config));
     args.extend(["-r".to_string(), config.video.framerate.to_string()]);
-    args.push(output_file.to_string_lossy().to_string());
     args
 }
 
@@ -921,7 +1140,7 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 mod tests {
     use super::{
         cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote, nvenc_accepts,
-        x11grab_args, CinnamonCaptureRequest, CinnamonEncoder, X11grabEncoder,
+        nvfbc_ffmpeg_args, x11grab_args, CinnamonCaptureRequest, CinnamonEncoder, X11grabEncoder,
     };
     use crate::{Config, Rect};
 
@@ -1104,6 +1323,37 @@ mod tests {
     }
 
     #[test]
+    fn nvfbc_args_read_raw_frames_from_stdin_and_stop_with_them() {
+        let rect = Rect {
+            x: 1920,
+            y: 0,
+            w: 2560,
+            h: 1440,
+        };
+        let mut config = Config::default();
+        config.audio.enabled = true;
+        config.audio.inputs = vec!["system".to_string()];
+        let args = nvfbc_ffmpeg_args(&rect, 60, &config, std::path::Path::new("/tmp/out.mp4"));
+        let joined = args.join(" ");
+        for pair in [
+            ["-f", "rawvideo"],
+            ["-pix_fmt", "bgra"],
+            ["-video_size", "2560x1440"],
+            ["-framerate", "60"],
+            ["-i", "pipe:0"],
+            ["-use_wallclock_as_timestamps", "1"],
+            ["-f", "pulse"],
+            ["-c:v", "h264_nvenc"],
+            ["-fps_mode", "cfr"],
+        ] {
+            assert!(args.windows(2).any(|window| window == pair), "{joined}");
+        }
+        assert!(args.iter().any(|arg| arg == "-shortest"), "{joined}");
+        assert!(!joined.contains("x11grab"), "{joined}");
+        assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
+    }
+
+    #[test]
     fn x11grab_args_use_container_codecs_and_clamp_crf() {
         let rect = Rect {
             x: 0,
@@ -1127,6 +1377,7 @@ mod tests {
             assert!(has(["-c:v", video]), "{format}: {args:?}");
             assert!(has(["-c:a", audio]), "{format}: {args:?}");
             assert!(has(["-crf", crf]), "{format}: {args:?}");
+            assert!(has(["-pix_fmt", "yuv420p"]), "{format}: {args:?}");
             assert_eq!(
                 args.iter().filter(|arg| *arg == "-c:a").count(),
                 1,

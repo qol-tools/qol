@@ -11,7 +11,7 @@ use x11rb::connection::Connection;
 pub fn platform_supported_check() -> DoctorCheckResult {
     DoctorCheckResult::ok(
         "platform_supported",
-        "Linux capture uses Cinnamon's synchronized recorder when available and ffmpeg/x11grab elsewhere.",
+        "Linux recording uses NVIDIA frame capture when the GPU encoder works, otherwise ffmpeg/x11grab or Cinnamon's synchronized recorder.",
     )
 }
 
