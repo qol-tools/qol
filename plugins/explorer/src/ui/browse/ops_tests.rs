@@ -89,6 +89,26 @@ fn holding_a_cut_fades_the_rows_and_tells_how_to_paste() {
 }
 
 #[test]
+fn the_menu_reads_what_is_held_and_how_many_rows_it_acts_on() {
+    let (temp, _dest) = two_folders();
+    let first = write(temp.path(), "a.txt", "a");
+    let second = write(temp.path(), "b.txt", "b");
+    let mut browser = opened(temp.path());
+    point_at(&mut browser, &first);
+    assert!(!browser.holds());
+    assert_eq!(browser.operand_count(), 1);
+
+    browser.add_pick(browser.row_of(&first).unwrap());
+    browser.add_pick(browser.row_of(&second).unwrap());
+    assert_eq!(browser.operand_count(), 2);
+
+    assert!(browser.hold(Held::Copied));
+    assert!(browser.holds());
+    assert!(browser.dismiss());
+    assert!(!browser.holds());
+}
+
+#[test]
 fn a_copy_is_not_faded_and_picks_win_over_the_cursor_row() {
     let (temp, _dest) = two_folders();
     let first = write(temp.path(), "a.txt", "a");

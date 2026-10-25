@@ -44,6 +44,7 @@ pub enum Action {
     NewFolder,
     Undo,
     Moves,
+    ContextMenu,
     Resize(Resize),
     Nothing,
 }
@@ -105,6 +106,7 @@ pub fn action(keystroke: &Keystroke, path_open: bool) -> Action {
         ("n", (true, false, true)) => Action::NewFolder,
         ("z", (true, false, false)) => Action::Undo,
         ("j", (true, false, false)) => Action::Moves,
+        ("menu", (false, false, false)) | ("f10", (false, false, true)) => Action::ContextMenu,
         _ => typed(keystroke).map_or(Action::Nothing, Action::Jump),
     }
 }
@@ -147,6 +149,7 @@ pub fn waits(action: Action, arriving: bool, stalled: bool, queued: bool) -> boo
                 | Action::Trash
                 | Action::Rename
                 | Action::NewFolder
+                | Action::ContextMenu
         )
 }
 
@@ -297,6 +300,8 @@ mod tests {
                 key("j", Modifiers::secondary_key(), Some("j")),
                 Action::Moves,
             ),
+            (plain("menu"), Action::ContextMenu),
+            (key("f10", shift(), None), Action::ContextMenu),
         ];
         for (keystroke, expected) in cases {
             assert_eq!(action(&keystroke, false), expected, "{keystroke:?}");
@@ -313,6 +318,8 @@ mod tests {
             ),
             (key("delete", shift(), None), Action::Nothing),
             (key("f2", shift(), None), Action::Nothing),
+            (plain("f10"), Action::Nothing),
+            (key("menu", shift(), None), Action::Nothing),
             (key("z", alt(), Some("z")), Action::Nothing),
         ];
         for (keystroke, expected) in cases {
@@ -447,6 +454,7 @@ mod tests {
             Action::Trash,
             Action::Rename,
             Action::NewFolder,
+            Action::ContextMenu,
         ];
         let leaving = [
             Action::Up,

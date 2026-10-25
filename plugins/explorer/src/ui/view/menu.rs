@@ -20,12 +20,21 @@ pub(super) enum Command {
     GoToPath,
     ToggleHidden,
     Settings,
+    OpenItem,
+    Cut,
+    Copy,
+    Paste,
+    RenameItem,
+    Trash,
+    NewFolder,
+    Undo,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Owner {
     Folder,
     Pin(usize),
+    Item,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +72,85 @@ impl Line {
         self.enabled = enabled;
         self
     }
+}
+
+fn entry(command: Command, label: &str, key: Option<Key>, enabled: bool) -> Item {
+    Item::Line(Line::new(command, label, key).enabled(enabled))
+}
+
+fn secondary(key: Key) -> Option<Key> {
+    Some(key.secondary())
+}
+
+fn paste_line(can_paste: bool) -> Item {
+    entry(
+        Command::Paste,
+        "Paste",
+        secondary(Key::letter('v')),
+        can_paste,
+    )
+}
+
+fn make_lines() -> [Item; 2] {
+    [
+        entry(
+            Command::NewFolder,
+            "New folder",
+            secondary(Key::letter('n').shift()),
+            true,
+        ),
+        entry(Command::Undo, "Undo", secondary(Key::letter('z')), true),
+    ]
+}
+
+fn edit_lines(can_paste: bool) -> Vec<Item> {
+    let mut lines = vec![paste_line(can_paste)];
+    lines.extend(make_lines());
+    lines
+}
+
+fn item_lines(can_paste: bool, single: bool) -> Vec<Item> {
+    let mut lines = vec![
+        entry(Command::OpenItem, "Open", Some(Key::ENTER), true),
+        entry(Command::Cut, "Cut", secondary(Key::letter('x')), true),
+        entry(Command::Copy, "Copy", secondary(Key::letter('c')), true),
+        paste_line(can_paste),
+        entry(Command::RenameItem, "Rename", Key::parse("f2"), single),
+        entry(Command::Trash, "Move to trash", Some(Key::DELETE), true),
+        Item::Rule,
+    ];
+    lines.extend(make_lines());
+    lines
+}
+
+fn folder_lines(folder_name: &str, pinned_as: Option<&str>, shows_hidden: bool) -> Vec<Item> {
+    let pin_label = match pinned_as {
+        Some(name) => format!("Unpin {name}"),
+        None => format!("Pin {folder_name}"),
+    };
+    let hidden_label = if shows_hidden {
+        "Hide hidden files"
+    } else {
+        "Show hidden files"
+    };
+    let line = |command, label: String, key: Key| {
+        Item::Line(Line::new(command, label, Some(key.secondary())))
+    };
+    vec![
+        line(Command::TogglePin, pin_label, Key::letter('d')),
+        line(
+            Command::GoToPath,
+            "Go to a path\u{2026}".into(),
+            Key::letter('g'),
+        ),
+        line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
+        Item::Rule,
+        line(
+            Command::Settings,
+            "Explorer settings\u{2026}".into(),
+            Key::symbol(','),
+        ),
+    ]
 }
 
 impl Menu {
@@ -109,37 +197,28 @@ impl Menu {
         shows_hidden: bool,
         at: Point<Pixels>,
     ) -> Self {
-        let pin_label = match pinned_as {
-            Some(name) => format!("Unpin {name}"),
-            None => format!("Pin {folder_name}"),
-        };
-        let hidden_label = if shows_hidden {
-            "Hide hidden files"
-        } else {
-            "Show hidden files"
-        };
-        let line = |command, label: String, key: Key| {
-            Item::Line(Line::new(command, label, Some(key.secondary())))
-        };
         Self::new(
             Owner::Folder,
             at,
-            vec![
-                line(Command::TogglePin, pin_label, Key::letter('d')),
-                line(
-                    Command::GoToPath,
-                    "Go to a path\u{2026}".into(),
-                    Key::letter('g'),
-                ),
-                line(Command::ToggleHidden, hidden_label.into(), Key::letter('h')),
-                Item::Rule,
-                line(
-                    Command::Settings,
-                    "Explorer settings\u{2026}".into(),
-                    Key::symbol(','),
-                ),
-            ],
+            folder_lines(folder_name, pinned_as, shows_hidden),
         )
+    }
+
+    pub(super) fn background(
+        folder_name: &str,
+        pinned_as: Option<&str>,
+        shows_hidden: bool,
+        can_paste: bool,
+        at: Point<Pixels>,
+    ) -> Self {
+        let mut items = edit_lines(can_paste);
+        items.push(Item::Rule);
+        items.extend(folder_lines(folder_name, pinned_as, shows_hidden));
+        Self::new(Owner::Folder, at, items)
+    }
+
+    pub(super) fn item(can_paste: bool, single: bool, at: Point<Pixels>) -> Self {
+        Self::new(Owner::Item, at, item_lines(can_paste, single))
     }
 
     pub(super) fn owner(&self) -> Owner {
@@ -279,5 +358,87 @@ mod tests {
         assert_ne!(pin.owner(), Owner::Folder);
         let folder = Menu::folder("Docs", None, false, at());
         assert_eq!(folder.owner(), Owner::Folder);
+    }
+
+    fn lines(menu: &Menu) -> Vec<(Command, bool)> {
+        menu.items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line(line) => Some((line.command, line.enabled)),
+                Item::Rule => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_item_menu_lists_the_file_actions_with_paste_and_rename_gated() {
+        let cases = [
+            (true, true, true, true),
+            (false, true, false, true),
+            (true, false, true, false),
+            (false, false, false, false),
+        ];
+        for (can_paste, single, paste, rename) in cases {
+            let menu = Menu::item(can_paste, single, at());
+            assert_eq!(
+                lines(&menu),
+                vec![
+                    (Command::OpenItem, true),
+                    (Command::Cut, true),
+                    (Command::Copy, true),
+                    (Command::Paste, paste),
+                    (Command::RenameItem, rename),
+                    (Command::Trash, true),
+                    (Command::NewFolder, true),
+                    (Command::Undo, true),
+                ],
+                "{can_paste} {single}"
+            );
+            assert_eq!(menu.owner(), Owner::Item);
+        }
+    }
+
+    #[test]
+    fn an_item_menu_opens_on_open_and_steps_over_what_is_unavailable() {
+        let mut menu = Menu::item(false, false, at());
+        let mut walked = vec![menu.selected_command()];
+        for _ in 0..5 {
+            menu.step(true);
+            walked.push(menu.selected_command());
+        }
+        assert_eq!(
+            walked,
+            [
+                Some(Command::OpenItem),
+                Some(Command::Cut),
+                Some(Command::Copy),
+                Some(Command::Trash),
+                Some(Command::NewFolder),
+                Some(Command::Undo),
+            ]
+        );
+        menu.step(true);
+        assert_eq!(menu.selected_command(), Some(Command::Undo));
+    }
+
+    #[test]
+    fn a_background_menu_puts_the_edit_lines_before_the_folder_lines() {
+        let menu = Menu::background("Docs", None, true, false, at());
+        assert_eq!(
+            lines(&menu),
+            vec![
+                (Command::Paste, false),
+                (Command::NewFolder, true),
+                (Command::Undo, true),
+                (Command::TogglePin, true),
+                (Command::GoToPath, true),
+                (Command::ToggleHidden, true),
+                (Command::Settings, true),
+            ]
+        );
+        assert_eq!(menu.selected_command(), Some(Command::NewFolder));
+        assert_eq!(menu.owner(), Owner::Folder);
+        let held = Menu::background("Docs", None, true, true, at());
+        assert_eq!(held.selected_command(), Some(Command::Paste));
     }
 }

@@ -1,6 +1,7 @@
 mod band;
 mod choices;
 mod clash;
+mod context;
 mod drag;
 mod grid;
 mod list;
@@ -270,7 +271,7 @@ impl ExplorerView {
             self.drop_menu(cx);
             return;
         }
-        self.open_folder_menu(at, cx);
+        self.open_folder_menu(at, false, cx);
     }
 
     fn pressed_more_closes(&mut self, owner: Owner, at: Point<Pixels>) -> bool {
@@ -278,7 +279,7 @@ impl ExplorerView {
         just_closed || self.menu.as_ref().is_some_and(|menu| menu.owner() == owner)
     }
 
-    fn open_folder_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn open_folder_menu(&mut self, at: Point<Pixels>, background: bool, cx: &mut Context<Self>) {
         if !self.places_ready() {
             return;
         }
@@ -293,12 +294,12 @@ impl ExplorerView {
             .find(|place| place.path == folder)
             .map(|place| place.name.as_str());
         self.renaming = None;
-        self.menu = Some(Menu::folder(
-            &name,
-            pinned_as,
-            self.browser.shows_hidden(),
-            at,
-        ));
+        let shows_hidden = self.browser.shows_hidden();
+        self.menu = Some(if background {
+            Menu::background(&name, pinned_as, shows_hidden, self.browser.holds(), at)
+        } else {
+            Menu::folder(&name, pinned_as, shows_hidden, at)
+        });
         cx.notify();
     }
 
@@ -348,6 +349,30 @@ impl ExplorerView {
                 self.toggle_hidden();
             }
             Command::Settings => self.open_settings(cx),
+            Command::OpenItem => {
+                self.open(cx);
+            }
+            Command::Cut => {
+                self.browser.hold(Held::Cut);
+            }
+            Command::Copy => {
+                self.browser.hold(Held::Copied);
+            }
+            Command::Paste => {
+                self.paste();
+            }
+            Command::RenameItem => {
+                self.browser.rename_open();
+            }
+            Command::Trash => {
+                self.browser.trash_picks();
+            }
+            Command::NewFolder => {
+                self.revealed(Browser::new_folder);
+            }
+            Command::Undo => {
+                self.browser.undo();
+            }
         }
         cx.notify();
     }
@@ -759,6 +784,7 @@ impl ExplorerView {
             Action::NewFolder => self.revealed(Browser::new_folder),
             Action::Undo => self.browser.undo(),
             Action::Moves => self.browser.toggle_moves(),
+            Action::ContextMenu => self.open_cursor_menu(cx),
             Action::Nothing => false,
         }
     }

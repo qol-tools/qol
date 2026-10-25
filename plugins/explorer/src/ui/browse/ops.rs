@@ -136,6 +136,14 @@ impl Browser {
         true
     }
 
+    pub fn holds(&self) -> bool {
+        self.ops.holding.is_some()
+    }
+
+    pub fn operand_count(&self) -> usize {
+        self.operands().len()
+    }
+
     pub fn is_cut(&self, entry: &Entry) -> bool {
         self.ops
             .holding

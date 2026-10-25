@@ -54,6 +54,7 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+Shift+N | Make a new folder and rename it |
 | Ctrl+Z | Undo the last copy, move, rename, trash or new folder, putting back anything a copy replaced |
 | Ctrl+J | Show or hide today's moves |
+| Menu key, Shift+F10 | Open the row menu at the cursor row; with other rows picked it acts on them all, otherwise it picks the cursor row first |
 | Ctrl+H | Show or hide hidden entries, also while editing the path; hiding them drops their picks |
 | Ctrl+D | Pin the folder you are in, or unpin it |
 | Ctrl+, | Open Explorer's settings |
@@ -63,6 +64,8 @@ In Explorer's settings, Sidebar > Pinned folders reorders the pins from the keyb
 | Ctrl+wheel | Step the size up or down |
 | Left, Right | In the icon sizes, move the cursor one icon; Up and Down move a whole row |
 | Letters | Jump to the first name that starts with what you typed; a plain letter also matches its accented forms, an accented one only itself, and a letter that matches nothing is left out |
+
+Right-click a row or icon to pick it and open a menu with Open, Cut, Copy, Paste, Rename, Move to trash, New folder and Undo, each showing its key. Right-clicking a row that is already picked keeps the picks, so the menu acts on all of them; Rename needs a single row and Paste needs something cut or copied. Right-click on empty space in the list for Paste, New folder and Undo above the folder lines (pin, go to a path, hidden files, settings). Up and Down move through a menu, Enter runs the line and any other key closes it.
 
 Press anywhere in the list and move at once to draw a selection box: every row or icon it touches is picked while you drag, Ctrl or Shift keeps the picks you had, Esc puts them back, and the list scrolls when you pull past its top or bottom edge. A click on empty space drops the picks. Press a row and hold still for half a second and a circle grows beside the pointer, then the files lift and you can drag them. Drag rows onto a folder, a place in the sidebar or a folder in the path to move them there; hold Ctrl to copy instead. Rows dragged to another drive, and files dropped in from another app, are copied. The target says "move here" or "copy here", or "no room" or "copy only" when the drive is too full or the files cannot be removed from where they are.
 
