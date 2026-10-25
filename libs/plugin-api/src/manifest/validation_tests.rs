@@ -795,6 +795,7 @@ mod shortcut_rules {
                 enabled: true,
                 export_to_launcher: true,
                 action: "open".to_string(),
+                app_window: false,
             }],
             ..base_manifest()
         };
@@ -827,6 +828,7 @@ mod shortcut_rules {
                 enabled: true,
                 export_to_launcher: true,
                 action: "open".to_string(),
+                app_window: false,
             }],
             ..base_manifest()
         };
@@ -843,6 +845,7 @@ mod shortcut_rules {
                 enabled: true,
                 export_to_launcher: true,
                 action: "missing".to_string(),
+                app_window: false,
             }],
             ..base_manifest()
         };
@@ -869,6 +872,7 @@ mod shortcut_rules {
                     enabled: true,
                     export_to_launcher: true,
                     action: "open".to_string(),
+                    app_window: false,
                 },
                 ShortcutDeclaration {
                     id: "open".to_string(),
@@ -876,12 +880,42 @@ mod shortcut_rules {
                     enabled: true,
                     export_to_launcher: true,
                     action: "open".to_string(),
+                    app_window: false,
                 },
             ],
             ..base_manifest()
         };
 
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_two_app_window_shortcuts() {
+        let shortcut = |id: &str| ShortcutDeclaration {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            export_to_launcher: true,
+            action: "open".to_string(),
+            app_window: true,
+        };
+        let manifest = PluginManifest {
+            menu: MenuConfig {
+                label: "M".to_string(),
+                items: vec![MenuItem::Action {
+                    id: "open".to_string(),
+                    label: "Open".to_string(),
+                    action: ActionType::Run,
+                    config_key: None,
+                }],
+            },
+            shortcuts: vec![shortcut("open"), shortcut("reopen")],
+            ..base_manifest()
+        };
+
+        let error = manifest.validate().unwrap_err();
+
+        assert!(error.to_string().contains("app_window"), "got: {error}");
     }
 }
 

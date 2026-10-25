@@ -213,6 +213,8 @@ pub struct ShortcutDeclaration {
     pub export_to_launcher: bool,
     #[serde(default = "default_shortcut_action")]
     pub action: String,
+    #[serde(default)]
+    pub app_window: bool,
 }
 
 fn default_true() -> bool {

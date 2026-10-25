@@ -206,8 +206,11 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     shortcut_store::save(&config).unwrap();
 
     let after_add = shortcut_store::load().unwrap();
-    let after_add_entries =
-        launcher_apps::collect_shortcut_entries(&after_add.shortcuts, &Default::default());
+    let after_add_entries = launcher_apps::collect_shortcut_entries(
+        &after_add.shortcuts,
+        &Default::default(),
+        &Default::default(),
+    );
     assert_eq!(
         entry_stems(&after_add_entries),
         vec!["shortcut-alpha".to_string(), "shortcut-delta".to_string()],
@@ -222,6 +225,7 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     shortcut_store::save(&config).unwrap();
     let after_enable_export = launcher_apps::collect_shortcut_entries(
         &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
         &Default::default(),
     );
     assert_eq!(
@@ -243,6 +247,7 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     let after_disable = launcher_apps::collect_shortcut_entries(
         &shortcut_store::load().unwrap().shortcuts,
         &Default::default(),
+        &Default::default(),
     );
     assert_eq!(
         entry_stems(&after_disable),
@@ -254,6 +259,7 @@ async fn shortcut_add_update_remove_reflects_in_derived_launcher_entry_set() {
     shortcut_store::save(&config).unwrap();
     let after_remove = launcher_apps::collect_shortcut_entries(
         &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
         &Default::default(),
     );
     assert_eq!(
@@ -285,6 +291,7 @@ async fn shortcut_exec_args_carry_id_for_each_derived_entry() {
 
     let entries = launcher_apps::collect_shortcut_entries(
         &shortcut_store::load().unwrap().shortcuts,
+        &Default::default(),
         &Default::default(),
     );
 

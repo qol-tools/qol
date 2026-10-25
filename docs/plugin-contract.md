@@ -114,6 +114,12 @@ Sections:
   `export_to_launcher` (default true), `action` (default `"open"`). `action` must
   reference an existing executable `[action.<id>]` entry when the catalog is
   present, otherwise an existing executable menu action id.
+  `app_window` (default false) marks the one shortcut that opens the plugin's own
+  app window. On Linux its launcher entry gets `StartupWMClass=<plugin id>`, so the
+  Cinnamon panel links the window to it and offers "Pin to panel". The window must
+  set `.app_id(PLUGIN_ID)` with `PLUGIN_ID = env!("QOL_PLUGIN_ID")`; the
+  `plugin_identity_ssot` workspace test fails when it does not. At most one
+  shortcut per manifest may set it.
 - `[[default_for]]` (`DefaultFor`): `role` and `action`. Declares a host job the plugin
   can take over (for example `slot.screenshot`); the tray claims it on the plugin's
   behalf and runs `action` when the host job fires. `action` must reference an

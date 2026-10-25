@@ -2,17 +2,20 @@ pub mod icon;
 mod platform;
 
 use crate::plugins::{Plugin, PluginManager};
-use crate::shortcuts::model::{Shortcut, ShortcutAction};
+use crate::shortcuts::model::{Shortcut, ShortcutAction, ShortcutSource};
 use icon::{LauncherIcon, MarkFiles, PluginMarks};
 use qol_plugin_api::launcher_flows::{self, FlowEntry};
 use qol_plugin_api::manifest::LauncherKind;
 use qol_theme::Mark;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 static SYNC_LOCK: Mutex<()> = Mutex::new(());
 static SYNC_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub type AppWindows = HashSet<(String, String)>;
 
 pub struct LauncherEntry {
     pub file_stem: String,
@@ -22,9 +25,41 @@ pub struct LauncherEntry {
     pub exec_args: Vec<String>,
     pub shortcut_action: Option<ShortcutAction>,
     pub icon: LauncherIcon,
+    pub window_class: Option<String>,
 }
 
-pub fn collect_shortcut_entries(shortcuts: &[Shortcut], marks: &PluginMarks) -> Vec<LauncherEntry> {
+pub fn app_window_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) -> AppWindows {
+    plugins
+        .into_iter()
+        .flat_map(|plugin| {
+            plugin
+                .manifest
+                .shortcuts
+                .iter()
+                .filter(|declared| declared.app_window)
+                .map(|declared| (plugin.id.to_string(), declared.id.clone()))
+        })
+        .collect()
+}
+
+fn window_class(shortcut: &Shortcut, app_windows: &AppWindows) -> Option<String> {
+    let Some(ShortcutSource::PluginManifest {
+        plugin_id,
+        shortcut_id,
+    }) = &shortcut.source
+    else {
+        return None;
+    };
+    app_windows
+        .contains(&(plugin_id.clone(), shortcut_id.clone()))
+        .then(|| plugin_id.clone())
+}
+
+pub fn collect_shortcut_entries(
+    shortcuts: &[Shortcut],
+    marks: &PluginMarks,
+    app_windows: &AppWindows,
+) -> Vec<LauncherEntry> {
     shortcuts
         .iter()
         .filter(|s| s.enabled && s.export_to_launcher)
@@ -36,6 +71,7 @@ pub fn collect_shortcut_entries(shortcuts: &[Shortcut], marks: &PluginMarks) -> 
             exec_args: vec!["exec".into(), "shortcut".into(), s.id.clone()],
             shortcut_action: Some(s.action.clone()),
             icon: icon::shortcut_icon(s, marks),
+            window_class: window_class(s, app_windows),
         })
         .collect()
 }
@@ -55,6 +91,7 @@ pub fn collect_command_entries() -> Vec<LauncherEntry> {
             ],
             shortcut_action: None,
             icon: LauncherIcon::Mark(c.mark),
+            window_class: None,
         })
         .collect()
 }
@@ -75,6 +112,7 @@ pub fn core_settings_entry() -> LauncherEntry {
         ],
         shortcut_action: None,
         icon: LauncherIcon::Mark(Mark::Settings),
+        window_class: None,
     }
 }
 
@@ -103,6 +141,7 @@ pub fn collect_plugin_settings_entries<'a>(
                 exec_args: vec!["exec".into(), id.to_string(), action.id],
                 shortcut_action: None,
                 icon: LauncherIcon::Mark(icon::plugin_mark(plugin)),
+                window_class: None,
             })
         })
         .collect()
@@ -172,13 +211,14 @@ pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>
         log::warn!("Skipping launcher sync: no data directory");
         return;
     };
-    let (plugin_settings_entries, flows, plugin_marks) = match plugin_manager.lock() {
+    let (plugin_settings_entries, flows, plugin_marks, app_windows) = match plugin_manager.lock() {
         Ok(manager) => {
             reconcile_plugin_shortcuts(manager.plugins());
             (
                 collect_plugin_settings_entries(manager.plugins()),
                 collect_flow_entries(manager.plugins(), &marks),
                 icon::plugin_marks(manager.plugins()),
+                app_window_shortcuts(manager.plugins()),
             )
         }
         Err(error) => {
@@ -186,10 +226,21 @@ pub fn trigger_full_sync_with_manager(plugin_manager: &Arc<Mutex<PluginManager>>
                 "plugin manager lock poisoned during launcher sync: {}",
                 error
             );
-            (Vec::new(), Vec::new(), PluginMarks::new())
+            (
+                Vec::new(),
+                Vec::new(),
+                PluginMarks::new(),
+                AppWindows::new(),
+            )
         }
     };
-    sync_launcher_entries(plugin_settings_entries, flows, &plugin_marks, marks);
+    sync_launcher_entries(
+        plugin_settings_entries,
+        flows,
+        &plugin_marks,
+        &app_windows,
+        marks,
+    );
 }
 
 fn reconcile_plugin_shortcuts<'a>(plugins: impl IntoIterator<Item = &'a Plugin>) {
@@ -205,6 +256,7 @@ fn sync_launcher_entries(
     plugin_settings_entries: Vec<LauncherEntry>,
     flows: Vec<FlowEntry>,
     plugin_marks: &PluginMarks,
+    app_windows: &AppWindows,
     marks: MarkFiles,
 ) {
     let shortcut_config = match crate::shortcuts::store::load() {
@@ -214,7 +266,8 @@ fn sync_launcher_entries(
             return;
         }
     };
-    let mut entries = collect_shortcut_entries(&shortcut_config.shortcuts, plugin_marks);
+    let mut entries =
+        collect_shortcut_entries(&shortcut_config.shortcuts, plugin_marks, app_windows);
     entries.extend(collect_command_entries());
     entries.push(core_settings_entry());
     entries.extend(plugin_settings_entries);
@@ -326,7 +379,7 @@ mod tests {
             },
         ];
 
-        let entries = collect_shortcut_entries(&shortcuts, &PluginMarks::new());
+        let entries = collect_shortcut_entries(&shortcuts, &PluginMarks::new(), &AppWindows::new());
         let alpha = &entries[0];
         let delta = &entries[1];
 
@@ -355,6 +408,35 @@ mod tests {
             &delta.icon,
             LauncherIcon::TargetApp(AppRef::BundleId { id }) if id == "com.apple.Safari"
         ));
+    }
+
+    #[test]
+    fn only_the_app_window_shortcut_carries_the_plugin_window_class() {
+        let plugin = Plugin::new(
+            PluginId::new("qol-explorer"),
+            manifest(
+                "[plugin]\nid = \"qol-explorer\"\nname = \"Explorer\"\ndescription = \"\"\nversion = \"1.0.0\"\n[menu]\nlabel = \"\"\nitems = []\n[action.open]\nlabel = \"Open\"\nargs = [\"open\"]\n[action.peek]\nlabel = \"Peek\"\nargs = [\"peek\"]\n[[shortcuts]]\nid = \"open\"\nname = \"Explorer\"\napp_window = true\n[[shortcuts]]\nid = \"peek\"\nname = \"Peek\"\naction = \"peek\"\n",
+            ),
+            "/a/b/qol-explorer".into(),
+        );
+        let managed = |shortcut_id: &str| Shortcut {
+            source: Some(ShortcutSource::PluginManifest {
+                plugin_id: "qol-explorer".to_string(),
+                shortcut_id: shortcut_id.to_string(),
+            }),
+            ..url_shortcut(shortcut_id, true, true, "https://unused.example")
+        };
+        let shortcuts = [
+            managed("open"),
+            managed("peek"),
+            url_shortcut("open", true, true, "https://open.example"),
+        ];
+
+        let app_windows = app_window_shortcuts([&plugin]);
+        let entries = collect_shortcut_entries(&shortcuts, &PluginMarks::new(), &app_windows);
+        let classes: Vec<_> = entries.iter().map(|e| e.window_class.as_deref()).collect();
+
+        assert_eq!(classes, [Some("qol-explorer"), None, None]);
     }
 
     #[test]

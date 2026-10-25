@@ -39,6 +39,7 @@ id = "open"
 name = "Explorer"
 action = "open"
 export_to_launcher = true
+app_window = true
 
 [[default_for]]
 role = "folder.open"

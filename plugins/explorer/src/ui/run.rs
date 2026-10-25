@@ -26,6 +26,7 @@ pub fn open(start: PathBuf) -> anyhow::Result<()> {
         let tracker = MonitorTracker::start(cx);
         let opened = Surface::new(SurfaceKind::Panel)
             .title(WINDOW_TITLE)
+            .app_id(PLUGIN_ID)
             .title_bar(title_bar)
             .icon(ICON_SIDE, ICON)
             .size(size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)))

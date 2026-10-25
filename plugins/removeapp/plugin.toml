@@ -37,6 +37,7 @@ id = "open"
 name = "Remove App"
 action = "open"
 export_to_launcher = true
+app_window = true
 
 [[dependencies.binaries]]
 name = "qol-removeapp"

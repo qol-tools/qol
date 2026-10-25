@@ -37,7 +37,7 @@ fn bin_names(crate_manifest: &Path) -> Vec<String> {
     vec![package.to_string()]
 }
 
-fn binary_name_constant_files(plugin_dir: &Path) -> Vec<String> {
+fn src_files_containing(plugin_dir: &Path, needle: &str) -> Vec<String> {
     let src = plugin_dir.join("src");
     if !src.is_dir() {
         return Vec::new();
@@ -51,7 +51,7 @@ fn binary_name_constant_files(plugin_dir: &Path) -> Vec<String> {
         let Ok(content) = fs::read_to_string(entry.path()) else {
             continue;
         };
-        if content.contains("const BINARY_NAME") {
+        if content.contains(needle) {
             found.push(entry.path().display().to_string());
         }
     }
@@ -189,7 +189,7 @@ fn every_plugin_declares_one_identity_everywhere() {
             )),
         }
 
-        for file in binary_name_constant_files(&dir) {
+        for file in src_files_containing(&dir, "const BINARY_NAME") {
             problems.push(format!("{file}: const BINARY_NAME must not exist"));
         }
     }
@@ -197,6 +197,45 @@ fn every_plugin_declares_one_identity_everywhere() {
     assert!(
         problems.is_empty(),
         "plugin identity violations:\n{}",
+        problems.join("\n")
+    );
+}
+
+#[test]
+fn every_app_window_shortcut_opens_a_window_classed_by_the_plugin_id() {
+    let root = workspace_root();
+    let plugin_dirs = qol_workspace::monorepo_plugin_dirs(&root).expect("read plugins directory");
+    let mut app_window_plugins = 0;
+    let mut problems = Vec::new();
+
+    for dir in plugin_dirs {
+        let manifest = PluginManifest::read_from_dir(&dir)
+            .unwrap_or_else(|error| panic!("{}: {error}", dir.display()));
+        if !manifest
+            .shortcuts
+            .iter()
+            .any(|shortcut| shortcut.app_window)
+        {
+            continue;
+        }
+        app_window_plugins += 1;
+        for needle in ["env!(\"QOL_PLUGIN_ID\")", ".app_id(PLUGIN_ID)"] {
+            if src_files_containing(&dir, needle).is_empty() {
+                problems.push(format!(
+                    "{}: marks an app_window shortcut, so its window needs {needle}",
+                    dir.display()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        app_window_plugins > 0,
+        "no plugin marks an app_window shortcut"
+    );
+    assert!(
+        problems.is_empty(),
+        "app window class violations:\n{}",
         problems.join("\n")
     );
 }

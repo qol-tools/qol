@@ -196,6 +196,7 @@ mod tests {
             enabled: true,
             export_to_launcher: true,
             action: "open".to_string(),
+            app_window: false,
         }
     }
 

@@ -12,7 +12,16 @@ pub(super) fn validate_shortcuts(
     for shortcut in shortcuts {
         validate_shortcut(shortcut, executable_action_ids, &mut ids)?;
     }
-    Ok(())
+    validate_one_app_window(shortcuts)
+}
+
+fn validate_one_app_window(shortcuts: &[ShortcutDeclaration]) -> Result<()> {
+    let app_windows = shortcuts.iter().filter(|shortcut| shortcut.app_window);
+    if app_windows.count() <= 1 {
+        return Ok(());
+    }
+
+    bail!("shortcuts may mark at most one app_window")
 }
 
 fn validate_shortcut(
