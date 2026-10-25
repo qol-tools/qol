@@ -98,9 +98,16 @@ pub(super) fn render(view: &ExplorerView, cx: &mut Context<ExplorerView>) -> imp
         pinned.push(pin_slot(slot, name, kit));
     }
     children.push(
-        targets::pins(div().flex_none().flex().flex_col(), cx)
-            .children(pinned)
-            .into_any_element(),
+        targets::pins(
+            div()
+                .flex_none()
+                .min_h(px(HEIGHT_CONTROL))
+                .flex()
+                .flex_col(),
+            cx,
+        )
+        .children(pinned)
+        .into_any_element(),
     );
     children.push(header("Devices", "Your drives", in_devices));
     for (offset, row) in devices.into_iter().enumerate() {
