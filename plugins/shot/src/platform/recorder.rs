@@ -52,17 +52,7 @@ pub fn encoder_args(config: &Config, realtime: bool) -> Vec<String> {
     args
 }
 
-pub fn h264_copy_args(config: &Config) -> Option<Vec<String>> {
-    let format = recording_format(&config.video.format);
-    if format == "webm" {
-        return None;
-    }
-    let mut args = ["-c:v", "copy"].map(str::to_string).to_vec();
-    args.extend(h264_container_args(&format));
-    Some(args)
-}
-
-fn h264_container_args(format: &str) -> Vec<String> {
+pub fn h264_container_args(format: &str) -> Vec<String> {
     let mut args = ["-c:a", "aac", "-b:a", "192k"].map(str::to_string).to_vec();
     if matches!(format, "mp4" | "mov") {
         args.extend(["-movflags", "+faststart"].map(str::to_string));

@@ -804,13 +804,23 @@ fn cinnamon_conversion_args(
         capture_file.to_string_lossy().to_string(),
     ];
     let copied = match CinnamonEncoder::from_capture_file(capture_file) {
-        CinnamonEncoder::Nvenc => recorder::h264_copy_args(config),
+        CinnamonEncoder::Nvenc => h264_copy_args(config),
         CinnamonEncoder::Vp8 => None,
     };
     args.extend(copied.unwrap_or_else(|| recorder::encoder_args(config, false)));
     args.extend(["-fps_mode", "passthrough"].map(str::to_string));
     args.push(output_file.to_string_lossy().to_string());
     args
+}
+
+fn h264_copy_args(config: &Config) -> Option<Vec<String>> {
+    let format = recording_format(&config.video.format);
+    if format == "webm" {
+        return None;
+    }
+    let mut args = ["-c:v", "copy"].map(str::to_string).to_vec();
+    args.extend(recorder::h264_container_args(&format));
+    Some(args)
 }
 
 pub fn stop_capture(session: &CaptureSession) -> Result<()> {
