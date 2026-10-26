@@ -209,21 +209,20 @@ fn scan_with_branch_resolver<F>(anchor: &Path, resolve_branch: F) -> Vec<Worktre
 where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    let Some(worktrees) = qol_workspace::worktrees_dir(anchor) else {
-        return vec![];
-    };
-    collect_feature_grouped(&worktrees, resolve_branch)
+    let mut out = Vec::new();
+    for worktrees in qol_workspace::worktrees_dirs(anchor) {
+        collect_feature_grouped(&worktrees, resolve_branch, &mut out);
+    }
+    out
 }
 
-fn collect_feature_grouped<F>(worktrees_dir: &Path, resolve_branch: F) -> Vec<WorktreeInfo>
+fn collect_feature_grouped<F>(worktrees_dir: &Path, resolve_branch: F, out: &mut Vec<WorktreeInfo>)
 where
     F: Fn(&Path) -> Option<String> + Copy,
 {
-    let mut out = Vec::new();
     for child in read_child_dirs(worktrees_dir) {
-        walk_for_any_repo(&child, resolve_branch, &mut out, WORKTREE_SCAN_MAX_DEPTH);
+        walk_for_any_repo(&child, resolve_branch, out, WORKTREE_SCAN_MAX_DEPTH);
     }
-    out
 }
 
 fn walk_for_any_repo<F>(dir: &Path, resolve_branch: F, out: &mut Vec<WorktreeInfo>, max_depth: u8)
@@ -747,6 +746,56 @@ path = \"src/main.rs\"
         assert!(result.is_empty(), "result: {:?}", result);
     }
 
+    #[test]
+    fn scan_collects_in_repo_and_sibling_worktree_roots() {
+        let tmp = TempDir::new().unwrap();
+        let primary = tmp.path().join("qol-monorepo");
+        let in_repo = create_git_worktree(&primary.join("worktrees").join("in-repo-branch"));
+        let sibling = create_git_worktree(&tmp.path().join("worktrees").join("sibling-branch"));
+        let result = scan_with_branch_resolver(&primary, dir_name_branch_resolver);
+
+        assert_eq!(
+            result,
+            vec![
+                WorktreeInfo {
+                    branch: "in-repo-branch".to_string(),
+                    path: in_repo,
+                },
+                WorktreeInfo {
+                    branch: "sibling-branch".to_string(),
+                    path: sibling,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_lists_branch_in_both_roots_once_from_nearer_root() {
+        let tmp = TempDir::new().unwrap();
+        let primary = tmp.path().join("qol-monorepo");
+        let in_repo = create_git_worktree(&primary.join("worktrees").join("shared-branch"));
+        create_git_worktree(&tmp.path().join("worktrees").join("shared-branch"));
+        let result = scan_with_branch_resolver(&primary, dir_name_branch_resolver);
+
+        assert_eq!(
+            result,
+            vec![WorktreeInfo {
+                branch: "shared-branch".to_string(),
+                path: in_repo,
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_without_any_worktrees_root_finds_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let primary = tmp.path().join("qol-monorepo");
+        std::fs::create_dir_all(&primary).unwrap();
+        let result = scan_with_branch_resolver(&primary, dir_name_branch_resolver);
+
+        assert!(result.is_empty(), "result: {:?}", result);
+    }
+
     fn create_manifest_dir(root: &Path, repo_name: &str) -> PathBuf {
         let manifest_dir = root.join(repo_name);
         std::fs::create_dir_all(&manifest_dir).unwrap();
@@ -765,6 +814,13 @@ path = \"src/main.rs\"
             std::fs::create_dir_all(path.join(".git")).unwrap();
         }
         path.to_path_buf()
+    }
+
+    fn dir_name_branch_resolver(repo_dir: &Path) -> Option<String> {
+        if !repo_dir.join(".git").exists() {
+            return None;
+        }
+        repo_dir.file_name()?.to_str().map(str::to_string)
     }
 
     fn fake_branch_resolver(repo_dir: &Path) -> Option<String> {
