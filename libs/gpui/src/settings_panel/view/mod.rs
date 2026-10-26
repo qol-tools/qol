@@ -304,6 +304,7 @@ pub(super) struct SettingsPanelView {
     slider_press: Option<SliderPress>,
     number_hover: Option<(usize, String)>,
     number_scrub: Option<f32>,
+    number_drag_start: Option<(usize, String, f64)>,
     number_motion: RefCell<NumberMotion>,
     number_pulse: Option<NumberPulse>,
     slider_pending: std::collections::HashSet<(usize, String)>,
@@ -518,6 +519,7 @@ impl SettingsPanelView {
             slider_press: None,
             number_hover: None,
             number_scrub: None,
+            number_drag_start: None,
             number_motion: RefCell::new(NumberMotion::default()),
             number_pulse: None,
             slider_pending: std::collections::HashSet::new(),
@@ -1260,11 +1262,40 @@ impl SettingsPanelView {
     }
 
     fn drop_slider_press(&mut self) {
+        self.restore_number_drag();
         self.slider_press = None;
         self.slider_drag = None;
         self.number_scrub = None;
         self.number_hover = None;
         self.number_motion.get_mut().settles.clear();
+    }
+
+    fn restore_number_drag(&mut self) {
+        let Some((row, id, value)) = self.number_drag_start.take() else {
+            return;
+        };
+        if number_drag_effect(&self.level().rows, row) != NumberDragEffect::Preview {
+            return;
+        }
+        let Some(target) = self.level_mut().rows.get_mut(row) else {
+            return;
+        };
+        if target.id != id {
+            return;
+        }
+        if let RowControl::Number { value: held, .. } = &mut target.control {
+            *held = value;
+        }
+    }
+
+    fn number_value_at(&self, row: usize, id: &str) -> Option<f64> {
+        match self.level().rows.get(row) {
+            Some(row) if row.id == id => match &row.control {
+                RowControl::Number { value, .. } => Some(*value),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn on_rail_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -2844,6 +2875,15 @@ impl SettingsPanelView {
 
     fn begin_number_slider_drag(&mut self, row: usize, cx: &mut Context<Self>) {
         self.number_pulse = None;
+        self.number_drag_start = self
+            .level()
+            .rows
+            .get(row)
+            .and_then(|row| match &row.control {
+                RowControl::Number { value, .. } => Some((row.id.clone(), *value)),
+                _ => None,
+            })
+            .map(|(id, value)| (row, id, value));
         if matches!(self.level().active_control, Some(ActiveControl::Edit(..))) {
             match pending_edit_on_scrub(row, self.level().selected) {
                 PendingEdit::Commit => self.commit_edit(cx),
@@ -3015,11 +3055,20 @@ impl SettingsPanelView {
         if let Some(stream) = self.stream_for(row) {
             stream.close();
         }
+        let started = self.number_drag_start.take();
         match number_finish_plan(&self.level().rows, row) {
             NumberFinishPlan::Live => {}
             NumberFinishPlan::DispatchLive => {
-                if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
-                    self.schedule_live_number(row, id, cx);
+                let moved = match &started {
+                    Some((start_row, id, value)) => {
+                        self.number_value_at(*start_row, id) != Some(*value)
+                    }
+                    None => true,
+                };
+                if moved {
+                    if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                        self.schedule_live_number(row, id, cx);
+                    }
                 }
             }
             NumberFinishPlan::Persist { action } => {
