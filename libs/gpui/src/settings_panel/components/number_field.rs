@@ -1,7 +1,7 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, AnimationExt, BoxShadow, SharedString};
-use qol_theme::{Curve, Motion, TextStyle};
+use gpui::{div, px, rgb, rgba, AnimationExt, SharedString};
+use qol_theme::{Curve, Motion, TextStyle, FOCUS_RING_HALO};
 use std::time::Duration;
 
 use crate::deck::with_alpha;
@@ -81,8 +81,6 @@ const LEVEL_SEGMENT_HEIGHT: f32 = 10.0;
 const LEVEL_LOUD_FROM: f32 = 0.7;
 const LEVEL_PEAK_FROM: f32 = 0.9;
 const MARKER_THUMB: f32 = 12.0;
-const MARKER_GLOW: f32 = 4.0;
-const MARKER_GLOW_ALPHA: f32 = 0.55;
 
 fn thumb_left(centre: f32) -> f32 {
     centre - WIDE_THUMB / 2.0
@@ -363,17 +361,20 @@ fn settling(
         .into_any_element()
 }
 
-fn marker_glow(ground: Ground) -> Vec<BoxShadow> {
-    vec![BoxShadow {
-        color: with_alpha(ground.ink, MARKER_GLOW_ALPHA).into(),
-        offset: point(px(0.0), px(0.0)),
-        blur_radius: px(MARKER_GLOW),
-        spread_radius: px(0.0),
-    }]
-}
-
-fn glowing(face: gpui::Div, ground: Ground) -> gpui::Div {
-    face.shadow(marker_glow(ground))
+fn marker_face(ground: Ground, hover: Option<Ground>, glowing: bool) -> gpui::Div {
+    let halo = div()
+        .absolute()
+        .top(px(-FOCUS_RING_HALO))
+        .left(px(-FOCUS_RING_HALO))
+        .size(px(MARKER_THUMB + FOCUS_RING_HALO * 2.0))
+        .rounded_full()
+        .bg(rgba(ground.halo.packed()))
+        .opacity(if glowing { 1.0 } else { 0.0 });
+    div().size_full().child(halo).child(ground_bg(
+        div().absolute().size(px(MARKER_THUMB)).rounded_full(),
+        rgb(ground.ink),
+        hover.map(|hover| rgb(hover.ink)),
+    ))
 }
 
 fn marker_thumb(
@@ -382,27 +383,16 @@ fn marker_thumb(
     ground: Ground,
     hover: Option<Ground>,
 ) -> gpui::AnyElement {
-    let face = ground_bg(
-        div().size_full().rounded_full(),
-        rgb(ground.ink),
-        hover.map(|hover| rgb(hover.ink)),
-    );
     let face = match cue.pulse {
-        _ if cue.dragging => glowing(face, ground).into_any_element(),
-        Some(step) => face
+        _ if cue.dragging => marker_face(ground, hover, true).into_any_element(),
+        Some(step) => marker_face(ground, hover, false)
             .with_animation(
                 ("settings-number-pulse", step),
                 crate::motion::animation(Motion::TRAVEL),
-                move |face, delta| {
-                    if delta < 1.0 {
-                        glowing(face, ground)
-                    } else {
-                        face
-                    }
-                },
+                move |_, delta| marker_face(ground, hover, delta < 1.0),
             )
             .into_any_element(),
-        None => face.into_any_element(),
+        None => marker_face(ground, hover, false).into_any_element(),
     };
     settling(
         div()
