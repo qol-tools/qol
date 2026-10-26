@@ -1,7 +1,7 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, AnimationExt, SharedString};
-use qol_theme::{Curve, Motion, TextStyle, FOCUS_RING_HALO};
+use qol_theme::{Curve, Motion, TextStyle};
 use std::time::Duration;
 
 use crate::deck::with_alpha;
@@ -57,8 +57,9 @@ pub(in crate::settings_panel) struct NumberCue {
     pub(in crate::settings_panel) dragging: bool,
     pub(in crate::settings_panel) limit: Option<String>,
     pub(in crate::settings_panel) marked: bool,
-    pub(in crate::settings_panel) pulse: Option<usize>,
     pub(in crate::settings_panel) settle: Option<(f32, usize)>,
+    pub(in crate::settings_panel) bloom: Option<(f32, usize)>,
+    pub(in crate::settings_panel) glowing: bool,
 }
 
 impl NumberCue {
@@ -66,7 +67,6 @@ impl NumberCue {
         duration: Duration::from_millis(200),
         curve: Curve::Settle,
     };
-    pub(in crate::settings_panel) const PULSE: Duration = Motion::TRAVEL.duration;
 }
 
 const WIDE_THUMB: f32 = 16.0;
@@ -80,17 +80,20 @@ const LEVEL_SEGMENTS: usize = 16;
 const LEVEL_SEGMENT_HEIGHT: f32 = 10.0;
 const LEVEL_LOUD_FROM: f32 = 0.7;
 const LEVEL_PEAK_FROM: f32 = 0.9;
-const MARKER_THUMB: f32 = 12.0;
+const BOLT: f32 = 18.0;
+const HEX: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path fill="currentColor" fill-rule="evenodd" d="M9 0L17 4.5V13.5L9 18L1 13.5V4.5ZM9 5.8A3.2 3.2 0 1 0 9 12.2A3.2 3.2 0 1 0 9 5.8Z"/></svg>"#;
+const BLOOM: f32 = 34.0;
+const BLOOM_MARKUP: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34"><defs><radialGradient id="b" cx="50%" cy="50%" r="50%"><stop offset="34%" stop-color="currentColor" stop-opacity="0.3"/><stop offset="68%" stop-color="currentColor" stop-opacity="0.1"/><stop offset="100%" stop-color="currentColor" stop-opacity="0"/></radialGradient></defs><circle cx="17" cy="17" r="17" fill="url(#b)"/></svg>"#;
 
 fn thumb_left(centre: f32) -> f32 {
     centre - WIDE_THUMB / 2.0
 }
 
-fn marker_pin_left(fraction: f32) -> f32 {
-    tick_left(fraction, SliderStyle::Compact.track_width())
+fn marker_centre(fraction: f32) -> f32 {
+    fraction.clamp(0.0, 1.0) * SliderStyle::Compact.track_width()
 }
 
-fn marker_pin_inset(left: f32) -> f32 {
+fn marker_inset(left: f32) -> f32 {
     let width = SliderStyle::Compact.track_width();
     let radius = qol_theme::RADIUS_CONTROL;
     let centre = left + qol_theme::LINE / 2.0;
@@ -99,16 +102,6 @@ fn marker_pin_inset(left: f32) -> f32 {
         return 0.0;
     }
     radius - (radius * radius - (radius - edge) * (radius - edge)).sqrt()
-}
-
-fn marker_thumb_left(fraction: f32) -> f32 {
-    let width = SliderStyle::Compact.track_width();
-    let half = MARKER_THUMB / 2.0;
-    (fraction * width).clamp(half, width - half) - half
-}
-
-fn marker_thumb_top() -> f32 {
-    SliderStyle::Compact.track_height() - MARKER_THUMB / 2.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,50 +354,63 @@ fn settling(
         .into_any_element()
 }
 
-fn marker_face(ground: Ground, hover: Option<Ground>, glowing: bool) -> gpui::Div {
-    let halo = div()
-        .absolute()
-        .top(px(-FOCUS_RING_HALO))
-        .left(px(-FOCUS_RING_HALO))
-        .size(px(MARKER_THUMB + FOCUS_RING_HALO * 2.0))
-        .rounded_full()
-        .bg(rgba(ground.halo.packed()))
-        .opacity(if glowing { 1.0 } else { 0.0 });
-    div().size_full().child(halo).child(ground_bg(
-        div().absolute().size(px(MARKER_THUMB)).rounded_full(),
-        rgb(ground.ink),
-        hover.map(|hover| rgb(hover.ink)),
-    ))
+fn bloom(ink: u32, strength: f32) -> Option<impl IntoElement> {
+    crate::pictures::icon("settings-number-bloom", BLOOM_MARKUP, ink, BLOOM as u32)
+        .map(|image| gpui::img(image).size(px(BLOOM)).opacity(strength))
 }
 
-fn marker_thumb(
+fn marker_mark(
     fraction: f32,
     cue: &NumberCue,
     ground: Ground,
     hover: Option<Ground>,
 ) -> gpui::AnyElement {
-    let face = match cue.pulse {
-        _ if cue.dragging => marker_face(ground, hover, true).into_any_element(),
-        Some(step) => marker_face(ground, hover, false)
-            .with_animation(
-                ("settings-number-pulse", step),
-                crate::motion::animation(Motion::TRAVEL),
-                move |_, delta| marker_face(ground, hover, delta < 1.0),
-            )
-            .into_any_element(),
-        None => marker_face(ground, hover, false).into_any_element(),
-    };
-    settling(
+    let ink = hover.unwrap_or(ground).ink;
+    let strength = if cue.glowing { 1.0 } else { 0.0 };
+    let seat = SliderStyle::Compact.track_height() - BOLT / 2.0;
+    let halo = settling(
         div()
             .absolute()
-            .top(px(marker_thumb_top()))
-            .size(px(MARKER_THUMB))
-            .child(face),
-        "settings-number-thumb",
+            .top(px(seat - (BLOOM - BOLT) / 2.0))
+            .size(px(BLOOM))
+            .children(bloom(ink, 1.0)),
+        "settings-number-bloom-position",
         fraction,
         cue.settle,
-        |thumb, at| thumb.left(px(marker_thumb_left(at))),
-    )
+        |halo, at| halo.left(px(marker_centre(at) - BLOOM / 2.0)),
+    );
+    let halo = settling(
+        div().absolute().inset_0().child(halo),
+        "settings-number-bloom",
+        strength,
+        cue.bloom,
+        |halo, opacity| halo.opacity(opacity),
+    );
+    let bolt = match crate::pictures::icon("settings-number-bolt", HEX, ink, BOLT as u32) {
+        Some(image) => gpui::img(image).size(px(BOLT)).into_any_element(),
+        None => div()
+            .size(px(BOLT))
+            .rounded_full()
+            .bg(rgb(ink))
+            .into_any_element(),
+    };
+    let bolt = settling(
+        div()
+            .absolute()
+            .top(px(seat))
+            .size(px(BOLT))
+            .when(cue.marked, |mark| mark.child(bolt)),
+        "settings-number-grip",
+        fraction,
+        cue.settle,
+        |mark, at| mark.left(px(marker_centre(at) - BOLT / 2.0)),
+    );
+    div()
+        .absolute()
+        .inset_0()
+        .child(halo)
+        .child(bolt)
+        .into_any_element()
 }
 
 fn scrub_field(
@@ -421,34 +427,31 @@ fn scrub_field(
     } else {
         qol_theme::OPACITY_FILL
     };
+    let radius = qol_theme::RADIUS_CONTROL;
     let fill = settling(
         ground_bg(
-            div().absolute().left_0().top_0().h_full(),
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .h_full()
+                .rounded_l(px(radius)),
             with_alpha(ground.mark, strength),
             hover.map(|hover| with_alpha(hover.mark, strength)),
         ),
         "settings-number-fill",
         fraction,
         cue.settle,
-        move |fill, at| fill.w(px(at * width)),
+        move |fill, at| {
+            let filled = at * width;
+            let fill = fill.w(px(filled));
+            if width - filled < radius {
+                fill.rounded_r(px(radius))
+            } else {
+                fill
+            }
+        },
     );
-    let pin = cue.marked.then(|| {
-        settling(
-            ground_bg(
-                div().absolute().w(px(qol_theme::LINE)),
-                rgb(ground.ink),
-                hover.map(|hover| rgb(hover.ink)),
-            ),
-            "settings-number-pin",
-            fraction,
-            cue.settle,
-            |pin, at| {
-                let left = marker_pin_left(at);
-                let inset = marker_pin_inset(left);
-                pin.left(px(left)).top(px(inset)).bottom(px(inset))
-            },
-        )
-    });
     let field = ground_bg(
         div()
             .absolute()
@@ -459,7 +462,26 @@ fn scrub_field(
         hover.map(|hover| rgba(hover.well.packed())),
     )
     .child(fill)
-    .children(pin)
+    .children(cue.marked.then(|| {
+        settling(
+            ground_bg(
+                div().absolute().w(px(qol_theme::LINE)),
+                rgb(ground.ink),
+                hover.map(|hover| rgb(hover.ink)),
+            ),
+            "settings-number-pin",
+            fraction,
+            cue.settle,
+            |pin, at| {
+                let width = SliderStyle::Compact.track_width();
+                let left =
+                    (marker_centre(at) - qol_theme::LINE / 2.0).clamp(0.0, width - qol_theme::LINE);
+                pin.left(px(left))
+                    .top(px(marker_inset(left)))
+                    .bottom(px(BOLT / 2.0))
+            },
+        )
+    }))
     .when(cue.editing, |field| field.shadow(kit.focus_ring(ground)));
     div()
         .relative()
@@ -468,8 +490,7 @@ fn scrub_field(
         .h(px(SliderStyle::Compact.track_height()))
         .child(field)
         .children(
-            cue.marked
-                .then(|| marker_thumb(fraction, cue, ground, hover)),
+            (cue.marked || cue.bloom.is_some()).then(|| marker_mark(fraction, cue, ground, hover)),
         )
         .child(
             div()
@@ -579,29 +600,18 @@ mod tests {
     }
 
     #[test]
-    fn the_compact_marker_pin_rides_the_boundary_and_the_thumb_stays_inside_the_field() {
+    fn the_compact_marker_rides_the_boundary_inside_the_field() {
         let width = SliderStyle::Compact.track_width();
-        assert_eq!(marker_pin_left(0.0), 0.0);
-        assert_eq!(marker_pin_left(1.0), width - qol_theme::LINE);
-        assert_eq!(marker_pin_inset(marker_pin_left(0.5)), 0.0);
-        let corner = marker_pin_inset(marker_pin_left(0.0));
-        assert!(
-            corner > 0.0 && corner < qol_theme::RADIUS_CONTROL,
-            "{corner}"
-        );
-        assert_eq!(corner, marker_pin_inset(marker_pin_left(1.0)));
-        assert_eq!(marker_thumb_left(0.0), 0.0);
-        assert_eq!(marker_thumb_left(1.0) + MARKER_THUMB, width);
-        assert_eq!(marker_thumb_left(0.5) + MARKER_THUMB / 2.0, width / 2.0);
+        assert_eq!(marker_centre(0.5), width / 2.0);
+        assert_eq!(marker_centre(0.0), 0.0);
+        assert_eq!(marker_centre(1.0), width);
         for fraction in [0.0, 0.02, 0.25, 0.5, 0.75, 0.98, 1.0] {
-            let left = marker_thumb_left(fraction);
+            let centre = marker_centre(fraction);
             assert!(
-                left >= 0.0 && left + MARKER_THUMB <= width,
-                "fraction {fraction}: thumb left {left}"
+                (0.0..=width).contains(&centre),
+                "fraction {fraction}: centre {centre}"
             );
         }
-        assert_eq!(marker_thumb_top(), 22.0);
-        assert_eq!(marker_thumb_top() + MARKER_THUMB, 34.0);
     }
 
     #[test]
