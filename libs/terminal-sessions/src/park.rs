@@ -58,6 +58,9 @@ pub struct ParkRecord {
     /// What the conversation is told about the finished command, kept until it is delivered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wake: Option<String>,
+    /// When a runner first typed `wake` into the conversation, so it is never typed twice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_typed_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -249,6 +252,7 @@ mod tests {
             restarts: 0,
             exit_code: None,
             wake: None,
+            wake_typed_at: None,
             resumed_session: None,
             detail: None,
             report: None,

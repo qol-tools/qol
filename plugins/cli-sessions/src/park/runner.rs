@@ -26,6 +26,7 @@ const READY_POLLS_BEFORE_CLOSE: u32 = 2;
 const WOKEN_UNREAD_LIMIT: u32 = 30;
 const UNKNOWN_POLLS_BEFORE_RESUME: u32 = 30;
 const BUSY_POLLS_BEFORE_GIVING_UP: u32 = 1800;
+const UNCONFIRMED_POLLS_BEFORE_SETTLING: u32 = 5;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum CallerState {
@@ -165,38 +166,6 @@ impl SettleGate {
     }
 }
 
-#[derive(Debug, Default)]
-struct WakeDelivery {
-    unconfirmed: u32,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum WakeStep {
-    Retry,
-    Delivered,
-    DeliveredUnconfirmed,
-}
-
-impl WakeDelivery {
-    fn observe(&mut self, outcome: Result<Typed, TerminalError>) -> WakeStep {
-        let Ok(typed) = outcome else {
-            return WakeStep::Retry;
-        };
-        if matches!(typed, Typed::Held(_)) {
-            return WakeStep::Retry;
-        }
-        if typed.landed() {
-            return WakeStep::Delivered;
-        }
-        self.unconfirmed += 1;
-        if self.unconfirmed > 1 {
-            WakeStep::DeliveredUnconfirmed
-        } else {
-            WakeStep::Retry
-        }
-    }
-}
-
 pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     let mut record = store.load(id)?;
     if store.is_claimed(id) {
@@ -321,7 +290,7 @@ fn start_command(record: &ParkRecord, log_path: &Path) -> Result<std::process::C
         .with_context(|| format!("failed to start `{program}`"))
 }
 
-/// Delivers every finished result of this conversation to the one session that holds it once its
+/// Delivers this record's finished result to the one session that holds the conversation once its
 /// prompt is free, or resumes the conversation once when no session holds it. Each attempt holds
 /// the conversation lock; the wait between attempts does not. Returns whether this runner resumed
 /// it and so watches the woken session.
@@ -332,11 +301,16 @@ fn deliver(
     record: &mut ParkRecord,
     caller: &SessionBinding,
 ) -> Result<bool> {
+    let Some(section) = record.wake.clone() else {
+        return Ok(false);
+    };
+    let prompt = wake_prompt(std::slice::from_ref(&section));
     let mut unknown = 0;
     let mut busy = 0;
     let mut settle = SettleGate::default();
     let mut guard = ComposerGuard::default();
-    let mut wake = WakeDelivery::default();
+    let mut wake = WakeConfirmation::default();
+    let mut typed = record.wake_typed_at.is_some();
     loop {
         {
             let _turn = store.lock_conversation(&record.external_id)?;
@@ -345,53 +319,143 @@ fn deliver(
                 return Ok(false);
             }
             if settle.settled(&batch) {
-                let prompt = wake_prompt(
-                    &batch
-                        .iter()
-                        .filter_map(|parked| parked.wake.clone())
-                        .collect::<Vec<_>>(),
-                );
                 match holder(terminals, interpreter, store, record, caller) {
                     Holder::Live(binding) => {
                         unknown = 0;
-                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready {
+                        let turns = woken_turns(terminals, interpreter, &binding);
+                        let ready =
+                            caller_state(terminals, interpreter, &binding) == CallerState::Ready;
+                        if typed {
+                            if section_landed(&turns, &section) {
+                                settle_record(store, record, ParkState::Delivered, &binding, None);
+                                qol_runtime::probe!(
+                                    "CLI_SESSION_PARK",
+                                    "event=delivered id={} session={} confirmed=true",
+                                    record.id,
+                                    binding
+                                );
+                                return Ok(false);
+                            }
+                            if ready
+                                && wake_in_composer(terminals, interpreter, &binding, &prompt)
+                                && guard
+                                    .type_text(
+                                        terminals,
+                                        interpreter,
+                                        Typing::submit(&binding, &prompt),
+                                    )
+                                    .is_ok_and(Typed::landed)
+                            {
+                                settle_record(store, record, ParkState::Delivered, &binding, None);
+                                qol_runtime::probe!(
+                                    "CLI_SESSION_PARK",
+                                    "event=delivered id={} session={} confirmed=true",
+                                    record.id,
+                                    binding
+                                );
+                                return Ok(false);
+                            }
+                        } else if ready {
                             let outcome = guard.type_text(
                                 terminals,
                                 interpreter,
                                 Typing::submit(&binding, &prompt),
                             );
-                            let step = wake.observe(outcome);
-                            if step != WakeStep::Retry {
-                                let detail = (step == WakeStep::DeliveredUnconfirmed).then_some(
-                                    "the wake was typed into the conversation twice without confirmation, so it was not typed again; its output is in the park log",
-                                );
-                                settle_batch(store, &batch, ParkState::Delivered, &binding, detail);
+                            let written = matches!(
+                                &outcome,
+                                Ok(Typed::Submitted | Typed::Inserted | Typed::Unsubmitted)
+                            );
+                            if written {
+                                typed = true;
+                                record.wake_typed_at = Some(crate::park::now_seconds());
+                                if let Err(error) = store.record(record) {
+                                    log::warn!(
+                                        "[cli-sessions] park {} typed but not marked: {error:#}",
+                                        record.id
+                                    );
+                                }
+                            }
+                            if outcome.is_ok_and(Typed::landed) {
+                                settle_record(store, record, ParkState::Delivered, &binding, None);
                                 qol_runtime::probe!(
                                     "CLI_SESSION_PARK",
-                                    "event=delivered id={} batch={} session={} confirmed={}",
+                                    "event=delivered id={} session={} confirmed=true",
                                     record.id,
-                                    batch.len(),
-                                    binding,
-                                    step == WakeStep::Delivered
+                                    binding
                                 );
                                 return Ok(false);
                             }
                         }
+                        if wake.retired(typed) {
+                            let detail = "the wake was typed into the conversation but the transcript never showed it, so it was not typed again; its output is in the park log";
+                            settle_record(
+                                store,
+                                record,
+                                ParkState::Delivered,
+                                &binding,
+                                Some(detail),
+                            );
+                            qol_runtime::probe!(
+                                "CLI_SESSION_PARK",
+                                "event=delivered id={} session={} confirmed=false",
+                                record.id,
+                                binding
+                            );
+                            return Ok(false);
+                        }
                         busy += 1;
                         if busy >= BUSY_POLLS_BEFORE_GIVING_UP {
                             let detail = format!("`{binding}` stayed busy or held a draft for an hour, so the result was not submitted; it is in the park log");
-                            settle_batch(store, &batch, ParkState::Failed, &binding, Some(&detail));
+                            settle_record(
+                                store,
+                                record,
+                                ParkState::Failed,
+                                &binding,
+                                Some(&detail),
+                            );
                             return Ok(false);
                         }
                     }
                     Holder::Unknown if unknown < UNKNOWN_POLLS_BEFORE_RESUME => unknown += 1,
                     Holder::Unknown | Holder::None => {
-                        return resume_batch(terminals, interpreter, store, record, &batch, &prompt)
+                        let prompt = wake_prompt(
+                            &batch
+                                .iter()
+                                .filter_map(|parked| parked.wake.clone())
+                                .collect::<Vec<_>>(),
+                        );
+                        return resume_batch(
+                            terminals,
+                            interpreter,
+                            store,
+                            record,
+                            &batch,
+                            &prompt,
+                        );
                     }
                 }
             }
         }
         thread::sleep(POLL);
+    }
+}
+
+fn settle_record(
+    store: &ParkStore,
+    record: &ParkRecord,
+    state: ParkState,
+    binding: &SessionBinding,
+    detail: Option<&str>,
+) {
+    let settled = ParkRecord {
+        state,
+        runner_pid: None,
+        resumed_session: (state == ParkState::Delivered).then(|| binding.to_string()),
+        detail: detail.map(str::to_owned).or_else(|| record.detail.clone()),
+        ..record.clone()
+    };
+    if let Err(error) = store.record(&settled) {
+        log::warn!("[cli-sessions] park {} not settled: {error:#}", record.id);
     }
 }
 
@@ -482,6 +546,43 @@ fn resume_batch(
         record.resumed_session.as_deref().unwrap_or("-")
     );
     Ok(record.state == ParkState::Resumed)
+}
+
+#[derive(Debug, Default)]
+struct WakeConfirmation {
+    polls: u32,
+}
+
+impl WakeConfirmation {
+    fn retired(&mut self, typed: bool) -> bool {
+        if !typed {
+            return false;
+        }
+        self.polls += 1;
+        self.polls > UNCONFIRMED_POLLS_BEFORE_SETTLING
+    }
+}
+
+fn wake_in_composer(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+    binding: &SessionBinding,
+    prompt: &str,
+) -> bool {
+    read_composer(terminals, interpreter, binding).is_ok_and(|composer| composer.holds_only(prompt))
+}
+
+fn squashed(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+fn section_landed(turns: &[ChatTurn], section: &str) -> bool {
+    let sent = squashed(section);
+    turns
+        .iter()
+        .any(|turn| turn.role == ChatRole::User && squashed(&turn.text).contains(&sent))
 }
 
 fn woken_turns(
@@ -692,39 +793,43 @@ mod tests {
     }
 
     #[test]
-    fn a_wake_typed_twice_without_confirmation_is_delivered_instead_of_retyped() {
-        let mut delivery = WakeDelivery::default();
-        assert_eq!(delivery.observe(Ok(Typed::Unsubmitted)), WakeStep::Retry);
-        assert_eq!(
-            delivery.observe(Ok(Typed::Unsubmitted)),
-            WakeStep::DeliveredUnconfirmed
-        );
+    fn a_wake_section_is_recognised_inside_the_wrapped_turn() {
+        let section = "You parked this conversation on `sleep 5`.";
+        let wrapped =
+            format!("[qol parked session woke]\n\n{section}\n\nContinue from where you left off.");
+        assert!(section_landed(&[turn(ChatRole::User, &wrapped)], section));
+        assert!(!section_landed(
+            &[turn(ChatRole::User, "a later question")],
+            section
+        ));
+        assert!(!section_landed(
+            &[turn(ChatRole::Assistant, &wrapped)],
+            section
+        ));
+        assert!(!section_landed(
+            &[turn(
+                ChatRole::User,
+                "You parked this conversation on `sleep 6`."
+            )],
+            section
+        ));
     }
 
     #[test]
-    fn a_held_wake_has_not_been_typed() {
-        let mut delivery = WakeDelivery::default();
-        for _ in 0..5 {
-            assert_eq!(
-                delivery.observe(Ok(Typed::Held(qol_terminal_sessions::cli::Hold::Draft))),
-                WakeStep::Retry
-            );
-            assert_eq!(
-                delivery.observe(Err(TerminalError::UnknownBackend(
-                    qol_terminal_sessions::BackendId::new("nope").unwrap()
-                ))),
-                WakeStep::Retry
-            );
+    fn a_wake_that_was_never_typed_never_retires() {
+        let mut wake = WakeConfirmation::default();
+        for _ in 0..UNCONFIRMED_POLLS_BEFORE_SETTLING + 10 {
+            assert!(!wake.retired(false));
         }
-        assert_eq!(delivery.observe(Ok(Typed::Submitted)), WakeStep::Delivered);
     }
 
     #[test]
-    fn one_unconfirmed_wake_still_delivers_when_the_next_attempt_lands() {
-        let mut delivery = WakeDelivery::default();
-        assert_eq!(delivery.observe(Ok(Typed::Unsubmitted)), WakeStep::Retry);
-        assert_eq!(delivery.observe(Ok(Typed::Submitted)), WakeStep::Delivered);
-        assert_eq!(delivery.observe(Ok(Typed::Inserted)), WakeStep::Delivered);
+    fn a_typed_wake_retires_after_the_grace() {
+        let mut wake = WakeConfirmation::default();
+        for _ in 0..UNCONFIRMED_POLLS_BEFORE_SETTLING {
+            assert!(!wake.retired(true));
+        }
+        assert!(wake.retired(true));
     }
 
     fn turn(role: ChatRole, text: &str) -> ChatTurn {

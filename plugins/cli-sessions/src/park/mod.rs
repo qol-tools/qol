@@ -170,6 +170,7 @@ fn park(
         restarts: 0,
         exit_code: None,
         wake: None,
+        wake_typed_at: None,
         resumed_session: None,
         detail: None,
         report: None,
@@ -308,6 +309,7 @@ fn watch_launch(
         restarts: 0,
         exit_code: None,
         wake: None,
+        wake_typed_at: None,
         resumed_session: Some(token.to_owned()),
         detail: None,
         report: None,
@@ -509,7 +511,7 @@ pub fn list() -> Result<Vec<String>> {
         .collect()
 }
 
-fn now_seconds() -> u64 {
+pub(crate) fn now_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
@@ -545,6 +547,7 @@ pub(crate) mod tests {
             restarts: 0,
             exit_code: None,
             wake: None,
+            wake_typed_at: None,
             resumed_session: None,
             detail: None,
             report: None,
