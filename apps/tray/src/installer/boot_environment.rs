@@ -7,7 +7,7 @@ use crate::installer::autostart::AutostartState;
 pub trait BootEnvironment: Send + Sync {
     fn canonical_binary(&self) -> Result<PathBuf>;
     fn read_autostart_state(&self) -> Result<AutostartState>;
-    fn write_autostart_target(&self, binary: &Path) -> Result<()>;
+    fn write_autostart_target(&self, binary: &Path) -> Result<bool>;
     fn honors_dev_selection(&self) -> bool;
 }
 
@@ -57,12 +57,12 @@ impl BootEnvironment for InMemoryBootEnvironment {
             self.autostart.lock().unwrap().clone(),
         ))
     }
-    fn write_autostart_target(&self, binary: &Path) -> Result<()> {
+    fn write_autostart_target(&self, binary: &Path) -> Result<bool> {
         if self.fail_write {
             anyhow::bail!("simulated write failure");
         }
         *self.autostart.lock().unwrap() = Some(binary.to_path_buf());
-        Ok(())
+        Ok(true)
     }
     fn honors_dev_selection(&self) -> bool {
         self.honors_dev
@@ -176,7 +176,9 @@ pub(crate) fn paths_equal_canonicalized(a: &Path, b: &Path) -> bool {
 }
 
 fn installed_binary_path() -> Result<PathBuf> {
-    let dir = crate::installer::platform::install_dir()?;
+    let dir = crate::installer::platform::install_dir(
+        qol_apps::tray_install::InstallProfile::Production,
+    )?;
     Ok(dir.join(crate::installer::platform::binary_filename()))
 }
 
@@ -319,8 +321,9 @@ impl BootEnvironment for PlatformBootEnvironment {
     fn read_autostart_state(&self) -> Result<AutostartState> {
         crate::installer::autostart::read_state()
     }
-    fn write_autostart_target(&self, binary: &Path) -> Result<()> {
-        crate::installer::autostart::write_target(binary)
+    fn write_autostart_target(&self, binary: &Path) -> Result<bool> {
+        crate::installer::autostart::write_target(binary)?;
+        Ok(true)
     }
     fn honors_dev_selection(&self) -> bool {
         cfg!(feature = "dev")
@@ -337,6 +340,7 @@ pub fn default_boot_environment() -> Arc<dyn BootEnvironment> {
 pub struct InstallBootEnvironment {
     pub installed_binary: PathBuf,
     pub honors_dev_selection: bool,
+    pub owns_autostart: bool,
 }
 
 impl BootEnvironment for InstallBootEnvironment {
@@ -346,8 +350,12 @@ impl BootEnvironment for InstallBootEnvironment {
     fn read_autostart_state(&self) -> Result<AutostartState> {
         crate::installer::autostart::read_state()
     }
-    fn write_autostart_target(&self, binary: &Path) -> Result<()> {
-        crate::installer::autostart::write_target(binary)
+    fn write_autostart_target(&self, binary: &Path) -> Result<bool> {
+        if !self.owns_autostart {
+            return Ok(false);
+        }
+        crate::installer::autostart::write_target(binary)?;
+        Ok(true)
     }
     fn honors_dev_selection(&self) -> bool {
         self.honors_dev_selection
@@ -363,11 +371,24 @@ mod install_env_tests {
         let env = InstallBootEnvironment {
             installed_binary: PathBuf::from("/usr/local/qol-tray"),
             honors_dev_selection: false,
+            owns_autostart: true,
         };
         assert_eq!(
             env.canonical_binary().unwrap(),
             PathBuf::from("/usr/local/qol-tray")
         );
         assert!(!env.honors_dev_selection());
+    }
+
+    #[test]
+    fn a_development_install_never_writes_the_autostart_artifact() {
+        let env = InstallBootEnvironment {
+            installed_binary: PathBuf::from("/home/u/.local/share/qol-tray/dev/bin/qol-tray"),
+            honors_dev_selection: true,
+            owns_autostart: false,
+        };
+        assert!(!env
+            .write_autostart_target(Path::new("/home/u/.local/bin/qol-tray"))
+            .unwrap());
     }
 }

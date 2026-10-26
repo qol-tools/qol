@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+const INSTALL_PROFILES: &[qol_apps::tray_install::InstallProfile] = &[
+    qol_apps::tray_install::InstallProfile::Production,
+    qol_apps::tray_install::InstallProfile::Development,
+];
 const PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
 const PORT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const QOL_ENV_PREFIX: &str = "QOL_";
@@ -19,17 +23,25 @@ pub(crate) enum InstalledTray {
 
 impl InstalledTray {
     pub(crate) fn probe() -> Self {
-        let Ok(binary) = qol_apps::tray_install::installed_binary() else {
-            return Self::Missing;
-        };
-        if !binary.is_file() {
-            return Self::Missing;
+        Self::probe_paths(
+            INSTALL_PROFILES
+                .iter()
+                .filter_map(|profile| profile.installed_binary().ok()),
+        )
+    }
+
+    fn probe_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        for binary in paths {
+            if !binary.is_file() {
+                continue;
+            }
+            let version = qol_artifact::inspect_path(&binary)
+                .ok()
+                .and_then(|artifact| artifact.slices.into_iter().next())
+                .map(|slice| slice.identity.version);
+            return Self::Installed { binary, version };
         }
-        let version = qol_artifact::inspect_path(&binary)
-            .ok()
-            .and_then(|artifact| artifact.slices.into_iter().next())
-            .map(|slice| slice.identity.version);
-        Self::Installed { binary, version }
+        Self::Missing
     }
 
     pub(crate) fn version_label(version: Option<&str>) -> String {
@@ -154,6 +166,35 @@ mod tests {
                 version: Some("3.86.5".to_string()),
             }
         );
+    }
+
+    #[test]
+    fn a_restore_prefers_the_production_install_and_falls_back_to_the_development_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let production = dir.path().join("bin/qol-tray");
+        let development = dir.path().join("dev/bin/qol-tray");
+        std::fs::create_dir_all(development.parent().unwrap()).unwrap();
+        std::fs::write(&development, b"development").unwrap();
+
+        assert_eq!(
+            InstalledTray::probe_paths([production.clone(), development.clone()]),
+            InstalledTray::Installed {
+                binary: development.clone(),
+                version: None,
+            }
+        );
+
+        std::fs::create_dir_all(production.parent().unwrap()).unwrap();
+        std::fs::write(&production, b"production").unwrap();
+        assert_eq!(
+            InstalledTray::probe_paths([production.clone(), development]),
+            InstalledTray::Installed {
+                binary: production,
+                version: None,
+            }
+        );
+
+        assert_eq!(InstalledTray::probe_paths([]), InstalledTray::Missing);
     }
 
     #[test]

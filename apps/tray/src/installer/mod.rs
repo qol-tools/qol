@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::mode::{ModeConfig, ModeFlag};
 use crate::paths::install_marker;
+use qol_apps::tray_install::InstallProfile;
 
 pub mod autostart;
 pub mod boot_environment;
@@ -44,6 +45,7 @@ pub fn bootstrap_current_install() -> Result<()> {
         let env = boot_environment::InstallBootEnvironment {
             installed_binary: current_exe.clone(),
             honors_dev_selection: true,
+            owns_autostart: true,
         };
         let lister = crate::dev::boot_contract::GitWorktreeLister;
         let probe = crate::dev::boot_contract::FsBinaryProbe;
@@ -62,15 +64,17 @@ pub fn ensure_installed_desktop_registration() {
 }
 
 pub fn check_platform_paths() -> Result<()> {
-    platform::install_dir()?;
+    platform::install_dir(InstallProfile::Production)?;
     autostart::autostart_path()?;
     Ok(())
 }
 
-fn register_install_id(installed_binary: &Path) -> Result<String> {
+fn register_install_id(installed_binary: &Path, claims_active_install_id: bool) -> Result<String> {
     let install_id = create_install_id();
     write_install_id_marker(installed_binary, &install_id)?;
-    crate::paths::set_active_install_id(&install_id)?;
+    if claims_active_install_id {
+        crate::paths::set_active_install_id(&install_id)?;
+    }
     Ok(install_id)
 }
 

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use qol_apps::tray_install::InstallProfile;
 use std::path::{Path, PathBuf};
 
 use self::desktop_entry::format_desktop_exec_command;
@@ -31,8 +32,8 @@ impl InstallerOps for Platform {
         qol_apps::tray_install::binary_filename().to_string()
     }
 
-    fn install_dir(&self) -> Result<PathBuf> {
-        crate::paths::tray_install_dir()
+    fn install_dir(&self, profile: InstallProfile) -> Result<PathBuf> {
+        crate::paths::tray_install_dir(profile)
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
@@ -69,9 +70,14 @@ impl InstallerOps for Platform {
         let Ok(current_exe) = std::env::current_exe() else {
             return Ok(());
         };
-        let installed = crate::installer::has_install_marker(&current_exe);
-        let production = installed && crate::installer::mode::is_production_mode();
-        ensure_linux_desktop_entries(&current_exe, installed, production)
+        let owns_production_install = crate::installer::has_install_marker(&current_exe)
+            && crate::paths::tray_installed_binary(InstallProfile::Production)
+                .is_ok_and(|binary| same_install(&current_exe, &binary));
+        ensure_linux_desktop_entries(
+            &current_exe,
+            owns_production_install,
+            owns_production_install,
+        )
     }
 
     fn warn_system_install_conflict(&self) {
@@ -89,12 +95,32 @@ impl InstallerOps for Platform {
 
     fn remove_legacy_install(&self) {}
 
-    fn uninstall(&self, binary_path: &Path) -> Result<()> {
-        anyhow::bail!(
-            "qol-tray-install uninstall is for Windows; on Linux remove the qol-tray package, or delete {} and its desktop entries",
-            binary_path.display()
-        )
+    fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {
+        match profile {
+            InstallProfile::Production => anyhow::bail!(
+                "qol-tray-install uninstall is for Windows; on Linux remove the qol-tray package, or delete {} and its desktop entries",
+                binary_path.display()
+            ),
+            InstallProfile::Development => remove_development_install(binary_path),
+        }
     }
+}
+
+fn remove_development_install(binary_path: &Path) -> Result<()> {
+    let directory = binary_path
+        .parent()
+        .context("development install directory has no parent")?;
+    match std::fs::remove_dir_all(directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to remove {}", directory.display()))
+        }
+    }
+    if let Some(root) = directory.parent() {
+        let _ = std::fs::remove_dir(root);
+    }
+    Ok(())
 }
 
 fn install_icons(data_dir: &Path) -> Result<bool> {
@@ -116,6 +142,10 @@ fn install_desktop_entry(binary_path: &Path) -> Result<()> {
     std::fs::create_dir_all(&apps_dir)?;
     write_desktop_entries(&apps_dir, binary_path, true)?;
     Ok(())
+}
+
+fn same_install(a: &Path, b: &Path) -> bool {
+    crate::installer::boot_environment::paths_equal_canonicalized(a, b)
 }
 
 fn desktop_apps_dir() -> Result<PathBuf> {

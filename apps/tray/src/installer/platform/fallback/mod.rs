@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use qol_apps::tray_install::InstallProfile;
 use std::path::{Path, PathBuf};
 
 use super::InstallerOps;
@@ -14,8 +15,8 @@ impl InstallerOps for Platform {
         qol_apps::tray_install::binary_filename().to_string()
     }
 
-    fn install_dir(&self) -> Result<PathBuf> {
-        crate::paths::tray_install_dir()
+    fn install_dir(&self, profile: InstallProfile) -> Result<PathBuf> {
+        crate::paths::tray_install_dir(profile)
     }
 
     fn start_now(&self, _binary_path: &Path) -> Result<()> {
@@ -46,7 +47,7 @@ impl InstallerOps for Platform {
 
     fn remove_legacy_install(&self) {}
 
-    fn uninstall(&self, _binary_path: &Path) -> Result<()> {
+    fn uninstall(&self, _binary_path: &Path, _profile: InstallProfile) -> Result<()> {
         unavailable()
     }
 }

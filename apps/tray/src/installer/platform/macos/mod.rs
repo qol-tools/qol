@@ -1,6 +1,7 @@
 pub(crate) mod codesign;
 
 use anyhow::{anyhow, Context, Result};
+use qol_apps::tray_install::InstallProfile;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,8 +18,8 @@ impl InstallerOps for Platform {
         qol_apps::tray_install::binary_filename().to_string()
     }
 
-    fn install_dir(&self) -> Result<PathBuf> {
-        crate::paths::tray_install_dir()
+    fn install_dir(&self, profile: InstallProfile) -> Result<PathBuf> {
+        crate::paths::tray_install_dir(profile)
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
@@ -77,12 +78,32 @@ impl InstallerOps for Platform {
         }
     }
 
-    fn uninstall(&self, binary_path: &Path) -> Result<()> {
-        Err(anyhow!(
-            "qol-tray-install uninstall is for Windows; on macOS quit QoL Tray and move the app bundle holding {} to the Trash",
-            binary_path.display()
-        ))
+    fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {
+        match profile {
+            InstallProfile::Production => Err(anyhow!(
+                "qol-tray-install uninstall is for Windows; on macOS quit QoL Tray and move the app bundle holding {} to the Trash",
+                binary_path.display()
+            )),
+            InstallProfile::Development => remove_development_install(binary_path),
+        }
     }
+}
+
+fn remove_development_install(binary_path: &Path) -> Result<()> {
+    let directory = binary_path
+        .parent()
+        .context("development install directory has no parent")?;
+    match fs::remove_dir_all(directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to remove {}", directory.display()))
+        }
+    }
+    if let Some(root) = directory.parent() {
+        let _ = fs::remove_dir(root);
+    }
+    Ok(())
 }
 
 fn bundle_root_from_binary(binary_path: &Path) -> Result<PathBuf> {

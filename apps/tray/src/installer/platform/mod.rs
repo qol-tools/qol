@@ -1,9 +1,10 @@
 use anyhow::Result;
+use qol_apps::tray_install::InstallProfile;
 use std::path::{Path, PathBuf};
 
 trait InstallerOps {
     fn binary_filename(&self) -> String;
-    fn install_dir(&self) -> Result<PathBuf>;
+    fn install_dir(&self, profile: InstallProfile) -> Result<PathBuf>;
     fn start_now(&self, binary_path: &Path) -> Result<()>;
     fn stop_running(&self, binary_path: &Path) -> Result<()>;
     fn set_executable_permissions(&self, path: &Path) -> Result<()>;
@@ -12,7 +13,7 @@ trait InstallerOps {
     fn ensure_desktop_registration(&self) -> Result<()>;
     fn warn_system_install_conflict(&self);
     fn remove_legacy_install(&self);
-    fn uninstall(&self, binary_path: &Path) -> Result<()>;
+    fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()>;
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -41,8 +42,8 @@ pub(crate) fn binary_filename() -> String {
     Platform.binary_filename()
 }
 
-pub(crate) fn install_dir() -> Result<PathBuf> {
-    Platform.install_dir()
+pub(crate) fn install_dir(profile: InstallProfile) -> Result<PathBuf> {
+    Platform.install_dir(profile)
 }
 
 pub(super) fn start_now(binary_path: &Path) -> Result<()> {
@@ -77,8 +78,22 @@ pub(super) fn remove_legacy_install() {
     Platform.remove_legacy_install();
 }
 
-pub(super) fn uninstall(binary_path: &Path) -> Result<()> {
-    Platform.uninstall(binary_path)
+pub(super) fn uninstall(binary_path: &Path, profile: InstallProfile) -> Result<()> {
+    Platform.uninstall(binary_path, profile)
+}
+
+pub(super) fn tray_running() -> bool {
+    let name = binary_filename();
+    let own_pid = std::process::id();
+    qol_process::processes().is_ok_and(|processes| {
+        processes
+            .iter()
+            .any(|entry| entry.pid != own_pid && same_process_name(&entry.exe, &name))
+    })
+}
+
+fn same_process_name(a: &str, b: &str) -> bool {
+    a == b || (cfg!(windows) && a.eq_ignore_ascii_case(b))
 }
 
 pub(super) fn bundled_binary_candidates(installer_path: &Path) -> Vec<PathBuf> {
