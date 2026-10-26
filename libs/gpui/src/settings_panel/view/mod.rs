@@ -2793,6 +2793,11 @@ impl SettingsPanelView {
                 PendingEdit::Drop => self.drop_edit(),
             }
         }
+        if number_drag_effect(&self.level().rows, row) == NumberDragEffect::Preview {
+            #[cfg(debug_assertions)]
+            qol_runtime::probe!("SETTINGS_INPUT", "phase=number-drag-preview row={row}");
+            return;
+        }
         if row_streams(&self.level().rows, row) && !stream_gated(&self.level().rows) {
             if let Some(stream) = self.stream_for(row) {
                 stream.open();
@@ -2842,6 +2847,7 @@ impl SettingsPanelView {
     }
 
     fn set_number_slider(&mut self, row: usize, fraction: f32, cx: &mut Context<Self>) {
+        let effect = number_drag_effect(&self.level().rows, row);
         let Some(RowControl::Number {
             value,
             min: Some(min),
@@ -2862,7 +2868,7 @@ impl SettingsPanelView {
         *value = dragged;
         let live = live.is_some();
         self.level_mut().selected = row;
-        if moved {
+        if moved && effect == NumberDragEffect::Apply {
             self.stream_level(row, dragged);
             if live {
                 if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
@@ -2945,11 +2951,18 @@ impl SettingsPanelView {
     }
 
     fn finish_number_slider(&mut self, row: usize, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        qol_runtime::probe!("SETTINGS_INPUT", "phase=number-drag-release row={row}");
         if let Some(stream) = self.stream_for(row) {
             stream.close();
         }
         match number_finish_plan(&self.level().rows, row) {
             NumberFinishPlan::Live => {}
+            NumberFinishPlan::DispatchLive => {
+                if let Some(id) = self.level().rows.get(row).map(|row| row.id.clone()) {
+                    self.schedule_live_number(row, id, cx);
+                }
+            }
             NumberFinishPlan::Persist { action } => {
                 self.persist();
                 if let Some(action) = action {
@@ -5314,13 +5327,35 @@ fn live_number_dispatch_plan(rows: &[Row], row: usize) -> LiveNumberDispatch {
 }
 
 #[derive(Debug, PartialEq)]
+enum NumberDragEffect {
+    Preview,
+    Apply,
+}
+
+fn number_drag_effect(rows: &[Row], row: usize) -> NumberDragEffect {
+    let compact = rows
+        .get(row)
+        .is_some_and(|row| row.variant.as_deref() == Some("slider"));
+    if compact {
+        return NumberDragEffect::Preview;
+    }
+    NumberDragEffect::Apply
+}
+
+#[derive(Debug, PartialEq)]
 enum NumberFinishPlan {
     Live,
+    DispatchLive,
     Persist { action: Option<String> },
 }
 
 fn number_finish_plan(rows: &[Row], row: usize) -> NumberFinishPlan {
     match rows.get(row).map(|row| &row.control) {
+        Some(RowControl::Number { live: Some(_), .. })
+            if number_drag_effect(rows, row) == NumberDragEffect::Preview =>
+        {
+            NumberFinishPlan::DispatchLive
+        }
         Some(RowControl::Number { live: Some(_), .. }) => NumberFinishPlan::Live,
         Some(RowControl::Number { .. }) => NumberFinishPlan::Persist {
             action: row_action(rows, row),
@@ -6201,16 +6236,17 @@ mod tests {
         edit_display, erase_typed, escape_step, field_id_unit, focus_level, format_number,
         header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
         live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_cue,
-        number_finish_plan, number_limit, number_preview, number_release, number_unit,
-        parsed_color, parsed_number, pending_edit_on_scrub, pointer_keys, pop_level,
+        number_drag_effect, number_finish_plan, number_limit, number_preview, number_release,
+        number_unit, parsed_color, parsed_number, pending_edit_on_scrub, pointer_keys, pop_level,
         pressed_slider, push_level, query_is_due, rail_child_index, rail_group_breaks,
         release_slider_dispatch, row_body_height, row_description, schedule_slider_generation,
         slider_fraction, slider_generation_current, slider_protected, source_window_height_for,
         stepped_number, text_or_placeholder, transition_in_flight, transition_policy, type_number,
         widest_number, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
-        LiveNumberDispatch, NumberCue, NumberFinishPlan, NumberRelease, NumberSpec,
-        ObjectArrayState, PendingEdit, Row, RowControl, RowSection, SettingsDestination,
-        SliderPress, SliderStyle, TransitionAction, TransitionTracker, SCRUB_SLOP,
+        LiveNumberDispatch, NumberCue, NumberDragEffect, NumberFinishPlan, NumberRelease,
+        NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
+        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
+        SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -8095,6 +8131,75 @@ active_value_from = "active"
             number_finish_plan(&[number_row(Some("set_brightness"), true)], 0),
             NumberFinishPlan::Live
         );
+    }
+
+    #[test]
+    fn compact_number_drags_preview_until_release() {
+        let cases = [
+            (
+                false,
+                Some("set_brightness"),
+                NumberFinishPlan::Persist {
+                    action: Some("set_brightness".into()),
+                },
+            ),
+            (true, Some("set_brightness"), NumberFinishPlan::DispatchLive),
+            (false, None, NumberFinishPlan::Persist { action: None }),
+            (true, None, NumberFinishPlan::DispatchLive),
+        ];
+        for (live, action, finish) in cases {
+            let mut row = number_row(action, live);
+            row.variant = Some("slider".into());
+            let rows = [row];
+            assert_eq!(
+                number_drag_effect(&rows, 0),
+                NumberDragEffect::Preview,
+                "live={live} action={action:?}"
+            );
+            assert_eq!(
+                number_finish_plan(&rows, 0),
+                finish,
+                "live={live} action={action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_release_dispatches_the_last_previewed_value() {
+        for value in [1.0, 17.0, 42.0, 99.0, 100.0] {
+            let mut row = number_row(Some("set_brightness"), true);
+            row.variant = Some("slider".into());
+            if let RowControl::Number { value: preview, .. } = &mut row.control {
+                *preview = value;
+            }
+            assert_eq!(
+                live_number_dispatch_plan(&[row], 0),
+                LiveNumberDispatch::Fire {
+                    action: "set_brightness".into(),
+                    value,
+                },
+                "preview={value}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_number_variants_keep_their_drag_behavior() {
+        for variant in [None, Some("wide_slider"), Some("level_slider")] {
+            let mut row = number_row(Some("set_brightness"), true);
+            row.variant = variant.map(str::to_string);
+            let rows = [row];
+            assert_eq!(
+                number_drag_effect(&rows, 0),
+                NumberDragEffect::Apply,
+                "variant={variant:?}"
+            );
+            assert_eq!(
+                number_finish_plan(&rows, 0),
+                NumberFinishPlan::Live,
+                "variant={variant:?}"
+            );
+        }
     }
 
     #[test]

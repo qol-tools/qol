@@ -1,6 +1,6 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{canvas, div, point, px, rgb, rgba, PathBuilder, SharedString};
+use gpui::{div, px, rgb, rgba, SharedString};
 use qol_theme::TextStyle;
 
 use crate::deck::with_alpha;
@@ -62,9 +62,6 @@ const THUMB_RING: f32 = 3.0;
 const THUMB_HALO: f32 = 6.0;
 const CARET_WIDTH: f32 = 2.0;
 const CARET_HEIGHT: f32 = 18.0;
-const NUDGE_CHEVRON_WIDTH: f32 = 6.0;
-const NUDGE_CHEVRON_HEIGHT: f32 = 10.0;
-const NUDGE_CHEVRON_STROKE: f32 = 1.5;
 const TICK_HEIGHT: f32 = 4.0;
 const TICKS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 const LEVEL_SEGMENTS: usize = 16;
@@ -253,47 +250,6 @@ pub(in crate::settings_panel) struct NumberText {
     pub(in crate::settings_panel) selected: bool,
 }
 
-fn nudge_chevron(points_right: bool, ink: u32, shown: bool) -> gpui::Div {
-    let mark = canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let inset = px(qol_theme::LINE);
-            let (tail, tip) = if points_right {
-                (bounds.left() + inset, bounds.right() - inset)
-            } else {
-                (bounds.right() - inset, bounds.left() + inset)
-            };
-            let mut path = PathBuilder::stroke(px(NUDGE_CHEVRON_STROKE));
-            path.move_to(point(tail, bounds.top() + inset));
-            path.line_to(point(tip, bounds.center().y));
-            path.line_to(point(tail, bounds.bottom() - inset));
-            if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(ink));
-            }
-        },
-    )
-    .w(px(NUDGE_CHEVRON_WIDTH))
-    .h(px(NUDGE_CHEVRON_HEIGHT));
-    let end = div()
-        .absolute()
-        .top_0()
-        .h_full()
-        .flex()
-        .items_center()
-        .child(mark);
-    let end = if points_right {
-        end.right(px(qol_theme::SPACE_INSET))
-    } else {
-        end.left(px(qol_theme::SPACE_INSET))
-    };
-    if shown {
-        end
-    } else {
-        end.opacity(0.0)
-            .group_hover(SETTINGS_ROW_GROUP, |style| style.opacity(1.0))
-    }
-}
-
 fn number_value(
     text: NumberText,
     unit: Option<SharedString>,
@@ -361,10 +317,10 @@ fn scrub_field(
     } else {
         qol_theme::OPACITY_FILL
     };
-    let chevron = hover.unwrap_or(ground).soft;
     ground_bg(
         div()
             .relative()
+            .flex_none()
             .flex()
             .flex_row()
             .items_center()
@@ -381,14 +337,12 @@ fn scrub_field(
         with_alpha(ground.mark, strength),
         hover.map(|hover| with_alpha(hover.mark, strength)),
     ))
-    .child(nudge_chevron(false, chevron, cue.dragging))
-    .child(nudge_chevron(true, chevron, cue.dragging))
     .child(value)
     .when(cue.editing, |field| field.shadow(kit.focus_ring(ground)))
 }
 
 pub(in crate::settings_panel) fn number_field(
-    text: NumberText,
+    mut text: NumberText,
     unit: Option<SharedString>,
     track: Option<(f32, SliderStyle)>,
     cue: NumberCue,
@@ -398,7 +352,12 @@ pub(in crate::settings_panel) fn number_field(
 ) -> gpui::Div {
     let ground = row.rest(kit);
     let hover = row.hover(kit);
-    let value = number_value(text, unit, &cue, ground, hover, kit);
+    let compact = matches!(track, Some((_, SliderStyle::Compact)));
+    if compact {
+        text.widest = text.shown.clone();
+    }
+    let value = number_value(text, unit, &cue, ground, hover, kit)
+        .when(compact, |value| value.gap(px(qol_theme::SPACE_TIGHT)));
     let gap = track.map_or(qol_theme::SPACE_INSET, |_| qol_theme::SPACE_CELL);
     let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
