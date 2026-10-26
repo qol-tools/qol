@@ -304,6 +304,7 @@ fn deliver(
     let mut busy = 0;
     let mut settle = SettleGate::default();
     let mut guard = ComposerGuard::default();
+    let mut wake = WakeDelivery::default();
     loop {
         {
             let _turn = store.lock_conversation(&record.external_id)?;
@@ -321,23 +322,31 @@ fn deliver(
                 match holder(terminals, interpreter, store, record, caller) {
                     Holder::Live(binding) => {
                         unknown = 0;
-                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready
-                            && (wake_landed(terminals, interpreter, &binding, &prompt)
-                                || guard
-                                    .type_text(
-                                        terminals,
-                                        interpreter,
-                                        Typing::submit(&binding, &prompt),
-                                    )
-                                    .is_ok_and(Typed::landed))
-                        {
-                            settle_batch(store, &batch, ParkState::Delivered, &binding, None);
+                        let turns = woken_turns(terminals, interpreter, &binding);
+                        let landed = batch_landed(&turns, &batch);
+                        let outcome = (!landed
+                            && caller_state(terminals, interpreter, &binding)
+                                == CallerState::Ready)
+                            .then(|| {
+                                guard.type_text(
+                                    terminals,
+                                    interpreter,
+                                    Typing::submit(&binding, &prompt),
+                                )
+                            });
+                        let step = wake.observe(landed, outcome);
+                        if step != WakeStep::Retry {
+                            let detail = (step == WakeStep::DeliveredUnconfirmed).then_some(
+                                "the wake was typed into the conversation and never confirmed, so it was not typed again; its output is in the park log",
+                            );
+                            settle_batch(store, &batch, ParkState::Delivered, &binding, detail);
                             qol_runtime::probe!(
                                 "CLI_SESSION_PARK",
-                                "event=delivered id={} batch={} session={}",
+                                "event=delivered id={} batch={} session={} confirmed={}",
                                 record.id,
                                 batch.len(),
-                                binding
+                                binding,
+                                step == WakeStep::Delivered
                             );
                             return Ok(false);
                         }
@@ -448,25 +457,62 @@ fn resume_batch(
     Ok(record.state == ParkState::Resumed)
 }
 
+#[derive(Debug, Default)]
+struct WakeDelivery {
+    typed: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WakeStep {
+    Retry,
+    Delivered,
+    DeliveredUnconfirmed,
+}
+
+impl WakeDelivery {
+    fn observe(&mut self, landed: bool, outcome: Option<Result<Typed, TerminalError>>) -> WakeStep {
+        if landed {
+            return WakeStep::Delivered;
+        }
+        let typed = match outcome {
+            Some(Ok(typed)) if !matches!(typed, Typed::Held(_)) => Some(typed),
+            _ => None,
+        };
+        let Some(typed) = typed else {
+            return WakeStep::Retry;
+        };
+        if typed.landed() {
+            return WakeStep::Delivered;
+        }
+        if self.typed {
+            return WakeStep::DeliveredUnconfirmed;
+        }
+        self.typed = true;
+        WakeStep::Retry
+    }
+}
+
 fn squashed(text: &str) -> String {
     text.chars()
         .filter(|character| !character.is_whitespace())
         .collect()
 }
 
-fn opens_delivered_wake(turn: &ChatTurn, prompt: &str) -> bool {
-    turn.role == ChatRole::User && squashed(&turn.text).starts_with(&squashed(prompt))
+fn section_landed(turns: &[ChatTurn], section: &str) -> bool {
+    let sent = squashed(section);
+    turns
+        .iter()
+        .any(|turn| turn.role == ChatRole::User && squashed(&turn.text).contains(&sent))
 }
 
-fn wake_landed(
-    terminals: &TerminalSessionService,
-    interpreter: &CliSessionInterpreter,
-    waking: &SessionBinding,
-    prompt: &str,
-) -> bool {
-    woken_turns(terminals, interpreter, waking)
-        .iter()
-        .any(|turn| opens_delivered_wake(turn, prompt))
+fn batch_landed(turns: &[ChatTurn], batch: &[ParkRecord]) -> bool {
+    !batch.is_empty()
+        && batch.iter().all(|parked| {
+            parked
+                .wake
+                .as_deref()
+                .is_some_and(|section| section_landed(turns, section))
+        })
 }
 
 fn woken_turns(
@@ -677,18 +723,101 @@ mod tests {
     }
 
     #[test]
-    fn a_wake_is_recognised_in_the_conversation_even_though_it_is_wrapped() {
-        let prompt = "[qol parked session woke]\nYou parked this conversation on `sleep 5`.\n\nContinue from where you left off.";
-        let stored = "[qol parked session woke]\n\nYou parked this conversation on `sleep 5`.\n\nContinue from where you left off.\n";
-        assert!(opens_delivered_wake(&turn(ChatRole::User, stored), prompt));
-        assert!(!opens_delivered_wake(
-            &turn(ChatRole::User, "a later question"),
-            prompt
+    fn a_wake_section_is_recognised_inside_the_wrapped_turn() {
+        let section = "You parked this conversation on `sleep 5`.";
+        let wrapped =
+            format!("[qol parked session woke]\n\n{section}\n\nContinue from where you left off.");
+        assert!(section_landed(&[turn(ChatRole::User, &wrapped)], section));
+        assert!(!section_landed(
+            &[turn(ChatRole::User, "a later question")],
+            section
         ));
-        assert!(!opens_delivered_wake(
-            &turn(ChatRole::Assistant, stored),
-            prompt
+        assert!(!section_landed(
+            &[turn(ChatRole::Assistant, &wrapped)],
+            section
         ));
+        assert!(!section_landed(
+            &[turn(
+                ChatRole::User,
+                "You parked this conversation on `sleep 6`."
+            )],
+            section
+        ));
+    }
+
+    #[test]
+    fn a_batch_counts_as_landed_only_when_every_result_is_in_the_transcript() {
+        let mut first = crate::park::tests::record(ParkState::Exited);
+        first.wake = Some("You parked this conversation on `sleep 5`.".to_owned());
+        let mut second = crate::park::tests::record(ParkState::Exited);
+        second.id = "park-9-3".to_owned();
+        second.wake = Some("You parked this conversation on `sleep 6`.".to_owned());
+        let batch = [first.clone(), second.clone()];
+        let only_first = [turn(
+            ChatRole::User,
+            "[qol parked session woke]\n\nYou parked this conversation on `sleep 5`.\n\nContinue from where you left off.",
+        )];
+        assert!(!batch_landed(&only_first, &batch));
+        let both = [
+            only_first[0].clone(),
+            turn(
+                ChatRole::User,
+                &format!(
+                    "[qol parked session woke]\n\n{}\n\nContinue from where you left off.",
+                    second.wake.clone().unwrap()
+                ),
+            ),
+        ];
+        assert!(batch_landed(&both, &batch));
+        assert!(!batch_landed(&both, &[]));
+    }
+
+    #[test]
+    fn a_wake_typed_once_without_confirmation_is_not_typed_again() {
+        let mut delivery = WakeDelivery::default();
+        assert_eq!(
+            delivery.observe(false, Some(Ok(Typed::Unsubmitted))),
+            WakeStep::Retry
+        );
+        assert_eq!(
+            delivery.observe(false, Some(Ok(Typed::Unsubmitted))),
+            WakeStep::DeliveredUnconfirmed
+        );
+    }
+
+    #[test]
+    fn a_held_wake_has_not_been_typed() {
+        let mut delivery = WakeDelivery::default();
+        for _ in 0..5 {
+            assert_eq!(
+                delivery.observe(
+                    false,
+                    Some(Ok(Typed::Held(qol_terminal_sessions::cli::Hold::Draft)))
+                ),
+                WakeStep::Retry
+            );
+            assert_eq!(
+                delivery.observe(
+                    false,
+                    Some(Err(TerminalError::UnknownBackend(
+                        qol_terminal_sessions::BackendId::new("nope").unwrap()
+                    )))
+                ),
+                WakeStep::Retry
+            );
+        }
+        assert_eq!(delivery.observe(false, None), WakeStep::Retry);
+        assert_eq!(
+            delivery.observe(false, Some(Ok(Typed::Submitted))),
+            WakeStep::Delivered
+        );
+    }
+
+    #[test]
+    fn a_landed_wake_settles_while_the_agent_is_busy() {
+        let mut delivery = WakeDelivery::default();
+        assert_eq!(delivery.observe(true, None), WakeStep::Delivered);
+        assert_eq!(delivery.observe(true, None), WakeStep::Delivered);
     }
 
     fn turn(role: ChatRole, text: &str) -> ChatTurn {
