@@ -78,10 +78,7 @@ fn run_install(
         ));
     }
     let steps = InstallSteps::for_profile(profile);
-    println!(
-        "Installing QoL Tray{}...",
-        if dev_mode { " (development)" } else { "" }
-    );
+    println!("Installing QoL Tray...");
     let repo_root = env::current_dir().context("Failed to determine current directory")?;
     let source = source::resolve_source_binary(&repo_root, source_override, dev_mode)?;
     let mut expectation = if dev_mode {
@@ -127,11 +124,11 @@ fn run_install(
     let plugins_dir = files::ensure_plugin_dir()?;
     install_workspace_plugins(workspace_root, &plugins_dir)?;
     #[cfg(feature = "dev")]
-    {
+    if dev_mode {
         let env = boot_environment::InstallBootEnvironment {
             installed_binary: installed_binary.clone(),
             honors_dev_selection: true,
-            owns_autostart: !dev_mode,
+            owns_autostart: false,
         };
         let lister = crate::dev::boot_contract::GitWorktreeLister;
         let probe = crate::dev::boot_contract::FsBinaryProbe;

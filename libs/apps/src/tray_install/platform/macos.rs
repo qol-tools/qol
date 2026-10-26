@@ -12,12 +12,7 @@ pub(crate) fn install_dir(profile: InstallProfile) -> io::Result<PathBuf> {
                 .ok_or_else(|| io::Error::other("Could not determine home directory"))?;
             install_dir_for_home(profile, &home)
         }
-        InstallProfile::Development => {
-            let data = dirs::data_local_dir()
-                .or_else(dirs::data_dir)
-                .ok_or_else(|| io::Error::other("Could not determine data directory"))?;
-            Ok(development_dir(&data))
-        }
+        InstallProfile::Development => development_dir(),
     }
 }
 
@@ -28,16 +23,23 @@ pub(crate) fn install_dir_for_home(profile: InstallProfile, home: &Path) -> io::
             .join(format!("{}.app", qol_conventions::TRAY_DISPLAY_NAME))
             .join("Contents")
             .join("MacOS")),
-        InstallProfile::Development => Ok(development_dir(
-            &home.join("Library").join("Application Support"),
+        InstallProfile::Development => Ok(development_dir_at(
+            &home
+                .join("Library")
+                .join("Application Support")
+                .join(qol_config::NAMESPACE),
         )),
     }
 }
 
-fn development_dir(data: &Path) -> PathBuf {
-    data.join(qol_conventions::artifact::TRAY_PACKAGE_NAME)
-        .join("dev")
-        .join("bin")
+fn development_dir() -> io::Result<PathBuf> {
+    let data = qol_config::data_dir()
+        .ok_or_else(|| io::Error::other("Could not determine qol data directory"))?;
+    Ok(development_dir_at(&data))
+}
+
+fn development_dir_at(data: &Path) -> PathBuf {
+    data.join("dev").join("bin")
 }
 
 #[cfg(test)]

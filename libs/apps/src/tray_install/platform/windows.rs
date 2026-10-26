@@ -6,23 +6,38 @@ use crate::tray_install::InstallProfile;
 pub(crate) const BINARY_FILENAME: &str = "qol-tray.exe";
 
 pub(crate) fn install_dir(profile: InstallProfile) -> io::Result<PathBuf> {
-    let local_data = dirs::data_local_dir()
-        .ok_or_else(|| io::Error::other("Could not determine local data directory"))?;
-    Ok(install_dir_in(profile, &local_data))
+    match profile {
+        InstallProfile::Production => {
+            let local_data = dirs::data_local_dir()
+                .ok_or_else(|| io::Error::other("Could not determine local data directory"))?;
+            Ok(production_dir(&local_data))
+        }
+        InstallProfile::Development => development_dir(),
+    }
 }
 
 pub(crate) fn install_dir_for_home(profile: InstallProfile, home: &Path) -> io::Result<PathBuf> {
-    Ok(install_dir_in(profile, &home.join("AppData").join("Local")))
+    let local_data = home.join("AppData").join("Local");
+    match profile {
+        InstallProfile::Production => Ok(production_dir(&local_data)),
+        InstallProfile::Development => {
+            Ok(development_dir_at(&local_data.join(qol_config::NAMESPACE)))
+        }
+    }
 }
 
-fn install_dir_in(profile: InstallProfile, local_data: &Path) -> PathBuf {
-    match profile {
-        InstallProfile::Production => local_data.join("Programs").join("qol-tray").join("bin"),
-        InstallProfile::Development => local_data
-            .join(qol_conventions::artifact::TRAY_PACKAGE_NAME)
-            .join("dev")
-            .join("bin"),
-    }
+fn production_dir(local_data: &Path) -> PathBuf {
+    local_data.join("Programs").join("qol-tray").join("bin")
+}
+
+fn development_dir() -> io::Result<PathBuf> {
+    let data = qol_config::data_dir()
+        .ok_or_else(|| io::Error::other("Could not determine qol data directory"))?;
+    Ok(development_dir_at(&data))
+}
+
+fn development_dir_at(data: &Path) -> PathBuf {
+    data.join("dev").join("bin")
 }
 
 #[cfg(test)]

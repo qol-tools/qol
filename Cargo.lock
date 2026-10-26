@@ -6420,6 +6420,7 @@ dependencies = [
  "log",
  "open",
  "plist",
+ "qol-config",
  "qol-conventions",
  "qol-platform",
  "qol-plugin-api",
