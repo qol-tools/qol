@@ -8,3 +8,4 @@ verify/reports/
 tools/qol-memory/
 /target-linux/
 /libs/host-fixes/core
+/worktrees/
