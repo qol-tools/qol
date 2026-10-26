@@ -1,6 +1,6 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, point, px, rgb, rgba, Animation, AnimationExt, BoxShadow, SharedString};
+use gpui::{div, point, px, rgb, rgba, AnimationExt, BoxShadow, SharedString};
 use qol_theme::{Curve, Motion, TextStyle};
 use std::time::Duration;
 
@@ -392,7 +392,7 @@ fn marker_thumb(
         Some(step) => face
             .with_animation(
                 ("settings-number-pulse", step),
-                Animation::new(NumberCue::PULSE),
+                crate::motion::animation(Motion::TRAVEL),
                 move |face, delta| {
                     if delta < 1.0 {
                         glowing(face, ground)
