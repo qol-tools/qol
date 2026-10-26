@@ -6,6 +6,7 @@ pub(in crate::installer) mod run_key;
 pub(crate) mod shortcut;
 
 use anyhow::{Context, Result};
+use qol_apps::tray_install::InstallProfile;
 use qol_host_fixes::residency::HostResidency;
 use qol_platform::windows_path::same_path;
 use std::fs;
@@ -38,8 +39,8 @@ impl InstallerOps for Platform {
         qol_apps::tray_install::binary_filename().to_string()
     }
 
-    fn install_dir(&self) -> Result<PathBuf> {
-        crate::paths::tray_install_dir()
+    fn install_dir(&self, profile: InstallProfile) -> Result<PathBuf> {
+        crate::paths::tray_install_dir(profile)
     }
 
     fn start_now(&self, binary_path: &Path) -> Result<()> {
@@ -91,12 +92,13 @@ impl InstallerOps for Platform {
 
     fn remove_legacy_install(&self) {}
 
-    fn uninstall(&self, binary_path: &Path) -> Result<()> {
+    fn uninstall(&self, binary_path: &Path, profile: InstallProfile) -> Result<()> {
         let layout = Layout::for_binary(binary_path)?;
         run_uninstall(&mut WindowsUninstall {
             platform: self,
             binary: binary_path,
             layout: &layout,
+            profile,
         })
     }
 }
@@ -115,7 +117,7 @@ pub(crate) fn refresh_after_update(binary: &Path, installer: Option<&Path>) -> R
 }
 
 fn installed_layout(binary: &Path) -> Result<Option<Layout>> {
-    let installed = crate::paths::tray_installed_binary()?;
+    let installed = crate::paths::tray_installed_binary(InstallProfile::Production)?;
     if !same_path(binary, &installed)
         || !crate::installer::has_install_marker(&installed)
         || !crate::installer::mode::is_production_mode()
@@ -129,10 +131,14 @@ struct WindowsUninstall<'a> {
     platform: &'a Platform,
     binary: &'a Path,
     layout: &'a Layout,
+    profile: InstallProfile,
 }
 
 impl UninstallSteps for WindowsUninstall<'_> {
     fn end_residency(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         if !HostResidency::current().is_resident() {
             return Ok(());
         }
@@ -140,6 +146,9 @@ impl UninstallSteps for WindowsUninstall<'_> {
     }
 
     fn release_plugins(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         plugin_release::release_all()
     }
 
@@ -148,20 +157,29 @@ impl UninstallSteps for WindowsUninstall<'_> {
     }
 
     fn remove_autostart(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         run_key::remove()
     }
 
     fn remove_shell_entries(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         registration::remove_shell_entries(self.layout)
     }
 
     fn remove_toast_identity(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         qol_plugin_daemon::notification::platform::uninstall_toast_identity()
             .context("Failed to remove the QoL Tray notification identity")
     }
 
     fn remove_files(&mut self) -> Result<FileRemoval> {
-        let install_dir = crate::paths::tray_install_dir()?;
+        let install_dir = crate::paths::tray_install_dir(self.profile)?;
         let current =
             std::env::current_exe().context("Failed to determine the uninstaller path")?;
         match plan(self.binary, &install_dir, &current)? {
@@ -173,6 +191,12 @@ impl UninstallSteps for WindowsUninstall<'_> {
                 .with_context(|| format!("Failed to remove {}", root.display()))
                 .map(|()| FileRemoval::Done),
             UninstallPlan::RemoveAfterExit(root) => {
+                if self.profile == InstallProfile::Development {
+                    anyhow::bail!(
+                        "quit the development QoL Tray and run the uninstall again: {} cannot be removed while it is running",
+                        root.display()
+                    );
+                }
                 registration::remove_file_if_present(self.binary)?;
                 if let Some(marker) = crate::paths::install_marker::marker_path(self.binary) {
                     registration::remove_file_if_present(&marker)?;
@@ -184,6 +208,9 @@ impl UninstallSteps for WindowsUninstall<'_> {
     }
 
     fn remove_uninstall_entry(&mut self) -> Result<()> {
+        if self.profile == InstallProfile::Development {
+            return Ok(());
+        }
         registration::remove_uninstall_entry()
     }
 }

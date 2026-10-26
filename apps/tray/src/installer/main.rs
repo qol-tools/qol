@@ -10,7 +10,7 @@ qol_conventions::declare_build_identity!(Installer);
 
 trait InstallerOperations: Clone + Send + Sync + 'static {
     fn apply(&self, args: Vec<String>) -> Result<()>;
-    fn uninstall(&self) -> Result<()>;
+    fn uninstall(&self, dev: bool) -> Result<()>;
     fn inspect_platform_paths(&self) -> Result<DoctorCheckResult>;
 }
 
@@ -22,8 +22,8 @@ impl InstallerOperations for ProductionOperations {
         qol_tray::installer::run(args)
     }
 
-    fn uninstall(&self) -> Result<()> {
-        qol_tray::installer::uninstall()
+    fn uninstall(&self, dev: bool) -> Result<()> {
+        qol_tray::installer::uninstall(dev)
     }
 
     fn inspect_platform_paths(&self) -> Result<DoctorCheckResult> {
@@ -100,7 +100,7 @@ where
         .usage(usage)
         .detail("--source <PATH> selects an existing install source.")
         .detail("--workspace <PATH> installs its locally built plugin bundles.")
-        .detail("--dev selects dev runtime mode and requires a dev-enabled build.");
+        .detail("--dev installs the development build beside the production install, in its own directory, and requires a dev-enabled build.");
     command
         .output("Progress is written to stdout; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero when validation or an install operation fails.")
@@ -116,16 +116,23 @@ where
 {
     Command::new("uninstall")
         .about("Uninstall QoL Tray.")
-        .usage("qol-tray-install uninstall")
+        .usage("qol-tray-install uninstall [--dev]")
         .detail("Stops QoL Tray and removes its binary, autostart entry and app registration.")
+        .detail(
+            "--dev removes only the development install and leaves the production install alone.",
+        )
         .detail("Settings and plugins are kept.")
         .output("Progress is written to stdout; diagnostics are written to stderr.")
         .exit_behavior("Exits non-zero when an uninstall step fails.")
         .run_plain_text(move |context| {
-            if let Some(extra) = context.args().first() {
-                anyhow::bail!("uninstall takes no arguments, got {extra}");
-            }
-            operations.uninstall()?;
+            let dev = match context.args() {
+                [] => false,
+                [flag] if flag == "--dev" => true,
+                [extra, ..] => {
+                    anyhow::bail!("uninstall takes no arguments other than --dev, got {extra}")
+                }
+            };
+            operations.uninstall(dev)?;
             Ok(PlainTextOutput::empty())
         })
 }
@@ -183,7 +190,7 @@ mod tests {
     #[derive(Default)]
     struct OperationCalls {
         mutations: Mutex<Vec<Vec<String>>>,
-        uninstalls: AtomicUsize,
+        uninstalls: Mutex<Vec<bool>>,
         doctor: AtomicUsize,
     }
 
@@ -198,8 +205,8 @@ mod tests {
             Ok(())
         }
 
-        fn uninstall(&self) -> Result<()> {
-            self.calls.uninstalls.fetch_add(1, Ordering::SeqCst);
+        fn uninstall(&self, dev: bool) -> Result<()> {
+            self.calls.uninstalls.lock().unwrap().push(dev);
             Ok(())
         }
 
@@ -249,18 +256,19 @@ mod tests {
 
     #[test]
     fn uninstall_reaches_only_its_operation_and_rejects_arguments() {
-        let cases: [(&[&str], u8, usize); 4] = [
-            (&["uninstall"], EXIT_SUCCESS, 1),
-            (&["uninstall", "--help"], EXIT_SUCCESS, 0),
-            (&["help", "uninstall"], EXIT_SUCCESS, 0),
-            (&["uninstall", "--dev"], EXIT_RUNTIME_ERROR, 0),
+        let cases: [(&[&str], u8, &[bool]); 5] = [
+            (&["uninstall"], EXIT_SUCCESS, &[false]),
+            (&["uninstall", "--dev"], EXIT_SUCCESS, &[true]),
+            (&["uninstall", "--help"], EXIT_SUCCESS, &[]),
+            (&["help", "uninstall"], EXIT_SUCCESS, &[]),
+            (&["uninstall", "--force"], EXIT_RUNTIME_ERROR, &[]),
         ];
         for (args, exit_code, uninstalls) in cases {
             let (app, calls) = sentinel();
             let execution = execute(&app, args);
             assert_eq!(execution.exit_code, exit_code, "{args:?}");
             assert_eq!(
-                calls.uninstalls.load(Ordering::SeqCst),
+                calls.uninstalls.lock().unwrap().as_slice(),
                 uninstalls,
                 "{args:?}"
             );

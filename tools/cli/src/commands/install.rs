@@ -9,9 +9,6 @@ use std::process::Command;
 
 pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     let dev = parse_dev_flag(args)?;
-    if dev {
-        refuse_dev_over_production(installed_build_intent())?;
-    }
     let root = repo_root()?;
     print_title("qol install");
     print_hint(verbose);
@@ -79,28 +76,6 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
     )?;
     record_workspace_build(build_identity.source())?;
     step_label("ready", StepKind::Success, "qol-tray");
-    Ok(())
-}
-
-fn installed_build_intent() -> Option<qol_conventions::artifact::BuildIntent> {
-    let binary = qol_apps::tray_install::installed_binary().ok()?;
-    let artifact = qol_artifact::inspect_path(binary).ok()?;
-    artifact
-        .slices
-        .into_iter()
-        .next()
-        .map(|slice| slice.identity.intent)
-}
-
-fn refuse_dev_over_production(
-    installed: Option<qol_conventions::artifact::BuildIntent>,
-) -> Result<()> {
-    if installed == Some(qol_conventions::artifact::BuildIntent::Production) {
-        bail!(
-            "refusing to replace the installed production qol-tray with a development build; \
-             use `qol dev` to run a development build without touching the install"
-        );
-    }
     Ok(())
 }
 
@@ -237,14 +212,6 @@ mod tests {
             args_of(&dev).contains("--features dev,linux_evdev"),
             "dev install carries dev and evdev features"
         );
-    }
-
-    #[test]
-    fn dev_install_never_replaces_a_production_install() {
-        use qol_conventions::artifact::BuildIntent;
-        assert!(refuse_dev_over_production(Some(BuildIntent::Production)).is_err());
-        assert!(refuse_dev_over_production(Some(BuildIntent::Development)).is_ok());
-        assert!(refuse_dev_over_production(None).is_ok());
     }
 
     #[test]

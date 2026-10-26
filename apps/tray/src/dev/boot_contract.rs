@@ -279,8 +279,7 @@ pub fn set_selected_worktree(
         Some(AutostartState::Missing) | None => false,
     };
     if !keep_current {
-        env.write_autostart_target(desired)?;
-        wrote_autostart = true;
+        wrote_autostart = env.write_autostart_target(desired)?;
     }
 
     Ok(SetSelectedReport {
@@ -969,7 +968,7 @@ mod heal_tests {
             ))
         }
 
-        fn write_autostart_target(&self, _binary: &Path) -> anyhow::Result<()> {
+        fn write_autostart_target(&self, _binary: &Path) -> anyhow::Result<bool> {
             panic!("failed boot resolution must not write autostart")
         }
 

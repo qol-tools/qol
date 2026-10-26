@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use qol_apps::tray_install::InstallProfile;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -101,17 +102,17 @@ pub fn user_home_dir() -> Result<PathBuf> {
     dirs::home_dir().context("Could not determine home directory")
 }
 
-pub fn tray_install_dir() -> Result<PathBuf> {
+pub fn tray_install_dir(profile: InstallProfile) -> Result<PathBuf> {
     #[cfg(any(test, debug_assertions))]
     if let Some(home) = test_home_dir() {
-        return Ok(qol_apps::tray_install::install_dir_for_home(&home)?);
+        return Ok(profile.install_dir_for_home(&home)?);
     }
 
-    Ok(qol_apps::tray_install::install_dir()?)
+    Ok(profile.install_dir()?)
 }
 
-pub fn tray_installed_binary() -> Result<PathBuf> {
-    Ok(tray_install_dir()?.join(qol_apps::tray_install::binary_filename()))
+pub fn tray_installed_binary(profile: InstallProfile) -> Result<PathBuf> {
+    Ok(tray_install_dir(profile)?.join(qol_apps::tray_install::binary_filename()))
 }
 
 pub fn is_safe_path_component(s: &str) -> bool {
@@ -432,8 +433,14 @@ mod tests {
         let _guard = push_test_path_root(tmp.path());
         let home = tmp.path().join("home");
 
-        assert!(tray_install_dir().unwrap().starts_with(&home));
-        assert!(tray_installed_binary().unwrap().starts_with(&home));
+        for profile in [InstallProfile::Production, InstallProfile::Development] {
+            assert!(tray_install_dir(profile).unwrap().starts_with(&home));
+            assert!(tray_installed_binary(profile).unwrap().starts_with(&home));
+        }
+        assert_ne!(
+            tray_install_dir(InstallProfile::Production).unwrap(),
+            tray_install_dir(InstallProfile::Development).unwrap()
+        );
     }
 
     const HOME_LOOKUPS: [&str; 6] = [
