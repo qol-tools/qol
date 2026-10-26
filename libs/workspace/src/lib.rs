@@ -69,10 +69,15 @@ pub fn monorepo_plugin_dirs(workspace_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-pub fn worktrees_dir(root: &Path) -> Option<PathBuf> {
+pub fn worktrees_dirs(root: &Path) -> Vec<PathBuf> {
     root.ancestors()
-        .find(|dir| dir.join("worktrees").is_dir())
         .map(|dir| dir.join("worktrees"))
+        .filter(|dir| dir.is_dir())
+        .collect()
+}
+
+pub fn worktrees_dir(root: &Path) -> Option<PathBuf> {
+    worktrees_dirs(root).into_iter().next()
 }
 
 pub fn workspace_parent(repo: &Path) -> Result<PathBuf> {
@@ -605,6 +610,37 @@ mod tests {
             ),
         );
         assert!(find_plugin_dirs(&[tmp.path().to_path_buf()]).is_empty());
+    }
+
+    #[test]
+    fn worktrees_dirs_lists_in_repo_then_sibling_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("qol-monorepo");
+        let in_repo = primary.join("worktrees");
+        let sibling = tmp.path().join("worktrees");
+        fs::create_dir_all(in_repo.join("in-repo-branch")).unwrap();
+        fs::create_dir_all(sibling.join("sibling-branch")).unwrap();
+        assert_eq!(worktrees_dirs(&primary), vec![in_repo.clone(), sibling]);
+        assert_eq!(worktrees_dir(&primary), Some(in_repo));
+    }
+
+    #[test]
+    fn worktrees_dirs_from_inside_sibling_worktree_finds_sibling_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sibling = tmp.path().join("worktrees");
+        let grouped = sibling.join("grouped").join("qol-monorepo");
+        fs::create_dir_all(&grouped).unwrap();
+        assert_eq!(worktrees_dirs(&grouped), vec![sibling.clone()]);
+        assert_eq!(worktrees_dir(&grouped), Some(sibling));
+    }
+
+    #[test]
+    fn worktrees_dirs_is_empty_without_worktrees_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("qol-monorepo");
+        fs::create_dir_all(&primary).unwrap();
+        assert!(worktrees_dirs(&primary).is_empty());
+        assert_eq!(worktrees_dir(&primary), None);
     }
 
     #[test]
