@@ -165,6 +165,38 @@ impl SettleGate {
     }
 }
 
+#[derive(Debug, Default)]
+struct WakeDelivery {
+    unconfirmed: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WakeStep {
+    Retry,
+    Delivered,
+    DeliveredUnconfirmed,
+}
+
+impl WakeDelivery {
+    fn observe(&mut self, outcome: Result<Typed, TerminalError>) -> WakeStep {
+        let Ok(typed) = outcome else {
+            return WakeStep::Retry;
+        };
+        if matches!(typed, Typed::Held(_)) {
+            return WakeStep::Retry;
+        }
+        if typed.landed() {
+            return WakeStep::Delivered;
+        }
+        self.unconfirmed += 1;
+        if self.unconfirmed > 1 {
+            WakeStep::DeliveredUnconfirmed
+        } else {
+            WakeStep::Retry
+        }
+    }
+}
+
 pub fn run_parked(store: &ParkStore, id: &str) -> Result<()> {
     let mut record = store.load(id)?;
     if store.is_claimed(id) {
@@ -304,6 +336,7 @@ fn deliver(
     let mut busy = 0;
     let mut settle = SettleGate::default();
     let mut guard = ComposerGuard::default();
+    let mut wake = WakeDelivery::default();
     loop {
         {
             let _turn = store.lock_conversation(&record.external_id)?;
@@ -321,24 +354,28 @@ fn deliver(
                 match holder(terminals, interpreter, store, record, caller) {
                     Holder::Live(binding) => {
                         unknown = 0;
-                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready
-                            && guard
-                                .type_text(
-                                    terminals,
-                                    interpreter,
-                                    Typing::submit(&binding, &prompt),
-                                )
-                                .is_ok_and(Typed::landed)
-                        {
-                            settle_batch(store, &batch, ParkState::Delivered, &binding, None);
-                            qol_runtime::probe!(
-                                "CLI_SESSION_PARK",
-                                "event=delivered id={} batch={} session={}",
-                                record.id,
-                                batch.len(),
-                                binding
+                        if caller_state(terminals, interpreter, &binding) == CallerState::Ready {
+                            let outcome = guard.type_text(
+                                terminals,
+                                interpreter,
+                                Typing::submit(&binding, &prompt),
                             );
-                            return Ok(false);
+                            let step = wake.observe(outcome);
+                            if step != WakeStep::Retry {
+                                let detail = (step == WakeStep::DeliveredUnconfirmed).then_some(
+                                    "the wake was typed into the conversation twice without confirmation, so it was not typed again; its output is in the park log",
+                                );
+                                settle_batch(store, &batch, ParkState::Delivered, &binding, detail);
+                                qol_runtime::probe!(
+                                    "CLI_SESSION_PARK",
+                                    "event=delivered id={} batch={} session={} confirmed={}",
+                                    record.id,
+                                    batch.len(),
+                                    binding,
+                                    step == WakeStep::Delivered
+                                );
+                                return Ok(false);
+                            }
                         }
                         busy += 1;
                         if busy >= BUSY_POLLS_BEFORE_GIVING_UP {
@@ -652,6 +689,42 @@ mod tests {
             .unwrap()
             .success());
         assert_eq!(std::fs::read_to_string(&log).unwrap(), "found\n");
+    }
+
+    #[test]
+    fn a_wake_typed_twice_without_confirmation_is_delivered_instead_of_retyped() {
+        let mut delivery = WakeDelivery::default();
+        assert_eq!(delivery.observe(Ok(Typed::Unsubmitted)), WakeStep::Retry);
+        assert_eq!(
+            delivery.observe(Ok(Typed::Unsubmitted)),
+            WakeStep::DeliveredUnconfirmed
+        );
+    }
+
+    #[test]
+    fn a_held_wake_has_not_been_typed() {
+        let mut delivery = WakeDelivery::default();
+        for _ in 0..5 {
+            assert_eq!(
+                delivery.observe(Ok(Typed::Held(qol_terminal_sessions::cli::Hold::Draft))),
+                WakeStep::Retry
+            );
+            assert_eq!(
+                delivery.observe(Err(TerminalError::UnknownBackend(
+                    qol_terminal_sessions::BackendId::new("nope").unwrap()
+                ))),
+                WakeStep::Retry
+            );
+        }
+        assert_eq!(delivery.observe(Ok(Typed::Submitted)), WakeStep::Delivered);
+    }
+
+    #[test]
+    fn one_unconfirmed_wake_still_delivers_when_the_next_attempt_lands() {
+        let mut delivery = WakeDelivery::default();
+        assert_eq!(delivery.observe(Ok(Typed::Unsubmitted)), WakeStep::Retry);
+        assert_eq!(delivery.observe(Ok(Typed::Submitted)), WakeStep::Delivered);
+        assert_eq!(delivery.observe(Ok(Typed::Inserted)), WakeStep::Delivered);
     }
 
     fn turn(role: ChatRole, text: &str) -> ChatTurn {
