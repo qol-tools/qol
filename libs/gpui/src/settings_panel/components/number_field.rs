@@ -1,7 +1,8 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{canvas, div, point, px, rgb, rgba, PathBuilder, SharedString};
-use qol_theme::TextStyle;
+use gpui::{div, px, rgb, rgba, AnimationExt, SharedString};
+use qol_theme::{Curve, Motion, TextStyle, FOCUS_RING_HALO};
+use std::time::Duration;
 
 use crate::deck::with_alpha;
 use crate::kit::Kit;
@@ -55,6 +56,17 @@ pub(in crate::settings_panel) struct NumberCue {
     pub(in crate::settings_panel) editing: bool,
     pub(in crate::settings_panel) dragging: bool,
     pub(in crate::settings_panel) limit: Option<String>,
+    pub(in crate::settings_panel) marked: bool,
+    pub(in crate::settings_panel) pulse: Option<usize>,
+    pub(in crate::settings_panel) settle: Option<(f32, usize)>,
+}
+
+impl NumberCue {
+    pub(in crate::settings_panel) const SETTLE: Motion = Motion {
+        duration: Duration::from_millis(200),
+        curve: Curve::Settle,
+    };
+    pub(in crate::settings_panel) const PULSE: Duration = Motion::TRAVEL.duration;
 }
 
 const WIDE_THUMB: f32 = 16.0;
@@ -62,18 +74,41 @@ const THUMB_RING: f32 = 3.0;
 const THUMB_HALO: f32 = 6.0;
 const CARET_WIDTH: f32 = 2.0;
 const CARET_HEIGHT: f32 = 18.0;
-const NUDGE_CHEVRON_WIDTH: f32 = 6.0;
-const NUDGE_CHEVRON_HEIGHT: f32 = 10.0;
-const NUDGE_CHEVRON_STROKE: f32 = 1.5;
 const TICK_HEIGHT: f32 = 4.0;
 const TICKS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
 const LEVEL_SEGMENTS: usize = 16;
 const LEVEL_SEGMENT_HEIGHT: f32 = 10.0;
 const LEVEL_LOUD_FROM: f32 = 0.7;
 const LEVEL_PEAK_FROM: f32 = 0.9;
+const MARKER_THUMB: f32 = 12.0;
 
 fn thumb_left(centre: f32) -> f32 {
     centre - WIDE_THUMB / 2.0
+}
+
+fn marker_pin_left(fraction: f32) -> f32 {
+    tick_left(fraction, SliderStyle::Compact.track_width())
+}
+
+fn marker_pin_inset(left: f32) -> f32 {
+    let width = SliderStyle::Compact.track_width();
+    let radius = qol_theme::RADIUS_CONTROL;
+    let centre = left + qol_theme::LINE / 2.0;
+    let edge = centre.min(width - centre);
+    if edge >= radius {
+        return 0.0;
+    }
+    radius - (radius * radius - (radius - edge) * (radius - edge)).sqrt()
+}
+
+fn marker_thumb_left(fraction: f32) -> f32 {
+    let width = SliderStyle::Compact.track_width();
+    let half = MARKER_THUMB / 2.0;
+    (fraction * width).clamp(half, width - half) - half
+}
+
+fn marker_thumb_top() -> f32 {
+    SliderStyle::Compact.track_height() - MARKER_THUMB / 2.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,47 +288,6 @@ pub(in crate::settings_panel) struct NumberText {
     pub(in crate::settings_panel) selected: bool,
 }
 
-fn nudge_chevron(points_right: bool, ink: u32, shown: bool) -> gpui::Div {
-    let mark = canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let inset = px(qol_theme::LINE);
-            let (tail, tip) = if points_right {
-                (bounds.left() + inset, bounds.right() - inset)
-            } else {
-                (bounds.right() - inset, bounds.left() + inset)
-            };
-            let mut path = PathBuilder::stroke(px(NUDGE_CHEVRON_STROKE));
-            path.move_to(point(tail, bounds.top() + inset));
-            path.line_to(point(tip, bounds.center().y));
-            path.line_to(point(tail, bounds.bottom() - inset));
-            if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(ink));
-            }
-        },
-    )
-    .w(px(NUDGE_CHEVRON_WIDTH))
-    .h(px(NUDGE_CHEVRON_HEIGHT));
-    let end = div()
-        .absolute()
-        .top_0()
-        .h_full()
-        .flex()
-        .items_center()
-        .child(mark);
-    let end = if points_right {
-        end.right(px(qol_theme::SPACE_INSET))
-    } else {
-        end.left(px(qol_theme::SPACE_INSET))
-    };
-    if shown {
-        end
-    } else {
-        end.opacity(0.0)
-            .group_hover(SETTINGS_ROW_GROUP, |style| style.opacity(1.0))
-    }
-}
-
 fn number_value(
     text: NumberText,
     unit: Option<SharedString>,
@@ -348,47 +342,149 @@ fn number_value(
         .children(after)
 }
 
+fn settling(
+    piece: gpui::Div,
+    name: &'static str,
+    to: f32,
+    settle: Option<(f32, usize)>,
+    place: impl Fn(gpui::Div, f32) -> gpui::Div + 'static,
+) -> gpui::AnyElement {
+    let Some((from, step)) = settle else {
+        return place(piece, to).into_any_element();
+    };
+    piece
+        .with_animation(
+            (name, step),
+            crate::motion::animation(NumberCue::SETTLE),
+            move |piece, delta| place(piece, from + (to - from) * delta),
+        )
+        .into_any_element()
+}
+
+fn marker_face(ground: Ground, hover: Option<Ground>, glowing: bool) -> gpui::Div {
+    let halo = div()
+        .absolute()
+        .top(px(-FOCUS_RING_HALO))
+        .left(px(-FOCUS_RING_HALO))
+        .size(px(MARKER_THUMB + FOCUS_RING_HALO * 2.0))
+        .rounded_full()
+        .bg(rgba(ground.halo.packed()))
+        .opacity(if glowing { 1.0 } else { 0.0 });
+    div().size_full().child(halo).child(ground_bg(
+        div().absolute().size(px(MARKER_THUMB)).rounded_full(),
+        rgb(ground.ink),
+        hover.map(|hover| rgb(hover.ink)),
+    ))
+}
+
+fn marker_thumb(
+    fraction: f32,
+    cue: &NumberCue,
+    ground: Ground,
+    hover: Option<Ground>,
+) -> gpui::AnyElement {
+    let face = match cue.pulse {
+        _ if cue.dragging => marker_face(ground, hover, true).into_any_element(),
+        Some(step) => marker_face(ground, hover, false)
+            .with_animation(
+                ("settings-number-pulse", step),
+                crate::motion::animation(Motion::TRAVEL),
+                move |_, delta| marker_face(ground, hover, delta < 1.0),
+            )
+            .into_any_element(),
+        None => marker_face(ground, hover, false).into_any_element(),
+    };
+    settling(
+        div()
+            .absolute()
+            .top(px(marker_thumb_top()))
+            .size(px(MARKER_THUMB))
+            .child(face),
+        "settings-number-thumb",
+        fraction,
+        cue.settle,
+        |thumb, at| thumb.left(px(marker_thumb_left(at))),
+    )
+}
+
 fn scrub_field(
     value: gpui::Div,
-    fill: f32,
+    fraction: f32,
     cue: &NumberCue,
     ground: Ground,
     hover: Option<Ground>,
     kit: Kit,
 ) -> gpui::Div {
+    let width = SliderStyle::Compact.track_width();
     let strength = if cue.dragging {
         qol_theme::OPACITY_FILL_HELD
     } else {
         qol_theme::OPACITY_FILL
     };
-    let chevron = hover.unwrap_or(ground).soft;
-    ground_bg(
+    let fill = settling(
+        ground_bg(
+            div().absolute().left_0().top_0().h_full(),
+            with_alpha(ground.mark, strength),
+            hover.map(|hover| with_alpha(hover.mark, strength)),
+        ),
+        "settings-number-fill",
+        fraction,
+        cue.settle,
+        move |fill, at| fill.w(px(at * width)),
+    );
+    let pin = cue.marked.then(|| {
+        settling(
+            ground_bg(
+                div().absolute().w(px(qol_theme::LINE)),
+                rgb(ground.ink),
+                hover.map(|hover| rgb(hover.ink)),
+            ),
+            "settings-number-pin",
+            fraction,
+            cue.settle,
+            |pin, at| {
+                let left = marker_pin_left(at);
+                let inset = marker_pin_inset(left);
+                pin.left(px(left)).top(px(inset)).bottom(px(inset))
+            },
+        )
+    });
+    let field = ground_bg(
         div()
-            .relative()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_center()
-            .w(px(SliderStyle::Compact.track_width()))
-            .h(px(SliderStyle::Compact.track_height()))
+            .absolute()
+            .inset_0()
             .rounded(px(qol_theme::RADIUS_CONTROL))
             .overflow_hidden(),
         rgba(ground.well.packed()),
         hover.map(|hover| rgba(hover.well.packed())),
     )
-    .child(ground_bg(
-        div().absolute().left_0().top_0().h_full().w(px(fill)),
-        with_alpha(ground.mark, strength),
-        hover.map(|hover| with_alpha(hover.mark, strength)),
-    ))
-    .child(nudge_chevron(false, chevron, cue.dragging))
-    .child(nudge_chevron(true, chevron, cue.dragging))
-    .child(value)
-    .when(cue.editing, |field| field.shadow(kit.focus_ring(ground)))
+    .child(fill)
+    .children(pin)
+    .when(cue.editing, |field| field.shadow(kit.focus_ring(ground)));
+    div()
+        .relative()
+        .flex_none()
+        .w(px(width))
+        .h(px(SliderStyle::Compact.track_height()))
+        .child(field)
+        .children(
+            cue.marked
+                .then(|| marker_thumb(fraction, cue, ground, hover)),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .child(value),
+        )
 }
 
 pub(in crate::settings_panel) fn number_field(
-    text: NumberText,
+    mut text: NumberText,
     unit: Option<SharedString>,
     track: Option<(f32, SliderStyle)>,
     cue: NumberCue,
@@ -398,7 +494,12 @@ pub(in crate::settings_panel) fn number_field(
 ) -> gpui::Div {
     let ground = row.rest(kit);
     let hover = row.hover(kit);
-    let value = number_value(text, unit, &cue, ground, hover, kit);
+    let compact = matches!(track, Some((_, SliderStyle::Compact)));
+    if compact {
+        text.widest = text.shown.clone();
+    }
+    let value = number_value(text, unit, &cue, ground, hover, kit)
+        .when(compact, |value| value.gap(px(qol_theme::SPACE_TIGHT)));
     let gap = track.map_or(qol_theme::SPACE_INSET, |_| qol_theme::SPACE_CELL);
     let mut cell = div().flex().flex_row().items_center().gap(px(gap));
     if let Some((fraction, style)) = track {
@@ -416,7 +517,7 @@ pub(in crate::settings_panel) fn number_field(
         };
         let bar = match style {
             SliderStyle::Compact => {
-                return interact(scrub_field(value, fill, &cue, ground, hover, kit));
+                return interact(scrub_field(value, fraction, &cue, ground, hover, kit));
             }
             SliderStyle::Wide => with_thumb(slider_bar(style, fill, ground, hover))
                 .children(quarter_ticks(width, ground, hover)),
@@ -475,6 +576,32 @@ mod tests {
                 style.track_width() + reach
             );
         }
+    }
+
+    #[test]
+    fn the_compact_marker_pin_rides_the_boundary_and_the_thumb_stays_inside_the_field() {
+        let width = SliderStyle::Compact.track_width();
+        assert_eq!(marker_pin_left(0.0), 0.0);
+        assert_eq!(marker_pin_left(1.0), width - qol_theme::LINE);
+        assert_eq!(marker_pin_inset(marker_pin_left(0.5)), 0.0);
+        let corner = marker_pin_inset(marker_pin_left(0.0));
+        assert!(
+            corner > 0.0 && corner < qol_theme::RADIUS_CONTROL,
+            "{corner}"
+        );
+        assert_eq!(corner, marker_pin_inset(marker_pin_left(1.0)));
+        assert_eq!(marker_thumb_left(0.0), 0.0);
+        assert_eq!(marker_thumb_left(1.0) + MARKER_THUMB, width);
+        assert_eq!(marker_thumb_left(0.5) + MARKER_THUMB / 2.0, width / 2.0);
+        for fraction in [0.0, 0.02, 0.25, 0.5, 0.75, 0.98, 1.0] {
+            let left = marker_thumb_left(fraction);
+            assert!(
+                left >= 0.0 && left + MARKER_THUMB <= width,
+                "fraction {fraction}: thumb left {left}"
+            );
+        }
+        assert_eq!(marker_thumb_top(), 22.0);
+        assert_eq!(marker_thumb_top() + MARKER_THUMB, 34.0);
     }
 
     #[test]
