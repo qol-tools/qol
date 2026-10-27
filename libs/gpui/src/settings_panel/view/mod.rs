@@ -5636,7 +5636,8 @@ fn coarse_drag(start: f64, value: f64, coarse: bool, min: f64, max: f64, step: f
         return value;
     }
     let pulled = start + (value - start) * COARSE_DRAG;
-    min + ((pulled.clamp(min, max) - min) / step).round() * step
+    let aligned = align_to_step(pulled.clamp(min, max), Some(min), Some(max), step);
+    round_to_step_precision(aligned, step).clamp(min, max)
 }
 
 fn number_drag_effect(rows: &[Row], row: usize) -> NumberDragEffect {
@@ -7908,6 +7909,8 @@ active_value_from = "active"
         assert_eq!(coarse_drag(20.0, 22.0, true, 0.0, 100.0, 1.0), 28.0);
         assert_eq!(coarse_drag(20.0, 18.0, true, 0.0, 100.0, 1.0), 12.0);
         assert_eq!(coarse_drag(95.0, 99.0, true, 0.0, 100.0, 1.0), 100.0);
+        assert_eq!(coarse_drag(4.0, 8.0, true, 0.0, 10.0, 4.0), 8.0);
+        assert_eq!(coarse_drag(0.1, 0.15, true, 0.0, 1.0, 0.1), 0.3);
     }
 
     #[test]
