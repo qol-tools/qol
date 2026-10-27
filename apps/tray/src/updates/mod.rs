@@ -23,6 +23,17 @@ const OFFLINE_RETRY: Duration = Duration::from_secs(60);
 pub(crate) const UPDATE_ALREADY_RUNNING: &str = "An update is already running";
 pub(crate) const UPDATE_FAILED: &str = "The update could not be installed";
 
+#[derive(Debug)]
+struct IncompatibleUpdate;
+
+impl std::fmt::Display for IncompatibleUpdate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("This update cannot run on your system; your current version was kept")
+    }
+}
+
+impl std::error::Error for IncompatibleUpdate {}
+
 pub(super) const GITHUB_REPO: &str = "qol-tools/qol";
 pub(super) const HOST_TAG_PREFIX: &str = "qol-tray";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -380,6 +391,9 @@ pub(crate) fn github_status_message(status: u16) -> String {
 }
 
 pub(crate) fn plain_update_failure(error: &anyhow::Error) -> String {
+    if error.is::<IncompatibleUpdate>() {
+        return IncompatibleUpdate.to_string();
+    }
     let text = format!("{error:#}");
     if text.contains("already running") || text.contains("already in progress") {
         return UPDATE_ALREADY_RUNNING.to_string();

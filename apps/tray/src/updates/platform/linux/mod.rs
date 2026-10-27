@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::daemon::{DaemonEvent, EventBus};
 use crate::plugins::PluginManager;
 
-use super::super::{verify_host_update, FoundUpdate};
+use super::super::FoundUpdate;
 use super::download::HostUpdate;
 use super::InstallKind;
 use super::{download, unix};
+
+mod installation;
 
 pub(super) fn recover_interrupted_update() {}
 
@@ -34,36 +34,6 @@ fn asset_name() -> String {
 
 fn arch_suffix() -> &'static str {
     std::env::consts::ARCH
-}
-
-fn atomic_replace(source: &Path, target: &Path) -> Result<()> {
-    let staged = target.with_extension("new");
-    let result = atomic_replace_inner(source, target, &staged);
-    if result.is_err() && staged.exists() {
-        let _ = std::fs::remove_file(&staged);
-    }
-    result
-}
-
-fn atomic_replace_inner(source: &Path, target: &Path, staged: &Path) -> Result<()> {
-    if staged.exists() {
-        let _ = std::fs::remove_file(staged);
-    }
-    std::fs::copy(source, staged).with_context(|| {
-        format!(
-            "Failed to stage {} to {}",
-            source.display(),
-            staged.display()
-        )
-    })?;
-
-    let mut perms = std::fs::metadata(staged)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(staged, perms)?;
-
-    std::fs::rename(staged, target)
-        .with_context(|| format!("Failed to replace {}", target.display()))?;
-    Ok(())
 }
 
 fn tar_update_blocked(
@@ -140,15 +110,14 @@ pub(super) async fn download_and_install(
         .await?;
 
     let current_exe = std::env::current_exe()?;
-    let install_result = unix::extract_tar_gz_entry(&dest, "qol-tray", false).and_then(|binary| {
-        verify_host_update(
-            &binary,
-            expected_version,
-            qol_artifact::ArtifactExpectation::with_exact_target,
-        )?;
-        atomic_replace(&binary, &current_exe)
-    });
-    install_result?;
+    let binary = unix::extract_tar_gz_entry(&dest, "qol-tray", false)?;
+    let target = current_exe.clone();
+    let expected_version = expected_version.map(str::to_owned);
+    tokio::task::spawn_blocking(move || {
+        installation::install(&binary, &target, expected_version.as_deref())
+    })
+    .await
+    .context("Update installation task failed")??;
 
     events.send(DaemonEvent::UpdateComplete);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -214,27 +183,5 @@ mod tests {
     fn linux_release_asset_name_is_stable() {
         let arch = arch_suffix();
         assert_eq!(asset_name(), format!("qol-tray-linux-{arch}.tar.gz"));
-    }
-
-    #[test]
-    fn atomic_replace_swaps_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        std::fs::write(&source, b"new content").unwrap();
-        std::fs::write(&target, b"old content").unwrap();
-        atomic_replace(&source, &target).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new content");
-        assert!(!dir.path().join("target.new").exists());
-    }
-
-    #[test]
-    fn atomic_replace_creates_target_if_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        std::fs::write(&source, b"content").unwrap();
-        atomic_replace(&source, &target).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"content");
     }
 }

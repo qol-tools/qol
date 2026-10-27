@@ -73,7 +73,7 @@ runs:
       id: build-cache
       uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       with:
-        shared-key: ${{ inputs.cache-key }}
+        shared-key: ${{ inputs.cache-key }}-${{ env.ImageOS }}
         lookup-only: ${{ inputs.lookup-only }}
         save-if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' && inputs.lookup-only != 'true' }}
 

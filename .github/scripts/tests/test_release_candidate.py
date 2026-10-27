@@ -97,7 +97,7 @@ class CandidatePlanTests(unittest.TestCase):
         self.assertEqual(
             [(row["os"], row["target"]) for row in matrix],
             [
-                ("ubuntu-latest", "x86_64-unknown-linux-gnu"),
+                ("ubuntu-24.04", "x86_64-unknown-linux-gnu"),
                 ("macos-latest", "aarch64-apple-darwin"),
                 ("macos-latest", "x86_64-apple-darwin"),
             ],
@@ -300,7 +300,7 @@ class SourceCiTests(unittest.TestCase):
         ]
         jobs = [
             {"name": "Plan affected crates", "conclusion": "success"},
-            {"name": "lint + test (ubuntu-latest)", "conclusion": "success"},
+            {"name": "lint + test (ubuntu-24.04)", "conclusion": "success"},
             {"name": "lint + test (macos-latest)", "conclusion": "success"},
             {"name": "lint + test (windows-latest)", "conclusion": "success"},
             {"name": "sandbox lifecycle (windows)", "conclusion": "skipped"},
@@ -323,7 +323,7 @@ class SourceCiTests(unittest.TestCase):
                 [
                     {"name": "Plan affected crates", "conclusion": "success"},
                     {
-                        "name": "lint + test (ubuntu-latest)",
+                        "name": "lint + test (ubuntu-24.04)",
                         "conclusion": "success",
                     },
                 ],
@@ -426,7 +426,7 @@ class SourceCiTests(unittest.TestCase):
         queued = {"id": 41, "head_sha": sha, "conclusion": "success"}
         plan = {"name": "Plan affected crates", "conclusion": "success"}
         skipped = {"name": "lint + test (${{ matrix.os }})", "conclusion": "skipped"}
-        ubuntu = {"name": "release build (ubuntu-latest)", "conclusion": "success"}
+        ubuntu = {"name": "release build (ubuntu-24.04)", "conclusion": "success"}
         macos = {"name": "release build (macos-latest)", "conclusion": "success"}
         windows = {"name": "release build (windows-latest)", "conclusion": "success"}
         cases = [
@@ -518,7 +518,7 @@ class SourceCiTests(unittest.TestCase):
         queued = {"id": 41, "head_sha": sha, "conclusion": "success"}
         queue_jobs = [
             {"name": "Plan affected crates", "conclusion": "success"},
-            {"name": "lint + test (ubuntu-latest)", "conclusion": "success"},
+            {"name": "lint + test (ubuntu-24.04)", "conclusion": "success"},
             {"name": "lint + test (macos-latest)", "conclusion": "success"},
             {"name": "lint + test (windows-latest)", "conclusion": "success"},
             {"name": "batch role", "conclusion": "success"},
@@ -1089,9 +1089,23 @@ class BuildNodeTests(unittest.TestCase):
         root = SCRIPTS.parents[1]
         for kind, package, target, expected in cases:
             with self.subTest(kind=kind, package=package):
+                if kind == "qol-tray-linux":
+                    expected.append([sys.executable, ".github/scripts/linux_compat.py", "--package", "qol-tray"])
+                if kind == "plugin" and target.endswith("-linux-gnu"):
+                    expected.append([sys.executable, ".github/scripts/linux_compat.py", "--package", package, "--target", target])
                 self.assertEqual(
                     rc.build_commands(root, kind, package, target), expected
                 )
+
+    def test_compatibility_failure_cannot_attest_a_successful_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "report.json"
+            results = [subprocess.CompletedProcess([], code) for code in (0, 0, 1)]
+            with patch.object(rc.subprocess, "run", side_effect=results):
+                with self.assertRaisesRegex(RuntimeError, "linux_compat.py.*failed"):
+                    rc.execute_build(root, "qol-tray-linux", None, None, str(report))
+            self.assertEqual(json.loads(report.read_text())["status"], "failed")
 
 
 class TargetBuildTests(unittest.TestCase):

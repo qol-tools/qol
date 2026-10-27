@@ -34,14 +34,14 @@ PLAN_CI_JOB = "Plan affected crates"
 CHECK_CI_JOB_PREFIX = "lint + test ("
 REQUIRED_CI_JOBS = {
     PLAN_CI_JOB,
-    "lint + test (ubuntu-latest)",
+    "lint + test (ubuntu-24.04)",
     "lint + test (macos-latest)",
     "lint + test (windows-latest)",
 }
 HOST_BUILD_KINDS = ("qol-tray-linux", "qol-tray-macos", "qol-tray-windows")
 QUEUE_BUILD_CI_JOBS = {
     PLAN_CI_JOB,
-    "release build (ubuntu-latest)",
+    "release build (ubuntu-24.04)",
     "release build (macos-latest)",
     "release build (windows-latest)",
 }
@@ -332,7 +332,11 @@ def build_commands(
         "production",
     ]
     if kind == "qol-tray-linux":
-        return [["cargo", "deb", "-p", "qol-tray", "--locked"], verify]
+        return [
+            ["cargo", "deb", "-p", "qol-tray", "--locked"],
+            verify,
+            [sys.executable, ".github/scripts/linux_compat.py", "--package", "qol-tray"],
+        ]
     if kind == "qol-tray-macos":
         return [
             [
@@ -391,7 +395,13 @@ def build_commands(
     ]
     for feature in plugin_release_features(root, package):
         command.extend(["--features", feature])
-    return [command, verify]
+    commands = [command, verify]
+    if target.endswith("-linux-gnu"):
+        commands.append([
+            sys.executable, ".github/scripts/linux_compat.py",
+            "--package", package, "--target", target,
+        ])
+    return commands
 
 
 def write_json(path: str | None, value: dict) -> None:

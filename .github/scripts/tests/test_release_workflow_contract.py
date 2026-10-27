@@ -27,6 +27,21 @@ def fake_command(directory, name, body):
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
+    def test_linux_builds_share_a_pinned_baseline_and_isolate_system_library_caches(self):
+        import plugin_matrix
+
+        runner = plugin_matrix.RUNNERS["linux"][0][0]
+        self.assertEqual(runner, "ubuntu-24.04")
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        host = versioning.split("  qol_tray_linux_candidate:\n", 1)[1].split("  qol_tray_macos_candidate:\n", 1)[0]
+        self.assertIn(f"runs-on: {runner}\n", host)
+        for name in ["ci.yml", "build-cache.yml"]:
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn(f"- os: {runner}\n", workflow, name)
+            self.assertNotIn("- os: ubuntu-latest\n", workflow, name)
+        setup = (ROOT / ".github/actions/rust-setup/action.yml").read_text()
+        self.assertIn("shared-key: ${{ inputs.cache-key }}-${{ env.ImageOS }}", setup)
+
     def test_setup_reports_whether_the_build_cache_will_be_saved(self):
         action = (ROOT / ".github/actions/rust-setup/action.yml").read_text()
         cache = named_step(action, "Restore or save build cache", "    ")
@@ -90,7 +105,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         warm = (ROOT / ".github/workflows/build-cache.yml").read_text()
         tests = (ROOT / ".github/workflows/ci.yml").read_text()
         rustflags = (
-            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && "
+            "RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-24.04' && "
             "'-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && "
             "'-C linker=rust-lld -C target-feature=+crt-static' || '' }}"
         )
@@ -946,7 +961,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("release_build", warm)
         for contract in [
             "          - os: windows-latest\n            plan: windows\n",
-            "          - os: ubuntu-latest\n            plan: ubuntu\n",
+            "          - os: ubuntu-24.04\n            plan: ubuntu\n",
             "          - os: macos-latest\n            plan: macos\n",
             "    defaults:\n      run:\n        shell: bash\n",
             "          cargo build --release --locked $BUILD_ARGS\n",
