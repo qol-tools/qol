@@ -12,17 +12,12 @@ pub(super) fn built_binary_path(plugin_dir: &Path, binary_name: &str) -> Result<
         .with_context(|| missing_built_binary(binary_name, plugin_dir))
 }
 
-pub(super) async fn install_built_binary(source_path: &Path, output_path: &Path) -> Result<()> {
-    let staged_path = output_path.with_extension("new");
-    let _ = tokio::fs::remove_file(&staged_path).await;
+pub(super) async fn stage_built_binary(source_path: &Path, destination: &Path) -> Result<()> {
+    let _ = tokio::fs::remove_file(destination).await;
 
-    tokio::fs::copy(source_path, &staged_path)
+    tokio::fs::copy(source_path, destination)
         .await
-        .with_context(|| stage_copy_error(source_path, &staged_path))?;
-
-    tokio::fs::rename(&staged_path, output_path)
-        .await
-        .with_context(|| install_copy_error(&staged_path, output_path))?;
+        .with_context(|| stage_copy_error(source_path, destination))?;
 
     Ok(())
 }
@@ -47,14 +42,6 @@ fn stage_copy_error(source_path: &Path, staged_path: &Path) -> String {
     )
 }
 
-fn install_copy_error(staged_path: &Path, output_path: &Path) -> String {
-    format!(
-        "Failed to install built binary {} -> {}",
-        staged_path.display(),
-        output_path.display()
-    )
-}
-
 pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
     let metadata = tokio::fs::metadata(path).await?;
     let Some(permissions) = super::super::super::super::platform::executable_permissions(metadata)
@@ -63,4 +50,35 @@ pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
     };
     tokio::fs::set_permissions(path, permissions).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_built_binary_stages_to_the_destination_it_is_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let built = dir.path().join("target-release-binary");
+        let destination = dir.path().join("qol-alt-tab.new");
+        std::fs::write(&built, b"built bytes").unwrap();
+
+        stage_built_binary(&built, &destination).await.unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"built bytes");
+        assert!(!dir.path().join("qol-alt-tab").exists());
+    }
+
+    #[tokio::test]
+    async fn staging_replaces_a_stale_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let built = dir.path().join("target-release-binary");
+        let destination = dir.path().join("qol-alt-tab.new");
+        std::fs::write(&built, b"built bytes").unwrap();
+        std::fs::write(&destination, b"stale bytes").unwrap();
+
+        stage_built_binary(&built, &destination).await.unwrap();
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"built bytes");
+    }
 }

@@ -13,7 +13,7 @@ pub(super) async fn build_fallback_binary(plan: &DependencyPlan<'_>) -> Result<(
         plan.dependency.name,
         plan.plugin_dir
     );
-    build_binary_from_source(plan.plugin_dir, &plan.dependency.name).await
+    build_binary_from_source(plan.plugin_dir, &plan.dependency.name, &plan.binary_path).await
 }
 
 fn ensure_source_fallback_available(plan: &DependencyPlan<'_>) -> Result<()> {
@@ -28,14 +28,17 @@ fn ensure_source_fallback_available(plan: &DependencyPlan<'_>) -> Result<()> {
     )
 }
 
-async fn build_binary_from_source(plugin_dir: &Path, binary_name: &str) -> Result<()> {
+async fn build_binary_from_source(
+    plugin_dir: &Path,
+    binary_name: &str,
+    destination: &Path,
+) -> Result<()> {
     let manifest_path = plugin_dir.join("Cargo.toml");
     manifest_sanitizer::ensure_release_build_manifest(&manifest_path)?;
     let output = run_cargo_build(&manifest_path, plugin_dir).await?;
     ensure_build_succeeded(&output)?;
     let source_path = artifact::built_binary_path(plugin_dir, binary_name)?;
-    let output_path = artifact::dependency_binary_output_path(plugin_dir, binary_name);
-    artifact::install_built_binary(&source_path, &output_path).await
+    artifact::stage_built_binary(&source_path, destination).await
 }
 
 fn ensure_build_succeeded(output: &std::process::Output) -> Result<()> {

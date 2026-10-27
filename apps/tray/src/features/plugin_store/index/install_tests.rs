@@ -229,6 +229,18 @@ fn installed_version(plugins_dir: &Path) -> String {
         .version
 }
 
+fn candidate(tag: &str) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        format!("#!/bin/sh\n# {tag}\nexit 0\n").into_bytes()
+    }
+    #[cfg(windows)]
+    {
+        let _ = tag;
+        std::fs::read(std::env::current_exe().unwrap()).unwrap()
+    }
+}
+
 #[tokio::test]
 async fn install_update_and_pinned_update_follow_the_signed_index() {
     let _env = crate::test_support::env_lock().lock().await;
@@ -241,11 +253,13 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     let source = PluginSource::new("core", "qol-tools/qol", "main")
         .with_signed_index(server.location(&signer));
     let installer = PluginInstaller::new(plugins_dir.clone());
+    let one = candidate("binary one");
+    let two = candidate("binary two");
 
-    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    server.publish(&signer, 1, &[("1.0.0", one.as_slice())]);
     installer.install(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary one");
+    assert_eq!(installed_binary(&plugins_dir), one);
     assert_eq!(
         std::fs::read(plugins_dir.join(PLUGIN_ID).join("README.md")).unwrap(),
         b"shot"
@@ -254,25 +268,25 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     server.publish(
         &signer,
         2,
-        &[("1.0.0", b"binary one"), ("1.1.0", b"binary two")],
+        &[("1.0.0", one.as_slice()), ("1.1.0", two.as_slice())],
     );
     installer.update(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.1.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary two");
+    assert_eq!(installed_binary(&plugins_dir), two);
 
     installer
         .update_exact(&source, PLUGIN_ID, "1.0.0")
         .await
         .unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary one");
+    assert_eq!(installed_binary(&plugins_dir), one);
     assert_eq!(server.published.lock().unwrap().tokens_issued, 1);
     assert_eq!(server.published.lock().unwrap().indexes_served, 3);
 
-    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    server.publish(&signer, 1, &[("1.0.0", one.as_slice())]);
     installer.update(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.1.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary two");
+    assert_eq!(installed_binary(&plugins_dir), two);
 }
 
 #[tokio::test]

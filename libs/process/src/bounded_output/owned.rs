@@ -7,6 +7,15 @@ use std::time::{Duration, Instant};
 
 const OWNED_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub fn run_eager_candidate(
+    mut command: Command,
+    timeout: Duration,
+    output_limit: usize,
+) -> io::Result<BoundedCommandOutput> {
+    command.env("LD_BIND_NOW", "1");
+    run_owned_with_output_timeout(command, timeout, output_limit)
+}
+
 pub fn run_owned_with_output_timeout(
     mut command: Command,
     timeout: Duration,
@@ -179,6 +188,7 @@ mod tests {
                 std::io::stderr().write_all(&bytes).unwrap();
             }
             "sleep" => std::thread::sleep(Duration::from_secs(10)),
+            "eager" => println!("{}", std::env::var("LD_BIND_NOW").unwrap_or_default()),
             other => run_unix_helper_mode(other),
         }
     }
@@ -208,6 +218,32 @@ mod tests {
     #[cfg(not(unix))]
     fn run_unix_helper_mode(mode: &str) {
         panic!("unknown helper mode: {mode}");
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn eager_binding_reaches_the_child() {
+        let output =
+            run_eager_candidate(helper_command("eager"), Duration::from_secs(5), 1024).unwrap();
+        let BoundedCommandOutput::Completed(output) = output else {
+            panic!("helper unexpectedly timed out");
+        };
+
+        assert!(
+            text(&output.stdout).lines().any(|line| line.trim() == "1"),
+            "{}",
+            text(&output.stdout)
+        );
+    }
+
+    #[test]
+    fn eager_binding_reports_a_timed_out_candidate() {
+        let started = Instant::now();
+        let output =
+            run_eager_candidate(helper_command("sleep"), Duration::from_millis(100), 1024).unwrap();
+
+        assert!(matches!(output, BoundedCommandOutput::TimedOut { .. }));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

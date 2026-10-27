@@ -3,7 +3,7 @@ mod guarded;
 mod owned;
 
 pub use guarded::run_guarded_with_output_timeout;
-pub use owned::run_owned_with_output_timeout;
+pub use owned::{run_eager_candidate, run_owned_with_output_timeout};
 use std::process::ExitStatus;
 
 #[derive(Debug)]
