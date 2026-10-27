@@ -561,6 +561,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('--conversation "$OUT/conversation.md"', review)
         self.assertNotIn("github.event.pull_request.body", workflow)
 
+    def test_review_can_use_a_separately_billed_api_key_and_redacts_it(self):
+        workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
+        review = named_step(workflow, "Review", "      ")
+        self.assertIn("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}", review)
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}", review)
+        script = textwrap.dedent(review.split("        run: |\n", 1)[1])
+        for key, expected in [("api-secret", "api-secret:unset"), ("", "unset:oauth-secret")]:
+            with self.subTest(api_key_configured=bool(key)), tempfile.TemporaryDirectory() as temp:
+                node = Path(temp) / "node"
+                node.write_text('#!/usr/bin/env bash\nprintf "%s:%s" "${ANTHROPIC_API_KEY-unset}" "${CLAUDE_CODE_OAUTH_TOKEN-unset}"\n')
+                node.chmod(0o755)
+                result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={
+                    **os.environ, "PATH": f"{temp}:{os.environ['PATH']}", "NODE": "review.cjs",
+                    "ANTHROPIC_API_KEY": key, "CLAUDE_CODE_OAUTH_TOKEN": "oauth-secret",
+                    "PR_NUMBER": "7", "OUT": temp, "SINCE": "",
+                })
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
+        post = named_step(workflow, "Post review comment", "      ")
+        self.assertIn("SECRET_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}", post)
+        self.assertIn('for secret in "$SECRET_OAUTH" "$SECRET_API_KEY" "$SECRET_PAT"', post)
+
     def test_a_follow_up_review_stands_only_on_a_review_of_the_same_base(self):
         workflow = (ROOT / ".github/workflows/claude-review.yml").read_text()
         last = named_step(workflow, "Find the last review", "      ")
@@ -615,7 +637,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("BASE: ${{ github.event.pull_request.base.ref }}", post)
         script = textwrap.dedent(post.split("        run: |\n", 1)[1])
         rendered = "<!-- qol-code-review -->\n\n<!-- reviewed 0123456789abcdef0123456789abcdef01234567 -->\n> [!NOTE]\n> **pass**\n"
-        for case, comment in [("a rendered review", rendered), ("no rendered review", "")]:
+        for case, comment in [("a rendered review", rendered), ("no rendered review", ""), ("API key in review", rendered + "api-secret")]:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temp:
                 tools, out, posted = Path(temp) / "bin", Path(temp) / "out", Path(temp) / "posted.md"
                 tools.mkdir()
@@ -641,17 +663,17 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                         "RUN_URL": "https://github.com/qol-tools/qol/actions/runs/7",
                         "REPO_URL": "https://github.com/qol-tools/qol",
                         "SECRET_OAUTH": "",
+                        "SECRET_API_KEY": "api-secret",
                         "SECRET_PAT": "",
                         "GITHUB_REPOSITORY": "qol-tools/qol",
                         "COMMENT": comment,
                     },
                 )
-                if comment:
+                if case == "a rendered review":
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(posted.read_text(), f"{rendered}\n<!-- base fix/stacked-base -->\n")
                 else:
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertFalse((out / "comment.md").exists())
                     self.assertFalse(posted.exists())
 
     def test_no_workflow_wraps_the_compiler(self):
