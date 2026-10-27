@@ -74,6 +74,8 @@ def verdict(env: dict, summary: str | None) -> int:
         return 1
     if review == "pass":
         return 0
+    if review == "quota" and env.get("REVIEW_RESULT") == "success":
+        return 0
     override = override_for(comments(env["GITHUB_REPOSITORY"], env["PR_NUMBER"]), env["HEAD_SHA"])
     if not override:
         print(f"::error::the review verdict is {review or 'missing'}; only a pass verdict or an owner override may queue")

@@ -1067,7 +1067,15 @@ where
         .gap(px(qol_theme::SPACE_INSET))
         .cursor(CursorStyle::PointingHand)
         .child(settings_slider_track(fill, ground).child(slider_drag_track(
-            cx, row, id, 0.0, on_down, move_to, release,
+            cx,
+            row,
+            id,
+            0.0,
+            on_down,
+            move |panel, row, fraction, _coarse, cx| {
+                move_to(panel, row, fraction, cx);
+            },
+            release,
         )))
         .child(settings_slider_percent(percent, kit))
 }

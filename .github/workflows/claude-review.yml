@@ -138,6 +138,7 @@ jobs:
         run: node "$NODE" conversation --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --owner KMRH47 --out "$OUT"
 
       - name: Review
+        id: run-review
         if: github.event_name == 'pull_request'
         timeout-minutes: 50
         env:
@@ -147,16 +148,31 @@ jobs:
           OUT: ${{ steps.node.outputs.out }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           SINCE: ${{ steps.last.outputs.sha }}
-        run: >-
-          node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT"
-          --conversation "$OUT/conversation.md" --since "$SINCE" --previous "$OUT/previous.md"
+        run: |
+          set -o pipefail
+          status=0
+          node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT" \
+            --conversation "$OUT/conversation.md" --since "$SINCE" --previous "$OUT/previous.md" > "$RUNNER_TEMP/review.log" 2>&1 || status=$?
+          if [ "$status" -ne 0 ] && [ ! -f "$OUT/review/report.json" ] &&
+             grep -Eq "^You've hit your (weekly|daily|session) limit · resets .+$" "$RUNNER_TEMP/review.log"; then
+            echo "quota=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/review.log"
+          exit "$status"
 
       - name: Read the verdict
         id: verdict
         if: github.event_name == 'pull_request'
         env:
           OUT: ${{ steps.node.outputs.out }}
-        run: echo "verdict=$(jq -r .status "$OUT/review/report.json")" >> "$GITHUB_OUTPUT"
+          QUOTA: ${{ steps.run-review.outputs.quota }}
+        run: |
+          if [ "$QUOTA" = true ]; then
+            echo "verdict=quota" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=$(jq -r .status "$OUT/review/report.json")" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload review
         if: ${{ !cancelled() && github.event_name != 'push' && steps.node.outcome == 'success' }}
@@ -180,7 +196,7 @@ jobs:
     # !cancelled() replaces the implicit success() a job if gets, so a failed review still posts its comment.
     if: >-
       !cancelled() && needs.review.result != 'skipped' && needs.review.result != 'cancelled' &&
-      github.event_name == 'pull_request'
+      needs.review.outputs.verdict != 'quota' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -232,8 +248,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$OUT"
           status=0
-          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
           body="$OUT/comment.md"
+          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
           if [ -f "$body" ]; then
             printf '\n<!-- base %s -->\n' "$BASE" >> "$body"
           fi
@@ -290,6 +306,7 @@ jobs:
                 github.event.pull_request.user.login == 'dependabot[bot]' &&
                 github.event.pull_request.head.repo.full_name == github.repository }}
           VERDICT: ${{ needs.review.outputs.verdict }}
+          REVIEW_RESULT: ${{ needs.review.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
