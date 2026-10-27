@@ -95,15 +95,31 @@ impl<'a> DependencyInstaller<'a> {
             self.origin,
         )?;
         let live_path = plan.binary_path.clone();
-        let staged_path = live_path.with_extension("new");
+        let staged_path = staged_path_for(&live_path);
         let _ = tokio::fs::remove_file(&staged_path).await;
         plan.binary_path = staged_path.clone();
         ensure_dependency_binary(&plan).await?;
-        set_executable_permissions(&staged_path).await?;
+        set_executable_permissions(&staged_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to make the staged {} executable at {}",
+                    dependency.name,
+                    staged_path.display()
+                )
+            })?;
         promote_candidate(&staged_path, &live_path, self.plugin_id, &dependency.name).await?;
         log::info!("Installed binary: {:?}", live_path);
         Ok(())
     }
+}
+
+fn staged_path_for(live: &Path) -> PathBuf {
+    let name = live
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    live.with_file_name(format!("{name}.new"))
 }
 
 pub(super) struct DependencyPlan<'a> {
@@ -203,8 +219,22 @@ async fn promote_candidate_with_timeout(
             .context("Plugin compatibility probe task failed")?;
     if let Err(error) = probe {
         let _ = tokio::fs::remove_file(staged).await;
-        return Err(error)
-            .with_context(|| format!("Cannot install {} for plugin {}", binary_name, plugin_id));
+        log::warn!(
+            "[plugin-store] compatibility probe rejected {} for {}: {error:#}",
+            binary_name,
+            plugin_id
+        );
+        let recovery = if live.is_file() {
+            "the installed version was kept"
+        } else {
+            "nothing was installed"
+        };
+        return Err(error).with_context(|| {
+            format!(
+                "Cannot install {} for plugin {}; {}",
+                binary_name, plugin_id, recovery
+            )
+        });
     }
     tokio::fs::rename(staged, live)
         .await
@@ -298,46 +328,80 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn a_candidate_that_starts_replaces_the_installed_binary() {
-        for body in ["exit 0", "exit 1"] {
-            let dir = tempfile::tempdir().unwrap();
-            let live = dir.path().join("qol-alt-tab");
-            let staged = live.with_extension("new");
-            std::fs::write(&live, b"working installation").unwrap();
-            write_candidate(
-                &staged,
-                &format!("#!/bin/sh\nprintf '%s' \"$0\" > \"$(dirname \"$0\")/probed\"\n{body}\n"),
-            );
-            let expected = std::fs::read(&staged).unwrap();
-
-            promote_candidate_with_timeout(
-                &staged,
-                &live,
-                "qol-alt-tab",
-                "qol-alt-tab",
-                PROBE_TIMEOUT,
-            )
-            .await
-            .unwrap_or_else(|error| panic!("body={body}: {error:#}"));
-
-            assert_eq!(std::fs::read(&live).unwrap(), expected, "body={body}");
-            assert_eq!(
-                std::fs::read_to_string(dir.path().join("probed")).unwrap(),
-                staged.display().to_string(),
-                "body={body}"
-            );
-            assert!(!staged.exists(), "body={body}");
+    fn wait_for_exit(pid: i32) -> bool {
+        for _ in 0..200 {
+            if !std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+            {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        false
+    }
+
+    #[test]
+    fn the_staged_name_preserves_the_platform_binary_extension() {
+        assert_eq!(
+            staged_path_for(Path::new("/plugins/qol-alt-tab/qol-alt-tab")),
+            PathBuf::from("/plugins/qol-alt-tab/qol-alt-tab.new")
+        );
+        assert_eq!(
+            staged_path_for(Path::new("/plugins/qol-alt-tab/qol-alt-tab.exe")),
+            PathBuf::from("/plugins/qol-alt-tab/qol-alt-tab.exe.new")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_candidate_that_runs_replaces_the_installed_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("qol-alt-tab");
+        let staged = staged_path_for(&live);
+        std::fs::write(&live, b"working installation").unwrap();
+        write_candidate(
+            &staged,
+            "#!/bin/sh\nprintf '%s' \"$0\" > \"$(dirname \"$0\")/probed\"\nexit 0\n",
+        );
+        let expected = std::fs::read(&staged).unwrap();
+
+        promote_candidate_with_timeout(&staged, &live, "qol-alt-tab", "qol-alt-tab", PROBE_TIMEOUT)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&live).unwrap(), expected);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("probed")).unwrap(),
+            staged.display().to_string()
+        );
+        assert!(!staged.exists());
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn a_candidate_that_cannot_run_keeps_the_installed_binary() {
-        for content in ["#!/missing/loader\n", "#!/bin/sh\nexec sleep 30\n"] {
+        for (label, content, timed) in [
+            ("nonzero", "#!/bin/sh\nexit 1\n", false),
+            (
+                "loader failure",
+                "#!/bin/sh\nprintf 'version `GLIBC_2.43' not found' >&2\nexit 127\n",
+                false,
+            ),
+            ("missing loader", "#!/missing/loader\n", false),
+            (
+                "hang",
+                "#!/bin/sh\necho $$ > \"$(dirname \"$0\")/pid\"\nexec sleep 30\n",
+                true,
+            ),
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let live = dir.path().join("qol-alt-tab");
-            let staged = live.with_extension("new");
+            let staged = staged_path_for(&live);
             std::fs::write(&live, b"working installation").unwrap();
             write_candidate(&staged, content);
 
@@ -351,16 +415,53 @@ mod tests {
             .await
             .unwrap_err();
 
+            let text = format!("{error:#}");
             assert!(
-                format!("{error:#}").contains("cannot run on this system"),
-                "content={content}: {error:#}"
+                text.contains("cannot run on this system"),
+                "{label}: {text}"
+            );
+            assert!(
+                text.contains("the installed version was kept"),
+                "{label}: {text}"
             );
             assert_eq!(
                 std::fs::read(&live).unwrap(),
                 b"working installation",
-                "content={content}"
+                "{label}"
             );
-            assert!(!staged.exists(), "content={content}");
+            assert!(!staged.exists(), "{label}");
+            if timed {
+                let pid: i32 = std::fs::read_to_string(dir.path().join("pid"))
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .unwrap();
+                assert!(wait_for_exit(pid), "{label}: candidate {pid} survived");
+            }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_refused_first_install_says_nothing_was_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("qol-alt-tab");
+        let staged = staged_path_for(&live);
+        write_candidate(&staged, "#!/missing/loader\n");
+
+        let error = promote_candidate_with_timeout(
+            &staged,
+            &live,
+            "qol-alt-tab",
+            "qol-alt-tab",
+            PROBE_TIMEOUT,
+        )
+        .await
+        .unwrap_err();
+
+        let text = format!("{error:#}");
+        assert!(text.contains("nothing was installed"), "{text}");
+        assert!(!live.exists());
+        assert!(!staged.exists());
     }
 }

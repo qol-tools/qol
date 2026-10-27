@@ -229,6 +229,9 @@ fn installed_version(plugins_dir: &Path) -> String {
         .version
 }
 
+const CANDIDATE_ONE: &[u8] = b"#!/bin/sh\n# binary one\nexit 0\n";
+const CANDIDATE_TWO: &[u8] = b"#!/bin/sh\n# binary two\nexit 0\n";
+
 #[tokio::test]
 async fn install_update_and_pinned_update_follow_the_signed_index() {
     let _env = crate::test_support::env_lock().lock().await;
@@ -242,10 +245,10 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
         .with_signed_index(server.location(&signer));
     let installer = PluginInstaller::new(plugins_dir.clone());
 
-    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    server.publish(&signer, 1, &[("1.0.0", CANDIDATE_ONE)]);
     installer.install(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary one");
+    assert_eq!(installed_binary(&plugins_dir), CANDIDATE_ONE);
     assert_eq!(
         std::fs::read(plugins_dir.join(PLUGIN_ID).join("README.md")).unwrap(),
         b"shot"
@@ -254,25 +257,25 @@ async fn install_update_and_pinned_update_follow_the_signed_index() {
     server.publish(
         &signer,
         2,
-        &[("1.0.0", b"binary one"), ("1.1.0", b"binary two")],
+        &[("1.0.0", CANDIDATE_ONE), ("1.1.0", CANDIDATE_TWO)],
     );
     installer.update(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.1.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary two");
+    assert_eq!(installed_binary(&plugins_dir), CANDIDATE_TWO);
 
     installer
         .update_exact(&source, PLUGIN_ID, "1.0.0")
         .await
         .unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.0.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary one");
+    assert_eq!(installed_binary(&plugins_dir), CANDIDATE_ONE);
     assert_eq!(server.published.lock().unwrap().tokens_issued, 1);
     assert_eq!(server.published.lock().unwrap().indexes_served, 3);
 
-    server.publish(&signer, 1, &[("1.0.0", b"binary one")]);
+    server.publish(&signer, 1, &[("1.0.0", CANDIDATE_ONE)]);
     installer.update(&source, PLUGIN_ID).await.unwrap();
     assert_eq!(installed_version(&plugins_dir), "1.1.0");
-    assert_eq!(installed_binary(&plugins_dir), b"binary two");
+    assert_eq!(installed_binary(&plugins_dir), CANDIDATE_TWO);
 }
 
 #[tokio::test]
