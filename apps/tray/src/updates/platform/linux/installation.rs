@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use qol_process::{run_owned_with_output_timeout, BoundedCommandOutput};
+use qol_process::BoundedCommandOutput;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
@@ -44,8 +44,8 @@ fn promote(staged: &Path, target: &Path, version: Option<&str>, timeout: Duratio
 
 fn verify_launch(binary: &Path, version: Option<&str>, timeout: Duration) -> Result<()> {
     let mut command = Command::new(binary);
-    command.arg("--version").env("LD_BIND_NOW", "1");
-    let output = run_owned_with_output_timeout(command, timeout, PROBE_OUTPUT_LIMIT)
+    command.arg("--version");
+    let output = qol_process::run_eager_candidate(command, timeout, PROBE_OUTPUT_LIMIT)
         .context("Could not execute staged tray")?;
     let output = match output {
         BoundedCommandOutput::Completed(output) => output,

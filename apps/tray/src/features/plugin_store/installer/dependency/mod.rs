@@ -2,10 +2,12 @@ use super::super::index::IndexedRelease;
 use super::super::release_assets::{resolve_asset_pattern, PlatformTarget};
 use super::super::source::PluginSource;
 use super::InstallSource;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 mod manifest;
+mod probe;
 mod release;
 mod source_build;
 
@@ -16,6 +18,8 @@ use source_build::build_fallback_binary;
 pub(super) async fn set_executable_permissions(path: &Path) -> Result<()> {
     source_build::set_executable_permissions(path).await
 }
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AssetOrigin<'a> {
@@ -82,7 +86,7 @@ impl<'a> DependencyInstaller<'a> {
         dependency: &crate::plugins::manifest::BinaryDependency,
     ) -> Result<()> {
         validate_binary_name(dependency)?;
-        let plan = DependencyPlan::new(
+        let mut plan = DependencyPlan::new(
             self.source,
             self.plugin_id,
             self.plugin_dir,
@@ -90,9 +94,14 @@ impl<'a> DependencyInstaller<'a> {
             self.install_source,
             self.origin,
         )?;
+        let live_path = plan.binary_path.clone();
+        let staged_path = live_path.with_extension("new");
+        let _ = tokio::fs::remove_file(&staged_path).await;
+        plan.binary_path = staged_path.clone();
         ensure_dependency_binary(&plan).await?;
-        set_executable_permissions(&plan.binary_path).await?;
-        log::info!("Installed binary: {:?}", plan.binary_path);
+        set_executable_permissions(&staged_path).await?;
+        promote_candidate(&staged_path, &live_path, self.plugin_id, &dependency.name).await?;
+        log::info!("Installed binary: {:?}", live_path);
         Ok(())
     }
 }
@@ -171,6 +180,37 @@ async fn ensure_dependency_binary(plan: &DependencyPlan<'_>) -> Result<()> {
     build_fallback_binary(plan).await
 }
 
+async fn promote_candidate(
+    staged: &Path,
+    live: &Path,
+    plugin_id: &str,
+    binary_name: &str,
+) -> Result<()> {
+    promote_candidate_with_timeout(staged, live, plugin_id, binary_name, PROBE_TIMEOUT).await
+}
+
+async fn promote_candidate_with_timeout(
+    staged: &Path,
+    live: &Path,
+    plugin_id: &str,
+    binary_name: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let candidate = staged.to_path_buf();
+    let probe =
+        tokio::task::spawn_blocking(move || probe::verify_candidate_runs(&candidate, timeout))
+            .await
+            .context("Plugin compatibility probe task failed")?;
+    if let Err(error) = probe {
+        let _ = tokio::fs::remove_file(staged).await;
+        return Err(error)
+            .with_context(|| format!("Cannot install {} for plugin {}", binary_name, plugin_id));
+    }
+    tokio::fs::rename(staged, live)
+        .await
+        .with_context(|| format!("Failed to install {} at {}", binary_name, live.display()))
+}
+
 fn validate_binary_name(dependency: &crate::plugins::manifest::BinaryDependency) -> Result<()> {
     if crate::plugins::manifest::is_valid_command_basename(&dependency.name) {
         return Ok(());
@@ -246,6 +286,81 @@ mod tests {
                 assert_eq!(tag, "qol-alt-tab-v1.2.3");
             }
             ReleaseTagPick::Latest => panic!("expected PluginTag"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_candidate(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_candidate_that_starts_replaces_the_installed_binary() {
+        for body in ["exit 0", "exit 1"] {
+            let dir = tempfile::tempdir().unwrap();
+            let live = dir.path().join("qol-alt-tab");
+            let staged = live.with_extension("new");
+            std::fs::write(&live, b"working installation").unwrap();
+            write_candidate(
+                &staged,
+                &format!("#!/bin/sh\nprintf '%s' \"$0\" > \"$(dirname \"$0\")/probed\"\n{body}\n"),
+            );
+            let expected = std::fs::read(&staged).unwrap();
+
+            promote_candidate_with_timeout(
+                &staged,
+                &live,
+                "qol-alt-tab",
+                "qol-alt-tab",
+                PROBE_TIMEOUT,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("body={body}: {error:#}"));
+
+            assert_eq!(std::fs::read(&live).unwrap(), expected, "body={body}");
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("probed")).unwrap(),
+                staged.display().to_string(),
+                "body={body}"
+            );
+            assert!(!staged.exists(), "body={body}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_candidate_that_cannot_run_keeps_the_installed_binary() {
+        for content in ["#!/missing/loader\n", "#!/bin/sh\nexec sleep 30\n"] {
+            let dir = tempfile::tempdir().unwrap();
+            let live = dir.path().join("qol-alt-tab");
+            let staged = live.with_extension("new");
+            std::fs::write(&live, b"working installation").unwrap();
+            write_candidate(&staged, content);
+
+            let error = promote_candidate_with_timeout(
+                &staged,
+                &live,
+                "qol-alt-tab",
+                "qol-alt-tab",
+                std::time::Duration::from_millis(50),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(
+                format!("{error:#}").contains("cannot run on this system"),
+                "content={content}: {error:#}"
+            );
+            assert_eq!(
+                std::fs::read(&live).unwrap(),
+                b"working installation",
+                "content={content}"
+            );
+            assert!(!staged.exists(), "content={content}");
         }
     }
 }

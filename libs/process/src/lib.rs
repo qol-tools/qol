@@ -12,8 +12,8 @@ pub use observation::{
 };
 
 pub use bounded_output::{
-    run_guarded_with_output_timeout, run_owned_with_output_timeout, BoundedCommandOutput,
-    CapturedOutput, CompletedCommandOutput,
+    run_eager_candidate, run_guarded_with_output_timeout, run_owned_with_output_timeout,
+    BoundedCommandOutput, CapturedOutput, CompletedCommandOutput,
 };
 
 use std::io;
