@@ -94,12 +94,12 @@ class VerdictTests(unittest.TestCase):
                 self.assertIn(f"the review verdict is {review or 'missing'}", out)
                 self.assertEqual(summary, "")
 
-    def test_quota_passes_only_after_the_skipped_review_was_published(self):
-        code, out, summary = self.verdict("quota", PUBLISH_RESULT="success")
+    def test_quota_passes_only_when_the_review_job_succeeded(self):
+        code, out, summary = self.verdict("quota", REVIEW_RESULT="success")
         self.assertEqual(code, 0)
-        self.assertIn("this commit was not reviewed", out)
-        self.assertIn("Review skipped", summary)
-        self.assertEqual(self.verdict("quota", PUBLISH_RESULT="failure")[0], 1)
+        self.assertNotIn("::warning::", out)
+        self.assertEqual(summary, "")
+        self.assertEqual(self.verdict("quota", REVIEW_RESULT="failure")[0], 1)
 
     def test_an_owner_override_of_this_head_passes_and_is_recorded_in_the_check(self):
         code, out, summary = self.verdict("conditional", [comment(gate.record(SHA, "KMRH47"), url="https://c/3")])

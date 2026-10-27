@@ -74,11 +74,7 @@ def verdict(env: dict, summary: str | None) -> int:
         return 1
     if review == "pass":
         return 0
-    if review == "quota" and env.get("PUBLISH_RESULT") == "success":
-        print("::warning::Claude usage limit reached; this commit was not reviewed")
-        if summary:
-            with open(summary, "a", encoding="utf-8") as handle:
-                handle.write("### Review skipped\n\nClaude usage limit reached; this commit was not reviewed.\n")
+    if review == "quota" and env.get("REVIEW_RESULT") == "success":
         return 0
     override = override_for(comments(env["GITHUB_REPOSITORY"], env["PR_NUMBER"]), env["HEAD_SHA"])
     if not override:

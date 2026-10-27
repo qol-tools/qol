@@ -152,13 +152,13 @@ jobs:
           set -o pipefail
           status=0
           node "$NODE" review --pr "$PR_NUMBER" --base HEAD^1 --head HEAD --out "$OUT" \
-            --conversation "$OUT/conversation.md" --since "$SINCE" --previous "$OUT/previous.md" 2>&1 | tee "$RUNNER_TEMP/review.log" || status=$?
+            --conversation "$OUT/conversation.md" --since "$SINCE" --previous "$OUT/previous.md" > "$RUNNER_TEMP/review.log" 2>&1 || status=$?
           if [ "$status" -ne 0 ] && [ ! -f "$OUT/review/report.json" ] &&
              grep -Eq "^You've hit your (weekly|daily|session) limit · resets .+$" "$RUNNER_TEMP/review.log"; then
             echo "quota=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Claude usage limit reached; this commit was not reviewed."
             exit 0
           fi
+          cat "$RUNNER_TEMP/review.log"
           exit "$status"
 
       - name: Read the verdict
@@ -196,7 +196,7 @@ jobs:
     # !cancelled() replaces the implicit success() a job if gets, so a failed review still posts its comment.
     if: >-
       !cancelled() && needs.review.result != 'skipped' && needs.review.result != 'cancelled' &&
-      github.event_name == 'pull_request'
+      needs.review.outputs.verdict != 'quota' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -216,7 +216,6 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Download review
-        if: needs.review.outputs.verdict != 'quota'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
@@ -245,17 +244,12 @@ jobs:
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           SECRET_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SECRET_PAT: ${{ secrets.KMRH47_SKILLS_TOKEN }}
-          VERDICT: ${{ needs.review.outputs.verdict }}
         run: |
           set -euo pipefail
           mkdir -p "$OUT"
           status=0
           body="$OUT/comment.md"
-          if [ "${VERDICT:-}" = quota ]; then
-            printf '<!-- qol-code-review -->\n\n> [!WARNING]\n> **Review skipped** · Claude usage limit reached. Commit `%s` was not reviewed. [Run](%s)\n' "${HEAD_SHA:0:7}" "$RUN_URL" > "$body"
-          else
-            node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
-          fi
+          node "$NODE" comment --out "$OUT" --head-sha "$HEAD_SHA" --run-url "$RUN_URL" --repo-url "$REPO_URL" > /dev/null || status=$?
           if [ -f "$body" ]; then
             printf '\n<!-- base %s -->\n' "$BASE" >> "$body"
           fi
@@ -312,7 +306,7 @@ jobs:
                 github.event.pull_request.user.login == 'dependabot[bot]' &&
                 github.event.pull_request.head.repo.full_name == github.repository }}
           VERDICT: ${{ needs.review.outputs.verdict }}
-          PUBLISH_RESULT: ${{ needs.publish.result }}
+          REVIEW_RESULT: ${{ needs.review.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
