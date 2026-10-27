@@ -10,6 +10,7 @@ const UNRUNNABLE: &str = "This plugin build cannot run on this system";
 pub(super) fn verify_candidate_runs(binary: &Path, timeout: Duration) -> Result<()> {
     let mut command = Command::new(binary);
     command.arg("help");
+    qol_process::hide_console_window(&mut command);
     let output = qol_process::run_eager_candidate(command, timeout, PROBE_OUTPUT_LIMIT)
         .with_context(|| format!("{UNRUNNABLE} ({})", binary.display()))?;
     match output {
