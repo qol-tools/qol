@@ -29,7 +29,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     # Must equal the tests workflow's RUSTFLAGS: they are part of the cache key.
     env:
-      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
+      RUSTFLAGS: -D warnings ${{ matrix.os == 'ubuntu-24.04' && '-C link-arg=-fuse-ld=lld' || matrix.os == 'windows-latest' && '-C linker=rust-lld -C target-feature=+crt-static' || '' }}
     timeout-minutes: 90
     defaults:
       run:
@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             plan: ubuntu
           - os: macos-latest
             plan: macos
