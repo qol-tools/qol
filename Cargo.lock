@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.119.1"
+version = "0.119.2"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7601,7 +7601,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.127.2"
+version = "3.127.3"
 dependencies = [
  "anyhow",
  "axum",
