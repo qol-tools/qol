@@ -7570,6 +7570,7 @@ dependencies = [
  "aho-corasick",
  "chrono",
  "dirs 6.0.0",
+ "memchr",
  "qol-agent-homes",
  "qol-config",
  "qol-headless",

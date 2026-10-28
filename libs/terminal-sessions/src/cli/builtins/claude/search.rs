@@ -14,6 +14,7 @@ use crate::cli::{ChatRole, ChatTurn, CliConversationMatch};
 use super::metadata::append_chat_turn;
 
 const READ_BUFFER: usize = 1 << 20;
+const LINE_LIMIT: usize = 4 << 20;
 const EXCERPT_LEAD_CHARS: usize = 60;
 const EXCERPT_CHARS: usize = 200;
 const ELLIPSIS: &str = "…";
@@ -34,7 +35,7 @@ pub(super) fn search_transcripts(
     }
     let Ok(searcher) = AhoCorasick::builder()
         .ascii_case_insensitive(true)
-        .build(terms)
+        .build(terms.iter().map(|term| json_escaped(term)))
     else {
         return Vec::new();
     };
@@ -78,12 +79,8 @@ fn search_file(
     let mut line = Vec::new();
     let mut seen = vec![false; terms.len()];
     let mut best: Option<Best> = None;
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line).ok()? == 0 {
-            break;
-        }
-        if !searcher.is_match(&line) {
+    while let Some(within) = read_line_within(&mut reader, &mut line, LINE_LIMIT).ok()? {
+        if !within || !searcher.is_match(&line) {
             continue;
         }
         let Ok(value) = serde_json::from_slice::<Value>(&line) else {
@@ -104,6 +101,42 @@ fn search_file(
         external_id,
         excerpt: excerpt(&best),
     })
+}
+
+fn json_escaped(term: &str) -> String {
+    let quoted = serde_json::Value::from(term).to_string();
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
+fn read_line_within(
+    reader: &mut impl BufRead,
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<Option<bool>> {
+    line.clear();
+    let mut read_any = false;
+    let mut within = true;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok(read_any.then_some(within));
+        }
+        read_any = true;
+        let (end, done) = match memchr::memchr(b'\n', available) {
+            Some(index) => (index + 1, true),
+            None => (available.len(), false),
+        };
+        if within && line.len() + end <= limit {
+            line.extend_from_slice(&available[..end]);
+        } else {
+            within = false;
+            line.clear();
+        }
+        reader.consume(end);
+        if done {
+            return Ok(Some(within));
+        }
+    }
 }
 
 fn absorb(turn: ChatTurn, terms: &[String], seen: &mut [bool], best: &mut Option<Best>) {
@@ -346,6 +379,43 @@ mod tests {
         let found = search_transcripts(vec![path], &terms(&["invoice"]));
 
         assert_eq!(found[0].excerpt, "user: Please Review The INVOICE");
+    }
+
+    #[test]
+    fn a_term_with_a_quote_or_backslash_matches_its_json_escaped_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "abc",
+            &[user(r#"open "notes" from c:\temp\mods"#)],
+        );
+
+        let found = search_transcripts(vec![path], &terms(&[r#""notes""#, r"c:\temp\mods"]));
+
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_line_over_the_limit_is_skipped_and_the_next_line_is_read() {
+        let mut reader = std::io::Cursor::new(b"short\nmuch-longer-line\nok".to_vec());
+        let mut line = Vec::new();
+
+        assert_eq!(
+            read_line_within(&mut reader, &mut line, 8).unwrap(),
+            Some(true)
+        );
+        assert_eq!(line, b"short\n");
+        assert_eq!(
+            read_line_within(&mut reader, &mut line, 8).unwrap(),
+            Some(false)
+        );
+        assert!(line.is_empty());
+        assert_eq!(
+            read_line_within(&mut reader, &mut line, 8).unwrap(),
+            Some(true)
+        );
+        assert_eq!(line, b"ok");
+        assert_eq!(read_line_within(&mut reader, &mut line, 8).unwrap(), None);
     }
 
     #[test]

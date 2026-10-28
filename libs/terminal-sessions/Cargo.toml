@@ -9,6 +9,7 @@ description = "Backend-neutral live terminal session discovery and interaction"
 aho-corasick = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "6.0"
+memchr = "2"
 qol-agent-homes.workspace = true
 qol-config.workspace = true
 qol-headless.workspace = true
