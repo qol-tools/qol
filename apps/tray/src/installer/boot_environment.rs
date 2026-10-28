@@ -35,6 +35,7 @@ impl InMemoryBootEnvironment {
         }
     }
 
+    #[cfg(feature = "dev")]
     pub(crate) fn with_production(mut self, binary: PathBuf) -> Self {
         self.production = Some(binary);
         self
