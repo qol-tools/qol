@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -68,9 +69,25 @@ impl History<'_> {
             })
     }
 
+    pub(super) fn search(
+        &self,
+        now: u64,
+        external_ids: &HashSet<String>,
+        terms: &[String],
+    ) -> HashMap<String, String> {
+        self.interpreter
+            .search_conversations(self.since(now), external_ids, terms)
+            .into_iter()
+            .map(|found| (found.external_id, found.excerpt))
+            .collect()
+    }
+
+    fn since(&self, now: u64) -> std::time::SystemTime {
+        UNIX_EPOCH + Duration::from_secs(now.saturating_sub(closed::RETENTION_SECS))
+    }
+
     fn conversations(&self, now: u64) -> Vec<CliConversation> {
-        let since = UNIX_EPOCH + Duration::from_secs(now.saturating_sub(closed::RETENTION_SECS));
-        self.interpreter.closed_conversations(since)
+        self.interpreter.closed_conversations(self.since(now))
     }
 
     fn record(&self, conversation: &CliConversation) -> Option<ClosedRecord> {

@@ -527,7 +527,7 @@ fn main_thread_model(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
+pub(super) fn append_chat_turn(turns: &mut Vec<ChatTurn>, value: &Value) {
     if value.get("isSidechain").and_then(Value::as_bool) == Some(true)
         || value.get("isMeta").and_then(Value::as_bool) == Some(true)
         || value.get("promptSource").and_then(Value::as_str) == Some("system")

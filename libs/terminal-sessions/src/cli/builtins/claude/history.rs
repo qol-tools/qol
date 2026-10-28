@@ -9,13 +9,14 @@ use qol_agent_homes::{Harness, Registry};
 use serde_json::Value;
 
 use crate::cli::chat::text_blocks;
-use crate::cli::{CliConversation, CliResumeSettings, CliToolId};
+use crate::cli::{CliConversation, CliConversationMatch, CliResumeSettings, CliToolId};
 
 use super::environment::{custom_config_dir, open_session_ids};
 use super::metadata::{
     contains_bytes, file_signature, is_local_command, scan_backwards, FileSignature,
     TranscriptFacts,
 };
+use super::search::search_transcripts;
 
 const HEAD_BUDGET: u64 = 256 * 1024;
 const TAIL_BUDGET: u64 = 256 * 1024;
@@ -120,6 +121,36 @@ impl ClaudeHistory {
         let mut ids = HashSet::new();
         found.retain(|conversation| ids.insert(conversation.external_id.clone()));
         found
+    }
+
+    pub(super) fn search_conversations(
+        &self,
+        since: SystemTime,
+        external_ids: &HashSet<String>,
+        terms: &[String],
+    ) -> Vec<CliConversationMatch> {
+        let mut seen = HashSet::new();
+        let mut paths = Vec::new();
+        for root in self.roots() {
+            let open = open_session_ids(&root.home);
+            let projects = Harness::Claude.transcripts_dir(&root.home);
+            for path in projects.as_deref().map(transcripts).unwrap_or_default() {
+                let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                    continue;
+                };
+                if !external_ids.contains(id) || open.contains(id) || seen.contains(id) {
+                    continue;
+                }
+                let recent = file_signature(&path)
+                    .and_then(|signature| signature.modified)
+                    .is_some_and(|modified| modified >= since);
+                if recent {
+                    seen.insert(id.to_owned());
+                    paths.push(path);
+                }
+            }
+        }
+        search_transcripts(paths, terms)
     }
 }
 
@@ -600,6 +631,38 @@ mod tests {
             found[0].settings.claude_config_dir.as_deref(),
             account.to_str()
         );
+    }
+
+    #[test]
+    fn search_skips_ids_outside_the_candidates_and_transcripts_older_than_since() {
+        let home = tempfile::tempdir().unwrap();
+        let first = prompt("find the refund");
+        write_transcript(home.path(), "wanted", &[ENTRY, &first]);
+        write_transcript(home.path(), "unwanted", &[ENTRY, &first]);
+        let old = write_transcript(home.path(), "old", &[ENTRY, &first]);
+        let since = SystemTime::now() - Duration::from_secs(3_600);
+        fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(since - Duration::from_secs(60))
+            .unwrap();
+        let candidates = ["wanted", "old"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<HashSet<_>>();
+
+        let found = history(home.path(), None).search_conversations(
+            since,
+            &candidates,
+            &["refund".to_owned()],
+        );
+
+        let listed = found
+            .iter()
+            .map(|found| found.external_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(listed, ["wanted"]);
     }
 
     #[test]

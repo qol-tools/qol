@@ -384,7 +384,9 @@ Details:
   Code transcripts), and brings one back in a new tab with session_reopen.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
   filters them with `query` (title, cwd, key, tool, id or a linked pull
-  request URL), and leaves out lanes unless `include_lanes` is true, along
+  request URL) and `text` (up to 8 words the conversation's own prompts,
+  replies and tool call inputs must all hold, each row then carrying an
+  `excerpt`), and leaves out lanes unless `include_lanes` is true, along
   with conversations a live session or running tool process holds, ones a
   park still waits on and ones whose cwd is gone, counting what it left
   out. session_reopen resumes
