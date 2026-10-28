@@ -1,6 +1,7 @@
 mod platform;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
@@ -10,6 +11,7 @@ pub(crate) const LOGIN_ENVS: [&str; 3] = [
     "ANTHROPIC_AUTH_TOKEN",
 ];
 const LOGIN_DIR: &str = "lane-logins";
+static STAGED_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn remember_caller() {
     let config_dir = std::env::var_os(crate::account::CONFIG_DIR_ENV).map(PathBuf::from);
@@ -38,27 +40,31 @@ pub(crate) fn file_for(config_dir: Option<&Path>) -> Option<PathBuf> {
 }
 
 pub(crate) fn read(path: &Path) -> Result<Vec<(String, String)>> {
-    let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read the lane login {}", path.display()))?;
-    Ok(parse(&contents))
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(parse(&contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => {
+            Err(error).with_context(|| format!("cannot read the lane login {}", path.display()))
+        }
+    }
 }
 
 fn file_name(config_dir: Option<&Path>) -> String {
-    let Some(config_dir) = config_dir else {
+    let normalized: PathBuf = config_dir
+        .map(|dir| dir.components().collect())
+        .unwrap_or_default();
+    if normalized.as_os_str().is_empty() {
         return "default".to_owned();
-    };
-    let normalized: PathBuf = config_dir.components().collect();
-    normalized
-        .to_string_lossy()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    }
+    let mut name = "dir-".to_owned();
+    for byte in normalized.to_string_lossy().bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'-' {
+            name.push(char::from(byte));
+        } else {
+            name.push_str(&format!("_{byte:02x}"));
+        }
+    }
+    name
 }
 
 fn parse(contents: &str) -> Vec<(String, String)> {
@@ -85,10 +91,17 @@ fn store(path: &Path, login: &[(&str, String)]) -> Result<()> {
         .iter()
         .map(|(name, value)| format!("{name}={value}\n"))
         .collect();
-    let staged = dir.join(format!(".login-{}", std::process::id()));
-    platform::write_private(&staged, contents.as_bytes())?;
-    std::fs::rename(&staged, path)?;
-    Ok(())
+    let staged = dir.join(format!(
+        ".login-{}-{}",
+        std::process::id(),
+        STAGED_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = platform::write_private(&staged, contents.as_bytes())
+        .and_then(|()| std::fs::rename(&staged, path).map_err(Into::into));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    written
 }
 
 #[cfg(test)]
@@ -103,9 +116,30 @@ mod tests {
         );
         assert_eq!(
             file_name(Some(Path::new("/home/me/.claude-work"))),
-            "_home_me_.claude-work"
+            "dir-_2fhome_2fme_2f_2eclaude-work"
         );
-        assert_eq!(file_name(None), "default");
+        for blank in [None, Some(Path::new(""))] {
+            assert_eq!(file_name(blank), "default");
+        }
+    }
+
+    #[test]
+    fn config_dirs_that_differ_only_in_punctuation_keep_separate_logins() {
+        let names = [
+            "/home/me/a_b",
+            "/home/me/a.b",
+            "/home/me/a/b",
+            "default",
+            ".",
+            "..",
+        ]
+        .map(|dir| file_name(Some(Path::new(dir))));
+        let unique: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "{names:?}");
+        assert!(
+            names.iter().all(|name| name.starts_with("dir-")),
+            "{names:?}"
+        );
     }
 
     #[test]
@@ -133,5 +167,10 @@ mod tests {
         store(&path, &[]).unwrap();
         assert!(!path.exists());
         store(&path, &[]).unwrap();
+        assert!(read(&path).unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            0
+        );
     }
 }
