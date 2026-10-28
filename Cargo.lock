@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.119.2"
+version = "0.120.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7567,8 +7567,10 @@ dependencies = [
 name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
+ "aho-corasick",
  "chrono",
  "dirs 6.0.0",
+ "memchr",
  "qol-agent-homes",
  "qol-config",
  "qol-headless",

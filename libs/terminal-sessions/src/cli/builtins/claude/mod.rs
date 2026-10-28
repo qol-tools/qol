@@ -1,6 +1,7 @@
 mod environment;
 mod history;
 mod metadata;
+mod search;
 
 #[cfg(test)]
 mod tests;
@@ -8,7 +9,7 @@ mod tests;
 use std::sync::Arc;
 
 use crate::cli::{
-    ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram,
+    ChatTurn, CliComposer, CliConversation, CliConversationMatch, CliDraftStash, CliLaunchProgram,
     CliRemoteControlToggle, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
     CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
     CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
@@ -129,6 +130,16 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
         self.history.closed_conversations(&self.tool.id, since)
+    }
+
+    fn search_conversations(
+        &self,
+        since: std::time::SystemTime,
+        external_ids: &std::collections::HashSet<String>,
+        terms: &[String],
+    ) -> Vec<CliConversationMatch> {
+        self.history
+            .search_conversations(since, external_ids, terms)
     }
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {
