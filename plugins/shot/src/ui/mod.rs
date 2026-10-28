@@ -7,9 +7,18 @@ pub(crate) mod region_selector;
 pub(crate) mod settings_panel;
 pub(crate) mod shortcuts;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 const PARKED_REVEAL_MAX_WAIT: Duration = Duration::from_millis(500);
+
+pub(crate) fn release_image(image: Option<Arc<gpui::RenderImage>>, window: &mut gpui::Window) {
+    let Some(image) = image else {
+        return;
+    };
+    let _ = window.drop_image(image);
+    window.refresh();
+}
 
 pub(crate) fn schedule_parked_reveal(title: &str, cx: &mut gpui::App) -> bool {
     if !qol_gpui::popup_window::prepare_window_reveal_by_title(title) {

@@ -538,6 +538,9 @@ impl PinnedView {
     }
 
     fn start_full_resolution_upgrade(&self, cx: &mut Context<Self>) {
+        let Some(handle) = self.handle else {
+            return;
+        };
         if self.image.is_none() || self.path.as_os_str().is_empty() {
             return;
         }
@@ -553,13 +556,13 @@ impl PinnedView {
             }
         };
         qol_runtime::probe!("SHOT_PIN_IMAGE", "generation={generation} state=scheduled");
-        cx.spawn(async move |view, cx| {
+        cx.spawn(async move |_, cx| {
             let result = match receiver.await {
                 Ok(result) => result,
                 Err(error) => Err(anyhow::anyhow!("pinned image worker stopped: {error}")),
             };
-            let _ = view.update(cx, move |view, cx| {
-                view.finish_full_resolution_upgrade(generation, started, result, cx);
+            let _ = handle.update(cx, move |view, window, cx| {
+                view.finish_full_resolution_upgrade(generation, started, result, window, cx);
             });
         })
         .detach();
@@ -570,6 +573,7 @@ impl PinnedView {
         generation: u64,
         started: Instant,
         result: FullResolutionImage,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.active || self.reveal_generation != generation {
@@ -583,7 +587,7 @@ impl PinnedView {
                 return;
             }
         };
-        self.image = Some(image);
+        crate::ui::release_image(self.image.replace(image), window);
         qol_runtime::probe!(
             "SHOT_PIN_IMAGE",
             "generation={generation} state=upgraded dims={width}x{height} ms={}",
@@ -956,7 +960,7 @@ impl PinnedView {
         };
         self.active = false;
         self.placed = false;
-        self.image = None;
+        crate::ui::release_image(self.image.take(), window);
         self.path.clear();
         self.resize_drag = None;
         self.scroll_resize = None;

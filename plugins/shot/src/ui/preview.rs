@@ -559,7 +559,7 @@ fn reuse_existing(
             );
             trace_preview_place(&resolved);
             view.window_origin = resolved.logical_bounds().origin;
-            view.reset_for_show(content, seq, reveal);
+            view.reset_for_show(content, seq, reveal, window);
             window.activate_window();
             window.focus(&view.focus_handle(cx));
             cx.notify();
@@ -932,11 +932,18 @@ impl PreviewView {
         self.is_showing = showing;
     }
 
-    fn reset_for_show(&mut self, content: GhostContent, seq: u64, reveal: PreviewReveal) {
+    fn reset_for_show(
+        &mut self,
+        content: GhostContent,
+        seq: u64,
+        reveal: PreviewReveal,
+        window: &mut Window,
+    ) {
         self.file_start.start();
         self.finish_completion(crate::capture::completion::PreviewExit::Superseded);
         self.path = content.path;
         self.thumb = content.thumb;
+        crate::ui::release_image(self.image.take(), window);
         self.image = content.image;
         self.file_ready = content.file_ready;
         self.file_start = content.file_start;

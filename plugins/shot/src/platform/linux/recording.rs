@@ -6,7 +6,6 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xfixes::ConnectionExt as XfixesExt;
@@ -31,7 +30,8 @@ const NVENC_ELEMENT: &str = "nvh264enc";
 const NVENC_MIN_SIZE: (i32, i32) = (145, 49);
 const NVENC_MAX_SIDE: i32 = 4096;
 const FFMPEG_NVENC: &str = "h264_nvenc";
-static FFMPEG_NVENC_WORKS: OnceLock<bool> = OnceLock::new();
+const NVIDIA_DRIVER_VERSION: &str = "/proc/driver/nvidia/version";
+static FFMPEG_NVENC_WORKS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum X11grabEncoder {
@@ -211,12 +211,30 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
 }
 
 fn ffmpeg_nvenc_available(config: &Config) -> bool {
-    recording_format(&config.video.format) != "webm"
-        && *FFMPEG_NVENC_WORKS.get_or_init(ffmpeg_encodes_with_nvenc)
+    if recording_format(&config.video.format) == "webm"
+        || !Path::new(NVIDIA_DRIVER_VERSION).exists()
+    {
+        return false;
+    }
+    if FFMPEG_NVENC_WORKS.load(Ordering::Relaxed) {
+        return true;
+    }
+    match ffmpeg_encodes_with_nvenc() {
+        Ok(()) => {
+            FFMPEG_NVENC_WORKS.store(true, Ordering::Relaxed);
+            true
+        }
+        Err(error) => {
+            log::warn!(
+                "ffmpeg cannot encode with {FFMPEG_NVENC}, so NVIDIA capture is skipped: {error:#}"
+            );
+            false
+        }
+    }
 }
 
-fn ffmpeg_encodes_with_nvenc() -> bool {
-    Command::new("ffmpeg")
+fn ffmpeg_encodes_with_nvenc() -> Result<()> {
+    let output = Command::new("ffmpeg")
         .args([
             "-hide_banner",
             "-loglevel",
@@ -235,9 +253,17 @@ fn ffmpeg_encodes_with_nvenc() -> bool {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stderr(Stdio::piped())
+        .output()
+        .context("failed to run ffmpeg")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
 }
 
 fn cinnamon_encoders(rect: &Rect) -> Vec<CinnamonEncoder> {

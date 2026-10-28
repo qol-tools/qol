@@ -674,7 +674,7 @@ impl RegionSelector {
         let completion = self.take_completion(rect);
         self.hide_window_before_remove(window);
         self.hide_all_before_remove();
-        self.frozen_image = None;
+        crate::ui::release_image(self.frozen_image.take(), window);
         if !self.reusable {
             self.remove_peer_windows(cx);
             window.remove_window();
@@ -850,7 +850,6 @@ impl RegionSelector {
             return SelectorPollResult::Stop;
         };
         self.hide_all_before_remove();
-        self.frozen_image = None;
         SelectorPollResult::Finish {
             handles: self.state.borrow().handles.clone(),
             completion,
@@ -1075,6 +1074,7 @@ async fn continue_selector_poll(result: SelectorPollResult, cx: &mut AsyncApp) -
             for handle in handles {
                 let _ = handle.update(cx, |view, window, _cx| {
                     view.hide_window_before_remove(window);
+                    crate::ui::release_image(view.frozen_image.take(), window);
                     if !retain_windows {
                         window.remove_window();
                     }
