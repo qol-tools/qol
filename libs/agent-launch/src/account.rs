@@ -102,8 +102,12 @@ pub fn apply(
     if tool.as_str() != "claude" {
         return Ok(());
     }
+    let login_file = crate::login::file_for(config_dir).filter(|path| path.is_file());
     let Some(config_dir) = config_dir else {
-        return Ok(());
+        return match login_file {
+            Some(file) => wrap_with_login_file(launch, lane_exec, &file),
+            None => Ok(()),
+        };
     };
     let home = dirs::home_dir();
     let mut accounts: Vec<_> = config_claude_accounts()?.into_iter().collect();
@@ -128,6 +132,7 @@ pub fn apply(
         &accounts,
         home.as_deref(),
         lane_exec,
+        login_file.as_deref(),
         |secret| qol_secrets::read(secret).map(drop),
     )
 }
@@ -138,6 +143,7 @@ fn apply_with(
     accounts: &[(String, ClaudeAccountSpec)],
     home: Option<&Path>,
     lane_exec: &LaneExecCommand,
+    login_file: Option<&Path>,
     check_secret: impl Fn(&str) -> Result<()>,
 ) -> Result<()> {
     let config_dir_text = config_dir
@@ -151,7 +157,10 @@ fn apply_with(
         .find(|(dir, _)| expand_home(dir, home) == config_dir)
         .map(|(_, account)| account)
     else {
-        return Ok(());
+        return match login_file {
+            Some(file) => wrap_with_login_file(launch, lane_exec, file),
+            None => Ok(()),
+        };
     };
     let token_env = account.token_env.as_deref().unwrap_or(DEFAULT_TOKEN_ENV);
     if token_env.is_empty() || token_env.contains('=') {
@@ -163,23 +172,50 @@ fn apply_with(
             account.secret
         )
     })?;
+    wrap(
+        launch,
+        lane_exec,
+        [
+            "--secret".to_owned(),
+            account.secret.clone(),
+            "--env".to_owned(),
+            token_env.to_owned(),
+        ],
+    );
+    Ok(())
+}
+
+fn wrap_with_login_file(
+    launch: &mut CliLaunchProgram,
+    lane_exec: &LaneExecCommand,
+    file: &Path,
+) -> Result<()> {
+    let file = file
+        .to_str()
+        .with_context(|| format!("the lane login `{}` is not UTF-8", file.display()))?;
+    wrap(
+        launch,
+        lane_exec,
+        ["--login-file".to_owned(), file.to_owned()],
+    );
+    Ok(())
+}
+
+fn wrap(
+    launch: &mut CliLaunchProgram,
+    lane_exec: &LaneExecCommand,
+    login_args: impl IntoIterator<Item = String>,
+) {
     let mut args: Vec<String> = lane_exec
         .prefix
         .iter()
         .map(|part| (*part).to_owned())
         .collect();
-    args.extend([
-        "--secret".to_owned(),
-        account.secret.clone(),
-        "--env".to_owned(),
-        token_env.to_owned(),
-        "--".to_owned(),
-        launch.program.clone(),
-    ]);
+    args.extend(login_args);
+    args.extend(["--".to_owned(), launch.program.clone()]);
     args.append(&mut launch.args);
     launch.program = lane_exec.program.to_string_lossy().into_owned();
     launch.args = args;
-    Ok(())
 }
 
 fn expand_home(dir: &str, home: Option<&Path>) -> PathBuf {
@@ -229,6 +265,7 @@ mod tests {
             &accounts(),
             Some(Path::new("/Users/me")),
             &qol(),
+            None,
             |_| Ok(()),
         )
         .unwrap();
@@ -267,6 +304,7 @@ mod tests {
             &accounts(),
             Some(Path::new("/Users/me")),
             &qol(),
+            None,
             |_| panic!("no secret is read for an unmapped account"),
         )
         .unwrap();
@@ -274,6 +312,53 @@ mod tests {
         assert_eq!(launch.program, "claude");
         assert_eq!(launch.args, ["--resume", "abc"]);
         assert_eq!(launch.env.len(), 1);
+    }
+
+    #[test]
+    fn an_unmapped_config_dir_starts_under_the_login_its_caller_left() {
+        let mut launch = claude_launch();
+        apply_with(
+            &mut launch,
+            Path::new("/Users/me/.claude-work"),
+            &accounts(),
+            Some(Path::new("/Users/me")),
+            &qol(),
+            Some(Path::new("/data/lane-logins/_Users_me_.claude-work")),
+            |_| panic!("no secret is read for an unmapped account"),
+        )
+        .unwrap();
+
+        assert_eq!(launch.program, "/bin/qol");
+        assert_eq!(
+            launch.args,
+            [
+                "sessions",
+                "lane-exec",
+                "--login-file",
+                "/data/lane-logins/_Users_me_.claude-work",
+                "--",
+                "claude",
+                "--resume",
+                "abc",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_configured_account_wins_over_the_callers_login() {
+        let mut launch = claude_launch();
+        apply_with(
+            &mut launch,
+            Path::new("/Users/me/.claude-personal"),
+            &accounts(),
+            Some(Path::new("/Users/me")),
+            &qol(),
+            Some(Path::new("/data/lane-logins/_Users_me_.claude-personal")),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(launch.args[2], "--secret");
     }
 
     #[test]
@@ -285,6 +370,7 @@ mod tests {
             &accounts(),
             Some(Path::new("/Users/me")),
             &qol(),
+            None,
             |_| bail!("no such item"),
         )
         .unwrap_err();
@@ -308,6 +394,7 @@ mod tests {
             &accounts,
             None,
             &qol(),
+            None,
             |_| Ok(()),
         )
         .unwrap();
@@ -334,6 +421,7 @@ mod tests {
             &accounts,
             Some(Path::new("/Users/me")),
             &qol(),
+            None,
             |_| Ok(()),
         )
         .unwrap();
@@ -379,6 +467,7 @@ mod tests {
             &registered_accounts(Some(home.path())),
             Some(home.path()),
             &qol(),
+            None,
             |_| Ok(()),
         )
         .unwrap();

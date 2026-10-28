@@ -144,6 +144,7 @@ fn park(
     );
     let executable = std::env::current_exe()
         .context("cannot resolve the CLI Sessions executable for the park runner")?;
+    qol_agent_launch::login::remember_caller();
     let created_at = now_seconds();
     let id = format!("park-{created_at}-{}", std::process::id());
     let record = ParkRecord {
@@ -284,6 +285,7 @@ fn watch_launch(
     if interpreter.resume_args_for(&tool, &external_id).is_none() {
         bail!("{tool} conversations cannot be resumed, so the fork's tab stays open");
     }
+    qol_agent_launch::login::remember_caller();
     let created_at = now_seconds();
     let mut record = ParkRecord {
         id: format!("park-{created_at}-{}", std::process::id()),

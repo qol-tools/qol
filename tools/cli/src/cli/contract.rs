@@ -359,10 +359,10 @@ fn app() -> HeadlessApp {
             .subcommand(command(
                 "lane-exec",
                 "Start a lane under the Claude account its architect runs under.",
-                "qol sessions lane-exec --secret NAME --env VAR -- PROGRAM [ARGS...]",
-                "Spawn puts this in front of a claude lane when claude_accounts in sessions.toml maps the caller's CLAUDE_CONFIG_DIR to a secret. It reads that secret from the OS credential store (the login Keychain on macOS, the Secret Service via secret-tool on Linux, the Credential Manager on Windows), exports it as VAR, and replaces itself with PROGRAM, so the token never passes through the terminal. Each entry is `[claude_accounts.\"<config dir>\"]` with `secret = \"<name>\"` and an optional `token_env` that defaults to CLAUDE_CODE_OAUTH_TOKEN.",
+                "qol sessions lane-exec (--secret NAME --env VAR | --login-file PATH) -- PROGRAM [ARGS...]",
+                "Spawn, fork, reopen and park put this in front of a claude lane so it runs under the caller's account, and it replaces itself with PROGRAM, so the token never passes through the terminal. Every spawn, fork and park records the caller's login variables (CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN) in a private file per CLAUDE_CONFIG_DIR under the qol-tray data folder, lane-logins/, and removes it when the caller has none; --login-file clears those variables and sets the recorded ones. claude_accounts in sessions.toml overrides that for a config dir: --secret reads the named secret from the OS credential store (the login Keychain on macOS, the Secret Service via secret-tool on Linux, the Credential Manager on Windows) and exports it as VAR. Each entry is `[claude_accounts.\"<config dir>\"]` with `secret = \"<name>\"` and an optional `token_env` that defaults to CLAUDE_CODE_OAUTH_TOKEN.",
                 "The lane's own output; diagnostics on stderr.",
-                "Exits non-zero when the secret cannot be read or PROGRAM cannot start.",
+                "Exits non-zero when the secret or login file cannot be read or PROGRAM cannot start.",
             ))
             .subcommand(
                 command(
