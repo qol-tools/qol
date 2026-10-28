@@ -35,6 +35,7 @@ where
                 .about("Open the Explorer window.")
                 .usage(format!("{PLUGIN_ID} {OPEN_COMMAND} [path]"))
                 .detail("Without a path the window opens on the home folder.")
+                .detail("A file path opens the file's folder with the file selected.")
                 .detail("A path may start with ~ for the home folder.")
                 .detail("A path that starts with - is read as a flag, so write ./-name for such a folder.")
                 .output("No stdout on success.")
