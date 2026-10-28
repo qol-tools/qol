@@ -369,6 +369,10 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
     }
 }
 
+pub(super) fn check_key_label(snapshot: &UpdatesSnapshot) -> Option<&'static str> {
+    (summary(snapshot).action == Some(RowAction::UpdateAll)).then(|| check_label(snapshot))
+}
+
 fn check_label(snapshot: &UpdatesSnapshot) -> &'static str {
     if snapshot.check_error.is_some() {
         "Try again"
@@ -746,6 +750,34 @@ mod tests {
             vec![target("cli", "CLI Sessions", TargetState::Available)],
         );
         assert_eq!(summary(&waiting).label, "1 update waiting");
+    }
+
+    #[test]
+    fn the_check_key_stays_reachable_while_update_all_holds_the_button() {
+        let mut waiting = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Available),
+            vec![target("cli", "CLI Sessions", TargetState::Available)],
+        );
+        assert_eq!(summary(&waiting).action, Some(RowAction::UpdateAll));
+        assert_eq!(check_key_label(&waiting), Some("Check now"));
+
+        waiting.check_error = Some("No connection to GitHub".to_string());
+        assert_eq!(check_key_label(&waiting), Some("Try again"));
+
+        waiting.checking = true;
+        assert_eq!(check_key_label(&waiting), None);
+
+        let one_waiting = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Available),
+            vec![target("cli", "CLI Sessions", TargetState::UpToDate)],
+        );
+        assert_eq!(summary(&one_waiting).action, Some(RowAction::Check));
+        assert_eq!(check_key_label(&one_waiting), None);
+
+        let mut running = waiting.clone();
+        running.checking = false;
+        running.running = true;
+        assert_eq!(check_key_label(&running), None);
     }
 
     #[test]

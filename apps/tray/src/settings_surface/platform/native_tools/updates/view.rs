@@ -24,7 +24,8 @@ use qol_gpui::surface::SurfaceDismisser;
 
 use super::data;
 use super::model::{
-    page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot, ValueTone,
+    check_key_label, page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
+    ValueTone,
 };
 
 const MAX_VISIBLE: usize = 10;
@@ -284,6 +285,10 @@ impl UpdatesView {
         self.run_action(action, cx);
     }
 
+    fn check_key(&self) -> Option<&'static str> {
+        self.snapshot.as_ref().and_then(check_key_label)
+    }
+
     fn run_action(&mut self, action: RowAction, cx: &mut Context<Self>) {
         if self.pending {
             return;
@@ -350,6 +355,11 @@ impl UpdatesView {
         let key = event.keystroke.key.as_str();
         if matches!(key, "escape" | "esc") {
             self.escape(window, cx);
+            cx.notify();
+            return;
+        }
+        if key == "c" && !event.keystroke.modifiers.modified() && self.check_key().is_some() {
+            self.run_action(RowAction::Check, cx);
             cx.notify();
             return;
         }
@@ -591,6 +601,9 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
         let mut left = Vec::new();
         if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
             left.push(SettingsHint::new(Key::ENTER, label.to_lowercase()));
+        }
+        if let Some(label) = self.check_key() {
+            left.push(SettingsHint::new(Key::letter('c'), label.to_lowercase()));
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
