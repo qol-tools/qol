@@ -2,7 +2,7 @@ use gpui::{
     div, rgb, AnyElement, App, Context, InteractiveElement, IntoElement, Keystroke, MouseDownEvent,
     ParentElement, RenderOnce, Styled, Window,
 };
-use qol_gpui::text::laid_out_width;
+use qol_gpui::text::{laid_out_width, TextStyled};
 use qol_gpui::text_edit::{visible_char_count, CaretStyle, TextField, TextFieldElement};
 use qol_gpui::theme::{Ground, TextStyle, SPACE_CELL, SPACE_GUTTER};
 
@@ -53,6 +53,8 @@ impl RenderOnce for RenameLabel {
                 radius: 1.0,
             })
             .render()
+            .text(self.style)
+            .text_color(rgb(self.ink))
     }
 }
 
