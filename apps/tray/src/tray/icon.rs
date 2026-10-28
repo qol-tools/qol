@@ -77,7 +77,12 @@ fn recolor_accent(art: &mut [u8], idle: &[u8], accent: (u8, u8, u8)) {
         f32::from(accent.1) - f32::from(drawn_g),
         f32::from(accent.2) - f32::from(drawn_b),
     ];
-    for (pixel, idle) in art.chunks_exact_mut(4).zip(idle.chunks_exact(4)) {
+    for (pixel, idle) in art
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(idle.as_chunks::<4>().0)
+    {
         if pixel == idle {
             continue;
         }
@@ -174,9 +179,11 @@ mod tests {
             let mut recolored = drawn.to_vec();
             recolor_accent(&mut recolored, idle, (0x00, 0xff, 0x00));
             for ((before, after), idle) in drawn
-                .chunks_exact(4)
-                .zip(recolored.chunks_exact(4))
-                .zip(idle.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(recolored.as_chunks::<4>().0.iter())
+                .zip(idle.as_chunks::<4>().0.iter())
             {
                 if before == idle {
                     assert_eq!(before, after, "{tone:?}");
@@ -193,8 +200,10 @@ mod tests {
             let mut recolored = drawn.to_vec();
             recolor_accent(&mut recolored, art(false, tone), accent);
             let solid = drawn
-                .chunks_exact(4)
-                .zip(recolored.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(recolored.as_chunks::<4>().0.iter())
                 .filter(|(before, _)| before[..3] == [0xff, 0x6b, 0x6b])
                 .map(|(_, after)| after)
                 .collect::<Vec<_>>();

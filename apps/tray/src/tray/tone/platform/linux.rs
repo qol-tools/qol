@@ -1,7 +1,7 @@
 use super::super::{PanelLook, PanelTone};
 use qol_desktop_settings::gsettings;
 
-const ST_WARNING: (u8, u8, u8) = (0xf5, 0x79, 0x00);
+const ST_WARNING: (u8, u8, u8) = (0xf5, 0x79, 0x3e);
 
 pub(crate) fn current() -> PanelLook {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
