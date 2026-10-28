@@ -125,8 +125,6 @@ mod tests {
 /// Resolves the binary the autostart artifact should point at when no dev
 /// worktree is selected, or when the selected worktree is unusable.
 pub fn canonical_boot_binary() -> Result<PathBuf> {
-    let install_binary = installed_binary_path().ok();
-    let install_exists = install_binary.as_ref().is_some_and(|p| p.is_file());
     let main_clone = main_clone_debug_path();
     let main_exists = main_clone.as_ref().is_some_and(|p| p.is_file());
     let current_exe = std::env::current_exe()?;
@@ -135,8 +133,7 @@ pub fn canonical_boot_binary() -> Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("running build identity is unavailable"))?;
 
     let probes = CanonicalProbes {
-        install_binary,
-        install_binary_exists: install_exists,
+        production_install: existing_production_binary(),
         main_clone_debug: main_clone,
         main_clone_debug_exists: main_exists,
         current_exe,
@@ -146,8 +143,7 @@ pub fn canonical_boot_binary() -> Result<PathBuf> {
 }
 
 struct CanonicalProbes {
-    install_binary: Option<PathBuf>,
-    install_binary_exists: bool,
+    production_install: Option<PathBuf>,
     main_clone_debug: Option<PathBuf>,
     main_clone_debug_exists: bool,
     current_exe: PathBuf,
@@ -155,21 +151,14 @@ struct CanonicalProbes {
 }
 
 fn canonical_boot_binary_inner(probes: &CanonicalProbes, honors_dev: bool) -> PathBuf {
-    if let Some(install) = probes.install_binary.as_ref() {
-        if probes.install_binary_exists && paths_equal_canonicalized(&probes.current_exe, install) {
-            return install.clone();
-        }
+    if let Some(install) = probes.production_install.as_ref() {
+        return install.clone();
     }
     if honors_dev {
         if let Some(main) = probes.main_clone_debug.as_ref() {
             if probes.main_clone_debug_exists {
                 return main.clone();
             }
-        }
-    }
-    if let Some(install) = probes.install_binary.as_ref() {
-        if probes.install_binary_exists {
-            return install.clone();
         }
     }
     if probes.current_role != qol_conventions::artifact::BuildRole::Host {
@@ -188,15 +177,46 @@ pub(crate) fn paths_equal_canonicalized(a: &Path, b: &Path) -> bool {
     canon_a == canon_b
 }
 
-fn installed_binary_path() -> Result<PathBuf> {
-    let dir = crate::installer::platform::install_dir(
-        qol_apps::tray_install::InstallProfile::Production,
-    )?;
-    Ok(dir.join(crate::installer::platform::binary_filename()))
+fn existing_production_binary() -> Option<PathBuf> {
+    crate::paths::tray_installed_binary(qol_apps::tray_install::InstallProfile::Production)
+        .ok()
+        .filter(|path| path.is_file() && super::has_install_marker(path))
 }
 
-fn existing_production_binary() -> Option<PathBuf> {
-    installed_binary_path().ok().filter(|path| path.is_file())
+#[cfg(test)]
+mod production_install_tests {
+    use super::*;
+    use qol_apps::tray_install::InstallProfile;
+
+    fn place_production_binary(with_marker: bool) -> PathBuf {
+        let binary = crate::paths::tray_installed_binary(InstallProfile::Production).unwrap();
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"binary").unwrap();
+        if with_marker {
+            let marker = crate::paths::install_marker::marker_path(&binary).unwrap();
+            std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+            std::fs::write(&marker, "install-test\n").unwrap();
+        }
+        binary
+    }
+
+    #[test]
+    fn a_binary_without_its_install_marker_is_not_a_production_install() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+        place_production_binary(false);
+        assert_eq!(existing_production_binary(), None);
+    }
+
+    #[test]
+    fn a_binary_with_its_install_marker_is_the_production_install() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+        let binary = place_production_binary(true);
+        assert_eq!(existing_production_binary(), Some(binary));
+    }
 }
 
 #[cfg(feature = "dev")]
@@ -223,36 +243,21 @@ mod canonical_tests {
     }
 
     #[test]
-    fn step_2_current_exe_equals_install() {
+    fn production_install_wins_over_main_clone_in_a_dev_build() {
         let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: true,
+            production_install: Some(PathBuf::from("/install")),
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: true,
-            current_exe: PathBuf::from("/install"),
+            current_exe: PathBuf::from("/worktree"),
             current_role: qol_conventions::artifact::BuildRole::Host,
         };
         assert_eq!(pick(&probes, true), PathBuf::from("/install"));
     }
 
     #[test]
-    fn step_3_dev_prefers_main_clone_over_install() {
+    fn production_install_wins_in_a_production_build() {
         let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: true,
-            main_clone_debug: Some(PathBuf::from("/main")),
-            main_clone_debug_exists: true,
-            current_exe: PathBuf::from("/worktree"),
-            current_role: qol_conventions::artifact::BuildRole::Host,
-        };
-        assert_eq!(pick(&probes, true), PathBuf::from("/main"));
-    }
-
-    #[test]
-    fn step_3_skipped_in_prod() {
-        let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: true,
+            production_install: Some(PathBuf::from("/install")),
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: true,
             current_exe: PathBuf::from("/worktree"),
@@ -262,23 +267,33 @@ mod canonical_tests {
     }
 
     #[test]
-    fn step_4_installed_when_no_main_clone() {
+    fn main_clone_wins_in_a_dev_build_without_a_production_install() {
         let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: true,
+            production_install: None,
             main_clone_debug: Some(PathBuf::from("/main")),
-            main_clone_debug_exists: false,
+            main_clone_debug_exists: true,
             current_exe: PathBuf::from("/worktree"),
             current_role: qol_conventions::artifact::BuildRole::Host,
         };
-        assert_eq!(pick(&probes, true), PathBuf::from("/install"));
+        assert_eq!(pick(&probes, true), PathBuf::from("/main"));
     }
 
     #[test]
-    fn step_5_current_exe_when_nothing_else() {
+    fn main_clone_is_ignored_in_a_production_build() {
         let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: false,
+            production_install: None,
+            main_clone_debug: Some(PathBuf::from("/main")),
+            main_clone_debug_exists: true,
+            current_exe: PathBuf::from("/worktree"),
+            current_role: qol_conventions::artifact::BuildRole::Host,
+        };
+        assert_eq!(pick(&probes, false), PathBuf::from("/worktree"));
+    }
+
+    #[test]
+    fn current_exe_when_no_install_and_no_built_main_clone() {
+        let probes = CanonicalProbes {
+            production_install: None,
             main_clone_debug: Some(PathBuf::from("/main")),
             main_clone_debug_exists: false,
             current_exe: PathBuf::from("/worktree"),
@@ -288,7 +303,7 @@ mod canonical_tests {
     }
 
     #[test]
-    fn step_5_non_host_roles_fall_back_to_sibling_tray() {
+    fn non_host_roles_fall_back_to_sibling_tray() {
         let roles = [
             qol_conventions::artifact::BuildRole::Doctor,
             qol_conventions::artifact::BuildRole::Installer,
@@ -296,8 +311,7 @@ mod canonical_tests {
         ];
         for current_role in roles {
             let probes = CanonicalProbes {
-                install_binary: Some(PathBuf::from("/install")),
-                install_binary_exists: false,
+                production_install: None,
                 main_clone_debug: None,
                 main_clone_debug_exists: false,
                 current_exe: PathBuf::from("/repo/target/debug/renamed-tool.exe"),
@@ -313,10 +327,9 @@ mod canonical_tests {
     }
 
     #[test]
-    fn step_5_host_exe_still_resolves_to_itself() {
+    fn host_exe_still_resolves_to_itself() {
         let probes = CanonicalProbes {
-            install_binary: Some(PathBuf::from("/install")),
-            install_binary_exists: false,
+            production_install: None,
             main_clone_debug: None,
             main_clone_debug_exists: false,
             current_exe: PathBuf::from("/repo/target/debug/qol-tray"),

@@ -171,6 +171,7 @@ class LocalPlannerContract(unittest.TestCase):
                     self.assertIs(emit.call_args.args[0]["macos_doctest"], expected)
                     self.assertIs(emit.call_args.args[0]["lint_skip"], not expected)
                     self.assertIs(emit.call_args.args[0]["registry_tool_skip"], not expected)
+                    self.assertIs(emit.call_args.args[0]["tray_dev"], expected)
                     self.assertIs(
                         emit.call_args.args[0]["windows_doctest"], expected
                     )
@@ -369,6 +370,29 @@ class LocalPlannerContract(unittest.TestCase):
         with patch.dict(os.environ, {"BASE_SHA": "base", "HEAD_SHA": "head"}):
             ac.main()
         full_workspace.assert_called_once_with("cannot list the files the sources embed")
+
+    def test_tray_dev_follows_qol_tray_in_the_ubuntu_plan(self):
+        pkgs = {
+            "qol-tray": {"dir": "apps/tray", "deps": set(), "doctest": False},
+            "qol-alt-tab": {"dir": "plugins/alt-tab", "deps": set(), "doctest": False},
+        }
+        cases = [
+            ({"qol-tray"}, set(), True),
+            ({"qol-tray", "qol-alt-tab"}, set(), True),
+            ({"qol-alt-tab"}, set(), False),
+            ({"qol-tray"}, {"qol-tray"}, False),
+        ]
+        for affected, excluded, expected in cases:
+            with self.subTest(affected=affected, excluded=excluded):
+                with patch.object(ac, "UBUNTU_EXCLUDE", excluded):
+                    self.assertIs(ac.affected_outputs(affected, pkgs)["tray_dev"], expected)
+
+    def test_full_workspace_tray_dev_follows_the_ubuntu_excludes(self):
+        for excluded, expected in [(set(), True), ({"qol-tray"}, False)]:
+            with self.subTest(excluded=excluded):
+                with patch.object(ac, "UBUNTU_EXCLUDE", excluded), patch.object(ac, "emit") as emit:
+                    ac.full_workspace("test")
+                self.assertIs(emit.call_args.args[0]["tray_dev"], expected)
 
     def test_workspace_gates_and_the_registry_tool_follow_the_affected_crates(self):
         pkgs = {

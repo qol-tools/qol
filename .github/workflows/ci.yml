@@ -39,6 +39,7 @@ jobs:
       ubuntu_test: ${{ steps.trust.outputs.ubuntu_test || steps.affected.outputs.ubuntu_test }}
       ubuntu_doctest: ${{ steps.trust.outputs.ubuntu_doctest || steps.affected.outputs.ubuntu_doctest }}
       ubuntu_skip: ${{ steps.trust.outputs.ubuntu_skip || steps.affected.outputs.ubuntu_skip }}
+      tray_dev: ${{ steps.trust.outputs.tray_dev || steps.affected.outputs.tray_dev }}
       macos_clippy: ${{ steps.trust.outputs.macos_clippy || steps.affected.outputs.macos_clippy }}
       macos_build: ${{ steps.trust.outputs.macos_build || steps.affected.outputs.macos_build }}
       macos_test: ${{ steps.trust.outputs.macos_test || steps.affected.outputs.macos_test }}
@@ -198,6 +199,7 @@ jobs:
             clippy_args: ${{ needs.plan.outputs.ubuntu_clippy }}
             build_args: ${{ needs.plan.outputs.ubuntu_build }}
             test_args: ${{ needs.plan.outputs.ubuntu_test }}
+            tray_dev: ${{ needs.plan.outputs.tray_dev }}
             doctest: ${{ needs.plan.outputs.ubuntu_doctest }}
             skip: ${{ needs.plan.outputs.ubuntu_skip }}
             lint_skip: ${{ needs.plan.outputs.lint_skip }}
@@ -275,6 +277,10 @@ jobs:
           CLIPPY_ARGS: ${{ matrix.clippy_args }}
         run: cargo clippy --locked --keep-going $CLIPPY_ARGS -- -D warnings
 
+      - name: Clippy qol-tray with the dev feature
+        if: runner.os == 'Linux' && matrix.skip != 'true' && matrix.tray_dev == 'true'
+        run: cargo clippy --locked --keep-going -p qol-tray --all-targets --features qol-tray/dev -- -D warnings
+
       # A pull request run builds no release binaries, so this check is its
       # proof that the release profile compiles. Only the build cache workflow
       # saves the cache, and it runs the same check, so this one starts warm.
@@ -290,6 +296,7 @@ jobs:
         env:
           TEST_ARGS: ${{ matrix.test_args }}
           DOCTEST: ${{ matrix.doctest }}
+          TRAY_DEV: ${{ matrix.tray_dev }}
         run: |
           cgroup_mount=/sys/fs/cgroup
           [[ $(stat -fc '%T' "$cgroup_mount") == cgroup2fs ]] || {
@@ -347,6 +354,9 @@ jobs:
           export QOL_PROCESS_CGROUP_ROOT="$cgroup_root"
           export QOL_PROCESS_CGROUP_JOURNAL_ROOT="$journal_root"
           cargo nextest run --locked $TEST_ARGS --no-fail-fast --retries 0 --no-tests=pass --ignore-default-filter
+          if [ "$TRAY_DEV" = "true" ]; then
+            cargo nextest run --locked -p qol-tray --features qol-tray/dev --no-fail-fast --retries 0 --no-tests=pass --ignore-default-filter
+          fi
           if [ "$DOCTEST" = "true" ]; then
             cargo test --locked $TEST_ARGS --doc
           fi

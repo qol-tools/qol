@@ -323,7 +323,7 @@ pub fn heal_drift_on_startup(
     lister: &dyn WorktreeLister,
     probe: &dyn BinaryProbe,
 ) -> HealReport {
-    let (_target, events) = match resolve(env, config_dir, lister, probe) {
+    let (resolved_target, events) = match resolve(env, config_dir, lister, probe) {
         Ok(resolved) => resolved,
         Err(error) => {
             return HealReport {
@@ -381,7 +381,7 @@ pub fn heal_drift_on_startup(
             }
         }
         Err(e) => {
-            let binary = env.canonical_binary().unwrap_or_default();
+            let binary = resolved_target.binary().to_path_buf();
             report.failures.push(HealFailure::WriteAutostartFailed {
                 binary,
                 error: e.to_string(),
@@ -586,6 +586,49 @@ mod resolve_dev_tests {
         .unwrap();
         assert_eq!(target, BootTarget::Fallback { binary: production });
         assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn production_install_wins_over_every_marker_state_and_keeps_the_marker() {
+        let wt = "/wt";
+        let built = binary_in_worktree(wt);
+        let cases: [(&str, Option<&str>, &[(&str, &str)], &[&str]); 4] = [
+            (
+                "valid built worktree",
+                Some("feat-x"),
+                &[("feat-x", wt)],
+                &[built.as_str()],
+            ),
+            ("marker names a missing worktree", Some("ghost"), &[], &[]),
+            ("worktree not built", Some("feat-x"), &[("feat-x", wt)], &[]),
+            ("no marker", None, &[], &[]),
+        ];
+        for (case, marker, worktrees, binaries) in cases {
+            let tmp = TempDir::new().unwrap();
+            if let Some(branch) = marker {
+                write_marker(tmp.path(), branch);
+            }
+            let marker_file = tmp.path().join("dev/active-worktree.txt");
+            let marker_before = std::fs::read_to_string(&marker_file).ok();
+            let production = PathBuf::from("/home/user/.local/bin/qol-tray");
+            let env = dev_env(PathBuf::from("/main/qol-tray"), Some(production.clone()))
+                .with_production(production.clone());
+
+            let (target, events) =
+                resolve(&env, tmp.path(), &lister(worktrees), &probe(binaries)).unwrap();
+
+            assert_eq!(
+                target,
+                BootTarget::Fallback { binary: production },
+                "case: {case}"
+            );
+            assert!(events.is_empty(), "case: {case}, events: {events:?}");
+            assert_eq!(
+                std::fs::read_to_string(&marker_file).ok(),
+                marker_before,
+                "case: {case}"
+            );
+        }
     }
 }
 
@@ -898,6 +941,35 @@ mod set_tests {
         assert!(!repaired.wrote_autostart);
         assert_eq!(read_marker(tmp.path()).as_deref(), Some("feat-x"));
         assert_eq!(*env.autostart.lock().unwrap(), Some(production));
+    }
+
+    #[test]
+    fn production_install_leaves_an_autostart_the_user_turned_off() {
+        let tmp = TempDir::new().unwrap();
+        let wt = "/wt";
+        let binary_path = binary_in_worktree(wt);
+        let production = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_production(production)
+            .with_autostart_disabled_by_user();
+        let lister = InMemoryWorktreeLister {
+            map: [("feat-x".to_string(), PathBuf::from(wt))]
+                .into_iter()
+                .collect(),
+        };
+        let probe = InMemoryBinaryProbe {
+            existing: [PathBuf::from(&binary_path)].into_iter().collect(),
+        };
+
+        let selected =
+            set_selected_worktree(&env, tmp.path(), Some("feat-x"), &lister, &probe).unwrap();
+        let healed = heal_drift_on_startup(&env, tmp.path(), &lister, &probe);
+
+        assert!(!selected.wrote_autostart);
+        assert_eq!(read_marker(tmp.path()).as_deref(), Some("feat-x"));
+        assert!(healed.actions.is_empty(), "{:?}", healed.actions);
+        assert!(healed.failures.is_empty(), "{:?}", healed.failures);
+        assert_eq!(*env.autostart.lock().unwrap(), None);
     }
 
     #[test]

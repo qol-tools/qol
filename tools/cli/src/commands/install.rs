@@ -74,7 +74,9 @@ pub(crate) fn run(args: &[OsString], verbose: bool) -> Result<()> {
         &mut command,
         verbose,
     )?;
-    record_workspace_build(build_identity.source())?;
+    if !dev {
+        record_workspace_build(build_identity.source())?;
+    }
     step_label("ready", StepKind::Success, "qol-tray");
     Ok(())
 }
@@ -116,9 +118,9 @@ fn build_command(root: &Path, buildable: &[BuildablePlugin], dev: bool) -> Resul
         .args(["build", "--release", "--locked", "-p", "qol-tray"]);
     if dev {
         command.args(["--features", "dev,linux_evdev"]);
-    } else {
-        command.args(["--features", "linux_evdev"]);
+        return Ok(command);
     }
+    command.args(["--features", "linux_evdev"]);
     for plugin in buildable {
         command.arg("-p").arg(&plugin.package_name);
         for feature in qualified_plugin_build_features(&plugin.dir)? {
@@ -168,7 +170,9 @@ fn install_command(installer: &Path, root: &Path, tray: Option<&Path>, dev: bool
     if let Some(tray) = tray {
         command.arg("--source").arg(tray);
     }
-    command.arg("--workspace").arg(root);
+    if !dev {
+        command.arg("--workspace").arg(root);
+    }
     command
 }
 
@@ -226,6 +230,24 @@ mod tests {
         let dev_args = args_of(&dev);
         assert!(dev_args.contains("--dev"));
         assert!(!dev_args.contains("--source"));
-        assert!(dev_args.contains("--workspace"));
+        assert!(!dev_args.contains("--workspace"));
+        assert_eq!(
+            args_of(&production),
+            "--source /a/b/ws/target/release/qol-tray --workspace /a/b/ws"
+        );
+    }
+
+    #[test]
+    fn dev_build_command_builds_only_the_tray() {
+        let root = Path::new("/a/b/ws");
+        let plugin = BuildablePlugin {
+            dir: root.join("plugins/plugin-a"),
+            package_name: "plugin-a".to_string(),
+        };
+        let dev = build_command(root, &[plugin], true).unwrap();
+        assert_eq!(
+            args_of(&dev),
+            "build --release --locked -p qol-tray --features dev,linux_evdev"
+        );
     }
 }
