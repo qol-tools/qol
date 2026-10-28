@@ -24,7 +24,8 @@ use qol_gpui::surface::SurfaceDismisser;
 
 use super::data;
 use super::model::{
-    page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot, ValueTone,
+    can_check, page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
+    ValueTone,
 };
 
 const MAX_VISIBLE: usize = 10;
@@ -353,6 +354,12 @@ impl UpdatesView {
             cx.notify();
             return;
         }
+        if key == "c" && !event.keystroke.modifiers.modified() {
+            if self.snapshot.as_ref().is_some_and(can_check) {
+                self.run_action(RowAction::Check, cx);
+            }
+            return;
+        }
         match intent(key, None, false) {
             Some(Intent::Up) => self.move_selection(-1),
             Some(Intent::Down) => self.move_selection(1),
@@ -589,8 +596,13 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
     fn settings_hints(&self) -> Option<CustomHints> {
         let (rows, _) = self.page_rows();
         let mut left = Vec::new();
-        if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
+        let selected = rows.get(self.selected);
+        if let Some(label) = selected.and_then(PageRow::action_label) {
             left.push(SettingsHint::new(Key::ENTER, label.to_lowercase()));
+        }
+        let enter_checks = selected.and_then(PageRow::action) == Some(&RowAction::Check);
+        if !enter_checks && self.snapshot.as_ref().is_some_and(can_check) {
+            left.push(SettingsHint::new(Key::letter('c'), "check now"));
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
