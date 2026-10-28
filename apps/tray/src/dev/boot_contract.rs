@@ -592,7 +592,13 @@ mod resolve_dev_tests {
     fn production_install_wins_over_every_marker_state_and_keeps_the_marker() {
         let wt = "/wt";
         let built = binary_in_worktree(wt);
-        let cases: [(&str, Option<&str>, &[(&str, &str)], &[&str]); 4] = [
+        type Case<'a> = (
+            &'a str,
+            Option<&'a str>,
+            &'a [(&'a str, &'a str)],
+            &'a [&'a str],
+        );
+        let cases: [Case; 4] = [
             (
                 "valid built worktree",
                 Some("feat-x"),
