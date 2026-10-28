@@ -435,10 +435,10 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         | "sessions_closed"
         | "session_reopen"
         | "session_remote_control" => {
-            let timeout_ms = if matches!(spec.name, "session_reopen" | "session_remote_control") {
-                "60_000"
-            } else {
-                "30_000"
+            let timeout_ms = match spec.name {
+                "session_remote_control" => "90_000",
+                "session_reopen" => "60_000",
+                _ => "30_000",
             };
             through_mcp = EXECUTE_THROUGH_MCP
                 .replace("TOOL_NAME", &format!("{:?}", spec.name))
