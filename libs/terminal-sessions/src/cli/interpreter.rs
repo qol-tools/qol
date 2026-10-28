@@ -10,9 +10,9 @@ use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
     ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram, CliModelCatalog,
-    CliResumeSettings, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
-    CliTool, CliToolId,
+    CliRemoteControlToggle, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
+    CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,6 +220,10 @@ impl CliSessionInterpreter {
 
     pub fn remote_control_url(&self, session: &SessionFacts) -> Option<String> {
         self.strategy_for(session).remote_control_url(session)
+    }
+
+    pub fn remote_control_toggle(&self, session: &SessionFacts) -> Option<CliRemoteControlToggle> {
+        self.strategy_for(session).remote_control_toggle()
     }
 
     pub fn keep_open_reason_for(

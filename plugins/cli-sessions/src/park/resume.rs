@@ -94,6 +94,7 @@ fn resume_program(
             model: record.model.as_deref(),
             effort: record.effort.as_deref(),
             claude_config_dir: record.claude_config_dir.as_deref().map(Path::new),
+            remote_control: None,
         },
         cap,
         &LaneExecCommand::current(&[crate::park::LANE_EXEC])?,

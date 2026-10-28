@@ -429,9 +429,13 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         "session_bridge" => EXECUTE_BRIDGE,
         "session_loop_close" => EXECUTE_LOOP_CLOSE,
         "session_close" => EXECUTE_CLOSE,
-        "session_send" | "session_inbox" | "session_board" | "sessions_closed"
-        | "session_reopen" => {
-            let timeout_ms = if spec.name == "session_reopen" {
+        "session_send"
+        | "session_inbox"
+        | "session_board"
+        | "sessions_closed"
+        | "session_reopen"
+        | "session_remote_control" => {
+            let timeout_ms = if matches!(spec.name, "session_reopen" | "session_remote_control") {
                 "60_000"
             } else {
                 "30_000"

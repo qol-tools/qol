@@ -14,6 +14,7 @@ pub struct ResumePoint<'a> {
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub claude_config_dir: Option<&'a Path>,
+    pub remote_control: Option<&'a str>,
 }
 
 pub fn resume_launch(
@@ -38,6 +39,11 @@ pub fn resume_launch(
     launch
         .args
         .extend(launch_flags::tier_flags(tool, point.model, point.effort)?);
+    if let Some(name) = point.remote_control {
+        launch
+            .args
+            .extend(launch_flags::remote_control_flags(tool, name)?);
+    }
     let mut launch = qol_agent_launch::cap::wrap_launch(&launch, cap);
     qol_agent_launch::account::apply(&mut launch, tool, point.claude_config_dir, lane_exec)?;
     Ok(launch)
@@ -61,6 +67,7 @@ mod tests {
             model: None,
             effort: None,
             claude_config_dir: None,
+            remote_control: None,
         }
     }
 
@@ -94,6 +101,27 @@ mod tests {
             qol_agent_launch::account::CONFIG_DIR_ENV.to_owned(),
             "/home/someone/.claude-work".to_owned()
         )));
+    }
+
+    #[test]
+    fn a_resume_with_remote_control_names_it_after_the_key_and_other_tools_refuse_it() {
+        let interpreter = CliSessionInterpreter::system();
+        let claude = CliToolId::new("claude").unwrap();
+        let resumed = ResumePoint {
+            remote_control: Some("kcd2-henrys"),
+            ..point(&claude, None)
+        };
+        let launch = resume_launch(&interpreter, &resumed, None, &lane_exec()).unwrap();
+        assert_eq!(
+            launch.args,
+            ["--resume", "abc", "--remote-control", "kcd2-henrys"]
+        );
+        let codex = CliToolId::new("codex").unwrap();
+        let refused = ResumePoint {
+            remote_control: Some("k"),
+            ..point(&codex, None)
+        };
+        assert!(resume_launch(&interpreter, &refused, None, &lane_exec()).is_err());
     }
 
     #[test]

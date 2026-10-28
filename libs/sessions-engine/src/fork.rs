@@ -19,7 +19,7 @@ use super::spawn::{
 };
 
 const BRIEF_MAX_BYTES: usize = 256 * 1024;
-const REMOTE_CONTROL_URL_WAIT: Duration = Duration::from_secs(5);
+pub(super) const REMOTE_CONTROL_URL_WAIT: Duration = Duration::from_secs(5);
 const REMOTE_CONTROL_URL_POLL: Duration = Duration::from_millis(250);
 pub const FORK_HEADER: &str = "[qol session fork]";
 const BRIEF_LEAD: &str = "Your brief is written to ";
@@ -533,7 +533,12 @@ pub(super) fn fork_linked(
         _ => None,
     };
     let remote_control_url = match remote_control && !dry_run {
-        true => await_remote_control_url(terminals, interpreter, &record.session),
+        true => await_remote_control_url(
+            terminals,
+            interpreter,
+            &record.session,
+            REMOTE_CONTROL_URL_WAIT,
+        ),
         false => None,
     };
     qol_runtime::probe!(
@@ -573,13 +578,14 @@ pub(super) fn fork_linked(
     })
 }
 
-fn await_remote_control_url(
+pub(super) fn await_remote_control_url(
     terminals: &TerminalSessionService,
     interpreter: &CliSessionInterpreter,
     session: &str,
+    wait: Duration,
 ) -> Option<String> {
     let binding = session.parse::<SessionBinding>().ok()?;
-    let deadline = Instant::now() + REMOTE_CONTROL_URL_WAIT;
+    let deadline = Instant::now() + wait;
     loop {
         let url = super::bridge::resolve_target(terminals, &binding)
             .ok()
