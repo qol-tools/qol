@@ -527,8 +527,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        fold_text, host_row, join_names, long_age, page, plugin_rows, summary, RowAction,
-        SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
+        check_key_label, fold_text, host_row, join_names, long_age, page, plugin_rows, summary,
+        RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
     };
 
     #[test]
