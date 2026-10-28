@@ -108,6 +108,7 @@ pub(crate) fn open_cached(
             window.scale_factor() as f64,
         );
         view.handle = Some(handle);
+        crate::ui::release_image(view.frozen_image.take(), window);
         view.reset(state, false, window_bounds, selector.sources, reveal, cx);
         let _ = qol_gpui::popup_window::sync_window_layout(
             &title,
