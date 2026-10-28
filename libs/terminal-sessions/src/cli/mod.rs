@@ -24,7 +24,8 @@ pub use builtins::{
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 pub use evidence::{
     CliActivityEvidence, CliComposer, CliDraftStash, CliLaunchProgram, CliModelCatalog,
-    CliRuntimeState, CliScreenEvidence, CliSessionEvidence, CliViewportState,
+    CliRemoteControlToggle, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
+    CliViewportState,
 };
 pub use guard::{read_composer, ComposerGuard, Hold, Typed, Typing, QUIET};
 pub use interpreter::{CliInterpreterError, CliSessionInterpreter};
@@ -190,6 +191,10 @@ pub trait CliSessionStrategy: Send + Sync {
     }
 
     fn remote_control_url(&self, _session: &SessionFacts) -> Option<String> {
+        None
+    }
+
+    fn remote_control_toggle(&self) -> Option<CliRemoteControlToggle> {
         None
     }
 

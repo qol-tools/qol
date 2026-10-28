@@ -11,12 +11,13 @@ use super::switchboard::SWITCHBOARD_KEY;
 
 pub(crate) const ATTENTION_STALE_AFTER_MS: u64 = 30_000;
 
-pub(crate) const SWITCHBOARD_TOOLS: [&str; 8] = [
+pub(crate) const SWITCHBOARD_TOOLS: [&str; 9] = [
     "sessions_list",
     "sessions_closed",
     "session_fork",
     "session_reopen",
     "session_close",
+    "session_remote_control",
     "session_send",
     "session_inbox",
     "session_board",
@@ -280,7 +281,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, excerpt when text is given, closed_at in local time and closed_ago (for a history row, when the conversation last wrote). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit).",
+            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, excerpt when text is given, closed_at in local time and closed_ago (for a history row, when the conversation last wrote). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -498,13 +499,17 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "session_reopen",
             label: "Reopen a closed session",
-            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode, model, effort and Claude account it ran with. It keeps the spawn key it had (a fork from history gets back the key of the fork that launched it), so its mail still reaches it, and a conversation that had none gets a reopen-* key derived from its id, so a second reopen while the first tab is still starting is refused. Refuses a conversation a live session already holds, a key another live conversation holds, and a conversation a park still waits on. Returns the new session token with the key, tool, cwd, title, model and effort, and confirmed: true when the new tab reported the conversation within 15 seconds, which clears it from sessions_closed (ledger_cleared); confirmed: false means the tab is still starting, and CLI Sessions clears the record when it sees the conversation. A tool that exits right after it starts is an error, and the conversation stays in sessions_closed.",
+            description: "Resume a conversation listed by sessions_closed in a new terminal tab at its recorded cwd, with its tool's resume command and the permission mode, model, effort and Claude account it ran with. It keeps the spawn key it had (a fork from history gets back the key of the fork that launched it), so its mail still reaches it, and a conversation that had none gets a reopen-* key derived from its id, so a second reopen while the first tab is still starting is refused. Pass remote_control: true to resume it with Remote Control on, named after its key; a tool without Remote Control refuses it, and the outcome carries remote_control_url when the session shows it within 5 seconds. Refuses a conversation a live session already holds, a key another live conversation holds, and a conversation a park still waits on. Returns the new session token with the key, tool, cwd, title, model and effort, and confirmed: true when the new tab reported the conversation within 15 seconds, which clears it from sessions_closed (ledger_cleared); confirmed: false means the tab is still starting, and CLI Sessions clears the record when it sees the conversation. A tool that exits right after it starts is an error, and the conversation stays in sessions_closed.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "external_id": {
                         "type": "string",
                         "description": "The external_id of a row from sessions_closed",
+                    },
+                    "remote_control": {
+                        "type": "boolean",
+                        "description": "Resume it with Remote Control on, named after its key, so the user can drive it from claude.ai or the Claude app; false by default",
                     },
                 },
                 "required": ["external_id"],
@@ -625,6 +630,25 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
                     },
                 },
                 "required": ["session"],
+            }),
+        },
+        ToolSpec {
+            name: "session_remote_control",
+            label: "Turn Remote Control on or off",
+            description: "Turn Remote Control on or off for a live session, so the user can drive it from claude.ai or the Claude app, or stop that. It types the tool's Remote Control command into the session once its prompt is empty, named after its spawn key when it has one, and for off it picks the disconnect entry of the menu that command opens. Returns the session, key, remote_control (the state now), changed (false when it was already in that state, so nothing was typed) and remote_control_url while it is on. Refuses the calling session, a tool without Remote Control, and a session that does not reach the asked state within 10 seconds.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session": {
+                        "type": "string",
+                        "description": "Stable session token from sessions_list",
+                    },
+                    "on": {
+                        "type": "boolean",
+                        "description": "true turns Remote Control on, false turns it off",
+                    },
+                },
+                "required": ["session", "on"],
             }),
         },
         ToolSpec {
@@ -772,6 +796,7 @@ mod tests {
                 "session_bridge",
                 "session_loop_close",
                 "session_close",
+                "session_remote_control",
                 "session_send",
                 "session_inbox",
                 "session_board"
@@ -780,7 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn the_switchboard_profile_lists_only_its_eight_tools_in_contract_order() {
+    fn the_switchboard_profile_lists_only_its_nine_tools_in_contract_order() {
         let names = mcp_tool_specs_for(McpProfile::Switchboard)
             .into_iter()
             .map(|spec| spec.name)
@@ -793,6 +818,7 @@ mod tests {
                 "session_fork",
                 "session_reopen",
                 "session_close",
+                "session_remote_control",
                 "session_send",
                 "session_inbox",
                 "session_board"

@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use crate::cli::{
     ChatTurn, CliComposer, CliConversation, CliConversationMatch, CliDraftStash, CliLaunchProgram,
-    CliResumeSettings, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy, CliSessionSubscription,
-    CliSessionSubscriptionError, CliTool, CliViewportState,
+    CliRemoteControlToggle, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionEvidence, CliSessionStrategy,
+    CliSessionSubscription, CliSessionSubscriptionError, CliTool, CliViewportState,
 };
 use crate::SessionFacts;
 
@@ -152,6 +152,17 @@ impl CliSessionStrategy for ClaudeStrategy {
         self.metadata
             .remote_control_session(session)
             .map(|id| format!("{REMOTE_CONTROL_URL}{id}"))
+    }
+
+    fn remote_control_toggle(&self) -> Option<CliRemoteControlToggle> {
+        Some(CliRemoteControlToggle {
+            command: "/remote-control",
+            disconnect_choice: "Disconnect this session",
+            menu_cursor: "\u{276F}",
+            menu_up_key: "up",
+            menu_select_key: "enter",
+            menu_cancel_key: "esc",
+        })
     }
 
     fn harness_busy(&self, session: &SessionFacts) -> bool {

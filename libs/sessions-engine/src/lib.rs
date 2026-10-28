@@ -34,6 +34,7 @@ use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
 mod prs;
+mod remote_control;
 pub mod resume;
 mod spawn;
 mod status;

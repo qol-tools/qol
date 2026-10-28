@@ -54,6 +54,39 @@ pub struct CliDraftStash {
     pub indicator: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CliRemoteControlToggle {
+    pub command: &'static str,
+    pub disconnect_choice: &'static str,
+    pub menu_cursor: &'static str,
+    pub menu_up_key: &'static str,
+    pub menu_select_key: &'static str,
+    pub menu_cancel_key: &'static str,
+}
+
+impl CliRemoteControlToggle {
+    pub fn enable_command(&self, name: Option<&str>) -> String {
+        match name {
+            Some(name) => format!("{} {name}", self.command),
+            None => self.command.to_owned(),
+        }
+    }
+
+    pub fn disconnect_menu_open(&self, screen: &str) -> bool {
+        screen
+            .lines()
+            .any(|line| line.trim_end().ends_with(self.disconnect_choice))
+    }
+
+    pub fn disconnect_selected(&self, screen: &str) -> bool {
+        screen.lines().any(|line| {
+            line.trim()
+                .strip_prefix(self.menu_cursor)
+                .is_some_and(|rest| rest.trim() == self.disconnect_choice)
+        })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CliComposer {
     Empty,

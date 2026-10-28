@@ -544,6 +544,41 @@ fn remote_control_on_the_foreground_claude_process_keeps_its_terminal_open() {
 }
 
 #[test]
+fn the_remote_control_menu_is_read_from_the_dialog_claude_draws() {
+    let toggle = ClaudeStrategy::default().remote_control_toggle().unwrap();
+    assert_eq!(
+        toggle.enable_command(Some("kcd2-henrys")),
+        "/remote-control kcd2-henrys"
+    );
+    assert_eq!(toggle.enable_command(None), "/remote-control");
+    let menu = |cursor_on: usize| {
+        let rows = [
+            "Disconnect this session",
+            "Show QR code   Scan with your phone to open this session",
+            "Continue",
+        ];
+        let mut screen = "\u{276F} /remote-control\n  Remote Control\n  This session is available at https://claude.ai/code/session_01X.\n".to_owned();
+        for (index, row) in rows.iter().enumerate() {
+            let cursor = if index == cursor_on { "\u{276F}" } else { " " };
+            screen.push_str(&format!("  {cursor} {row}\n"));
+        }
+        screen.push_str("  Enter to select \u{b7} Esc to continue\n");
+        screen
+    };
+    for (cursor_on, selected) in [(0, true), (1, false), (2, false)] {
+        assert!(toggle.disconnect_menu_open(&menu(cursor_on)));
+        assert_eq!(
+            toggle.disconnect_selected(&menu(cursor_on)),
+            selected,
+            "cursor on row {cursor_on}"
+        );
+    }
+    let prompt = "\u{276F} \n  /remote-control is active \u{b7} Continue here\n";
+    assert!(!toggle.disconnect_menu_open(prompt));
+    assert!(!toggle.disconnect_selected(prompt));
+}
+
+#[test]
 fn a_foreground_claude_process_that_reports_work_reads_busy() {
     for (pid, expected) in [(22, true), (23, false)] {
         let strategy = ClaudeStrategy::with_environment(Arc::new(BusyEnvironment { pid }));
