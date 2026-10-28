@@ -6,6 +6,12 @@ pub enum PanelTone {
     Light,
 }
 
-pub fn current() -> PanelTone {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelLook {
+    pub tone: PanelTone,
+    pub update_accent: Option<(u8, u8, u8)>,
+}
+
+pub fn current() -> PanelLook {
     platform::current()
 }
