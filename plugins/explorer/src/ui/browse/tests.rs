@@ -701,6 +701,17 @@ fn typing_jumps_to_the_first_name_that_starts_with_the_run() {
 }
 
 #[test]
+fn starting_on_a_file_opens_its_folder_with_the_file_under_the_cursor() {
+    let temp = abc_folder();
+    let file = temp.path().join("c.txt");
+    let mut browser = Browser::new(file, temp.path().to_path_buf(), false);
+    settle(&mut browser);
+    assert_eq!(browser.folder(), temp.path());
+    assert_eq!(browser.row_count(), 4);
+    assert_eq!(names(&browser)[browser.cursor()], "c.txt");
+}
+
+#[test]
 fn a_folder_that_cannot_be_read_settles_at_the_top() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing");
