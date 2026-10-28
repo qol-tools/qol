@@ -156,6 +156,11 @@ impl UpdatesView {
         due
     }
 
+    fn comes_into_view(&self) -> bool {
+        self.last_render
+            .is_none_or(|last| last.elapsed() >= POLL_STALE_AFTER)
+    }
+
     fn connection(&self) -> Level {
         self.snapshot
             .as_ref()
@@ -622,6 +627,10 @@ impl Focusable for UpdatesView {
 impl Render for UpdatesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.body_focused = self.focus_handle.is_focused(window);
+        if self.comes_into_view() {
+            cx.background_spawn(async { super::super::check_updates() })
+                .detach();
+        }
         self.last_render = Some(Instant::now());
         self.forget_faded();
         let (rows, fold) = self.page_rows();
