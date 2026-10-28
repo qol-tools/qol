@@ -1,14 +1,22 @@
-use super::super::PanelTone;
+use super::super::{PanelLook, PanelTone};
 use qol_desktop_settings::gsettings;
 
-pub(crate) fn current() -> PanelTone {
+const ST_WARNING: (u8, u8, u8) = (0xf5, 0x79, 0x00);
+
+pub(crate) fn current() -> PanelLook {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
     if is_cinnamon(&desktop) {
-        return gsettings::get("org.cinnamon.theme", "name")
-            .map_or(PanelTone::Dark, |name| tone_from_cinnamon_theme(&name));
+        return PanelLook {
+            tone: gsettings::get("org.cinnamon.theme", "name")
+                .map_or(PanelTone::Dark, |name| tone_from_cinnamon_theme(&name)),
+            update_accent: Some(ST_WARNING),
+        };
     }
-    gsettings::get("org.gnome.desktop.interface", "color-scheme")
-        .map_or(PanelTone::Dark, |scheme| tone_from_color_scheme(&scheme))
+    PanelLook {
+        tone: gsettings::get("org.gnome.desktop.interface", "color-scheme")
+            .map_or(PanelTone::Dark, |scheme| tone_from_color_scheme(&scheme)),
+        update_accent: None,
+    }
 }
 
 fn is_cinnamon(desktop: &str) -> bool {

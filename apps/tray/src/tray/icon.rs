@@ -1,5 +1,5 @@
 use super::platform::{ICON_SIDE_PADDING, ICON_SIZE};
-use super::tone::PanelTone;
+use super::tone::{PanelLook, PanelTone};
 use tray_icon::Icon;
 
 struct ArtSet {
@@ -43,8 +43,14 @@ const fn checked(bytes: &'static [u8], size: u32) -> &'static [u8] {
     bytes
 }
 
-pub fn tray_icon(update: bool, tone: PanelTone) -> Icon {
-    let canvas = pad_sides(art(update, tone), ICON_SIZE, ICON_SIDE_PADDING);
+const DRAWN_ACCENT: (u8, u8, u8) = (0xff, 0x6b, 0x6b);
+
+pub fn tray_icon(update: bool, look: PanelLook) -> Icon {
+    let mut pixels = art(update, look.tone).to_vec();
+    if let Some(accent) = look.update_accent.filter(|_| update) {
+        recolor_accent(&mut pixels, art(false, look.tone), accent);
+    }
+    let canvas = pad_sides(&pixels, ICON_SIZE, ICON_SIDE_PADDING);
     Icon::from_rgba(canvas, ICON_SIZE + 2 * ICON_SIDE_PADDING, ICON_SIZE)
         .expect("embedded tray art is valid")
 }
@@ -61,6 +67,28 @@ fn pad_sides(art: &[u8], size: u32, padding: u32) -> Vec<u8> {
         dst[left..left + art_row].copy_from_slice(src);
     }
     canvas
+}
+
+fn recolor_accent(art: &mut [u8], idle: &[u8], accent: (u8, u8, u8)) {
+    let (drawn_r, drawn_g, drawn_b) = DRAWN_ACCENT;
+    let span = f32::from(drawn_r - drawn_g.max(drawn_b));
+    let shift = [
+        f32::from(accent.0) - f32::from(drawn_r),
+        f32::from(accent.1) - f32::from(drawn_g),
+        f32::from(accent.2) - f32::from(drawn_b),
+    ];
+    for (pixel, idle) in art.chunks_exact_mut(4).zip(idle.chunks_exact(4)) {
+        if pixel == idle {
+            continue;
+        }
+        let excess = f32::from(pixel[0]) - f32::from(pixel[1].max(pixel[2]));
+        let weight = (excess / span).clamp(0.0, 1.0);
+        for (channel, delta) in pixel[..3].iter_mut().zip(shift) {
+            *channel = (f32::from(*channel) + weight * delta)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
 }
 
 fn art(update: bool, tone: PanelTone) -> &'static [u8] {
@@ -115,7 +143,64 @@ mod tests {
     fn tray_icon_decodes_every_variant() {
         for tone in [PanelTone::Dark, PanelTone::Light] {
             for update in [false, true] {
-                let _icon = tray_icon(update, tone);
+                for update_accent in [None, Some((0xf5, 0x79, 0x00))] {
+                    let _icon = tray_icon(
+                        update,
+                        PanelLook {
+                            tone,
+                            update_accent,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recolor_to_the_drawn_accent_leaves_the_art_unchanged() {
+        for tone in [PanelTone::Dark, PanelTone::Light] {
+            for update in [false, true] {
+                let mut recolored = art(update, tone).to_vec();
+                recolor_accent(&mut recolored, art(false, tone), DRAWN_ACCENT);
+                assert_eq!(recolored, art(update, tone), "{tone:?} update={update}");
+            }
+        }
+    }
+
+    #[test]
+    fn recolor_touches_only_pixels_the_update_art_changed() {
+        for tone in [PanelTone::Dark, PanelTone::Light] {
+            let (idle, drawn) = (art(false, tone), art(true, tone));
+            let mut recolored = drawn.to_vec();
+            recolor_accent(&mut recolored, idle, (0x00, 0xff, 0x00));
+            for ((before, after), idle) in drawn
+                .chunks_exact(4)
+                .zip(recolored.chunks_exact(4))
+                .zip(idle.chunks_exact(4))
+            {
+                if before == idle {
+                    assert_eq!(before, after, "{tone:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recolor_paints_the_solid_nut_in_the_accent() {
+        let accent = (0xf5, 0x79, 0x00);
+        for tone in [PanelTone::Dark, PanelTone::Light] {
+            let drawn = art(true, tone);
+            let mut recolored = drawn.to_vec();
+            recolor_accent(&mut recolored, art(false, tone), accent);
+            let solid = drawn
+                .chunks_exact(4)
+                .zip(recolored.chunks_exact(4))
+                .filter(|(before, _)| before[..3] == [0xff, 0x6b, 0x6b])
+                .map(|(_, after)| after)
+                .collect::<Vec<_>>();
+            assert!(!solid.is_empty(), "{tone:?} has no solid nut pixels");
+            for pixel in solid {
+                assert_eq!(pixel[..3], [accent.0, accent.1, accent.2], "{tone:?}");
             }
         }
     }

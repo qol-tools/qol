@@ -1,14 +1,17 @@
-use super::super::PanelTone;
+use super::super::{PanelLook, PanelTone};
 use qol_platform::native::registry::{read_dword, Hive};
 
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 
-pub(crate) fn current() -> PanelTone {
-    tone_from_system_uses_light_theme(
-        read_dword(Hive::CurrentUser, PERSONALIZE, "SystemUsesLightTheme")
-            .ok()
-            .flatten(),
-    )
+pub(crate) fn current() -> PanelLook {
+    PanelLook {
+        tone: tone_from_system_uses_light_theme(
+            read_dword(Hive::CurrentUser, PERSONALIZE, "SystemUsesLightTheme")
+                .ok()
+                .flatten(),
+        ),
+        update_accent: None,
+    }
 }
 
 fn tone_from_system_uses_light_theme(value: Option<u32>) -> PanelTone {
