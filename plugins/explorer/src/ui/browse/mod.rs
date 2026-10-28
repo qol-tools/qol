@@ -111,7 +111,7 @@ pub struct Browser {
 
 impl Browser {
     pub fn new(start: PathBuf, home: PathBuf, show_hidden: bool) -> Self {
-        let (start, landing) = folder_showing(start);
+        let (start, landing, hidden_file) = folder_showing(start);
         let (wake, wakes) = mpsc::unbounded();
         let mut browser = Self {
             home,
@@ -122,7 +122,7 @@ impl Browser {
             cursor: 0,
             picks: Picks::new(),
             jump: Jump::new(),
-            show_hidden,
+            show_hidden: show_hidden || hidden_file,
             order: SortOrder::default(),
             filter: None,
             filtered_out: 0,
@@ -1043,11 +1043,17 @@ fn hidden_by_filter(base: String, text: &str, hidden: usize) -> String {
     }
 }
 
-fn folder_showing(start: PathBuf) -> (PathBuf, Option<PathBuf>) {
-    let is_file = std::fs::metadata(&start).is_ok_and(|metadata| !metadata.is_dir());
-    match start.parent() {
-        Some(parent) if is_file => (parent.to_path_buf(), Some(start)),
-        _ => (start, None),
+fn folder_showing(start: PathBuf) -> (PathBuf, Option<PathBuf>, bool) {
+    let file = std::fs::metadata(&start)
+        .ok()
+        .filter(|metadata| !metadata.is_dir());
+    match (start.parent(), start.file_name(), file) {
+        (Some(parent), Some(name), Some(metadata)) => (
+            parent.to_path_buf(),
+            Some(start.clone()),
+            crate::places::is_hidden(name, &metadata),
+        ),
+        _ => (start, None, false),
     }
 }
 

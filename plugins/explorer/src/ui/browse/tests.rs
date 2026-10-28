@@ -712,6 +712,20 @@ fn starting_on_a_file_opens_its_folder_with_the_file_under_the_cursor() {
 }
 
 #[test]
+fn starting_on_a_hidden_file_shows_hidden_files_to_land_on_it() {
+    let temp = abc_folder();
+    touch(temp.path(), ".hidden");
+    let mut browser = Browser::new(
+        temp.path().join(".hidden"),
+        temp.path().to_path_buf(),
+        false,
+    );
+    settle(&mut browser);
+    assert!(browser.shows_hidden());
+    assert_eq!(names(&browser)[browser.cursor()], ".hidden");
+}
+
+#[test]
 fn a_folder_that_cannot_be_read_settles_at_the_top() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing");
