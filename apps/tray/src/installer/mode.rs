@@ -50,9 +50,12 @@ impl ModeConfig {
 }
 
 pub fn is_production_mode() -> bool {
+    if !cfg!(feature = "dev") {
+        return true;
+    }
     ModeConfig::load()
         .map(|config| !config.is_dev())
-        .unwrap_or(!cfg!(feature = "dev"))
+        .unwrap_or(false)
 }
 
 impl ModeFlag {
@@ -153,5 +156,20 @@ mod tests {
             let loaded = ModeConfig::load().unwrap();
             assert_eq!(loaded.mode, mode, "after set({mode:?})");
         }
+    }
+
+    #[test]
+    fn a_production_build_ignores_a_dev_mode_file() {
+        let _guard = crate::test_support::env_lock().blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _path_guard = crate::paths::push_test_path_root(tmp.path());
+
+        assert_eq!(is_production_mode(), !cfg!(feature = "dev"));
+
+        ModeConfig::set(ModeFlag::Dev).unwrap();
+        assert_eq!(is_production_mode(), !cfg!(feature = "dev"));
+
+        ModeConfig::set(ModeFlag::Prod).unwrap();
+        assert!(is_production_mode());
     }
 }

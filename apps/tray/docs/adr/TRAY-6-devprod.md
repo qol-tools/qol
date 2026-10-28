@@ -51,8 +51,9 @@ graph LR
 
 Implementation notes:
 
-- Capability is compile-time. A prod-feature binary returns `false` from `/api/dev/enabled` regardless of `mode.json`.
-- Runtime mode is file-backed. Missing `mode.json` means prod.
+- Capability is compile-time. A prod-feature binary returns `false` from `/api/dev/enabled` regardless of `mode.json`. Its `is_production_mode()` also ignores `mode.json` and always returns `true`, so dev-only settings never show in production.
+- Runtime mode is file-backed and matters only in a dev-feature binary, where a missing `mode.json` means dev.
+- Login autostart belongs to the production install whenever one exists. A dev-feature binary points it at a worktree build only on a machine with no production install, so a dev session that dies without cleanup cannot change what boots at login.
 - `/api/dev/enabled` remains the unguarded capability probe. In a dev-feature binary, every other `/api/dev/*` route returns 404 while runtime mode is prod.
 - The tray menu toggle writes `mode.json`, but the tray label/check state refreshes only after restart.
 - An already-open UI sees mode changes after refresh/reopen, not live.

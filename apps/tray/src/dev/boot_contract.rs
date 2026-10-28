@@ -174,6 +174,11 @@ fn resolve_for_marker(
         return Ok((BootTarget::Fallback { binary: canonical }, events));
     }
 
+    if let Some(production) = env.production_install() {
+        push_autostart_drift_if_any(&autostart, &production, &mut events);
+        return Ok((BootTarget::Fallback { binary: production }, events));
+    }
+
     let Some(branch) = marker else {
         push_autostart_drift_if_any(&autostart, &canonical, &mut events);
         return Ok((BootTarget::Fallback { binary: canonical }, events));
@@ -562,6 +567,26 @@ mod resolve_dev_tests {
             DriftEvent::SelectionBinaryNotBuilt { .. }
         ));
     }
+
+    #[test]
+    fn dev_set_valid_built_yields_to_production_install() {
+        let tmp = TempDir::new().unwrap();
+        write_marker(tmp.path(), "feat-x");
+        let wt = "/wt";
+        let binary_path = binary_in_worktree(wt);
+        let production = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = dev_env(PathBuf::from("/main/qol-tray"), Some(production.clone()))
+            .with_production(production.clone());
+        let (target, events) = resolve(
+            &env,
+            tmp.path(),
+            &lister(&[("feat-x", wt)]),
+            &probe(&[&binary_path]),
+        )
+        .unwrap();
+        assert_eq!(target, BootTarget::Fallback { binary: production });
+        assert!(events.is_empty(), "{events:?}");
+    }
 }
 
 #[cfg(test)]
@@ -848,6 +873,34 @@ mod set_tests {
     }
 
     #[test]
+    fn set_with_production_install_keeps_autostart_on_production() {
+        let tmp = TempDir::new().unwrap();
+        let wt = "/wt";
+        let binary_path = binary_in_worktree(wt);
+        let production = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(production.clone())
+            .with_production(production.clone());
+        let lister = InMemoryWorktreeLister {
+            map: [("feat-x".to_string(), PathBuf::from(wt))]
+                .into_iter()
+                .collect(),
+        };
+        let probe = InMemoryBinaryProbe {
+            existing: [PathBuf::from(&binary_path)].into_iter().collect(),
+        };
+
+        let selected =
+            set_selected_worktree(&env, tmp.path(), Some("feat-x"), &lister, &probe).unwrap();
+        let repaired = repair_autostart_for_selection(&env, tmp.path(), &lister, &probe).unwrap();
+
+        assert!(!selected.wrote_autostart);
+        assert!(!repaired.wrote_autostart);
+        assert_eq!(read_marker(tmp.path()).as_deref(), Some("feat-x"));
+        assert_eq!(*env.autostart.lock().unwrap(), Some(production));
+    }
+
+    #[test]
     fn set_propagates_writer_error() {
         let tmp = TempDir::new().unwrap();
         let mut env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true);
@@ -975,6 +1028,10 @@ mod heal_tests {
         fn honors_dev_selection(&self) -> bool {
             true
         }
+
+        fn production_install(&self) -> Option<PathBuf> {
+            None
+        }
     }
 
     fn empty_lister() -> InMemoryWorktreeLister {
@@ -1100,6 +1157,44 @@ mod heal_tests {
             .expect("marker file must still exist");
         assert_eq!(marker_after.trim(), "ghost");
         assert!(r.failures.is_empty());
+    }
+
+    #[test]
+    fn heal_rewrites_worktree_autostart_to_production_and_keeps_marker() {
+        let tmp = TempDir::new().unwrap();
+        write_marker(tmp.path(), "feat-x");
+        let wt = "/wt";
+        let binary_path = PathBuf::from(format!(
+            "{}/target/debug/{}",
+            wt,
+            crate::installer::binary_filename()
+        ));
+        let production = PathBuf::from("/home/user/.local/bin/qol-tray");
+        let env = InMemoryBootEnvironment::new(PathBuf::from("/main"), true)
+            .with_autostart(binary_path.clone())
+            .with_production(production.clone());
+        let lister = InMemoryWorktreeLister {
+            map: [("feat-x".to_string(), PathBuf::from(wt))]
+                .into_iter()
+                .collect(),
+        };
+        let probe = InMemoryBinaryProbe {
+            existing: [binary_path].into_iter().collect(),
+        };
+
+        let r = heal_drift_on_startup(&env, tmp.path(), &lister, &probe);
+
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        assert_eq!(
+            r.actions,
+            vec![HealAction::WroteAutostart {
+                binary: production.clone()
+            }]
+        );
+        assert_eq!(*env.autostart.lock().unwrap(), Some(production));
+        let marker_after = std::fs::read_to_string(tmp.path().join("dev/active-worktree.txt"))
+            .expect("marker file must still exist");
+        assert_eq!(marker_after.trim(), "feat-x");
     }
 
     #[test]

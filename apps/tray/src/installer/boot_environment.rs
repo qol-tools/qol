@@ -9,6 +9,7 @@ pub trait BootEnvironment: Send + Sync {
     fn read_autostart_state(&self) -> Result<AutostartState>;
     fn write_autostart_target(&self, binary: &Path) -> Result<bool>;
     fn honors_dev_selection(&self) -> bool;
+    fn production_install(&self) -> Option<PathBuf>;
 }
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ pub(crate) struct InMemoryBootEnvironment {
     pub autostart: std::sync::Mutex<Option<PathBuf>>,
     pub disabled_by_user: bool,
     pub fail_write: bool,
+    pub production: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -29,7 +31,13 @@ impl InMemoryBootEnvironment {
             autostart: std::sync::Mutex::new(None),
             disabled_by_user: false,
             fail_write: false,
+            production: None,
         }
+    }
+
+    pub(crate) fn with_production(mut self, binary: PathBuf) -> Self {
+        self.production = Some(binary);
+        self
     }
 
     pub(crate) fn with_autostart(self, target: PathBuf) -> Self {
@@ -66,6 +74,9 @@ impl BootEnvironment for InMemoryBootEnvironment {
     }
     fn honors_dev_selection(&self) -> bool {
         self.honors_dev
+    }
+    fn production_install(&self) -> Option<PathBuf> {
+        self.production.clone()
     }
 }
 
@@ -104,6 +115,7 @@ mod tests {
             autostart: std::sync::Mutex::new(None),
             disabled_by_user: false,
             fail_write: true,
+            production: None,
         };
         assert!(env.write_autostart_target(Path::new("/x")).is_err());
     }
@@ -180,6 +192,10 @@ fn installed_binary_path() -> Result<PathBuf> {
         qol_apps::tray_install::InstallProfile::Production,
     )?;
     Ok(dir.join(crate::installer::platform::binary_filename()))
+}
+
+fn existing_production_binary() -> Option<PathBuf> {
+    installed_binary_path().ok().filter(|path| path.is_file())
 }
 
 #[cfg(feature = "dev")]
@@ -328,6 +344,9 @@ impl BootEnvironment for PlatformBootEnvironment {
     fn honors_dev_selection(&self) -> bool {
         cfg!(feature = "dev")
     }
+    fn production_install(&self) -> Option<PathBuf> {
+        existing_production_binary()
+    }
 }
 
 pub fn default_boot_environment() -> Arc<dyn BootEnvironment> {
@@ -359,6 +378,9 @@ impl BootEnvironment for InstallBootEnvironment {
     }
     fn honors_dev_selection(&self) -> bool {
         self.honors_dev_selection
+    }
+    fn production_install(&self) -> Option<PathBuf> {
+        existing_production_binary()
     }
 }
 
