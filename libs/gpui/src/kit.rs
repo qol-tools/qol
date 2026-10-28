@@ -111,21 +111,35 @@ impl Kit {
         }
     }
 
-    pub fn focus_ring(&self, ground: Ground) -> Vec<BoxShadow> {
-        vec![
-            BoxShadow {
-                color: rgb(ground.mark).into(),
-                offset: point(px(0.0), px(0.0)),
-                blur_radius: px(0.0),
-                spread_radius: px(FOCUS_RING_EDGE),
-            },
-            BoxShadow {
-                color: rgba(ground.halo.packed()).into(),
-                offset: point(px(0.0), px(0.0)),
-                blur_radius: px(0.0),
-                spread_radius: px(FOCUS_RING_HALO),
-            },
-        ]
+    pub fn focus_ring(&self, ground: Ground, radius: f32, border: f32) -> [Div; 2] {
+        focus_ring_bands(ground).map(|band| {
+            let reach = band.reach + border;
+            div()
+                .absolute()
+                .top(px(-reach))
+                .bottom(px(-reach))
+                .left(px(-reach))
+                .right(px(-reach))
+                .rounded(px(radius - border + reach))
+                .border(px(band.width))
+                .border_color(band.color)
+        })
+    }
+
+    pub fn ringed<E: Styled + ParentElement>(&self, element: E, ground: Ground, radius: f32) -> E {
+        self.ringed_within(element, ground, radius, 0.0)
+    }
+
+    pub fn ringed_within<E: Styled + ParentElement>(
+        &self,
+        element: E,
+        ground: Ground,
+        radius: f32,
+        border: f32,
+    ) -> E {
+        element
+            .relative()
+            .children(self.focus_ring(ground, radius, border))
     }
 
     pub fn window(&self) -> Div {
@@ -937,6 +951,28 @@ pub fn action_row_width(count: usize, size: ActionCircleSize) -> f32 {
     count as f32 * size.px() + (count - 1) as f32 * qol_theme::ACTION_CIRCLE_GAP
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RingBand {
+    reach: f32,
+    width: f32,
+    color: Rgba,
+}
+
+fn focus_ring_bands(ground: Ground) -> [RingBand; 2] {
+    [
+        RingBand {
+            reach: FOCUS_RING_HALO,
+            width: FOCUS_RING_HALO - FOCUS_RING_EDGE,
+            color: rgba(ground.halo.packed()),
+        },
+        RingBand {
+            reach: FOCUS_RING_EDGE,
+            width: FOCUS_RING_EDGE,
+            color: rgb(ground.mark),
+        },
+    ]
+}
+
 pub fn key_cast() -> Vec<BoxShadow> {
     vec![BoxShadow {
         color: rgba(SHADE_WELL).into(),
@@ -1028,13 +1064,13 @@ pub fn enter_window(look: WindowLook) {
 
 #[cfg(test)]
 mod tests {
-    use super::Kit;
     use super::{
         action_row_width, next_selectable, path_label, rail_scrim, row_circle_state,
         ActionCircleGround, ActionCircleSize, ActionCircleState, Chip, CHIP_COUNT_HEIGHT,
         CHIP_HEIGHT, FOCUS_RING_EDGE, FOCUS_RING_HALO, RAIL_SCRIM_ALPHA, RAIL_SCRIM_END,
         RAIL_SCRIM_START,
     };
+    use super::{focus_ring_bands, Kit};
     use gpui::{px, rgb, rgba, Fill, Hsla, SharedString, Styled};
     use qol_theme::{status_look, StatusTone, ThemeMode, DARK_SYSTEM, LIGHT_SYSTEM};
 
@@ -1188,19 +1224,15 @@ mod tests {
                 (kit.grounds.pane, palette.accent),
                 (kit.grounds.band, palette.text_primary),
             ] {
-                let ring = kit.focus_ring(ground);
-                assert_eq!(ring.len(), 2);
+                let [halo, edge] = focus_ring_bands(ground);
 
-                let edge = &ring[0];
-                assert_eq!(f32::from(edge.spread_radius), FOCUS_RING_EDGE);
-                assert_eq!(f32::from(edge.blur_radius), 0.0);
-                assert_eq!(edge.color.a, 1.0);
-                assert_eq!(edge.color, gpui::Hsla::from(gpui::rgb(mark)));
+                assert_eq!(edge.reach, FOCUS_RING_EDGE);
+                assert_eq!(edge.width, FOCUS_RING_EDGE);
+                assert_eq!(edge.color, gpui::rgb(mark));
 
-                let halo = &ring[1];
-                assert_eq!(f32::from(halo.spread_radius), FOCUS_RING_HALO);
+                assert_eq!(halo.reach, FOCUS_RING_HALO);
+                assert_eq!(halo.reach - halo.width, edge.reach);
                 assert!(halo.color.a > 0.0 && halo.color.a < 1.0);
-                assert!(halo.spread_radius > edge.spread_radius);
             }
         }
     }
@@ -1208,8 +1240,8 @@ mod tests {
     #[test]
     fn a_quiet_window_rings_focus_without_a_halo() {
         let quiet = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).grounds.quiet();
-        let ring = Kit::new(ThemeMode::Light, LIGHT_SYSTEM).focus_ring(quiet.pane);
-        assert_eq!(ring[1].color.a, 0.0);
+        let [halo, _] = focus_ring_bands(quiet.pane);
+        assert_eq!(halo.color.a, 0.0);
     }
 
     #[test]

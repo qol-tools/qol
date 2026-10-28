@@ -446,14 +446,20 @@ fn path_field(
     let text = text.render();
     let text_bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
     let measured = text_bounds.clone();
-    let text = div().relative().flex_1().min_w_0().child(text).child(
-        canvas(
-            move |bounds, _, _| measured.set(Some(bounds)),
-            |_, _, _, _| {},
-        )
-        .absolute()
-        .inset_0(),
-    );
+    let text = div()
+        .relative()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .child(text)
+        .child(
+            canvas(
+                move |bounds, _, _| measured.set(Some(bounds)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        );
     let field = div()
         .flex()
         .items_center()
@@ -462,10 +468,9 @@ fn path_field(
         .px(px(qol_theme::SPACE_CELL))
         .rounded(px(qol_theme::RADIUS_CONTROL))
         .bg(rgba(pane.well.packed()))
-        .shadow(kit.focus_ring(pane))
+        .map(|field| kit.ringed(field, pane, qol_theme::RADIUS_CONTROL))
         .text(TextStyle::Code)
         .text_color(rgb(pane.ink))
-        .overflow_hidden()
         .child(text)
         .when_some(handlers.on_caret, |field, on_caret| {
             field
