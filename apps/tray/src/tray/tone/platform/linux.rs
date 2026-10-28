@@ -5,18 +5,21 @@ const ST_WARNING: (u8, u8, u8) = (0xf5, 0x79, 0x3e);
 
 pub(crate) fn current() -> PanelLook {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if is_cinnamon(&desktop) {
-        return PanelLook {
-            tone: gsettings::get("org.cinnamon.theme", "name")
-                .map_or(PanelTone::Dark, |name| tone_from_cinnamon_theme(&name)),
-            update_accent: Some(ST_WARNING),
-        };
-    }
+    let tone = if is_cinnamon(&desktop) {
+        gsettings::get("org.cinnamon.theme", "name")
+            .map_or(PanelTone::Dark, |name| tone_from_cinnamon_theme(&name))
+    } else {
+        gsettings::get("org.gnome.desktop.interface", "color-scheme")
+            .map_or(PanelTone::Dark, |scheme| tone_from_color_scheme(&scheme))
+    };
     PanelLook {
-        tone: gsettings::get("org.gnome.desktop.interface", "color-scheme")
-            .map_or(PanelTone::Dark, |scheme| tone_from_color_scheme(&scheme)),
-        update_accent: None,
+        tone,
+        update_accent: update_accent(&desktop),
     }
+}
+
+fn update_accent(desktop: &str) -> Option<(u8, u8, u8)> {
+    is_cinnamon(desktop).then_some(ST_WARNING)
 }
 
 fn is_cinnamon(desktop: &str) -> bool {
@@ -54,6 +57,19 @@ mod tests {
         ];
         for (desktop, expected) in cases {
             assert_eq!(is_cinnamon(desktop), expected, "{desktop:?}");
+        }
+    }
+
+    #[test]
+    fn only_cinnamon_gets_the_st_warning_accent() {
+        let cases = [
+            ("X-Cinnamon", Some(ST_WARNING)),
+            ("ubuntu:GNOME", None),
+            ("KDE", None),
+            ("", None),
+        ];
+        for (desktop, expected) in cases {
+            assert_eq!(update_accent(desktop), expected, "{desktop:?}");
         }
     }
 

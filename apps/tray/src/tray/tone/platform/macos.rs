@@ -50,4 +50,15 @@ mod tests {
             assert_eq!(tone_from_interface_style(style), expected, "{style:?}");
         }
     }
+
+    #[test]
+    fn badge_red_follows_the_appearance() {
+        let cases = [
+            (PanelTone::Light, SYSTEM_RED_LIGHT),
+            (PanelTone::Dark, SYSTEM_RED_DARK),
+        ];
+        for (tone, expected) in cases {
+            assert_eq!(badge_red(tone), expected, "{tone:?}");
+        }
+    }
 }
