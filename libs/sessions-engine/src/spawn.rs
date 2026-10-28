@@ -43,6 +43,14 @@ fn caller_config_dir() -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(test))]
+fn remember_caller_login() {
+    qol_agent_launch::login::remember_caller();
+}
+
+#[cfg(test)]
+fn remember_caller_login() {}
+
 #[derive(Debug, Serialize)]
 pub(super) struct SpawnOutcome {
     pub(super) session: String,
@@ -1519,6 +1527,7 @@ pub(super) fn spawn_or_reuse(
                             prepared.key.as_str(),
                         )?);
                 }
+                remember_caller_login();
                 qol_agent_launch::account::apply(
                     &mut launch,
                     &prepared.tool_id,
@@ -2098,6 +2107,7 @@ pub(super) fn launch_detached(
     let flags = super::launch_flags::launch_flags(&prepared.tool_id, model, effort)?;
     launch.args.extend(flags);
     launch.args.extend(extra_args.iter().cloned());
+    remember_caller_login();
     qol_agent_launch::account::apply(
         &mut launch,
         &prepared.tool_id,

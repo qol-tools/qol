@@ -1,26 +1,43 @@
 mod platform;
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-const USAGE: &str = "lane-exec --secret NAME --env VAR -- PROGRAM [ARGS...]";
+const USAGE: &str = "lane-exec (--secret NAME --env VAR | --login-file PATH) -- PROGRAM [ARGS...]";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Login {
+    Secret { secret: String, env: String },
+    File(PathBuf),
+}
 
 #[derive(Debug, PartialEq, Eq)]
 struct LaneExec {
-    secret: String,
-    env: String,
+    login: Login,
     program: OsString,
     args: Vec<OsString>,
 }
 
 pub fn run(args: &[OsString]) -> Result<()> {
     let lane = parse(args)?;
-    let token = qol_secrets::read(&lane.secret)
-        .with_context(|| format!("lane-exec could not read secret `{}`", lane.secret))?;
     let mut command = Command::new(&lane.program);
-    command.args(&lane.args).env(&lane.env, token);
+    command.args(&lane.args);
+    match &lane.login {
+        Login::Secret { secret, env } => {
+            let token = qol_secrets::read(secret)
+                .with_context(|| format!("lane-exec could not read secret `{secret}`"))?;
+            command.env(env, token);
+        }
+        Login::File(path) => {
+            for name in crate::login::LOGIN_ENVS {
+                command.env_remove(name);
+            }
+            command.envs(crate::login::read(path)?);
+        }
+    }
     platform::run_in_place(command).with_context(|| {
         format!(
             "lane-exec failed to start {}",
@@ -30,7 +47,7 @@ pub fn run(args: &[OsString]) -> Result<()> {
 }
 
 fn parse(args: &[OsString]) -> Result<LaneExec> {
-    let (mut secret, mut env) = (None, None);
+    let (mut secret, mut env, mut login_file) = (None, None, None);
     let mut rest = args.iter();
     loop {
         let Some(flag) = rest.next() else {
@@ -40,6 +57,7 @@ fn parse(args: &[OsString]) -> Result<LaneExec> {
             Some("--") => break,
             Some("--secret") => &mut secret,
             Some("--env") => &mut env,
+            Some("--login-file") => &mut login_file,
             _ => bail!(
                 "unexpected lane-exec argument `{}`; usage: {USAGE}",
                 flag.to_string_lossy()
@@ -52,15 +70,16 @@ fn parse(args: &[OsString]) -> Result<LaneExec> {
             .with_context(|| format!("{} needs a value; usage: {USAGE}", flag.to_string_lossy()))?;
         *slot = Some(value.to_owned());
     }
-    let (Some(secret), Some(env)) = (secret, env) else {
-        bail!("lane-exec needs both --secret and --env; usage: {USAGE}");
+    let login = match (secret, env, login_file) {
+        (Some(secret), Some(env), None) => Login::Secret { secret, env },
+        (None, None, Some(file)) => Login::File(PathBuf::from(file)),
+        _ => bail!("lane-exec needs --secret with --env, or --login-file alone; usage: {USAGE}"),
     };
     let Some(program) = rest.next().cloned() else {
         bail!("lane-exec needs a program after `--`; usage: {USAGE}");
     };
     Ok(LaneExec {
-        secret,
-        env,
+        login,
         program,
         args: rest.cloned().collect(),
     })
@@ -83,8 +102,10 @@ mod tests {
         assert_eq!(
             lane,
             LaneExec {
-                secret: "s".to_owned(),
-                env: "TOKEN".to_owned(),
+                login: Login::Secret {
+                    secret: "s".to_owned(),
+                    env: "TOKEN".to_owned(),
+                },
                 program: "claude".into(),
                 args: argv(&["--secret", "--", "task"]),
             }
@@ -98,8 +119,26 @@ mod tests {
             argv(&["--secret", "s", "--env", "TOKEN", "--"]),
             argv(&["--secret", "--env", "TOKEN", "--", "claude"]),
             argv(&["--secret", "s", "--env", "TOKEN", "claude"]),
+            argv(&["--secret", "s", "--login-file", "/l", "--", "claude"]),
+            argv(&[
+                "--secret",
+                "s",
+                "--env",
+                "T",
+                "--login-file",
+                "/l",
+                "--",
+                "claude",
+            ]),
         ] {
             assert!(parse(&args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn a_login_file_alone_starts_the_lane() {
+        let lane = parse(&argv(&["--login-file", "/l", "--", "claude", "-p"])).unwrap();
+        assert_eq!(lane.login, Login::File(PathBuf::from("/l")));
+        assert_eq!(lane.args, argv(&["-p"]));
     }
 }
