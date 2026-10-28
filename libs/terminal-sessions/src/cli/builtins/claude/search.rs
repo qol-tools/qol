@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Cursor, Read};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use std::thread;
 
 use aho_corasick::AhoCorasick;
+use serde::de::{self, Deserializer, SeqAccess, Visitor};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::{ChatRole, ChatTurn, CliConversationMatch};
@@ -33,12 +35,16 @@ pub(super) fn search_transcripts(
     if paths.is_empty() || terms.is_empty() {
         return Vec::new();
     }
-    let Ok(searcher) = AhoCorasick::builder()
-        .ascii_case_insensitive(true)
-        .build(terms.iter().map(|term| json_escaped(term)))
-    else {
-        return Vec::new();
-    };
+    let searcher = terms
+        .iter()
+        .all(|term| term.is_ascii())
+        .then(|| {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(terms.iter().map(|term| json_escaped(term)))
+                .ok()
+        })
+        .flatten();
     let mut sized = paths
         .into_iter()
         .map(|path| {
@@ -56,7 +62,7 @@ pub(super) fn search_transcripts(
         for _ in 0..workers {
             scope.spawn(|| {
                 while let Some((_, path)) = sized.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    if let Some(hit) = search_file(path, &searcher, terms) {
+                    if let Some(hit) = search_file(path, searcher.as_ref(), terms) {
                         if let Ok(mut found) = found.lock() {
                             found.push(hit);
                         }
@@ -70,7 +76,7 @@ pub(super) fn search_transcripts(
 
 fn search_file(
     path: &Path,
-    searcher: &AhoCorasick,
+    searcher: Option<&AhoCorasick>,
     terms: &[String],
 ) -> Option<CliConversationMatch> {
     let external_id = path.file_stem()?.to_str()?.to_owned();
@@ -79,10 +85,15 @@ fn search_file(
     let mut seen = vec![false; terms.len()];
     let mut best: Option<Best> = None;
     while let Some(within) = read_line_within(&mut reader, &mut line, LINE_LIMIT).ok()? {
-        if !within || !searcher.is_match(&line) {
-            continue;
-        }
-        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+        let value = if within {
+            if searcher.is_some_and(|searcher| !searcher.is_match(&line)) {
+                continue;
+            }
+            serde_json::from_slice::<Value>(&line).ok()
+        } else {
+            read_oversized_line(&line, &mut reader).ok()?
+        };
+        let Some(value) = value else {
             continue;
         };
         for turn in searchable_turns(&value) {
@@ -111,30 +122,158 @@ fn read_line_within(
     reader: &mut impl BufRead,
     line: &mut Vec<u8>,
     limit: usize,
-) -> std::io::Result<Option<bool>> {
+) -> io::Result<Option<bool>> {
     line.clear();
-    let mut read_any = false;
-    let mut within = true;
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
-            return Ok(read_any.then_some(within));
+            return Ok((!line.is_empty()).then_some(true));
         }
-        read_any = true;
         let (end, done) = match memchr::memchr(b'\n', available) {
             Some(index) => (index + 1, true),
             None => (available.len(), false),
         };
-        if within && line.len() + end <= limit {
-            line.extend_from_slice(&available[..end]);
-        } else {
-            within = false;
-            line.clear();
+        let taken = end.min(limit - line.len());
+        line.extend_from_slice(&available[..taken]);
+        reader.consume(taken);
+        if taken < end {
+            return Ok(Some(false));
         }
-        reader.consume(end);
         if done {
-            return Ok(Some(within));
+            return Ok(Some(true));
         }
+    }
+}
+
+fn read_oversized_line(head: &[u8], reader: &mut impl BufRead) -> io::Result<Option<Value>> {
+    let mut rest = RestOfLine {
+        reader,
+        ended: false,
+    };
+    let parsed = serde_json::from_reader::<_, SlimLine>(Cursor::new(head).chain(&mut rest));
+    io::copy(&mut rest, &mut io::sink())?;
+    Ok(parsed.ok().and_then(|slim| serde_json::to_value(slim).ok()))
+}
+
+struct RestOfLine<'a, R> {
+    reader: &'a mut R,
+    ended: bool,
+}
+
+impl<R: BufRead> Read for RestOfLine<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.ended {
+            return Ok(0);
+        }
+        let available = self.reader.fill_buf()?;
+        let (end, newline) = match memchr::memchr(b'\n', available) {
+            Some(index) => (index + 1, true),
+            None => (available.len(), false),
+        };
+        let count = end.min(buf.len());
+        buf[..count].copy_from_slice(&available[..count]);
+        self.reader.consume(count);
+        self.ended = end == 0 || (newline && count == end);
+        Ok(count)
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct SlimLine {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(
+        rename = "isSidechain",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    sidechain: Option<bool>,
+    #[serde(rename = "isMeta", default, skip_serializing_if = "Option::is_none")]
+    meta: Option<bool>,
+    #[serde(
+        rename = "promptSource",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    prompt_source: Option<String>,
+    #[serde(
+        rename = "isCompactSummary",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    compact_summary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<SlimMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attachment: Option<SlimAttachment>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SlimMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content: Option<SlimContent>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SlimAttachment {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(
+        rename = "commandMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    command_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SlimContent {
+    Text(String),
+    Blocks(Vec<SlimBlock>),
+}
+
+#[derive(Deserialize, Serialize)]
+struct SlimBlock {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for SlimContent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ContentVisitor;
+
+        impl<'de> Visitor<'de> for ContentVisitor {
+            type Value = SlimContent;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or an array of content blocks")
+            }
+
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<SlimContent, E> {
+                Ok(SlimContent::Text(text.to_owned()))
+            }
+
+            fn visit_string<E: de::Error>(self, text: String) -> Result<SlimContent, E> {
+                Ok(SlimContent::Text(text))
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SlimContent, A::Error> {
+                let mut blocks = Vec::new();
+                while let Some(block) = seq.next_element()? {
+                    blocks.push(block);
+                }
+                Ok(SlimContent::Blocks(blocks))
+            }
+        }
+
+        deserializer.deserialize_any(ContentVisitor)
     }
 }
 
@@ -395,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn a_line_over_the_limit_is_skipped_and_the_next_line_is_read() {
+    fn a_line_over_the_limit_stops_at_the_limit_and_its_rest_reads_to_the_newline() {
         let mut reader = std::io::Cursor::new(b"short\nmuch-longer-line\nok".to_vec());
         let mut line = Vec::new();
 
@@ -408,13 +547,59 @@ mod tests {
             read_line_within(&mut reader, &mut line, 8).unwrap(),
             Some(false)
         );
-        assert!(line.is_empty());
+        assert_eq!(line, b"much-lon");
+        let mut rest = Vec::new();
+        RestOfLine {
+            reader: &mut reader,
+            ended: false,
+        }
+        .read_to_end(&mut rest)
+        .unwrap();
+        assert_eq!(rest, b"ger-line\n");
         assert_eq!(
             read_line_within(&mut reader, &mut line, 8).unwrap(),
             Some(true)
         );
         assert_eq!(line, b"ok");
         assert_eq!(read_line_within(&mut reader, &mut line, 8).unwrap(), None);
+    }
+
+    #[test]
+    fn a_line_over_the_limit_is_searched_without_its_tool_results_and_the_next_line_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let oversized = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "x".repeat(LINE_LIMIT) },
+                { "type": "text", "text": "find the needle" },
+            ] },
+        })
+        .to_string();
+        let path = write(
+            dir.path(),
+            "abc",
+            &[oversized, assistant("and the haystack")],
+        );
+
+        let found = search_transcripts(vec![path.clone()], &terms(&["needle", "haystack"]));
+        assert_eq!(
+            found,
+            [CliConversationMatch {
+                external_id: "abc".to_owned(),
+                excerpt: "user: find the needle".to_owned(),
+            }]
+        );
+        assert!(search_transcripts(vec![path], &terms(&["xxxx"])).is_empty());
+    }
+
+    #[test]
+    fn a_non_ascii_term_matches_the_same_word_in_capitals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "abc", &[user("die Größe ÄNDERN")]);
+
+        let found = search_transcripts(vec![path], &terms(&["ändern"]));
+
+        assert_eq!(found.len(), 1, "{found:?}");
     }
 
     #[test]

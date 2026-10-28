@@ -26,6 +26,12 @@ struct LiveConversation {
     token: String,
 }
 
+enum ClosedOmission {
+    Parked,
+    MissingCwd,
+    Lane,
+}
+
 #[cfg(test)]
 const TEST_ROUND_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -658,10 +664,24 @@ impl McpSessionServer {
                     .as_deref()
                     .is_some_and(|query| !closed_matches(entry, query))
         };
+        let left_out = |record: &qol_terminal_sessions::closed::ClosedRecord| {
+            if parks
+                .iter()
+                .any(|park| park.external_id == record.external_id)
+            {
+                Some(ClosedOmission::Parked)
+            } else if !std::path::Path::new(&record.cwd).is_dir() {
+                Some(ClosedOmission::MissingCwd)
+            } else if record.lane && !include_lanes {
+                Some(ClosedOmission::Lane)
+            } else {
+                None
+            }
+        };
         let found = terms.as_deref().map(|terms| {
             let candidates = entries
                 .iter()
-                .filter(|entry| !held_or_unmatched(entry))
+                .filter(|entry| !held_or_unmatched(entry) && left_out(&entry.record).is_none())
                 .map(|entry| entry.record.external_id.clone())
                 .collect();
             self.history().search(now, &candidates, terms)
@@ -680,15 +700,12 @@ impl McpSessionServer {
                 },
                 None => None,
             };
-            if parks
-                .iter()
-                .any(|park| park.external_id == record.external_id)
-            {
-                omitted.parked += 1;
-            } else if !std::path::Path::new(&record.cwd).is_dir() {
-                omitted.missing_cwd += 1;
-            } else if record.lane && !include_lanes {
-                omitted.lanes += 1;
+            if let Some(omission) = left_out(record) {
+                match omission {
+                    ClosedOmission::Parked => omitted.parked += 1,
+                    ClosedOmission::MissingCwd => omitted.missing_cwd += 1,
+                    ClosedOmission::Lane => omitted.lanes += 1,
+                }
             } else if closed.len() < limit {
                 closed.push(super::contract::closed_row(record, excerpt, now));
             } else {
@@ -2992,6 +3009,13 @@ mod tests {
         let history = vec![
             conversation("mail", &cwd, "the mail was flagged by Nexus mods today", 10),
             conversation("other", &cwd, "fix the flaky test", 20),
+            conversation("gone", "/no/such/dir", "flagged by nexus", 30),
+            conversation(
+                "lane",
+                &cwd,
+                "[qol session bridge]\nAct as the implementation agent, flagged by nexus",
+                40,
+            ),
         ];
         let server = history_server(&backend, &root, true, &[], history);
 
@@ -3007,9 +3031,21 @@ mod tests {
             listed["omitted"],
             json!({ "lanes": 0, "missing_cwd": 0, "parked": 0, "beyond_limit": 0 })
         );
+        assert_eq!(
+            closed_ids(&tool_json(&tool_call(
+                &server,
+                "sessions_closed",
+                json!({ "text": "nexus", "include_lanes": true }),
+            ))),
+            ["mail", "lane"]
+        );
 
         let plain = tool_json(&tool_call(&server, "sessions_closed", json!({})));
         assert_eq!(closed_ids(&plain), ["mail", "other"], "{plain}");
+        assert_eq!(
+            plain["omitted"],
+            json!({ "lanes": 1, "missing_cwd": 1, "parked": 0, "beyond_limit": 0 })
+        );
         assert!(plain["closed"][0].get("excerpt").is_none(), "{plain}");
 
         let narrowed = tool_json(&tool_call(
