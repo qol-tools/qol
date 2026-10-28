@@ -184,9 +184,11 @@ impl RenderOnce for SettingsTextField {
             .when(band, |field| {
                 field.border(px(qol_theme::LINE)).border_color(rgba(0))
             })
-            .when(focused, |field| field.shadow(kit.focus_ring(ground)))
-            .text(TextStyle::Code)
-            .overflow_hidden();
+            .when(focused, |field| {
+                let border = if band { qol_theme::LINE } else { 0.0 };
+                kit.ringed_within(field, ground, qol_theme::RADIUS_CONTROL, border)
+            })
+            .text(TextStyle::Code);
         let field = ground_bg(
             field,
             rgba(ground.well.packed()),
@@ -197,6 +199,7 @@ impl RenderOnce for SettingsTextField {
                 div()
                     .flex_1()
                     .min_w_0()
+                    .overflow_hidden()
                     .when(truncate_plain, |text| text.truncate()),
                 rgb(rest_text),
                 hover_text.map(rgb),

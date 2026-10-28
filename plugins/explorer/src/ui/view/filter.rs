@@ -26,7 +26,7 @@ pub(super) fn render(field: &TextField, window: &mut Window) -> AnyElement {
         })
         .placeholder("Filter names", rgb(pane.faint).into())
         .render();
-    div()
+    let shell = div()
         .flex_none()
         .w(px(WIDTH))
         .h(px(HEIGHT_CONTROL))
@@ -35,10 +35,15 @@ pub(super) fn render(field: &TextField, window: &mut Window) -> AnyElement {
         .items_center()
         .rounded(px(RADIUS_CONTROL))
         .bg(rgba(pane.well.packed()))
-        .shadow(kit.focus_ring(pane))
         .text(STYLE)
         .text_color(rgb(pane.ink))
-        .overflow_hidden()
-        .child(div().relative().flex_1().min_w_0().child(text))
-        .into_any_element()
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .child(text),
+        );
+    kit.ringed(shell, pane, RADIUS_CONTROL).into_any_element()
 }

@@ -409,10 +409,10 @@ pub fn settings_label_group(
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 
-pub fn settings_card<E: Styled>(card: E, selected: bool, kit: Kit) -> E {
+pub fn settings_card<E: Styled + ParentElement>(card: E, selected: bool, kit: Kit) -> E {
     let card = card.rounded(px(qol_theme::RADIUS_CARD));
     if selected {
-        card.shadow(kit.focus_ring(kit.grounds.pane))
+        kit.ringed(card, kit.grounds.pane, qol_theme::RADIUS_CARD)
     } else {
         card
     }

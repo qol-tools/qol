@@ -481,14 +481,16 @@ fn scrub_field(
                     .bottom(px(BOLT / 2.0))
             },
         )
-    }))
-    .when(cue.editing, |field| field.shadow(kit.focus_ring(ground)));
+    }));
     div()
         .relative()
         .flex_none()
         .w(px(width))
         .h(px(SliderStyle::Compact.track_height()))
         .child(field)
+        .when(cue.editing, |track| {
+            kit.ringed(track, ground, qol_theme::RADIUS_CONTROL)
+        })
         .children(
             (cue.marked || cue.bloom.is_some()).then(|| marker_mark(fraction, cue, ground, hover)),
         )
@@ -556,7 +558,9 @@ pub(in crate::settings_panel) fn number_field(
         .px(px(qol_theme::SPACE_INSET))
         .rounded(px(qol_theme::RADIUS_CONTROL))
         .child(value)
-        .when(cue.editing, |chip| chip.shadow(kit.focus_ring(ground)));
+        .when(cue.editing, |chip| {
+            kit.ringed(chip, ground, qol_theme::RADIUS_CONTROL)
+        });
     cell.child(ground_bg(
         chip,
         rgba(ground.well.packed()),

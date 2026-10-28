@@ -100,7 +100,9 @@ impl RenderOnce for SettingsKeyCombination {
             .items_center()
             .h(px(qol_theme::HEIGHT_INLINE))
             .rounded(px(qol_theme::RADIUS_CONTROL))
-            .when(editing, |combo| combo.shadow(kit().focus_ring(ground)))
+            .when(editing, |combo| {
+                kit().ringed(combo, ground, qol_theme::RADIUS_CONTROL)
+            })
             .text(TextStyle::Key);
         let Some(caps) = key_caps(&self.text).filter(|_| !self.recording) else {
             return ground_bg(
