@@ -57,6 +57,12 @@ pub struct CliConversation {
     pub settings: CliResumeSettings,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliConversationMatch {
+    pub external_id: String,
+    pub excerpt: String,
+}
+
 pub trait CliSessionStrategy: Send + Sync {
     fn tool(&self) -> &CliTool;
 
@@ -167,6 +173,15 @@ pub trait CliSessionStrategy: Send + Sync {
     }
 
     fn closed_conversations(&self, _since: std::time::SystemTime) -> Vec<CliConversation> {
+        Vec::new()
+    }
+
+    fn search_conversations(
+        &self,
+        _since: std::time::SystemTime,
+        _external_ids: &std::collections::HashSet<String>,
+        _terms: &[String],
+    ) -> Vec<CliConversationMatch> {
         Vec::new()
     }
 

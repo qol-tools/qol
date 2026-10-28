@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ use crate::{
 use super::builtins::GenericStrategy;
 use super::model::normalize_display_name;
 use super::{
-    ChatTurn, CliComposer, CliConversation, CliDraftStash, CliLaunchProgram, CliModelCatalog,
-    CliResumeSettings, CliRuntimeState, CliScreenEvidence, CliSessionChangeHandler,
-    CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription, CliSessionSubscriptionError,
-    CliTool, CliToolId,
+    ChatTurn, CliComposer, CliConversation, CliConversationMatch, CliDraftStash, CliLaunchProgram,
+    CliModelCatalog, CliResumeSettings, CliRuntimeState, CliScreenEvidence,
+    CliSessionChangeHandler, CliSessionDescriptor, CliSessionStrategy, CliSessionSubscription,
+    CliSessionSubscriptionError, CliTool, CliToolId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -197,6 +197,18 @@ impl CliSessionInterpreter {
 
     pub fn resume_settings(&self, session: &SessionFacts) -> CliResumeSettings {
         self.strategy_for(session).resume_settings(session)
+    }
+
+    pub fn search_conversations(
+        &self,
+        since: std::time::SystemTime,
+        external_ids: &HashSet<String>,
+        terms: &[String],
+    ) -> Vec<CliConversationMatch> {
+        self.strategies
+            .iter()
+            .flat_map(|strategy| strategy.search_conversations(since, external_ids, terms))
+            .collect()
     }
 
     pub fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {

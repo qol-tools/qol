@@ -7567,6 +7567,7 @@ dependencies = [
 name = "qol-terminal-sessions"
 version = "1.0.0"
 dependencies = [
+ "aho-corasick",
  "chrono",
  "dirs 6.0.0",
  "qol-agent-homes",
