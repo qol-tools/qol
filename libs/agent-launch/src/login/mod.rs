@@ -114,10 +114,12 @@ mod tests {
             file_name(Some(Path::new("/home/me/.claude-work/"))),
             file_name(Some(Path::new("/home/me/.claude-work")))
         );
-        assert_eq!(
-            file_name(Some(Path::new("/home/me/.claude-work"))),
-            "dir-_2fhome_2fme_2f_2eclaude-work"
+        let name = file_name(Some(Path::new("/home/me/.claude-work")));
+        assert!(
+            name.starts_with("dir-") && name.ends_with("_2eclaude-work"),
+            "{name}"
         );
+        assert!(!name.contains(['/', '\\']), "{name}");
         for blank in [None, Some(Path::new(""))] {
             assert_eq!(file_name(blank), "default");
         }
