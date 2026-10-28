@@ -183,7 +183,7 @@ fn app() -> HeadlessApp {
         )
         .command(command(
             "install",
-            "Install built qol applications and plugins. --dev builds with the dev feature and installs the development runtime beside the production install, in its own directory.",
+            "Install built qol applications and plugins. --dev builds only the development tray and installs it beside the production install, in its own directory. It leaves the plugins folder and the workspace build record to the production install.",
             "qol install",
             "Use -v to show child command output.",
             "Installation progress on stdout; diagnostics on stderr.",

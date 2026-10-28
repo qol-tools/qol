@@ -25,12 +25,9 @@ pub(super) async fn dev_enabled() -> Json<bool> {
 }
 
 async fn current_dev() -> bool {
-    let mode_is_dev = tokio::task::spawn_blocking(|| {
-        crate::mode::ModeConfig::load().unwrap_or_default().is_dev()
-    })
-    .await
-    .unwrap_or(false);
-    cfg!(feature = "dev") && mode_is_dev
+    tokio::task::spawn_blocking(|| !crate::mode::is_production_mode())
+        .await
+        .unwrap_or(false)
 }
 
 pub(super) async fn get_version() -> &'static str {

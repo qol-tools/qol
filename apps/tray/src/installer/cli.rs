@@ -41,6 +41,7 @@ struct InstallSteps {
     claims_active_install_id: bool,
     removes_legacy_install: bool,
     warns_about_system_install: bool,
+    installs_workspace_plugins: bool,
 }
 
 impl InstallSteps {
@@ -53,6 +54,7 @@ impl InstallSteps {
                 claims_active_install_id: true,
                 removes_legacy_install: true,
                 warns_about_system_install: true,
+                installs_workspace_plugins: true,
             },
             InstallProfile::Development => Self {
                 stops_running_tray: false,
@@ -61,6 +63,7 @@ impl InstallSteps {
                 claims_active_install_id: false,
                 removes_legacy_install: false,
                 warns_about_system_install: false,
+                installs_workspace_plugins: false,
             },
         }
     }
@@ -122,7 +125,9 @@ fn run_install(
     platform::set_executable_permissions(&installed_binary)?;
     let install_id = register_install_id(&installed_binary, steps.claims_active_install_id)?;
     let plugins_dir = files::ensure_plugin_dir()?;
-    install_workspace_plugins(workspace_root, &plugins_dir)?;
+    if steps.installs_workspace_plugins {
+        install_workspace_plugins(workspace_root, &plugins_dir)?;
+    }
     #[cfg(feature = "dev")]
     if dev_mode {
         let env = boot_environment::InstallBootEnvironment {
@@ -231,6 +236,7 @@ mod tests {
                 claims_active_install_id: true,
                 removes_legacy_install: true,
                 warns_about_system_install: true,
+                installs_workspace_plugins: true,
             }
         );
         assert_eq!(
@@ -242,6 +248,7 @@ mod tests {
                 claims_active_install_id: false,
                 removes_legacy_install: false,
                 warns_about_system_install: false,
+                installs_workspace_plugins: false,
             }
         );
     }
