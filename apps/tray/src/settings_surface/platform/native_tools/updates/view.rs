@@ -24,7 +24,8 @@ use qol_gpui::surface::SurfaceDismisser;
 
 use super::data;
 use super::model::{
-    page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot, ValueTone,
+    can_check, page, RowAction, Summary, SummaryDot, TargetRow, TargetState, UpdatesSnapshot,
+    ValueTone,
 };
 
 const MAX_VISIBLE: usize = 10;
@@ -153,6 +154,11 @@ impl UpdatesView {
             self.poll_skipped = true;
         }
         due
+    }
+
+    fn comes_into_view(&self) -> bool {
+        self.last_render
+            .is_none_or(|last| last.elapsed() >= POLL_STALE_AFTER)
     }
 
     fn connection(&self) -> Level {
@@ -351,6 +357,12 @@ impl UpdatesView {
         if matches!(key, "escape" | "esc") {
             self.escape(window, cx);
             cx.notify();
+            return;
+        }
+        if key == "c" && !event.keystroke.modifiers.modified() {
+            if self.snapshot.as_ref().is_some_and(can_check) {
+                self.run_action(RowAction::Check, cx);
+            }
             return;
         }
         match intent(key, None, false) {
@@ -589,8 +601,13 @@ impl CustomSettingsBreadcrumbs for UpdatesView {
     fn settings_hints(&self) -> Option<CustomHints> {
         let (rows, _) = self.page_rows();
         let mut left = Vec::new();
-        if let Some(label) = rows.get(self.selected).and_then(PageRow::action_label) {
+        let selected = rows.get(self.selected);
+        if let Some(label) = selected.and_then(PageRow::action_label) {
             left.push(SettingsHint::new(Key::ENTER, label.to_lowercase()));
+        }
+        let enter_checks = selected.and_then(PageRow::action) == Some(&RowAction::Check);
+        if !enter_checks && self.snapshot.as_ref().is_some_and(can_check) {
+            left.push(SettingsHint::new(Key::letter('c'), "check now"));
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
@@ -610,6 +627,10 @@ impl Focusable for UpdatesView {
 impl Render for UpdatesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.body_focused = self.focus_handle.is_focused(window);
+        if self.comes_into_view() {
+            cx.background_spawn(async { super::super::check_updates() })
+                .detach();
+        }
         self.last_render = Some(Instant::now());
         self.forget_faded();
         let (rows, fold) = self.page_rows();

@@ -494,6 +494,10 @@ fn pending_count(snapshot: &UpdatesSnapshot, state: TargetState) -> usize {
             .count()
 }
 
+pub(super) fn can_check(snapshot: &UpdatesSnapshot) -> bool {
+    !snapshot.checking && !job_running(snapshot)
+}
+
 fn job_running(snapshot: &UpdatesSnapshot) -> bool {
     snapshot.running
         || matches!(
@@ -523,8 +527,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        fold_text, host_row, join_names, long_age, page, plugin_rows, summary, RowAction,
-        SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
+        can_check, fold_text, host_row, join_names, long_age, page, plugin_rows, summary,
+        RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
     };
 
     #[test]
@@ -1050,6 +1054,31 @@ mod tests {
         assert!(row.busy);
         assert_eq!(row.dot, None);
         assert_eq!(row.label, "1 update waiting");
+    }
+
+    #[test]
+    fn a_check_can_start_with_updates_waiting_but_not_while_one_runs() {
+        let waiting = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Available),
+            vec![target("cli", "CLI Sessions", TargetState::Available)],
+        );
+        assert_eq!(summary(&waiting).action, Some(RowAction::UpdateAll));
+        assert!(can_check(&waiting));
+        let checking = UpdatesSnapshot {
+            checking: true,
+            ..waiting.clone()
+        };
+        assert!(!can_check(&checking));
+        let updating = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Queued),
+            vec![target("cli", "CLI Sessions", TargetState::Updating)],
+        );
+        assert!(!can_check(&updating));
+        let running = UpdatesSnapshot {
+            running: true,
+            ..waiting
+        };
+        assert!(!can_check(&running));
     }
 
     #[test]
