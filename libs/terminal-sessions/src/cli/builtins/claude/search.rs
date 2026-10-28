@@ -54,13 +54,12 @@ pub(super) fn search_transcripts(
     let found = Mutex::new(Vec::new());
     thread::scope(|scope| {
         for _ in 0..workers {
-            scope.spawn(|| loop {
-                let Some((_, path)) = sized.get(next.fetch_add(1, Ordering::Relaxed)) else {
-                    break;
-                };
-                if let Some(hit) = search_file(path, &searcher, terms) {
-                    if let Ok(mut found) = found.lock() {
-                        found.push(hit);
+            scope.spawn(|| {
+                while let Some((_, path)) = sized.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    if let Some(hit) = search_file(path, &searcher, terms) {
+                        if let Ok(mut found) = found.lock() {
+                            found.push(hit);
+                        }
                     }
                 }
             });
