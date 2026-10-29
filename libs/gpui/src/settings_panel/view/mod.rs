@@ -5224,11 +5224,9 @@ impl SettingsPanelView {
                     body_bounds.get(),
                     page_scroll.as_ref().map(ScrollHandle::bounds)
                 );
-                if dismisser.user_sized() {
-                    return;
-                }
+                let maximized = window.is_maximized() || window.is_fullscreen();
                 let current = window.viewport_size().height.to_f64() as f32;
-                if (target - current).abs() <= 1.0 {
+                if !refits_to_page(dismisser.user_sized(), maximized, target, current) {
                     return;
                 }
                 let next = size(dismisser.window_size().width, px(target));
@@ -6102,6 +6100,10 @@ fn list_fit_updates(
     updates
 }
 
+fn refits_to_page(user_sized: bool, maximized: bool, target: f32, current: f32) -> bool {
+    !user_sized && !maximized && (target - current).abs() > 1.0
+}
+
 fn source_window_height_for(
     rows: &[Row],
     sections: &[RowSection],
@@ -6553,14 +6555,15 @@ mod tests {
         next_settle, number_cue, number_drag_effect, number_finish_plan, number_limit,
         number_preview, number_release, number_unit, parsed_color, parsed_number,
         pending_edit_on_scrub, pointer_keys, pop_level, pressed_slider, push_level, query_is_due,
-        rail_child_index, rail_group_breaks, release_slider_dispatch, row_body_height,
-        row_description, schedule_slider_generation, slider_fraction, slider_generation_current,
-        slider_protected, source_window_height_for, stepped_number, text_or_placeholder,
-        transition_in_flight, transition_policy, type_number, widest_number, AppliedQueryPayloads,
-        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberCue,
-        NumberDragEffect, NumberFinishPlan, NumberRelease, NumberSpec, ObjectArrayState,
-        PendingEdit, Row, RowControl, RowSection, SettingsDestination, SliderPress, SliderStyle,
-        TransitionAction, TransitionTracker, SCRUB_SLOP,
+        rail_child_index, rail_group_breaks, refits_to_page, release_slider_dispatch,
+        row_body_height, row_description, schedule_slider_generation, slider_fraction,
+        slider_generation_current, slider_protected, source_window_height_for, stepped_number,
+        text_or_placeholder, transition_in_flight, transition_policy, type_number, widest_number,
+        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        LiveNumberDispatch, NumberCue, NumberDragEffect, NumberFinishPlan, NumberRelease,
+        NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
+        SettingsDestination, SliderPress, SliderStyle, TransitionAction, TransitionTracker,
+        SCRUB_SLOP,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -9416,6 +9419,37 @@ active_value_from = "active"
             Vec::new(),
             "applying the updates settles the list"
         );
+    }
+
+    #[test]
+    fn only_a_panel_nobody_sized_or_maximized_refits_to_its_page() {
+        let cases = [
+            (
+                false,
+                false,
+                600.0,
+                724.0,
+                true,
+                "a panel that follows its page",
+            ),
+            (
+                true,
+                false,
+                600.0,
+                541.0,
+                false,
+                "a panel window-actions or a drag sized",
+            ),
+            (false, true, 600.0, 949.0, false, "a maximized panel"),
+            (false, false, 600.0, 600.5, false, "native rounding"),
+        ];
+        for (user_sized, maximized, target, current, expected, note) in cases {
+            assert_eq!(
+                refits_to_page(user_sized, maximized, target, current),
+                expected,
+                "{note}"
+            );
+        }
     }
 
     #[test]
