@@ -2,15 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
-use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
 use qol_terminal_sessions::closed::{self, ClosedRecord};
 
 use super::bridge::BRIDGE_HEADER;
 use super::fork::{brief_in_prompt, ForkStore, FORK_HEADER};
 
 const PROMPT_TITLE_CHARS: usize = 80;
-const RESERVED_PROMPT_PREFIX: &str = "[qol ";
-const HARNESS_BLOCK_PREFIX: char = '<';
 
 pub(super) struct ClosedEntry {
     pub(super) record: ClosedRecord,
@@ -135,11 +133,7 @@ fn same_dir(left: &Path, right: &Path) -> bool {
 }
 
 fn last_prompt(conversation: &CliConversation) -> Option<String> {
-    conversation
-        .recent_prompts
-        .iter()
-        .filter(|prompt| !prompt.starts_with(HARNESS_BLOCK_PREFIX))
-        .find_map(|prompt| prompt_title(prompt))
+    conversation.last_prompt.as_deref().and_then(prompt_title)
 }
 
 fn prompt_title(prompt: &str) -> Option<String> {

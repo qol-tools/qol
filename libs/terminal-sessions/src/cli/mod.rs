@@ -38,6 +38,13 @@ pub use subscription::{CliSessionSubscription, CliSessionSubscriptionError};
 
 pub type CliSessionChangeHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 
+pub const RESERVED_PROMPT_PREFIX: &str = "[qol ";
+const HARNESS_BLOCK_PREFIX: char = '<';
+
+pub fn is_typed_prompt(prompt: &str) -> bool {
+    !prompt.starts_with(RESERVED_PROMPT_PREFIX) && !prompt.starts_with(HARNESS_BLOCK_PREFIX)
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CliResumeSettings {
     pub permission_mode: Option<String>,
@@ -53,7 +60,7 @@ pub struct CliConversation {
     pub cwd: String,
     pub title: Option<String>,
     pub first_prompt: Option<String>,
-    pub recent_prompts: Vec<String>,
+    pub last_prompt: Option<String>,
     pub last_active: u64,
     pub pr_urls: Vec<String>,
     pub settings: CliResumeSettings,

@@ -2876,7 +2876,7 @@ mod tests {
             cwd: cwd.to_owned(),
             title: None,
             first_prompt: Some(first_prompt.to_owned()),
-            recent_prompts: Vec::new(),
+            last_prompt: None,
             last_active: super::super::mailbox::now_ms() / 1_000 - age_secs,
             pr_urls: Vec::new(),
             settings: qol_terminal_sessions::cli::CliResumeSettings::default(),
@@ -2914,11 +2914,7 @@ mod tests {
         std::fs::create_dir_all(&switchboard).unwrap();
         let mut ledgered = conversation("abc", &cwd, "old prompt", 10);
         ledgered.pr_urls = vec!["https://github.com/o/r/pull/12".to_owned()];
-        ledgered.recent_prompts = vec![
-            "[qol session] 1 new message from child. Read it with session_inbox.".to_owned(),
-            "<task-notification>done</task-notification>".to_owned(),
-            "tune the reload timing\nwith details".to_owned(),
-        ];
+        ledgered.last_prompt = Some("tune the reload timing\nwith details".to_owned());
         let mut plain = conversation("hist", &cwd, "fix the flaky test\nwith details", 120);
         plain.settings = qol_terminal_sessions::cli::CliResumeSettings {
             permission_mode: Some("bypassPermissions".to_owned()),

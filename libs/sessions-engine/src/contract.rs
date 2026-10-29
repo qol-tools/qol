@@ -10,7 +10,7 @@ use super::spawn::surface_token;
 use super::switchboard::SWITCHBOARD_KEY;
 
 pub(crate) const ATTENTION_STALE_AFTER_MS: u64 = 30_000;
-const WORK_DAY_START_HOUR: i64 = 5;
+const WORK_DAY_START_HOUR: u32 = 5;
 
 pub(crate) const SWITCHBOARD_TOOLS: [&str; 9] = [
     "sessions_list",
@@ -243,12 +243,16 @@ fn local_time(secs: u64) -> String {
 
 fn work_day(secs: u64, now: u64) -> String {
     let day = |secs: u64| {
-        i64::try_from(secs)
+        let time = i64::try_from(secs)
             .ok()
-            .and_then(|secs| {
-                chrono::DateTime::from_timestamp(secs - WORK_DAY_START_HOUR * 3_600, 0)
-            })
-            .map(|time| time.with_timezone(&chrono::Local).date_naive())
+            .and_then(|secs| chrono::DateTime::from_timestamp(secs, 0))?
+            .with_timezone(&chrono::Local);
+        let date = time.date_naive();
+        if chrono::Timelike::hour(&time) < WORK_DAY_START_HOUR {
+            date.pred_opt()
+        } else {
+            Some(date)
+        }
     };
     match (day(secs), day(now)) {
         (Some(day), Some(today)) => match (today - day).num_days() {

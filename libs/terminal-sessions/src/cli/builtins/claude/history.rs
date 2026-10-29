@@ -9,7 +9,9 @@ use qol_agent_homes::{Harness, Registry};
 use serde_json::Value;
 
 use crate::cli::chat::text_blocks;
-use crate::cli::{CliConversation, CliConversationMatch, CliResumeSettings, CliToolId};
+use crate::cli::{
+    is_typed_prompt, CliConversation, CliConversationMatch, CliResumeSettings, CliToolId,
+};
 
 use super::environment::{custom_config_dir, open_session_ids};
 use super::metadata::{
@@ -22,7 +24,6 @@ const HEAD_BUDGET: u64 = 256 * 1024;
 const TAIL_BUDGET: u64 = 256 * 1024;
 const TAIL_CHUNK: u64 = 16 * 1024;
 const PROMPT_CHARS: usize = 2048;
-const RECENT_PROMPTS: usize = 4;
 const ENTRYPOINT_KEY: &[u8] = b"\"entrypoint\"";
 const USER_TAG: &[u8] = b"\"type\":\"user\"";
 const AI_TITLE_TAG: &[u8] = b"\"type\":\"ai-title\"";
@@ -200,7 +201,7 @@ fn read_conversation(
         cwd,
         title: tail.facts.title.clone().or(tail.ai_title),
         first_prompt: head.first_prompt,
-        recent_prompts: tail.recent_prompts,
+        last_prompt: tail.last_prompt,
         last_active,
         pr_urls: tail.pr_urls,
         settings: CliResumeSettings {
@@ -272,7 +273,7 @@ fn user_prompt(value: &Value) -> Option<String> {
 struct Tail {
     facts: TranscriptFacts,
     ai_title: Option<String>,
-    recent_prompts: Vec<String>,
+    last_prompt: Option<String>,
     pr_urls: Vec<String>,
 }
 
@@ -287,17 +288,13 @@ impl Tail {
                 self.ai_title = Some(title);
             }
         }
-        if (newer || self.recent_prompts.len() < RECENT_PROMPTS) && contains_bytes(line, USER_TAG) {
+        if (newer || self.last_prompt.is_none()) && contains_bytes(line, USER_TAG) {
             if let Some(prompt) = serde_json::from_slice::<Value>(line)
                 .ok()
                 .and_then(|value| user_prompt(&value))
+                .filter(|prompt| is_typed_prompt(prompt))
             {
-                if newer {
-                    self.recent_prompts.insert(0, prompt);
-                    self.recent_prompts.truncate(RECENT_PROMPTS);
-                } else {
-                    self.recent_prompts.push(prompt);
-                }
+                self.last_prompt = Some(prompt);
             }
         }
         if contains_bytes(line, PR_LINK_TAG) {
@@ -313,17 +310,13 @@ impl Tail {
         self.facts.title.is_some()
             && self.facts.permission_mode.is_some()
             && self.facts.request.is_some()
+            && self.last_prompt.is_some()
     }
 
     fn fill_from(&mut self, older: Tail) {
         self.facts = std::mem::take(&mut self.facts).or(older.facts);
         self.ai_title = self.ai_title.take().or(older.ai_title);
-        for prompt in older.recent_prompts {
-            if self.recent_prompts.len() < RECENT_PROMPTS && !self.recent_prompts.contains(&prompt)
-            {
-                self.recent_prompts.push(prompt);
-            }
-        }
+        self.last_prompt = self.last_prompt.take().or(older.last_prompt);
         for url in older.pr_urls.into_iter().rev() {
             if !self.pr_urls.contains(&url) {
                 self.pr_urls.push(url);
@@ -427,6 +420,8 @@ mod tests {
                 &first,
                 r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/6"}"#,
                 &prompt("a later prompt"),
+                &prompt("[qol session] 1 new message from child. Read it with session_inbox."),
+                &prompt("<task-notification>done</task-notification>"),
                 r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"high"}}}"#,
                 r#"{"type":"ai-title","aiTitle":"Older title"}"#,
                 r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/7"}"#,
@@ -454,10 +449,7 @@ mod tests {
                 cwd: "/work/proj".to_owned(),
                 title: Some("Login bug fix".to_owned()),
                 first_prompt: Some("fix the login bug\nwith details".to_owned()),
-                recent_prompts: vec![
-                    "a later prompt".to_owned(),
-                    "fix the login bug\nwith details".to_owned(),
-                ],
+                last_prompt: Some("a later prompt".to_owned()),
                 last_active: modified,
                 pr_urls: vec![
                     "https://github.com/o/r/pull/7".to_owned(),
