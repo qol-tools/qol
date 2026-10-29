@@ -642,11 +642,12 @@ impl Surface {
         if self.takes_focus() {
             crate::popup_window::capture_focus_return();
         }
+        let framed = self.os_frame;
         let handle = match cx.open_window(options, move |window, cx| {
             *build_dismisser.state.native_window.borrow_mut() =
                 Some((window.window_handle(), cx.to_async()));
             window.set_window_title(&window_title);
-            crate::platform::square_window_corners(window);
+            crate::platform::square_window_corners(window, framed);
             if applies_settings_identity {
                 crate::platform::apply_settings_surface_identity(window);
             }

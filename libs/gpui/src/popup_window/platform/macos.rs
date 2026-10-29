@@ -995,7 +995,11 @@ fn show_window_by_title_with_focus(
         WindowPresentation::Normal => NSNormalWindowLevel,
     };
     window.setLevel(level);
-    window.setBackgroundColor(Some(&NSColor::clearColor()));
+    if window.styleMask().contains(NSWindowStyleMask::Titled) {
+        window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
+    } else {
+        window.setBackgroundColor(Some(&NSColor::clearColor()));
+    }
     window.setAlphaValue(1.0);
     window.setIgnoresMouseEvents(input_passthrough);
     if !input_passthrough && input_region(title).is_some() {

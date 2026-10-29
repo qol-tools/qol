@@ -36,7 +36,7 @@ pub fn has_process_focus() -> bool {
     true
 }
 
-pub fn square_window_corners(_window: &mut gpui::Window) {}
+pub fn square_window_corners(_window: &mut gpui::Window, _framed: bool) {}
 
 pub fn start_window_move(window: &mut gpui::Window) {
     window.start_window_move();
