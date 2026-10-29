@@ -3,6 +3,7 @@
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Invocation {
     Daemon,
+    HeadlessDaemon,
     Help,
     Version,
     WriteMode(String),
@@ -19,11 +20,14 @@ pub(super) fn from_env() -> Invocation {
 }
 
 pub(super) fn dispatch(invocation: Invocation) -> Option<i32> {
-    if !matches!(invocation, Invocation::Daemon | Invocation::WriteMode(_)) {
+    if !matches!(
+        invocation,
+        Invocation::Daemon | Invocation::HeadlessDaemon | Invocation::WriteMode(_)
+    ) {
         qol_log::init_stderr();
     }
     match invocation {
-        Invocation::Daemon => None,
+        Invocation::Daemon | Invocation::HeadlessDaemon => None,
         Invocation::Help => {
             print_usage();
             Some(0)
@@ -85,6 +89,9 @@ fn print_usage() {
     println!();
     println!("USAGE:");
     println!("    qol-tray                              Run the tray daemon");
+    println!(
+        "    qol-tray --headless                   Run the daemon without its icon, windows, toasts and hotkeys (automatic when Linux has no display)"
+    );
     println!(
         "    qol-tray exec <plugin_id> <action>    Trigger a plugin action via the running daemon"
     );
@@ -155,6 +162,7 @@ fn classify(args: Vec<String>) -> Invocation {
 
     match args.as_slice() {
         [flag] if matches!(flag.as_str(), "--version" | "-V") => Invocation::Version,
+        [flag] if flag == "--headless" => Invocation::HeadlessDaemon,
         [mode] if mode.starts_with("--write-mode=") => {
             Invocation::WriteMode(mode["--write-mode=".len()..].to_string())
         }
@@ -290,6 +298,7 @@ mod tests {
             (vec!["-h"], Invocation::Help),
             (vec!["--version"], Invocation::Version),
             (vec!["-V"], Invocation::Version),
+            (vec!["--headless"], Invocation::HeadlessDaemon),
             (
                 vec!["--write-mode=dev"],
                 Invocation::WriteMode("dev".to_string()),
@@ -344,6 +353,8 @@ mod tests {
             vec!["exec", "plugin-test", "toggle", "--json"],
             vec!["open", "settings"],
             vec!["exec", "plugin-test", "toggle", "extra"],
+            vec!["--headless", "extra"],
+            vec!["--headless", "doctor"],
         ] {
             assert_eq!(
                 classify(args(&values)),

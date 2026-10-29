@@ -55,7 +55,7 @@ where
 
     run_event_loop();
 
-    shutdown_plugins(&plugin_manager);
+    crate::tray::shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
     log::info!("Shutdown signal received, exiting...");
     Ok(())
@@ -257,17 +257,6 @@ fn handle_menu_event(
     gtk::main_quit();
     let _ = shutdown_tx.send(());
     true
-}
-
-fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
-            return;
-        }
-    };
-    manager.shutdown();
 }
 
 #[cfg(test)]

@@ -107,6 +107,7 @@ port = 42750
 [capabilities]
 gpui = true
 doctor = true
+headless = true
 
 [config.scope]
 output = "device"

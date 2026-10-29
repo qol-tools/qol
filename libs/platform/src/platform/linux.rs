@@ -20,6 +20,10 @@ impl PlatformApi for Platform {
         capabilities_for(self.linux_display_backend())
     }
 
+    fn has_display(&self) -> bool {
+        self.linux_display_backend() != LinuxDisplayBackend::Unknown
+    }
+
     fn disk_space(&self, path: &Path) -> std::io::Result<DiskSpace> {
         super::statvfs::disk_space(path)
     }

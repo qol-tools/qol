@@ -1,11 +1,13 @@
+mod headless;
 pub mod icon;
 pub mod platform;
 pub mod tone;
 
 use crate::daemon::EventBus;
 use crate::features::FeatureRegistry;
+use crate::plugins::PluginManager;
 use qol_runtime::protocol::NotificationLevel;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -15,7 +17,30 @@ const MISSING_ICON_NOTICE_WAIT: Duration = Duration::from_secs(30);
 pub struct TrayManager {
     _tray: Option<platform::PlatformTray>,
     shutdown_tx: broadcast::Sender<()>,
+    headless_shutdown_rx: Option<broadcast::Receiver<()>>,
     _post_pull_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+pub fn run_app<F>(init: F) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<(TrayManager, Arc<Mutex<PluginManager>>)>,
+{
+    if crate::headless_mode::active() {
+        headless::run_app(init)
+    } else {
+        platform::run_app(init)
+    }
+}
+
+pub(crate) fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
+    let mut manager = match plugin_manager.lock() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
+            return;
+        }
+    };
+    manager.shutdown();
 }
 
 impl TrayManager {
@@ -27,6 +52,14 @@ impl TrayManager {
         events: Arc<EventBus>,
         post_pull_task: Option<tokio::task::JoinHandle<()>>,
     ) -> Self {
+        if crate::headless_mode::active() {
+            return Self {
+                _tray: None,
+                shutdown_tx,
+                headless_shutdown_rx: Some(shutdown_rx),
+                _post_pull_task: post_pull_task,
+            };
+        }
         let icon = icon::tray_icon(update_available, tone::current());
         let tray = match platform::create_tray(
             feature_registry,
@@ -45,7 +78,14 @@ impl TrayManager {
         Self {
             _tray: tray,
             shutdown_tx,
+            headless_shutdown_rx: None,
             _post_pull_task: post_pull_task,
+        }
+    }
+
+    pub(crate) fn wait_for_shutdown(&mut self) {
+        if let Some(mut rx) = self.headless_shutdown_rx.take() {
+            let _ = rx.blocking_recv();
         }
     }
 

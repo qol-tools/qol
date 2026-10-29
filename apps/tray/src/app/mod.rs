@@ -31,7 +31,9 @@ pub(crate) fn run() -> Result<()> {
     }
     qol_tray::console_guard::guard_console_pipes();
 
-    if let Some(code) = host_cli::dispatch(host_cli::from_env()) {
+    let invocation = host_cli::from_env();
+    let headless_requested = invocation == host_cli::Invocation::HeadlessDaemon;
+    if let Some(code) = host_cli::dispatch(invocation) {
         #[cfg(debug_assertions)]
         qol_runtime::probe!(
             "HOST_ENTRY",
@@ -50,6 +52,7 @@ pub(crate) fn run() -> Result<()> {
     qol_tray::logging::init_logger();
 
     qol_tray::logging::log_build_identity();
+    let headless = qol_tray::headless_mode::select(headless_requested);
 
     qol_tray::lifeline_handoff::adopt_handed_off_fds();
     qol_tray::relaunch::wait_for_predecessor();
@@ -143,7 +146,9 @@ pub(crate) fn run() -> Result<()> {
         features::host_defaults::release_portable_on_start();
     }
 
-    std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
+    if !headless {
+        std::thread::spawn(qol_tray::features::notifications::sync_notification_inhibit);
+    }
 
     log::info!("Starting QoL Tray daemon...");
 
@@ -151,10 +156,10 @@ pub(crate) fn run() -> Result<()> {
     let starting_peers = peer_runtime.clone();
 
     #[cfg(feature = "dev")]
-    let outcome = tray::platform::run_app(move || app_init(core_log_controls, starting_peers));
+    let outcome = tray::run_app(move || app_init(core_log_controls, starting_peers));
 
     #[cfg(not(feature = "dev"))]
-    let outcome = tray::platform::run_app(move || app_init(starting_peers));
+    let outcome = tray::run_app(move || app_init(starting_peers));
 
     let peer_shutdown = stop_peer_runtime(&peer_runtime);
 
@@ -288,11 +293,14 @@ fn app_init_inner(
         init.post_pull_task,
     );
     log::info!("QoL Tray daemon started successfully");
-    if is_first_run() {
+    let headless = qol_tray::headless_mode::active();
+    if !headless && is_first_run() {
         std::thread::spawn(show_first_run_welcome);
     }
     std::thread::spawn(confirm_host_update);
-    qol_tray::window_reopen::reopen_after_restart(init.plugin_manager.clone());
+    if !headless {
+        qol_tray::window_reopen::reopen_after_restart(init.plugin_manager.clone());
+    }
     Ok((tray, init.plugin_manager))
 }
 
@@ -412,6 +420,8 @@ async fn async_init_inner(
     };
     if shadow_generation {
         log::info!("Shadow dev generation: deferring hotkey capture until promotion");
+    } else if qol_tray::headless_mode::active() {
+        log::info!("Headless: hotkey capture is off");
     } else {
         hotkeys::start_capture_with_fallback(plugin_manager.clone());
     }
