@@ -16,6 +16,7 @@ static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> 
 pub(crate) const ICON_SIZE: u32 = 32;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
 const TONE_REFRESH_SECONDS: u32 = 10;
+const SLOW_STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub enum PlatformTray {
     Linux,
@@ -91,6 +92,33 @@ fn spawn_tray(
         )
     });
     match startup_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            log::warn!(
+                "The Linux tray icon is slow to start, so qol-tray keeps starting without it"
+            );
+            std::thread::spawn(move || {
+                follow_slow_startup(startup_rx, crate::tray::report_missing_icon)
+            });
+            Ok(())
+        }
+        received => startup_result(received),
+    }
+}
+
+fn follow_slow_startup(
+    startup_rx: std::sync::mpsc::Receiver<StartupResult>,
+    report: impl FnOnce(&anyhow::Error),
+) {
+    match startup_result(startup_rx.recv_timeout(SLOW_STARTUP_WAIT)) {
+        Ok(()) => log::info!("The Linux tray icon started late"),
+        Err(error) => report(&error),
+    }
+}
+
+fn startup_result(
+    received: std::result::Result<StartupResult, std::sync::mpsc::RecvTimeoutError>,
+) -> Result<()> {
+    match received {
         Ok(Ok(())) => Ok(()),
         Ok(Err(message)) => anyhow::bail!(message),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -268,5 +296,29 @@ mod tests {
         );
         assert_eq!(refused, Err("no status notifier".to_string()));
         assert_eq!(built, Ok(7));
+    }
+
+    #[test]
+    fn a_slow_tray_start_reports_the_icon_missing_only_if_it_fails() {
+        let follow = |result: Option<super::StartupResult>| {
+            let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+            if let Some(result) = result {
+                startup_tx.send(result).unwrap();
+            }
+            drop(startup_tx);
+            let mut reported = None;
+            super::follow_slow_startup(startup_rx, |error| reported = Some(format!("{error:#}")));
+            reported
+        };
+
+        assert_eq!(follow(Some(Ok(()))), None);
+        assert_eq!(
+            follow(Some(Err("no status notifier".to_string()))),
+            Some("no status notifier".to_string())
+        );
+        assert_eq!(
+            follow(None),
+            Some("The Linux tray thread stopped before the icon was ready".to_string())
+        );
     }
 }
