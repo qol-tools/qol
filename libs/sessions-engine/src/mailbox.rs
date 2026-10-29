@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -346,13 +346,19 @@ impl Messaging<'_> {
     }
 
     fn refresh_knock(&self, key: &str) -> Result<()> {
+        self.knocks
+            .refresh_messages(key, || self.unread_notes(key).map_err(io::Error::other))
+            .context("failed to queue the knock")
+    }
+
+    fn unread_notes(&self, key: &str) -> Result<Vec<KnockNote>> {
         let (from_user, others): (Vec<_>, Vec<_>) = self
             .mail
             .messages(key)?
             .into_iter()
             .filter(|message| !message.read)
             .partition(|message| message.from == USER_SENDER && message.via.is_some());
-        let notes = from_user
+        Ok(from_user
             .into_iter()
             .chain(others)
             .map(|message| KnockNote {
@@ -361,10 +367,7 @@ impl Messaging<'_> {
                 from: message.from,
                 text: message.text,
             })
-            .collect::<Vec<_>>();
-        self.knocks
-            .set_messages(key, &notes)
-            .context("failed to queue the knock")
+            .collect())
     }
 
     pub(super) fn inbox(

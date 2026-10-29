@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub const KNOCK_HEADER: &str = "[qol session]";
 pub(super) const MESSAGE_LEAD: &str = "Message from ";
 const ANSWER_LEAD: &str = "(Answer with session_send";
+const KNOCK_TEXT_BUDGET: usize = 8 * 1024;
 
 pub(super) fn poses_as_sender(text: &str) -> bool {
     let leads = [MESSAGE_LEAD.to_lowercase(), ANSWER_LEAD.to_lowercase()];
@@ -34,6 +35,19 @@ pub(super) fn quoted_body(text: &str) -> String {
 
 pub(super) fn has_line_separator(text: &str) -> bool {
     text.contains(['\u{2028}', '\u{2029}', '\r'])
+}
+
+fn inline_count(notes: &[KnockNote]) -> usize {
+    let mut spent = 0;
+    notes
+        .iter()
+        .take_while(|note| {
+            spent += note.text.len();
+            spent <= KNOCK_TEXT_BUDGET
+        })
+        .count()
+        .max(1)
+        .min(notes.len())
 }
 
 fn is_invisible(character: char) -> bool {
@@ -236,15 +250,25 @@ impl KnockStore {
         qol_fs::atomic_write(&self.path(&record.recipient_key)?, encoded.as_bytes())
     }
 
-    pub(super) fn set_messages(&self, key: &str, notes: &[KnockNote]) -> io::Result<()> {
+    pub(super) fn refresh_messages(
+        &self,
+        key: &str,
+        read: impl FnOnce() -> io::Result<Vec<KnockNote>>,
+    ) -> io::Result<()> {
         self.locked(key, || {
+            let notes = read()?;
             let mut record = self.load(key)?;
             if record.notes == notes {
                 return Ok(());
             }
-            record.notes = notes.to_vec();
+            record.notes = notes;
             self.save(&record)
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_messages(&self, key: &str, notes: &[KnockNote]) -> io::Result<()> {
+        self.refresh_messages(key, || Ok(notes.to_vec()))
     }
 
     pub(super) fn add_board(&self, key: &str, thread: &str, mention: bool) -> io::Result<()> {
@@ -276,8 +300,16 @@ impl KnockStore {
             if !self.path(key)?.exists() {
                 return Ok(None);
             }
-            let record = self.load(key)?;
-            self.clear(key)?;
+            let mut record = self.load(key)?;
+            let rest = record.notes.split_off(inline_count(&record.notes));
+            match rest.is_empty() {
+                true => self.clear(key)?,
+                false => self.save(&KnockRecord {
+                    notes: rest,
+                    board: Vec::new(),
+                    ..record.clone()
+                })?,
+            }
             Ok((!record.is_empty()).then_some(ClaimedKnock(record)))
         })
     }
@@ -312,17 +344,22 @@ impl KnockStore {
         let claimed = &claimed.0;
         let key = claimed.recipient_key.as_str();
         self.locked(key, || {
+            let mut failure = None;
+            let mut done = Vec::new();
             for note in &claimed.notes {
-                mail.mark(key, &note.id, "read").map_err(io::Error::other)?;
+                match mail.mark(key, &note.id, "read") {
+                    Ok(()) => done.push(note.id.as_str()),
+                    Err(error) => failure = failure.or(Some(error)),
+                }
             }
-            if !self.path(key)?.exists() {
-                return Ok(());
+            if self.path(key)?.exists() {
+                let mut record = self.load(key)?;
+                record
+                    .notes
+                    .retain(|note| !done.contains(&note.id.as_str()));
+                self.save(&record)?;
             }
-            let mut record = self.load(key)?;
-            record
-                .notes
-                .retain(|note| !claimed.notes.iter().any(|done| done.id == note.id));
-            self.save(&record)
+            failure.map_or(Ok(()), |error| Err(io::Error::other(error)))
         })
     }
 
@@ -523,6 +560,34 @@ mod tests {
             stores.knocks.pending_knocks()[0].text,
             "[qol session] Message from child: two"
         );
+    }
+
+    #[test]
+    fn a_claim_types_at_most_one_budget_of_text_and_leaves_the_rest_waiting() {
+        let (_root, store) = store();
+        let long = "x".repeat(5 * 1024);
+        store
+            .set_messages(
+                "lane",
+                &[
+                    note("m1", "a", &long),
+                    note("m2", "b", &long),
+                    note("m3", "c", "short"),
+                ],
+            )
+            .unwrap();
+        store.add_board("lane", "t1", false).unwrap();
+        let first = store.claim("lane").unwrap().unwrap();
+        assert_eq!(first.0.notes.len(), 1);
+        assert_eq!(first.0.board.len(), 1);
+        let waiting = store.pending_knocks();
+        assert_eq!(
+            waiting[0].text,
+            format!("[qol session] Message from b: {long}\n\nMessage from c: short")
+        );
+        let second = store.claim("lane").unwrap().unwrap();
+        assert_eq!(second.0.notes.len(), 2);
+        assert!(store.pending_knocks().is_empty());
     }
 
     #[test]
