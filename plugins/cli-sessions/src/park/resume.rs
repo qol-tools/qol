@@ -64,6 +64,7 @@ pub fn resume(
         launch,
         cwd,
         title: Some(record.title.clone().unwrap_or_else(|| record.id.clone())),
+        in_active_window: false,
     };
     let session = terminals
         .spawn(&request)

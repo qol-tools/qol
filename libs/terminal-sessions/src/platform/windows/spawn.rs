@@ -295,6 +295,7 @@ mod tests {
             },
             cwd: PathBuf::from(r"C:\work"),
             title: Some("Lane".to_owned()),
+            in_active_window: false,
         };
         let spec = spec(&request);
         assert_eq!(spec.program, "claude");

@@ -414,11 +414,16 @@ impl KittyBackend {
     fn spawn_at(
         &self,
         request: &SpawnRequest,
-        anchor_window_id: Option<u64>,
+        caller_window_id: Option<u64>,
         path: Option<&str>,
     ) -> Result<SessionId, TerminalError> {
         let endpoint = self.endpoints.current();
-        let keep_focus = self.has_focus_at(&endpoint);
+        let layout = self.layout_at(&endpoint);
+        let keep_focus = layout.as_ref().is_none_or(KittyLs::has_focus);
+        let anchor_window_id = match request.in_active_window {
+            true => layout.as_ref().and_then(KittyLs::active_window_id),
+            false => caller_window_id,
+        };
         let argv = spawn::launch_argv(request, path, anchor_window_id, keep_focus)?;
         let stdout = self.run_at(&endpoint, "spawn session", &argv, None)?;
         let window_id =
@@ -440,11 +445,10 @@ impl KittyBackend {
         Ok(session_id)
     }
 
-    fn has_focus_at(&self, endpoint: &Endpoint) -> bool {
+    fn layout_at(&self, endpoint: &Endpoint) -> Option<KittyLs> {
         self.run_at(endpoint, "read focus", &strings(["@", "ls"]), None)
             .ok()
             .and_then(|body| parse_ls(&body, backend_id()).ok())
-            .is_none_or(|ls| ls.has_focus())
     }
 
     fn verify_spawned_identity(
@@ -1233,6 +1237,7 @@ mod tests {
             },
             cwd: "/work/project".into(),
             title: None,
+            in_active_window: false,
         }
     }
 
@@ -1309,6 +1314,29 @@ mod tests {
             ]
         );
         assert_eq!(calls[2].1, ["@", "ls"]);
+    }
+
+    #[test]
+    fn spawn_in_the_active_window_anchors_the_tab_on_kittys_last_used_window() {
+        let layout = r#"[{"is_focused":false,"last_focused":false,"tabs":[{"is_active":true,"windows":[{"id":11,"title":"a","pid":1,"is_active":true}]}]},
+{"is_focused":false,"last_focused":true,"tabs":[{"is_active":true,"windows":[{"id":15,"title":"b","pid":2,"is_active":true}]}]}]"#;
+        let runner = FakeRunner::with_outputs(vec![
+            success(layout.to_owned()),
+            success("77\n".to_owned()),
+            success(ls_with_identity(77, "voice-42", "codex", "tab")),
+        ]);
+        let backend = KittyBackend::with_runner(runner.clone());
+        let mut request = spawn_request(SpawnSurface::Tab);
+        request.in_active_window = true;
+
+        backend.spawn_at(&request, Some(42), None).unwrap();
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(
+            calls[1].1[..6],
+            ["@", "launch", "--type", "tab", "--next-to", "id:15"]
+        );
+        assert_ne!(calls[1].1[6], "--dont-take-focus");
     }
 
     #[test]

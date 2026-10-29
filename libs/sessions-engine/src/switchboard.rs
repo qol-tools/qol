@@ -21,7 +21,7 @@ pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
 pub const DEFAULT_EFFORT: &str = "low";
 pub const HERE_TAKEN_EXIT: u8 = 3;
 const SWITCHBOARD_TOOL: &str = "claude";
-const SWITCHBOARD_SURFACE: &str = "os-window";
+const SWITCHBOARD_SURFACE: &str = "tab";
 const HERE_SURFACE_TAG: &str = "tab";
 const CLI_SESSIONS_BINARY: &str = "qol-cli-sessions";
 const KITTY_WINDOW_ENV: &str = "KITTY_WINDOW_ID";
@@ -454,6 +454,7 @@ pub(super) fn launch(
         assignment.as_ref(),
         false,
         &claude_env(plan),
+        true,
     )?;
     Ok(SwitchboardOutcome {
         session: launched.session,
@@ -481,21 +482,13 @@ fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
         snapshot.as_ref().map(|snapshot| snapshot.sessions()),
     ) {
         OpenStep::StartKitty => start_kitty(profile),
-        OpenStep::Focus(held) => {
-            let binding = held
-                .binding()
-                .context("the live switchboard cannot bind to a stable token")?;
-            terminals
-                .focus(&binding)
-                .context("failed to focus the switchboard")?;
-            Ok(Opened::Focused {
-                session: binding.token(),
-            })
-        }
+        OpenStep::Focus(held) => Ok(Opened::Focused {
+            session: focus(&terminals, held)?,
+        }),
         OpenStep::Launch => {
             let ledger = SpawnLedger::system()?;
             let plan = LaunchPlan::system(profile, &ledger, login_shell_path())?;
-            launch(
+            let outcome = launch(
                 &terminals,
                 &interpreter,
                 &ledger,
@@ -504,10 +497,35 @@ fn open_on(profile: &Profile, surface: Option<&str>) -> Result<Opened> {
                 surface,
                 resolve_spawn_cap(config_spawn_cap()?).as_ref(),
                 &system_dispatch()?,
-            )
-            .map(Opened::Launched)
+            )?;
+            if let Err(error) = focus_launched(&terminals, &interpreter) {
+                crate::cli::warn(format!(
+                    "the switchboard opened but kept in the background: {error:#}"
+                ));
+            }
+            Ok(Opened::Launched(outcome))
         }
     }
+}
+
+fn focus(terminals: &TerminalSessionService, held: &SessionFacts) -> Result<String> {
+    let binding = held
+        .binding()
+        .context("the live switchboard cannot bind to a stable token")?;
+    terminals
+        .focus(&binding)
+        .context("failed to focus the switchboard")?;
+    Ok(binding.token())
+}
+
+fn focus_launched(
+    terminals: &TerminalSessionService,
+    interpreter: &CliSessionInterpreter,
+) -> Result<()> {
+    let snapshot = terminals.snapshot().context("session discovery failed")?;
+    let held = live_switchboard(interpreter, snapshot.sessions())
+        .context("the new switchboard is missing from discovery")?;
+    focus(terminals, held).map(drop)
 }
 
 /// Runs the switchboard in the calling kitty window and returns its exit code once it
@@ -581,7 +599,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for terminal sessions. It is a claude session keyed and titled `{SWITCHBOARD_KEY}` whose only tools are the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}` and loaded through ToolSearch. Your hooks, status line and plugins run as in any other claude session, so `qols` commands work in it; no other MCP server is loaded. It starts blank in its own folder under the sessions data directory, so you type its first message, and it starts, lists, reopens, closes and messages other sessions for you without doing their work. It passes your words to a session as yours with session_send as_user true, unless you ask it to report back; its forks deliver their own pull requests, report the merge or a blocker to it, and close their tabs when done, and it closes a quiet lane with nothing open.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, and with no kitty running a new kitty is started for it. It is never resumed, and the session tools never park, close or submit to it.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to os-window.", SWITCHBOARD_TOOLS.join(", "))
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for terminal sessions. It is a claude session keyed and titled `{SWITCHBOARD_KEY}` whose only tools are the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}` and loaded through ToolSearch. Your hooks, status line and plugins run as in any other claude session, so `qols` commands work in it; no other MCP server is loaded. It starts blank in its own folder under the sessions data directory, so you type its first message, and it starts, lists, reopens, closes and messages other sessions for you without doing their work. It passes your words to a session as yours with session_send as_user true, unless you ask it to report back; its forks deliver their own pull requests, report the merge or a blocker to it, and close their tabs when done, and it closes a quiet lane with nothing open.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. It is never resumed, and the session tools never park, close or submit to it.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "))
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {

@@ -140,6 +140,7 @@ mod tests {
             },
             cwd: "/work/project".into(),
             title: title.map(str::to_owned),
+            in_active_window: false,
         }
     }
 
