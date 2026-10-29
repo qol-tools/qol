@@ -1562,6 +1562,7 @@ pub(super) fn spawn_or_reuse(
                         launch,
                         cwd: requested_cwd.clone(),
                         title: Some(prepared.title.clone()),
+                        in_active_window: false,
                     };
                     let mut outcome = launch_background(
                         terminals,
@@ -1590,6 +1591,7 @@ pub(super) fn spawn_or_reuse(
                         launch,
                         cwd: requested_cwd,
                         title: Some(prepared.title.clone()),
+                        in_active_window: false,
                     };
                     let mut outcome = launch_ready(
                         terminals,
@@ -2076,6 +2078,7 @@ pub(super) fn spawn_detached(
         assignment,
         park,
         &[],
+        false,
     )
 }
 
@@ -2100,6 +2103,7 @@ pub(super) fn launch_detached(
     assignment: Option<&AgentAssignment>,
     park: bool,
     env: &[(String, String)],
+    in_active_window: bool,
 ) -> Result<DetachedLaunch> {
     require_model_for_launch(model)?;
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
@@ -2132,6 +2136,7 @@ pub(super) fn launch_detached(
         model,
         assignment,
         if dry_run { prompt } else { "" },
+        in_active_window,
     )
 }
 
@@ -2176,6 +2181,7 @@ pub(super) fn resume_detached(
         point.model,
         None,
         "",
+        false,
     )
 }
 
@@ -2191,6 +2197,7 @@ fn start_detached(
     model: Option<&str>,
     assignment: Option<&AgentAssignment>,
     typed_prompt: &str,
+    in_active_window: bool,
 ) -> Result<DetachedLaunch> {
     let _guard = locks.acquire(&prepared.key)?;
     let started = Instant::now();
@@ -2209,6 +2216,7 @@ fn start_detached(
         launch,
         cwd: canonicalize_cwd(cwd)?,
         title: Some(prepared.title.clone()),
+        in_active_window,
     };
     let session_id = terminals
         .spawn(&request)
