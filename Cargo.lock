@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.121.7"
+version = "0.121.8"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.123.3"
+version = "0.123.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.21.7"
+version = "0.21.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6976,7 +6976,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.112.7"
+version = "1.112.8"
 dependencies = [
  "anyhow",
  "block2",
@@ -7376,7 +7376,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.97.7"
+version = "0.97.8"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7490,7 +7490,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.110.8"
+version = "1.110.9"
 dependencies = [
  "anyhow",
  "block2",
@@ -7604,7 +7604,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.128.6"
+version = "3.128.7"
 dependencies = [
  "anyhow",
  "axum",
