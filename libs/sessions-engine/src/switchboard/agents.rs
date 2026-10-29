@@ -103,7 +103,6 @@ pub(super) fn settings_json(program: &Path) -> String {
         .map(|part| entry(Some(FORK_AGENT), command(&format!("{FORK_CONTEXT} {part}"))))
         .collect();
     json!({
-        "alwaysThinkingEnabled": false,
         "subagentPromptCacheTtl": PROMPT_CACHE_TTL,
         "hooks": {
             "PreToolUse": [entry(Some("Agent"), command(PRE_AGENT))],
@@ -252,6 +251,6 @@ mod tests {
             assert_eq!(entry["matcher"], "project-fork");
             assert_eq!(command_of(entry), format!("{prefix} fork-context {part}"));
         }
-        assert_eq!(settings["alwaysThinkingEnabled"], false);
+        assert!(settings.get("alwaysThinkingEnabled").is_none());
     }
 }
