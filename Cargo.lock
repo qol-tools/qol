@@ -7125,7 +7125,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.51.3"
+version = "0.51.4"
 dependencies = [
  "anyhow",
  "chrono",
