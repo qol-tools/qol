@@ -3066,6 +3066,7 @@ mod tests {
             123,
         )
         .unwrap();
+        pending.set_role(&binding, Role::Lane).unwrap();
         let facts = facts(&binding);
         let mut screens = vec![">>> ready".to_owned()];
         screens.push(
