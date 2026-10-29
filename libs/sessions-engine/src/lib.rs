@@ -381,10 +381,11 @@ Details:
   switchboard opens the one control chat per machine, or focuses the live
   one; qol sessions switchboard help lists its flags. It starts new work as
   forks, which are Claude Code subagents inside that chat, and resumes its
-  newest conversation, waking the forks that were running. It lists the sessions
-  closed in the last 14 days with sessions_closed, from the CLI Sessions
-  daemon's record of closes and the tool's own conversation history (Claude
-  Code transcripts), and brings one back in a new tab with session_reopen.
+  newest conversation started under its current instructions, waking the
+  forks that were running. It lists the sessions closed in the last 14 days
+  with sessions_closed, from the CLI Sessions daemon's record of closes and
+  the tool's own conversation history (Claude Code transcripts), and brings
+  one back in a new tab with session_reopen.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
   filters them with `query` (title, cwd, key, tool, id or a linked pull
   request URL) and `text` (up to 8 words the conversation's own prompts,
