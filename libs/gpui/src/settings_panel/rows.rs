@@ -2803,6 +2803,52 @@ query = "modes"
         );
     }
 
+    #[test]
+    fn removing_a_string_array_entry_puts_the_shortened_array_under_its_config_key() {
+        let spec = qol_config::contract::parse_spec_str(
+            r#"
+schema_version = 1
+
+[field.excluded_apps]
+type = "string_array"
+label = "Excluded apps"
+default = ["a", "b", "c"]
+"#,
+        )
+        .unwrap();
+        let resolved =
+            qol_config::normalized::resolve_config(&spec, &serde_json::json!({})).unwrap();
+        let mut rows = rows_from_resolved(&resolved, 0);
+        assert!(matches!(
+            &rows[0].control,
+            RowControl::TextList(values) if values == &["a".to_string(), "b".to_string(), "c".to_string()]
+        ));
+        let cases: &[(&str, &[&str])] = &[
+            ("remove-first", &["b", "c"]),
+            ("remove-middle", &["a", "c"]),
+            ("remove-last", &["a", "b"]),
+            ("remove-only", &[]),
+        ];
+        let base = serde_json::json!({ "excluded_apps": ["a", "b", "c"] });
+        for (name, remaining) in cases {
+            let shortened: Vec<String> = remaining.iter().map(|value| value.to_string()).collect();
+            rows[0].control = RowControl::TextList(shortened.clone());
+            let merged = merged_config(&base, &rows);
+            let expected: Vec<serde_json::Value> = remaining
+                .iter()
+                .map(|value| serde_json::Value::String(value.to_string()))
+                .collect();
+            assert_eq!(
+                merged,
+                serde_json::json!({ "excluded_apps": expected }),
+                "case `{name}` merged config"
+            );
+            let body = serde_json::to_string(&merged).unwrap();
+            let roundtrip: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(roundtrip, merged, "case `{name}` PUT body roundtrip");
+        }
+    }
+
     const LIVE_NUMBER_SPEC: &str = r#"
 schema_version = 1
 
