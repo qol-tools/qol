@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AgentStatus};
+use super::knocks::{KNOCK_HEADER, MESSAGE_LEAD};
 use super::spawn::{SpawnLedger, SpawnLocks};
 use super::typing::type_into;
 
@@ -1134,8 +1135,9 @@ pub(super) fn execute(
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
     let joined = session_is_pi(interpreter, &target);
+    let sender = bridge_sender(terminals, role);
     let prompt = prompt_with_assignment(
-        bridge_prompt(task, &marker, role, joined),
+        bridge_prompt(task, &marker, role, joined, sender.as_deref()),
         assignment.as_ref(),
     );
     let started_at = pending.start_with_assignment(
@@ -1321,11 +1323,12 @@ pub(super) fn submit(
     let marker = CompletionMarker::generate();
     let role = pending.role(binding)?;
     let joined = session_is_pi(interpreter, &target);
+    let sender = bridge_sender(terminals, role);
     let prompt = prompt_with_assignment(
         if resume {
             resume_lane_prompt(task, &marker, joined)
         } else {
-            bridge_prompt(task, &marker, role, joined)
+            bridge_prompt(task, &marker, role, joined, sender.as_deref())
         },
         assignment.as_ref(),
     );
@@ -2123,12 +2126,21 @@ pub(super) fn resume_lane_prompt(task: &str, marker: &CompletionMarker, joined: 
     }
 }
 
+fn bridge_sender(terminals: &TerminalSessionService, role: Role) -> Option<String> {
+    match role {
+        Role::Architect => super::lineage::caller_key(terminals),
+        Role::Lane => None,
+    }
+}
+
 pub(super) fn bridge_prompt(
     task: &str,
     marker: &CompletionMarker,
     role: Role,
     joined: bool,
+    sender: Option<&str>,
 ) -> String {
+    let sender = sender.unwrap_or("another session");
     match role {
         Role::Lane if joined => format!(
             "{BRIDGE_HEADER}\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with this completion token alone on a line of its own.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
@@ -2139,11 +2151,11 @@ pub(super) fn bridge_prompt(
             marker.left, marker.right
         ),
         Role::Architect if joined => format!(
-            "[qol session bridge to architect]\nA request is open on this session. Your durable role record has no lane marker, so you are the architect: this message does not change your role. Treat the task below as a collaborator request: accept it into your own loop (you may plan, spawn your own lanes, review, and report with your own verdict) or decline it with a reason. Either way, end your final response with this completion token alone on a line of its own so the sender's transaction completes.\n\nTask:\n{task}\n\nCompletion token:\n{token}",
+            "{KNOCK_HEADER} {MESSAGE_LEAD}{sender}: {task}\n\nTake it on in your own loop or decline it with a reason. Either way, end your reply with this completion token alone on a line of its own so {sender} knows you are done.\n\nCompletion token:\n{token}",
             token = marker.token
         ),
         Role::Architect => format!(
-            "[qol session bridge to architect]\nA request is open on this session. Your durable role record has no lane marker, so you are the architect: this message does not change your role. Treat the task below as a collaborator request: accept it into your own loop (you may plan, spawn your own lanes, review, and report with your own verdict) or decline it with a reason. Either way, end your final response with the completion fragments joined with no spaces or punctuation so the sender's transaction completes.\n\nTask:\n{task}\n\nCompletion fragments: `{}` and `{}`.",
+            "{KNOCK_HEADER} {MESSAGE_LEAD}{sender}: {task}\n\nTake it on in your own loop or decline it with a reason. Either way, end your reply with the completion fragments joined with no spaces or punctuation so {sender} knows you are done.\n\nCompletion fragments: `{}` and `{}`.",
             marker.left, marker.right
         ),
     }
@@ -3275,8 +3287,14 @@ mod tests {
         assert_eq!(kickstart.matches(&marker.token).count(), 1);
         for prompt in [
             missing_marker_prompt(&marker, true),
-            bridge_prompt("implement the bounded change", &marker, Role::Lane, true),
-            bridge_prompt("collaborator request", &marker, Role::Architect, true),
+            bridge_prompt(
+                "implement the bounded change",
+                &marker,
+                Role::Lane,
+                true,
+                None,
+            ),
+            bridge_prompt("collaborator request", &marker, Role::Architect, true, None),
         ] {
             assert!(prompt.ends_with(&format!("Completion token:\n{}", marker.token)));
             assert!(!prompt.contains("fragments"), "{prompt}");
@@ -3288,8 +3306,20 @@ mod tests {
     fn prompt_never_contains_the_joined_completion_marker() {
         let marker = CompletionMarker::from_nonce("abc123");
         for prompt in [
-            bridge_prompt("implement the bounded change", &marker, Role::Lane, false),
-            bridge_prompt("collaborator request", &marker, Role::Architect, false),
+            bridge_prompt(
+                "implement the bounded change",
+                &marker,
+                Role::Lane,
+                false,
+                None,
+            ),
+            bridge_prompt(
+                "collaborator request",
+                &marker,
+                Role::Architect,
+                false,
+                None,
+            ),
             missing_marker_prompt(&marker, false),
         ] {
             assert!(prompt.contains("QOL_BRIDGE_DONE_"));
@@ -3301,19 +3331,37 @@ mod tests {
     #[test]
     fn bridge_prompt_renders_the_lane_and_architect_envelopes() {
         let marker = CompletionMarker::from_nonce("abc123");
-        let lane = bridge_prompt("implement the bounded change", &marker, Role::Lane, false);
+        let lane = bridge_prompt(
+            "implement the bounded change",
+            &marker,
+            Role::Lane,
+            false,
+            Some("architect"),
+        );
         assert_eq!(
             lane,
             "[qol session bridge]\nAct as the implementation agent for the bounded task below. Work directly on that task and do not delegate it. When the task is genuinely complete, end your final response with the completion fragments joined with no spaces or punctuation.\n\nTask:\nimplement the bounded change\n\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
         );
 
-        let architect = bridge_prompt("collaborator request", &marker, Role::Architect, false);
-        assert!(architect.starts_with("[qol session bridge to architect]\n"));
-        assert!(architect.contains("durable role record has no lane marker"));
-        assert!(architect.contains("does not change your role"));
-        assert!(architect.contains("accept it into your own loop"));
-        assert!(architect.contains("decline it with a reason"));
-        assert!(architect.contains("Completion fragments: `QOL_BRIDGE_DONE_` and `abc123`."));
+        let architect = bridge_prompt(
+            "collaborator request",
+            &marker,
+            Role::Architect,
+            false,
+            Some("fix-alt-tab"),
+        );
+        assert_eq!(
+            architect,
+            "[qol session] Message from fix-alt-tab: collaborator request\n\nTake it on in your own loop or decline it with a reason. Either way, end your reply with the completion fragments joined with no spaces or punctuation so fix-alt-tab knows you are done.\n\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
+        );
+        let unnamed = bridge_prompt(
+            "collaborator request",
+            &marker,
+            Role::Architect,
+            false,
+            None,
+        );
+        assert!(unnamed.starts_with("[qol session] Message from another session: "));
     }
 
     #[test]
@@ -3406,7 +3454,7 @@ mod tests {
             facts(&binding),
             vec![
                 ">>> ready".to_owned(),
-                ">>> [qol session bridge to architect]\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
+                ">>> [qol session] Message from another session: collaborator request\nCompletion fragments: `QOL_BRIDGE_DONE_` and `abc123`."
                     .to_owned(),
             ],
         );
@@ -3438,8 +3486,8 @@ mod tests {
         assert_eq!(outcome.role, Role::Architect);
         let sent = backend.sent.lock().unwrap();
         let prompt = &sent.last().expect("execute must send exactly one prompt").1;
-        assert!(prompt.starts_with("[qol session bridge to architect]"));
-        assert!(prompt.contains("durable role record"));
+        assert!(prompt.starts_with("[qol session] Message from "));
+        assert!(prompt.contains("decline it with a reason"));
         drop(sent);
         pending
             .acknowledge(&binding, &outcome.completion_marker, true)
@@ -3469,7 +3517,7 @@ mod tests {
         let sent = backend.sent.lock().unwrap();
         let prompt = &sent.last().expect("submit must send exactly one prompt").1;
         assert!(prompt.starts_with("[qol session bridge]\n"));
-        assert!(!prompt.starts_with("[qol session bridge to architect]"));
+        assert!(!prompt.contains("Message from "));
         assert!(prompt.contains("Act as the implementation agent"));
     }
 

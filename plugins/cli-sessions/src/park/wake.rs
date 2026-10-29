@@ -85,6 +85,12 @@ fn knock_live(
             }
         }
     };
+    if matches!(
+        typed,
+        Ok(Typed::Submitted | Typed::Inserted | Typed::Unsubmitted)
+    ) {
+        mark_delivered(claimed.as_ref(), key);
+    }
     match typed {
         Ok(Typed::Submitted | Typed::Inserted) => {
             qol_runtime::probe!(
@@ -104,6 +110,14 @@ fn knock_live(
             put_back();
             Err(error.into())
         }
+    }
+}
+
+fn mark_delivered(claimed: Option<&knocks::ClaimedKnock>, key: &str) {
+    if let Some(Err(error)) = claimed.map(knocks::delivered) {
+        log::warn!(
+            "[cli-sessions] knock for {key} typed but its messages not marked read: {error}"
+        );
     }
 }
 
@@ -135,6 +149,7 @@ fn reopen(key: &str) -> Result<String> {
     let prompt = message_wake_prompt(&record, &knock);
     match resume(&terminals, &interpreter, &store, &record, &prompt) {
         Ok(session) => {
+            mark_delivered(claimed.as_ref(), key);
             qol_runtime::probe!(
                 "CLI_SESSION_PARK",
                 "event=woken_by_message id={} key={key} session={session}",

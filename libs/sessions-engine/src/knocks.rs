@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub const KNOCK_HEADER: &str = "[qol session]";
+pub(super) const MESSAGE_LEAD: &str = "Message from ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingKnock {
@@ -41,6 +42,14 @@ pub fn restore(claimed: &ClaimedKnock) -> io::Result<()> {
     }
 }
 
+pub fn delivered(claimed: &ClaimedKnock) -> io::Result<()> {
+    let Some(store) = KnockStore::system() else {
+        return Ok(());
+    };
+    let mail = super::mailbox::MailboxStore::system().map_err(io::Error::other)?;
+    store.delivered(&mail, claimed)
+}
+
 pub fn lock_delivery(recipient_key: &str) -> io::Result<Option<File>> {
     KnockStore::system()
         .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no sessions data directory"))?
@@ -52,13 +61,34 @@ struct KnockRecord {
     recipient_key: String,
     since_ms: u64,
     #[serde(default)]
-    messages: usize,
-    #[serde(default)]
-    senders: Vec<String>,
-    #[serde(default)]
-    from_user: usize,
+    notes: Vec<KnockNote>,
     #[serde(default)]
     board: Vec<BoardKnock>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(super) struct KnockNote {
+    pub(super) id: String,
+    pub(super) from: String,
+    pub(super) text: String,
+    #[serde(default)]
+    pub(super) ask: bool,
+}
+
+impl KnockNote {
+    fn line(&self) -> String {
+        let from = match self.from == super::mailbox::USER_SENDER {
+            true => "the user",
+            false => self.from.as_str(),
+        };
+        match self.ask {
+            true => format!(
+                "{MESSAGE_LEAD}{from}: {}\n(Answer with session_send kind reply, reply_to {}.)",
+                self.text, self.id
+            ),
+            false => format!("{MESSAGE_LEAD}{from}: {}", self.text),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -77,28 +107,11 @@ impl KnockRecord {
     }
 
     fn is_empty(&self) -> bool {
-        self.messages == 0 && self.from_user == 0 && self.board.is_empty()
+        self.notes.is_empty() && self.board.is_empty()
     }
 
     fn text(&self) -> String {
-        let mut parts = Vec::new();
-        if self.from_user > 0 {
-            let pronoun = if self.from_user == 1 { "it" } else { "them" };
-            parts.push(format!(
-                "The user wrote to you through the switchboard. Read {pronoun} with session_inbox."
-            ));
-        }
-        if self.messages > 0 {
-            let (noun, pronoun) = match self.messages {
-                1 => ("message", "it"),
-                _ => ("messages", "them"),
-            };
-            parts.push(format!(
-                "{} new {noun} from {}. Read {pronoun} with session_inbox.",
-                self.messages,
-                self.senders.join(", ")
-            ));
-        }
+        let mut parts = self.notes.iter().map(KnockNote::line).collect::<Vec<_>>();
         if !self.board.is_empty() {
             let threads = self
                 .board
@@ -112,7 +125,7 @@ impl KnockRecord {
             let pronoun = if self.board.len() == 1 { "it" } else { "them" };
             parts.push(format!("{threads}. Read {pronoun} with session_board."));
         }
-        format!("{KNOCK_HEADER} {}", parts.join(" "))
+        format!("{KNOCK_HEADER} {}", parts.join("\n\n"))
     }
 }
 
@@ -181,24 +194,13 @@ impl KnockStore {
         qol_fs::atomic_write(&self.path(&record.recipient_key)?, encoded.as_bytes())
     }
 
-    pub(super) fn set_messages(
-        &self,
-        key: &str,
-        unread: usize,
-        senders: &[String],
-        from_user: usize,
-    ) -> io::Result<()> {
+    pub(super) fn set_messages(&self, key: &str, notes: &[KnockNote]) -> io::Result<()> {
         self.locked(key, || {
             let mut record = self.load(key)?;
-            if record.messages == unread
-                && record.senders == senders
-                && record.from_user == from_user
-            {
+            if record.notes == notes {
                 return Ok(());
             }
-            record.messages = unread;
-            record.senders = senders.to_vec();
-            record.from_user = from_user;
+            record.notes = notes.to_vec();
             self.save(&record)
         })
     }
@@ -246,15 +248,38 @@ impl KnockStore {
             }
             let mut record = self.load(&claimed.recipient_key)?;
             record.since_ms = record.since_ms.min(claimed.since_ms);
-            if record.messages == 0 {
-                record.messages = claimed.messages;
-                record.senders.clone_from(&claimed.senders);
-            }
+            let newer = record
+                .notes
+                .into_iter()
+                .filter(|note| !claimed.notes.iter().any(|kept| kept.id == note.id));
+            record.notes = claimed.notes.iter().cloned().chain(newer).collect();
             for knock in &claimed.board {
                 if !record.board.iter().any(|kept| kept.thread == knock.thread) {
                     record.board.push(knock.clone());
                 }
             }
+            self.save(&record)
+        })
+    }
+
+    pub(super) fn delivered(
+        &self,
+        mail: &super::mailbox::MailboxStore,
+        claimed: &ClaimedKnock,
+    ) -> io::Result<()> {
+        let claimed = &claimed.0;
+        let key = claimed.recipient_key.as_str();
+        self.locked(key, || {
+            for note in &claimed.notes {
+                mail.mark(key, &note.id, "read").map_err(io::Error::other)?;
+            }
+            if !self.path(key)?.exists() {
+                return Ok(());
+            }
+            let mut record = self.load(key)?;
+            record
+                .notes
+                .retain(|note| !claimed.notes.iter().any(|done| done.id == note.id));
             self.save(&record)
         })
     }
@@ -297,58 +322,69 @@ mod tests {
         (root, store)
     }
 
+    fn note(id: &str, from: &str, text: &str) -> KnockNote {
+        KnockNote {
+            id: id.to_owned(),
+            from: from.to_owned(),
+            text: text.to_owned(),
+            ask: false,
+        }
+    }
+
     #[test]
     fn a_message_knock_is_written_overwritten_and_cleared() {
         let (_root, store) = store();
         assert!(store.pending_knocks().is_empty());
         store
-            .set_messages("lane", 1, &["switchboard".to_owned()], 0)
+            .set_messages("lane", &[note("m1", "switchboard", "rebase it")])
             .unwrap();
         let first = store.pending_knocks();
         assert_eq!(
             first,
             [PendingKnock {
                 recipient_key: "lane".to_owned(),
-                text: "[qol session] 1 new message from switchboard. Read it with session_inbox."
-                    .to_owned(),
+                text: "[qol session] Message from switchboard: rebase it".to_owned(),
                 since_ms: first[0].since_ms,
             }]
         );
         store
-            .set_messages("lane", 3, &["switchboard".to_owned(), "sib".to_owned()], 0)
+            .set_messages(
+                "lane",
+                &[
+                    note("m1", "switchboard", "rebase it"),
+                    note("m2", "sib", "tests are green\non my side"),
+                ],
+            )
             .unwrap();
         let updated = store.pending_knocks();
         assert_eq!(updated.len(), 1);
         assert_eq!(
             updated[0].text,
-            "[qol session] 3 new messages from switchboard, sib. Read them with session_inbox."
+            "[qol session] Message from switchboard: rebase it\n\nMessage from sib: tests are green\non my side"
         );
         assert_eq!(
             updated[0].since_ms, first[0].since_ms,
             "the wait start is kept"
         );
-        store.set_messages("lane", 0, &[], 0).unwrap();
+        store.set_messages("lane", &[]).unwrap();
         assert!(store.pending_knocks().is_empty());
         assert!(!store.dir.join("lane.json").exists());
     }
 
     #[test]
-    fn the_users_words_lead_the_knock_ahead_of_session_messages() {
+    fn the_user_and_asks_read_as_plain_messages() {
         let (_root, store) = store();
-        store.set_messages("lane", 0, &[], 1).unwrap();
-        assert_eq!(
-            store.pending_knocks()[0].text,
-            "[qol session] The user wrote to you through the switchboard. Read it with session_inbox."
-        );
+        let ask = KnockNote {
+            ask: true,
+            ..note("m2", "sib", "which branch?")
+        };
         store
-            .set_messages("lane", 1, &["sib".to_owned()], 2)
+            .set_messages("lane", &[note("m1", "user", "ship it"), ask])
             .unwrap();
         assert_eq!(
             store.pending_knocks()[0].text,
-            "[qol session] The user wrote to you through the switchboard. Read them with session_inbox. 1 new message from sib. Read it with session_inbox."
+            "[qol session] Message from the user: ship it\n\nMessage from sib: which branch?\n(Answer with session_send kind reply, reply_to m2.)"
         );
-        store.set_messages("lane", 0, &[], 0).unwrap();
-        assert!(store.pending_knocks().is_empty());
     }
 
     #[test]
@@ -362,14 +398,14 @@ mod tests {
         store.add_board("lane", "t1", false).unwrap();
         store.add_board("lane", "t2", true).unwrap();
         store
-            .set_messages("lane", 1, &["parent-key".to_owned()], 0)
+            .set_messages("lane", &[note("m1", "parent-key", "hi")])
             .unwrap();
         assert_eq!(
             store.pending_knocks()[0].text,
-            "[qol session] 1 new message from parent-key. Read it with session_inbox. board reply in thread t1, board mention in thread t2. Read them with session_board."
+            "[qol session] Message from parent-key: hi\n\nboard reply in thread t1, board mention in thread t2. Read them with session_board."
         );
         store.clear_board("lane", "t1").unwrap();
-        store.set_messages("lane", 0, &[], 0).unwrap();
+        store.set_messages("lane", &[]).unwrap();
         assert_eq!(
             store.pending_knocks()[0].text,
             "[qol session] board mention in thread t2. Read it with session_board."
@@ -382,8 +418,8 @@ mod tests {
     #[test]
     fn a_delivered_knock_clears_one_recipient_and_keeps_the_rest() {
         let (_root, store) = store();
-        store.set_messages("a", 1, &["x".to_owned()], 0).unwrap();
-        store.set_messages("b", 1, &["x".to_owned()], 0).unwrap();
+        store.set_messages("a", &[note("m1", "x", "hi")]).unwrap();
+        store.set_messages("b", &[note("m2", "x", "hi")]).unwrap();
         store.clear("a").unwrap();
         store.clear("a").unwrap();
         let left = store.pending_knocks();
@@ -396,26 +432,55 @@ mod tests {
     fn a_claimed_knock_leaves_room_for_news_and_a_failed_typing_merges_back() {
         let (_root, store) = store();
         assert!(store.claim("lane").unwrap().is_none());
-        store.set_messages("lane", 1, &["a".to_owned()], 0).unwrap();
+        store
+            .set_messages("lane", &[note("m1", "a", "first")])
+            .unwrap();
         store.add_board("lane", "t1", false).unwrap();
         let claimed = store.claim("lane").unwrap().unwrap();
         assert_eq!(
             claimed.text(),
-            "[qol session] 1 new message from a. Read it with session_inbox. board reply in thread t1. Read it with session_board."
+            "[qol session] Message from a: first\n\nboard reply in thread t1. Read it with session_board."
         );
         assert!(store.pending_knocks().is_empty());
         store.add_board("lane", "t2", true).unwrap();
-        assert_eq!(
-            store.pending_knocks()[0].text,
-            "[qol session] board mention in thread t2. Read it with session_board."
-        );
+        store
+            .set_messages(
+                "lane",
+                &[note("m1", "a", "first"), note("m2", "b", "second")],
+            )
+            .unwrap();
         store.restore(&claimed).unwrap();
         let merged = store.pending_knocks();
         assert_eq!(
             merged[0].text,
-            "[qol session] 1 new message from a. Read it with session_inbox. board mention in thread t2, board reply in thread t1. Read them with session_board."
+            "[qol session] Message from a: first\n\nMessage from b: second\n\nboard mention in thread t2, board reply in thread t1. Read them with session_board."
         );
         assert_eq!(merged[0].since_ms, claimed.0.since_ms);
+    }
+
+    #[test]
+    fn a_typed_knock_marks_its_messages_read_and_drops_them_from_the_next_knock() {
+        let stores = super::super::mailbox::tests::Stores::new();
+        stores.lineage.record("child", Some("architect")).unwrap();
+        let messaging = stores.messaging();
+        let keys = ["architect".to_owned(), "child".to_owned()];
+        let send = |text: &'static str| super::super::mailbox::SendRequest {
+            from: "child",
+            to: "parent",
+            kind: super::super::mailbox::MessageKind::Note,
+            text,
+            reply_to: None,
+            as_user: false,
+        };
+        messaging.send(&keys, &send("one")).unwrap();
+        let claimed = stores.knocks.claim("architect").unwrap().unwrap();
+        messaging.send(&keys, &send("two")).unwrap();
+        stores.knocks.delivered(&stores.mail, &claimed).unwrap();
+        assert_eq!(stores.mail.counts("architect").unwrap().0, 1);
+        assert_eq!(
+            stores.knocks.pending_knocks()[0].text,
+            "[qol session] Message from child: two"
+        );
     }
 
     #[test]
