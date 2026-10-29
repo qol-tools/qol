@@ -7,6 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use qol_terminal_sessions::cli::{launch_flags, CliSessionInterpreter, CliToolId};
 use qol_terminal_sessions::{SessionFacts, SessionFocus, SpawnKey, TerminalSessionService};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 mod agents;
 mod context;
@@ -41,6 +42,7 @@ const PROJECTS_SHOWN: usize = 12;
 const SHELL_ENV: &str = "SHELL";
 const LOGIN_PATH_TIMEOUT: Duration = Duration::from_secs(5);
 const LOGIN_ENV_LIMIT: usize = 256 * 1024;
+const ROLE_REVISION_PREFIX: &str = "Switchboard role revision ";
 pub(super) const SWITCHBOARD_ROLE: &str = concat!(
     "You are the switchboard: the user's one control chat for their work. Your only job is starting forks, relaying the user's words to them, and listing, reopening, closing and messaging terminal sessions and turning their Remote Control on or off. You start forks with the Agent tool and talk to them with SendMessage; you reach terminal sessions with the sessions tools, which you load with ToolSearch: sessions_list, sessions_closed, session_fork, session_reopen, session_close, session_remote_control, session_send, session_inbox and session_board. You have no file, shell or web tools, and you never investigate, explain or discuss the details of any fork's or session's work; that belongs to whoever owns it. ",
     "When the user describes new work or asks anything that needs investigation, such as why something stopped working or how something works, call the Agent tool right away with subagent_type project-fork, a short name the user can address, a short description, and a prompt whose first line is `Project: <absolute path of the project folder the work belongs to>` followed by the user's own words. Pass model or effort only when the user names one. Start forks for different projects in separate messages, each after the earlier fork's Agent call has returned, and start forks for the same project together when they are independent. Write nothing before the Agent call, and reply with only `Started <name>.`: never say what you cannot do, never apologize and never restate the request. ",
@@ -141,7 +143,7 @@ impl LaunchPlan {
     fn system(profile: &Profile, ledger: &SpawnLedger, path: Option<String>) -> Result<Self> {
         let cwd = neutral_cwd()?;
         let config_home = paths::claude_home();
-        let resume = resume::latest_conversation(&config_home, &cwd);
+        let resume = resume::latest_conversation(&config_home, &cwd, &role_revision());
         let wake = resume.as_deref().and_then(|conversation| {
             resume::wake_prompt(&resume::sleeping_forks(&resume::subagents_dir(
                 &config_home,
@@ -286,16 +288,23 @@ fn mcp_program(installed: Option<PathBuf>, current: Option<PathBuf>) -> Result<P
         })
 }
 
+fn role_revision() -> String {
+    let fork_definitions = agents::agents_json(&agents::ForkAgent::default());
+    let digest = Sha256::digest(format!("{SWITCHBOARD_ROLE}\u{0}{fork_definitions}").as_bytes());
+    format!("{ROLE_REVISION_PREFIX}{digest:x}.")
+}
+
 fn role(projects: &[String]) -> String {
+    let revision = role_revision();
     let list = projects
         .iter()
         .filter(|project| !project.chars().any(char::is_control))
         .map(|project| format!("- {project}"))
         .collect::<Vec<_>>();
     if list.is_empty() {
-        return SWITCHBOARD_ROLE.to_owned();
+        return format!("{SWITCHBOARD_ROLE}\n\n{revision}");
     }
-    format!("{SWITCHBOARD_ROLE}\n\nThe user's recent project folders, newest first. Use one as the Project folder for new work unless the user names another:\n{}", list.join("\n"))
+    format!("{SWITCHBOARD_ROLE}\n\nThe user's recent project folders, newest first. Use one as the Project folder for new work unless the user names another:\n{}\n\n{revision}", list.join("\n"))
 }
 
 fn allowed_tools() -> String {
@@ -656,7 +665,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; Esc in a fork's view stops that fork, so leave it by selecting the main thread. Terminal sessions are still listed, reopened, closed and messaged with the sessions tools, your words go to them as yours with session_send as_user true unless you ask it to report back, and a separate terminal or another tool still starts with session_fork.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation. Forks that were running or waiting when the last switchboard ended are woken: it sends each one a message to continue and to start its pull request watcher again. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "))
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; Esc in a fork's view stops that fork, so leave it by selecting the main thread. Terminal sessions are still listed, reopened, closed and messaged with the sessions tools, your words go to them as yours with session_send as_user true unless you ask it to report back, and a separate terminal or another tool still starts with session_fork.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation started under the current switchboard instructions; after an update that changed them it starts a new conversation, because a resumed one keeps the instructions it started with. Forks that were running or waiting when the last switchboard ended are woken: it sends each one a message to continue and to start its pull request watcher again. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "))
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {
@@ -748,10 +757,7 @@ mod tests {
             "{args:?}"
         );
         assert!(!args.contains(&"--resume".to_owned()), "{args:?}");
-        assert_eq!(
-            flag_value(&args, "--append-system-prompt"),
-            SWITCHBOARD_ROLE
-        );
+        assert_eq!(flag_value(&args, "--append-system-prompt"), role(&[]));
         assert_eq!(flag_value(&args, "--agent"), "switchboard");
         let agents: serde_json::Value =
             serde_json::from_str(flag_value(&args, "--agents")).unwrap();
@@ -881,10 +887,14 @@ mod tests {
 
     #[test]
     fn the_role_lists_recent_projects_only_when_there_are_some() {
-        assert_eq!(role(&[]), SWITCHBOARD_ROLE);
+        let revision = role_revision();
+        assert_eq!(role(&[]), format!("{SWITCHBOARD_ROLE}\n\n{revision}"));
         let text = role(&["/work/a".to_owned(), "/work/b".to_owned()]);
         assert!(text.starts_with(SWITCHBOARD_ROLE));
-        assert!(text.ends_with("- /work/a\n- /work/b"), "{text}");
+        assert!(
+            text.ends_with(&format!("- /work/a\n- /work/b\n\n{revision}")),
+            "{text}"
+        );
         for tool in SWITCHBOARD_TOOLS {
             assert!(SWITCHBOARD_ROLE.contains(tool), "{tool}");
         }
@@ -927,6 +937,10 @@ mod tests {
         assert!(text.contains("select it in the agent list"), "{text}");
         assert!(
             text.contains("resumes the newest switchboard conversation"),
+            "{text}"
+        );
+        assert!(
+            text.contains("keeps the instructions it started with"),
             "{text}"
         );
         assert!(text.contains("woken"), "{text}");
