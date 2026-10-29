@@ -93,7 +93,12 @@ fn spawn_tray(
     match startup_rx.recv_timeout(std::time::Duration::from_secs(5)) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(message)) => anyhow::bail!(message),
-        Err(_) => anyhow::bail!("Timed out while initializing Linux tray"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            anyhow::bail!("Timed out while initializing Linux tray")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            anyhow::bail!("The Linux tray thread stopped before the icon was ready")
+        }
     }
 }
 
@@ -156,18 +161,26 @@ fn build_menu_and_icon(
                 return None;
             }
         };
-    match TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip("QoL Tray")
-        .with_icon(icon)
-        .build()
-    {
+    let built = catch_tray_panic(move || {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_tooltip("QoL Tray")
+            .with_icon(icon)
+            .build()
+            .map_err(|e| e.to_string())
+    });
+    match built {
         Ok(t) => Some((t, router)),
         Err(e) => {
             let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e)));
             None
         }
     }
+}
+
+fn catch_tray_panic<T>(build: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(build))
+        .unwrap_or_else(|panic| Err(crate::doctor::panic_payload_message(&panic)))
 }
 
 fn setup_event_loop(router: crate::menu::router::EventRouter, shutdown_tx: broadcast::Sender<()>) {
@@ -237,5 +250,23 @@ mod tests {
         super::request_shutdown(&shutdown_tx);
 
         assert!(shutdown_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_tray_library_that_panics_becomes_a_startup_error() {
+        let missing_library = super::catch_tray_panic::<()>(|| {
+            panic!("Failed to load ayatana-appindicator3 or appindicator3 dynamic library")
+        });
+        let refused = super::catch_tray_panic::<()>(|| Err("no status notifier".to_string()));
+        let built = super::catch_tray_panic(|| Ok(7));
+
+        assert_eq!(
+            missing_library,
+            Err(
+                "Failed to load ayatana-appindicator3 or appindicator3 dynamic library".to_string()
+            )
+        );
+        assert_eq!(refused, Err("no status notifier".to_string()));
+        assert_eq!(built, Ok(7));
     }
 }

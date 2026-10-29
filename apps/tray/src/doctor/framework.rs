@@ -336,7 +336,7 @@ fn synthesize_summary(issues: &[DoctorIssue]) -> String {
         .join("; ")
 }
 
-fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         return (*message).to_string();
     }

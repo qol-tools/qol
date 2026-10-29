@@ -13,6 +13,7 @@ pub mod trigger;
 
 use anyhow::Result;
 use diagnosis::{apply_fix, FixAction, FixApplicability};
+pub(crate) use framework::panic_payload_message;
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub(crate) use host_bindings::{
     free_host_bindings, host_answers_in, normalize_combo, shadowed_combos,
