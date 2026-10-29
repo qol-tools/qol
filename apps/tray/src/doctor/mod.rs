@@ -3,7 +3,7 @@ mod checks;
 mod cli;
 mod de_bindings;
 mod diagnosis;
-mod framework;
+pub(crate) mod framework;
 mod host_bindings;
 mod host_cli;
 mod install_id;
@@ -13,7 +13,6 @@ pub mod trigger;
 
 use anyhow::Result;
 use diagnosis::{apply_fix, FixAction, FixApplicability};
-pub(crate) use framework::panic_payload_message;
 use framework::{run_check, DoctorCheckResult, DoctorContext, Selector};
 pub(crate) use host_bindings::{
     free_host_bindings, host_answers_in, normalize_combo, shadowed_combos,

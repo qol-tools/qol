@@ -208,7 +208,7 @@ fn build_menu_and_icon(
 
 fn catch_tray_panic<T>(build: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(build))
-        .unwrap_or_else(|panic| Err(crate::doctor::panic_payload_message(&panic)))
+        .unwrap_or_else(|panic| Err(crate::doctor::framework::panic_payload_message(&panic)))
 }
 
 fn setup_event_loop(router: crate::menu::router::EventRouter, shutdown_tx: broadcast::Sender<()>) {
