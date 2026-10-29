@@ -2,27 +2,17 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::{DaemonConfig, SocketSource};
+use super::DaemonConfig;
 
 const MANIFEST_FILE_NAME: &str = "plugin.toml";
 
 pub(super) fn resolve(config: &DaemonConfig) -> Option<PathBuf> {
-    super::socket_path(config).or_else(|| manifest_assigned_socket_path(config))
+    super::socket_path(config).or_else(manifest_assigned_socket_path)
 }
 
-fn manifest_assigned_socket_path(config: &DaemonConfig) -> Option<PathBuf> {
-    let declared = declared_socket_name(config)?;
+fn manifest_assigned_socket_path() -> Option<PathBuf> {
+    let declared = read_manifest_socket_name_from(manifest_dir()?.as_path())?;
     qol_runtime::plugin_socket::assigned_socket_path(&declared)
-}
-
-fn declared_socket_name(config: &DaemonConfig) -> Option<String> {
-    if let SocketSource::Path(path) = &config.socket {
-        return path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(ToString::to_string);
-    }
-    read_manifest_socket_name_from(manifest_dir()?.as_path())
 }
 
 fn manifest_dir() -> Option<PathBuf> {
@@ -71,17 +61,13 @@ struct DaemonSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::SocketSource;
     use std::io::Write;
     use tempfile::TempDir;
 
     fn write_manifest(dir: &Path, body: &str) {
         let mut file = std::fs::File::create(dir.join(MANIFEST_FILE_NAME)).unwrap();
         file.write_all(body.as_bytes()).unwrap();
-    }
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|error| error.into_inner())
     }
 
     const SAMPLE_MANIFEST: &str = r#"[plugin]
@@ -184,7 +170,7 @@ items = []
 
     #[test]
     fn env_required_without_env_resolves_from_the_plugin_dir_manifest() {
-        let _lock = env_lock();
+        let _lock = super::super::tests::daemon_listener_fd_env_lock();
         let dir = TempDir::new().unwrap();
         write_manifest(dir.path(), SAMPLE_MANIFEST);
         std::env::remove_var(qol_conventions::ENV_DAEMON_SOCKET);
@@ -213,7 +199,7 @@ items = []
 
     #[test]
     fn env_required_with_env_prefers_the_env_over_the_manifest() {
-        let _lock = env_lock();
+        let _lock = super::super::tests::daemon_listener_fd_env_lock();
         let dir = TempDir::new().unwrap();
         write_manifest(dir.path(), SAMPLE_MANIFEST);
         std::env::set_var(qol_conventions::ENV_DAEMON_SOCKET, "/tmp/env-chosen.sock");
@@ -232,7 +218,7 @@ items = []
 
     #[test]
     fn env_required_without_env_returns_none_when_no_manifest_is_findable() {
-        let _lock = env_lock();
+        let _lock = super::super::tests::daemon_listener_fd_env_lock();
         let dir = TempDir::new().unwrap();
         std::env::remove_var(qol_conventions::ENV_DAEMON_SOCKET);
         std::env::set_var("QOL_TRAY_PLUGIN_DIR", dir.path());
