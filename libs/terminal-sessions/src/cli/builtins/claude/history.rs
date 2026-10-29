@@ -9,7 +9,9 @@ use qol_agent_homes::{Harness, Registry};
 use serde_json::Value;
 
 use crate::cli::chat::text_blocks;
-use crate::cli::{CliConversation, CliConversationMatch, CliResumeSettings, CliToolId};
+use crate::cli::{
+    is_typed_prompt, CliConversation, CliConversationMatch, CliResumeSettings, CliToolId,
+};
 
 use super::environment::{custom_config_dir, open_session_ids};
 use super::metadata::{
@@ -199,6 +201,7 @@ fn read_conversation(
         cwd,
         title: tail.facts.title.clone().or(tail.ai_title),
         first_prompt: head.first_prompt,
+        last_prompt: tail.last_prompt,
         last_active,
         pr_urls: tail.pr_urls,
         settings: CliResumeSettings {
@@ -270,6 +273,7 @@ fn user_prompt(value: &Value) -> Option<String> {
 struct Tail {
     facts: TranscriptFacts,
     ai_title: Option<String>,
+    last_prompt: Option<String>,
     pr_urls: Vec<String>,
 }
 
@@ -282,6 +286,15 @@ impl Tail {
                 .filter(|title| !title.is_empty())
             {
                 self.ai_title = Some(title);
+            }
+        }
+        if (newer || self.last_prompt.is_none()) && contains_bytes(line, USER_TAG) {
+            if let Some(prompt) = serde_json::from_slice::<Value>(line)
+                .ok()
+                .and_then(|value| user_prompt(&value))
+                .filter(|prompt| is_typed_prompt(prompt))
+            {
+                self.last_prompt = Some(prompt);
             }
         }
         if contains_bytes(line, PR_LINK_TAG) {
@@ -297,11 +310,13 @@ impl Tail {
         self.facts.title.is_some()
             && self.facts.permission_mode.is_some()
             && self.facts.request.is_some()
+            && self.last_prompt.is_some()
     }
 
     fn fill_from(&mut self, older: Tail) {
         self.facts = std::mem::take(&mut self.facts).or(older.facts);
         self.ai_title = self.ai_title.take().or(older.ai_title);
+        self.last_prompt = self.last_prompt.take().or(older.last_prompt);
         for url in older.pr_urls.into_iter().rev() {
             if !self.pr_urls.contains(&url) {
                 self.pr_urls.push(url);
@@ -405,6 +420,8 @@ mod tests {
                 &first,
                 r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/6"}"#,
                 &prompt("a later prompt"),
+                &prompt("[qol session] 1 new message from child. Read it with session_inbox."),
+                &prompt("<task-notification>done</task-notification>"),
                 r#"{"type":"api-request","querySource":"repl_main_thread","params":{"model":"claude-opus-5-5","output_config":{"effort":"high"}}}"#,
                 r#"{"type":"ai-title","aiTitle":"Older title"}"#,
                 r#"{"type":"pr-link","prUrl":"https://github.com/o/r/pull/7"}"#,
@@ -432,6 +449,7 @@ mod tests {
                 cwd: "/work/proj".to_owned(),
                 title: Some("Login bug fix".to_owned()),
                 first_prompt: Some("fix the login bug\nwith details".to_owned()),
+                last_prompt: Some("a later prompt".to_owned()),
                 last_active: modified,
                 pr_urls: vec![
                     "https://github.com/o/r/pull/7".to_owned(),

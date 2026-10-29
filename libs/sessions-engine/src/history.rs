@@ -2,18 +2,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
-use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter};
+use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
 use qol_terminal_sessions::closed::{self, ClosedRecord};
 
 use super::bridge::BRIDGE_HEADER;
 use super::fork::{brief_in_prompt, ForkStore, FORK_HEADER};
 
 const PROMPT_TITLE_CHARS: usize = 80;
-const RESERVED_PROMPT_PREFIX: &str = "[qol ";
 
 pub(super) struct ClosedEntry {
     pub(super) record: ClosedRecord,
     pub(super) pr_urls: Vec<String>,
+    pub(super) last_prompt: Option<String>,
 }
 
 pub(super) struct History<'a> {
@@ -31,6 +31,7 @@ impl History<'_> {
             .map(|record| ClosedEntry {
                 record,
                 pr_urls: Vec::new(),
+                last_prompt: None,
             })
             .collect::<Vec<_>>();
         for conversation in self.conversations(now) {
@@ -38,12 +39,14 @@ impl History<'_> {
                 .iter_mut()
                 .find(|entry| entry.record.external_id == conversation.external_id)
             {
+                entry.last_prompt = last_prompt(&conversation);
                 entry.pr_urls = conversation.pr_urls;
                 continue;
             }
             if let Some(record) = self.record(&conversation) {
                 entries.push(ClosedEntry {
                     record,
+                    last_prompt: last_prompt(&conversation),
                     pr_urls: conversation.pr_urls,
                 });
             }
@@ -127,6 +130,10 @@ fn same_dir(left: &Path, right: &Path) -> bool {
             (left.canonicalize(), right.canonicalize()),
             (Ok(left), Ok(right)) if left == right
         )
+}
+
+fn last_prompt(conversation: &CliConversation) -> Option<String> {
+    conversation.last_prompt.as_deref().and_then(prompt_title)
 }
 
 fn prompt_title(prompt: &str) -> Option<String> {
