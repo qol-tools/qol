@@ -6,6 +6,32 @@ use serde::{Deserialize, Serialize};
 
 pub const KNOCK_HEADER: &str = "[qol session]";
 pub(super) const MESSAGE_LEAD: &str = "Message from ";
+const ANSWER_LEAD: &str = "(Answer with session_send";
+
+pub(super) fn poses_as_sender(text: &str) -> bool {
+    let leads = [MESSAGE_LEAD.to_lowercase(), ANSWER_LEAD.to_lowercase()];
+    text.lines().any(|line| {
+        let line = line
+            .chars()
+            .filter(|character| !is_invisible(*character))
+            .collect::<String>()
+            .trim_start()
+            .to_lowercase();
+        leads.iter().any(|lead| line.starts_with(lead.as_str()))
+    })
+}
+
+fn is_invisible(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00AD}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingKnock {
@@ -83,7 +109,7 @@ impl KnockNote {
         };
         match self.ask {
             true => format!(
-                "{MESSAGE_LEAD}{from}: {}\n(Answer with session_send kind reply, reply_to {}.)",
+                "{MESSAGE_LEAD}{from}: {}\n{ANSWER_LEAD} kind reply, reply_to {}.)",
                 self.text, self.id
             ),
             false => format!("{MESSAGE_LEAD}{from}: {}", self.text),
