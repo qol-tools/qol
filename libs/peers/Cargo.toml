@@ -45,7 +45,7 @@ thiserror = "2"
 mdns-sd = { version = "=0.21.4", optional = true }
 p256 = { version = "0.13.2", default-features = false, features = ["arithmetic"], optional = true }
 rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "zeroize"], optional = true }
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"], optional = true }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"], optional = true }
 sha2 = { workspace = true, optional = true }
 time = { version = "0.3", optional = true }
 subtle = { version = "2.6", optional = true }
@@ -71,7 +71,7 @@ windows-sys = { version = "0.59", optional = true, features = [
 ] }
 
 [dev-dependencies]
-rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json.workspace = true
 tempfile = "3.27"
 tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt", "time", "sync", "test-util"] }
