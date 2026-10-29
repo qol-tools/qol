@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::board::BoardStore;
-use super::knocks::{poses_as_sender, KnockNote, KnockStore, MESSAGE_LEAD};
+use super::knocks::{has_line_separator, poses_as_sender, KnockNote, KnockStore, MESSAGE_LEAD};
 use super::lineage::LineageStore;
 use super::switchboard::SWITCHBOARD_KEY;
 
@@ -229,6 +229,9 @@ impl MailboxStore {
 impl Messaging<'_> {
     pub(super) fn send(&self, live_keys: &[String], request: &SendRequest<'_>) -> Result<Message> {
         validate_text(request.text, "message")?;
+        if has_line_separator(request.text) {
+            bail!("the message text contains a carriage return or Unicode line separator; use plain newlines");
+        }
         if poses_as_sender(request.text) {
             bail!("the message text has a line starting `{MESSAGE_LEAD}`, which the knock uses to name who sent each message");
         }

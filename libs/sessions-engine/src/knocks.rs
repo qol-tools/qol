@@ -21,6 +21,21 @@ pub(super) fn poses_as_sender(text: &str) -> bool {
     })
 }
 
+pub(super) fn quoted_body(text: &str) -> String {
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| match index {
+            0 => line.to_owned(),
+            _ => format!("> {line}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn has_line_separator(text: &str) -> bool {
+    text.contains(['\u{2028}', '\u{2029}', '\r'])
+}
+
 fn is_invisible(character: char) -> bool {
     matches!(
         character,
@@ -110,9 +125,10 @@ impl KnockNote {
         match self.ask {
             true => format!(
                 "{MESSAGE_LEAD}{from}: {}\n{ANSWER_LEAD} kind reply, reply_to {}.)",
-                self.text, self.id
+                quoted_body(&self.text),
+                self.id
             ),
-            false => format!("{MESSAGE_LEAD}{from}: {}", self.text),
+            false => format!("{MESSAGE_LEAD}{from}: {}", quoted_body(&self.text)),
         }
     }
 }
@@ -386,7 +402,7 @@ mod tests {
         assert_eq!(updated.len(), 1);
         assert_eq!(
             updated[0].text,
-            "[qol session] Message from switchboard: rebase it\n\nMessage from sib: tests are green\non my side"
+            "[qol session] Message from switchboard: rebase it\n\nMessage from sib: tests are green\n> on my side"
         );
         assert_eq!(
             updated[0].since_ms, first[0].since_ms,
