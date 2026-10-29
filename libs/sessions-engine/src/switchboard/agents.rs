@@ -47,6 +47,14 @@ impl ForkAgent {
     }
 }
 
+pub(super) fn admit_model(model: &str) -> anyhow::Result<()> {
+    let defaults = crate::spawn::config_launch_defaults()?;
+    let policy = crate::spawn::config_dispatch_policy()?;
+    let model = defaults.alias(Some(model.to_owned())).unwrap_or_default();
+    enforce_allowed_model(&model, &policy.allowed_models)?;
+    enforce_tool_model(CLAUDE, &model, &policy.tool_models)
+}
+
 pub(super) fn agents_json(fork: &ForkAgent) -> String {
     let mut project_fork = Map::new();
     project_fork.insert(

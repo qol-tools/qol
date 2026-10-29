@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -29,6 +30,16 @@ struct Meta {
     worktree_path: Option<String>,
 }
 
+fn has_assistant_row(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.contains("\"type\":\"assistant\""))
+}
+
 pub(super) fn latest_conversation(config_home: &Path, switchboard: &Path) -> Option<String> {
     let mut found: Vec<(SystemTime, String)> =
         fs::read_dir(conversations_dir(config_home, switchboard))
@@ -40,8 +51,7 @@ pub(super) fn latest_conversation(config_home: &Path, switchboard: &Path) -> Opt
                     return None;
                 }
                 let id = path.file_stem()?.to_str()?.to_owned();
-                let text = fs::read_to_string(&path).ok()?;
-                if !text.contains("\"type\":\"assistant\"") {
+                if !has_assistant_row(&path) {
                     return None;
                 }
                 Some((entry.metadata().ok()?.modified().ok()?, id))

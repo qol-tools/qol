@@ -8,6 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::agents::admit_model;
 use super::context;
 use super::paths::{claude_home, switchboard_dir};
 use super::resume::{recorded_worktree, FORK_AGENT};
@@ -25,6 +26,7 @@ const PROJECT_PREFIX: &str = "Project:";
 struct ToolInput {
     subagent_type: Option<String>,
     prompt: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -163,7 +165,12 @@ fn project_of(prompt: &str) -> Result<PathBuf, String> {
     })
 }
 
-fn pre_agent(pins: &Pins, payload: &Payload, now: SystemTime) -> Result<Verdict> {
+fn pre_agent(
+    pins: &Pins,
+    payload: &Payload,
+    now: SystemTime,
+    admit: &dyn Fn(&str) -> Result<()>,
+) -> Result<Verdict> {
     if payload.agent_id.is_some() || payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT)
     {
         return Ok(Verdict::Pass);
@@ -172,6 +179,11 @@ fn pre_agent(pins: &Pins, payload: &Payload, now: SystemTime) -> Result<Verdict>
         Ok(project) => project,
         Err(reason) => return Ok(Verdict::Deny(reason)),
     };
+    if let Some(model) = payload.tool_input.model.as_deref() {
+        if let Err(error) = admit(model) {
+            return Ok(Verdict::Deny(format!("{error:#}")));
+        }
+    }
     let (Some(session), Some(tool_use)) = (&payload.session_id, &payload.tool_use_id) else {
         return Ok(Verdict::Deny(
             "The hook payload carried no session or tool use id, so the fork's folder cannot be pinned.".to_owned(),
@@ -276,7 +288,8 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     let now = SystemTime::now();
     match name {
         PRE_AGENT => {
-            if let Verdict::Deny(reason) = pre_agent(&Pins::system()?, &payload, now)? {
+            if let Verdict::Deny(reason) = pre_agent(&Pins::system()?, &payload, now, &admit_model)?
+            {
                 crate::cli::line(deny_json(&reason));
             }
         }
@@ -324,6 +337,14 @@ mod tests {
         }
     }
 
+    fn admit_all(_model: &str) -> Result<()> {
+        Ok(())
+    }
+
+    fn admit_none(model: &str) -> Result<()> {
+        bail!("model {model} is not allowed")
+    }
+
     fn call(tool_use: &str, subagent: &str, prompt: &str) -> Payload {
         Payload {
             session_id: Some("s1".to_owned()),
@@ -331,6 +352,7 @@ mod tests {
             tool_input: ToolInput {
                 subagent_type: Some(subagent.to_owned()),
                 prompt: Some(prompt.to_owned()),
+                model: None,
             },
             ..Payload::default()
         }
@@ -362,8 +384,9 @@ mod tests {
             format!("Project: {}\nfix it", missing.display()),
             format!("fix it\nProject: {}", rig.project_a.display()),
         ] {
-            let reason =
-                denied(pre_agent(&rig.pins, &call("t1", FORK_AGENT, &prompt), now).unwrap());
+            let reason = denied(
+                pre_agent(&rig.pins, &call("t1", FORK_AGENT, &prompt), now, &admit_all).unwrap(),
+            );
             assert!(reason.contains("Project: <absolute path"), "{reason}");
         }
         assert!(rig.pins.live("s1", now).is_empty());
@@ -374,14 +397,16 @@ mod tests {
         let rig = rig();
         let now = SystemTime::now();
         assert_eq!(
-            pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap(),
+            pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap(),
             Verdict::Pass
         );
         assert_eq!(
-            pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now).unwrap(),
+            pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap(),
             Verdict::Pass
         );
-        let reason = denied(pre_agent(&rig.pins, &fork_call("t3", &rig.project_b), now).unwrap());
+        let reason = denied(
+            pre_agent(&rig.pins, &fork_call("t3", &rig.project_b), now, &admit_all).unwrap(),
+        );
         assert!(reason.contains("later message"), "{reason}");
         assert!(
             reason.contains(&rig.project_a.display().to_string()),
@@ -394,10 +419,16 @@ mod tests {
     fn a_stale_pin_is_ignored_and_removed() {
         let rig = rig();
         let now = SystemTime::now();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap();
+        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
         let later = now + PIN_TTL + Duration::from_secs(5);
         assert_eq!(
-            pre_agent(&rig.pins, &fork_call("t2", &rig.project_b), later).unwrap(),
+            pre_agent(
+                &rig.pins,
+                &fork_call("t2", &rig.project_b),
+                later,
+                &admit_all
+            )
+            .unwrap(),
             Verdict::Pass
         );
         let live = rig.pins.live("s1", now);
@@ -410,25 +441,51 @@ mod tests {
         let rig = rig();
         let now = SystemTime::now();
         let other = call("t1", "general-purpose", "no project line");
-        assert_eq!(pre_agent(&rig.pins, &other, now).unwrap(), Verdict::Pass);
+        assert_eq!(
+            pre_agent(&rig.pins, &other, now, &admit_all).unwrap(),
+            Verdict::Pass
+        );
         let mut from_subagent = fork_call("t2", &rig.project_a);
         from_subagent.agent_id = Some("a123".to_owned());
         assert_eq!(
-            pre_agent(&rig.pins, &from_subagent, now).unwrap(),
+            pre_agent(&rig.pins, &from_subagent, now, &admit_all).unwrap(),
             Verdict::Pass
         );
         let mut unscoped = call("t3", FORK_AGENT, "no project line");
         unscoped.agent_id = Some("a123".to_owned());
-        assert_eq!(pre_agent(&rig.pins, &unscoped, now).unwrap(), Verdict::Pass);
+        assert_eq!(
+            pre_agent(&rig.pins, &unscoped, now, &admit_all).unwrap(),
+            Verdict::Pass
+        );
         assert!(rig.pins.live("s1", now).is_empty());
+    }
+
+    #[test]
+    fn a_model_the_policy_does_not_admit_is_denied_and_none_is_always_fine() {
+        let rig = rig();
+        let now = SystemTime::now();
+        let mut named = fork_call("t1", &rig.project_a);
+        named.tool_input.model = Some("opus".to_owned());
+        let reason = denied(pre_agent(&rig.pins, &named, now, &admit_none).unwrap());
+        assert!(reason.contains("model opus is not allowed"), "{reason}");
+        assert!(rig.pins.live("s1", now).is_empty());
+        assert_eq!(
+            pre_agent(&rig.pins, &named, now, &admit_all).unwrap(),
+            Verdict::Pass
+        );
+        let unnamed = fork_call("t2", &rig.project_a);
+        assert_eq!(
+            pre_agent(&rig.pins, &unnamed, now, &admit_none).unwrap(),
+            Verdict::Pass
+        );
     }
 
     #[test]
     fn post_agent_removes_the_pin_of_its_tool_use() {
         let rig = rig();
         let now = SystemTime::now();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap();
-        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now).unwrap();
+        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
+        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap();
         post_agent(&rig.pins, &fork_call("t1", &rig.project_a)).unwrap();
         let live = rig.pins.live("s1", now);
         assert_eq!(
@@ -454,8 +511,8 @@ mod tests {
         let rig = rig();
         let now = SystemTime::now();
         let transcript = rig._root.path().join("t/s1.jsonl");
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap();
-        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now).unwrap();
+        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
+        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap();
         let got =
             worktree_create(&rig.pins, &creation("agent-new", "s1", &transcript), now).unwrap();
         assert_eq!(got, rig.project_a);
@@ -470,7 +527,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("Project: <absolute path"), "{error}");
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap();
+        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
         rig.pins.write("s1", "t9", &rig.project_b).unwrap();
         assert!(
             worktree_create(&rig.pins, &creation("agent-new", "s1", &transcript), now).is_err()
@@ -489,7 +546,7 @@ mod tests {
         fs::create_dir_all(&subagents).unwrap();
         let meta = json!({"agentType": "project-fork", "worktreePath": rig.project_b});
         fs::write(subagents.join("agent-abc123.meta.json"), meta.to_string()).unwrap();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now).unwrap();
+        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
         let got =
             worktree_create(&rig.pins, &creation("agent-abc123", "s1", &transcript), now).unwrap();
         assert_eq!(got, rig.project_b);
