@@ -60,7 +60,7 @@ impl LaunchDefaults {
         }
     }
 
-    fn alias(&self, value: Option<String>) -> Option<String> {
+    pub(super) fn alias(&self, value: Option<String>) -> Option<String> {
         value.map(|value| self.aliases.get(&value).cloned().unwrap_or(value))
     }
 

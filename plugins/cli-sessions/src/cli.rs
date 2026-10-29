@@ -277,6 +277,7 @@ where
                 .about("Open the switchboard, the one chat that starts, lists, closes and messages your sessions.")
                 .usage(format!("{PLUGIN_ID} {SWITCHBOARD} [{HERE}]"))
                 .detail("Focuses the live switchboard, or opens one in a new kitty window; with no kitty running it starts kitty for it.")
+                .detail("New work runs as forks, which are Claude Code subagents inside the one switchboard chat instead of a terminal each. Select a fork in the agent list under the prompt to talk to it. A new switchboard resumes the newest switchboard conversation and wakes the forks that were running or waiting when the last one ended.")
                 .detail(format!("{HERE} makes the calling kitty window the switchboard when none is live; when one is, it starts nothing and exits {}, so a wrapper like clauded starts its usual chat.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
                 .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at medium effort unless changed.")
                 .output(format!("One line saying what was focused, opened or started on stdout; with {HERE} this process becomes claude."))
