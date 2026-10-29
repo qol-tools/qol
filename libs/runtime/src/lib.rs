@@ -12,6 +12,7 @@ pub mod local_ipc;
 
 mod client;
 pub mod plugin_config;
+pub mod plugin_socket;
 mod types;
 
 mod watchdog;
