@@ -1,6 +1,6 @@
 [package]
 name = "qol-shot"
-version = "1.110.7"
+version = "1.110.8"
 edition = "2021"
 
 [dependencies]
