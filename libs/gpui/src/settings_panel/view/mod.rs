@@ -58,7 +58,7 @@ use crate::kit::Kit;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
-use crate::surface::{PanelDragArea, SurfaceDismisser};
+use crate::surface::{DragGestureState, PanelDragArea, SurfaceDismisser};
 use crate::text_edit::{Span, TextField};
 use qol_config::contract::NumberConstraints;
 
@@ -288,6 +288,7 @@ pub(super) struct SettingsPanelView {
     deck_motion: Option<DeckMotion>,
     closing: bool,
     back_target: Option<usize>,
+    drag_gesture: Rc<RefCell<DragGestureState>>,
     card_marks: Vec<Option<f32>>,
     render_level: std::cell::Cell<usize>,
     height_cap: f32,
@@ -502,6 +503,7 @@ impl SettingsPanelView {
             deck_transition: TransitionTracker::default(),
             closing: false,
             back_target: None,
+            drag_gesture: Rc::new(RefCell::new(DragGestureState::new(4.0))),
             card_marks: Vec::new(),
             render_level: std::cell::Cell::new(usize::MAX),
             deck_motion: None,
@@ -4914,15 +4916,28 @@ impl SettingsPanelView {
         rgba(self.kit.washes.hairline.packed())
     }
 
-    fn render_band(&self, cx: &App) -> Div {
+    fn render_band(&self, cx: &Context<Self>) -> Div {
         let trail = self.trail(cx);
-        settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit)
-            .panel_drag_area()
-            .child(CrumbTrail::new(
-                "settings-crumb-trail",
-                trail.iter().map(|crumb| crumb.to_lowercase()),
-                self.kit,
-            ))
+        let crumbs = CrumbTrail::new(
+            "settings-crumb-trail",
+            trail.iter().map(|crumb| crumb.to_lowercase()),
+            self.kit,
+        );
+        let band = settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit);
+        if self.current_source_is_custom() {
+            return band.panel_drag_area().child(crumbs);
+        }
+        let first_card = trail.len().saturating_sub(self.stack.len() - 1);
+        let view = cx.weak_entity();
+        let gesture = self.drag_gesture.clone();
+        band.panel_drag_after(&self.drag_gesture)
+            .child(crumbs.on_crumb(move |index, window, cx| {
+                if gesture.borrow().is_moving() {
+                    return;
+                }
+                let level = crumb_level(index, first_card);
+                let _ = view.update(cx, |this, cx| this.back_to(level, window, cx));
+            }))
     }
 
     fn render_filter_field(&self) -> Div {
@@ -6490,6 +6505,10 @@ fn focus_enters_the_body(plugin_id: &str) -> bool {
     plugin_id != qol_conventions::CORE_PANEL_ID
 }
 
+fn crumb_level(index: usize, first_card: usize) -> usize {
+    (index + 1).saturating_sub(first_card)
+}
+
 fn crumb_labels(heading: &str, plugin: Option<String>, parents: Vec<String>) -> Vec<String> {
     let mut labels = vec![heading.to_string()];
     labels.extend(plugin.filter(|title| title != heading));
@@ -6548,7 +6567,7 @@ mod tests {
     use super::{
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
-        clamp_selected, coarse_drag, color_display, complete_action, crumb_labels,
+        clamp_selected, coarse_drag, color_display, complete_action, crumb_labels, crumb_level,
         due_query_indices, edit_display, erase_typed, escape_step, field_id_unit, focus_level,
         format_number, header_is_redundant, horizontal_step_direction, intent, list_fit_updates,
         live_card_level, live_card_sync, live_card_sync_back, live_number_dispatch_plan,
@@ -9225,6 +9244,14 @@ active_value_from = "active"
             ),
             vec!["qol settings", "Key remap", "Excluded apps"]
         );
+    }
+
+    #[test]
+    fn a_crumb_goes_back_to_its_card_and_the_crumbs_above_the_cards_go_to_the_root() {
+        let first_card = 2;
+        for (index, level) in [(0, 0), (1, 0), (2, 1), (3, 2)] {
+            assert_eq!(crumb_level(index, first_card), level, "crumb {index}");
+        }
     }
 
     #[test]
