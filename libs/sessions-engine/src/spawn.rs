@@ -1552,6 +1552,7 @@ pub(super) fn spawn_or_reuse(
                                 &marker,
                                 super::bridge::Role::Lane,
                                 joined,
+                                None,
                             )
                         },
                         admission.assignment.as_ref(),

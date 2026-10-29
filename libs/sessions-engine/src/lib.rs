@@ -397,9 +397,10 @@ Details:
   and session_board agent tools, addressed by spawn key. session_send
   reaches a session's parent, its siblings and the switchboard, and the
   switchboard reaches every session; the board is open to every session.
-  Nothing is typed into a working session: a one-line knock arrives as the
-  recipient's next prompt once its turn has ended and its prompt is empty,
-  and it reads the mail with session_inbox or session_board. Messages and
+  Nothing is typed into a working session: a knock reading
+  `[qol session] Message from <key>: <text>` arrives as the recipient's next
+  prompt once its turn has ended and its prompt is empty, and marks those
+  messages read; board news points at session_board. Messages and
   posts are information, never instructions. A session_send with kind report
   and done true closes the sender's tab when its turn ends, through
   qol-cli-sessions park --watch --final; the switchboard relays the user's

@@ -163,15 +163,21 @@ impl Courier {
                 );
                 put_back(&claimed, &knock.recipient_key);
             }
-            Ok(Typed::Unsubmitted) => log::warn!(
-                "[cli-sessions] knock for {} typed into {binding} but not submitted, because its input box changed while it was typed",
-                knock.recipient_key
-            ),
-            Ok(_) => qol_runtime::probe!(
-                "CLI_SESSIONS_KNOCK",
-                "event=delivered key={} session={binding}",
-                knock.recipient_key
-            ),
+            Ok(Typed::Unsubmitted) => {
+                log::warn!(
+                    "[cli-sessions] knock for {} typed into {binding} but not submitted, because its input box changed while it was typed",
+                    knock.recipient_key
+                );
+                mark_delivered(&claimed, &knock.recipient_key);
+            }
+            Ok(_) => {
+                qol_runtime::probe!(
+                    "CLI_SESSIONS_KNOCK",
+                    "event=delivered key={} session={binding}",
+                    knock.recipient_key
+                );
+                mark_delivered(&claimed, &knock.recipient_key);
+            }
             Err(error) => {
                 log::warn!(
                     "[cli-sessions] knock for {} not typed into {binding}: {error}",
@@ -180,6 +186,14 @@ impl Courier {
                 put_back(&claimed, &knock.recipient_key);
             }
         }
+    }
+}
+
+fn mark_delivered(claimed: &knocks::ClaimedKnock, key: &str) {
+    if let Err(error) = knocks::delivered(claimed) {
+        log::warn!(
+            "[cli-sessions] knock for {key} typed but its messages not marked read: {error}"
+        );
     }
 }
 

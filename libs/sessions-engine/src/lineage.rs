@@ -74,6 +74,14 @@ impl LineageStore {
     }
 }
 
+pub(super) fn caller_key(terminals: &TerminalSessionService) -> Option<String> {
+    let token = super::bridge::driver_token(terminals);
+    session_key(
+        terminals,
+        Some(token.as_str()).filter(|token| !token.is_empty()),
+    )
+}
+
 pub(super) fn session_key(
     terminals: &TerminalSessionService,
     token: Option<&str>,
