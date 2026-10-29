@@ -278,7 +278,7 @@ where
                 .usage(format!("{PLUGIN_ID} {SWITCHBOARD} [{HERE}]"))
                 .detail("Focuses the live switchboard, or opens one in a new kitty window; with no kitty running it starts kitty for it.")
                 .detail(format!("{HERE} makes the calling kitty window the switchboard when none is live; when one is, it starts nothing and exits {}, so a wrapper like clauded starts its usual chat.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
-                .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at low effort unless changed.")
+                .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at medium effort unless changed.")
                 .output(format!("One line saying what was focused, opened or started on stdout; with {HERE} this process becomes claude."))
                 .exit_behavior(format!("With {HERE}, exits {} when a switchboard is already live. Exits non-zero when the switchboard cannot be focused, opened or started.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
                 .run_plain_text(|context| {

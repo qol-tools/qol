@@ -18,7 +18,7 @@ use super::spawn::{
 
 pub const SWITCHBOARD_KEY: &str = "switchboard";
 pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
-pub const DEFAULT_EFFORT: &str = "low";
+pub const DEFAULT_EFFORT: &str = "medium";
 pub const HERE_TAKEN_EXIT: u8 = 3;
 const SWITCHBOARD_TOOL: &str = "claude";
 const SWITCHBOARD_SURFACE: &str = "os-window";
@@ -735,7 +735,7 @@ mod tests {
             "{argv:?}"
         );
         assert!(
-            argv.windows(2).any(|pair| pair == ["--effort", "low"]),
+            argv.windows(2).any(|pair| pair == ["--effort", "medium"]),
             "{argv:?}"
         );
         assert!(argv.ends_with(&profile_args(&plan)), "{argv:?}");

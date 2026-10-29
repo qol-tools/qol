@@ -64,7 +64,7 @@ config_key = "switchboard_effort"
 label = "Switchboard effort"
 description = "How hard the switchboard thinks before each short reply."
 card_description = "How hard the switchboard thinks."
-default = "low"
+default = "medium"
 options = ["low", "medium", "high", "xhigh", "max"]
 
 [field.switchboard_effort.option_labels]
