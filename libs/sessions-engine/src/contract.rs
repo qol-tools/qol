@@ -10,6 +10,7 @@ use super::spawn::surface_token;
 use super::switchboard::SWITCHBOARD_KEY;
 
 pub(crate) const ATTENTION_STALE_AFTER_MS: u64 = 30_000;
+const WORK_DAY_START_HOUR: i64 = 5;
 
 pub(crate) const SWITCHBOARD_TOOLS: [&str; 9] = [
     "sessions_list",
@@ -193,9 +194,12 @@ pub(crate) struct ClosedRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) excerpt: Option<String>,
     pub(crate) closed_at: String,
     pub(crate) closed_ago: String,
+    pub(crate) work_day: String,
 }
 
 #[derive(Default, Serialize)]
@@ -206,16 +210,23 @@ pub(crate) struct ClosedOmitted {
     pub(crate) beyond_limit: usize,
 }
 
-pub(crate) fn closed_row(record: &ClosedRecord, excerpt: Option<String>, now: u64) -> ClosedRow {
+pub(crate) fn closed_row(
+    record: &ClosedRecord,
+    last_prompt: Option<String>,
+    excerpt: Option<String>,
+    now: u64,
+) -> ClosedRow {
     ClosedRow {
         external_id: record.external_id.clone(),
         tool: record.tool.clone(),
         cwd: record.cwd.clone(),
         title: record.title.clone(),
         key: record.key.clone(),
+        last_prompt,
         excerpt,
         closed_at: local_time(record.closed_at),
         closed_ago: ago(now.saturating_sub(record.closed_at)),
+        work_day: work_day(record.closed_at, now),
     }
 }
 
@@ -228,6 +239,25 @@ fn local_time(secs: u64) -> String {
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
         })
         .unwrap_or_else(|| secs.to_string())
+}
+
+fn work_day(secs: u64, now: u64) -> String {
+    let day = |secs: u64| {
+        i64::try_from(secs)
+            .ok()
+            .and_then(|secs| {
+                chrono::DateTime::from_timestamp(secs - WORK_DAY_START_HOUR * 3_600, 0)
+            })
+            .map(|time| time.with_timezone(&chrono::Local).date_naive())
+    };
+    match (day(secs), day(now)) {
+        (Some(day), Some(today)) => match (today - day).num_days() {
+            0 => "today".to_owned(),
+            1 => "yesterday".to_owned(),
+            _ => day.format("%A %Y-%m-%d").to_string(),
+        },
+        _ => secs.to_string(),
+    }
 }
 
 fn ago(elapsed_secs: u64) -> String {
@@ -281,7 +311,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, excerpt when text is given, closed_at in local time and closed_ago (for a history row, when the conversation last wrote). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
+            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, last_prompt (the first line of the newest prompt typed in it, from the tool's history, so rows sharing a title can be told apart), excerpt when text is given, closed_at in local time, closed_ago (for a history row, when the conversation last wrote) and work_day (today, yesterday, or the weekday and date of the work day it closed on; a work day starts at 05:00 local time, so a conversation closed after midnight counts as the evening before). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -854,7 +884,7 @@ mod tests {
             lane: false,
             closed_at: 1_700_000_000,
         };
-        let row = closed_row(&record, None, 1_700_000_000 + 2 * 86_400 + 5);
+        let row = closed_row(&record, None, None, 1_700_000_000 + 2 * 86_400 + 5);
         assert_eq!(row.external_id, "abc");
         assert_eq!(row.closed_ago, "2 days ago");
         assert!(row.closed_at.starts_with("2023-11-1"), "{}", row.closed_at);
@@ -890,9 +920,35 @@ mod tests {
             lane: false,
             closed_at: u64::MAX,
         };
-        let row = closed_row(&record, None, 1_700_000_000);
+        let row = closed_row(&record, None, None, 1_700_000_000);
         assert_eq!(row.closed_at, u64::MAX.to_string());
         assert_eq!(row.closed_ago, "just now");
+        assert_eq!(row.work_day, u64::MAX.to_string());
+    }
+
+    #[test]
+    fn a_closed_row_counts_a_session_closed_before_five_as_the_previous_work_day() {
+        let local = |day: u32, hour: u32, minute: u32| {
+            chrono::NaiveDate::from_ymd_opt(2026, 10, day)
+                .and_then(|date| date.and_hms_opt(hour, minute, 0))
+                .and_then(|time| time.and_local_timezone(chrono::Local).earliest())
+                .map(|time| time.timestamp() as u64)
+                .unwrap()
+        };
+        let now = local(29, 10, 0);
+        for (closed_at, expected) in [
+            (local(29, 9, 30), "today"),
+            (local(29, 5, 0), "today"),
+            (local(29, 1, 8), "yesterday"),
+            (local(29, 0, 25), "yesterday"),
+            (local(28, 23, 29), "yesterday"),
+            (local(28, 16, 42), "yesterday"),
+            (local(28, 4, 0), "Tuesday 2026-10-27"),
+            (local(26, 12, 0), "Monday 2026-10-26"),
+        ] {
+            assert_eq!(work_day(closed_at, now), expected, "{closed_at}");
+        }
+        assert_eq!(work_day(local(29, 3, 0), local(29, 4, 0)), "today");
     }
 
     #[test]

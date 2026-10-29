@@ -22,6 +22,7 @@ const HEAD_BUDGET: u64 = 256 * 1024;
 const TAIL_BUDGET: u64 = 256 * 1024;
 const TAIL_CHUNK: u64 = 16 * 1024;
 const PROMPT_CHARS: usize = 2048;
+const RECENT_PROMPTS: usize = 4;
 const ENTRYPOINT_KEY: &[u8] = b"\"entrypoint\"";
 const USER_TAG: &[u8] = b"\"type\":\"user\"";
 const AI_TITLE_TAG: &[u8] = b"\"type\":\"ai-title\"";
@@ -199,6 +200,7 @@ fn read_conversation(
         cwd,
         title: tail.facts.title.clone().or(tail.ai_title),
         first_prompt: head.first_prompt,
+        recent_prompts: tail.recent_prompts,
         last_active,
         pr_urls: tail.pr_urls,
         settings: CliResumeSettings {
@@ -270,6 +272,7 @@ fn user_prompt(value: &Value) -> Option<String> {
 struct Tail {
     facts: TranscriptFacts,
     ai_title: Option<String>,
+    recent_prompts: Vec<String>,
     pr_urls: Vec<String>,
 }
 
@@ -282,6 +285,19 @@ impl Tail {
                 .filter(|title| !title.is_empty())
             {
                 self.ai_title = Some(title);
+            }
+        }
+        if (newer || self.recent_prompts.len() < RECENT_PROMPTS) && contains_bytes(line, USER_TAG) {
+            if let Some(prompt) = serde_json::from_slice::<Value>(line)
+                .ok()
+                .and_then(|value| user_prompt(&value))
+            {
+                if newer {
+                    self.recent_prompts.insert(0, prompt);
+                    self.recent_prompts.truncate(RECENT_PROMPTS);
+                } else {
+                    self.recent_prompts.push(prompt);
+                }
             }
         }
         if contains_bytes(line, PR_LINK_TAG) {
@@ -302,6 +318,12 @@ impl Tail {
     fn fill_from(&mut self, older: Tail) {
         self.facts = std::mem::take(&mut self.facts).or(older.facts);
         self.ai_title = self.ai_title.take().or(older.ai_title);
+        for prompt in older.recent_prompts {
+            if self.recent_prompts.len() < RECENT_PROMPTS && !self.recent_prompts.contains(&prompt)
+            {
+                self.recent_prompts.push(prompt);
+            }
+        }
         for url in older.pr_urls.into_iter().rev() {
             if !self.pr_urls.contains(&url) {
                 self.pr_urls.push(url);
@@ -432,6 +454,10 @@ mod tests {
                 cwd: "/work/proj".to_owned(),
                 title: Some("Login bug fix".to_owned()),
                 first_prompt: Some("fix the login bug\nwith details".to_owned()),
+                recent_prompts: vec![
+                    "a later prompt".to_owned(),
+                    "fix the login bug\nwith details".to_owned(),
+                ],
                 last_active: modified,
                 pr_urls: vec![
                     "https://github.com/o/r/pull/7".to_owned(),

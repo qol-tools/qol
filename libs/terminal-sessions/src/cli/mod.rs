@@ -53,6 +53,7 @@ pub struct CliConversation {
     pub cwd: String,
     pub title: Option<String>,
     pub first_prompt: Option<String>,
+    pub recent_prompts: Vec<String>,
     pub last_active: u64,
     pub pr_urls: Vec<String>,
     pub settings: CliResumeSettings,

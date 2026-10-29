@@ -10,10 +10,12 @@ use super::fork::{brief_in_prompt, ForkStore, FORK_HEADER};
 
 const PROMPT_TITLE_CHARS: usize = 80;
 const RESERVED_PROMPT_PREFIX: &str = "[qol ";
+const HARNESS_BLOCK_PREFIX: char = '<';
 
 pub(super) struct ClosedEntry {
     pub(super) record: ClosedRecord,
     pub(super) pr_urls: Vec<String>,
+    pub(super) last_prompt: Option<String>,
 }
 
 pub(super) struct History<'a> {
@@ -31,6 +33,7 @@ impl History<'_> {
             .map(|record| ClosedEntry {
                 record,
                 pr_urls: Vec::new(),
+                last_prompt: None,
             })
             .collect::<Vec<_>>();
         for conversation in self.conversations(now) {
@@ -38,12 +41,14 @@ impl History<'_> {
                 .iter_mut()
                 .find(|entry| entry.record.external_id == conversation.external_id)
             {
+                entry.last_prompt = last_prompt(&conversation);
                 entry.pr_urls = conversation.pr_urls;
                 continue;
             }
             if let Some(record) = self.record(&conversation) {
                 entries.push(ClosedEntry {
                     record,
+                    last_prompt: last_prompt(&conversation),
                     pr_urls: conversation.pr_urls,
                 });
             }
@@ -127,6 +132,14 @@ fn same_dir(left: &Path, right: &Path) -> bool {
             (left.canonicalize(), right.canonicalize()),
             (Ok(left), Ok(right)) if left == right
         )
+}
+
+fn last_prompt(conversation: &CliConversation) -> Option<String> {
+    conversation
+        .recent_prompts
+        .iter()
+        .filter(|prompt| !prompt.starts_with(HARNESS_BLOCK_PREFIX))
+        .find_map(|prompt| prompt_title(prompt))
 }
 
 fn prompt_title(prompt: &str) -> Option<String> {
