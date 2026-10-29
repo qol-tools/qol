@@ -202,15 +202,20 @@ impl DismissState {
     fn hint_programmatic_size(&self, requested: Size<Pixels>, window: &Window) {
         if let Some(frame) = &self.resize_frame {
             frame.end_user_sizing();
-            self.size_requested_at.set(Some(Instant::now()));
+            self.note_size_request();
             window.set_window_min_size(native_min_size(frame.min_size(), requested));
         }
+    }
+
+    fn note_size_request(&self) {
+        self.size_requested_at.set(Some(Instant::now()));
     }
 
     fn rehint_min_size(self: &Rc<Self>) {
         if self.resize_frame.is_none() {
             return;
         }
+        self.note_size_request();
         let Some((handle, mut cx)) = self.native_window.borrow().clone() else {
             return;
         };
@@ -665,6 +670,7 @@ impl Surface {
             *build_dismisser.state.native_window.borrow_mut() =
                 Some((window.window_handle(), cx.to_async()));
             build_dismisser.state.viewport.set(window.viewport_size());
+            build_dismisser.state.note_size_request();
             window.set_window_title(&window_title);
             crate::platform::square_window_corners(window, framed);
             if applies_settings_identity {
@@ -2260,6 +2266,28 @@ mod tests {
             "the panel must keep the size window-actions gave it"
         );
         assert_eq!(dismisser.window_size(), centred);
+    }
+
+    #[test]
+    fn a_window_manager_growing_the_panel_to_a_raised_minimum_is_not_its_user_size() {
+        let opening = size(px(1196.0), px(600.0));
+        let grown = size(px(1196.0), px(640.0));
+        let dismisser = shown_settings_panel(opening);
+
+        assert!(dismisser.set_min_size(size(px(616.0), px(640.0))));
+        let asked = dismisser
+            .state
+            .size_requested_at
+            .get()
+            .expect("raising the minimum is a size request of the panel's");
+        dismisser.state.observe_bounds(
+            grown,
+            true,
+            false,
+            false,
+            asked + Duration::from_millis(16),
+        );
+        assert!(!dismisser.user_sized());
     }
 
     #[test]
