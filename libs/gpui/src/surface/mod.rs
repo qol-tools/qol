@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use gpui::*;
@@ -33,6 +33,7 @@ pub use self::reveal::{
 const REUSED_REVEAL_SAMPLE_INTERVAL: Duration = Duration::from_millis(5);
 const REUSED_REVEAL_MAX_ATTEMPTS: usize = 100;
 const USER_SIZE_TOLERANCE: f64 = 1.0;
+const REQUESTED_SIZE_SETTLE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceKind {
@@ -187,6 +188,8 @@ struct DismissState {
     title: Arc<Mutex<String>>,
     size: Cell<Size<Pixels>>,
     expected_viewport: Rc<Cell<Size<Pixels>>>,
+    viewport: Cell<Size<Pixels>>,
+    size_requested_at: Cell<Option<Instant>>,
     resize_frame: Option<ResizeFrame>,
     native_window: RefCell<Option<(AnyWindowHandle, AsyncApp)>>,
     user_sized: Cell<bool>,
@@ -199,14 +202,20 @@ impl DismissState {
     fn hint_programmatic_size(&self, requested: Size<Pixels>, window: &Window) {
         if let Some(frame) = &self.resize_frame {
             frame.end_user_sizing();
+            self.note_size_request();
             window.set_window_min_size(native_min_size(frame.min_size(), requested));
         }
+    }
+
+    fn note_size_request(&self) {
+        self.size_requested_at.set(Some(Instant::now()));
     }
 
     fn rehint_min_size(self: &Rc<Self>) {
         if self.resize_frame.is_none() {
             return;
         }
+        self.note_size_request();
         let Some((handle, mut cx)) = self.native_window.borrow().clone() else {
             return;
         };
@@ -234,13 +243,25 @@ impl DismissState {
         )
     }
 
-    fn observe_bounds(&self, observed: Size<Pixels>, maximized: bool, live_resizing: bool) {
+    fn observe_bounds(
+        &self,
+        observed: Size<Pixels>,
+        visible: bool,
+        maximized: bool,
+        live_resizing: bool,
+        now: Instant,
+    ) {
         let Some(frame) = &self.resize_frame else {
             return;
         };
+        let previous = self.viewport.replace(observed);
+        if !visible {
+            return;
+        }
         if !takes_user_size(
             frame.is_user_sizing(),
             live_resizing,
+            resized_outside(previous, observed, self.size_requested_at.get(), now),
             maximized,
             self.size.get(),
             observed,
@@ -286,6 +307,8 @@ impl SurfaceDismisser {
                 title,
                 size: Cell::new(size),
                 expected_viewport: Rc::new(Cell::new(size)),
+                viewport: Cell::new(size),
+                size_requested_at: Cell::new(None),
                 resize_frame,
                 native_window: RefCell::new(None),
                 user_sized: Cell::new(user_sized),
@@ -646,6 +669,8 @@ impl Surface {
         let handle = match cx.open_window(options, move |window, cx| {
             *build_dismisser.state.native_window.borrow_mut() =
                 Some((window.window_handle(), cx.to_async()));
+            build_dismisser.state.viewport.set(window.viewport_size());
+            build_dismisser.state.note_size_request();
             window.set_window_title(&window_title);
             crate::platform::square_window_corners(window, framed);
             if applies_settings_identity {
@@ -655,18 +680,21 @@ impl Surface {
             let inner = cx.new(|cx| build(build_dismisser, window, cx));
             cx.new(|cx| {
                 let bounds_subscription = cx.observe_window_bounds(window, move |_, window, cx| {
-                    if bounds_visible.get() {
-                        let maximized = window.is_maximized() || window.is_fullscreen();
-                        bounds_state.observe_bounds(
-                            window.viewport_size(),
-                            maximized,
-                            window.is_live_resizing(),
-                        );
-                        if let Some(remembered) =
-                            bounds_state.remembered.as_ref().filter(|_| !maximized)
-                        {
-                            remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
-                        }
+                    let visible = bounds_visible.get();
+                    let maximized = window.is_maximized() || window.is_fullscreen();
+                    bounds_state.observe_bounds(
+                        window.viewport_size(),
+                        visible,
+                        maximized,
+                        window.is_live_resizing(),
+                        Instant::now(),
+                    );
+                    if let Some(remembered) = bounds_state
+                        .remembered
+                        .as_ref()
+                        .filter(|_| visible && !maximized)
+                    {
+                        remembered.record_bounds(window.bounds(), window.scale_factor(), cx);
                     }
                     cx.notify();
                 });
@@ -945,13 +973,26 @@ fn restore_size(
 fn takes_user_size(
     user_sizing: bool,
     live_resizing: bool,
+    resized_outside: bool,
     maximized: bool,
     declared: Size<Pixels>,
     observed: Size<Pixels>,
 ) -> bool {
     let drawable = observed.width > px(0.0) && observed.height > px(0.0);
     let changed = !platform::dimensions_match(observed, declared, USER_SIZE_TOLERANCE);
-    drawable && changed && !maximized && (user_sizing || live_resizing)
+    drawable && changed && !maximized && (user_sizing || live_resizing || resized_outside)
+}
+
+fn resized_outside(
+    previous: Size<Pixels>,
+    observed: Size<Pixels>,
+    requested_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    let resized = !platform::dimensions_match(observed, previous, USER_SIZE_TOLERANCE);
+    let answers_request =
+        requested_at.is_some_and(|at| now.saturating_duration_since(at) < REQUESTED_SIZE_SETTLE);
+    resized && !answers_request
 }
 
 fn fresh_frame_for(fresh_frame: FreshFrame, resizable: bool) -> FreshFrame {
@@ -1695,10 +1736,10 @@ fn dismiss_on_close_request(window: &Window, dismisser: SurfaceDismisser, cx: &A
 mod tests {
     use super::platform::SurfacePlatform;
     use super::{
-        cancel_focus_reassert, held_look, native_min_size, panel_bounds, resolved_app_id,
-        restore_size, reveal_cancelled, state_restore_needs_retry, surface_look, takes_user_size,
-        DragGestureState, RestoreSize, RetainedHide, RevealReadiness, Surface, SurfaceDismisser,
-        SurfaceKind, WindowChrome, PANEL_FOCUS_GENERATION,
+        cancel_focus_reassert, held_look, native_min_size, panel_bounds, resized_outside,
+        resolved_app_id, restore_size, reveal_cancelled, state_restore_needs_retry, surface_look,
+        takes_user_size, DragGestureState, RestoreSize, RetainedHide, RevealReadiness, Surface,
+        SurfaceDismisser, SurfaceKind, WindowChrome, PANEL_FOCUS_GENERATION,
     };
     use crate::kit::WindowLook;
     use crate::placement::MonitorPlacement;
@@ -1706,6 +1747,7 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
 
     fn at(x: f32, y: f32) -> gpui::Point<Pixels> {
         point(px(x), px(y))
@@ -1989,15 +2031,17 @@ mod tests {
     }
 
     #[test]
-    fn only_a_drag_or_a_live_os_resize_claims_a_changed_viewport() {
+    fn a_drag_a_live_resize_or_an_outside_resize_claims_a_changed_viewport() {
         let declared = size(px(640.0), px(480.0));
         let dragged = size(px(700.0), px(520.0));
         let clamped = size(px(640.0), px(400.0));
         let rounded = size(px(640.5), px(480.0));
+        let centred = size(px(907.0), px(541.0));
         let empty = size(px(0.0), px(0.0));
         let cases = [
             (
                 true,
+                false,
                 false,
                 false,
                 dragged,
@@ -2008,6 +2052,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 dragged,
                 true,
                 "a window manager resize the user drives",
@@ -2015,6 +2060,7 @@ mod tests {
             (
                 false,
                 true,
+                false,
                 false,
                 size(px(900.0), px(700.0)),
                 true,
@@ -2024,12 +2070,31 @@ mod tests {
                 true,
                 true,
                 false,
+                false,
                 dragged,
                 true,
                 "a hand-off the window manager reports live",
             ),
-            (false, false, false, dragged, false, "a programmatic resize"),
             (
+                false,
+                false,
+                true,
+                false,
+                centred,
+                true,
+                "window-actions centring the panel",
+            ),
+            (
+                false,
+                false,
+                false,
+                false,
+                dragged,
+                false,
+                "a programmatic resize",
+            ),
+            (
+                false,
                 false,
                 false,
                 false,
@@ -2041,36 +2106,225 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
                 declared,
                 false,
                 "a live resize at the requested size",
             ),
             (
                 false,
+                false,
                 true,
+                false,
+                declared,
+                false,
+                "an outside resize back to the declared size",
+            ),
+            (
+                false,
+                true,
+                false,
                 true,
                 dragged,
                 false,
                 "a maximize during a live resize",
             ),
-            (true, false, true, dragged, false, "a maximize after a drag"),
+            (
+                false,
+                false,
+                true,
+                true,
+                dragged,
+                false,
+                "window-actions maximizing the panel",
+            ),
             (
                 true,
+                false,
+                false,
+                true,
+                dragged,
+                false,
+                "a maximize after a drag",
+            ),
+            (
+                true,
+                false,
                 false,
                 false,
                 rounded,
                 false,
                 "native rounding during a drag",
             ),
-            (true, true, false, empty, false, "an unmapped viewport"),
+            (
+                true,
+                true,
+                true,
+                false,
+                empty,
+                false,
+                "an unmapped viewport",
+            ),
         ];
-        for (user_sizing, live_resizing, maximized, observed, expected, note) in cases {
+        for (user_sizing, live_resizing, outside, maximized, observed, expected, note) in cases {
             assert_eq!(
-                takes_user_size(user_sizing, live_resizing, maximized, declared, observed),
+                takes_user_size(
+                    user_sizing,
+                    live_resizing,
+                    outside,
+                    maximized,
+                    declared,
+                    observed
+                ),
                 expected,
                 "{note}"
             );
         }
+    }
+
+    #[test]
+    fn only_a_size_change_the_surface_did_not_just_ask_for_comes_from_outside() {
+        let before = size(px(1196.0), px(724.0));
+        let centred = size(px(907.0), px(541.0));
+        let asked = Instant::now();
+        let cases = [
+            (
+                centred,
+                None,
+                asked,
+                true,
+                "window-actions centring with no request of the surface's",
+            ),
+            (
+                centred,
+                Some(asked),
+                asked + Duration::from_secs(2),
+                true,
+                "window-actions centring long after the surface's last request",
+            ),
+            (
+                centred,
+                Some(asked),
+                asked + Duration::from_millis(16),
+                false,
+                "the platform answering the surface's own request",
+            ),
+            (before, None, asked, false, "a move that keeps the size"),
+            (
+                size(px(1196.5), px(724.0)),
+                None,
+                asked,
+                false,
+                "native rounding",
+            ),
+        ];
+        for (observed, requested_at, now, expected, note) in cases {
+            assert_eq!(
+                resized_outside(before, observed, requested_at, now),
+                expected,
+                "{note}"
+            );
+        }
+    }
+
+    fn shown_settings_panel(opening: gpui::Size<Pixels>) -> SurfaceDismisser {
+        SurfaceDismisser::new(
+            WindowChrome {
+                retained: true,
+                os_frame: true,
+            },
+            "Outside Resize Panel".into(),
+            opening,
+            Some(size(px(616.0), px(120.0))),
+            Rc::new(Cell::new(true)),
+            Rc::new(Cell::new(false)),
+            None,
+        )
+    }
+
+    #[test]
+    fn window_actions_centring_a_shown_panel_becomes_its_user_size() {
+        let opening = size(px(1196.0), px(724.0));
+        let centred = size(px(907.0), px(541.0));
+        let dismisser = shown_settings_panel(opening);
+        let opened = Instant::now();
+
+        dismisser
+            .state
+            .observe_bounds(opening, true, false, false, opened);
+        assert!(!dismisser.user_sized(), "a move keeps the panel fitted");
+
+        dismisser.state.observe_bounds(
+            centred,
+            true,
+            false,
+            false,
+            opened + Duration::from_secs(3),
+        );
+        assert!(
+            dismisser.user_sized(),
+            "the panel must keep the size window-actions gave it"
+        );
+        assert_eq!(dismisser.window_size(), centred);
+    }
+
+    #[test]
+    fn a_window_manager_growing_the_panel_to_a_raised_minimum_is_not_its_user_size() {
+        let opening = size(px(1196.0), px(600.0));
+        let grown = size(px(1196.0), px(640.0));
+        let dismisser = shown_settings_panel(opening);
+
+        assert!(dismisser.set_min_size(size(px(616.0), px(640.0))));
+        let asked = dismisser
+            .state
+            .size_requested_at
+            .get()
+            .expect("raising the minimum is a size request of the panel's");
+        dismisser.state.observe_bounds(
+            grown,
+            true,
+            false,
+            false,
+            asked + Duration::from_millis(16),
+        );
+        assert!(!dismisser.user_sized());
+    }
+
+    #[test]
+    fn the_panels_own_and_hidden_resizes_never_become_its_user_size() {
+        let opening = size(px(1196.0), px(724.0));
+        let fitted = size(px(1196.0), px(600.0));
+        let clamped = size(px(1196.0), px(580.0));
+        let dismisser = shown_settings_panel(opening);
+        let state = &dismisser.state;
+        let opened = Instant::now();
+
+        state.observe_bounds(fitted, false, false, false, opened);
+        assert!(!dismisser.user_sized(), "a resize while hidden");
+
+        state.observe_bounds(fitted, true, false, false, opened + Duration::from_secs(1));
+        assert!(
+            !dismisser.user_sized(),
+            "the first move after a hidden resize"
+        );
+
+        let asked = opened + Duration::from_secs(2);
+        state.size_requested_at.set(Some(asked));
+        state.observe_bounds(
+            clamped,
+            true,
+            false,
+            false,
+            asked + Duration::from_millis(16),
+        );
+        assert!(
+            !dismisser.user_sized(),
+            "a window manager clamp answering the panel's own request"
+        );
+
+        state.observe_bounds(clamped, true, false, false, asked + Duration::from_secs(2));
+        assert!(!dismisser.user_sized(), "a later move at the clamped size");
+        assert_eq!(dismisser.window_size(), opening);
     }
 
     #[test]
