@@ -6821,14 +6821,12 @@ mod tests {
     }
 
     fn switchboard_plan(root: &tempfile::TempDir) -> super::super::switchboard::LaunchPlan {
-        super::super::switchboard::LaunchPlan {
-            model: "claude-sonnet-5-5".to_owned(),
-            effort: "low".to_owned(),
-            cwd: PathBuf::from(managed_workdir(root)),
-            mcp_program: PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
-            projects: Vec::new(),
-            path: None,
-        }
+        super::super::switchboard::LaunchPlan::bare(
+            "claude-sonnet-5-5",
+            "low",
+            PathBuf::from(managed_workdir(root)),
+            PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
+        )
     }
 
     #[test]

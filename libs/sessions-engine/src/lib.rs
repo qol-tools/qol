@@ -379,7 +379,9 @@ Details:
   fork --blank launches a fresh session with no brief, no chat copy and no
   launch prompt, so the user types its first message.
   switchboard opens the one control chat per machine, or focuses the live
-  one; qol sessions switchboard help lists its flags. It lists the sessions
+  one; qol sessions switchboard help lists its flags. It starts new work as
+  forks, which are Claude Code subagents inside that chat, and resumes its
+  newest conversation, waking the forks that were running. It lists the sessions
   closed in the last 14 days with sessions_closed, from the CLI Sessions
   daemon's record of closes and the tool's own conversation history (Claude
   Code transcripts), and brings one back in a new tab with session_reopen.

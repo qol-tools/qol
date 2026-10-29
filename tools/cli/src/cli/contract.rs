@@ -279,8 +279,8 @@ fn app() -> HeadlessApp {
             .subcommand(command(
                 "switchboard",
                 "Launch the one control chat that starts, lists, reopens and closes sessions.",
-                "qol sessions switchboard --cwd PATH [--model MODEL] [--effort LEVEL] [--surface tab|os-window]",
-                "Launches a blank claude session keyed and titled switchboard whose only tools are ToolSearch and the qol-sessions MCP tools, with a system prompt that confines it to starting, listing, reopening and closing other sessions without doing their work. Only one runs at a time: a live session already holding the switchboard key is refused. --effort defaults to low; --model and --surface resolve as they do for a fork. The switchboard is not recorded as a fork and never parks.",
+                "qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]",
+                "Opens the one control chat, a claude session keyed and titled switchboard, in its own folder. New work runs as forks, which are Claude Code subagents inside that one chat, each pinned to a project folder named on the first line of its task; terminal sessions are still listed, reopened, closed and messaged with the qol-sessions MCP tools. Only one runs at a time: a live session already holding the switchboard key is refused. A new one resumes the newest switchboard conversation and wakes the forks that were running or waiting when the last one ended. --effort defaults to medium; --model and --surface resolve as they do for a fork. The switchboard is not recorded as a fork and never parks.",
                 "Switchboard JSON on stdout; diagnostics on stderr.",
                 "Exits non-zero when a switchboard is already running, or on validation, readiness, or launch failure.",
             ))
