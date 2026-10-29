@@ -7274,6 +7274,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml 0.9.12+spec-1.1.0",
  "windows 0.61.3",
  "windows-sys 0.59.0",
  "workspace-hack",
