@@ -253,6 +253,11 @@ fn fork_context(part: usize, payload: &Payload) -> Result<Option<String>> {
         .ok_or_else(|| anyhow!("the hook payload carries no cwd"))?;
     let parts = context::parts(Path::new(cwd), &claude_home(), switchboard_dir().as_deref());
     Ok(parts.get(part).map(|text| {
+        let text = format!(
+            "[project context part {}/{}]\n{text}",
+            part + 1,
+            parts.len()
+        );
         json!({"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": text}})
             .to_string()
     }))
@@ -568,7 +573,7 @@ mod tests {
         assert!(value["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap()
-            .contains("Your project folder is"));
+            .starts_with("[project context part 1/1]\nYour project folder is"));
         assert!(fork_context(context::PART_SLOTS - 1, &Payload::default()).is_err());
         assert_eq!(fork_context(9, &payload).unwrap(), None);
     }
