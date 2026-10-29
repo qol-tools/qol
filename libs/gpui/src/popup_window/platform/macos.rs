@@ -974,6 +974,11 @@ enum WindowPresentation {
     Normal,
 }
 
+fn shows_system_title_bar(mask: NSWindowStyleMask) -> bool {
+    mask.contains(NSWindowStyleMask::Titled)
+        && !mask.contains(NSWindowStyleMask::FullSizeContentView)
+}
+
 fn show_window_by_title_with_focus(
     title: &str,
     focus: bool,
@@ -995,7 +1000,7 @@ fn show_window_by_title_with_focus(
         WindowPresentation::Normal => NSNormalWindowLevel,
     };
     window.setLevel(level);
-    if window.styleMask().contains(NSWindowStyleMask::Titled) {
+    if shows_system_title_bar(window.styleMask()) {
         window.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
     } else {
         window.setBackgroundColor(Some(&NSColor::clearColor()));
@@ -1529,12 +1534,31 @@ mod tests {
     use super::{
         cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_in_region, pointer_inside,
         primary_anchored_from_screen_relative, reassert_delay, should_return_focus,
-        HOLD_REASSERT_SPACING,
+        shows_system_title_bar, HOLD_REASSERT_SPACING,
     };
+    use objc2_app_kit::NSWindowStyleMask;
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use std::time::Duration;
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    #[test]
+    fn only_a_visible_system_title_bar_gets_an_opaque_background() {
+        let cases = [
+            (
+                NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+                true,
+            ),
+            (
+                NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView,
+                false,
+            ),
+            (NSWindowStyleMask::Borderless, false),
+        ];
+        for (mask, expected) in cases {
+            assert_eq!(shows_system_title_bar(mask), expected, "{mask:?}");
+        }
+    }
 
     #[test]
     fn focus_returns_only_while_this_process_still_holds_the_front() {
