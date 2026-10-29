@@ -103,7 +103,7 @@ pub fn has_process_focus() -> bool {
     true
 }
 
-pub fn square_window_corners(window: &mut gpui::Window) {
+pub fn square_window_corners(window: &mut gpui::Window, _framed: bool) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return;
     };
