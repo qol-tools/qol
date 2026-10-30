@@ -7,6 +7,32 @@ use qol_config::config_dir;
 
 pub const REGISTRY_FILE_NAME: &str = "agents.toml";
 
+const CLAUDE_SESSION_ENV: [&str; 11] = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_AGENT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+];
+
+pub fn session_env_vars() -> impl Iterator<Item = &'static str> {
+    Harness::ALL
+        .into_iter()
+        .flat_map(|harness| harness.session_env_vars().iter().copied())
+}
+
+pub fn scrub_session_env(command: &mut std::process::Command) {
+    for name in session_env_vars() {
+        command.env_remove(name);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
@@ -40,6 +66,13 @@ impl Harness {
             Harness::Codex => "CODEX_HOME",
             Harness::Kimi => "KIMI_CODE_HOME",
             Harness::Pi => "PI_CODING_AGENT_DIR",
+        }
+    }
+
+    pub fn session_env_vars(self) -> &'static [&'static str] {
+        match self {
+            Harness::Claude => &CLAUDE_SESSION_ENV,
+            Harness::Codex | Harness::Kimi | Harness::Pi => &[],
         }
     }
 
@@ -404,6 +437,25 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(normalize(input, home), expected, "input: {input}");
         }
+    }
+
+    #[test]
+    fn a_scrubbed_command_drops_the_parent_session_and_keeps_the_account() {
+        let mut command = std::process::Command::new("claude");
+        command
+            .env("CLAUDE_CODE_CHILD_SESSION", "1")
+            .env("CLAUDE_CODE_SESSION_ID", "parent")
+            .env("CLAUDE_CONFIG_DIR", "/home/tester/.claude-work");
+        scrub_session_env(&mut command);
+        let envs: HashMap<_, _> = command
+            .get_envs()
+            .map(|(name, value)| (name.to_string_lossy().into_owned(), value.is_some()))
+            .collect();
+        for name in session_env_vars() {
+            assert_eq!(envs.get(name), Some(&false), "{name} must be removed");
+        }
+        assert_eq!(envs.get("CLAUDE_CONFIG_DIR"), Some(&true));
+        assert!(!session_env_vars().any(|name| name == Harness::Claude.home_env_var()));
     }
 
     #[test]

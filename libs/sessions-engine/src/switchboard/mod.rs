@@ -411,6 +411,7 @@ fn start_kitty(profile: &Profile) -> Result<Opened> {
     let program = kitty_program();
     let mut command = Command::new(&program);
     command.args(start_kitty_args(&exe, profile));
+    qol_agent_homes::scrub_session_env(&mut command);
     if let Some(dir) = qol_platform::launch_working_dir() {
         command.current_dir(dir);
     }
@@ -655,7 +656,9 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
             tag_window(&tag_args(&window))?;
             drop(guard);
             let detached = Detached::register();
-            let ran = Command::new(SWITCHBOARD_TOOL)
+            let mut switchboard = Command::new(SWITCHBOARD_TOOL);
+            qol_agent_homes::scrub_session_env(&mut switchboard);
+            let ran = switchboard
                 .args(&argv)
                 .envs(claude_env(&plan))
                 .current_dir(&plan.cwd)
