@@ -13,6 +13,7 @@ mod agents;
 mod context;
 mod hooks;
 mod paths;
+mod plugin;
 mod resume;
 mod rows;
 
@@ -46,7 +47,7 @@ const LOGIN_ENV_LIMIT: usize = 256 * 1024;
 const ROLE_REVISION_PREFIX: &str = "Switchboard role revision ";
 pub(super) const SWITCHBOARD_ROLE: &str = concat!(
     "You are the switchboard: the user's one control chat for their work. Your only job is starting forks, relaying the user's words to them, and listing, reopening, closing and messaging terminal sessions and turning their Remote Control on or off. You start forks with the Agent tool and talk to them with SendMessage; you reach terminal sessions with the sessions tools, which you load with ToolSearch: sessions_list, sessions_closed, session_fork, session_reopen, session_close, session_remote_control, session_send, session_inbox and session_board. You have no file, shell or web tools, and you never investigate, explain or discuss the details of any fork's or session's work; that belongs to whoever owns it. ",
-    "When the user describes new work or asks anything that needs investigation, such as why something stopped working or how something works, call the Agent tool right away with subagent_type project-fork, a short name the user can address, a short description, and a prompt whose first line is `Project: <absolute path of the project folder the work belongs to>` followed by the user's own words. Pass model or effort only when the user names one. Start forks for different projects in separate messages, each after the earlier fork's Agent call has returned, and start forks for the same project together when they are independent. Write nothing before the Agent call, and reply with only `Started <name>.`: never say what you cannot do, never apologize and never restate the request. ",
+    "When the user describes new work or asks anything that needs investigation, such as why something stopped working or how something works, call the Agent tool right away with subagent_type project-fork, a short name the user can address, a short description, and a prompt whose first line is `Project: <absolute path of the project folder the work belongs to>` followed by the user's own words. Pass model or effort only when the user names one. Write nothing before the Agent call, and reply with only `Started <name>.`: never say what you cannot do, never apologize and never restate the request. ",
     "A fork owns its delivery: in a qol-tools repository it works in a worktree, pushes its branch and opens a pull request with auto-merge armed on its own, or a draft that waits for the user's approval when the change involves design, and in any other repository it delivers the way that repository's own instructions say. So never add push, pull request or merge conditions of your own to a prompt and never ask the user whether a fork may push or open a pull request; when a fork asks you that anyway, answer it with SendMessage that it follows that delivery policy, unless the user's own words restricted pushing, in which case answer that the user's restriction stands. ",
     "A fork's final message arrives as a notification. Tell the user in one line: the merged pull request's number, a failure and what broke, or a question together with the fork's recommended answer, and send the user's answer back to that fork with SendMessage. When a fork reports a blocker you could fix by changing sessions.toml or another config, tell the user what would change and ask before changing anything. Relay the user's words to a fork with SendMessage as they are. The user talks to a fork directly by selecting it in the agent list under the prompt and typing; Esc in a fork's view stops that fork, so the user leaves it by selecting the main thread. Use TaskStop on a fork only when the user asks. ",
     "Call session_fork only when the user asks for a new or empty session, with blank true, or for a separate terminal or another tool, with a short key, a brief that keeps the user's own words, copy_chat false and cwd set to the project the work belongs to; remote_control follows sessions.toml unless the user asks otherwise, and pass park true only when the user asks for a fork to park. A terminal session you forked delivers its own pull request and reports to you with session_send kind report and done true; when it reports a merge, tell the user in one line with the pull request number, when it reports a failing check it cannot fix, tell the user the pull request and what broke, and when it sends an ask meant for the user, show it in one line and send the user's answer back with session_send kind reply. A lane that sits quiet with nothing open, meaning no open pull request in its prs and no open ask, is closed with session_close; say so in one line. ",
@@ -120,6 +121,7 @@ pub(super) struct LaunchPlan {
     pub(super) mcp_program: PathBuf,
     pub(super) projects: Vec<String>,
     pub(super) path: Option<String>,
+    config_home: PathBuf,
     fork: agents::ForkAgent,
     resume: Option<String>,
     wake: Option<String>,
@@ -131,6 +133,7 @@ impl LaunchPlan {
         Self {
             model: model.to_owned(),
             effort: effort.to_owned(),
+            config_home: cwd.join("claude-home"),
             cwd,
             mcp_program,
             projects: Vec::new(),
@@ -154,6 +157,7 @@ impl LaunchPlan {
         });
         Ok(Self {
             fork: agents::ForkAgent::system(),
+            config_home,
             resume,
             wake,
             model: profile.model.clone(),
@@ -341,6 +345,8 @@ pub(super) fn profile_args(plan: &LaunchPlan) -> Vec<String> {
         agents::agents_json(&plan.fork),
         "--agent".to_owned(),
         agents::AGENT.to_owned(),
+        "--plugin-dir".to_owned(),
+        plugin::dir(&plan.cwd).to_string_lossy().into_owned(),
         format!("--mcp-config={mcp_config}"),
         format!("--allowedTools={}", allowed_tools()),
     ]);
@@ -459,6 +465,25 @@ fn system_dispatch() -> Result<AgentDispatch> {
     ))
 }
 
+fn prepare(plan: &LaunchPlan) -> Result<()> {
+    agents::write_agent_files(&plan.cwd, &plan.fork)?;
+    plugin::write(&plugin::dir(&plan.cwd))?;
+    for failure in resume::unpin_forks(&plan.config_home, &plan.cwd) {
+        crate::cli::warn(format!(
+            "a fork keeps its worktree pin, so it cannot be resumed: {failure}"
+        ));
+    }
+    if let Some(sessions) = qol_config::data_subdir("sessions") {
+        if let Err(error) = hooks::remove_retired_pins(&sessions) {
+            crate::cli::warn(format!(
+                "failed to remove the retired fork pins in {}: {error}",
+                sessions.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn admitted_model(
     dispatch: &AgentDispatch,
     plan: &LaunchPlan,
@@ -496,7 +521,7 @@ pub(super) fn launch(
             plan.cwd.display()
         )
     })?;
-    agents::write_agent_files(&plan.cwd, &plan.fork)?;
+    prepare(plan)?;
     let launched = launch_detached(
         terminals,
         interpreter,
@@ -646,7 +671,7 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
             let plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path)?;
             let (model, _) = admitted_model(&system_dispatch()?, &plan)?;
             let argv = here_argv(&plan, &model)?;
-            agents::write_agent_files(&plan.cwd, &plan.fork)?;
+            prepare(&plan)?;
             // The window outlives the switchboard (a wrapper's shell), so its tag is removed
             // on exit; a kept tag makes the next chat in the window pass for the switchboard.
             // An interrupt or terminate signal therefore only ends claude, never this wait.
@@ -701,7 +726,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its model and effort, since the status line shows only the switchboard's. Esc in a fork's view stops that fork, so leave it by selecting the main thread. Terminal sessions are still listed, reopened, closed and messaged with the sessions tools, your words go to them as yours with session_send as_user true unless you ask it to report back, and a separate terminal or another tool still starts with session_fork.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation started under the current switchboard instructions; after an update that changed them it starts a new conversation, because a resumed one keeps the instructions it started with. Forks that were running or waiting when the last switchboard ended are woken: it sends each one a message to continue and to start its pull request watcher again. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "))
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. The {} plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder; a fork it did not start there says so in its report. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its model and effort, since the status line shows only the switchboard's. Esc in a fork's view stops that fork, so leave it by selecting the main thread. Terminal sessions are still listed, reopened, closed and messaged with the sessions tools, your words go to them as yours with session_send as_user true unless you ask it to report back, and a separate terminal or another tool still starts with session_fork.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation started under the current switchboard instructions; after an update that changed them it starts a new conversation, because a resumed one keeps the instructions it started with. Forks that were running or waiting when the last switchboard ended are woken: it sends each one a message to continue and to start its pull request watcher again. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "), plugin::NAME)
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {
@@ -750,6 +775,7 @@ mod tests {
                 .map(|project| (*project).to_owned())
                 .collect(),
             path: None,
+            config_home: PathBuf::from("/home/u/.claude"),
             fork: agents::ForkAgent::default(),
             resume: None,
             wake: None,
@@ -798,22 +824,26 @@ mod tests {
         let agents: serde_json::Value =
             serde_json::from_str(flag_value(&args, "--agents")).unwrap();
         assert_eq!(agents["switchboard"]["prompt"], "");
-        assert_eq!(agents["project-fork"]["isolation"], "worktree");
+        assert!(
+            agents["project-fork"].get("isolation").is_none(),
+            "{agents}"
+        );
         assert_eq!(agents["project-fork"]["background"], true);
+        assert_eq!(
+            flag_value(&args, "--plugin-dir"),
+            Path::new("/data/sessions/switchboard")
+                .join("plugin")
+                .to_string_lossy()
+        );
         let settings: serde_json::Value =
             serde_json::from_str(flag_value(&args, "--settings")).unwrap();
         assert_eq!(settings["subagentPromptCacheTtl"], "1h");
         assert!(settings.get("disableAllHooks").is_none(), "{settings}");
         let hooks = settings["hooks"].as_object().unwrap();
-        for event in [
-            "PreToolUse",
-            "PostToolUse",
-            "PostToolUseFailure",
-            "WorktreeCreate",
-            "SubagentStart",
-        ] {
-            assert!(hooks.contains_key(event), "{event}");
-        }
+        assert_eq!(
+            hooks.keys().collect::<Vec<_>>(),
+            ["PreToolUse", "SubagentStart"]
+        );
         assert!(hooks["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
@@ -939,7 +969,6 @@ mod tests {
             "first line is `Project: <absolute path of the project folder",
             "reply with only `Started <name>.`",
             "Pass model or effort only when the user names one",
-            "separate messages",
             "never add push, pull request or merge conditions of your own",
             "the user's restriction stands",
             "Relay the user's words to a fork with SendMessage",
@@ -961,6 +990,7 @@ mod tests {
             assert!(SWITCHBOARD_ROLE.contains(needle), "{needle}");
         }
         assert!(!SWITCHBOARD_ROLE.contains("Spawned <key>"));
+        assert!(!SWITCHBOARD_ROLE.contains("separate messages"));
     }
 
     #[test]
@@ -984,6 +1014,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("woken"), "{text}");
+        assert!(
+            text.contains("The qol-switchboard plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder"),
+            "{text}"
+        );
         assert!(!text.contains("It starts blank"), "{text}");
         assert!(!text.contains("never resumed"), "{text}");
     }

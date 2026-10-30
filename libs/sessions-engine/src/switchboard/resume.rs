@@ -3,7 +3,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use anyhow::Result;
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::paths::conversations_dir;
 
@@ -11,6 +13,8 @@ pub(super) const FORK_AGENT: &str = "project-fork";
 const META_SUFFIX: &str = ".meta.json";
 const AGENT_PREFIX: &str = "agent-";
 const BACKGROUND_MARKER: &str = "Command running in background with ID: ";
+const WORKTREE_PIN: &str = "worktreePath";
+const WORKTREE_KEYS: [&str; 3] = [WORKTREE_PIN, "worktreeBranch", "spawnedWithWorktree"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct SleepingFork {
@@ -27,7 +31,6 @@ struct Meta {
     name: Option<String>,
     finished: bool,
     stopped_by_user: bool,
-    worktree_path: Option<String>,
 }
 
 fn answered_under_revision(path: &Path, revision: &str) -> bool {
@@ -97,14 +100,40 @@ pub(super) fn meta_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-pub(super) fn recorded_worktree(subagents: &Path, agent_id: &str) -> Option<PathBuf> {
-    let wanted = format!("{AGENT_PREFIX}{agent_id}{META_SUFFIX}");
-    let meta_path = meta_files(subagents)
-        .into_iter()
-        .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(wanted.as_str()))?;
-    let meta: Meta = serde_json::from_str(&fs::read_to_string(meta_path).ok()?).ok()?;
-    let worktree = PathBuf::from(meta.worktree_path?);
-    worktree.is_dir().then_some(worktree)
+fn unpin(meta_path: &Path) -> Result<()> {
+    let Ok(text) = fs::read_to_string(meta_path) else {
+        return Ok(());
+    };
+    let Ok(Value::Object(mut meta)) = serde_json::from_str::<Value>(&text) else {
+        return Ok(());
+    };
+    if meta.get("agentType").and_then(Value::as_str) != Some(FORK_AGENT) {
+        return Ok(());
+    }
+    let Some(Value::String(worktree)) = meta.get(WORKTREE_PIN).cloned() else {
+        return Ok(());
+    };
+    for key in WORKTREE_KEYS {
+        meta.remove(key);
+    }
+    meta.entry("cwd").or_insert(Value::String(worktree));
+    qol_fs::atomic_write(meta_path, Value::Object(meta).to_string().as_bytes())?;
+    Ok(())
+}
+
+pub(super) fn unpin_forks(config_home: &Path, switchboard: &Path) -> Vec<String> {
+    let Ok(conversations) = fs::read_dir(conversations_dir(config_home, switchboard)) else {
+        return Vec::new();
+    };
+    let mut failures = Vec::new();
+    for conversation in conversations.flatten() {
+        for meta_path in meta_files(&conversation.path().join("subagents")) {
+            if let Err(error) = unpin(&meta_path) {
+                failures.push(format!("{}: {error:#}", meta_path.display()));
+            }
+        }
+    }
+    failures
 }
 
 fn pending_background(transcript: &str) -> bool {
@@ -331,20 +360,58 @@ mod tests {
         assert!(text.contains("in one line which forks you woke"), "{text}");
     }
 
+    fn meta_of(subagents: &Path, id: &str) -> Value {
+        let text = fs::read_to_string(subagents.join(format!("agent-{id}.meta.json"))).unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
     #[test]
-    fn a_recorded_worktree_is_found_in_a_nested_subfolder_and_must_exist() {
+    fn a_worktree_pinned_fork_of_any_conversation_is_moved_to_a_cwd() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("subagents");
-        let project = root.path().join("proj");
-        fs::create_dir_all(&project).unwrap();
-        let meta = format!(
-            "{{\"agentType\":\"project-fork\",\"worktreePath\":{}}}",
-            serde_json::json!(project)
+        let (home, board) = (root.path().join("h"), Path::new("/data/switchboard"));
+        let conversations = conversations_dir(&home, board);
+        let older = conversations.join("older").join("subagents");
+        let newer = conversations.join("newer").join("subagents");
+        let pinned = r#"{"agentType":"project-fork","description":"fix","worktreePath":"/work/app","worktreeBranch":"wt","spawnedWithWorktree":true,"finished":true}"#;
+        fork(&older, "p1", pinned, "");
+        fork(&newer.join("agent-parent"), "p2", pinned, "");
+        fork(
+            &newer,
+            "kept",
+            r#"{"agentType":"project-fork","worktreePath":"/work/app","cwd":"/work/own"}"#,
+            "",
         );
-        fork(&dir.join("nested"), "x1", &meta, "");
-        assert_eq!(recorded_worktree(&dir, "x1"), Some(project));
-        fork(&dir, "x2", r#"{"worktreePath":"/nope/missing"}"#, "");
-        assert_eq!(recorded_worktree(&dir, "x2"), None);
-        assert_eq!(recorded_worktree(&dir, "x3"), None);
+        let placed = r#"{"agentType":"project-fork","cwd":"/work/app"}"#;
+        fork(&newer, "placed", placed, "");
+        let other = r#"{"agentType":"Explore","worktreePath":"/work/app"}"#;
+        fork(&newer, "other", other, "");
+        fork(&newer, "broken", "not json", "");
+        fs::write(conversations.join("newer.jsonl"), "").unwrap();
+        assert!(unpin_forks(&home, board).is_empty());
+        let expected = serde_json::json!({
+            "agentType": "project-fork",
+            "description": "fix",
+            "cwd": "/work/app",
+            "finished": true,
+        });
+        assert_eq!(meta_of(&older, "p1"), expected);
+        assert_eq!(meta_of(&newer.join("agent-parent"), "p2"), expected);
+        assert_eq!(
+            meta_of(&newer, "kept"),
+            serde_json::json!({"agentType": "project-fork", "cwd": "/work/own"})
+        );
+        assert_eq!(
+            fs::read_to_string(newer.join("agent-placed.meta.json")).unwrap(),
+            placed
+        );
+        assert_eq!(
+            fs::read_to_string(newer.join("agent-other.meta.json")).unwrap(),
+            other
+        );
+        assert_eq!(
+            fs::read_to_string(newer.join("agent-broken.meta.json")).unwrap(),
+            "not json"
+        );
+        assert!(unpin_forks(&root.path().join("none"), board).is_empty());
     }
 }
