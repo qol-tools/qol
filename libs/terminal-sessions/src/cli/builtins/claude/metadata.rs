@@ -405,8 +405,8 @@ fn runtime_entry(value: &Value) -> Option<CliRuntimeState> {
                 _ => CliRuntimeState::Working,
             })
         }
-        Some("user") if is_local_command(value) => None,
-        Some("attachment") if is_hook_output(value) => None,
+        Some("user") if is_local_command(value) || is_compact_summary(value) => None,
+        Some("attachment") if is_hook_output(value) || is_compaction_context(value) => None,
         Some("user" | "attachment") => Some(CliRuntimeState::Working),
         _ => None,
     }
@@ -442,6 +442,31 @@ fn is_hook_output(value: &Value) -> bool {
         .and_then(|attachment| attachment.get("type"))
         .and_then(Value::as_str)
         .is_some_and(|kind| kind.starts_with("hook_"))
+}
+
+const COMPACTION_CONTEXT_ATTACHMENTS: [&str; 10] = [
+    "file",
+    "compact_file_reference",
+    "invoked_skills",
+    "deferred_tools_delta",
+    "agent_listing_delta",
+    "skill_listing",
+    "mcp_instructions_delta",
+    "environment",
+    "model",
+    "output_style_instructions",
+];
+
+fn is_compact_summary(value: &Value) -> bool {
+    value.get("isCompactSummary").and_then(Value::as_bool) == Some(true)
+}
+
+fn is_compaction_context(value: &Value) -> bool {
+    value
+        .get("attachment")
+        .and_then(|attachment| attachment.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|kind| COMPACTION_CONTEXT_ATTACHMENTS.contains(&kind))
 }
 
 fn is_interrupt_note(value: &Value) -> bool {
@@ -685,6 +710,47 @@ mod runtime_regressions {
             ),
             (
                 format!("{working}\n{session_start_hooks}"),
+                CliRuntimeState::Working,
+            ),
+        ] {
+            std::fs::write(&path, format!("{events}\n{{\"type\":\"cost-state\"}}\n")).unwrap();
+            assert_eq!(tail_runtime(&path), expected, "{events}");
+        }
+    }
+
+    #[test]
+    fn compaction_leaves_the_turn_state_as_it_was() {
+        let root = tempfile::TempDir::new().unwrap();
+        let path = root.path().join("session.jsonl");
+        let ready = r#"{"type":"system","subtype":"turn_duration"}"#;
+        let working = r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#;
+        let compaction = [
+            r#"{"type":"system","subtype":"compact_boundary"}"#,
+            r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#,
+            r#"{"type":"attachment","attachment":{"type":"file"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"compact_file_reference"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"invoked_skills"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"deferred_tools_delta"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"agent_listing_delta"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"skill_listing"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"mcp_instructions_delta"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"environment"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"model"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"output_style_instructions"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"hook_success","hookEvent":"SessionStart"}}"#,
+            r#"{"type":"system","subtype":"informational"}"#,
+        ]
+        .join("\n");
+        let model_call = [
+            r#"{"type":"attachment","attachment":{"type":"credential_org"}}"#,
+            r#"{"type":"attachment","attachment":{"type":"prompt_snapshot"}}"#,
+        ]
+        .join("\n");
+        for (events, expected) in [
+            (format!("{ready}\n{compaction}"), CliRuntimeState::Ready),
+            (format!("{working}\n{compaction}"), CliRuntimeState::Working),
+            (
+                format!("{ready}\n{compaction}\n{model_call}"),
                 CliRuntimeState::Working,
             ),
         ] {
