@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use serde_json::{json, Map, Value};
 
-use super::hooks::{AGENT_ROWS, FORK_CONTEXT, POST_AGENT, PRE_AGENT, WORKTREE_CREATE};
+use super::hooks::{AGENT_ROWS, FORK_CONTEXT, PRE_AGENT};
 use super::resume::FORK_AGENT;
 use crate::agent_policy::{enforce_allowed_model, enforce_tool_model, DispatchPolicy};
 use crate::launch::LaunchDefaults;
@@ -15,7 +15,7 @@ const AGENT_TOOL_FOR_FORKS: &str = "Agent(project-fork)";
 const PROMPT_CACHE_TTL: &str = "1h";
 pub(super) const CONTEXT_SLOTS: usize = super::context::PART_SLOTS;
 
-pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Claude Code treats you as isolated in the project folder, so Bash refuses a command that passes a value computed at runtime, such as a variable, `$(...)` or a loop variable, where it could be read as an option: spell paths and patterns out, put `--` before a computed operand, and split loops into plain separate commands. Read before editing, verify before claiming, and report failures faithfully. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard: one or two lines with the pull request number and its state, or the blocker. Never use session_send. A question only the user can decide ends your turn, stating the question and your recommended answer. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
+pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Read before editing, verify before claiming, and report failures faithfully. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard: one or two lines with the pull request number and its state, or the blocker. Never use session_send. A question only the user can decide ends your turn, stating the question and your recommended answer. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct ForkAgent {
@@ -85,7 +85,6 @@ fn definitions(fork: &ForkAgent) -> Map<String, Value> {
     if let Some(effort) = &fork.effort {
         project_fork.insert("effort".to_owned(), json!(effort));
     }
-    project_fork.insert("isolation".to_owned(), json!("worktree"));
     project_fork.insert("background".to_owned(), json!(true));
     let mut definitions = Map::new();
     definitions.insert(AGENT.to_owned(), Value::Object(lead));
@@ -139,27 +138,20 @@ fn hook_command(program: &Path, hook: &str) -> String {
     format!("{} sessions switchboard hook {hook}", shell_quote(program))
 }
 
-fn entry(matcher: Option<&str>, command: String) -> Value {
-    let mut entry = json!({"hooks": [{"type": "command", "command": command}]});
-    if let Some(matcher) = matcher {
-        entry["matcher"] = json!(matcher);
-    }
-    entry
+fn entry(matcher: &str, command: String) -> Value {
+    json!({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
 }
 
 pub(super) fn settings_json(program: &Path) -> String {
     let command = |hook: &str| hook_command(program, hook);
     let context: Vec<Value> = (0..CONTEXT_SLOTS)
-        .map(|part| entry(Some(FORK_AGENT), command(&format!("{FORK_CONTEXT} {part}"))))
+        .map(|part| entry(FORK_AGENT, command(&format!("{FORK_CONTEXT} {part}"))))
         .collect();
     json!({
         "subagentPromptCacheTtl": PROMPT_CACHE_TTL,
         "subagentStatusLine": {"type": "command", "command": command(AGENT_ROWS)},
         "hooks": {
-            "PreToolUse": [entry(Some("Agent"), command(PRE_AGENT))],
-            "PostToolUse": [entry(Some("Agent"), command(POST_AGENT))],
-            "PostToolUseFailure": [entry(Some("Agent"), command(POST_AGENT))],
-            "WorktreeCreate": [entry(None, command(WORKTREE_CREATE))],
+            "PreToolUse": [entry("Agent", command(PRE_AGENT))],
             "SubagentStart": context,
         },
     })
@@ -229,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn the_agents_json_defines_the_lead_and_the_worktree_pinned_background_fork() {
+    fn the_agents_json_defines_the_lead_and_the_unisolated_background_fork() {
         let fork = ForkAgent {
             model: Some("claude-opus-5-5".to_owned()),
             effort: Some("high".to_owned()),
@@ -252,7 +244,7 @@ mod tests {
         assert_eq!(worker["prompt"], FORK_PROMPT);
         assert_eq!(worker["model"], "claude-opus-5-5");
         assert_eq!(worker["effort"], "high");
-        assert_eq!(worker["isolation"], "worktree");
+        assert!(worker.get("isolation").is_none(), "{worker}");
         assert_eq!(worker["background"], true);
         assert!(agents.get("fork").is_none());
         let bare: Value = serde_json::from_str(&agents_json(&ForkAgent::default())).unwrap();
@@ -292,11 +284,11 @@ mod tests {
         for line in [
             "\nmodel: \"claude-opus-5-5\"\n",
             "\neffort: \"high\"\n",
-            "\nisolation: \"worktree\"\n",
             "\nbackground: true\n",
         ] {
             assert!(worker.contains(line), "{line}: {worker}");
         }
+        assert!(!worker.contains("\nisolation:"), "{worker}");
         assert!(
             worker.contains("\ndescription: \"One piece of work in one project"),
             "{worker}"
@@ -353,7 +345,6 @@ mod tests {
     fn the_fork_prompt_carries_the_rules_the_subagent_prompt_replaces() {
         for needle in [
             "cd <worktree> &&",
-            "put `--` before a computed operand",
             "Never use session_send",
             "Never use `qol-cli-sessions park`",
             "run_in_background true",
@@ -362,6 +353,7 @@ mod tests {
         ] {
             assert!(FORK_PROMPT.contains(needle), "{needle}");
         }
+        assert!(!FORK_PROMPT.contains("isolated"), "{FORK_PROMPT}");
     }
 
     #[test]
@@ -377,19 +369,15 @@ mod tests {
             settings["subagentStatusLine"]["command"],
             format!("{prefix} agent-rows")
         );
-        for (event, hook) in [
-            ("PreToolUse", "pre-agent"),
-            ("PostToolUse", "post-agent"),
-            ("PostToolUseFailure", "post-agent"),
-        ] {
-            assert_eq!(hooks[event].as_array().unwrap().len(), 1, "{event}");
-            assert_eq!(hooks[event][0]["matcher"], "Agent", "{event}");
-            assert_eq!(command_of(&hooks[event][0]), format!("{prefix} {hook}"));
-        }
-        assert_eq!(hooks["WorktreeCreate"][0].get("matcher"), None);
         assert_eq!(
-            command_of(&hooks["WorktreeCreate"][0]),
-            format!("{prefix} worktree-create")
+            hooks.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["PreToolUse", "SubagentStart"]
+        );
+        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["PreToolUse"][0]["matcher"], "Agent");
+        assert_eq!(
+            command_of(&hooks["PreToolUse"][0]),
+            format!("{prefix} pre-agent")
         );
         let context = hooks["SubagentStart"].as_array().unwrap();
         assert_eq!(context.len(), 4);
