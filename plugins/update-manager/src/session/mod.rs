@@ -155,14 +155,14 @@ impl Session {
     pub(crate) fn available(&self) -> Vec<&Update> {
         self.list()
             .iter()
-            .filter(|update| update.held.is_none())
+            .filter(|update| update.installable())
             .collect()
     }
 
     pub(crate) fn held(&self) -> Vec<&Update> {
         self.list()
             .iter()
-            .filter(|update| update.held.is_some())
+            .filter(|update| !update.installable())
             .collect()
     }
 
@@ -371,7 +371,7 @@ impl Session {
         let updates: Vec<Update> = self
             .list()
             .iter()
-            .filter(|update| update.held.is_none() && ids.contains(&update.id))
+            .filter(|update| update.installable() && ids.contains(&update.id))
             .cloned()
             .collect();
         if updates.is_empty() {

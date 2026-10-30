@@ -452,6 +452,46 @@ fn install_asks_first_then_starts_one_job() {
 }
 
 #[test]
+fn an_administrator_hold_installs_like_any_update() {
+    let mut session = mint();
+    let held = session
+        .updates
+        .as_mut()
+        .and_then(|updates| {
+            updates
+                .list
+                .iter_mut()
+                .find(|update| update.id == "apt:nvidia")
+        })
+        .expect("nvidia");
+    held.held = Some(Held::Administrator);
+    held.why = "An administrator holds it at 580.173".into();
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        detail(&pages, ROOT, "waiting"),
+        "30 can install, 3 held by Ubuntu"
+    );
+    let row = page(&pages, "waiting")
+        .row("update:apt:nvidia")
+        .expect("nvidia row");
+    assert!(!row.dim);
+    let all = super::updates::install_all(&session);
+    assert_eq!(
+        label(&pages, &all, "release:apt:nvidia"),
+        "Its hold comes off"
+    );
+    assert_eq!(label(&pages, &all, "held"), "AppArmor 4.0.1 stays held");
+    assert!(pages.page("install:apt:apparmor").is_none());
+    let outcome = press(&mut session, &all, "go", now());
+    let Some(Task::Install(list)) = outcome.task else {
+        panic!("install all must take the held driver too");
+    };
+    assert!(list
+        .iter()
+        .any(|update| update.held == Some(Held::Administrator)));
+}
+
+#[test]
 fn a_failed_install_offers_a_retry_and_the_log() {
     let mut session = mint();
     press(&mut session, "install:apt:nvidia", "go", now());
