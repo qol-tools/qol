@@ -51,6 +51,24 @@ fn remember_caller_login() {
 #[cfg(test)]
 fn remember_caller_login() {}
 
+#[cfg(not(test))]
+fn launch_blocker(
+    interpreter: &CliSessionInterpreter,
+    tool: &CliToolId,
+    cwd: &Path,
+) -> Option<String> {
+    interpreter.launch_blocker_for(tool, cwd, caller_config_dir().as_deref())
+}
+
+#[cfg(test)]
+fn launch_blocker(
+    _interpreter: &CliSessionInterpreter,
+    _tool: &CliToolId,
+    _cwd: &Path,
+) -> Option<String> {
+    None
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct SpawnOutcome {
     pub(super) session: String,
@@ -2212,10 +2230,14 @@ fn start_detached(
             prepared.key
         );
     }
+    let cwd = canonicalize_cwd(cwd)?;
+    if let Some(reason) = launch_blocker(interpreter, &prepared.tool_id, &cwd) {
+        bail!("refusing to launch `{}`: {reason}", prepared.key);
+    }
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
         launch,
-        cwd: canonicalize_cwd(cwd)?,
+        cwd,
         title: Some(prepared.title.clone()),
         in_active_window,
     };

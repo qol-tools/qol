@@ -2,6 +2,7 @@ mod environment;
 mod history;
 mod metadata;
 mod search;
+mod trust;
 
 #[cfg(test)]
 mod tests;
@@ -118,6 +119,16 @@ impl CliSessionStrategy for ClaudeStrategy {
 
     fn launch(&self) -> Option<CliLaunchProgram> {
         Some(CliLaunchProgram::new("claude"))
+    }
+
+    fn launch_blocker(
+        &self,
+        cwd: &std::path::Path,
+        config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        let user_home = dirs::home_dir()?;
+        let config_file = config_dir.unwrap_or(&user_home).join(".claude.json");
+        trust::untrusted_folder(&config_file, cwd, &user_home)
     }
 
     fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
