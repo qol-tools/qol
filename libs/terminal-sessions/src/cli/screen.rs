@@ -70,6 +70,16 @@ pub(super) fn claude_dialog(text: &str) -> bool {
         return false;
     }
     let region = &lines[start..end];
+    let window_end = end.saturating_add(CLAUDE_DIALOG_WINDOW).min(lines.len());
+    let affordance = lines[start..window_end].iter().any(|line| {
+        let lower = line.to_lowercase();
+        CLAUDE_DIALOG_AFFORDANCES
+            .iter()
+            .any(|marker| lower.contains(marker))
+    });
+    if affordance && unnumbered_options(region) {
+        return true;
+    }
     let options: Vec<(usize, bool)> = region
         .iter()
         .filter_map(|line| claude_option(line))
@@ -88,13 +98,6 @@ pub(super) fn claude_dialog(text: &str) -> bool {
     } else {
         &options[..]
     };
-    let window_end = end.saturating_add(CLAUDE_DIALOG_WINDOW).min(lines.len());
-    let affordance = lines[start..window_end].iter().any(|line| {
-        let lower = line.to_lowercase();
-        CLAUDE_DIALOG_AFFORDANCES
-            .iter()
-            .any(|marker| lower.contains(marker))
-    });
     let question = region.iter().any(|line| {
         let lower = line.to_lowercase();
         lower.contains("do you want to proceed?") || lower.contains("would you like to proceed?")
@@ -111,6 +114,43 @@ pub(super) fn claude_dialog(text: &str) -> bool {
     } else {
         dialog
     }
+}
+
+fn unnumbered_options(region: &[&str]) -> bool {
+    let mut selected = region
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start().starts_with('\u{276F}'));
+    let Some((index, line)) = selected.next() else {
+        return false;
+    };
+    if selected.next().is_some() {
+        return false;
+    }
+    let Some(column) = unnumbered_text_column(line) else {
+        return false;
+    };
+    let before = index.checked_sub(1).map(|previous| region[previous]);
+    let after = region.get(index + 1).copied();
+    [before, after].into_iter().flatten().any(|sibling| {
+        !sibling.trim().is_empty() && !is_rule_line(sibling) && leading_columns(sibling) == column
+    })
+}
+
+fn unnumbered_text_column(line: &str) -> Option<usize> {
+    let rest = line.trim_start().strip_prefix('\u{276F}')?;
+    let text = rest.trim_start();
+    if text.is_empty() || claude_option(line).is_some() {
+        return None;
+    }
+    let gap = rest.chars().count() - text.chars().count();
+    Some(leading_columns(line) + 1 + gap)
+}
+
+fn leading_columns(line: &str) -> usize {
+    line.chars()
+        .take_while(|character| character.is_whitespace())
+        .count()
 }
 
 fn claude_option(line: &str) -> Option<(usize, bool)> {
@@ -889,6 +929,88 @@ mod tests {
         ]
         .join("\n");
         assert!(!claude_dialog(&ruleless_echo));
+    }
+
+    #[test]
+    fn claude_dialog_reads_unnumbered_option_lists_only_with_an_affordance() {
+        let rule = "\u{2500}".repeat(65);
+        let trust = |no_mark: &str, yes_mark: &str| {
+            [
+                rule.as_str(),
+                " Accessing workspace:",
+                "",
+                " /home/kmrh47",
+                "",
+                " Quick safety check: Is this a project you created or one you trust?",
+                "",
+                " Claude Code'll be able to read, edit, and execute files here.",
+                "",
+                " Security guide",
+                "",
+                &format!(" {no_mark} No, exit"),
+                &format!(" {yes_mark} Yes, I trust this folder"),
+                "",
+                " Enter to confirm \u{b7} Esc to cancel",
+            ]
+            .join("\n")
+        };
+        let footer = "  \u{23F5}\u{23F5} bypass permissions on (shift+tab to cycle)";
+        let cases = [
+            ("no selected", trust("\u{276F}", " "), true),
+            ("yes selected", trust(" ", "\u{276F}"), true),
+            (
+                "empty composer",
+                [rule.as_str(), "\u{276F} ", rule.as_str(), footer].join("\n"),
+                false,
+            ),
+            (
+                "two-line draft",
+                [
+                    rule.as_str(),
+                    "\u{276F} fix the bug and then",
+                    "  write the tests",
+                    rule.as_str(),
+                    footer,
+                ]
+                .join("\n"),
+                false,
+            ),
+            (
+                "no affordance",
+                [
+                    rule.as_str(),
+                    " Pick one",
+                    " \u{276F} No, exit",
+                    "   Yes, I trust this folder",
+                ]
+                .join("\n"),
+                false,
+            ),
+            (
+                "quoted selection without sibling",
+                [
+                    rule.as_str(),
+                    " \u{276F} No, exit",
+                    " Enter to confirm \u{b7} Esc to cancel",
+                ]
+                .join("\n"),
+                false,
+            ),
+            (
+                "two selected lines",
+                [
+                    rule.as_str(),
+                    " \u{276F} No, exit",
+                    " \u{276F} Yes, I trust this folder",
+                    " Enter to confirm \u{b7} Esc to cancel",
+                ]
+                .join("\n"),
+                false,
+            ),
+        ];
+        for (name, text, expected) in cases {
+            assert_eq!(claude_dialog(&text), expected, "case: {name}");
+        }
     }
 
     #[test]

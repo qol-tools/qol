@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::Context;
 use serde_json::{json, Map, Value};
 
 use super::hooks::{FORK_CONTEXT, POST_AGENT, PRE_AGENT, WORKTREE_CREATE};
@@ -55,7 +56,23 @@ pub(super) fn admit_model(model: &str) -> anyhow::Result<()> {
     enforce_tool_model(CLAUDE, &model, &policy.tool_models)
 }
 
-pub(super) fn agents_json(fork: &ForkAgent) -> String {
+fn definitions(fork: &ForkAgent) -> Map<String, Value> {
+    let mut lead = Map::new();
+    lead.insert(
+        "description".to_owned(),
+        json!("The user's one control chat: it starts forks and talks to terminal sessions."),
+    );
+    lead.insert("prompt".to_owned(), json!(""));
+    lead.insert(
+        "tools".to_owned(),
+        json!([
+            AGENT_TOOL_FOR_FORKS,
+            "SendMessage",
+            "TaskStop",
+            "ToolSearch",
+            SESSIONS_TOOLS
+        ]),
+    );
     let mut project_fork = Map::new();
     project_fork.insert(
         "description".to_owned(),
@@ -70,15 +87,48 @@ pub(super) fn agents_json(fork: &ForkAgent) -> String {
     }
     project_fork.insert("isolation".to_owned(), json!("worktree"));
     project_fork.insert("background".to_owned(), json!(true));
-    json!({
-        AGENT: {
-            "description": "The user's one control chat: it starts forks and talks to terminal sessions.",
-            "prompt": "",
-            "tools": [AGENT_TOOL_FOR_FORKS, "SendMessage", "TaskStop", "ToolSearch", SESSIONS_TOOLS],
-        },
-        FORK_AGENT: Value::Object(project_fork),
-    })
-    .to_string()
+    let mut definitions = Map::new();
+    definitions.insert(AGENT.to_owned(), Value::Object(lead));
+    definitions.insert(FORK_AGENT.to_owned(), Value::Object(project_fork));
+    definitions
+}
+
+pub(super) fn agents_json(fork: &ForkAgent) -> String {
+    Value::Object(definitions(fork)).to_string()
+}
+
+pub(super) fn agent_files(fork: &ForkAgent) -> Vec<(String, String)> {
+    definitions(fork)
+        .into_iter()
+        .map(|(name, definition)| {
+            let mut contents = format!("---\nname: {}\n", Value::String(name.clone()));
+            let mut prompt = "";
+            if let Value::Object(fields) = &definition {
+                for (key, value) in fields {
+                    if key == "prompt" {
+                        prompt = value.as_str().unwrap_or_default();
+                    } else {
+                        contents.push_str(&format!("{key}: {value}\n"));
+                    }
+                }
+            }
+            contents.push_str("---\n");
+            contents.push_str(prompt);
+            (format!("{name}.md"), contents)
+        })
+        .collect()
+}
+
+pub(super) fn write_agent_files(dir: &Path, fork: &ForkAgent) -> anyhow::Result<()> {
+    let agents = dir.join(".claude").join("agents");
+    std::fs::create_dir_all(&agents)
+        .with_context(|| format!("failed to create {}", agents.display()))?;
+    for (file, contents) in agent_files(fork) {
+        let path = agents.join(file);
+        std::fs::write(&path, contents)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn shell_quote(path: &Path) -> String {
@@ -207,6 +257,95 @@ mod tests {
         let bare: Value = serde_json::from_str(&agents_json(&ForkAgent::default())).unwrap();
         assert!(bare["project-fork"].get("model").is_none());
         assert!(bare["project-fork"].get("effort").is_none());
+    }
+
+    fn tuned_fork() -> ForkAgent {
+        ForkAgent {
+            model: Some("claude-opus-5-5".to_owned()),
+            effort: Some("high".to_owned()),
+        }
+    }
+
+    #[test]
+    fn the_agent_files_render_each_definition_as_json_quoted_frontmatter() {
+        let files = agent_files(&tuned_fork());
+        let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["switchboard.md", "project-fork.md"]);
+        let lead = &files[0].1;
+        assert!(lead.starts_with("---\nname: \"switchboard\"\n"), "{lead}");
+        assert!(
+            lead.contains("\ndescription: \"The user's one control chat"),
+            "{lead}"
+        );
+        assert!(
+            lead.contains("\ntools: [\"Agent(project-fork)\",\"SendMessage\",\"TaskStop\",\"ToolSearch\",\"mcp__sessions__*\"]\n"),
+            "{lead}"
+        );
+        assert!(!lead.contains("prompt:"), "{lead}");
+        assert!(lead.ends_with("\n---\n"), "{lead}");
+        let worker = &files[1].1;
+        assert!(
+            worker.starts_with("---\nname: \"project-fork\"\n"),
+            "{worker}"
+        );
+        for line in [
+            "\nmodel: \"claude-opus-5-5\"\n",
+            "\neffort: \"high\"\n",
+            "\nisolation: \"worktree\"\n",
+            "\nbackground: true\n",
+        ] {
+            assert!(worker.contains(line), "{line}: {worker}");
+        }
+        assert!(
+            worker.contains("\ndescription: \"One piece of work in one project"),
+            "{worker}"
+        );
+        assert!(
+            worker.ends_with(&format!("\n---\n{FORK_PROMPT}")),
+            "{worker}"
+        );
+        assert!(!worker.contains("\nprompt:"), "{worker}");
+    }
+
+    #[test]
+    fn the_agent_files_omit_the_unset_fork_model_and_effort() {
+        let worker = &agent_files(&ForkAgent::default())[1].1;
+        assert!(!worker.contains("\nmodel:"), "{worker}");
+        assert!(!worker.contains("\neffort:"), "{worker}");
+    }
+
+    #[test]
+    fn the_agent_files_and_the_agents_json_come_from_the_same_definitions() {
+        let fork = tuned_fork();
+        let agents: Value = serde_json::from_str(&agents_json(&fork)).unwrap();
+        for (file, contents) in agent_files(&fork) {
+            let name = file.strip_suffix(".md").unwrap();
+            let fields = agents[name].as_object().unwrap();
+            for (key, value) in fields.iter().filter(|(key, _)| *key != "prompt") {
+                assert!(
+                    contents.contains(&format!("\n{key}: {value}\n")),
+                    "{key}: {contents}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn writing_the_agent_files_creates_both_and_replaces_stale_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents = dir.path().join(".claude").join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("project-fork.md"), "stale").unwrap();
+        write_agent_files(dir.path(), &tuned_fork()).unwrap();
+        for (file, contents) in agent_files(&tuned_fork()) {
+            assert_eq!(
+                std::fs::read_to_string(agents.join(file)).unwrap(),
+                contents
+            );
+        }
+        write_agent_files(dir.path(), &ForkAgent::default()).unwrap();
+        let worker = std::fs::read_to_string(agents.join("project-fork.md")).unwrap();
+        assert!(!worker.contains("claude-opus-5-5"), "{worker}");
     }
 
     #[test]
