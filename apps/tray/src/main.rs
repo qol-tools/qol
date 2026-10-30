@@ -16,7 +16,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn scrub_inherited_agent_session_env() {
+    drop_launching_claude_session_env();
     for key in qol_agent_homes::session_env_vars() {
+        std::env::remove_var(key);
+    }
+}
+
+fn drop_launching_claude_session_env() {
+    if std::env::var_os("CLAUDECODE").is_none() {
+        return;
+    }
+    for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR"] {
         std::env::remove_var(key);
     }
 }

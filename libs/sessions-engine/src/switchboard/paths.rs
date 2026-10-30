@@ -19,7 +19,10 @@ pub(super) fn conversations_dir(config_home: &Path, project: &Path) -> PathBuf {
 
 pub(super) fn switchboard_dir() -> Option<PathBuf> {
     let dir = qol_config::data_subdir("sessions")?.join(super::SWITCHBOARD_KEY);
-    std::fs::canonicalize(&dir).ok().or(Some(dir))
+    std::fs::canonicalize(&dir)
+        .map(qol_platform::windows_path::strip_verbatim)
+        .ok()
+        .or(Some(dir))
 }
 
 #[cfg(test)]

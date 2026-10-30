@@ -1,26 +1,27 @@
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
+use qol_platform::windows_path::strip_verbatim;
 use serde::Deserialize;
 use serde_json::json;
 
 use super::agents::admit_model;
 use super::context;
 use super::paths::{claude_home, switchboard_dir};
-use super::resume::{recorded_worktree, FORK_AGENT};
+use super::plugin;
+use super::resume::FORK_AGENT;
 
 pub(super) const PRE_AGENT: &str = "pre-agent";
-pub(super) const POST_AGENT: &str = "post-agent";
-pub(super) const WORKTREE_CREATE: &str = "worktree-create";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
-const PIN_TTL: Duration = Duration::from_secs(120);
-const AGENT_NAME_PREFIX: &str = "agent-";
+const RETIRED_POST_AGENT: &str = "post-agent";
+const RETIRED_WORKTREE_CREATE: &str = "worktree-create";
+const RETIRED_PINS: &str = "fork-pins";
 const PROJECT_PREFIX: &str = "Project:";
+const FORMAT_HELP: &str = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -33,12 +34,7 @@ struct ToolInput {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct Payload {
-    session_id: Option<String>,
-    tool_use_id: Option<String>,
-    agent_id: Option<String>,
     cwd: Option<String>,
-    name: Option<String>,
-    transcript_path: Option<String>,
     tool_input: ToolInput,
 }
 
@@ -48,211 +44,85 @@ enum Verdict {
     Deny(String),
 }
 
-struct Pins {
-    dir: PathBuf,
+fn canonical(path: &Path) -> Result<PathBuf, std::io::Error> {
+    fs::canonicalize(path).map(strip_verbatim)
 }
 
-fn safe_name(id: &str) -> String {
-    id.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-impl Pins {
-    fn system() -> Result<Self> {
-        let dir = qol_config::data_subdir("sessions")
-            .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?
-            .join("fork-pins");
-        Ok(Self { dir })
-    }
-
-    #[cfg(test)]
-    fn with_dir(dir: PathBuf) -> Self {
-        Self { dir }
-    }
-
-    fn session_dir(&self, session: &str) -> PathBuf {
-        self.dir.join(safe_name(session))
-    }
-
-    fn lock(&self, session: &str) -> Result<fs::File> {
-        fs::create_dir_all(&self.dir).context("failed to create the fork pin directory")?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.dir.join(format!("{}.lock", safe_name(session))))
-            .context("failed to open the fork pin lock")?;
-        file.lock().context("failed to take the fork pin lock")?;
-        Ok(file)
-    }
-
-    fn live(&self, session: &str, now: SystemTime) -> Vec<(String, String)> {
-        let Ok(entries) = fs::read_dir(self.session_dir(session)) else {
-            return Vec::new();
-        };
-        let mut live = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let age = entry
-                .metadata()
-                .and_then(|meta| meta.modified())
-                .ok()
-                .and_then(|modified| now.duration_since(modified).ok())
-                .unwrap_or_default();
-            if age > PIN_TTL {
-                let _ = fs::remove_file(&path);
-                continue;
-            }
-            let Ok(project) = fs::read_to_string(&path) else {
-                continue;
-            };
-            let Some(tool_use) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            live.push((tool_use.to_owned(), project.trim().to_owned()));
-        }
-        live
-    }
-
-    fn write(&self, session: &str, tool_use: &str, project: &Path) -> Result<()> {
-        let dir = self.session_dir(session);
-        fs::create_dir_all(&dir).context("failed to create the fork pin directory")?;
-        qol_fs::atomic_write(
-            &dir.join(safe_name(tool_use)),
-            project.to_string_lossy().as_bytes(),
-        )
-        .context("failed to write the fork pin")
-    }
-
-    fn remove(&self, session: &str, tool_use: &str) {
-        let _ = fs::remove_file(self.session_dir(session).join(safe_name(tool_use)));
-    }
-}
-
-fn project_of(prompt: &str) -> Result<PathBuf, String> {
-    let format_help = "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`, followed by the user's words.";
+fn check_project(prompt: &str) -> Result<(), String> {
     let first = prompt.lines().next().unwrap_or_default().trim();
-    let Some(path) = first.strip_prefix(PROJECT_PREFIX) else {
+    let Some(written) = first.strip_prefix(PROJECT_PREFIX).map(str::trim) else {
         return Err(format!(
-            "The prompt's first line is not a project line. {format_help}"
+            "The prompt's first line is not a project line. {FORMAT_HELP}"
         ));
     };
-    let path = Path::new(path.trim());
+    let path = Path::new(written);
     if !path.is_absolute() {
         return Err(format!(
-            "`{}` is not an absolute path. {format_help}",
-            path.display()
+            "`{written}` is not an absolute path. {FORMAT_HELP}"
         ));
     }
     if !path.is_dir() {
         return Err(format!(
-            "`{}` is not an existing directory. {format_help}",
-            path.display()
+            "`{written}` is not an existing directory. {FORMAT_HELP}"
         ));
     }
-    fs::canonicalize(path).map_err(|error| {
-        format!(
-            "`{}` cannot be resolved ({error}). {format_help}",
-            path.display()
-        )
-    })
-}
-
-fn pre_agent(
-    pins: &Pins,
-    payload: &Payload,
-    now: SystemTime,
-    admit: &dyn Fn(&str) -> Result<()>,
-) -> Result<Verdict> {
-    if payload.agent_id.is_some() || payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT)
-    {
-        return Ok(Verdict::Pass);
-    }
-    let project = match project_of(payload.tool_input.prompt.as_deref().unwrap_or_default()) {
-        Ok(project) => project,
-        Err(reason) => return Ok(Verdict::Deny(reason)),
-    };
-    if let Some(model) = payload.tool_input.model.as_deref() {
-        if let Err(error) = admit(model) {
-            return Ok(Verdict::Deny(format!("{error:#}")));
-        }
-    }
-    let (Some(session), Some(tool_use)) = (&payload.session_id, &payload.tool_use_id) else {
-        return Ok(Verdict::Deny(
-            "The hook payload carried no session or tool use id, so the fork's folder cannot be pinned.".to_owned(),
+    let resolved = canonical(path)
+        .map_err(|error| format!("`{written}` cannot be resolved ({error}). {FORMAT_HELP}"))?;
+    if resolved.as_os_str() != written {
+        return Err(format!(
+            "`{written}` is not the folder's own spelling, so the fork's memory would not be found. Start the prompt with `Project: {}` instead.",
+            resolved.display()
         ));
-    };
-    let _lock = pins.lock(session)?;
-    let project_text = project.to_string_lossy();
-    if let Some((_, other)) = pins
-        .live(session, now)
-        .into_iter()
-        .find(|(id, pinned)| id != &safe_name(tool_use) && pinned.as_str() != &*project_text)
-    {
-        return Ok(Verdict::Deny(format!(
-            "Another fork is still starting in {other}. Start this one in a later message, after that fork's Agent call has returned."
-        )));
     }
-    pins.write(session, tool_use, &project)?;
-    Ok(Verdict::Pass)
-}
-
-fn post_agent(pins: &Pins, payload: &Payload) -> Result<()> {
-    let (Some(session), Some(tool_use)) = (&payload.session_id, &payload.tool_use_id) else {
-        return Ok(());
-    };
-    let _lock = pins.lock(session)?;
-    pins.remove(session, tool_use);
     Ok(())
 }
 
-fn worktree_create(pins: &Pins, payload: &Payload, now: SystemTime) -> Result<PathBuf> {
-    let session = payload.session_id.as_deref();
-    if let (Some(name), Some(transcript), Some(session)) = (
-        payload.name.as_deref(),
-        payload.transcript_path.as_deref(),
-        session,
-    ) {
-        let agent_id = name.strip_prefix(AGENT_NAME_PREFIX).unwrap_or(name);
-        let subagents = Path::new(transcript)
-            .parent()
-            .map(|dir| dir.join(session).join("subagents"));
-        if let Some(worktree) = subagents.and_then(|dir| recorded_worktree(&dir, agent_id)) {
-            return Ok(worktree);
+fn pre_agent(payload: &Payload, admit: &dyn Fn(&str) -> Result<()>) -> Verdict {
+    if payload.tool_input.subagent_type.as_deref() != Some(FORK_AGENT) {
+        return Verdict::Pass;
+    }
+    if let Err(reason) = check_project(payload.tool_input.prompt.as_deref().unwrap_or_default()) {
+        return Verdict::Deny(reason);
+    }
+    if let Some(model) = payload.tool_input.model.as_deref() {
+        if let Err(error) = admit(model) {
+            return Verdict::Deny(format!("{error:#}"));
         }
     }
-    if let Some(session) = session {
-        let _lock = pins.lock(session)?;
-        let mut projects: Vec<String> = pins
-            .live(session, now)
-            .into_iter()
-            .map(|(_, project)| project)
-            .collect();
-        projects.sort();
-        projects.dedup();
-        if let [project] = projects.as_slice() {
-            return Ok(PathBuf::from(project));
-        }
-    }
-    bail!(
-        "a project-fork's prompt must start with `Project: <absolute path of an existing folder>`"
+    Verdict::Pass
+}
+
+fn unplaced_notice(switchboard: &Path, config_home: &Path) -> String {
+    format!(
+        "Claude Code started you in the switchboard's own folder, {}, not in your project folder, because the {} plugin, which starts each fork in its project folder, did not run. Work in the folder on the first line of your task all the same: start each Bash command with `cd <that folder> &&` until you make a worktree, and before anything else read that folder's CLAUDE.md files and your memory index, {}, where <key> is that folder's path with each character that is not a letter or digit replaced by `-`. End your final message with the line `The {} plugin did not run.`\n",
+        switchboard.display(),
+        plugin::NAME,
+        config_home
+            .join("projects")
+            .join("<key>")
+            .join("memory")
+            .join("MEMORY.md")
+            .display(),
+        plugin::NAME,
     )
 }
 
-fn fork_context(part: usize, payload: &Payload) -> Result<Option<String>> {
+fn fork_context(
+    part: usize,
+    payload: &Payload,
+    config_home: &Path,
+    switchboard: Option<&Path>,
+) -> Result<Option<String>> {
     let cwd = payload
         .cwd
         .as_deref()
+        .map(Path::new)
         .ok_or_else(|| anyhow!("the hook payload carries no cwd"))?;
-    let parts = context::parts(Path::new(cwd), &claude_home(), switchboard_dir().as_deref());
+    let cwd = canonical(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let parts = match switchboard {
+        Some(own) if own == cwd => vec![unplaced_notice(own, config_home)],
+        _ => context::parts(&cwd, config_home, switchboard),
+    };
     Ok(parts.get(part).map(|text| {
         let text = format!(
             "[project context part {}/{}]\n{text}",
@@ -273,6 +143,13 @@ fn deny_json(reason: &str) -> String {
     .to_string()
 }
 
+pub(super) fn remove_retired_pins(sessions: &Path) -> std::io::Result<()> {
+    match fs::remove_dir_all(sessions.join(RETIRED_PINS)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 fn read_payload() -> Result<Payload> {
     let mut raw = String::new();
     std::io::stdin()
@@ -286,25 +163,19 @@ fn read_payload() -> Result<Payload> {
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
-        anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{POST_AGENT}|{WORKTREE_CREATE}|{FORK_CONTEXT} N|{AGENT_ROWS}>"
-        )
+        anyhow!("usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{AGENT_ROWS}>")
     })?;
-    if name == AGENT_ROWS {
-        return super::rows::run();
-    }
-    let payload = read_payload()?;
-    let now = SystemTime::now();
     match name {
+        AGENT_ROWS => super::rows::run(),
+        RETIRED_POST_AGENT => Ok(()),
+        RETIRED_WORKTREE_CREATE => bail!(
+            "this switchboard was started by an older CLI Sessions whose forks ran in worktree isolation; close the switchboard and open it again to start forks"
+        ),
         PRE_AGENT => {
-            if let Verdict::Deny(reason) = pre_agent(&Pins::system()?, &payload, now, &admit_model)?
-            {
+            if let Verdict::Deny(reason) = pre_agent(&read_payload()?, &admit_model) {
                 crate::cli::line(deny_json(&reason));
             }
-        }
-        POST_AGENT => post_agent(&Pins::system()?, &payload)?,
-        WORKTREE_CREATE => {
-            crate::cli::line(worktree_create(&Pins::system()?, &payload, now)?.display());
+            Ok(())
         }
         FORK_CONTEXT => {
             let part = args
@@ -312,13 +183,16 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .and_then(|arg| arg.to_str())
                 .and_then(|arg| arg.parse::<usize>().ok())
                 .ok_or_else(|| anyhow!("{FORK_CONTEXT} takes a part number"))?;
-            if let Some(line) = fork_context(part, &payload)? {
+            let payload = read_payload()?;
+            if let Some(line) =
+                fork_context(part, &payload, &claude_home(), switchboard_dir().as_deref())?
+            {
                 crate::cli::line(line);
             }
+            Ok(())
         }
         other => bail!("unknown switchboard hook `{other}`"),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -326,8 +200,7 @@ mod tests {
     use super::*;
 
     struct Rig {
-        _root: tempfile::TempDir,
-        pins: Pins,
+        root: tempfile::TempDir,
         project_a: PathBuf,
         project_b: PathBuf,
     }
@@ -339,10 +212,9 @@ mod tests {
         fs::create_dir_all(&project_a).unwrap();
         fs::create_dir_all(&project_b).unwrap();
         Rig {
-            pins: Pins::with_dir(root.path().join("pins")),
-            project_a: fs::canonicalize(project_a).unwrap(),
-            project_b: fs::canonicalize(project_b).unwrap(),
-            _root: root,
+            project_a: canonical(&project_a).unwrap(),
+            project_b: canonical(&project_b).unwrap(),
+            root,
         }
     }
 
@@ -354,10 +226,8 @@ mod tests {
         bail!("model {model} is not allowed")
     }
 
-    fn call(tool_use: &str, subagent: &str, prompt: &str) -> Payload {
+    fn call(subagent: &str, prompt: &str) -> Payload {
         Payload {
-            session_id: Some("s1".to_owned()),
-            tool_use_id: Some(tool_use.to_owned()),
             tool_input: ToolInput {
                 subagent_type: Some(subagent.to_owned()),
                 prompt: Some(prompt.to_owned()),
@@ -367,9 +237,8 @@ mod tests {
         }
     }
 
-    fn fork_call(tool_use: &str, project: &Path) -> Payload {
+    fn fork_call(project: &Path) -> Payload {
         call(
-            tool_use,
             FORK_AGENT,
             &format!("Project: {}\nfix it", project.display()),
         )
@@ -385,7 +254,6 @@ mod tests {
     #[test]
     fn a_missing_relative_or_nonexistent_project_is_denied_with_the_format() {
         let rig = rig();
-        let now = SystemTime::now();
         let missing = rig.project_a.join("gone");
         for prompt in [
             "fix it".to_owned(),
@@ -393,193 +261,157 @@ mod tests {
             format!("Project: {}\nfix it", missing.display()),
             format!("fix it\nProject: {}", rig.project_a.display()),
         ] {
-            let reason = denied(
-                pre_agent(&rig.pins, &call("t1", FORK_AGENT, &prompt), now, &admit_all).unwrap(),
-            );
+            let reason = denied(pre_agent(&call(FORK_AGENT, &prompt), &admit_all));
             assert!(reason.contains("Project: <absolute path"), "{reason}");
         }
-        assert!(rig.pins.live("s1", now).is_empty());
     }
 
     #[test]
-    fn a_different_in_flight_project_is_denied_and_the_same_one_is_allowed() {
+    fn a_project_spelled_otherwise_than_on_disk_is_denied_with_its_own_spelling() {
         let rig = rig();
-        let now = SystemTime::now();
+        let own = rig.project_a.display().to_string();
+        for written in [
+            format!("{own}{}", std::path::MAIN_SEPARATOR),
+            rig.project_a.join(".").display().to_string(),
+            rig.project_b.join("..").join("a").display().to_string(),
+        ] {
+            let prompt = format!("Project: {written}\nfix it");
+            let reason = denied(pre_agent(&call(FORK_AGENT, &prompt), &admit_all));
+            assert!(
+                reason.contains(&format!("Start the prompt with `Project: {own}` instead")),
+                "{reason}"
+            );
+        }
+        let spaced = format!("  Project:   {own}  \r\nfix it");
         assert_eq!(
-            pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap(),
+            pre_agent(&call(FORK_AGENT, &spaced), &admit_all),
             Verdict::Pass
         );
-        assert_eq!(
-            pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap(),
-            Verdict::Pass
-        );
-        let reason = denied(
-            pre_agent(&rig.pins, &fork_call("t3", &rig.project_b), now, &admit_all).unwrap(),
-        );
-        assert!(reason.contains("later message"), "{reason}");
-        assert!(
-            reason.contains(&rig.project_a.display().to_string()),
-            "{reason}"
-        );
-        assert_eq!(rig.pins.live("s1", now).len(), 2);
     }
 
     #[test]
-    fn a_stale_pin_is_ignored_and_removed() {
-        let rig = rig();
-        let now = SystemTime::now();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
-        let later = now + PIN_TTL + Duration::from_secs(5);
-        assert_eq!(
-            pre_agent(
-                &rig.pins,
-                &fork_call("t2", &rig.project_b),
-                later,
-                &admit_all
-            )
-            .unwrap(),
-            Verdict::Pass
-        );
-        let live = rig.pins.live("s1", now);
-        assert_eq!(live.len(), 1, "{live:?}");
-        assert_eq!(live[0].1, rig.project_b.to_string_lossy());
-    }
-
-    #[test]
-    fn calls_from_other_agents_and_from_subagents_are_ignored() {
-        let rig = rig();
-        let now = SystemTime::now();
-        let other = call("t1", "general-purpose", "no project line");
-        assert_eq!(
-            pre_agent(&rig.pins, &other, now, &admit_all).unwrap(),
-            Verdict::Pass
-        );
-        let mut from_subagent = fork_call("t2", &rig.project_a);
-        from_subagent.agent_id = Some("a123".to_owned());
-        assert_eq!(
-            pre_agent(&rig.pins, &from_subagent, now, &admit_all).unwrap(),
-            Verdict::Pass
-        );
-        let mut unscoped = call("t3", FORK_AGENT, "no project line");
-        unscoped.agent_id = Some("a123".to_owned());
-        assert_eq!(
-            pre_agent(&rig.pins, &unscoped, now, &admit_all).unwrap(),
-            Verdict::Pass
-        );
-        assert!(rig.pins.live("s1", now).is_empty());
+    fn only_project_fork_calls_are_checked() {
+        let other = call("general-purpose", "no project line");
+        assert_eq!(pre_agent(&other, &admit_none), Verdict::Pass);
+        let unscoped = call(FORK_AGENT, "no project line");
+        assert!(denied(pre_agent(&unscoped, &admit_all)).contains("not a project line"));
+        let unnamed = Payload::default();
+        assert_eq!(pre_agent(&unnamed, &admit_none), Verdict::Pass);
     }
 
     #[test]
     fn a_model_the_policy_does_not_admit_is_denied_and_none_is_always_fine() {
         let rig = rig();
-        let now = SystemTime::now();
-        let mut named = fork_call("t1", &rig.project_a);
+        let mut named = fork_call(&rig.project_a);
         named.tool_input.model = Some("opus".to_owned());
-        let reason = denied(pre_agent(&rig.pins, &named, now, &admit_none).unwrap());
+        let reason = denied(pre_agent(&named, &admit_none));
         assert!(reason.contains("model opus is not allowed"), "{reason}");
-        assert!(rig.pins.live("s1", now).is_empty());
-        assert_eq!(
-            pre_agent(&rig.pins, &named, now, &admit_all).unwrap(),
-            Verdict::Pass
-        );
-        let unnamed = fork_call("t2", &rig.project_a);
-        assert_eq!(
-            pre_agent(&rig.pins, &unnamed, now, &admit_none).unwrap(),
-            Verdict::Pass
-        );
+        assert_eq!(pre_agent(&named, &admit_all), Verdict::Pass);
+        let unnamed = fork_call(&rig.project_a);
+        assert_eq!(pre_agent(&unnamed, &admit_none), Verdict::Pass);
     }
 
-    #[test]
-    fn post_agent_removes_the_pin_of_its_tool_use() {
-        let rig = rig();
-        let now = SystemTime::now();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
-        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap();
-        post_agent(&rig.pins, &fork_call("t1", &rig.project_a)).unwrap();
-        let live = rig.pins.live("s1", now);
-        assert_eq!(
-            live.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
-            ["t2"]
-        );
-        post_agent(&rig.pins, &fork_call("t2", &rig.project_a)).unwrap();
-        assert!(rig.pins.live("s1", now).is_empty());
-        post_agent(&rig.pins, &Payload::default()).unwrap();
-    }
-
-    fn creation(name: &str, session: &str, transcript: &Path) -> Payload {
-        Payload {
-            session_id: Some(session.to_owned()),
-            name: Some(name.to_owned()),
-            transcript_path: Some(transcript.to_string_lossy().into_owned()),
-            ..Payload::default()
-        }
-    }
-
-    #[test]
-    fn worktree_create_prints_the_single_pinned_project() {
-        let rig = rig();
-        let now = SystemTime::now();
-        let transcript = rig._root.path().join("t/s1.jsonl");
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
-        pre_agent(&rig.pins, &fork_call("t2", &rig.project_a), now, &admit_all).unwrap();
-        let got =
-            worktree_create(&rig.pins, &creation("agent-new", "s1", &transcript), now).unwrap();
-        assert_eq!(got, rig.project_a);
-    }
-
-    #[test]
-    fn worktree_create_with_no_pin_or_two_projects_fails_with_the_format() {
-        let rig = rig();
-        let now = SystemTime::now();
-        let transcript = rig._root.path().join("t/s1.jsonl");
-        let error = worktree_create(&rig.pins, &creation("agent-new", "s1", &transcript), now)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("Project: <absolute path"), "{error}");
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
-        rig.pins.write("s1", "t9", &rig.project_b).unwrap();
-        assert!(
-            worktree_create(&rig.pins, &creation("agent-new", "s1", &transcript), now).is_err()
-        );
-        assert!(
-            worktree_create(&rig.pins, &creation("agent-new", "other", &transcript), now).is_err()
-        );
-    }
-
-    #[test]
-    fn worktree_create_resumes_into_the_folder_its_meta_recorded() {
-        let rig = rig();
-        let now = SystemTime::now();
-        let transcript = rig._root.path().join("t/s1.jsonl");
-        let subagents = rig._root.path().join("t/s1/subagents/deeper");
-        fs::create_dir_all(&subagents).unwrap();
-        let meta = json!({"agentType": "project-fork", "worktreePath": rig.project_b});
-        fs::write(subagents.join("agent-abc123.meta.json"), meta.to_string()).unwrap();
-        pre_agent(&rig.pins, &fork_call("t1", &rig.project_a), now, &admit_all).unwrap();
-        let got =
-            worktree_create(&rig.pins, &creation("agent-abc123", "s1", &transcript), now).unwrap();
-        assert_eq!(got, rig.project_b);
-    }
-
-    #[test]
-    fn fork_context_prints_the_part_as_subagent_start_json_and_nothing_past_the_end() {
-        let root = tempfile::tempdir().unwrap();
-        let payload = Payload {
-            cwd: Some(root.path().to_string_lossy().into_owned()),
-            ..Payload::default()
-        };
-        let line = fork_context(0, &payload).unwrap().unwrap();
-        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+    fn context_line(line: &str) -> String {
+        let value: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_eq!(
             value["hookSpecificOutput"]["hookEventName"],
             "SubagentStart"
         );
-        assert!(value["hookSpecificOutput"]["additionalContext"]
+        value["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap()
-            .starts_with("[project context part 1/1]\nYour project folder is"));
-        assert!(fork_context(context::PART_SLOTS - 1, &Payload::default()).is_err());
-        assert_eq!(fork_context(9, &payload).unwrap(), None);
+            .to_owned()
+    }
+
+    #[test]
+    fn fork_context_prints_the_part_as_subagent_start_json_and_nothing_past_the_end() {
+        let rig = rig();
+        let home = rig.root.path().join("home");
+        let board = rig.root.path().join("board");
+        let payload = Payload {
+            cwd: Some(rig.project_a.join(".").to_string_lossy().into_owned()),
+            ..Payload::default()
+        };
+        let text = context_line(
+            &fork_context(0, &payload, &home, Some(&board))
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(
+            text.starts_with(&format!(
+                "[project context part 1/1]\nYour project folder is {}.",
+                rig.project_a.display()
+            )),
+            "{text}"
+        );
+        assert!(fork_context(0, &Payload::default(), &home, None).is_err());
+        assert_eq!(fork_context(9, &payload, &home, None).unwrap(), None);
+    }
+
+    #[test]
+    fn a_fork_started_in_the_switchboard_folder_is_told_to_work_in_its_project() {
+        let rig = rig();
+        let home = rig.root.path().join("home");
+        let board = rig.project_b.clone();
+        let payload = Payload {
+            cwd: Some(board.to_string_lossy().into_owned()),
+            ..Payload::default()
+        };
+        let text = context_line(
+            &fork_context(0, &payload, &home, Some(&board))
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(text.starts_with("[project context part 1/1]\n"), "{text}");
+        for needle in [
+            format!("the switchboard's own folder, {}", board.display()),
+            "the qol-switchboard plugin".to_owned(),
+            "`cd <that folder> &&`".to_owned(),
+            home.join("projects")
+                .join("<key>")
+                .join("memory")
+                .join("MEMORY.md")
+                .display()
+                .to_string(),
+            "End your final message with the line `The qol-switchboard plugin did not run.`"
+                .to_owned(),
+        ] {
+            assert!(text.contains(&needle), "{needle}: {text}");
+        }
+        assert_eq!(
+            fork_context(1, &payload, &home, Some(&board)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_retired_worktree_hooks_tell_an_old_switchboard_to_restart() {
+        run(&[OsString::from("post-agent")]).unwrap();
+        let error = run(&[OsString::from("worktree-create")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("close the switchboard and open it again"),
+            "{error}"
+        );
+        let error = run(&[OsString::from("bogus")]).unwrap_err().to_string();
+        assert!(
+            error.contains("unknown switchboard hook `bogus`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_retired_pins_folder_is_removed_and_a_missing_one_is_fine() {
+        let root = tempfile::tempdir().unwrap();
+        let session = root.path().join(RETIRED_PINS).join("session-1");
+        fs::create_dir_all(&session).unwrap();
+        fs::write(session.join("agent-a"), "/work/app").unwrap();
+        fs::write(root.path().join("kept"), "").unwrap();
+        remove_retired_pins(root.path()).unwrap();
+        assert!(!root.path().join(RETIRED_PINS).exists());
+        assert!(root.path().join("kept").exists());
+        remove_retired_pins(root.path()).unwrap();
     }
 
     #[test]
