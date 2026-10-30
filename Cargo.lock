@@ -6460,7 +6460,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.79.3"
+version = "0.80.0"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6626,7 +6626,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.69.3"
+version = "0.70.0"
 dependencies = [
  "anyhow",
  "evdev",
@@ -7023,7 +7023,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.80.3"
+version = "1.81.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -7073,7 +7073,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.46.3"
+version = "0.47.0"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7125,7 +7125,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.51.4"
+version = "0.52.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7530,7 +7530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.38.3"
+version = "0.39.0"
 dependencies = [
  "anyhow",
  "log",
@@ -7605,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.128.9"
+version = "3.129.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7697,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.21.3"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "chrono",
