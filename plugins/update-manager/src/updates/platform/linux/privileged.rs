@@ -341,7 +341,7 @@ mod tests {
         .iter()
         .filter_map(|step| INSTALL_SH.find(step))
         .collect();
-        assert_eq!(order.len(), 8);
+        assert_eq!(order.len(), 9);
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(HELPER_SH.contains("echo ready\n"));
     }
