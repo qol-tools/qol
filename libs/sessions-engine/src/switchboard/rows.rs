@@ -117,10 +117,11 @@ fn row(task: &Task, columns: usize, now_ms: u64) -> String {
     let mut head = name.clone();
     let mut head_width = name.chars().count();
     if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
-        let label = model_label(model);
+        let label = plain(&model_label(model));
         head_width += GAP.len() + label.chars().count();
         head.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
         if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
+            let effort = plain(&effort);
             head_width += 1 + effort.chars().count();
             head.push(' ');
             head.push_str(&effort);
@@ -272,6 +273,20 @@ mod tests {
             ],
         }));
         assert_eq!(rows, ["project-fork  Start [31ming"]);
+    }
+
+    #[test]
+    fn a_model_or_effort_carrying_escapes_reaches_the_row_as_plain_text() {
+        let rows = content(json!({
+            "tasks": [{
+                "id": "a1",
+                "name": "fork-a",
+                "description": "work",
+                "model": "evil\x1b[2J",
+                "effort": "hi\x1b]0;x\x07gh",
+            }],
+        }));
+        assert_eq!(rows, ["fork-a  \x1b[33mevil [2J\x1b[39m hi ]0;x gh  work"]);
     }
 
     #[test]
