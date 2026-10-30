@@ -112,7 +112,7 @@ pub(super) fn pages(session: &Session) -> Vec<Sheet> {
     }
     for update in session.list() {
         sheets.extend(one(session, update));
-        if update.held.is_none() && session.job.is_none() {
+        if update.installable() && session.job.is_none() {
             sheets.push(install(
                 session,
                 &format!("install:{}", update.id),
@@ -147,10 +147,10 @@ fn waiting(session: &Session) -> Vec<Sheet> {
         );
     }
     let mut list: Vec<&Update> = session.list().iter().collect();
-    list.sort_by_key(|update| match (update.held, update.restart) {
-        (Some(_), _) => 2,
-        (None, true) => 0,
-        (None, false) => 1,
+    list.sort_by_key(|update| match (update.installable(), update.restart) {
+        (false, _) => 2,
+        (true, true) => 0,
+        (true, false) => 1,
     });
     let shared = list
         .first()
@@ -163,7 +163,7 @@ fn waiting(session: &Session) -> Vec<Sheet> {
             let id = format!("update:{}", update.id);
             let row = Row::new(id.clone(), update.label.as_str())
                 .detail(job_detail(session, update).unwrap_or_else(|| update.wait()))
-                .dim(update.held.is_some())
+                .dim(!update.installable())
                 .open(id);
             match shared {
                 Some(_) => row,
@@ -186,7 +186,7 @@ fn one(session: &Session, update: &Update) -> Vec<Sheet> {
             Row::info("state", super::words::cap(&detail))
                 .detail("Each one installs in the order below"),
         );
-    } else if let Some(held) = update.held {
+    } else if let Some(held) = update.held.filter(|_| !update.installable()) {
         sheet.row(Row::info("state", held.title()).detail(update.why.as_str()));
     } else if session.job.is_some() {
         sheet.row(
@@ -297,6 +297,13 @@ fn install(session: &Session, id: &str, ids: &[String]) -> Sheet {
                 .attention(true),
         );
     }
+    for update in set.iter().filter(|update| update.held.is_some()) {
+        sheet.row(
+            Row::info(format!("release:{}", update.id), "Its hold comes off")
+                .detail(update.why.as_str())
+                .attention(true),
+        );
+    }
     let held = session.held();
     if !held.is_empty() && set.len() == session.available().len() {
         sheet.row(
@@ -376,11 +383,7 @@ fn failed(session: &Session) -> Option<Sheet> {
         let waiting: Vec<String> = failed
             .updates
             .iter()
-            .filter(|update| {
-                session
-                    .update(&update.id)
-                    .is_some_and(|known| known.held.is_none())
-            })
+            .filter(|update| session.update(&update.id).is_some_and(Update::installable))
             .map(|update| update.id.clone())
             .collect();
         if !waiting.is_empty() {

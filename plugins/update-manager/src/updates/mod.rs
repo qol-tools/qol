@@ -184,6 +184,10 @@ impl Update {
         self.packages.len()
     }
 
+    pub(crate) fn installable(&self) -> bool {
+        matches!(self.held, None | Some(Held::Administrator))
+    }
+
     pub(crate) fn wait(&self) -> String {
         let what = format!(
             "{} {}",

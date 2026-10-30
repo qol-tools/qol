@@ -261,7 +261,7 @@ fn items(sim: &Sim, holds: &BTreeSet<String>, policies: &BTreeMap<String, Policy
             name: name.clone(),
             version: candidate,
             installed: policy.installed.clone(),
-            target: None,
+            target: (held == Held::Administrator).then(|| name.clone()),
             security: policy.security,
             held: Some(held),
         });
@@ -582,6 +582,8 @@ Description: An open and reliable container runtime
         );
         assert_eq!(updates[3].why, "Ubuntu sends it to 10% of computers first");
         assert_eq!(updates[4].why, "An administrator holds it at 580.173");
+        assert_eq!(updates[3].packages[0].target, "");
+        assert_eq!(updates[4].packages[0].target, "libnvidia-gl-580:i386");
         assert!(!updates[4].unattended);
     }
 }
