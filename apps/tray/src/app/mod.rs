@@ -286,7 +286,7 @@ fn app_init_inner(
         init.update_available,
         init.events,
         init.post_pull_task,
-    )?;
+    );
     log::info!("QoL Tray daemon started successfully");
     if is_first_run() {
         std::thread::spawn(show_first_run_welcome);

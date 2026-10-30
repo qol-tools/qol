@@ -624,9 +624,11 @@ mod tray_menu_gap_pin {
     fn tray_manager_constructor_takes_feature_registry_once_and_holds_built_tray() {
         let src = read_src("tray/mod.rs");
         assert!(
-            src.contains("pub struct TrayManager") && src.contains("_tray: platform::PlatformTray"),
-            "TrayManager owns a single PlatformTray built at construction; there is no \
-             public hook to swap or rebuild its menu after the fact"
+            src.contains("pub struct TrayManager")
+                && src.contains("_tray: Option<platform::PlatformTray>"),
+            "TrayManager owns at most one PlatformTray, built at construction and None when \
+             the icon could not be created; there is no public hook to swap or rebuild its \
+             menu after the fact"
         );
         let menu_mod = read_src("menu/builder.rs");
         assert!(
