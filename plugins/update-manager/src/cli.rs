@@ -22,9 +22,9 @@ fn app() -> HeadlessApp {
         .about("See what updates wait, install them when you choose, and restart when it suits you.")
         .command(
             Command::new("status")
-                .about("List the updates that wait and what finishes at a restart.")
+                .about("List the updates that wait, what finishes at a restart, and what is skipped.")
                 .usage(format!("{PLUGIN_ID} status"))
-                .output("One line per waiting update, then what a restart finishes.")
+                .output("One line per waiting update, then what a restart finishes, then the skipped entries.")
                 .exit_behavior("Exits 64 on a usage error; 0 otherwise, with read problems on stderr.")
                 .run_result(status),
         )
@@ -64,10 +64,11 @@ fn status(context: &CommandContext) -> Result<Execution> {
     }
     let found = updates::read_updates();
     let host = updates::read_host();
+    let list = updates::visible(&found.list, &host.skips);
     let mut out = String::new();
-    let total: usize = found.list.iter().map(|update| update.count()).sum();
+    let total: usize = list.iter().map(|update| update.count()).sum();
     out.push_str(&format!("{total} waiting\n"));
-    for update in &found.list {
+    for update in &list {
         out.push_str(&format!(
             "  {} [{}]: {}\n",
             update.label,
@@ -77,6 +78,9 @@ fn status(context: &CommandContext) -> Result<Execution> {
     }
     for row in &host.finish {
         out.push_str(&format!("Finishes at a restart: {}\n", row.label));
+    }
+    if !host.skips.is_empty() {
+        out.push_str(&format!("Skipped: {}\n", host.skips.join(", ")));
     }
     let problems: Vec<String> = found.problems.into_iter().chain(host.problems).collect();
     Ok(Execution::new(out, problems.join("\n"), 0))
