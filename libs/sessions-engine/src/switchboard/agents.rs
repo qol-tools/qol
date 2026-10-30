@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use serde_json::{json, Map, Value};
 
-use super::hooks::{FORK_CONTEXT, POST_AGENT, PRE_AGENT, WORKTREE_CREATE};
+use super::hooks::{AGENT_ROWS, FORK_CONTEXT, POST_AGENT, PRE_AGENT, WORKTREE_CREATE};
 use super::resume::FORK_AGENT;
 use crate::agent_policy::{enforce_allowed_model, enforce_tool_model, DispatchPolicy};
 use crate::launch::LaunchDefaults;
@@ -154,6 +154,7 @@ pub(super) fn settings_json(program: &Path) -> String {
         .collect();
     json!({
         "subagentPromptCacheTtl": PROMPT_CACHE_TTL,
+        "subagentStatusLine": {"type": "command", "command": command(AGENT_ROWS)},
         "hooks": {
             "PreToolUse": [entry(Some("Agent"), command(PRE_AGENT))],
             "PostToolUse": [entry(Some("Agent"), command(POST_AGENT))],
@@ -371,6 +372,11 @@ mod tests {
         let hooks = &settings["hooks"];
         let command_of = |entry: &Value| entry["hooks"][0]["command"].as_str().unwrap().to_owned();
         let prefix = "'/plugins/it'\\''s/qol-cli-sessions' sessions switchboard hook";
+        assert_eq!(settings["subagentStatusLine"]["type"], "command");
+        assert_eq!(
+            settings["subagentStatusLine"]["command"],
+            format!("{prefix} agent-rows")
+        );
         for (event, hook) in [
             ("PreToolUse", "pre-agent"),
             ("PostToolUse", "post-agent"),

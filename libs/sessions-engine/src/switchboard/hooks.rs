@@ -17,6 +17,7 @@ pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const POST_AGENT: &str = "post-agent";
 pub(super) const WORKTREE_CREATE: &str = "worktree-create";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
+pub(super) const AGENT_ROWS: &str = "agent-rows";
 const PIN_TTL: Duration = Duration::from_secs(120);
 const AGENT_NAME_PREFIX: &str = "agent-";
 const PROJECT_PREFIX: &str = "Project:";
@@ -286,9 +287,12 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{POST_AGENT}|{WORKTREE_CREATE}|{FORK_CONTEXT} N>"
+            "usage: switchboard hook <{PRE_AGENT}|{POST_AGENT}|{WORKTREE_CREATE}|{FORK_CONTEXT} N|{AGENT_ROWS}>"
         )
     })?;
+    if name == AGENT_ROWS {
+        return super::rows::run();
+    }
     let payload = read_payload()?;
     let now = SystemTime::now();
     match name {
