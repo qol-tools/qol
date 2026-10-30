@@ -17,6 +17,7 @@ mod history;
 mod mint;
 mod names;
 mod privileged;
+mod skips;
 
 use boot::Running;
 pub(crate) use privileged::Helper;
@@ -146,6 +147,7 @@ pub(crate) fn read_host() -> Host {
             .any(|group| ADMIN_GROUPS.contains(&group)),
         restart_at: mint::read_restart(),
         log: Path::new(HISTORY).exists().then(|| HISTORY.to_string()),
+        skips: skips::read(),
         problems: Vec::new(),
     }
 }
@@ -232,6 +234,10 @@ pub(crate) fn set_hours(
     restart: Option<NaiveDateTime>,
 ) -> Result<(), Refusal> {
     mint::set_hours(hours, startup_delay, restart)
+}
+
+pub(crate) fn set_skips(add: &[String], remove: &[String], system: bool) -> Result<(), Refusal> {
+    skips::set(add, remove, system && is_mint())
 }
 
 pub(crate) fn schedule_restart(at: Option<NaiveDateTime>) -> Result<(), Refusal> {

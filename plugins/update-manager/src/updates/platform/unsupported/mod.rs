@@ -67,6 +67,10 @@ pub(crate) fn set_hours(
     Err(refusal())
 }
 
+pub(crate) fn set_skips(_add: &[String], _remove: &[String], _system: bool) -> Result<(), Refusal> {
+    Err(refusal())
+}
+
 pub(crate) fn schedule_restart(_at: Option<NaiveDateTime>) -> Result<(), Refusal> {
     Err(refusal())
 }

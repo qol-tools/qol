@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDateTime;
 
 use crate::updates::{
-    Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal, Update, Updates,
+    visible, Auto, AutoKey, Clock, Failure, Finish, Holding, Host, Hours, Mint, Refusal, Update,
+    Updates,
 };
 
 mod journal;
@@ -24,6 +25,7 @@ pub(crate) enum Op {
     Auto(AutoKey),
     Tonight,
     RestartNow,
+    Skips,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +83,9 @@ pub(crate) enum Act {
     Ask(Proposal),
     RestartNow,
     Open(String),
+    Skip(String),
+    Never(String),
+    Unskip(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,11 +106,17 @@ pub(crate) enum Task {
     RestartNow,
     Rules,
     Open(String),
+    Skips {
+        add: Vec<String>,
+        remove: Vec<String>,
+        system: bool,
+    },
 }
 
 #[derive(Debug)]
 pub(crate) struct Session {
     pub(crate) updates: Option<Updates>,
+    read: Vec<Update>,
     pub(crate) host: Host,
     pub(crate) checked: Option<NaiveDateTime>,
     pub(crate) job: Option<Job>,
@@ -125,6 +136,7 @@ impl Session {
     pub(crate) fn new(journal: Journal, borrowed: bool) -> Self {
         Self {
             updates: None,
+            read: Vec::new(),
             host: Host::default(),
             checked: None,
             job: None,
@@ -250,7 +262,11 @@ impl Session {
     }
 
     pub(crate) fn apply_updates(&mut self, updates: Updates, now: NaiveDateTime) {
-        self.updates = Some(updates);
+        self.read = updates.list;
+        self.updates = Some(Updates {
+            list: visible(&self.read, &self.host.skips),
+            problems: updates.problems,
+        });
         self.checked = Some(now);
     }
 
@@ -260,7 +276,21 @@ impl Session {
                 self.time = Clock::of(at);
             }
         }
+        let skips_changed = host.skips != self.host.skips;
         self.host = host;
+        if skips_changed {
+            self.show_unskipped();
+        }
+    }
+
+    fn show_unskipped(&mut self) {
+        if let Some(updates) = self.updates.as_mut() {
+            updates.list = visible(&self.read, &self.host.skips);
+        }
+    }
+
+    pub(crate) fn skips(&self) -> &[String] {
+        &self.host.skips
     }
 
     pub(crate) fn apply(&mut self, act: &Act, now: NaiveDateTime) -> Result<Option<Task>, String> {
@@ -339,7 +369,42 @@ impl Session {
                 Ok(Some(Task::RestartNow))
             }
             Act::Open(path) => Ok(Some(Task::Open(path.clone()))),
+            Act::Skip(id) => {
+                let update = self.update(id).ok_or("That update is gone")?;
+                let add = update.skip_entries();
+                self.change_skips(add, Vec::new())
+            }
+            Act::Never(id) => {
+                let update = self.update(id).ok_or("That update is gone")?;
+                let add = update.never_entries();
+                let remove = self
+                    .host
+                    .skips
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .split_once('=')
+                            .is_some_and(|(source, _)| add.iter().any(|never| never == source))
+                    })
+                    .cloned()
+                    .collect();
+                self.change_skips(add, remove)
+            }
+            Act::Unskip(entry) => self.change_skips(Vec::new(), vec![entry.clone()]),
         }
+    }
+
+    fn change_skips(
+        &mut self,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<Option<Task>, String> {
+        self.start(Op::Skips)?;
+        Ok(Some(Task::Skips {
+            add,
+            remove,
+            system: !self.locked(),
+        }))
     }
 
     fn switched(&mut self, on: bool) {
@@ -399,11 +464,12 @@ impl Session {
         };
         match result {
             Ok(()) => {
+                let installed =
+                    |update: &Update| job.updates.iter().any(|done| done.id == update.id);
                 if let Some(updates) = self.updates.as_mut() {
-                    updates
-                        .list
-                        .retain(|update| !job.updates.iter().any(|done| done.id == update.id));
+                    updates.list.retain(|update| !installed(update));
                 }
+                self.read.retain(|update| !installed(update));
                 self.journal.installed(&job.updates);
             }
             Err(failure) => {
@@ -421,6 +487,7 @@ impl Session {
             Task::Auto { key, .. } => Op::Auto(*key),
             Task::Restart(_) => Op::Tonight,
             Task::RestartNow => Op::RestartNow,
+            Task::Skips { .. } => Op::Skips,
             Task::Install(_) | Task::Rules | Task::Open(_) => return,
         };
         self.busy.remove(&op);
@@ -434,6 +501,15 @@ impl Session {
             }
             Task::Auto { key, on, was } => self.journal.auto_written(*key, *was, *on, now),
             Task::Restart(at) => self.journal.restart = at.map(|_| now),
+            Task::Skips { add, remove, .. } => {
+                self.host.skips.retain(|entry| !remove.contains(entry));
+                for entry in add {
+                    if !self.host.skips.contains(entry) {
+                        self.host.skips.push(entry.clone());
+                    }
+                }
+                self.show_unskipped();
+            }
             _ => {}
         }
     }
@@ -497,6 +573,8 @@ mod tests {
                     detail: String::new(),
                     bytes: None,
                     target: format!("{id}{index}=1"),
+                    source: id.into(),
+                    version: "1".into(),
                 })
                 .collect(),
             running: None,

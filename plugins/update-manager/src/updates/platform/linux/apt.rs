@@ -366,6 +366,10 @@ fn group(
                                 .unwrap_or_default(),
                             bytes: record.and_then(|record| record.size),
                             target: item.target.clone().unwrap_or_default(),
+                            source: record
+                                .and_then(|record| record.source.clone())
+                                .unwrap_or_else(|| base(&item.name).to_string()),
+                            version: item.version.clone(),
                         }
                     })
                     .collect(),
@@ -574,6 +578,13 @@ Description: An open and reliable container runtime
         );
         assert_eq!(updates[1].why, "A security fix. Restarts nothing.");
         assert_eq!(updates[1].packages[0].target, "python3-urllib3");
+        assert_eq!(updates[1].packages[0].source, "python-urllib3");
+        assert_eq!(updates[1].packages[0].version, "2.0.7-1ubuntu0.8");
+        assert_eq!(updates[0].packages[0].source, "containerd.io");
+        assert_eq!(
+            updates[4].skip_entries(),
+            ["nvidia-graphics-drivers-580=580.178.04-0ubuntu0.24.04.1"]
+        );
         assert_eq!(updates[2].packages[0].target, "");
         assert_eq!(updates[2].why, "A security fix. Needs a restart.");
         assert_eq!(

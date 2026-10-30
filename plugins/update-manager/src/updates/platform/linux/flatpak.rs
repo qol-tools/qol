@@ -121,6 +121,8 @@ fn package(flatpak: &Ref, detail: String) -> Package {
         detail,
         bytes: flatpak.bytes,
         target: flatpak.full.clone(),
+        source: String::new(),
+        version: String::new(),
     }
 }
 
