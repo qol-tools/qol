@@ -15,7 +15,7 @@ const AGENT_TOOL_FOR_FORKS: &str = "Agent(project-fork)";
 const PROMPT_CACHE_TTL: &str = "1h";
 pub(super) const CONTEXT_SLOTS: usize = super::context::PART_SLOTS;
 
-pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Read before editing, verify before claiming, and report failures faithfully. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard: one or two lines with the pull request number and its state, or the blocker. Never use session_send. A question only the user can decide ends your turn, stating the question and your recommended answer. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
+pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Claude Code treats you as isolated in the project folder, so Bash refuses a command that passes a value computed at runtime, such as a variable, `$(...)` or a loop variable, where it could be read as an option: spell paths and patterns out, put `--` before a computed operand, and split loops into plain separate commands. Read before editing, verify before claiming, and report failures faithfully. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard: one or two lines with the pull request number and its state, or the blocker. Never use session_send. A question only the user can decide ends your turn, stating the question and your recommended answer. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct ForkAgent {
@@ -352,6 +352,7 @@ mod tests {
     fn the_fork_prompt_carries_the_rules_the_subagent_prompt_replaces() {
         for needle in [
             "cd <worktree> &&",
+            "put `--` before a computed operand",
             "Never use session_send",
             "Never use `qol-cli-sessions park`",
             "run_in_background true",
