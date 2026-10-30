@@ -114,6 +114,7 @@ args = ["reload"]
 gpui = true
 doctor = true
 serial = true
+headless = true
 
 [daemon]
 enabled = true

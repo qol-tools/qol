@@ -29,7 +29,10 @@ pub(super) struct LoadedPlugin {
 
 fn load_all_plugins() -> Result<LoadedPlugins> {
     let report = resolution_report()?;
-    let plugins = PluginLoader::load_resolved(&report.plugins)?;
+    let plugins: Vec<Plugin> = PluginLoader::load_resolved(&report.plugins)?
+        .into_iter()
+        .filter(runs_in_current_mode)
+        .collect();
     if !crate::dev_generation::is_shadow() && !crate::dev_generation::is_rolling_restart() {
         super::super::daemon_tracker::clean_stale_sockets(&plugins);
     }
@@ -44,8 +47,20 @@ pub(super) fn load_plugin(plugin_id: &str) -> Result<LoadedPlugin> {
         .find(|plugin| plugin.id.as_str() == plugin_id)
         .map(PluginLoader::load_resolved_plugin)
         .transpose()?
-        .flatten();
+        .flatten()
+        .filter(runs_in_current_mode);
     Ok(LoadedPlugin { plugin, report })
+}
+
+fn runs_in_current_mode(plugin: &Plugin) -> bool {
+    if crate::headless_mode::active() && !plugin.manifest.capabilities.headless {
+        log::info!(
+            "Skipping plugin {} (it needs a desktop and qol-tray runs headless)",
+            plugin.id
+        );
+        return false;
+    }
+    true
 }
 
 fn resolution_report() -> Result<ResolutionReport> {

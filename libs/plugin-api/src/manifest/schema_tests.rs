@@ -470,6 +470,45 @@ fn parse_capabilities_section() {
 }
 
 #[test]
+fn parse_headless_capability() {
+    let with_headless = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Headless Plugin"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [capabilities]
+        headless = true
+    "#;
+    let without_headless = r#"
+        [plugin]
+        id = "test-plugin"
+        name = "Desktop Plugin"
+        description = ""
+        version = "0.0.1"
+
+        [menu]
+        label = "M"
+        items = []
+
+        [capabilities]
+        gpui = true
+    "#;
+
+    let manifest: PluginManifest = toml::from_str(with_headless).unwrap();
+    assert!(manifest.capabilities.headless);
+    assert!(!manifest.capabilities.extras.contains_key("headless"));
+
+    let manifest: PluginManifest = toml::from_str(without_headless).unwrap();
+    assert!(!manifest.capabilities.headless);
+}
+
+#[test]
 fn parse_forward_compat_unknown_capability() {
     // A newer qol-plugin-api may add capabilities (e.g. restore-rule) that the
     // running qol-tray binary does not yet know. Unknown entries must parse

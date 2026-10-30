@@ -52,14 +52,14 @@ where
 {
     let (tray, plugin_manager) = init()?;
     let manager = plugin_manager.clone();
-    register_shutdown_fn(move || shutdown_plugins(&manager));
+    register_shutdown_fn(move || crate::tray::shutdown_plugins(&manager));
 
     let _signal_listener = crate::signal::install_signal_handler(tray.shutdown_sender())?;
     let _tray = tray;
 
     run_event_loop();
 
-    shutdown_plugins(&plugin_manager);
+    crate::tray::shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
     log::info!("Shutdown signal received, exiting...");
     Ok(())
@@ -166,15 +166,4 @@ fn handle_menu_event(
     log::info!("Quitting application");
     let _ = shutdown_tx.send(());
     true
-}
-
-fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
-            return;
-        }
-    };
-    manager.shutdown();
 }

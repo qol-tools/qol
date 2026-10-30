@@ -6,6 +6,7 @@ pub mod dev;
 pub mod dev_generation;
 pub mod doctor;
 pub mod features;
+pub mod headless_mode;
 pub mod hotkeys;
 pub mod installer;
 pub mod logging;

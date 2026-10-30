@@ -45,6 +45,7 @@ args = ["settings"]
 
 [capabilities]
 doctor = true
+headless = true
 
 [launcher]
 kind = "flow"

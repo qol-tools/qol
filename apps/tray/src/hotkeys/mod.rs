@@ -149,6 +149,10 @@ pub fn start_capture(
 pub fn start_capture_with_fallback(
     plugin_manager: std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>,
 ) {
+    if crate::headless_mode::active() {
+        log::info!("Headless: hotkey capture is off");
+        return;
+    }
     match start_capture(plugin_manager.clone()) {
         Ok(()) => {
             log::info!("Hotkey capture: native");

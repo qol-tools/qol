@@ -14,6 +14,10 @@ pub fn show_plugin_notification(
     layout: Option<NotificationLayout>,
     activate: Option<&DaemonRequest>,
 ) {
+    if crate::headless_mode::active() {
+        log::info!("[surfaces] headless, not shown: {title}: {body}");
+        return;
+    }
     if !crate::features::notifications::enabled() {
         log::info!("[surfaces] notifications are off, dropped: {title}");
         return;
