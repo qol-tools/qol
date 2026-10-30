@@ -495,6 +495,7 @@ pub(super) fn launch(
             plan.cwd.display()
         )
     })?;
+    agents::write_agent_files(&plan.cwd, &plan.fork)?;
     let launched = launch_detached(
         terminals,
         interpreter,
@@ -589,6 +590,37 @@ fn focus_launched(
     focus(terminals, held).map(drop)
 }
 
+struct Detached(Option<PathBuf>);
+
+impl Detached {
+    fn register() -> Self {
+        let runtime_dir = qol_config::runtime_dir();
+        let registered = runtime_dir
+            .as_deref()
+            .ok_or_else(|| anyhow!("no runtime directory"))
+            .and_then(|dir| {
+                qol_process::detached::register(dir, std::process::id()).map_err(Into::into)
+            });
+        match registered {
+            Ok(()) => Self(runtime_dir),
+            Err(error) => {
+                crate::cli::warn(format!(
+                    "the switchboard is not registered as detached, so a tray restart may stop it: {error:#}"
+                ));
+                Self(None)
+            }
+        }
+    }
+}
+
+impl Drop for Detached {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            qol_process::detached::unregister(dir, std::process::id());
+        }
+    }
+}
+
 /// Runs the switchboard in the calling kitty window and returns its exit code once it
 /// exits, or returns None without starting anything when a switchboard is already live.
 pub fn here(profile: &Profile) -> Result<Option<u8>> {
@@ -613,6 +645,7 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
             let plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path)?;
             let (model, _) = admitted_model(&system_dispatch()?, &plan)?;
             let argv = here_argv(&plan, &model)?;
+            agents::write_agent_files(&plan.cwd, &plan.fork)?;
             // The window outlives the switchboard (a wrapper's shell), so its tag is removed
             // on exit; a kept tag makes the next chat in the window pass for the switchboard.
             // An interrupt or terminate signal therefore only ends claude, never this wait.
@@ -620,12 +653,14 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
                 .context("failed to hold off interrupts while the switchboard runs")?;
             tag_window(&tag_args(&window))?;
             drop(guard);
+            let detached = Detached::register();
             let ran = Command::new(SWITCHBOARD_TOOL)
                 .args(&argv)
                 .envs(claude_env(&plan))
                 .current_dir(&plan.cwd)
                 .status()
                 .with_context(|| format!("failed to run {SWITCHBOARD_TOOL}"));
+            drop(detached);
             if let Err(error) = tag_window(&untag_args(&window)) {
                 crate::cli::warn(format!("the switchboard window kept its tag: {error:#}"));
             }
