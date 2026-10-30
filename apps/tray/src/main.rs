@@ -11,7 +11,17 @@ fn main() -> anyhow::Result<()> {
     qol_runtime::probe!("HOST_ENTRY", "phase=start");
     register_build_identity();
     scrub_inherited_daemon_handoff_env();
+    drop_launching_claude_session_env();
     app::run()
+}
+
+fn drop_launching_claude_session_env() {
+    if std::env::var_os("CLAUDECODE").is_none() {
+        return;
+    }
+    for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR"] {
+        std::env::remove_var(key);
+    }
 }
 
 /// qol-tray hands pre-bound listener fds to the one daemon it spawns them for.
