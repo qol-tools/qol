@@ -71,13 +71,9 @@ pub(super) fn claude_dialog(text: &str) -> bool {
     }
     let region = &lines[start..end];
     let window_end = end.saturating_add(CLAUDE_DIALOG_WINDOW).min(lines.len());
-    let affordance = lines[start..window_end].iter().any(|line| {
-        let lower = line.to_lowercase();
-        CLAUDE_DIALOG_AFFORDANCES
-            .iter()
-            .any(|marker| lower.contains(marker))
-    });
-    if affordance && unnumbered_options(region) {
+    let window = &lines[start..window_end];
+    let affordance = has_dialog_affordance(window, 0..0);
+    if unnumbered_options(region).is_some_and(|options| has_dialog_affordance(window, options)) {
         return true;
     }
     let options: Vec<(usize, bool)> = region
@@ -116,25 +112,39 @@ pub(super) fn claude_dialog(text: &str) -> bool {
     }
 }
 
-fn unnumbered_options(region: &[&str]) -> bool {
+fn has_dialog_affordance(window: &[&str], options: std::ops::Range<usize>) -> bool {
+    window
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !options.contains(index))
+        .any(|(_, line)| {
+            let lower = line.to_lowercase();
+            CLAUDE_DIALOG_AFFORDANCES
+                .iter()
+                .any(|marker| lower.contains(marker))
+        })
+}
+
+fn unnumbered_options(region: &[&str]) -> Option<std::ops::Range<usize>> {
     let mut selected = region
         .iter()
         .enumerate()
         .filter(|(_, line)| line.trim_start().starts_with('\u{276F}'));
-    let Some((index, line)) = selected.next() else {
-        return false;
-    };
+    let (index, line) = selected.next()?;
     if selected.next().is_some() {
-        return false;
+        return None;
     }
-    let Some(column) = unnumbered_text_column(line) else {
-        return false;
+    let column = unnumbered_text_column(line)?;
+    let sibling = |row: &usize| {
+        let line = region[*row];
+        !line.trim().is_empty() && !is_rule_line(line) && leading_columns(line) == column
     };
-    let before = index.checked_sub(1).map(|previous| region[previous]);
-    let after = region.get(index + 1).copied();
-    [before, after].into_iter().flatten().any(|sibling| {
-        !sibling.trim().is_empty() && !is_rule_line(sibling) && leading_columns(sibling) == column
-    })
+    let first = (0..index).rev().take_while(sibling).last().unwrap_or(index);
+    let last = (index + 1..region.len())
+        .take_while(sibling)
+        .last()
+        .unwrap_or(index);
+    (first < last).then_some(first..last + 1)
 }
 
 fn unnumbered_text_column(line: &str) -> Option<usize> {
@@ -969,6 +979,18 @@ mod tests {
                     rule.as_str(),
                     "\u{276F} fix the bug and then",
                     "  write the tests",
+                    rule.as_str(),
+                    footer,
+                ]
+                .join("\n"),
+                false,
+            ),
+            (
+                "draft quoting an affordance",
+                [
+                    rule.as_str(),
+                    "\u{276F} when the picker opens press",
+                    "  esc to cancel and enter to confirm",
                     rule.as_str(),
                     footer,
                 ]
