@@ -7697,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.22.1"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",
