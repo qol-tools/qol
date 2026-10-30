@@ -513,11 +513,6 @@ impl Session {
             _ => {}
         }
     }
-
-    pub(crate) fn job_position(&self) -> Option<(&Update, usize)> {
-        let job = self.job.as_ref()?;
-        position(&job.updates, job.done)
-    }
 }
 
 pub(crate) fn position(updates: &[Update], done: usize) -> Option<(&Update, usize)> {
@@ -637,10 +632,9 @@ mod tests {
         assert!(matches!(task, Some(Task::Install(ref updates)) if updates.len() == 1));
         assert!(session.apply(&Act::Install(vec!["b".into()]), now).is_err());
         session.progress(1);
+        let job = session.job.as_ref().expect("job");
         assert_eq!(
-            session
-                .job_position()
-                .map(|(update, done)| (update.id.as_str(), done)),
+            position(&job.updates, job.done).map(|(update, done)| (update.id.as_str(), done)),
             Some(("a", 1))
         );
         session.installed(Ok(()));

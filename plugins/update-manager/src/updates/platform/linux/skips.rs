@@ -43,15 +43,25 @@ pub(super) fn read() -> Vec<String> {
 }
 
 pub(super) fn set(add: &[String], remove: &[String], system: bool) -> Result<(), Refusal> {
-    if system {
-        let changes = system_changes(add, remove, fs::read_to_string(SYSTEM));
-        if !changes.is_empty() {
-            run_script(SYSTEM_SH, &changes)?;
-        }
-    }
     let current = gsettings::get_within(SCHEMA, KEY, READ)
         .map(|value| parse_strv(&value))
         .map_err(|error| Refusal::Failed(format!("{error:#}")))?;
+    let file = fs::read_to_string(SYSTEM);
+    if system {
+        let changes = system_changes(add, remove, file);
+        if !changes.is_empty() {
+            run_script(SYSTEM_SH, &changes)?;
+        }
+    } else {
+        let lines = system_lines(&file.unwrap_or_default());
+        let stuck = held_by_system(&lines, add, remove);
+        if !stuck.is_empty() {
+            return Err(Refusal::Failed(format!(
+                "an administrator skips {} in {SYSTEM}, and only an administrator can change that",
+                stuck.join(", ")
+            )));
+        }
+    }
     let next = merged(&current, add, remove);
     if next == current {
         return Ok(());
@@ -76,6 +86,20 @@ fn system_changes(add: &[String], remove: &[String], file: std::io::Result<Strin
                 .filter(|entry| known(entry) != Some(false))
                 .map(|entry| format!("-{entry}")),
         )
+        .collect()
+}
+
+fn held_by_system<'a>(lines: &[String], add: &[String], remove: &'a [String]) -> Vec<&'a str> {
+    let covered = |entry: &String| {
+        let source = entry
+            .split_once('=')
+            .map_or(entry.as_str(), |(source, _)| source);
+        add.iter().any(|added| added == entry || added == source)
+    };
+    remove
+        .iter()
+        .filter(|entry| lines.contains(entry) && !covered(entry))
+        .map(String::as_str)
         .collect()
 }
 
@@ -198,5 +222,30 @@ mod tests {
             list(&["a", "c"])
         );
         assert!(SYSTEM_SH.starts_with(&format!("f={SYSTEM}\n")));
+    }
+
+    #[test]
+    fn without_admin_removing_what_the_system_list_holds_is_refused() {
+        let lines = list(&["thunderbird", "signal-desktop=7.1", "code=1.95"]);
+        let cases: [(&[&str], &[&str], &[&str]); 6] = [
+            (&[], &["thunderbird"], &["thunderbird"]),
+            (&[], &["brave-browser"], &[]),
+            (&[], &["signal-desktop=7.1"], &["signal-desktop=7.1"]),
+            (&["code"], &["code=1.95"], &[]),
+            (&["code=1.95"], &["code=1.95"], &[]),
+            (
+                &[],
+                &["code=1.95", "gone", "thunderbird"],
+                &["code=1.95", "thunderbird"],
+            ),
+        ];
+        for (add, remove, stuck) in cases {
+            let (add, remove) = (list(add), list(remove));
+            assert_eq!(
+                held_by_system(&lines, &add, &remove),
+                stuck.to_vec(),
+                "add {add:?} remove {remove:?}"
+            );
+        }
     }
 }
