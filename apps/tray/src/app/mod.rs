@@ -420,8 +420,6 @@ async fn async_init_inner(
     };
     if shadow_generation {
         log::info!("Shadow dev generation: deferring hotkey capture until promotion");
-    } else if qol_tray::headless_mode::active() {
-        log::info!("Headless: hotkey capture is off");
     } else {
         hotkeys::start_capture_with_fallback(plugin_manager.clone());
     }
