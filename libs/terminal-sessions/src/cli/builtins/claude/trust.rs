@@ -27,7 +27,9 @@ pub(super) fn untrusted_folder(config_file: &Path, cwd: &Path, user_home: &Path)
         return None;
     }
     let cwd = cwd.display();
-    Some(match cwd.to_string() == user_home.display().to_string() {
+    let at_home =
+        forward_slashes(&cwd.to_string()) == forward_slashes(&user_home.display().to_string());
+    Some(match at_home {
         true => format!(
             "Claude Code never remembers trust for the home folder {cwd}, so a claude session started there always stops on its \"Do you trust this folder?\" question, which --dangerously-skip-permissions does not skip, and waits unseen. Start it in a project folder instead."
         ),
@@ -39,7 +41,17 @@ pub(super) fn untrusted_folder(config_file: &Path, cwd: &Path, user_home: &Path)
 }
 
 fn forward_slashes(folder: &str) -> String {
-    folder.replace('\\', "/")
+    let folder = folder.replace('\\', "/");
+    let folder = folder.strip_prefix("//?/").unwrap_or(&folder);
+    let mut characters = folder.chars();
+    match (characters.next(), characters.next()) {
+        (Some(drive), Some(':')) => format!(
+            "{}{}",
+            drive.to_ascii_uppercase(),
+            &folder[drive.len_utf8()..]
+        ),
+        _ => folder.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +100,17 @@ mod tests {
             r#"{"C:/work/repo":{"hasTrustDialogAccepted":true}}"#,
         );
         assert_eq!(forward_slashes(r"C:\work\repo"), "C:/work/repo");
+        assert_eq!(forward_slashes(r"\\?\C:\work\repo"), "C:/work/repo");
+        assert_eq!(forward_slashes("c:/work/repo"), "C:/work/repo");
+        assert_eq!(forward_slashes("/home/u"), "/home/u");
+        assert_eq!(
+            untrusted_folder(
+                &file,
+                Path::new(r"\\?\c:\work\repo"),
+                Path::new("C:/Users/u")
+            ),
+            None
+        );
         assert_eq!(
             untrusted_folder(
                 &file,

@@ -56,8 +56,16 @@ fn launch_blocker(
     interpreter: &CliSessionInterpreter,
     tool: &CliToolId,
     cwd: &Path,
+    launch: &CliLaunchProgram,
 ) -> Option<String> {
-    interpreter.launch_blocker_for(tool, cwd, caller_config_dir().as_deref())
+    let config_dir = launch
+        .env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == qol_agent_launch::account::CONFIG_DIR_ENV)
+        .map(|(_, value)| PathBuf::from(value))
+        .or_else(caller_config_dir);
+    interpreter.launch_blocker_for(tool, cwd, config_dir.as_deref())
 }
 
 #[cfg(test)]
@@ -65,8 +73,22 @@ fn launch_blocker(
     _interpreter: &CliSessionInterpreter,
     _tool: &CliToolId,
     _cwd: &Path,
+    _launch: &CliLaunchProgram,
 ) -> Option<String> {
     None
+}
+
+fn refuse_blocked_launch(
+    interpreter: &CliSessionInterpreter,
+    tool: &CliToolId,
+    key: &str,
+    cwd: &Path,
+    launch: &CliLaunchProgram,
+) -> Result<()> {
+    match launch_blocker(interpreter, tool, cwd, launch) {
+        Some(reason) => bail!("refusing to launch `{key}`: {reason}"),
+        None => Ok(()),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1552,6 +1574,13 @@ pub(super) fn spawn_or_reuse(
                     caller_config_dir().as_deref(),
                     &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
                 )?;
+                refuse_blocked_launch(
+                    interpreter,
+                    &prepared.tool_id,
+                    prepared.key.as_str(),
+                    &requested_cwd,
+                    &launch,
+                )?;
                 let resumed = key.is_some()
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
@@ -2231,9 +2260,13 @@ fn start_detached(
         );
     }
     let cwd = canonicalize_cwd(cwd)?;
-    if let Some(reason) = launch_blocker(interpreter, &prepared.tool_id, &cwd) {
-        bail!("refusing to launch `{}`: {reason}", prepared.key);
-    }
+    refuse_blocked_launch(
+        interpreter,
+        &prepared.tool_id,
+        prepared.key.as_str(),
+        &cwd,
+        &launch,
+    )?;
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
         launch,
