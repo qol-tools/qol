@@ -177,6 +177,18 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.launch())
     }
 
+    pub fn launch_blocker_for(
+        &self,
+        tool: &CliToolId,
+        cwd: &std::path::Path,
+        config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.launch_blocker(cwd, config_dir))
+    }
+
     pub fn model_catalog_for(&self, tool: &CliToolId) -> Option<CliModelCatalog> {
         self.strategies
             .iter()

@@ -169,6 +169,14 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn launch_blocker(
+        &self,
+        _cwd: &std::path::Path,
+        _config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        None
+    }
+
     fn model_catalog(&self) -> Option<CliModelCatalog> {
         None
     }
