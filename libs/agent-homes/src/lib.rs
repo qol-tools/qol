@@ -8,18 +8,32 @@ use qol_config::config_dir;
 
 pub const REGISTRY_FILE_NAME: &str = "agents.toml";
 
-const CLAUDE_SESSION_ENV: [&str; 3] = ["CLAUDECODE", "CLAUDE_EFFORT", "CLAUDE_PID"];
-const CLAUDE_SESSION_ENV_PREFIX: &str = "CLAUDE_CODE_";
+const CLAUDE_SESSION_MARKER: &str = "CLAUDECODE";
+const CLAUDE_SESSION_ENV: [&str; 11] = [
+    CLAUDE_SESSION_MARKER,
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_AGENT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+];
 
 pub fn is_claude_session_env(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
-        name == Harness::Claude.home_env_var()
-            || CLAUDE_SESSION_ENV.contains(&name)
-            || name.starts_with(CLAUDE_SESSION_ENV_PREFIX)
+        name == Harness::Claude.home_env_var() || CLAUDE_SESSION_ENV.contains(&name)
     })
 }
 
 pub fn claude_session_env_names(names: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let names: Vec<OsString> = names.into_iter().collect();
+    if !names.iter().any(|name| name == CLAUDE_SESSION_MARKER) {
+        return Vec::new();
+    }
     names
         .into_iter()
         .filter(|name| is_claude_session_env(name))
@@ -419,10 +433,14 @@ mod tests {
             ("CLAUDE_CODE_SESSION_ID", true),
             ("CLAUDE_CODE_MESSAGING_SOCKET", true),
             ("CLAUDE_CODE_MESSAGING_TOKEN", true),
-            ("CLAUDE_CODE_OAUTH_TOKEN", true),
+            ("CLAUDE_CODE_SESSION_ATTENDED", true),
             ("CLAUDE_CODE_AGENT", true),
             ("CLAUDE_CODE_EXECPATH", true),
-            ("CLAUDE_CODE_", true),
+            ("CLAUDE_CODE_OAUTH_TOKEN", false),
+            ("CLAUDE_CODE_USE_BEDROCK", false),
+            ("CLAUDE_CODE_USE_VERTEX", false),
+            ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", false),
+            ("CLAUDE_CODE_", false),
             ("CLAUDE", false),
             ("CLAUDE_CODE", false),
             ("CLAUDE_CONFIG_DIRS", false),
@@ -445,6 +463,19 @@ mod tests {
             .map(|(name, _)| OsString::from(name))
             .collect();
         assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn nothing_is_dropped_outside_a_claude_session() {
+        let names = [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "PATH",
+        ]
+        .map(OsString::from);
+        assert!(claude_session_env_names(names).is_empty());
     }
 
     fn write_registry(content: &str) -> (tempfile::TempDir, PathBuf) {
