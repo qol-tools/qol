@@ -419,7 +419,7 @@ fn classify_lowered_match(name: &str, query: &str) -> MatchKind {
     MatchKind::Fuzzy
 }
 
-fn extension_hint(query: &str) -> Option<&str> {
+pub(super) fn extension_hint(query: &str) -> Option<&str> {
     let trimmed = query.trim();
     let (_, suffix) = trimmed.rsplit_once('.')?;
     let hint = suffix.trim().trim_matches('"').trim_matches('\'');

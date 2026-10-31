@@ -6,8 +6,8 @@ use super::Media;
 const MOOV_LIMIT: u64 = 32 << 20;
 
 pub fn read(file: &mut File, len: u64) -> Option<Media> {
-    let mut at = 0;
-    while at + 8 <= len {
+    let mut at: u64 = 0;
+    while at.saturating_add(8) <= len {
         let head = read_at(file, at, 16)?;
         let (header, size) = match be32(&head, 0)? {
             0 => (8, len - at),
@@ -24,7 +24,7 @@ pub fn read(file: &mut File, len: u64) -> Option<Media> {
             let moov = read_at(file, at + header, (size - header) as usize)?;
             return Some(movie(&moov));
         }
-        at += size;
+        at = at.checked_add(size)?;
     }
     None
 }
@@ -207,5 +207,14 @@ mod tests {
             Some((1080, 1920))
         );
         assert!(probe(b"not a movie at all").is_none());
+    }
+
+    #[test]
+    fn a_box_size_that_overflows_the_offset_ends_the_scan() {
+        let mut data = atom(b"ftyp", b"isom");
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&(u64::MAX - 11).to_be_bytes());
+        assert!(probe(&data).is_none());
     }
 }
