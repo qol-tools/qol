@@ -59,6 +59,7 @@ fn device_monitor_loop(
                         })
                         .collect(),
                     online: true,
+                    network_address: Some(device.network_address),
                 };
                 if let Ok(mut config) = store::load() {
                     config.devices.insert(ieee.clone(), entry);
@@ -101,7 +102,7 @@ fn start_background_services(state: &DaemonState) {
     ws::start(
         command_buffer,
         state.shared_service(),
-        state.main_target().clone(),
+        state.shared_main_target(),
     );
 }
 

@@ -6,6 +6,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tungstenite::Message;
 
+use super::state::{current_target, SharedTarget};
 use crate::backend::zigbee::ZigbeeBackend;
 use crate::domain::model::{LightCommand, LightTarget, RgbColor};
 use crate::service::light_service::LightService;
@@ -37,7 +38,7 @@ pub type CommandBuffer = Arc<Mutex<Option<PendingCommand>>>;
 pub fn start(
     buffer: CommandBuffer,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
-    target: LightTarget,
+    target: SharedTarget,
 ) {
     let ws_port: u16 = env!("QOL_DAEMON_PORT")
         .parse()
@@ -144,7 +145,7 @@ fn parse_pending(cmd: &WsCommand) -> Option<PendingCommand> {
 fn start_send_loop(
     buffer: CommandBuffer,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
-    target: LightTarget,
+    target: SharedTarget,
 ) {
     thread::Builder::new()
         .name("ws-send".into())
@@ -153,6 +154,7 @@ fn start_send_loop(
             let Some(cmd) = buffer.lock().ok().and_then(|mut b| b.take()) else {
                 continue;
             };
+            let target = current_target(&target);
             let Ok(mut guard) = service.lock() else {
                 continue;
             };
