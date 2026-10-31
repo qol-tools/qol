@@ -5118,6 +5118,8 @@ mod tests {
         );
     }
 
+    const WAKE_TEST_SLEEP_LIMIT: usize = 5_000;
+
     fn run_wake(backend: Arc<FakeBackend>) -> (Vec<serde_json::Value>, Arc<FakeBackend>, usize) {
         run_wake_to(backend, "v1:fake:7:100")
     }
@@ -5146,7 +5148,13 @@ mod tests {
             &mut out,
             root.path(),
             fast_config(Duration::from_secs(3600)),
-            &mut |duration| sleeps.push(duration),
+            &mut |duration| {
+                sleeps.push(duration);
+                assert!(
+                    sleeps.len() <= WAKE_TEST_SLEEP_LIMIT,
+                    "the wake loop never ended after {WAKE_TEST_SLEEP_LIMIT} sleeps"
+                );
+            },
         )
         .unwrap();
         let deferrals = sleeps

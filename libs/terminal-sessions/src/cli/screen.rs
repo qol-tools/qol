@@ -1,3 +1,4 @@
+use super::composer::{is_plain_rule, is_rule};
 use crate::{ScreenReader, SessionBinding, TerminalError, TerminalSessionService};
 
 const STATUS_TAIL: usize = 8;
@@ -57,7 +58,7 @@ pub(super) fn claude_dialog(text: &str) -> bool {
     let rules: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| is_rule_line(line))
+        .filter(|(_, line)| is_rule(line))
         .map(|(index, _)| index)
         .collect();
     let rule_less = rules.is_empty();
@@ -137,7 +138,7 @@ fn unnumbered_options(region: &[&str]) -> Option<std::ops::Range<usize>> {
     let column = unnumbered_text_column(line)?;
     let sibling = |row: &usize| {
         let line = region[*row];
-        !line.trim().is_empty() && !is_rule_line(line) && leading_columns(line) == column
+        !line.trim().is_empty() && !is_rule(line) && leading_columns(line) == column
     };
     let first = (0..index).rev().take_while(sibling).last().unwrap_or(index);
     let last = (index + 1..region.len())
@@ -200,7 +201,7 @@ pub(super) fn pi_working(text: &str) -> bool {
         return true;
     }
     let lines = text.lines().collect::<Vec<_>>();
-    let Some(bottom) = lines.iter().rposition(|line| is_rule_line(line)) else {
+    let Some(bottom) = lines.iter().rposition(|line| is_plain_rule(line)) else {
         return false;
     };
     let Some(border) = lines[..bottom]
@@ -241,7 +242,7 @@ pub(super) fn pi_live(text: &str) -> bool {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
-    let Some(last_rule) = lines.iter().rposition(|line| is_rule_line(line)) else {
+    let Some(last_rule) = lines.iter().rposition(|line| is_rule(line)) else {
         return false;
     };
     let below = lines.len() - 1 - last_rule;
@@ -253,14 +254,9 @@ pub(super) fn kimi_live(text: &str) -> bool {
         return false;
     };
     let last = last.trim();
-    is_rule_line(last)
+    is_rule(last)
         || (last.contains("context: ") && (last.ends_with('%') || last.ends_with(')')))
         || (kimi_hint_line(last) && kimi_dialog_corpus(text))
-}
-
-fn is_rule_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|character| character == '\u{2500}')
 }
 
 fn chrome_region(text: &str) -> Option<Vec<&str>> {
@@ -271,7 +267,7 @@ fn chrome_region(text: &str) -> Option<Vec<&str>> {
     let rules: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, line)| is_rule_line(line))
+        .filter(|(_, line)| is_rule(line))
         .map(|(index, _)| index)
         .collect();
     let last_rule = *rules.last()?;
@@ -305,20 +301,16 @@ pub(super) fn has_picker_cluster(text: &str) -> bool {
         return false;
     };
     let after = &region[counter + 1..];
-    let info_lines = after.iter().take_while(|line| !is_rule_line(line.trim()));
+    let info_lines = after.iter().take_while(|line| !is_rule(line.trim()));
     let adjacent = info_lines.clone().count() <= 3
         && info_lines
             .clone()
             .all(|line| !is_picker_marker(line.trim()))
-        && after
-            .iter()
-            .filter(|line| is_rule_line(line.trim()))
-            .count()
-            <= 2
+        && after.iter().filter(|line| is_rule(line.trim())).count() <= 2
         && after
             .iter()
             .rev()
-            .take_while(|line| !is_rule_line(line.trim()))
+            .take_while(|line| !is_rule(line.trim()))
             .count()
             <= 2;
     search < selected && selected < counter && adjacent
@@ -409,15 +401,11 @@ fn transcript_region(text: &str) -> Vec<&str> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .collect();
-    let footer = lines
-        .iter()
-        .rev()
-        .take_while(|line| !is_rule_line(line))
-        .count();
+    let footer = lines.iter().rev().take_while(|line| !is_rule(line)).count();
     let rules = lines.len() - footer;
     let start = lines[..rules]
         .iter()
-        .rposition(|line| !is_rule_line(line))
+        .rposition(|line| !is_rule(line))
         .map(|index| index + 1)
         .unwrap_or(0);
     lines[..start].to_vec()
@@ -430,8 +418,8 @@ fn is_progress_line(line: &str) -> bool {
 
 pub fn editor_draft(text: &str) -> Option<String> {
     let lines: Vec<&str> = text.lines().collect();
-    let last = lines.iter().rposition(|line| is_rule_line(line))?;
-    let first = lines[..last].iter().rposition(|line| is_rule_line(line))?;
+    let last = lines.iter().rposition(|line| is_rule(line))?;
+    let first = lines[..last].iter().rposition(|line| is_rule(line))?;
     let draft = lines[first + 1..last]
         .iter()
         .map(|line| line.trim_end())
@@ -718,11 +706,38 @@ fn is_choice_affordance(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_dialog, claude_working, composer_busy, contains_any, has_braille_spinner,
-        has_choice_hint, has_done_marker, has_interrupt_hint, has_numbered_choice,
-        has_picker_cluster, kimi_live, kimi_questionnaire, kimi_working, pi_live,
-        without_faint_text,
+        claude_dialog, claude_working, composer_busy, contains_any, editor_draft,
+        has_braille_spinner, has_choice_hint, has_done_marker, has_interrupt_hint,
+        has_numbered_choice, has_picker_cluster, kimi_live, kimi_questionnaire, kimi_working,
+        pi_live, pi_working, without_faint_text,
     };
+
+    #[test]
+    fn pi_working_reads_the_editor_border_above_a_labeled_widget_header() {
+        let rule = "\u{2500}".repeat(12);
+        let working = "\u{2500}\u{2500} \u{2819} Working \u{2500}\u{2500}";
+        let widget = "\u{2500}\u{2500}\u{2500} Tasks \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  [ ] lint\n";
+        let frame = |top: &str, below: &str| {
+            format!("assistant text\n{top}\nfix the parser\n{rule}\n{below}~/work 12k/200k")
+        };
+        let cases = [
+            ("working", frame(working, ""), true),
+            ("working above a widget", frame(working, widget), true),
+            ("idle", frame(&rule, ""), false),
+            ("idle above a widget", frame(&rule, widget), false),
+        ];
+        for (name, screen, expected) in cases {
+            assert_eq!(pi_working(&screen), expected, "case: {name}");
+        }
+    }
+
+    #[test]
+    fn editor_draft_reads_a_box_whose_top_rule_carries_a_label() {
+        let screen = "● Done.\n──────── ultracode ─\n❯ hello\n────────\n  /work";
+        assert_eq!(editor_draft(screen), Some("❯ hello".to_owned()));
+        let plain = "● Done.\n────────\n❯ hello\n────────\n  /work";
+        assert_eq!(editor_draft(plain), Some("❯ hello".to_owned()));
+    }
 
     #[test]
     fn composer_busy_detects_an_in_progress_prompt_and_ignores_bare_prompts() {

@@ -22,6 +22,7 @@ pub use builtins::{
     PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
+pub use composer::is_rule;
 pub use evidence::{
     CliActivityEvidence, CliComposer, CliDraftStash, CliLaunchProgram, CliModelCatalog,
     CliRemoteControlToggle, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
