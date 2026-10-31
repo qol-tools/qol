@@ -199,7 +199,7 @@ pub(super) fn execute(
         None => None,
     };
     let mut outcome = close_spawned_terminal(terminals, binding, force)?;
-    if let Some(round) = hung {
+    if let Some(round) = hung.filter(|_| outcome.closed) {
         let marker = round.completion_marker.clone();
         pending.discard(binding)?;
         outcome.discarded_round = Some(marker);
@@ -415,6 +415,7 @@ mod tests {
         live: Vec<SessionFacts>,
         sent: Mutex<Vec<(SessionBinding, String)>>,
         closed: Mutex<Vec<SessionBinding>>,
+        refuse_close: bool,
     }
 
     impl SessionInventory for InventoryOnlyBackend {
@@ -459,6 +460,12 @@ mod tests {
 
     impl SessionCloser for InventoryOnlyBackend {
         fn close(&self, target: &SessionBinding) -> Result<(), TerminalError> {
+            if self.refuse_close {
+                return Err(TerminalError::Unsupported {
+                    target: target.session_id().clone(),
+                    capability: "closing",
+                });
+            }
             self.closed.lock().unwrap().push(target.clone());
             Ok(())
         }
@@ -512,11 +519,19 @@ mod tests {
     fn terminals_with_backend(
         live: Vec<SessionFacts>,
     ) -> (TerminalSessionService, Arc<InventoryOnlyBackend>) {
+        backend_service(live, false)
+    }
+
+    fn backend_service(
+        live: Vec<SessionFacts>,
+        refuse_close: bool,
+    ) -> (TerminalSessionService, Arc<InventoryOnlyBackend>) {
         let backend = Arc::new(InventoryOnlyBackend {
             id: BackendId::new("fake").unwrap(),
             live,
             sent: Mutex::new(Vec::new()),
             closed: Mutex::new(Vec::new()),
+            refuse_close,
         });
         let service = TerminalSessionService::from_backends([
             Arc::clone(&backend) as Arc<dyn TerminalBackend>
@@ -559,6 +574,41 @@ mod tests {
 
         assert!(error.contains("is the switchboard"), "{error}");
         assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_close_that_fails_keeps_the_open_round_for_the_live_lane() {
+        let root = tempfile::TempDir::new().unwrap();
+        let lane = open_round(&root, "1", 100);
+        let (service, backend) = backend_service(vec![facts("1", 100)], true);
+
+        let outcome = execute(&service, &store(&root), root.path(), &lane, false).unwrap();
+
+        assert!(!outcome.closed);
+        assert_eq!(outcome.terminal_state, TerminalCloseState::CloseFailed);
+        assert_eq!(outcome.discarded_round, None);
+        assert!(
+            store(&root).pending_round(&lane).unwrap().is_some(),
+            "the lane still runs, so its round must stay open for its report"
+        );
+        assert!(backend.closed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_close_that_succeeds_discards_the_open_round() {
+        let root = tempfile::TempDir::new().unwrap();
+        let lane = open_round(&root, "1", 100);
+        let (service, backend) = terminals_with_backend(vec![facts("1", 100)]);
+
+        let outcome = execute(&service, &store(&root), root.path(), &lane, false).unwrap();
+
+        assert!(outcome.closed);
+        assert_eq!(
+            outcome.discarded_round.as_deref(),
+            Some("QOL_BRIDGE_DONE_1")
+        );
+        assert!(store(&root).pending_round(&lane).unwrap().is_none());
+        assert_eq!(*backend.closed.lock().unwrap(), [lane]);
     }
 
     #[test]
