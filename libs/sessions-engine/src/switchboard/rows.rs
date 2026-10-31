@@ -10,6 +10,12 @@ const COLOR_OFF: &str = "\x1b[39m";
 const ELLIPSIS: char = '…';
 const GAP: &str = "  ";
 const CLAUDE_PREFIX: &str = "claude-";
+const IDLE_STATUS: &str = "completed";
+const IDLE_LABEL: &str = "idle";
+const KEY_SEPARATOR: &str = ": ";
+const KEY_NAME_LIMIT: usize = 64;
+const NAME_SHARE: usize = 3;
+const NAME_MIN: usize = 12;
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -26,6 +32,7 @@ struct Task {
     agent_type: Option<String>,
     description: String,
     label: Option<String>,
+    status: Option<String>,
     start_time: Option<u64>,
     model: Option<String>,
     effort: Option<Value>,
@@ -107,32 +114,72 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
-fn row(task: &Task, columns: usize, now_ms: u64) -> String {
-    let name = plain(
-        task.name
-            .as_deref()
-            .or(task.agent_type.as_deref())
-            .unwrap_or("agent"),
-    );
-    let mut head = name.clone();
-    let mut head_width = name.chars().count();
-    if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
-        let label = plain(&model_label(model));
-        head_width += GAP.len() + label.chars().count();
-        head.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
-        if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
-            let effort = plain(&effort);
-            head_width += 1 + effort.chars().count();
-            head.push(' ');
-            head.push_str(&effort);
+fn filled(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|text| !text.is_empty())
+}
+
+fn is_key_name(text: &str) -> bool {
+    text.len() <= KEY_NAME_LIMIT
+        && text.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && text
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn key_and_friendly(description: &str) -> (Option<&str>, Option<&str>) {
+    let description = description.trim();
+    if let Some((key, friendly)) = description.split_once(KEY_SEPARATOR) {
+        if is_key_name(key.trim()) {
+            return (Some(key.trim()), filled(Some(friendly)));
         }
     }
-    let summary = plain(
-        task.label
-            .as_deref()
-            .filter(|label| !label.trim().is_empty())
-            .unwrap_or(&task.description),
+    if description.contains('-') && is_key_name(description) {
+        return (Some(description), None);
+    }
+    (None, filled(Some(description)))
+}
+
+struct Head {
+    text: String,
+    width: usize,
+}
+
+fn head(name: &str, task: &Task) -> Head {
+    let mut text = name.to_owned();
+    let mut width = name.chars().count();
+    if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
+        let label = plain(&model_label(model));
+        width += GAP.len() + label.chars().count();
+        text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
+        if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
+            let effort = plain(&effort);
+            width += 1 + effort.chars().count();
+            text.push(' ');
+            text.push_str(&effort);
+        }
+    }
+    Head { text, width }
+}
+
+fn row(task: &Task, columns: usize, now_ms: u64) -> String {
+    let (key, friendly) = key_and_friendly(&task.description);
+    let name = plain(
+        filled(task.name.as_deref())
+            .or(key)
+            .or(friendly)
+            .or(filled(task.agent_type.as_deref()))
+            .unwrap_or("agent"),
     );
+    let progress = filled(task.label.as_deref())
+        .filter(|label| *label != task.description.trim() && Some(*label) != friendly);
+    let summary = [
+        friendly.map(plain).filter(|friendly| *friendly != name),
+        progress.map(plain),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
     let summary = summary.trim();
     let mut tail = tokens_label(task.token_count);
     if let Some(start) = task.start_time {
@@ -141,14 +188,29 @@ fn row(task: &Task, columns: usize, now_ms: u64) -> String {
             elapsed_label(now_ms.saturating_sub(start) / 1000)
         );
     }
+    if task.status.as_deref() == Some(IDLE_STATUS) {
+        tail = format!("{IDLE_LABEL} · {tail}");
+    }
+    if columns == 0 {
+        let shown = head(&name, task);
+        return format!("{}{GAP}{summary}", shown.text)
+            .trim_end()
+            .to_owned();
+    }
     let tail_width = tail.chars().count();
-    let room = columns.saturating_sub(head_width + GAP.len() * 2 + tail_width);
-    if columns == 0 || room == 0 {
-        return format!("{head}{GAP}{summary}");
+    let capped = truncate(&name, (columns / NAME_SHARE).max(NAME_MIN));
+    let shown = head(&capped, task);
+    let room = columns.saturating_sub(shown.width + GAP.len() * 2 + tail_width);
+    if room == 0 {
+        let others = shown.width - capped.chars().count();
+        let fits = columns.saturating_sub(others + GAP.len() + tail_width);
+        let shown = head(&truncate(&name, fits), task);
+        let pad = columns.saturating_sub(shown.width + tail_width).max(1);
+        return format!("{}{}{tail}", shown.text, " ".repeat(pad));
     }
     let summary = truncate(summary, room);
     let pad = room - summary.chars().count() + GAP.len();
-    format!("{head}{GAP}{summary}{}{tail}", " ".repeat(pad))
+    format!("{}{GAP}{summary}{}{tail}", shown.text, " ".repeat(pad))
 }
 
 fn render(raw: &str, now_ms: u64) -> Result<Vec<String>> {
@@ -232,7 +294,7 @@ mod tests {
         let row = &rows[0];
         assert!(
             row.starts_with(
-                "project-fork  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
+                "RTX 3080 limits research  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
             ),
             "{row:?}"
         );
@@ -272,7 +334,79 @@ mod tests {
                 {"id": "", "description": "dropped"},
             ],
         }));
-        assert_eq!(rows, ["project-fork  Start [31ming"]);
+        assert_eq!(rows, ["Start [31ming"]);
+    }
+
+    #[test]
+    fn an_unnamed_fork_is_named_by_its_description_and_an_idle_one_says_so() {
+        let rows = content(json!({
+            "columns": 50,
+            "tasks": [
+                {"id": "a1", "agentType": "project-fork", "description": "kcd2-design", "label": "kcd2-design", "status": "completed"},
+                {"id": "a2", "agentType": "project-fork", "description": "forks-persist", "label": "Probing fork resume", "status": "running"},
+                {"id": "a3", "agentType": "project-fork", "description": " "},
+            ],
+        }));
+        let squeezed: Vec<String> = rows
+            .iter()
+            .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(
+            squeezed,
+            [
+                "kcd2-design idle · 0 tokens",
+                "forks-persist Probing fork resume 0 tokens",
+                "project-fork 0 tokens",
+            ]
+        );
+        for row in &rows {
+            assert_eq!(row.chars().count(), 50, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn a_key_name_description_shows_the_key_then_the_friendly_words_and_the_progress() {
+        let rows = content(json!({
+            "columns": 90,
+            "tasks": [
+                {"id": "a1", "description": "session-lookup-bug: Blocket session lookup", "label": "Creating pull request with gh", "status": "running"},
+                {"id": "a2", "description": "kcd2-design: KCD2 light-steer poses", "label": "kcd2-design: KCD2 light-steer poses", "status": "completed"},
+                {"id": "a3", "description": "Fix qol shot open latency", "label": "Fix qol shot open latency"},
+                {"id": "a4", "description": "Odd: Words Here", "label": "Odd: Words Here"},
+            ],
+        }));
+        let squeezed: Vec<String> = rows
+            .iter()
+            .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(
+            squeezed,
+            [
+                "session-lookup-bug Blocket session lookup · Creating pull request with gh 0 tokens",
+                "kcd2-design KCD2 light-steer poses idle · 0 tokens",
+                "Fix qol shot open latency 0 tokens",
+                "Odd: Words Here 0 tokens",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_name_with_a_model_still_fits_the_pane_and_keeps_the_idle_marker() {
+        let rows = content(json!({
+            "columns": 50,
+            "tasks": [{
+                "id": "a1",
+                "description": "Investigate why nightly sync stops after midnight and fix it",
+                "model": "claude-opus-5-5",
+                "effort": "high",
+                "status": "completed",
+            }],
+        }));
+        let visible = rows[0].replace(MODEL_COLOR, "").replace(COLOR_OFF, "");
+        assert_eq!(visible.chars().count(), 50, "{visible:?}");
+        assert!(visible.starts_with("Investigate why"), "{visible:?}");
+        assert!(visible.contains("…  Opus 5.5 high"), "{visible:?}");
+        assert!(visible.ends_with("  idle · 0 tokens"), "{visible:?}");
     }
 
     #[test]

@@ -284,7 +284,7 @@ pub(super) fn wake_prompt(forks: &[SleepingFork]) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     Some(format!(
-        "The switchboard restarted, which stopped these forks:\n{rows}\n\nSendMessage each one by its agent id to continue its work, and to start its pull request watcher again in the background if it was waiting on one. Then tell the user in one line which forks you woke."
+        "The switchboard restarted, which stopped these forks:\n{rows}\n\nSendMessage each one by its agent id to continue its work, to start its pull request watcher again in the background if it was waiting on one, and to start its hold again if it was waiting on the user. Then tell the user in one line which forks you woke."
     ))
 }
 
@@ -311,7 +311,7 @@ pub(super) fn handoff_prompt(forks: &[SleepingFork]) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     Some(format!(
-        "The switchboard restarted under new instructions, so it began a new conversation, and these forks of the last one stopped with it:\n{rows}\n\nStart each one again with the Agent tool: subagent_type project-fork, a short name, its description, its model and effort when its row names them, and a prompt whose first line is `Project: <its project>`, followed by `You take over the work of a fork that stopped when the switchboard restarted. Its conversation is in <its transcript>: read the end of it to learn where it stopped and what it was waiting on, then carry on from there, and start its pull request watcher again in the background if it was waiting on one.` Then tell the user in one line which forks you started again."
+        "The switchboard restarted under new instructions, so it began a new conversation, and these forks of the last one stopped with it:\n{rows}\n\nStart each one again with the Agent tool: subagent_type project-fork, its description as it is, or a `<key-name>: <friendly description>` one when it has no key-name, its model and effort when its row names them, and a prompt whose first line is `Project: <its project>`, followed by `You take over the work of a fork that stopped when the switchboard restarted. Its conversation is in <its transcript>: read the end of it to learn where it stopped and what it was waiting on, then carry on from there, and start its pull request watcher again in the background if it was waiting on one, or its hold if it was waiting on the user.` Then tell the user in one line which forks you started again."
     ))
 }
 
@@ -687,6 +687,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("SendMessage each one"), "{text}");
+        assert!(text.contains("its hold again"), "{text}");
         assert!(
             text.contains("pull request watcher again in the background"),
             "{text}"
