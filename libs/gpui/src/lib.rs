@@ -7,6 +7,7 @@ pub mod command_loop;
 pub mod crumb_trail;
 pub mod deck;
 pub mod event_router;
+pub mod focus_priority;
 pub mod fonts;
 pub mod format;
 pub mod gamepad;
