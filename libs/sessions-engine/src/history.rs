@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
@@ -14,6 +14,7 @@ pub(super) struct ClosedEntry {
     pub(super) record: ClosedRecord,
     pub(super) pr_urls: Vec<String>,
     pub(super) last_prompt: Option<String>,
+    pub(super) transcript: Option<PathBuf>,
 }
 
 pub(super) struct History<'a> {
@@ -32,6 +33,7 @@ impl History<'_> {
                 record,
                 pr_urls: Vec::new(),
                 last_prompt: None,
+                transcript: None,
             })
             .collect::<Vec<_>>();
         for conversation in self.conversations(now) {
@@ -41,6 +43,7 @@ impl History<'_> {
             {
                 entry.last_prompt = last_prompt(&conversation);
                 entry.pr_urls = conversation.pr_urls;
+                entry.transcript = conversation.transcript;
                 continue;
             }
             if let Some(record) = self.record(&conversation) {
@@ -48,6 +51,7 @@ impl History<'_> {
                     record,
                     last_prompt: last_prompt(&conversation),
                     pr_urls: conversation.pr_urls,
+                    transcript: conversation.transcript,
                 });
             }
         }

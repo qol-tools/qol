@@ -274,10 +274,11 @@ where
         )
         .command(
             Command::new(SWITCHBOARD)
-                .about("Open the switchboard, the one chat that starts, lists, closes and messages your sessions.")
+                .about("Open the switchboard, the one chat that starts, continues, lists, closes and messages your sessions.")
                 .usage(format!("{PLUGIN_ID} {SWITCHBOARD} [{HERE}]"))
                 .detail("Focuses the live switchboard, or opens one in a new kitty window; with no kitty running it starts kitty for it.")
-                .detail("New work runs as forks, which are Claude Code subagents inside the one switchboard chat instead of a terminal each. Select a fork in the agent list under the prompt to talk to it. A new switchboard resumes the newest switchboard conversation started under its current instructions, since a resumed conversation keeps the instructions it started with, and wakes the forks that were running or waiting when the last one ended.")
+                .detail("New work, a new or empty session, and a closed conversation you bring back run as forks, which are Claude Code subagents inside the one switchboard chat instead of a terminal each; a closed conversation's fork reads its transcript and carries it on. Select a fork in the agent list under the prompt to talk to it. A terminal opens only for another tool, a conversation with no transcript, or when you ask for one.")
+                .detail("A new switchboard resumes the newest switchboard conversation started under its current instructions and wakes the forks that were running or waiting when the last one ended, except those you stopped. A resumed conversation keeps the instructions it started with, so after an update that changed them it starts a new conversation and starts those forks again as new forks, each reading the transcript of the one it replaces.")
                 .detail(format!("{HERE} makes the calling kitty window the switchboard when none is live; when one is, it starts nothing and exits {}, so a wrapper like clauded starts its usual chat.", qol_sessions_engine::switchboard::HERE_TAKEN_EXIT))
                 .detail("The model and effort come from the Switchboard settings: claude-sonnet-5-5 at medium effort unless changed.")
                 .output(format!("One line saying what was focused, opened or started on stdout; with {HERE} this process becomes claude."))

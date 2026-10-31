@@ -1,10 +1,10 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Result;
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::paths::conversations_dir;
@@ -12,7 +12,13 @@ use super::paths::conversations_dir;
 pub(super) const FORK_AGENT: &str = "project-fork";
 const META_SUFFIX: &str = ".meta.json";
 const AGENT_PREFIX: &str = "agent-";
+const ASSISTANT_ROW: &str = "\"type\":\"assistant\"";
 const BACKGROUND_MARKER: &str = "Command running in background with ID: ";
+const TASK_ID_OPEN: &str = "<task-id>";
+const TASK_ID_CLOSE: &str = "</task-id>";
+const STATUS_OPEN: &str = "<status>";
+const STATUS_CLOSE: &str = "</status>";
+const USER_STOP_STATUS: &str = "killed";
 const WORKTREE_PIN: &str = "worktreePath";
 const WORKTREE_KEYS: [&str; 3] = [WORKTREE_PIN, "worktreeBranch", "spawnedWithWorktree"];
 
@@ -21,37 +27,31 @@ pub(super) struct SleepingFork {
     pub(super) agent_id: String,
     pub(super) name: Option<String>,
     pub(super) description: String,
+    pub(super) cwd: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) effort: Option<String>,
+    pub(super) transcript: PathBuf,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Meta {
-    agent_type: String,
-    description: String,
-    name: Option<String>,
-    finished: bool,
-    stopped_by_user: bool,
-}
-
-fn answered_under_revision(path: &Path, revision: &str) -> bool {
+fn answered(path: &Path, revision: Option<&str>) -> bool {
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
-    let (mut answered, mut current) = (false, false);
+    let (mut replied, mut current) = (false, revision.is_none());
     for line in BufReader::new(file).lines().map_while(Result::ok) {
-        answered |= line.contains("\"type\":\"assistant\"");
-        current |= line.contains(revision);
-        if answered && current {
+        replied |= line.contains(ASSISTANT_ROW);
+        current |= revision.is_some_and(|revision| line.contains(revision));
+        if replied && current {
             return true;
         }
     }
     false
 }
 
-pub(super) fn latest_conversation(
+fn newest_answered(
     config_home: &Path,
     switchboard: &Path,
-    revision: &str,
+    revision: Option<&str>,
 ) -> Option<String> {
     let mut found: Vec<(SystemTime, String)> =
         fs::read_dir(conversations_dir(config_home, switchboard))
@@ -63,7 +63,7 @@ pub(super) fn latest_conversation(
                     return None;
                 }
                 let id = path.file_stem()?.to_str()?.to_owned();
-                if !answered_under_revision(&path, revision) {
+                if !answered(&path, revision) {
                     return None;
                 }
                 Some((entry.metadata().ok()?.modified().ok()?, id))
@@ -73,10 +73,16 @@ pub(super) fn latest_conversation(
     found.pop().map(|(_, id)| id)
 }
 
-pub(super) fn subagents_dir(config_home: &Path, switchboard: &Path, conversation: &str) -> PathBuf {
-    conversations_dir(config_home, switchboard)
-        .join(conversation)
-        .join("subagents")
+pub(super) fn latest_conversation(
+    config_home: &Path,
+    switchboard: &Path,
+    revision: &str,
+) -> Option<String> {
+    newest_answered(config_home, switchboard, Some(revision))
+}
+
+pub(super) fn previous_conversation(config_home: &Path, switchboard: &Path) -> Option<String> {
+    newest_answered(config_home, switchboard, None)
 }
 
 pub(super) fn meta_files(dir: &Path) -> Vec<PathBuf> {
@@ -170,23 +176,65 @@ fn agent_id_of(meta_path: &Path) -> Option<String> {
     )
 }
 
-pub(super) fn sleeping_forks(subagents: &Path) -> Vec<SleepingFork> {
-    meta_files(subagents)
+fn stopped_by_user(transcript: &str) -> HashSet<String> {
+    let mut last = HashMap::new();
+    let mut rest = transcript;
+    while let Some(at) = rest.find(TASK_ID_OPEN) {
+        rest = &rest[at + TASK_ID_OPEN.len()..];
+        let Some(end) = rest.find(TASK_ID_CLOSE) else {
+            break;
+        };
+        let (id, after) = rest.split_at(end);
+        rest = after;
+        let bound = [after.find(TASK_ID_OPEN), after.find('\n')]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(after.len());
+        let status = after[..bound]
+            .split_once(STATUS_OPEN)
+            .and_then(|(_, status)| status.split_once(STATUS_CLOSE))
+            .map(|(status, _)| status);
+        if let Some(status) = status {
+            last.insert(id, status);
+        }
+    }
+    last.into_iter()
+        .filter(|(_, status)| *status == USER_STOP_STATUS)
+        .map(|(id, _)| id.to_owned())
+        .collect()
+}
+
+pub(super) fn sleeping_forks(
+    config_home: &Path,
+    switchboard: &Path,
+    conversation: &str,
+) -> Vec<SleepingFork> {
+    let conversations = conversations_dir(config_home, switchboard);
+    let stopped = fs::read_to_string(conversations.join(format!("{conversation}.jsonl")))
+        .map(|text| stopped_by_user(&text))
+        .unwrap_or_default();
+    meta_files(&conversations.join(conversation).join("subagents"))
         .into_iter()
         .filter_map(|path| {
-            let meta: Meta = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
-            if meta.agent_type != FORK_AGENT || meta.stopped_by_user {
+            let meta: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
+            let text = |key: &str| meta.get(key).and_then(Value::as_str).map(str::to_owned);
+            let agent_id = agent_id_of(&path)?;
+            if text("agentType").as_deref() != Some(FORK_AGENT) || stopped.contains(&agent_id) {
                 return None;
             }
-            let agent_id = agent_id_of(&path)?;
-            let asleep = !meta.finished || {
-                let transcript = path.with_file_name(format!("{AGENT_PREFIX}{agent_id}.jsonl"));
-                fs::read_to_string(transcript).is_ok_and(|text| pending_background(&text))
-            };
-            asleep.then_some(SleepingFork {
+            let transcript = path.with_file_name(format!("{AGENT_PREFIX}{agent_id}.jsonl"));
+            let finished = meta.get("finished").and_then(Value::as_bool) == Some(true);
+            let asleep = !finished
+                || fs::read_to_string(&transcript).is_ok_and(|text| pending_background(&text));
+            asleep.then(|| SleepingFork {
                 agent_id,
-                name: meta.name,
-                description: meta.description,
+                name: text("name"),
+                description: text("description").unwrap_or_default(),
+                cwd: text("cwd"),
+                model: text("model"),
+                effort: text("effort"),
+                transcript,
             })
         })
         .collect()
@@ -209,6 +257,33 @@ pub(super) fn wake_prompt(forks: &[SleepingFork]) -> Option<String> {
         .join("\n");
     Some(format!(
         "The switchboard restarted, which stopped these forks:\n{rows}\n\nSendMessage each one by its agent id to continue its work, and to start its pull request watcher again in the background if it was waiting on one. Then tell the user in one line which forks you woke."
+    ))
+}
+
+pub(super) fn handoff_prompt(forks: &[SleepingFork]) -> Option<String> {
+    if forks.is_empty() {
+        return None;
+    }
+    let rows = forks
+        .iter()
+        .map(|fork| {
+            let mut row = format!(
+                "- {}: project {}, transcript {}",
+                fork.description,
+                fork.cwd.as_deref().unwrap_or("unknown"),
+                fork.transcript.display()
+            );
+            for (label, value) in [("model", &fork.model), ("effort", &fork.effort)] {
+                if let Some(value) = value {
+                    row.push_str(&format!(", {label} {value}"));
+                }
+            }
+            row
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "The switchboard restarted under new instructions, so it began a new conversation, and these forks of the last one stopped with it:\n{rows}\n\nStart each one again with the Agent tool: subagent_type project-fork, a short name, its description, its model and effort when its row names them, and a prompt whose first line is `Project: <its project>`, followed by `You take over the work of a fork that stopped when the switchboard restarted. Its conversation is in <its transcript>: read the end of it to learn where it stopped and what it was waiting on, then carry on from there, and start its pull request watcher again in the background if it was waiting on one.` Then tell the user in one line which forks you started again."
     ))
 }
 
@@ -261,13 +336,61 @@ mod tests {
     }
 
     #[test]
-    fn only_unfinished_or_background_waiting_project_forks_are_woken() {
+    fn the_previous_conversation_is_the_newest_answered_one_under_any_role() {
         let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("subagents");
+        let (home, board) = (root.path().join("h"), Path::new("/data/switchboard"));
+        assert_eq!(previous_conversation(&home, board), None);
+        conversation(
+            &home,
+            board,
+            "stale",
+            "{\"systemPrompt\":\"Switchboard role revision a1.\"}\n{\"type\":\"assistant\"}\n",
+        );
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        conversation(&home, board, "unanswered", r#"{"type":"attachment"}"#);
+        assert_eq!(
+            previous_conversation(&home, board).as_deref(),
+            Some("stale")
+        );
+        assert_eq!(
+            latest_conversation(&home, board, "Switchboard role revision b2."),
+            None
+        );
+    }
+
+    fn notice(id: &str, status: &str) -> String {
+        format!("{{\"type\":\"user\",\"content\":\"<task-notification>\\n<task-id>{id}</task-id>\\n<tool-use-id>t</tool-use-id>\\n<status>{status}</status>\\n<summary>s</summary>\\n</task-notification>\"}}\n")
+    }
+
+    #[test]
+    fn a_fork_counts_as_stopped_by_the_user_while_its_latest_notice_is_killed() {
+        let text = [
+            notice("kept", "completed"),
+            notice("stopped", "killed"),
+            notice("revived", "killed"),
+            notice("revived", "completed"),
+            "<task-id>bare</task-id><summary>no status</summary>".to_owned(),
+            notice("other", "killed"),
+            "<task-id>split</task-id> ends its row\n<status>killed</status>\n".to_owned(),
+        ]
+        .concat();
+        let mut stopped = stopped_by_user(&text).into_iter().collect::<Vec<_>>();
+        stopped.sort();
+        assert_eq!(stopped, ["other", "stopped"]);
+        assert!(stopped_by_user("").is_empty());
+    }
+
+    #[test]
+    fn unfinished_or_background_waiting_forks_are_woken_unless_the_user_stopped_them() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, board) = (root.path().join("h"), Path::new("/data/switchboard"));
+        let dir = conversations_dir(&home, board)
+            .join("conv")
+            .join("subagents");
         fork(
             &dir,
             "mid",
-            r#"{"agentType":"project-fork","description":"mid turn","name":"mid"}"#,
+            r#"{"agentType":"project-fork","description":"mid turn","name":"mid","cwd":"/work/a","model":"opus","effort":"max"}"#,
             "",
         );
         fork(
@@ -275,6 +398,15 @@ mod tests {
             "done",
             r#"{"agentType":"project-fork","description":"done","finished":true}"#,
             r#"{"type":"assistant"}"#,
+        );
+        let waiting = format!(
+            "{{\"type\":\"user\",\"message\":\"{BACKGROUND_MARKER}bw1abc. Output is\"}}\n{{\"type\":\"assistant\",\"text\":\"waiting for bw1abc\"}}\n"
+        );
+        fork(
+            &dir,
+            "exited",
+            r#"{"agentType":"project-fork","description":"watching at exit","finished":true,"stoppedByUser":true}"#,
+            &waiting,
         );
         fork(
             &dir,
@@ -284,12 +416,15 @@ mod tests {
         );
         fork(
             &dir,
+            "revived",
+            r#"{"agentType":"project-fork","description":"y","stoppedByUser":true}"#,
+            "",
+        );
+        fork(
+            &dir,
             "other",
             r#"{"agentType":"Explore","description":"x"}"#,
             "",
-        );
-        let waiting = format!(
-            "{{\"type\":\"user\",\"message\":\"{BACKGROUND_MARKER}bw1abc. Output is\"}}\n{{\"type\":\"assistant\",\"text\":\"waiting for bw1abc\"}}\n"
         );
         fork(
             &dir,
@@ -297,25 +432,46 @@ mod tests {
             r#"{"agentType":"project-fork","description":"watching","finished":true,"name":"zed"}"#,
             &waiting,
         );
-        let nested = dir.join("agent-parent");
         fork(
-            &nested,
+            &dir.join("agent-parent"),
             "deep",
             r#"{"agentType":"project-fork","description":"deep"}"#,
             "",
         );
-        let woken: Vec<(String, Option<String>)> = sleeping_forks(&dir)
-            .into_iter()
-            .map(|fork| (fork.agent_id, fork.name))
-            .collect();
-        assert_eq!(
-            woken,
-            [
-                ("asleep".to_owned(), Some("zed".to_owned())),
-                ("mid".to_owned(), Some("mid".to_owned())),
-                ("deep".to_owned(), None),
+        conversation(
+            &home,
+            board,
+            "conv",
+            &[
+                notice("exited", "completed"),
+                notice("stopped", "killed"),
+                notice("revived", "killed"),
+                notice("revived", "completed"),
             ]
+            .concat(),
         );
+        let woken = sleeping_forks(&home, board, "conv");
+        assert_eq!(
+            woken
+                .iter()
+                .map(|fork| fork.agent_id.as_str())
+                .collect::<Vec<_>>(),
+            ["asleep", "exited", "mid", "deep", "revived"]
+        );
+        assert_eq!(woken[0].name.as_deref(), Some("zed"));
+        assert_eq!(
+            woken[2],
+            SleepingFork {
+                agent_id: "mid".to_owned(),
+                name: Some("mid".to_owned()),
+                description: "mid turn".to_owned(),
+                cwd: Some("/work/a".to_owned()),
+                model: Some("opus".to_owned()),
+                effort: Some("max".to_owned()),
+                transcript: dir.join("agent-mid.jsonl"),
+            }
+        );
+        assert!(sleeping_forks(&home, board, "missing").is_empty());
     }
 
     #[test]
@@ -328,20 +484,70 @@ mod tests {
         assert!(!pending_background(says));
     }
 
+    fn sleeping(agent_id: &str, name: Option<&str>, description: &str) -> SleepingFork {
+        SleepingFork {
+            agent_id: agent_id.to_owned(),
+            name: name.map(str::to_owned),
+            description: description.to_owned(),
+            cwd: None,
+            model: None,
+            effort: None,
+            transcript: PathBuf::from(format!("/conv/subagents/agent-{agent_id}.jsonl")),
+        }
+    }
+
+    #[test]
+    fn the_handoff_prompt_starts_each_fork_again_from_its_transcript() {
+        assert_eq!(handoff_prompt(&[]), None);
+        let text = handoff_prompt(&[
+            SleepingFork {
+                cwd: Some("/work/a".to_owned()),
+                model: Some("opus".to_owned()),
+                effort: Some("max".to_owned()),
+                ..sleeping("a1", None, "fix the bug")
+            },
+            sleeping("b2", None, "write docs"),
+        ])
+        .unwrap();
+        assert!(
+            text.contains("- fix the bug: project /work/a, transcript /conv/subagents/agent-a1.jsonl, model opus, effort max\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "- write docs: project unknown, transcript /conv/subagents/agent-b2.jsonl\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Start each one again with the Agent tool: subagent_type project-fork"),
+            "{text}"
+        );
+        assert!(
+            text.contains("first line is `Project: <its project>`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Its conversation is in <its transcript>"),
+            "{text}"
+        );
+        assert!(
+            text.contains("pull request watcher again in the background"),
+            "{text}"
+        );
+        assert!(
+            text.contains("in one line which forks you started again"),
+            "{text}"
+        );
+        assert!(!text.contains("SendMessage"), "{text}");
+    }
+
     #[test]
     fn the_wake_prompt_lists_each_fork_and_is_absent_without_any() {
         assert_eq!(wake_prompt(&[]), None);
         let text = wake_prompt(&[
-            SleepingFork {
-                agent_id: "a1".to_owned(),
-                name: Some("alpha".to_owned()),
-                description: "fix the bug".to_owned(),
-            },
-            SleepingFork {
-                agent_id: "b2".to_owned(),
-                name: None,
-                description: "write docs".to_owned(),
-            },
+            sleeping("a1", Some("alpha"), "fix the bug"),
+            sleeping("b2", None, "write docs"),
         ])
         .unwrap();
         assert!(
