@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::znp::{Device, Endpoint};
 use anyhow::Result;
@@ -27,9 +27,18 @@ pub struct DaemonState {
     // so replacing self.service alone wouldn't drop the inner — take() does.
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
-    main_target: LightTarget,
+    main_target: SharedTarget,
     current_brightness: u8,
     current_mirek: u16,
+}
+
+pub type SharedTarget = Arc<Mutex<LightTarget>>;
+
+pub fn current_target(target: &SharedTarget) -> LightTarget {
+    target
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 impl DaemonState {
@@ -38,7 +47,7 @@ impl DaemonState {
         Ok(Self {
             service: loaded.service,
             config: loaded.config,
-            main_target: loaded.main_target,
+            main_target: Arc::new(Mutex::new(loaded.main_target)),
             current_brightness: loaded.current_brightness,
             current_mirek: loaded.current_mirek,
         })
@@ -48,8 +57,8 @@ impl DaemonState {
         self.service.clone()
     }
 
-    pub fn main_target(&self) -> &LightTarget {
-        &self.main_target
+    pub fn shared_main_target(&self) -> SharedTarget {
+        self.main_target.clone()
     }
 
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
@@ -134,7 +143,7 @@ impl DaemonState {
     }
 
     fn apply(&mut self, command: LightCommand) -> DaemonOutcome {
-        let target = self.main_target.clone();
+        let target = current_target(&self.main_target);
         self.with_service(|svc| svc.apply_command(&target, &command))
     }
 
@@ -192,7 +201,7 @@ impl DaemonState {
         }
 
         let commands = preset_commands(preset);
-        let target = self.main_target.clone();
+        let target = current_target(&self.main_target);
         let Ok(mut guard) = self.service.lock() else {
             return DaemonOutcome::Error("service lock poisoned".into());
         };
@@ -217,7 +226,10 @@ impl DaemonState {
             Ok(c) => c,
             Err(e) => return DaemonOutcome::Error(e.to_string()),
         };
-        self.main_target = config.main_target();
+        *self
+            .main_target
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = config.main_target();
         self.current_brightness = config.live_brightness;
         self.current_mirek = config.live_mirek;
         self.config = config;
@@ -264,7 +276,10 @@ fn load_persisted_devices(config: &PluginConfig) -> Vec<Device> {
         .iter()
         .filter_map(|(key, entry)| {
             let ieee_address = parse_ieee_address(&entry.ieee_address).ok()?;
-            let network_address = parse_network_address(key).unwrap_or(0);
+            let network_address = entry
+                .network_address
+                .or_else(|| parse_network_address(key))
+                .unwrap_or(0);
             let endpoints = entry
                 .endpoints
                 .iter()
@@ -344,4 +359,57 @@ fn parse_color(color_hex: &str) -> RgbColor {
 
 fn parse_hex_pair(value: &str) -> u8 {
     u8::from_str_radix(value, 16).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::model::{DeviceEntry, EndpointEntry};
+
+    fn entry(network_address: Option<u16>) -> DeviceEntry {
+        DeviceEntry {
+            ieee_address: "00:11:22:33:44:55:66:77".into(),
+            name: "Desk".into(),
+            endpoints: vec![EndpointEntry {
+                id: 11,
+                clusters: vec![6, 8],
+            }],
+            online: true,
+            network_address,
+        }
+    }
+
+    #[test]
+    fn persisted_devices_keep_their_network_address() {
+        let cases = [
+            ("00:11:22:33:44:55:66:77", Some(0x4A1F), 0x4A1F),
+            ("0x1234", None, 0x1234),
+            ("0x1234", Some(0x4A1F), 0x4A1F),
+            ("00:11:22:33:44:55:66:77", None, 0x0000),
+        ];
+        for (key, stored, expected) in cases {
+            let mut config = PluginConfig::default();
+            config.devices.insert(key.into(), entry(stored));
+            let devices = load_persisted_devices(&config);
+            assert_eq!(devices.len(), 1, "key {key}");
+            assert_eq!(devices[0].network_address, expected, "key {key}");
+            assert_eq!(
+                devices[0].ieee_address,
+                [0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]
+            );
+        }
+    }
+
+    #[test]
+    fn device_entries_written_before_the_network_address_field_still_load() {
+        let entry: DeviceEntry = serde_json::from_value(serde_json::json!({
+            "ieee_address": "00:11:22:33:44:55:66:77",
+            "name": "Desk",
+            "endpoints": [],
+        }))
+        .unwrap();
+        assert_eq!(entry.network_address, None);
+        let written = serde_json::to_value(entry).unwrap();
+        assert!(written.get("network_address").is_none());
+    }
 }

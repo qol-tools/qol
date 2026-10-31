@@ -74,6 +74,8 @@ pub struct DeviceEntry {
     pub endpoints: Vec<EndpointEntry>,
     #[serde(default)]
     pub online: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_address: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
