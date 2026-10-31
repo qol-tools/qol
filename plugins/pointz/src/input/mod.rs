@@ -11,6 +11,7 @@ use platform::InputHandlerImpl;
 const MAX_POINTER_DELTA_PIXELS: f64 = 4096.0;
 const MAX_SCROLL_DELTA_NOTCHES: f64 = 64.0;
 const SCREEN_BOUNDS_REFRESH: Duration = Duration::from_secs(5);
+const CURSOR_RESYNC_AFTER: Duration = Duration::from_millis(250);
 
 pub struct InputHandler {
     inner: InputHandlerImpl,
@@ -166,10 +167,112 @@ impl ScreenBoundsCache {
     }
 }
 
+pub(in crate::input) struct CursorTrack {
+    state: Mutex<Option<((f64, f64), Instant)>>,
+    read: fn() -> Option<(f64, f64)>,
+}
+
+impl CursorTrack {
+    pub(in crate::input) fn new(read: fn() -> Option<(f64, f64)>) -> Self {
+        Self {
+            state: Mutex::new(None),
+            read,
+        }
+    }
+
+    pub(in crate::input) fn advance(&self, bounds: &ScreenBounds, dx: f64, dy: f64) -> (f64, f64) {
+        let mut state = self.state.lock().expect("Cursor position mutex poisoned");
+        let now = Instant::now();
+        let (x, y) = start_position(*state, now, self.read).unwrap_or_else(|| bounds.center());
+        let moved = bounds.clamp(x + dx, y + dy);
+        *state = Some((moved, now));
+        moved
+    }
+}
+
+fn start_position(
+    cached: Option<((f64, f64), Instant)>,
+    now: Instant,
+    read: impl FnOnce() -> Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    if let Some((position, at)) = cached {
+        if now.saturating_duration_since(at) < CURSOR_RESYNC_AFTER {
+            return Some(position);
+        }
+    }
+    let cached = cached.map(|(position, _)| position);
+    match read() {
+        Some(actual) if cached.is_some_and(|position| same_pixel(position, actual)) => cached,
+        Some(actual) => Some(actual),
+        None => cached,
+    }
+}
+
+fn same_pixel(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn the_start_position_follows_a_pointer_moved_outside_pointz() {
+        let now = Instant::now();
+        let paused = now - CURSOR_RESYNC_AFTER;
+        let streaming = now - CURSOR_RESYNC_AFTER / 2;
+        let cases = [
+            (None, Some((300.0, 200.0)), Some((300.0, 200.0))),
+            (None, None, None),
+            (
+                Some(((10.4, 20.6), streaming)),
+                Some((900.0, 900.0)),
+                Some((10.4, 20.6)),
+            ),
+            (
+                Some(((10.4, 20.6), paused)),
+                Some((900.0, 700.0)),
+                Some((900.0, 700.0)),
+            ),
+            (
+                Some(((10.4, 20.6), paused)),
+                Some((10.0, 20.0)),
+                Some((10.4, 20.6)),
+            ),
+            (Some(((10.4, 20.6), paused)), None, Some((10.4, 20.6))),
+        ];
+        for (cached, actual, expected) in cases {
+            assert_eq!(
+                start_position(cached, now, || actual),
+                expected,
+                "{cached:?} {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_streaming_move_does_not_read_the_pointer() {
+        let now = Instant::now();
+        let start = start_position(Some(((5.0, 5.0), now)), now, || {
+            panic!("the pointer is read while moves stream in")
+        });
+
+        assert_eq!(start, Some((5.0, 5.0)));
+    }
+
+    #[test]
+    fn a_tracked_cursor_moves_from_where_the_pointer_was_put() {
+        fn read() -> Option<(f64, f64)> {
+            Some((100.0, 100.0))
+        }
+        let bounds = ScreenBounds::from_origin_and_size(0.0, 0.0, 1920.0, 1080.0).unwrap();
+        let track = CursorTrack::new(read);
+
+        assert_eq!(track.advance(&bounds, 10.5, -5.0), (110.5, 95.0));
+        assert_eq!(track.advance(&bounds, 0.25, 0.0), (110.75, 95.0));
+        assert_eq!(track.advance(&bounds, 5000.0, 5000.0), (1919.0, 1079.0));
+    }
 
     #[test]
     fn non_finite_pointer_values_are_rejected() {
