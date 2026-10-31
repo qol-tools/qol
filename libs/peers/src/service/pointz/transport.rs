@@ -327,13 +327,17 @@ fn authenticate(
     replay: &mut ReplayWindow,
 ) -> Option<serde_json::Value> {
     let parsed = envelope::parse(packet)?;
-    if parsed.sent_at_ms.abs_diff(unix_time_ms()) > COMMAND_CLOCK_SKEW_MS {
+    let now_ms = unix_time_ms();
+    if parsed.sent_at_ms.abs_diff(now_ms) > COMMAND_CLOCK_SKEW_MS {
         return None;
     }
     let key = authority.pointz_key(&PointzDeviceId::from_bytes(parsed.device_id))?;
     let payload = parsed.verify(&key)?;
     let command: serde_json::Value = serde_json::from_slice(payload).ok()?;
-    if !command.is_object() || !replay.insert(&parsed.device_id, &parsed.nonce) {
+    let expires_at_ms = parsed.sent_at_ms.saturating_add(COMMAND_CLOCK_SKEW_MS);
+    if !command.is_object()
+        || !replay.insert(&parsed.device_id, &parsed.nonce, expires_at_ms, now_ms)
+    {
         return None;
     }
     Some(command)
