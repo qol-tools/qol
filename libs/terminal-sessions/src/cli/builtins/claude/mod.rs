@@ -30,7 +30,7 @@ pub(super) struct ClaudeStrategy {
 
 impl Default for ClaudeStrategy {
     fn default() -> Self {
-        Self::with_environment(Arc::new(SystemClaudeEnvironment))
+        Self::with_environment(Arc::new(SystemClaudeEnvironment::default()))
     }
 }
 

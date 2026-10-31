@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use qol_agent_homes::{Harness, Registry};
 use serde::Deserialize;
@@ -24,40 +26,79 @@ pub(super) trait ClaudeEnvironment: Send + Sync {
     }
 }
 
-pub(super) struct SystemClaudeEnvironment;
+const CLAUDE_HOMES_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Default)]
+pub(super) struct SystemClaudeEnvironment {
+    claude_homes: Mutex<Option<(Instant, Vec<PathBuf>)>>,
+}
+
+impl SystemClaudeEnvironment {
+    fn located_record(&self, pid: i32) -> Option<(PathBuf, ClaudeSessionRecord)> {
+        let current = Registry::load().current(Harness::Claude).path;
+        if let Some(record) = read_record(&current, pid) {
+            return Some((current, record));
+        }
+        let others = self.claude_homes(Instant::now(), || {
+            Registry::load()
+                .every_home()
+                .into_iter()
+                .filter(|home| home.harness == Harness::Claude)
+                .map(|home| home.path)
+                .collect()
+        });
+        held_record(&current, &others, pid)
+    }
+
+    fn claude_homes(&self, now: Instant, load: impl FnOnce() -> Vec<PathBuf>) -> Vec<PathBuf> {
+        let Ok(mut cached) = self.claude_homes.lock() else {
+            return Vec::new();
+        };
+        match cached.as_ref() {
+            Some((loaded_at, homes)) if now.duration_since(*loaded_at) < CLAUDE_HOMES_TTL => {
+                homes.clone()
+            }
+            _ => {
+                let homes = load();
+                *cached = Some((now, homes.clone()));
+                homes
+            }
+        }
+    }
+}
 
 impl ClaudeEnvironment for SystemClaudeEnvironment {
     fn session(&self, pid: i32) -> Option<ClaudeSessionLocation> {
-        let (home, record) = located_record(&Registry::load(), pid)?;
+        let (home, record) = self.located_record(pid)?;
         session_location(&home, record)
     }
 
     fn remote_control_session(&self, pid: i32) -> Option<String> {
-        located_record(&Registry::load(), pid)?
+        self.located_record(pid)?
             .1
             .bridge_session_id
             .filter(|id| !id.is_empty())
     }
 
     fn busy(&self, pid: i32) -> bool {
-        located_record(&Registry::load(), pid).is_some_and(|(_, record)| record.busy())
+        self.located_record(pid)
+            .is_some_and(|(_, record)| record.busy())
     }
 }
 
-fn located_record(registry: &Registry, pid: i32) -> Option<(PathBuf, ClaudeSessionRecord)> {
-    let current = registry.current(Harness::Claude).path;
-    if let Some(record) = read_record(&current, pid) {
-        return Some((current, record));
-    }
+fn held_record(
+    current: &Path,
+    homes: &[PathBuf],
+    pid: i32,
+) -> Option<(PathBuf, ClaudeSessionRecord)> {
     let held = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    registry
-        .every_home()
-        .into_iter()
-        .filter(|home| home.harness == Harness::Claude && home.path != current)
+    homes
+        .iter()
+        .filter(|home| home.as_path() != current)
         .find_map(|home| {
-            read_record(&home.path, pid)
+            read_record(home, pid)
                 .filter(|record| record.held_by(held))
-                .map(|record| (home.path, record))
+                .map(|record| (home.clone(), record))
         })
 }
 
@@ -227,7 +268,7 @@ mod tests {
         std::fs::write(projects.join("s-7.jsonl"), "{}\n").unwrap();
         let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
         std::env::set_var("CLAUDE_CONFIG_DIR", &home);
-        let location = SystemClaudeEnvironment.session(7);
+        let location = SystemClaudeEnvironment::default().session(7);
         match previous {
             Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
             None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
@@ -257,10 +298,10 @@ mod tests {
         let user = tempfile::TempDir::new().unwrap();
         let current = user.path().join(".claude");
         let other = user.path().join(".claude-other");
-        fs::create_dir_all(current.join("sessions")).unwrap();
-        fs::create_dir_all(other.join("sessions")).unwrap();
-        fs::create_dir_all(other.join("projects")).unwrap();
-        fs::write(other.join(".claude.json"), "{}").unwrap();
+        let stale = user.path().join(".claude-stale");
+        for home in [&current, &other, &stale] {
+            fs::create_dir_all(home.join("sessions")).unwrap();
+        }
         let pid = std::process::id() as i32;
         fs::write(
             other.join("sessions").join(format!("{pid}.json")),
@@ -268,25 +309,35 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            other.join("sessions").join("0.json"),
-            r#"{"sessionId":"stale","cwd":"/work/proj"}"#,
+            stale.join("sessions").join(format!("{pid}.json")),
+            r#"{"sessionId":"stale-chat","cwd":"/work/proj","procStart":"never"}"#,
         )
         .unwrap();
-        let registry =
-            Registry::load_from(None, user.path(), &|_: &str| None::<std::ffi::OsString>);
+        let homes = [current.clone(), stale.clone(), other.clone()];
 
-        let (home, record) = located_record(&registry, pid).unwrap();
+        let (home, record) = held_record(&current, &homes, pid).unwrap();
 
         assert_eq!(home, other);
         assert_eq!(record.session_id, "other-chat");
-        assert!(located_record(&registry, 0).is_none());
-        fs::write(
-            current.join("sessions").join(format!("{pid}.json")),
-            r#"{"sessionId":"current-chat","cwd":"/work/proj"}"#,
-        )
-        .unwrap();
-        let (home, record) = located_record(&registry, pid).unwrap();
-        assert_eq!(home, current);
-        assert_eq!(record.session_id, "current-chat");
+        assert!(held_record(&current, &homes, 0).is_none());
+        assert!(held_record(&other, &[other.clone()], pid).is_none());
+    }
+
+    #[test]
+    fn the_claude_home_list_is_reloaded_only_once_it_is_older_than_its_ttl() {
+        let environment = SystemClaudeEnvironment::default();
+        let start = Instant::now();
+        let first = vec![PathBuf::from("/home/u/.claude-a")];
+        let second = vec![PathBuf::from("/home/u/.claude-b")];
+
+        assert_eq!(environment.claude_homes(start, || first.clone()), first);
+        assert_eq!(
+            environment.claude_homes(start + CLAUDE_HOMES_TTL / 2, || second.clone()),
+            first
+        );
+        assert_eq!(
+            environment.claude_homes(start + CLAUDE_HOMES_TTL, || second.clone()),
+            second
+        );
     }
 }
