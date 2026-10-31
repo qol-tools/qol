@@ -387,7 +387,7 @@ fn discovered_homes(user_home: &Path) -> Vec<(Harness, PathBuf)> {
             Harness::ALL
                 .into_iter()
                 .filter(|harness| harness.holds_custom_home(&dir))
-                .map(move |harness| (harness, dir.clone()))
+                .map(|harness| (harness, dir.clone()))
                 .collect::<Vec<_>>()
         })
         .collect()
