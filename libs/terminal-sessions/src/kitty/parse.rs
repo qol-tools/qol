@@ -96,12 +96,11 @@ impl KittyWindow {
             .iter()
             .map(|process| process.pid)
             .collect();
-        let reported = self.last_reported_cmdline.trim();
-        let reported_cmd = if reported.is_empty() {
-            None
-        } else {
-            basename(&[reported.to_owned()]).or_else(|| Some(reported.to_owned()))
-        };
+        let reported_cmd = self
+            .last_reported_cmdline
+            .split_whitespace()
+            .next()
+            .map(|program| basename(&[program.to_owned()]).unwrap_or_else(|| program.to_owned()));
         let native_id = match instance {
             Some(instance) => format!("{instance}.{}", self.id),
             None => self.id.to_string(),
@@ -212,6 +211,34 @@ mod tests {
         assert_eq!(sessions[0].foreground_pids, [100, 101]);
         assert!(sessions[1].at_prompt);
         assert_eq!(sessions[1].reported_cmd, None);
+    }
+
+    #[test]
+    fn reported_command_is_the_program_name_without_its_arguments() {
+        let cases = [
+            ("claude", Some("claude")),
+            ("/usr/bin/claude", Some("claude")),
+            ("vim /etc/hosts", Some("vim")),
+            ("ls /usr/bin", Some("ls")),
+            ("  claude --resume abc  ", Some("claude")),
+            ("/opt/tools/codex exec 'fix it'", Some("codex")),
+            ("", None),
+            ("   ", None),
+        ];
+        for (cmdline, expected) in cases {
+            let body = format!(
+                r#"[{{"tabs":[{{"windows":[{{"id":10,"title":"t","pid":100,"last_reported_cmdline":{}}}]}}]}}]"#,
+                serde_json::to_string(cmdline).unwrap()
+            );
+            let sessions = parse_ls(&body, backend_id())
+                .unwrap()
+                .sessions(backend_id());
+            assert_eq!(
+                sessions[0].reported_cmd.as_deref(),
+                expected,
+                "cmdline: {cmdline:?}"
+            );
+        }
     }
 
     #[test]
