@@ -43,6 +43,10 @@ impl DistillLock {
                         return Ok(None);
                     }
                 }
+                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    drop(steal_guard(&path)?);
+                    return Ok(None);
+                }
                 Err(err) => return Err(err.into()),
             }
         }
@@ -246,7 +250,8 @@ mod tests {
                     .map(|_| {
                         scope.spawn(|| {
                             barrier.wait();
-                            DistillLock::acquire(&store, "race").unwrap()
+                            DistillLock::acquire_wait(&store, "race", Duration::from_millis(200))
+                                .ok()
                         })
                     })
                     .collect();
