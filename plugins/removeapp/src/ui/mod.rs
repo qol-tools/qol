@@ -238,10 +238,10 @@ impl RemoveAppView {
     }
 
     fn try_quit(&mut self) {
-        let Some(plan) = &self.plan else {
+        let Some(plan) = self.plan.as_mut() else {
             return;
         };
-        match core::quit_and_wait(&plan.app) {
+        match core::quit_and_wait(plan) {
             Ok(()) => {
                 if let Some(g) = self.guards.as_mut() {
                     g.running = core::is_running(&plan.app);
