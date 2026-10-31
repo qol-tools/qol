@@ -71,7 +71,7 @@ fn open_switchboard() {
         match qol_sessions_engine::switchboard::open(&profile) {
             Ok(opened) => log::info!("{}", opened.summary()),
             Err(error) => {
-                log::warn!("switchboard: {error:#}");
+                log::error!("switchboard: {error:#}");
                 qol_plugin_daemon::notification::send_notification(
                     "Switchboard",
                     &format!("{error:#}"),

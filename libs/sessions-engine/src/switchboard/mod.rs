@@ -4,7 +4,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use qol_terminal_sessions::cli::{launch_flags, CliSessionInterpreter, CliToolId};
+use qol_terminal_sessions::cli::{
+    launch_flags, CliLaunchProgram, CliSessionInterpreter, CliToolId,
+};
 use qol_terminal_sessions::{SessionFacts, SessionFocus, SpawnKey, TerminalSessionService};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -22,8 +24,9 @@ use super::contract::SWITCHBOARD_TOOLS;
 use super::fork::flag_value;
 use super::spawn::{
     config_dispatch_policy, config_spawn_cap, config_surface, launch_detached, resolve_spawn_cap,
-    SpawnCapConfig, SpawnLedger, SpawnLocks,
+    SpawnCapConfig, SpawnLedger, SpawnLocks, LANE_EXEC_PREFIX,
 };
+use qol_agent_launch::account::LaneExecCommand;
 
 pub const SWITCHBOARD_KEY: &str = "switchboard";
 pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
@@ -121,6 +124,7 @@ pub(super) struct LaunchPlan {
     pub(super) mcp_program: PathBuf,
     pub(super) projects: Vec<String>,
     pub(super) path: Option<String>,
+    config_dir: Option<PathBuf>,
     config_home: PathBuf,
     fork: agents::ForkAgent,
     resume: Option<String>,
@@ -134,6 +138,7 @@ impl LaunchPlan {
             model: model.to_owned(),
             effort: effort.to_owned(),
             config_home: cwd.join("claude-home"),
+            config_dir: None,
             cwd,
             mcp_program,
             projects: Vec::new(),
@@ -146,7 +151,8 @@ impl LaunchPlan {
 
     fn system(profile: &Profile, ledger: &SpawnLedger, path: Option<String>) -> Result<Self> {
         let cwd = neutral_cwd()?;
-        let config_home = paths::claude_home();
+        let config_dir = paths::config_dir(&cwd, paths::caller_config_dir());
+        let config_home = config_dir.clone().unwrap_or_else(paths::claude_home);
         let resume = resume::latest_conversation(&config_home, &cwd, &role_revision());
         let wake = match resume.as_deref() {
             Some(conversation) => {
@@ -158,6 +164,7 @@ impl LaunchPlan {
         };
         Ok(Self {
             fork: agents::ForkAgent::system(),
+            config_dir,
             config_home,
             resume,
             wake,
@@ -354,6 +361,20 @@ pub(super) fn profile_args(plan: &LaunchPlan) -> Vec<String> {
     args
 }
 
+fn here_launch(
+    plan: &LaunchPlan,
+    model: &str,
+    lane_exec: &LaneExecCommand,
+) -> Result<CliLaunchProgram> {
+    let tool = CliToolId::new(SWITCHBOARD_TOOL.to_owned())
+        .map_err(|error| anyhow!("invalid tool `{SWITCHBOARD_TOOL}`: {error}"))?;
+    let mut launch = CliLaunchProgram::new(SWITCHBOARD_TOOL);
+    launch.args = here_argv(plan, model)?;
+    launch.env = claude_env(plan);
+    qol_agent_launch::account::apply(&mut launch, &tool, plan.config_dir.as_deref(), lane_exec)?;
+    Ok(launch)
+}
+
 fn here_argv(plan: &LaunchPlan, model: &str) -> Result<Vec<String>> {
     let tool = CliToolId::new(SWITCHBOARD_TOOL.to_owned())
         .map_err(|error| anyhow!("invalid tool `{SWITCHBOARD_TOOL}`: {error}"))?;
@@ -544,6 +565,7 @@ pub(super) fn launch(
         assignment.as_ref(),
         false,
         &claude_env(plan),
+        plan.config_dir.as_deref(),
         true,
     )?;
     Ok(SwitchboardOutcome {
@@ -672,7 +694,7 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
                 })?;
             let plan = LaunchPlan::system(profile, &SpawnLedger::system()?, path)?;
             let (model, _) = admitted_model(&system_dispatch()?, &plan)?;
-            let argv = here_argv(&plan, &model)?;
+            let launch = here_launch(&plan, &model, &LaneExecCommand::current(LANE_EXEC_PREFIX)?)?;
             prepare(&plan)?;
             // The window outlives the switchboard (a wrapper's shell), so its tag is removed
             // on exit; a kept tag makes the next chat in the window pass for the switchboard.
@@ -682,11 +704,11 @@ pub fn here(profile: &Profile) -> Result<Option<u8>> {
             tag_window(&tag_args(&window))?;
             drop(guard);
             let detached = Detached::register();
-            let mut switchboard = Command::new(SWITCHBOARD_TOOL);
+            let mut switchboard = Command::new(&launch.program);
             qol_agent_homes::scrub_claude_session_env(&mut switchboard);
             let ran = switchboard
-                .args(&argv)
-                .envs(claude_env(&plan))
+                .args(&launch.args)
+                .envs(launch.env.iter().map(|(name, value)| (name, value)))
                 .current_dir(&plan.cwd)
                 .status()
                 .with_context(|| format!("failed to run {SWITCHBOARD_TOOL}"));
@@ -730,7 +752,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. The {} plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder; a fork it did not start there says so in its report. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its model and effort, since the status line shows only the switchboard's. Esc in a fork's view stops that fork, so leave it by selecting the main thread.\n\nA closed session you ask it to bring back continues as a fork that reads the closed conversation's transcript, so no tab opens; session_reopen resumes it in a tab of its own only when its sessions_closed row has no transcript, as for another tool's conversation, or when you ask for a terminal or for Remote Control on it. A new or empty session is a fork too, and session_fork opens a terminal only when you ask for one or for another tool. Terminal sessions that still run are listed, closed and messaged with the sessions tools, and your words go to them as yours with session_send as_user true unless you ask it to report back.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation started under the current switchboard instructions and wakes the forks that were running or waiting when the last switchboard ended, including those Claude Code marked stopped when it exited: it sends each one a message to continue and to start its pull request watcher again. A fork you stopped yourself stays stopped. After an update that changed the instructions it starts a new conversation, because a resumed one keeps the instructions it started with, and starts those forks of the last conversation again as new forks, each reading the transcript of the one it replaces. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "), plugin::NAME)
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message. Opened from a terminal, it runs in that terminal's Claude account (CLAUDE_CONFIG_DIR) and remembers it, so opening it from the tray or the launcher, which have no account of their own, uses the same account and its login.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. The {} plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder; a fork it did not start there says so in its report. It tells you in one line when a fork merged, failed or has a question. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its model and effort, since the status line shows only the switchboard's. Esc in a fork's view stops that fork, so leave it by selecting the main thread.\n\nA closed session you ask it to bring back continues as a fork that reads the closed conversation's transcript, so no tab opens; session_reopen resumes it in a tab of its own only when its sessions_closed row has no transcript, as for another tool's conversation, or when you ask for a terminal or for Remote Control on it. A new or empty session is a fork too, and session_fork opens a terminal only when you ask for one or for another tool. Terminal sessions that still run are listed, closed and messaged with the sessions tools, and your words go to them as yours with session_send as_user true unless you ask it to report back.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation started under the current switchboard instructions and wakes the forks that were running or waiting when the last switchboard ended, including those Claude Code marked stopped when it exited: it sends each one a message to continue and to start its pull request watcher again. A fork you stopped yourself stays stopped. After an update that changed the instructions it starts a new conversation, because a resumed one keeps the instructions it started with, and starts those forks of the last conversation again as new forks, each reading the transcript of the one it replaces. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "), plugin::NAME)
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {
@@ -779,6 +801,7 @@ mod tests {
                 .map(|project| (*project).to_owned())
                 .collect(),
             path: None,
+            config_dir: None,
             config_home: PathBuf::from("/home/u/.claude"),
             fork: agents::ForkAgent::default(),
             resume: None,
@@ -956,6 +979,35 @@ mod tests {
     }
 
     #[test]
+    fn the_here_launch_runs_claude_in_the_recorded_account() {
+        let account = tempfile::tempdir().unwrap();
+        let recorded = LaunchPlan {
+            config_dir: Some(account.path().to_path_buf()),
+            ..plan(&[])
+        };
+        let lane_exec = LaneExecCommand {
+            program: PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
+            prefix: LANE_EXEC_PREFIX,
+        };
+        let launch = here_launch(&recorded, DEFAULT_MODEL, &lane_exec).unwrap();
+        assert!(
+            launch.env.contains(&(
+                "CLAUDE_CONFIG_DIR".to_owned(),
+                account.path().to_string_lossy().into_owned()
+            )),
+            "{:?}",
+            launch.env
+        );
+        assert!(
+            launch
+                .args
+                .ends_with(&here_argv(&recorded, DEFAULT_MODEL).unwrap()),
+            "{:?}",
+            launch.args
+        );
+    }
+
+    #[test]
     fn the_role_lists_recent_projects_only_when_there_are_some() {
         let revision = role_revision();
         assert_eq!(role(&[]), format!("{SWITCHBOARD_ROLE}\n\n{revision}"));
@@ -1051,6 +1103,10 @@ mod tests {
         );
         assert!(
             text.contains("The qol-switchboard plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder"),
+            "{text}"
+        );
+        assert!(
+            text.contains("opening it from the tray or the launcher, which have no account of their own, uses the same account"),
             "{text}"
         );
         assert!(!text.contains("It starts blank"), "{text}");
