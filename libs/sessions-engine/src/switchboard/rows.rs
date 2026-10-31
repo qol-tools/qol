@@ -10,6 +10,8 @@ const COLOR_OFF: &str = "\x1b[39m";
 const ELLIPSIS: char = '…';
 const GAP: &str = "  ";
 const CLAUDE_PREFIX: &str = "claude-";
+const IDLE_STATUS: &str = "completed";
+const IDLE_LABEL: &str = "idle";
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -26,6 +28,7 @@ struct Task {
     agent_type: Option<String>,
     description: String,
     label: Option<String>,
+    status: Option<String>,
     start_time: Option<u64>,
     model: Option<String>,
     effort: Option<Value>,
@@ -107,11 +110,15 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
+fn filled(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|text| !text.is_empty())
+}
+
 fn row(task: &Task, columns: usize, now_ms: u64) -> String {
     let name = plain(
-        task.name
-            .as_deref()
-            .or(task.agent_type.as_deref())
+        filled(task.name.as_deref())
+            .or(filled(Some(&task.description)))
+            .or(filled(task.agent_type.as_deref()))
             .unwrap_or("agent"),
     );
     let mut head = name.clone();
@@ -127,12 +134,15 @@ fn row(task: &Task, columns: usize, now_ms: u64) -> String {
             head.push_str(&effort);
         }
     }
-    let summary = plain(
-        task.label
-            .as_deref()
-            .filter(|label| !label.trim().is_empty())
-            .unwrap_or(&task.description),
-    );
+    let summary = [
+        filled(task.label.as_deref()),
+        filled(Some(&task.description)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(plain)
+    .find(|summary| summary.trim() != name.trim())
+    .unwrap_or_default();
     let summary = summary.trim();
     let mut tail = tokens_label(task.token_count);
     if let Some(start) = task.start_time {
@@ -141,10 +151,13 @@ fn row(task: &Task, columns: usize, now_ms: u64) -> String {
             elapsed_label(now_ms.saturating_sub(start) / 1000)
         );
     }
+    if task.status.as_deref() == Some(IDLE_STATUS) {
+        tail = format!("{IDLE_LABEL} · {tail}");
+    }
     let tail_width = tail.chars().count();
     let room = columns.saturating_sub(head_width + GAP.len() * 2 + tail_width);
     if columns == 0 || room == 0 {
-        return format!("{head}{GAP}{summary}");
+        return format!("{head}{GAP}{summary}").trim_end().to_owned();
     }
     let summary = truncate(summary, room);
     let pad = room - summary.chars().count() + GAP.len();
@@ -232,7 +245,7 @@ mod tests {
         let row = &rows[0];
         assert!(
             row.starts_with(
-                "project-fork  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
+                "RTX 3080 limits research  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
             ),
             "{row:?}"
         );
@@ -272,7 +285,34 @@ mod tests {
                 {"id": "", "description": "dropped"},
             ],
         }));
-        assert_eq!(rows, ["project-fork  Start [31ming"]);
+        assert_eq!(rows, ["Start [31ming"]);
+    }
+
+    #[test]
+    fn an_unnamed_fork_is_named_by_its_description_and_an_idle_one_says_so() {
+        let rows = content(json!({
+            "columns": 50,
+            "tasks": [
+                {"id": "a1", "agentType": "project-fork", "description": "kcd2-design", "label": "kcd2-design", "status": "completed"},
+                {"id": "a2", "agentType": "project-fork", "description": "forks-persist", "label": "Probing fork resume", "status": "running"},
+                {"id": "a3", "agentType": "project-fork", "description": " "},
+            ],
+        }));
+        let squeezed: Vec<String> = rows
+            .iter()
+            .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        assert_eq!(
+            squeezed,
+            [
+                "kcd2-design idle · 0 tokens",
+                "forks-persist Probing fork resume 0 tokens",
+                "project-fork 0 tokens",
+            ]
+        );
+        for row in &rows {
+            assert_eq!(row.chars().count(), 50, "{row:?}");
+        }
     }
 
     #[test]
