@@ -13,7 +13,7 @@
     { "id": "s09", "query": "how do we debug whether a change reached the running process", "target": "qol-tray/qol-tray-dev-recompile", "answer_substr": "recompile" },
     { "id": "s10", "query": "how do we decide when to push a repo", "target": "qol-workflow/git-push", "answer_substr": "rebase" },
     { "id": "s11", "query": "what is the delivery rule about builds and tests", "target": "qol-workflow/qol-monorepo-rules", "answer_substr": "build" },
-    { "id": "s12", "query": "when should i use a workflow node", "target": "qol-workflow-nodes/qol-workflow-nodes", "answer_substr": "workflow" },
+    { "id": "s12", "query": "how do we break a feature with adversarial test storms", "target": "qol-adversarial-test/qol-adversarial-test", "answer_substr": "invariant" },
     { "id": "s13", "query": "how is the qol architecture built", "target": "qol-project/qol-arch-code", "answer_substr": "trait" }
   ]
 }

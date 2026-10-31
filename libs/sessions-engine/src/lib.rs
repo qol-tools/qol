@@ -227,7 +227,7 @@ Primary usage:
   qol sessions parked
   qol sessions unpark <id>
   qol sessions submit <session> --task TASK [--acknowledge-marker TEXT] [--agent-profile NAME] [--task-role ROLE] [--requires LIST]
-  qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]
+  qol sessions bridge <session> [<task...>] [--timeout-ms N] [--acknowledge-marker TEXT]
   qol sessions next [<session>] [--json]
   qol sessions resume <session> [--timeout-ms N] [--kickstart]
   qol sessions discard <session>
@@ -282,7 +282,10 @@ Details:
   --title names the new tab (the lane key by default), and
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
-  completion_marker, and next_command. Resume is automatic when the spawn
+  completion_marker, receipt_path (the absolute path of the round's
+  receipt.json, written when the watcher confirms completion, and not written
+  when a bridge call collects the round first; grouped lanes omit it because
+  the set delivers one combined report), and next_command. Resume is automatic when the spawn
   ledger holds a session id for the key (same tool and cwd), so a respawned
   lane continues the prior session; --no-resume opts out; the spawn JSON
   reports resume and resume_detail.
@@ -319,12 +322,7 @@ Details:
   resumes any unfinished bridge for that session and returns its latest
   response with submitted=false. Pass its reviewed completion_marker through
   --acknowledge-marker to submit the following round. Its timeout is clamped
-  to 1s..24h (default 24h). With --gate the local quality gate (cargo fmt
-  --check, clippy with -D warnings, and the qol and qol-terminal-sessions
-  test suites) runs in the current working directory once the round
-  completes, and its per-step results and GREEN/RED verdict are appended to
-  screen; a missing Cargo.toml skips the gate with a note, and --no-gate
-  (the default) leaves it off.
+  to 1s..24h (default 24h).
   Use -- before task text that contains --timeout-ms.
   next reads the durable per-session bridge state and prints the exact next
   command for each open round: resume while waiting, resume when the target
@@ -643,7 +641,7 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
         spawn::config_dispatch_policy()?,
         AssignmentRequest::default(),
     );
-    let mut outcome = match parsed.task.as_deref() {
+    let outcome = match parsed.task.as_deref() {
         Some(task) => bridge::execute(
             &terminals,
             &CliSessionInterpreter::system(),
@@ -678,9 +676,6 @@ fn run_bridge(args: &[OsString]) -> Result<()> {
             )?
         }
     };
-    if parsed.gate && outcome.completed {
-        outcome.screen = bridge::run_quality_gate(&outcome.screen, &std::env::current_dir()?);
-    }
     crate::cli::line(
         serde_json::to_string(&outcome).context("failed to serialize bridge outcome")?,
     );
@@ -692,12 +687,11 @@ struct BridgeArgs {
     task: Option<String>,
     timeout_ms: Option<u64>,
     acknowledge_marker: Option<String>,
-    gate: bool,
 }
 
 fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
     let usage =
-        "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT] [--gate]";
+        "qol sessions bridge <session> <task...> [--timeout-ms N] [--acknowledge-marker TEXT]";
     let binding = args
         .first()
         .and_then(|argument| argument.to_str())
@@ -706,7 +700,6 @@ fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
     let mut task_parts = Vec::new();
     let mut timeout_ms = None;
     let mut acknowledge_marker = None;
-    let mut gate = false;
     let mut literal = false;
     let mut index = 1;
     while index < args.len() {
@@ -743,13 +736,10 @@ fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
                 acknowledge_marker = Some(value.to_owned());
                 index += 2;
             }
-            "--gate" => {
-                gate = true;
-                index += 1;
-            }
-            "--no-gate" => {
-                gate = false;
-                index += 1;
+            "--gate" | "--no-gate" => {
+                bail!(
+                    "{argument} was removed; run qac gate in the worktree instead\nusage: {usage}"
+                )
             }
             other => {
                 task_parts.push(other.to_owned());
@@ -763,7 +753,6 @@ fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
         task: (!task.is_empty()).then_some(task),
         timeout_ms,
         acknowledge_marker,
-        gate,
     })
 }
 
@@ -1730,26 +1719,6 @@ mod tests {
             parsed.acknowledge_marker.as_deref(),
             Some("QOL_BRIDGE_DONE_previous")
         );
-        assert!(!parsed.gate);
-
-        let parsed = parse_bridge_args(&[
-            "v1:kitty:7:123".into(),
-            "--gate".into(),
-            "implement".into(),
-            "the fix".into(),
-        ])
-        .unwrap();
-        assert_eq!(parsed.task.as_deref(), Some("implement the fix"));
-        assert!(parsed.gate);
-
-        let parsed = parse_bridge_args(&[
-            "v1:kitty:7:123".into(),
-            "--gate".into(),
-            "--no-gate".into(),
-            "implement".into(),
-        ])
-        .unwrap();
-        assert!(!parsed.gate, "--no-gate must win over --gate");
 
         let parsed = parse_bridge_args(&[
             "v1:kitty:7:123".into(),
@@ -1762,17 +1731,35 @@ mod tests {
         assert_eq!(parsed.timeout_ms, None);
         assert_eq!(parsed.acknowledge_marker, None);
 
-        let parsed =
-            parse_bridge_args(&["v1:kitty:7:123".into(), "--".into(), "--gate".into()]).unwrap();
-        assert_eq!(parsed.task.as_deref(), Some("--gate"));
-        assert!(!parsed.gate, "--gate after -- is task text");
-
         let parsed = parse_bridge_args(&["v1:kitty:7:123".into()]).unwrap();
         assert_eq!(parsed.binding, "v1:kitty:7:123");
         assert_eq!(parsed.task, None);
         assert_eq!(parsed.timeout_ms, None);
         assert_eq!(parsed.acknowledge_marker, None);
-        assert!(!parsed.gate);
+    }
+
+    #[test]
+    fn bridge_args_refuse_the_removed_gate_flags_instead_of_sending_them_as_a_task() {
+        for flag in ["--gate", "--no-gate"] {
+            let error = parse_bridge_args(&["v1:kitty:7:123".into(), flag.into()])
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains(&format!("{flag} was removed; run qac gate")),
+                "{error}"
+            );
+            let error = parse_bridge_args(&[
+                "v1:kitty:7:123".into(),
+                flag.into(),
+                "implement".into(),
+                "the fix".into(),
+            ])
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(error.contains("was removed"), "{error}");
+        }
     }
 
     #[test]

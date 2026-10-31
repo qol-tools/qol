@@ -5234,6 +5234,19 @@ mod tests {
             1,
             "the reuse path pastes the task into the live session"
         );
+        let reused_marker = reused_outcome["completion_marker"].as_str().unwrap();
+        assert_ne!(reused_marker, marker);
+        assert_eq!(
+            reused_outcome["receipt_path"],
+            super::super::watch::round_receipt_path(
+                root.path(),
+                outcome["session"].as_str().unwrap(),
+                reused_marker
+            )
+            .display()
+            .to_string(),
+            "a reused session reports the receipt_path of its new round"
+        );
     }
 
     #[test]
@@ -5600,7 +5613,7 @@ mod tests {
         key: &str,
         cwd: &str,
         group: Option<&str>,
-    ) -> (String, String) {
+    ) -> (String, String, Option<String>) {
         let mut arguments = spawn_arguments("codex", key, None, cwd);
         arguments["model"] = json!("flash-x");
         arguments["task"] = json!("research the bounded question and write the report");
@@ -5619,7 +5632,27 @@ mod tests {
             .lane_marker(key)
             .expect("the launch prompt carries the round marker");
         assert_eq!(outcome["completion_marker"], marker);
-        (outcome["session"].as_str().unwrap().to_owned(), marker)
+        let reported = if group.is_some() {
+            assert!(
+                outcome.get("receipt_path").is_none(),
+                "a grouped lane delivers one combined report and reports no receipt_path: {outcome}"
+            );
+            None
+        } else {
+            let reported = outcome["receipt_path"]
+                .as_str()
+                .expect("an ungrouped background lane reports its receipt_path")
+                .to_owned();
+            let receipt = std::path::Path::new(&reported);
+            assert!(receipt.is_absolute(), "{receipt:?}");
+            assert_eq!(receipt.file_name().unwrap(), "receipt.json");
+            Some(reported)
+        };
+        (
+            outcome["session"].as_str().unwrap().to_owned(),
+            marker,
+            reported,
+        )
     }
 
     fn run_watcher(
@@ -5656,12 +5689,25 @@ mod tests {
         backend.enable_spawner();
         let server = server_with_backend(backend.clone(), root.path().to_path_buf());
 
-        let (session, marker) = spawn_lane(&server, &backend, "lane-one", &cwd, None);
+        let (session, marker, reported) = spawn_lane(&server, &backend, "lane-one", &cwd, None);
+        let reported = std::path::PathBuf::from(reported.expect("an ungrouped lane reports it"));
+        assert!(
+            !reported.exists(),
+            "the receipt does not exist before the watcher confirms the round"
+        );
         backend.show_lane_screen("lane-one", format!("the report is written\n{marker}"));
         let events = run_watcher(&server, std::slice::from_ref(&session), root.path());
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["session"], session);
+        assert!(
+            reported.is_file(),
+            "the watcher writes the receipt at the path the spawn reported: {reported:?}"
+        );
+        assert_eq!(
+            reported,
+            super::super::watch::round_receipt_path(root.path(), &session, &marker)
+        );
 
         let waited = tool_call(&server, "session_bridge", json!({ "session": session }));
         assert_eq!(
@@ -5716,6 +5762,10 @@ mod tests {
                     .lane_marker(key)
                     .expect("every lane launch carries its own round marker");
                 assert_eq!(outcome["lanes"][index]["completion_marker"], marker);
+                assert!(
+                    outcome["lanes"][index].get("receipt_path").is_none(),
+                    "a grouped lane delivers one combined report and reports no receipt_path: {outcome}"
+                );
                 (
                     outcome["lanes"][index]["session"]
                         .as_str()
@@ -5854,7 +5904,9 @@ mod tests {
 
         let mut lanes = Vec::new();
         for key in keys {
-            lanes.push(spawn_lane(&server, &backend, key, &cwd, Some(group)));
+            let (session, marker, reported) = spawn_lane(&server, &backend, key, &cwd, Some(group));
+            assert_eq!(reported, None);
+            lanes.push((session, marker));
         }
 
         for (index, (key, (session, marker))) in keys.iter().zip(&lanes).enumerate() {
