@@ -136,8 +136,8 @@ impl ProcessManager {
                 command,
                 timeout_ms,
             } => {
-                let process_id = self.spawn(command)?.0;
                 let timeout = command_timeout(timeout_ms)?;
+                let process_id = self.spawn(command)?.0;
                 let outcome = self.wait(process_id, timeout, true)?;
                 Ok(ResponseResult::Process { outcome })
             }
@@ -368,6 +368,21 @@ mod tests {
         assert_eq!(outcome.exit_code, Some(7));
         assert_eq!(outcome.stdout, "hello");
         assert_eq!(outcome.stderr, "err");
+    }
+
+    #[test]
+    fn exec_with_an_oversized_timeout_starts_nothing() {
+        let mut manager = ProcessManager::new(|_| {});
+        let timeout_ms = u64::try_from(MAX_COMMAND_TIMEOUT.as_millis()).unwrap() + 1;
+        let error = manager
+            .handle(RequestAction::Exec {
+                command: shell("sleep 30", "Start-Sleep 30"),
+                timeout_ms,
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("timeout exceeds"), "{error}");
+        assert!(manager.processes.is_empty());
+        assert_eq!(manager.next_id, 0);
     }
 
     #[test]
