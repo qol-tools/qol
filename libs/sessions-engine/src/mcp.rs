@@ -5616,6 +5616,9 @@ mod tests {
             .lane_marker(key)
             .expect("the launch prompt carries the round marker");
         assert_eq!(outcome["completion_marker"], marker);
+        let receipt = std::path::Path::new(outcome["receipt_path"].as_str().unwrap());
+        assert!(receipt.is_absolute(), "{receipt:?}");
+        assert_eq!(receipt.file_name().unwrap(), "receipt.json");
         (outcome["session"].as_str().unwrap().to_owned(), marker)
     }
 
@@ -5659,6 +5662,10 @@ mod tests {
         assert_eq!(events.len(), 1, "events: {events:?}");
         assert_eq!(events[0]["event"], "completed");
         assert_eq!(events[0]["session"], session);
+        assert!(
+            super::super::watch::round_receipt_path(root.path(), &session, &marker).is_file(),
+            "the watcher writes the receipt at the path the spawn reported"
+        );
 
         let waited = tool_call(&server, "session_bridge", json!({ "session": session }));
         assert_eq!(
@@ -5713,6 +5720,13 @@ mod tests {
                     .lane_marker(key)
                     .expect("every lane launch carries its own round marker");
                 assert_eq!(outcome["lanes"][index]["completion_marker"], marker);
+                let receipt = std::path::Path::new(
+                    outcome["lanes"][index]["receipt_path"]
+                        .as_str()
+                        .expect("every background lane reports its receipt_path"),
+                );
+                assert!(receipt.is_absolute(), "{receipt:?}");
+                assert_eq!(receipt.file_name().unwrap(), "receipt.json");
                 (
                     outcome["lanes"][index]["session"]
                         .as_str()

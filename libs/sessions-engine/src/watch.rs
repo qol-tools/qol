@@ -1702,6 +1702,15 @@ pub(super) fn maybe_deliver_group_combined(
     Ok(Some((combined, delivery)))
 }
 
+pub(super) fn round_receipt_path(
+    trace_dir: &std::path::Path,
+    session: &str,
+    marker: &str,
+) -> std::path::PathBuf {
+    let path = evidence::receipt_path(trace_dir, session, marker);
+    std::path::absolute(&path).unwrap_or(path)
+}
+
 #[cfg(test)]
 pub(super) fn combined_report_path(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
     settling_round_dir(trace_dir, group).join("combined.md")

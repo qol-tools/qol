@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "setup": [],
+  "protected": [".qac/**", ".github/**", "rust-toolchain.toml", "Cargo.lock"],
+  "tests": ["**/tests/**", "**/tests.rs", "**/*_test.rs"],
+  "accept_prefixes": [["node", "--test"]],
+  "defaults": { "test_runs_on_red": 3, "timeout_s": 600 },
+  "judges": [
+    { "id": "qac", "builtin": "qac-lint", "scope": "changed" },
+    { "id": "fmt", "argv": ["cargo", "fmt", "--all", "--check"], "parser": "exit-code", "scope": "repo", "timeout_s": 120 },
+    {
+      "id": "clippy",
+      "argv": ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--message-format=json", "--", "-D", "warnings"],
+      "parser": "cargo-json",
+      "scope": "repo",
+      "where": "ci",
+      "rules_home": "clippy.toml"
+    },
+    { "id": "test", "argv": ["cargo", "test", "--workspace", "--locked"], "parser": "exit-code", "kind": "test", "scope": "repo", "where": "ci" }
+  ],
+  "retention": { "loops": 50 }
+}
