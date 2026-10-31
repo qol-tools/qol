@@ -197,6 +197,8 @@ pub(crate) struct ClosedRow {
     pub(crate) last_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcript: Option<String>,
     pub(crate) closed_at: String,
     pub(crate) closed_ago: String,
     pub(crate) work_day: String,
@@ -214,6 +216,7 @@ pub(crate) fn closed_row(
     record: &ClosedRecord,
     last_prompt: Option<String>,
     excerpt: Option<String>,
+    transcript: Option<&std::path::Path>,
     now: u64,
 ) -> ClosedRow {
     ClosedRow {
@@ -224,6 +227,9 @@ pub(crate) fn closed_row(
         key: record.key.clone(),
         last_prompt,
         excerpt,
+        transcript: transcript
+            .and_then(std::path::Path::to_str)
+            .map(str::to_owned),
         closed_at: local_time(record.closed_at),
         closed_ago: ago(now.saturating_sub(record.closed_at)),
         work_day: work_day(record.closed_at, now),
@@ -315,7 +321,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back with session_reopen. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, last_prompt (the first line of the newest prompt typed in it, from the tool's history, so rows sharing a title can be told apart), excerpt when text is given, closed_at in local time, closed_ago (for a history row, when the conversation last wrote) and work_day (today, yesterday, or the weekday and date of the work day it closed on; a work day starts at 05:00 local time, so a conversation closed after midnight counts as the evening before). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
+            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back: the switchboard continues one as a fork that reads its transcript, and session_reopen resumes one in a new terminal tab. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (Claude Code transcripts), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, last_prompt (the first line of the newest prompt typed in it, from the tool's history, so rows sharing a title can be told apart), excerpt when text is given, transcript (the path of the conversation's transcript file when the tool's history holds it, so a fork can read where it stopped and carry it on), closed_at in local time, closed_ago (for a history row, when the conversation last wrote) and work_day (today, yesterday, or the weekday and date of the work day it closed on; a work day starts at 05:00 local time, so a conversation closed after midnight counts as the evening before). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -888,13 +894,23 @@ mod tests {
             lane: false,
             closed_at: 1_700_000_000,
         };
-        let row = closed_row(&record, None, None, 1_700_000_000 + 2 * 86_400 + 5);
+        let row = closed_row(&record, None, None, None, 1_700_000_000 + 2 * 86_400 + 5);
         assert_eq!(row.external_id, "abc");
         assert_eq!(row.closed_ago, "2 days ago");
         assert!(row.closed_at.starts_with("2023-11-1"), "{}", row.closed_at);
+        let value = serde_json::to_value(&row).unwrap();
+        assert_eq!(value["key"], serde_json::Value::Null);
+        assert!(value.get("transcript").is_none(), "{value}");
+        let row = closed_row(
+            &record,
+            None,
+            None,
+            Some(std::path::Path::new("/projects/-project/abc.jsonl")),
+            1_700_000_000,
+        );
         assert_eq!(
-            serde_json::to_value(&row).unwrap()["key"],
-            serde_json::Value::Null
+            row.transcript.as_deref(),
+            Some("/projects/-project/abc.jsonl")
         );
         for (elapsed, expected) in [
             (0, "just now"),
@@ -924,7 +940,7 @@ mod tests {
             lane: false,
             closed_at: u64::MAX,
         };
-        let row = closed_row(&record, None, None, 1_700_000_000);
+        let row = closed_row(&record, None, None, None, 1_700_000_000);
         assert_eq!(row.closed_at, u64::MAX.to_string());
         assert_eq!(row.closed_ago, "just now");
         assert_eq!(row.work_day, u64::MAX.to_string());

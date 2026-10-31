@@ -45,7 +45,7 @@ placeholder = "e.g. cargo watch"
 
 [section.switchboard]
 label = "Switchboard"
-description = "The one control chat that starts, lists, reopens and closes your sessions."
+description = "The one control chat that starts, continues, lists and closes your sessions."
 
 [field.switchboard_model]
 type = "string"

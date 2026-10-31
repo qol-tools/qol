@@ -214,6 +214,7 @@ fn read_conversation(
                 .and_then(Path::to_str)
                 .map(str::to_owned),
         },
+        transcript: Some(path.to_path_buf()),
     })
 }
 
@@ -462,6 +463,7 @@ mod tests {
                     effort: Some("high".to_owned()),
                     claude_config_dir: config.to_str().map(str::to_owned),
                 },
+                transcript: Some(path),
             }]
         );
     }

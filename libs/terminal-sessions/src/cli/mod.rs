@@ -64,6 +64,7 @@ pub struct CliConversation {
     pub last_active: u64,
     pub pr_urls: Vec<String>,
     pub settings: CliResumeSettings,
+    pub transcript: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
