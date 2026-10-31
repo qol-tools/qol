@@ -97,6 +97,7 @@ struct RandrCrtc {
     width: u32,
     height: u32,
     mode: u64,
+    rotation: randr::Rotation,
     outputs: Vec<u32>,
 }
 
@@ -153,6 +154,7 @@ trait RandrBus {
         x: i32,
         y: i32,
         mode: u64,
+        rotation: randr::Rotation,
         outputs: &[u32],
         config_timestamp: u32,
         context: &CrtcWriteContext,
@@ -262,6 +264,7 @@ impl RandrBus for X11Bus {
                 width: u32::from(info.width),
                 height: u32::from(info.height),
                 mode: u64::from(info.mode),
+                rotation: info.rotation,
                 outputs: info.outputs.clone(),
             });
         }
@@ -282,6 +285,7 @@ impl RandrBus for X11Bus {
         x: i32,
         y: i32,
         mode: u64,
+        rotation: randr::Rotation,
         outputs: &[u32],
         config_timestamp: u32,
         context: &CrtcWriteContext,
@@ -294,7 +298,7 @@ impl RandrBus for X11Bus {
             x as i16,
             y as i16,
             mode as u32,
-            randr::Rotation::ROTATE0,
+            rotation,
             outputs,
         )
         .map_err(randr_failed)?
@@ -426,6 +430,7 @@ struct CrtcWrite {
     x: i32,
     y: i32,
     mode: u64,
+    rotation: randr::Rotation,
     outputs: Vec<u32>,
     connector: String,
 }
@@ -494,6 +499,7 @@ fn write_mode_with_retry<B: RandrBus>(
             x: crtc.x,
             y: crtc.y,
             mode: crtc.mode,
+            rotation: crtc.rotation,
             outputs: crtc.outputs.clone(),
             connector: handle.connector().to_string(),
         };
@@ -508,6 +514,7 @@ fn write_mode_with_retry<B: RandrBus>(
             crtc.x,
             crtc.y,
             token,
+            crtc.rotation,
             &crtc.outputs,
             state.config_timestamp,
             &context,
@@ -546,6 +553,7 @@ fn write_placement_with_retry<B: RandrBus>(
             x: crtc.x,
             y: crtc.y,
             mode: crtc.mode,
+            rotation: crtc.rotation,
             outputs: crtc.outputs.clone(),
             connector: placement.handle.connector().to_string(),
         };
@@ -560,6 +568,7 @@ fn write_placement_with_retry<B: RandrBus>(
             placement.x,
             placement.y,
             crtc.mode,
+            crtc.rotation,
             &crtc.outputs,
             state.config_timestamp,
             &context,
@@ -596,6 +605,7 @@ fn write_captured<B: RandrBus>(bus: &mut B, target: &CrtcWrite) -> Result<(), Di
             target.x,
             target.y,
             target.mode,
+            target.rotation,
             &target.outputs,
             config_timestamp,
             &context,
@@ -746,7 +756,9 @@ fn set_layout_from<B: RandrBus>(
             return Err(rollback_layout(bus, &applied, error));
         }
     }
-    verify_placements(bus, placements)?;
+    if let Err(error) = verify_placements(bus, placements) {
+        return Err(rollback_layout(bus, &applied, error));
+    }
     Ok(())
 }
 
@@ -1039,6 +1051,7 @@ mod tests {
                     width: 1920,
                     height: 1080,
                     mode: 10,
+                    rotation: randr::Rotation::ROTATE0,
                     outputs: vec![100],
                 },
                 RandrCrtc {
@@ -1048,6 +1061,7 @@ mod tests {
                     width: 2560,
                     height: 1440,
                     mode: 21,
+                    rotation: randr::Rotation::ROTATE0,
                     outputs: vec![101],
                 },
             ],
@@ -1095,6 +1109,7 @@ mod tests {
         x: i32,
         y: i32,
         mode: u64,
+        rotation: randr::Rotation,
         config_timestamp: u32,
     }
 
@@ -1148,6 +1163,7 @@ mod tests {
             x: i32,
             y: i32,
             mode: u64,
+            rotation: randr::Rotation,
             _outputs: &[u32],
             config_timestamp: u32,
             context: &CrtcWriteContext,
@@ -1157,6 +1173,7 @@ mod tests {
                 x,
                 y,
                 mode,
+                rotation,
                 config_timestamp,
             });
             self.calls.push(FakeCall::Write(crtc));
@@ -1209,6 +1226,7 @@ mod tests {
                 entry.x = x;
                 entry.y = y;
                 entry.mode = mode;
+                entry.rotation = rotation;
             }
             if let Some((override_crtc, override_mode)) = self.readback_override {
                 if let Some(entry) = self
@@ -1686,6 +1704,7 @@ mod tests {
             x: 50,
             y: 25,
             mode: 10,
+            rotation: randr::Rotation::ROTATE0,
             outputs: vec![100],
             connector: "card0-DP-1".into(),
         };
@@ -1711,6 +1730,7 @@ mod tests {
             x: 50,
             y: 25,
             mode: 10,
+            rotation: randr::Rotation::ROTATE0,
             outputs: vec![100],
             connector: "card0-DP-1".into(),
         };
@@ -1752,7 +1772,68 @@ mod tests {
             set_layout_from(&mut bus, &placements),
             Err(DisplayError::LayoutInvalid { .. })
         ));
-        assert_eq!(bus.writes.len(), 1);
+        assert_eq!(bus.writes.len(), 2);
+        assert_eq!((bus.writes[1].x, bus.writes[1].y), (0, 0));
+    }
+
+    #[test]
+    fn set_layout_rolls_back_every_written_display_when_a_position_does_not_read_back() {
+        let mut bus = fake_bus(fake_state());
+        bus.readback_position_override = Some((200, 500, 500));
+        let placements = vec![
+            fake_placement("card0-DP-1", 2560, 0, true),
+            fake_placement("card0-DP-2", 0, 0, false),
+        ];
+        assert!(matches!(
+            set_layout_from(&mut bus, &placements),
+            Err(DisplayError::LayoutInvalid { .. })
+        ));
+        let restored: Vec<(u32, i32, i32)> = bus.writes[2..]
+            .iter()
+            .map(|write| (write.crtc, write.x, write.y))
+            .collect();
+        assert_eq!(restored, vec![(201, 1920, 0), (200, 0, 0)]);
+        let second = bus
+            .state
+            .crtcs
+            .iter()
+            .find(|crtc| crtc.crtc == 201)
+            .unwrap();
+        assert_eq!((second.x, second.y), (1920, 0));
+    }
+
+    #[test]
+    fn mode_layout_and_rollback_writes_keep_the_crtc_rotation() {
+        let rotated = randr::Rotation::ROTATE90 | randr::Rotation::REFLECT_X;
+        let mut state = fake_state();
+        for crtc in state.crtcs.iter_mut() {
+            crtc.rotation = rotated;
+        }
+
+        let mut bus = fake_bus(state.clone());
+        let requested = DisplayMode {
+            token: 11,
+            width: 1,
+            height: 1,
+            refresh_hz: 1,
+        };
+        set_mode_from(&mut bus, &fake_handle("card0-DP-1"), &requested).unwrap();
+
+        let mut layout = fake_bus(state.clone());
+        let placements = vec![
+            fake_placement("card0-DP-1", 2560, 0, true),
+            fake_placement("card0-DP-2", 0, 0, false),
+        ];
+        set_layout_from(&mut layout, &placements).unwrap();
+
+        let mut rollback = fake_bus(state);
+        rollback.fail_primary = true;
+        set_layout_from(&mut rollback, &placements).unwrap_err();
+
+        for writes in [&bus.writes, &layout.writes, &rollback.writes] {
+            assert!(!writes.is_empty());
+            assert!(writes.iter().all(|write| write.rotation == rotated));
+        }
     }
 
     #[test]
