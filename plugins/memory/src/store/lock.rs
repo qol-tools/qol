@@ -1,14 +1,18 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::store::Store;
 
 pub const STALE_AFTER: Duration = Duration::from_secs(600);
 
+static NEXT_NONCE: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug)]
 pub struct DistillLock {
     path: PathBuf,
+    payload: String,
 }
 
 impl DistillLock {
@@ -22,20 +26,26 @@ impl DistillLock {
                 .open(&path)
             {
                 Ok(mut file) => {
-                    let payload = serde_json::json!({
-                        "pid": std::process::id(),
-                        "started_at": crate::text::now_iso(),
-                        "mode": mode
-                    });
-                    file.write_all(format!("{}\n", payload).as_bytes())?;
-                    return Ok(Some(DistillLock { path }));
+                    let payload = format!(
+                        "{}\n",
+                        serde_json::json!({
+                            "pid": std::process::id(),
+                            "started_at": crate::text::now_iso(),
+                            "mode": mode,
+                            "nonce": lock_nonce()
+                        })
+                    );
+                    file.write_all(payload.as_bytes())?;
+                    return Ok(Some(DistillLock { path, payload }));
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if started_at_is_stale(&path) {
-                        let _ = std::fs::remove_file(&path);
-                    } else {
+                    if !remove_if_stale(&path)? {
                         return Ok(None);
                     }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                    drop(steal_guard(&path)?);
+                    return Ok(None);
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -59,8 +69,53 @@ impl DistillLock {
 
 impl Drop for DistillLock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        let _guard = steal_guard(&self.path).ok();
+        let still_ours =
+            std::fs::read_to_string(&self.path).is_ok_and(|current| current == self.payload);
+        if still_ours {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
+}
+
+fn remove_if_stale(path: &Path) -> anyhow::Result<bool> {
+    if !started_at_is_stale(path) {
+        return Ok(false);
+    }
+    let _guard = steal_guard(path)?;
+    let stale = started_at_is_stale(path);
+    if stale {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(stale)
+}
+
+fn steal_guard(path: &Path) -> std::io::Result<std::fs::File> {
+    let guard = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(steal_guard_path(path))?;
+    guard.lock()?;
+    Ok(guard)
+}
+
+fn steal_guard_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".steal");
+    path.with_file_name(name)
+}
+
+fn lock_nonce() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!(
+        "{}-{nanos}-{}",
+        std::process::id(),
+        NEXT_NONCE.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 fn started_at_is_stale(path: &Path) -> bool {
@@ -133,6 +188,80 @@ mod tests {
         );
         std::fs::write(store.distill_lock_path(), fresh).unwrap();
         assert!(DistillLock::acquire(&store, "test").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_holder_whose_lock_was_stolen_leaves_the_new_lock() {
+        let dir = TempDir::new("stolen");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let first = DistillLock::acquire(&store, "slow").unwrap().unwrap();
+        let stale_payload = "{\"started_at\":\"2020-01-01T00:00:00.000Z\"}\n";
+        std::fs::write(store.distill_lock_path(), stale_payload).unwrap();
+        let second = DistillLock::acquire(&store, "next").unwrap().unwrap();
+
+        drop(first);
+
+        assert!(store.distill_lock_path().exists());
+        assert!(DistillLock::acquire(&store, "third").unwrap().is_none());
+        drop(second);
+        assert!(!store.distill_lock_path().exists());
+    }
+
+    #[test]
+    fn a_release_waits_for_a_steal_in_progress() {
+        let dir = TempDir::new("release");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let holder = DistillLock::acquire(&store, "slow").unwrap().unwrap();
+        let stale_payload = "{\"started_at\":\"2020-01-01T00:00:00.000Z\"}\n";
+        std::fs::write(store.distill_lock_path(), stale_payload).unwrap();
+        let mut aged = holder;
+        aged.payload = stale_payload.to_string();
+        let guard = steal_guard(&store.distill_lock_path()).unwrap();
+
+        let released = std::thread::spawn(move || drop(aged));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            store.distill_lock_path().exists(),
+            "the release waits while a stealer holds the guard"
+        );
+        std::fs::remove_file(store.distill_lock_path()).unwrap();
+        let next = DistillLock::acquire(&store, "next").unwrap().unwrap();
+        drop(guard);
+        released.join().unwrap();
+
+        assert!(
+            store.distill_lock_path().exists(),
+            "the old holder's release leaves the new owner's lock"
+        );
+        drop(next);
+        assert!(!store.distill_lock_path().exists());
+    }
+
+    #[test]
+    fn racing_stealers_take_a_stale_lock_once() {
+        let dir = TempDir::new("race");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        for _ in 0..20 {
+            let stale_payload = "{\"started_at\":\"2020-01-01T00:00:00.000Z\"}\n";
+            std::fs::write(store.distill_lock_path(), stale_payload).unwrap();
+            let barrier = std::sync::Barrier::new(8);
+            let held: Vec<DistillLock> = std::thread::scope(|scope| {
+                let workers: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            DistillLock::acquire_wait(&store, "race", Duration::from_millis(200))
+                                .ok()
+                        })
+                    })
+                    .collect();
+                workers
+                    .into_iter()
+                    .filter_map(|worker| worker.join().unwrap())
+                    .collect()
+            });
+            assert_eq!(held.len(), 1, "exactly one stealer holds the lock");
+        }
     }
 
     #[test]
