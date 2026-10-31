@@ -1,6 +1,6 @@
 pub fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let r = u8::from_str_radix(hex.get(0..2)?, 16).ok()?;
@@ -78,6 +78,9 @@ mod tests {
             ("nope", None),
             ("aäxyz", None),
             ("#aäxyz", None),
+            ("#+1+2+3", None),
+            ("+f+f+f", None),
+            ("#-1-2-3", None),
         ];
         for (input, expected) in cases {
             assert_eq!(parse_hex_color(input), expected, "input: {input}");
