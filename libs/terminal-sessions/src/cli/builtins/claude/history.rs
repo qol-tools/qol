@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use qol_agent_homes::{Harness, Registry};
+use qol_agent_homes::{AgentHome, Harness};
 use serde_json::Value;
 
 use crate::cli::chat::text_blocks;
@@ -62,18 +62,17 @@ impl ClaudeHistory {
         }
     }
 
-    fn roots(&self) -> Vec<HistoryRoot> {
+    fn roots(&self, homes: &[AgentHome]) -> Vec<HistoryRoot> {
         if let Some(roots) = &self.roots {
             return roots.clone();
         }
-        Registry::load()
-            .homes()
-            .to_vec()
-            .into_iter()
-            .filter(|home| home.harness == Harness::Claude)
+        let mut paths = HashSet::new();
+        homes
+            .iter()
+            .filter(|home| home.harness == Harness::Claude && paths.insert(home.path.clone()))
             .map(|home| HistoryRoot {
                 config_dir: custom_config_dir(&home.path),
-                home: home.path,
+                home: home.path.clone(),
             })
             .collect()
     }
@@ -81,6 +80,7 @@ impl ClaudeHistory {
     pub(super) fn closed_conversations(
         &self,
         tool: &CliToolId,
+        homes: &[AgentHome],
         since: SystemTime,
     ) -> Vec<CliConversation> {
         let Ok(mut cache) = self.cache.lock() else {
@@ -88,7 +88,7 @@ impl ClaudeHistory {
         };
         let mut seen = HashSet::new();
         let mut found = Vec::new();
-        for root in self.roots() {
+        for root in self.roots(homes) {
             let open = open_session_ids(&root.home);
             let projects = Harness::Claude.transcripts_dir(&root.home);
             for path in projects.as_deref().map(transcripts).unwrap_or_default() {
@@ -127,13 +127,14 @@ impl ClaudeHistory {
 
     pub(super) fn search_conversations(
         &self,
+        homes: &[AgentHome],
         since: SystemTime,
         external_ids: &HashSet<String>,
         terms: &[String],
     ) -> Vec<CliConversationMatch> {
         let mut seen = HashSet::new();
         let mut paths = Vec::new();
-        for root in self.roots() {
+        for root in self.roots(homes) {
             let open = open_session_ids(&root.home);
             let projects = Harness::Claude.transcripts_dir(&root.home);
             for path in projects.as_deref().map(transcripts).unwrap_or_default() {
@@ -440,7 +441,8 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let found = history(home.path(), Some(&config)).closed_conversations(&tool(), UNIX_EPOCH);
+        let found =
+            history(home.path(), Some(&config)).closed_conversations(&tool(), &[], UNIX_EPOCH);
 
         assert_eq!(
             found,
@@ -505,7 +507,7 @@ mod tests {
         )
         .unwrap();
 
-        let found = history(home.path(), None).closed_conversations(&tool(), since);
+        let found = history(home.path(), None).closed_conversations(&tool(), &[], since);
 
         let mut listed = ids(&found);
         listed.sort_unstable();
@@ -537,12 +539,12 @@ mod tests {
         };
 
         write_record("not this process");
-        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history(home.path(), None).closed_conversations(&tool(), &[], UNIX_EPOCH);
         assert_eq!(ids(&found), ["reused"]);
 
         if let Some(started) = qol_process::process_start_time(std::process::id()) {
             write_record(&started.to_string());
-            let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+            let found = history(home.path(), None).closed_conversations(&tool(), &[], UNIX_EPOCH);
             assert!(found.is_empty(), "{found:?}");
         }
     }
@@ -568,7 +570,7 @@ mod tests {
         let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
         write_transcript(home.path(), "long", &lines);
 
-        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history(home.path(), None).closed_conversations(&tool(), &[], UNIX_EPOCH);
 
         assert_eq!(found[0].title.as_deref(), Some("Named early"));
         assert_eq!(found[0].settings.permission_mode.as_deref(), Some("plan"));
@@ -600,7 +602,7 @@ mod tests {
         let lines = lines.iter().map(String::as_str).collect::<Vec<_>>();
         write_transcript(home.path(), "long", &lines);
 
-        let found = history(home.path(), None).closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history(home.path(), None).closed_conversations(&tool(), &[], UNIX_EPOCH);
 
         assert_eq!(found[0].title.as_deref(), Some("Early name"));
         assert_eq!(
@@ -644,7 +646,7 @@ mod tests {
             },
         ]);
 
-        let found = history.closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history.closed_conversations(&tool(), &[], UNIX_EPOCH);
 
         assert_eq!(ids(&found), ["dup"]);
         assert_eq!(
@@ -673,6 +675,7 @@ mod tests {
             .collect::<HashSet<_>>();
 
         let found = history(home.path(), None).search_conversations(
+            &[],
             since,
             &candidates,
             &["refund".to_owned()],
@@ -699,16 +702,80 @@ mod tests {
             ],
         );
         let history = history(home.path(), None);
-        let found = history.closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history.closed_conversations(&tool(), &[], UNIX_EPOCH);
         assert_eq!(found[0].title.as_deref(), Some("Generated"));
 
         let mut grown = fs::read_to_string(&path).unwrap();
         grown.push_str("{\"type\":\"custom-title\",\"customTitle\":\"Named by me\"}\n");
         fs::write(&path, grown).unwrap();
-        let found = history.closed_conversations(&tool(), UNIX_EPOCH);
+        let found = history.closed_conversations(&tool(), &[], UNIX_EPOCH);
         assert_eq!(found[0].title.as_deref(), Some("Named by me"));
 
         fs::remove_file(&path).unwrap();
-        assert!(history.closed_conversations(&tool(), UNIX_EPOCH).is_empty());
+        assert!(history
+            .closed_conversations(&tool(), &[], UNIX_EPOCH)
+            .is_empty());
+    }
+
+    fn agent_home(harness: Harness, path: &Path) -> AgentHome {
+        AgentHome {
+            harness,
+            id: path.to_string_lossy().into_owned(),
+            path: path.to_path_buf(),
+            shared: false,
+            default: false,
+            declared: false,
+        }
+    }
+
+    #[test]
+    fn every_claude_home_passed_in_is_read_with_its_own_config_dir() {
+        let personal = tempfile::tempdir().unwrap();
+        let account = tempfile::tempdir().unwrap();
+        let codex = tempfile::tempdir().unwrap();
+        let first = prompt("sell the bike");
+        write_transcript(personal.path(), "personal", &[ENTRY, &first]);
+        write_transcript(account.path(), "account", &[ENTRY, &first]);
+        write_transcript(codex.path(), "codex", &[ENTRY, &first]);
+        let homes = [
+            agent_home(Harness::Claude, personal.path()),
+            agent_home(Harness::Claude, account.path()),
+            agent_home(Harness::Claude, account.path()),
+            agent_home(Harness::Codex, codex.path()),
+        ];
+        let history = ClaudeHistory::system();
+
+        let found = history.closed_conversations(&tool(), &homes, UNIX_EPOCH);
+
+        let mut listed = found
+            .iter()
+            .map(|conversation| {
+                (
+                    conversation.external_id.as_str(),
+                    conversation.settings.claude_config_dir.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        listed.sort_unstable();
+        assert_eq!(
+            listed,
+            [
+                ("account", account.path().to_str().map(str::to_owned)),
+                ("personal", personal.path().to_str().map(str::to_owned)),
+            ]
+        );
+        let candidates = ["account".to_owned()].into_iter().collect::<HashSet<_>>();
+        let matched =
+            history.search_conversations(&homes, UNIX_EPOCH, &candidates, &["bike".to_owned()]);
+        assert_eq!(
+            matched
+                .iter()
+                .map(|found| found.external_id.as_str())
+                .collect::<Vec<_>>(),
+            ["account"]
+        );
+        assert!(history
+            .closed_conversations(&tool(), &[], UNIX_EPOCH)
+            .is_empty());
     }
 }

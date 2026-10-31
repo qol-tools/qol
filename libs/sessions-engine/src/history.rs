@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
+use qol_agent_homes::AgentHome;
 use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
 use qol_terminal_sessions::closed::{self, ClosedRecord};
 
@@ -22,6 +23,7 @@ pub(super) struct History<'a> {
     pub(super) closed_dir: &'a Path,
     pub(super) forks: &'a ForkStore,
     pub(super) switchboard_dir: &'a Path,
+    pub(super) homes: Vec<AgentHome>,
 }
 
 impl History<'_> {
@@ -83,7 +85,7 @@ impl History<'_> {
         terms: &[String],
     ) -> HashMap<String, String> {
         self.interpreter
-            .search_conversations(self.since(now), external_ids, terms)
+            .search_conversations(&self.homes, self.since(now), external_ids, terms)
             .into_iter()
             .map(|found| (found.external_id, found.excerpt))
             .collect()
@@ -94,7 +96,8 @@ impl History<'_> {
     }
 
     fn conversations(&self, now: u64) -> Vec<CliConversation> {
-        self.interpreter.closed_conversations(self.since(now))
+        self.interpreter
+            .closed_conversations(&self.homes, self.since(now))
     }
 
     fn record(&self, conversation: &CliConversation) -> Option<ClosedRecord> {
