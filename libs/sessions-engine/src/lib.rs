@@ -386,7 +386,9 @@ Details:
   changed them it starts a new conversation and starts those forks again
   from their transcripts. It lists the sessions closed in the last 14 days
   with sessions_closed, from the CLI Sessions daemon's record of closes and
-  the tool's own conversation history (Claude Code transcripts), and brings
+  the tool's own conversation history (the Claude Code transcripts of every
+  Claude config dir, declared in agents.toml or found under the user home),
+  and brings
   one back as a fork that reads its transcript, or in a new tab with
   session_reopen when it has none or a terminal is asked for.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),

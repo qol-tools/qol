@@ -190,12 +190,17 @@ pub trait CliSessionStrategy: Send + Sync {
         CliResumeSettings::default()
     }
 
-    fn closed_conversations(&self, _since: std::time::SystemTime) -> Vec<CliConversation> {
+    fn closed_conversations(
+        &self,
+        _homes: &[qol_agent_homes::AgentHome],
+        _since: std::time::SystemTime,
+    ) -> Vec<CliConversation> {
         Vec::new()
     }
 
     fn search_conversations(
         &self,
+        _homes: &[qol_agent_homes::AgentHome],
         _since: std::time::SystemTime,
         _external_ids: &std::collections::HashSet<String>,
         _terms: &[String],
