@@ -95,8 +95,12 @@ pub fn residency_path(config_root: &Path) -> PathBuf {
 
 pub fn read_map(config_root: &Path) -> Result<BTreeMap<String, HostResidency>> {
     let path = residency_path(config_root);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Ok(BTreeMap::new());
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+        }
     };
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
@@ -235,6 +239,27 @@ mod tests {
                 .unwrap()
                 .is_resident(),
             "the persistent entry survives a read"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_residency_file_refuses_a_write_instead_of_erasing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = config_root_from(dir.path());
+        with_device(&root);
+        let path = residency_path(&root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let unreadable = [0xff, 0xfe, b'{'];
+        std::fs::write(&path, unreadable).unwrap();
+
+        assert!(read_map(&root).is_err());
+        assert!(
+            HostResidency::write_device(&root, "test-device", HostResidency::Resident).is_err()
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            unreadable,
+            "a failed read must leave the other devices' entries on disk"
         );
     }
 
