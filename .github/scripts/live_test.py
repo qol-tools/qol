@@ -55,9 +55,18 @@ def summary(found: list[str]) -> tuple[str, str]:
     return NEEDED_TITLE, "\n".join([lead, "", *shown])
 
 
+def paths_of(entries: list[dict]) -> list[str]:
+    paths = []
+    for entry in entries:
+        paths.append(entry["filename"])
+        if entry.get("previous_filename"):
+            paths.append(entry["previous_filename"])
+    return paths
+
+
 def changed_files(repo: str, pr: str) -> list[str]:
     pages = gh_json(["--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/files?per_page=100"])
-    return [entry["filename"] for page in pages for entry in page]
+    return paths_of([entry for page in pages for entry in page])
 
 
 def post(repo: str, sha: str, title: str, text: str, url: str) -> None:

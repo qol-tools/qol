@@ -51,6 +51,15 @@ class PatternTests(unittest.TestCase):
             ],
         )
 
+    def test_a_rename_counts_both_its_old_and_new_path(self):
+        entries = [
+            {"filename": "libs/sessions-engine/src/rows.rs", "previous_filename": "libs/gpui/src/rows.rs"},
+            {"filename": "README.md"},
+        ]
+        paths = live.paths_of(entries)
+        self.assertEqual(paths, ["libs/sessions-engine/src/rows.rs", "libs/gpui/src/rows.rs", "README.md"])
+        self.assertEqual(live.needing(paths, ["libs/gpui/**"]), ["libs/gpui/src/rows.rs"])
+
     def test_blank_lines_are_skipped(self):
         self.assertEqual(live.patterns("a/**\n\n  b.rs  \n"), ["a/**", "b.rs"])
 
