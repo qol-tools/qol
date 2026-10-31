@@ -7,19 +7,14 @@ use std::time::SystemTime;
 use anyhow::Result;
 use serde_json::Value;
 
+use super::background::{self, notice_of};
 use super::paths::conversations_dir;
 
 pub(super) const FORK_AGENT: &str = "project-fork";
 const META_SUFFIX: &str = ".meta.json";
-const AGENT_PREFIX: &str = "agent-";
+pub(super) const AGENT_PREFIX: &str = "agent-";
 const ASSISTANT_ROW: &str = "\"type\":\"assistant\"";
-const BACKGROUND_MARKER: &str = "Command running in background with ID: ";
-const NOTICE_ORIGIN: &str = "task-notification";
 const NOTICE_OPEN: &str = "<task-notification>";
-const NOTICE_ID_TAG: &str = "task-id";
-const NOTICE_STATUS_TAG: &str = "status";
-const NOTICE_TOOL_USE_TAG: &str = "tool-use-id";
-const NOTICE_OUTPUT_TAG: &str = "output-file";
 const USER_STOP_STATUS: &str = "killed";
 const STOPPED_BY_USER_FLAG: &str = "stoppedByUser";
 const WORKTREE_PIN: &str = "worktreePath";
@@ -145,31 +140,6 @@ pub(super) fn unpin_forks(config_home: &Path, switchboard: &Path) -> Vec<String>
     failures
 }
 
-fn pending_background(transcript: &str) -> bool {
-    let mut open: Vec<String> = Vec::new();
-    for line in transcript.lines() {
-        if let Some((_, rest)) = line.split_once(BACKGROUND_MARKER) {
-            let id: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric())
-                .collect();
-            if !id.is_empty() {
-                open.push(id);
-            }
-            continue;
-        }
-        if open.is_empty() || !open.iter().any(|id| line.contains(id.as_str())) {
-            continue;
-        }
-        let is_user =
-            serde_json::from_str::<serde_json::Value>(line).is_ok_and(|row| row["type"] == "user");
-        if is_user {
-            open.retain(|id| !line.contains(id.as_str()));
-        }
-    }
-    !open.is_empty()
-}
-
 fn agent_id_of(meta_path: &Path) -> Option<String> {
     let name = meta_path.file_name()?.to_str()?;
     Some(
@@ -177,38 +147,6 @@ fn agent_id_of(meta_path: &Path) -> Option<String> {
             .strip_suffix(META_SUFFIX)?
             .to_owned(),
     )
-}
-
-fn header_tag(line: &str) -> Option<(&str, &str)> {
-    let (name, rest) = line.strip_prefix('<')?.split_once('>')?;
-    let value = rest.strip_suffix(&format!("</{name}>"))?;
-    Some((name, value))
-}
-
-fn notice_of(row: &Value) -> Option<(&str, &str)> {
-    let from_the_harness = row.get("type").and_then(Value::as_str) == Some("user")
-        && row.pointer("/origin/kind").and_then(Value::as_str) == Some(NOTICE_ORIGIN);
-    if !from_the_harness {
-        return None;
-    }
-    let mut lines = row.pointer("/message/content")?.as_str()?.lines();
-    if lines.next()? != NOTICE_OPEN {
-        return None;
-    }
-    let (mut id, mut status) = (None, None);
-    for line in lines {
-        match header_tag(line) {
-            Some((NOTICE_ID_TAG, value)) => {
-                id.get_or_insert(value);
-            }
-            Some((NOTICE_STATUS_TAG, value)) => {
-                status.get_or_insert(value);
-            }
-            Some((NOTICE_TOOL_USE_TAG | NOTICE_OUTPUT_TAG, _)) => {}
-            _ => break,
-        }
-    }
-    Some((id?, status?))
 }
 
 fn user_stops(transcript: impl BufRead) -> Option<HashMap<String, bool>> {
@@ -254,7 +192,8 @@ pub(super) fn sleeping_forks(
             let transcript = path.with_file_name(format!("{AGENT_PREFIX}{agent_id}.jsonl"));
             let finished = meta.get("finished").and_then(Value::as_bool) == Some(true);
             let asleep = !finished
-                || fs::read_to_string(&transcript).is_ok_and(|text| pending_background(&text));
+                || fs::read_to_string(&transcript)
+                    .is_ok_and(|text| !background::running(&text).is_empty());
             asleep.then(|| SleepingFork {
                 agent_id,
                 name: text("name"),
@@ -317,7 +256,10 @@ pub(super) fn handoff_prompt(forks: &[SleepingFork]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::background::fixtures::{self, envelope, notice, row};
     use super::*;
+
+    const NOTICE_ORIGIN: &str = "task-notification";
 
     fn conversation(config_home: &Path, switchboard: &Path, id: &str, body: &str) {
         let dir = conversations_dir(config_home, switchboard);
@@ -386,27 +328,8 @@ mod tests {
         );
     }
 
-    fn row(kind: &str, origin: &str, content: &str) -> String {
-        let row = serde_json::json!({
-            "type": kind,
-            "origin": { "kind": origin, "producer": "session-task" },
-            "message": { "role": "user", "content": content },
-        });
-        format!("{row}\n")
-    }
-
-    fn envelope(id: &str, status: &str, result: &str) -> String {
-        format!("<task-notification>\n<task-id>{id}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>{status}</status>\n<summary>Agent \"x\" finished</summary>\n<result>{result}</result>\n</task-notification>")
-    }
-
-    fn notice(id: &str, status: &str) -> String {
-        row("user", NOTICE_ORIGIN, &envelope(id, status, "done"))
-    }
-
     fn waiting() -> String {
-        format!(
-            "{{\"type\":\"user\",\"message\":\"{BACKGROUND_MARKER}bw1abc. Output is\"}}\n{{\"type\":\"assistant\",\"text\":\"waiting for bw1abc\"}}\n"
-        )
+        fixtures::waiting("bw1abc", background::HOLD_COMMAND)
     }
 
     #[test]
@@ -600,16 +523,6 @@ mod tests {
             }
         );
         assert!(sleeping_forks(&home, board, "missing").is_empty());
-    }
-
-    #[test]
-    fn a_background_command_is_done_once_a_user_row_mentions_its_id() {
-        let started = format!("{{\"type\":\"user\",\"c\":\"{BACKGROUND_MARKER}b42x. Output\"}}\n");
-        let says = "{\"type\":\"assistant\",\"text\":\"waiting on b42x\"}\n";
-        let notice = "{\"type\":\"user\",\"c\":\"task b42x completed\"}\n";
-        assert!(pending_background(&format!("{started}{says}")));
-        assert!(!pending_background(&format!("{started}{says}{notice}")));
-        assert!(!pending_background(says));
     }
 
     fn sleeping(agent_id: &str, name: Option<&str>, description: &str) -> SleepingFork {
