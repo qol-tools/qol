@@ -248,6 +248,7 @@ fn create_and_show_ghost(
     mark_non_target_hidden(&active, target, cx);
     let Some(handle) = open_visible_ghost(cx, entries, &placement, native, &title) else {
         log::warn!("open failed");
+        focus_priority::release(FocusPriority::Launcher);
         return;
     };
     active.borrow_mut().insert(target, handle);
