@@ -101,6 +101,7 @@ pub(super) struct TargetRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PageModel {
     pub(super) summary: Summary,
+    pub(super) check: TargetRow,
     pub(super) host: TargetRow,
     pub(super) plugins: Vec<TargetRow>,
     pub(super) fold: Option<String>,
@@ -115,6 +116,7 @@ pub(super) fn page(snapshot: &UpdatesSnapshot, visited: &BTreeSet<String>) -> Pa
         .any(|plugin| plugin.state == TargetState::Unchecked && !visited.contains(&plugin.id));
     PageModel {
         summary: summary(snapshot),
+        check: check_row(snapshot),
         host: host_row(&snapshot.host),
         fold: fold_text(snapshot.plugins.len(), plugins.len(), checked),
         plugin_total: snapshot.plugins.len(),
@@ -282,7 +284,6 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             action_label: plugins_queued.then_some("Stop"),
         };
     }
-    let last_check = last_check_text(snapshot);
     let failed = pending_names(snapshot, &[TargetState::Failed]);
     let available = pending_names(snapshot, &[TargetState::Available]);
     let failed_count = pending_count(snapshot, TargetState::Failed);
@@ -305,67 +306,109 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
                 SummaryDot::Danger,
             ),
         };
-        let (action, action_label) = if failed_count + available_count >= 2 {
-            let verb = if available_count > 0 {
-                "Update all"
-            } else {
-                "Retry all"
-            };
-            (RowAction::UpdateAll, verb)
+        let verb = if available_count > 0 {
+            "Update all"
         } else {
-            (RowAction::Check, check_label(snapshot))
+            "Retry all"
         };
         return Summary {
-            dot: (!snapshot.checking).then_some(dot),
-            busy: snapshot.checking,
+            dot: Some(dot),
+            busy: false,
             label,
-            description: sentence(&names, &last_check),
-            action: (!snapshot.checking).then_some(action),
-            action_label: (!snapshot.checking).then_some(action_label),
+            description: format!("{names}."),
+            action: Some(RowAction::UpdateAll),
+            action_label: Some(verb),
         };
     }
-    let check_failed = snapshot.check_error.is_some() && !snapshot.checking;
+    let checked = checked_subject(snapshot);
     if snapshot.checking {
         return Summary {
             dot: None,
             busy: true,
             label: "Checking for updates".to_string(),
-            description: last_check,
+            description: format!("{checked}."),
             action: None,
             action_label: None,
         };
     }
-    if check_failed || !unchecked_names(snapshot).is_empty() {
+    if let Some(error) = &snapshot.check_error {
         return Summary {
             dot: Some(SummaryDot::Warning),
             busy: false,
-            label: if check_failed {
-                "Couldn't check for updates"
-            } else {
-                "Not checked yet"
-            }
-            .to_string(),
-            description: last_check,
-            action: Some(RowAction::Check),
-            action_label: Some(check_label(snapshot)),
+            label: "Couldn't check for updates".to_string(),
+            description: format!("{error}."),
+            action: None,
+            action_label: None,
         };
     }
-    let plugins = plural(snapshot.plugins.len(), "plugin", "plugins");
-    let (label, checked) = if snapshot.checks_enabled {
-        (
-            "Everything is up to date",
-            format!("qol-tray {} and {plugins}", snapshot.host.current),
-        )
+    let unchecked = unchecked_names(snapshot);
+    if !unchecked.is_empty() {
+        return Summary {
+            dot: Some(SummaryDot::Warning),
+            busy: false,
+            label: "Not checked yet".to_string(),
+            description: format!("{unchecked}."),
+            action: None,
+            action_label: None,
+        };
+    }
+    let label = if snapshot.checks_enabled {
+        "Everything is up to date"
     } else {
-        ("Plugins are up to date", plugins)
+        "Plugins are up to date"
     };
     Summary {
         dot: Some(SummaryDot::Success),
         busy: false,
         label: label.to_string(),
-        description: sentence(&checked, &last_check),
-        action: Some(RowAction::Check),
-        action_label: Some("Check now"),
+        description: format!("{checked}."),
+        action: None,
+        action_label: None,
+    }
+}
+
+fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
+    let failed = snapshot.check_error.is_some() && !snapshot.checking;
+    let value = match (snapshot.checking, snapshot.last_checked_secs) {
+        (true, _) => "Checking".to_string(),
+        (false, Some(secs)) => format!("{} ago", long_age(secs)),
+        (false, None) => "Never".to_string(),
+    };
+    let description = if failed {
+        snapshot
+            .last_success_secs
+            .map(|secs| format!("Last good check {} ago", long_age(secs)))
+    } else if snapshot.checks_enabled {
+        Some("qol checks by itself every 5 hours".to_string())
+    } else {
+        None
+    };
+    let action = can_check(snapshot).then_some(RowAction::Check);
+    TargetRow {
+        id: CHECK_ROW_ID.to_string(),
+        name: "Last checked".to_string(),
+        tone: if snapshot.checking || snapshot.last_checked_secs.is_none() {
+            ValueTone::Muted
+        } else {
+            ValueTone::Normal
+        },
+        value,
+        description,
+        action_label: action.as_ref().map(|_| check_label(snapshot)),
+        action,
+        attention: false,
+        spinner: snapshot.checking,
+    }
+}
+
+const CHECK_ROW_ID: &str = "last-checked";
+
+fn checked_subject(snapshot: &UpdatesSnapshot) -> String {
+    let plugins = plural(snapshot.plugins.len(), "plugin", "plugins");
+    if snapshot.checks_enabled {
+        format!("qol-tray {} and {plugins}", snapshot.host.current)
+    } else {
+        plugins
     }
 }
 
@@ -374,30 +417,6 @@ fn check_label(snapshot: &UpdatesSnapshot) -> &'static str {
         "Try again"
     } else {
         "Check now"
-    }
-}
-
-fn sentence(lead: &str, last_check: &str) -> String {
-    if last_check.is_empty() {
-        format!("{lead}.")
-    } else {
-        format!("{lead}. {last_check}")
-    }
-}
-
-fn last_check_text(snapshot: &UpdatesSnapshot) -> String {
-    match snapshot.check_error.as_ref().filter(|_| !snapshot.checking) {
-        Some(error) => match snapshot.last_success_secs {
-            Some(secs) => format!("{error}. Last good check {} ago.", long_age(secs)),
-            None => format!("{error}."),
-        },
-        None => match snapshot.last_checked_secs {
-            Some(secs) => format!("Checked {} ago.", long_age(secs)),
-            None if snapshot.checks_enabled => {
-                "qol checks for updates by itself every 5 hours.".to_string()
-            }
-            None => String::new(),
-        },
     }
 }
 
@@ -527,8 +546,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        can_check, fold_text, host_row, join_names, long_age, page, plugin_rows, summary,
-        RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
+        can_check, check_row, fold_text, host_row, join_names, long_age, page, plugin_rows,
+        summary, RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
     };
 
     #[test]
@@ -715,19 +734,15 @@ mod tests {
         let failed = summary(&offline);
         assert_eq!(failed.dot, Some(SummaryDot::Warning));
         assert_eq!(failed.label, "Couldn't check for updates");
-        assert_eq!(
-            failed.description,
-            "No connection to GitHub. Last good check 2 minutes ago."
-        );
-        assert_eq!(failed.action, Some(RowAction::Check));
-        assert_eq!(failed.action_label, Some("Try again"));
+        assert_eq!(failed.description, "No connection to GitHub.");
+        assert_eq!(failed.action, None);
 
         offline.checking = true;
         let checking = summary(&offline);
         assert!(checking.busy);
         assert_eq!(checking.dot, None);
         assert_eq!(checking.label, "Checking for updates");
-        assert_eq!(checking.description, "Checked 2 minutes ago.");
+        assert_eq!(checking.description, "qol-tray 1.0.0 and 2 plugins.");
         assert_eq!(checking.action, None);
 
         let fresh = snapshot(
@@ -736,8 +751,8 @@ mod tests {
         );
         let fresh = summary(&fresh);
         assert_eq!(fresh.label, "Not checked yet");
-        assert_eq!(fresh.description, "Checked 2 minutes ago.");
-        assert_eq!(fresh.action_label, Some("Check now"));
+        assert_eq!(fresh.description, "qol-tray.");
+        assert_eq!(fresh.action, None);
 
         let plugin_only = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -806,10 +821,7 @@ mod tests {
         let failed_summary = summary(&failed);
         assert_eq!(failed_summary.dot, Some(SummaryDot::Danger));
         assert_eq!(failed_summary.label, "2 updates failed");
-        assert_eq!(
-            failed_summary.description,
-            "qol-tray and Bluetooth. Checked 2 minutes ago."
-        );
+        assert_eq!(failed_summary.description, "qol-tray and Bluetooth.");
         assert_eq!(failed_summary.action, Some(RowAction::UpdateAll));
         assert_eq!(failed_summary.action_label, Some("Retry all"));
 
@@ -820,10 +832,7 @@ mod tests {
         let waiting_summary = summary(&waiting);
         assert_eq!(waiting_summary.dot, Some(SummaryDot::Warning));
         assert_eq!(waiting_summary.label, "2 updates waiting");
-        assert_eq!(
-            waiting_summary.description,
-            "qol-tray and CLI Sessions. Checked 2 minutes ago."
-        );
+        assert_eq!(waiting_summary.description, "qol-tray and CLI Sessions.");
         assert_eq!(waiting_summary.action, Some(RowAction::UpdateAll));
         assert_eq!(waiting_summary.action_label, Some("Update all"));
 
@@ -834,25 +843,21 @@ mod tests {
         let current_summary = summary(&current);
         assert_eq!(current_summary.dot, Some(SummaryDot::Success));
         assert_eq!(current_summary.label, "Everything is up to date");
-        assert_eq!(
-            current_summary.description,
-            "qol-tray 1.0.0 and 1 plugin. Checked 2 minutes ago."
-        );
-        assert_eq!(current_summary.action, Some(RowAction::Check));
-        assert_eq!(current_summary.action_label, Some("Check now"));
+        assert_eq!(current_summary.description, "qol-tray 1.0.0 and 1 plugin.");
+        assert_eq!(current_summary.action, None);
     }
 
     #[test]
-    fn one_pending_row_reads_in_the_singular() {
+    fn one_pending_row_reads_in_the_singular_and_still_offers_its_all_button() {
         let failed = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
             vec![target("bt", "Bluetooth", TargetState::Failed)],
         );
         let one_failed = summary(&failed);
         assert_eq!(one_failed.label, "1 update failed");
-        assert_eq!(one_failed.description, "Bluetooth. Checked 2 minutes ago.");
-        assert_eq!(one_failed.action, Some(RowAction::Check));
-        assert_eq!(one_failed.action_label, Some("Check now"));
+        assert_eq!(one_failed.description, "Bluetooth.");
+        assert_eq!(one_failed.action, Some(RowAction::UpdateAll));
+        assert_eq!(one_failed.action_label, Some("Retry all"));
 
         let waiting = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -860,14 +865,15 @@ mod tests {
         );
         let one_waiting = summary(&waiting);
         assert_eq!(one_waiting.label, "1 update waiting");
-        assert_eq!(one_waiting.action, Some(RowAction::Check));
-        assert_eq!(one_waiting.action_label, Some("Check now"));
+        assert_eq!(one_waiting.action, Some(RowAction::UpdateAll));
+        assert_eq!(one_waiting.action_label, Some("Update all"));
 
         let offline = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),
             ..waiting.clone()
         };
-        assert_eq!(summary(&offline).action_label, Some("Try again"));
+        assert_eq!(summary(&offline).action_label, Some("Update all"));
+        assert_eq!(check_row(&offline).action_label, Some("Try again"));
 
         let mixed = snapshot(
             target("qol-tray", "qol-tray", TargetState::UpToDate),
@@ -878,10 +884,7 @@ mod tests {
         );
         let mixed = summary(&mixed);
         assert_eq!(mixed.label, "1 update failed");
-        assert_eq!(
-            mixed.description,
-            "Bluetooth failed, CLI Sessions waiting. Checked 2 minutes ago."
-        );
+        assert_eq!(mixed.description, "Bluetooth failed, CLI Sessions waiting.");
         assert_eq!(mixed.action, Some(RowAction::UpdateAll));
         assert_eq!(mixed.action_label, Some("Update all"));
     }
@@ -948,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_folds_the_last_check_into_one_row_with_one_button() {
+    fn the_status_row_offers_updates_and_the_last_checked_row_offers_a_check() {
         let mut disabled = snapshot(
             target("qol-tray", "qol-tray", TargetState::DevBuild),
             vec![target("cli", "CLI Sessions", TargetState::Unchecked)],
@@ -958,8 +961,16 @@ mod tests {
         disabled.check_error = Some("No connection to GitHub".to_string());
         let row = summary(&disabled);
         assert_eq!(row.label, "Couldn't check for updates");
-        assert_eq!(row.action, Some(RowAction::Check));
-        assert_eq!(row.action_label, Some("Try again"));
+        assert_eq!(row.action, None);
+        let check = check_row(&disabled);
+        assert_eq!(check.name, "Last checked");
+        assert_eq!(check.value, "Never");
+        assert_eq!(
+            check.description,
+            Some("Last good check 2 minutes ago".into())
+        );
+        assert_eq!(check.action, Some(RowAction::Check));
+        assert_eq!(check.action_label, Some("Try again"));
 
         disabled.check_error = None;
         disabled.plugins = vec![
@@ -971,12 +982,16 @@ mod tests {
         assert_eq!(row.description, "CLI Sessions and Lights.");
         assert_eq!(row.action, Some(RowAction::UpdateAll));
         assert_eq!(row.action_label, Some("Update all"));
+        let check = check_row(&disabled);
+        assert_eq!(check.description, None);
+        assert_eq!(check.action, Some(RowAction::Check));
+        assert_eq!(check.action_label, Some("Check now"));
 
         disabled.plugins = vec![target("cli", "CLI Sessions", TargetState::UpToDate)];
         let row = summary(&disabled);
         assert_eq!(row.label, "Plugins are up to date");
         assert_eq!(row.description, "1 plugin.");
-        assert_eq!(row.action, Some(RowAction::Check));
+        assert_eq!(row.action, None);
 
         let failed = UpdatesSnapshot {
             check_error: Some("Couldn't reach GitHub".to_string()),
@@ -988,32 +1003,17 @@ mod tests {
         };
         let row = summary(&failed);
         assert_eq!(row.label, "Couldn't check for updates");
-        assert_eq!(
-            row.description,
-            "Couldn't reach GitHub. Last good check 3 days ago."
-        );
-        assert_eq!(row.action, Some(RowAction::Check));
-        assert_eq!(row.action_label, Some("Try again"));
+        assert_eq!(row.description, "Couldn't reach GitHub.");
+        let check = check_row(&failed);
+        assert_eq!(check.value, "2 minutes ago");
+        assert_eq!(check.description, Some("Last good check 3 days ago".into()));
+        assert_eq!(check.action_label, Some("Try again"));
 
         let never_succeeded = UpdatesSnapshot {
             last_success_secs: None,
             ..failed.clone()
         };
-        assert_eq!(
-            summary(&never_succeeded).description,
-            "Couldn't reach GitHub."
-        );
-
-        let stale_error_all_current = UpdatesSnapshot {
-            check_error: Some("Couldn't reach GitHub".to_string()),
-            ..snapshot(
-                target("qol-tray", "qol-tray", TargetState::UpToDate),
-                vec![],
-            )
-        };
-        let row = summary(&stale_error_all_current);
-        assert_eq!(row.label, "Couldn't check for updates");
-        assert_eq!(row.action_label, Some("Try again"));
+        assert_eq!(check_row(&never_succeeded).description, None);
 
         let never = UpdatesSnapshot {
             last_checked_secs: None,
@@ -1023,13 +1023,15 @@ mod tests {
                 vec![],
             )
         };
-        let row = summary(&never);
-        assert_eq!(row.label, "Not checked yet");
+        assert_eq!(summary(&never).label, "Not checked yet");
+        let check = check_row(&never);
+        assert_eq!(check.value, "Never");
+        assert_eq!(check.tone, ValueTone::Muted);
         assert_eq!(
-            row.description,
-            "qol checks for updates by itself every 5 hours."
+            check.description,
+            Some("qol checks by itself every 5 hours".into())
         );
-        assert_eq!(row.action_label, Some("Check now"));
+        assert_eq!(check.action_label, Some("Check now"));
 
         let rechecking = UpdatesSnapshot {
             checking: true,
@@ -1042,6 +1044,10 @@ mod tests {
         assert!(row.busy);
         assert_eq!(row.label, "Checking for updates");
         assert_eq!(row.action, None);
+        let check = check_row(&rechecking);
+        assert_eq!(check.value, "Checking");
+        assert!(check.spinner);
+        assert_eq!(check.action, None);
 
         let pending_while_checking = UpdatesSnapshot {
             checking: true,
@@ -1051,9 +1057,23 @@ mod tests {
             )
         };
         let row = summary(&pending_while_checking);
-        assert!(row.busy);
-        assert_eq!(row.dot, None);
+        assert!(!row.busy);
+        assert_eq!(row.dot, Some(SummaryDot::Warning));
         assert_eq!(row.label, "1 update waiting");
+        assert_eq!(row.action, Some(RowAction::UpdateAll));
+        assert!(check_row(&pending_while_checking).spinner);
+    }
+
+    #[test]
+    fn the_last_checked_row_has_no_button_while_an_update_runs() {
+        let updating = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("cli", "CLI Sessions", TargetState::Updating)],
+        );
+        let check = check_row(&updating);
+        assert_eq!(check.value, "2 minutes ago");
+        assert_eq!(check.action, None);
+        assert_eq!(check.action_label, None);
     }
 
     #[test]
