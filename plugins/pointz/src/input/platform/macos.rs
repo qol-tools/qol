@@ -1,7 +1,8 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
 use crate::input::{
-    InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds, ScreenBoundsCache,
+    CursorTrack, InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds,
+    ScreenBoundsCache,
 };
 use anyhow::Result;
 use qol_platform::{permission_status, Permission};
@@ -9,14 +10,29 @@ use rdev::{simulate, Button, EventType, Key, SimulateError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {}
+extern "C" {
+    fn CGEventCreate(source: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFRelease(cf: *const std::ffi::c_void);
+}
 
 const DRAG_BATCH_INTERVAL_MS: u64 = 16;
 const DOUBLE_CLICK_TIMEOUT_MS: u64 = 350;
 
 pub struct InputHandlerImpl {
-    current_pos: Mutex<Option<(f64, f64)>>,
+    cursor: CursorTrack,
     modifier_state: Mutex<ModifierKeys>,
     button_state: Mutex<Option<Button>>,
     last_click: Mutex<Option<ClickState>>,
@@ -61,7 +77,7 @@ struct ClickState {
 impl InputHandlerImpl {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            current_pos: Mutex::new(None),
+            cursor: CursorTrack::new(pointer_position),
             modifier_state: Mutex::new(ModifierKeys::default()),
             button_state: Mutex::new(None),
             last_click: Mutex::new(None),
@@ -76,12 +92,17 @@ impl InputHandlerImpl {
     }
 }
 
-fn screen_bounds() -> Option<ScreenBounds> {
-    #[repr(C)]
-    struct CGPoint {
-        x: f64,
-        y: f64,
+fn pointer_position() -> Option<(f64, f64)> {
+    let event = unsafe { CGEventCreate(std::ptr::null()) };
+    if event.is_null() {
+        return None;
     }
+    let location = unsafe { CGEventGetLocation(event) };
+    unsafe { CFRelease(event) };
+    Some((location.x, location.y))
+}
+
+fn screen_bounds() -> Option<ScreenBounds> {
     #[repr(C)]
     struct CGSize {
         width: f64,
@@ -150,22 +171,11 @@ impl InputHandlerTrait for InputHandlerImpl {
         log::debug!("[SERVER] Received: x={:.2} y={:.2}", x, y);
 
         let bounds = self.bounds.current();
-        let (new_x, new_y, button) = {
-            let mut pos_opt = self
-                .current_pos
-                .lock()
-                .expect("Cursor position mutex poisoned");
-            let button = *self
-                .button_state
-                .lock()
-                .expect("Button state mutex poisoned");
-
-            let (px, py) = (*pos_opt).unwrap_or_else(|| bounds.center());
-            let (new_x, new_y) = bounds.clamp(px + x, py + y);
-
-            *pos_opt = Some((new_x, new_y));
-            (new_x, new_y, button)
-        };
+        let button = *self
+            .button_state
+            .lock()
+            .expect("Button state mutex poisoned");
+        let (new_x, new_y) = self.cursor.advance(&bounds, x, y);
 
         log::debug!(
             "[SERVER] Sending to OS: new_x={:.2} new_y={:.2}",
@@ -348,12 +358,7 @@ impl InputHandlerImpl {
     }
 
     fn resolve_pointer_position(&self) -> (f64, f64) {
-        let center = self.bounds.current().center();
-        let mut pos = self
-            .current_pos
-            .lock()
-            .expect("Cursor position mutex poisoned");
-        *pos.get_or_insert(center)
+        self.cursor.advance(&self.bounds.current(), 0.0, 0.0)
     }
 
     fn next_click_count(&self, button: u8) -> i64 {
