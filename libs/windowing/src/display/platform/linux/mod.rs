@@ -628,11 +628,17 @@ fn write_captured<B: RandrBus>(bus: &mut B, target: &CrtcWrite) -> Result<(), Di
 fn rollback_layout<B: RandrBus>(
     bus: &mut B,
     applied: &[CrtcWrite],
+    primary: Option<PrimaryMarker>,
     error: DisplayError,
 ) -> DisplayError {
     let mut failures = Vec::new();
     for target in applied.iter().rev() {
         if let Err(failure) = write_captured(bus, target) {
+            failures.push(failure.to_string());
+        }
+    }
+    if let Some(marker) = primary {
+        if let Err(failure) = bus.set_primary(marker.root, marker.output) {
             failures.push(failure.to_string());
         }
     }
@@ -745,21 +751,34 @@ fn set_layout_from<B: RandrBus>(
     for (placement, _, _) in &targets {
         match write_placement_with_retry(bus, placement) {
             Ok(pre) => applied.push(pre),
-            Err(error) => return Err(rollback_layout(bus, &applied, error)),
+            Err(error) => return Err(rollback_layout(bus, &applied, None, error)),
         }
     }
+    let mut previous_primary = None;
     for (placement, output, _) in &targets {
         if !placement.primary {
             continue;
         }
         if let Err(error) = bus.set_primary(state.root, output.output) {
-            return Err(rollback_layout(bus, &applied, error));
+            return Err(rollback_layout(bus, &applied, previous_primary, error));
+        }
+        if state.primary != Some(output.output) {
+            previous_primary = Some(PrimaryMarker {
+                root: state.root,
+                output: state.primary.unwrap_or(0),
+            });
         }
     }
     if let Err(error) = verify_placements(bus, placements) {
-        return Err(rollback_layout(bus, &applied, error));
+        return Err(rollback_layout(bus, &applied, previous_primary, error));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct PrimaryMarker {
+    root: u32,
+    output: u32,
 }
 
 fn enumerate_from(root: &Path) -> Result<Vec<DisplayHandle>, DisplayError> {
@@ -1781,13 +1800,27 @@ mod tests {
         let mut bus = fake_bus(fake_state());
         bus.readback_position_override = Some((200, 500, 500));
         let placements = vec![
-            fake_placement("card0-DP-1", 2560, 0, true),
-            fake_placement("card0-DP-2", 0, 0, false),
+            fake_placement("card0-DP-1", 2560, 0, false),
+            fake_placement("card0-DP-2", 0, 0, true),
         ];
         assert!(matches!(
             set_layout_from(&mut bus, &placements),
             Err(DisplayError::LayoutInvalid { .. })
         ));
+        assert_eq!(
+            bus.state.primary,
+            Some(100),
+            "the rollback must restore the primary marker the layout moved"
+        );
+        let primary_calls: Vec<&FakeCall> = bus
+            .calls
+            .iter()
+            .filter(|call| matches!(call, FakeCall::Primary(_)))
+            .collect();
+        assert_eq!(
+            primary_calls,
+            vec![&FakeCall::Primary(101), &FakeCall::Primary(100)]
+        );
         let restored: Vec<(u32, i32, i32)> = bus.writes[2..]
             .iter()
             .map(|write| (write.crtc, write.x, write.y))
