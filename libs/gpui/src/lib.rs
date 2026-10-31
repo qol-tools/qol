@@ -5,6 +5,7 @@ pub mod canvas;
 pub mod color_wheel;
 pub mod command_loop;
 pub mod crumb_trail;
+pub mod dead_zone;
 pub mod deck;
 pub mod event_router;
 pub mod fonts;
