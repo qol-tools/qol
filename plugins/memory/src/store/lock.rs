@@ -65,6 +65,7 @@ impl DistillLock {
 
 impl Drop for DistillLock {
     fn drop(&mut self) {
+        let _guard = steal_guard(&self.path).ok();
         let still_ours =
             std::fs::read_to_string(&self.path).is_ok_and(|current| current == self.payload);
         if still_ours {
@@ -77,17 +78,22 @@ fn remove_if_stale(path: &Path) -> anyhow::Result<bool> {
     if !started_at_is_stale(path) {
         return Ok(false);
     }
+    let _guard = steal_guard(path)?;
+    let stale = started_at_is_stale(path);
+    if stale {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(stale)
+}
+
+fn steal_guard(path: &Path) -> std::io::Result<std::fs::File> {
     let guard = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(steal_guard_path(path))?;
     guard.lock()?;
-    let stale = started_at_is_stale(path);
-    if stale {
-        let _ = std::fs::remove_file(path);
-    }
-    Ok(stale)
+    Ok(guard)
 }
 
 fn steal_guard_path(path: &Path) -> PathBuf {
@@ -194,6 +200,36 @@ mod tests {
         assert!(store.distill_lock_path().exists());
         assert!(DistillLock::acquire(&store, "third").unwrap().is_none());
         drop(second);
+        assert!(!store.distill_lock_path().exists());
+    }
+
+    #[test]
+    fn a_release_waits_for_a_steal_in_progress() {
+        let dir = TempDir::new("release");
+        let store = Store::resolve(Some(dir.0.as_path())).unwrap();
+        let holder = DistillLock::acquire(&store, "slow").unwrap().unwrap();
+        let stale_payload = "{\"started_at\":\"2020-01-01T00:00:00.000Z\"}\n";
+        std::fs::write(store.distill_lock_path(), stale_payload).unwrap();
+        let mut aged = holder;
+        aged.payload = stale_payload.to_string();
+        let guard = steal_guard(&store.distill_lock_path()).unwrap();
+
+        let released = std::thread::spawn(move || drop(aged));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            store.distill_lock_path().exists(),
+            "the release waits while a stealer holds the guard"
+        );
+        std::fs::remove_file(store.distill_lock_path()).unwrap();
+        let next = DistillLock::acquire(&store, "next").unwrap().unwrap();
+        drop(guard);
+        released.join().unwrap();
+
+        assert!(
+            store.distill_lock_path().exists(),
+            "the old holder's release leaves the new owner's lock"
+        );
+        drop(next);
         assert!(!store.distill_lock_path().exists());
     }
 
