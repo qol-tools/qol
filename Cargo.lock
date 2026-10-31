@@ -6460,7 +6460,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.80.1"
+version = "0.80.2"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6626,7 +6626,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.70.1"
+version = "0.70.2"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6920,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "qol-input"
-version = "0.19.4"
+version = "0.19.5"
 dependencies = [
  "anyhow",
  "libc",
@@ -6976,7 +6976,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.112.11"
+version = "1.112.12"
 dependencies = [
  "anyhow",
  "block2",
@@ -7125,7 +7125,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.52.1"
+version = "0.52.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7160,7 +7160,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.82.4"
+version = "0.82.5"
 dependencies = [
  "anyhow",
  "libc",
@@ -7316,7 +7316,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.78.4"
+version = "1.78.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7376,7 +7376,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.97.11"
+version = "0.97.12"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7605,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.129.5"
+version = "3.129.6"
 dependencies = [
  "anyhow",
  "axum",
@@ -7697,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.23.1"
+version = "0.23.2"
 dependencies = [
  "anyhow",
  "chrono",
