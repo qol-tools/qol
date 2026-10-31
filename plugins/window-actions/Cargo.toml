@@ -1,6 +1,6 @@
 [package]
 name = "qol-window-actions"
-version = "2.77.4"
+version = "2.77.5"
 edition = "2021"
 
 [dependencies]
