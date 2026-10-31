@@ -10,6 +10,7 @@ use crate::open_window_with_focus;
 use super::layout::{full_window_height, header_window_height, WINDOW_WIDTH};
 use super::{trace, window_memory, LauncherView, LAUNCHER_APP_ID, LAUNCHER_WINDOW_TITLE};
 
+use qol_gpui::focus_priority::{self, FocusPriority, Summon};
 use qol_gpui::popup_window;
 use qol_gpui::window::{centered_window_placement, ActiveWindows, MonitorKey, WindowPlacement};
 use qol_gpui::window_options::PopupWindowOptions;
@@ -146,6 +147,11 @@ pub(crate) fn activate_or_open_launcher(
     cx: &mut App,
 ) {
     apply_ghost_debug();
+    if let Summon::Outranked(_) =
+        focus_priority::summon(FocusPriority::Launcher, LAUNCHER_WINDOW_TITLE)
+    {
+        return;
+    }
     if show_ghost(
         active.clone(),
         monitor_snapshot.as_ref(),
@@ -242,6 +248,7 @@ fn create_and_show_ghost(
     mark_non_target_hidden(&active, target, cx);
     let Some(handle) = open_visible_ghost(cx, entries, &placement, native, &title) else {
         log::warn!("open failed");
+        focus_priority::release(FocusPriority::Launcher);
         return;
     };
     active.borrow_mut().insert(target, handle);

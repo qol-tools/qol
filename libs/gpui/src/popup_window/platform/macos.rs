@@ -1195,6 +1195,10 @@ fn reassert_held_input(reason: &'static str) {
     if !INPUT_HELD.load(Ordering::Acquire) {
         return;
     }
+    if crate::focus_priority::must_yield() {
+        yield_held_input(reason);
+        return;
+    }
     let since_last = HOLD_LAST_REASSERT
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -1216,6 +1220,14 @@ fn reassert_held_input(reason: &'static str) {
             }
         }));
     });
+}
+
+fn yield_held_input(reason: &str) {
+    let Some(title) = held_title() else {
+        return;
+    };
+    release_input(&title);
+    qol_runtime::probe!("HOLD_YIELD", "title={title} reason={reason}");
 }
 
 fn held_title() -> Option<String> {
