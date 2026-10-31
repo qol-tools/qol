@@ -35,6 +35,12 @@ pub(super) fn fingerprint_inputs(path: &Path) -> Result<Vec<FingerprintInput>, S
             inputs.push((relative_path, absolute_path));
         }
     }
+    if inputs
+        .iter()
+        .all(|(relative_path, _)| is_contract_file(relative_path))
+    {
+        inputs.clear();
+    }
     Ok(inputs)
 }
 
@@ -139,6 +145,14 @@ fn should_skip_dir(name: &OsStr) -> bool {
     matches!(name.to_str(), Some("target" | ".git" | ".hg" | ".svn"))
 }
 
+fn is_contract_file(relative_path: &Path) -> bool {
+    relative_path.parent() == Some(Path::new(""))
+        && relative_path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .is_some_and(|file_name| EMBEDDED_CONTRACT_FILES.contains(&file_name))
+}
+
 fn is_fingerprint_input(relative_path: &Path) -> bool {
     let Some(file_name) = relative_path.file_name().and_then(OsStr::to_str) else {
         return false;
@@ -151,8 +165,7 @@ fn is_fingerprint_input(relative_path: &Path) -> bool {
         return true;
     }
 
-    if relative_path.parent() == Some(Path::new("")) && EMBEDDED_CONTRACT_FILES.contains(&file_name)
-    {
+    if is_contract_file(relative_path) {
         return true;
     }
 
@@ -231,6 +244,16 @@ mod tests {
             ]
             .map(PathBuf::from)
         );
+    }
+
+    #[test]
+    fn a_folder_with_only_contract_files_has_no_build_inputs() {
+        let tmp = TempDir::new().unwrap();
+        for name in EMBEDDED_CONTRACT_FILES {
+            std::fs::write(tmp.path().join(name), "[plugin]\n").unwrap();
+        }
+
+        assert!(fingerprint_inputs(tmp.path()).unwrap().is_empty());
     }
 
     #[test]
