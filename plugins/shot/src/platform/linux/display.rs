@@ -5,7 +5,7 @@ use crate::Monitor;
 
 pub fn get_monitors() -> Result<Vec<Monitor>> {
     let output = Command::new("xrandr")
-        .args(["--query"])
+        .arg("--current")
         .output()
         .context("failed to run xrandr")?;
     if !output.status.success() {

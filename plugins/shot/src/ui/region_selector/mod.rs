@@ -238,7 +238,7 @@ pub(crate) fn open_window(
 ) -> Option<WindowHandle<RegionSelector>> {
     let mut options = selector.options();
     options.show = show;
-    options.focus = show && selector.focus && !reusable;
+    options.focus = show && selector.focus;
     let focus = options.focus;
     let window_bounds = selector.bounds;
     let sources = selector.sources;

@@ -73,6 +73,48 @@ pub(crate) fn pre_create_cached(
     Some(title)
 }
 
+pub(crate) fn open_adopted(
+    cache: &SelectorCache,
+    tx: &mut Option<mpsc::Sender<Option<Rect>>>,
+    selector: &mut Option<SelectorWindow>,
+    kind: CaptureKind,
+    cx: &mut App,
+) -> Option<String> {
+    if cache.pool.len() >= SELECTOR_POOL_CAPACITY {
+        return None;
+    }
+    let (Some(tx), Some(selector)) = (tx.take(), selector.take()) else {
+        return None;
+    };
+    let topology = live_topology(cx);
+    let bounds = rect_from_bounds(selector.bounds);
+    let size = (bounds.w, bounds.h);
+    let title = selector.title.clone();
+    let state = Rc::new(RefCell::new(SelectionState::new(
+        tx,
+        selector.active_bounds,
+        selector.default_target,
+        selector.monitor_bounds.clone(),
+        vec![title.clone()],
+        kind,
+    )));
+    let Some(handle) = open_window(selector, state.clone(), false, true, true, cx) else {
+        qol_runtime::probe!("SHOT_SELECT_OPEN", "selectors=1 result=none");
+        return None;
+    };
+    state.borrow_mut().handles = vec![handle];
+    let _ = handle.update(cx, |view, _window, cx| {
+        view.handle = Some(handle);
+        view.start_active_monitor_poll(cx);
+    });
+    let _adopted = cache.pool.put(cache.pool.key(&topology, size), handle);
+    qol_runtime::probe!(
+        "SHOT_SELECT_OPEN",
+        "selectors=1 windows=1 result=adopt pooled={_adopted}"
+    );
+    Some(title)
+}
+
 pub(crate) fn open_cached(
     cache: &SelectorCache,
     tx: &mut Option<mpsc::Sender<Option<Rect>>>,
@@ -176,5 +218,103 @@ impl RegionSelector {
         self.scheduled_reveal_generation = None;
         self.pending_reveal = Some(reveal);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{identity_rect_mapper, open_adopted, open_cached, SelectorCache};
+    use crate::capture::space::CaptureKind;
+    use crate::ui::region_selector::{
+        SelectorReveal, SelectorWindow, SelectorWindowOptions, SelectorWindowSources,
+    };
+    use gpui::{point, px, size, Bounds, TestAppContext, WindowDecorations, WindowKind};
+    use std::rc::Rc;
+    use std::sync::mpsc;
+
+    fn selector() -> SelectorWindow {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        SelectorWindow::new(
+            bounds,
+            vec![bounds],
+            None,
+            None,
+            SelectorWindowOptions {
+                display_id: None,
+                placement: None,
+                kind: WindowKind::PopUp,
+                decorations: WindowDecorations::Client,
+                focus: true,
+            },
+            SelectorWindowSources {
+                map_rect: identity_rect_mapper(),
+                global_pointer: None,
+                cancel_signal: None,
+                active_bounds: None,
+                hover_target: None,
+                frozen_frame: None,
+            },
+        )
+    }
+
+    #[gpui::test]
+    fn a_cold_opened_selector_is_reused_by_the_next_open(cx: &mut TestAppContext) {
+        let cache = SelectorCache::default();
+        let (tx, _cold_rx) = mpsc::channel();
+        let adopted = cx.update(|cx| {
+            open_adopted(
+                &cache,
+                &mut Some(tx),
+                &mut Some(selector()),
+                CaptureKind::Screenshot,
+                cx,
+            )
+        });
+        assert!(adopted.is_some(), "the cold selector did not open");
+        assert_eq!(cache.pool.len(), 1, "the cold selector was not pooled");
+
+        let (tx, _warm_rx) = mpsc::channel();
+        let reveal: SelectorReveal = Rc::new(|_title: String| {});
+        let reused = cx.update(|cx| {
+            open_cached(
+                &cache,
+                &mut Some(tx),
+                &mut Some(selector()),
+                CaptureKind::Screenshot,
+                reveal,
+                cx,
+            )
+        });
+        assert_eq!(reused, adopted, "the next open built a new selector");
+        assert_eq!(cache.pool.len(), 1);
+    }
+
+    #[gpui::test]
+    fn a_full_pool_hands_the_cold_open_back_untouched(cx: &mut TestAppContext) {
+        let cache = SelectorCache::default();
+        let (tx, _pooled_rx) = mpsc::channel();
+        let pooled = cx.update(|cx| {
+            open_adopted(
+                &cache,
+                &mut Some(tx),
+                &mut Some(selector()),
+                CaptureKind::Screenshot,
+                cx,
+            )
+        });
+        assert!(pooled.is_some());
+
+        let (tx, _extra_rx) = mpsc::channel();
+        let mut tx = Some(tx);
+        let mut extra = Some(selector());
+        let adopted =
+            cx.update(|cx| open_adopted(&cache, &mut tx, &mut extra, CaptureKind::Screenshot, cx));
+        assert!(adopted.is_none());
+        assert!(tx.is_some(), "the sender was consumed without a window");
+        assert!(
+            extra.is_some(),
+            "the selector was consumed without a window"
+        );
+        assert_eq!(cache.pool.len(), 1);
     }
 }
