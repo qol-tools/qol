@@ -172,9 +172,34 @@ pub fn guards_with(app: &InstalledApp, index: &PackageIndex) -> Guards {
     }
 }
 
-pub fn quit_and_wait(app: &InstalledApp) -> Result<()> {
+pub fn quit_and_wait(plan: &mut RemovalPlan) -> Result<()> {
     let plat = platform();
-    quit_and_wait_with(&plat, app, 25, Duration::from_millis(100))
+    quit_and_wait_with(&plat, &plan.app, 25, Duration::from_millis(100))?;
+    settle_after_quit(plan);
+    Ok(())
+}
+
+fn settle_after_quit(plan: &mut RemovalPlan) {
+    if plan.snapshots.len() != plan.items.len() {
+        return;
+    }
+    let mut items = Vec::with_capacity(plan.items.len());
+    let mut snapshots = Vec::with_capacity(plan.snapshots.len());
+    for (item, snapshot) in plan.items.drain(..).zip(plan.snapshots.drain(..)) {
+        let current = IdentitySnapshot::capture(&item.path);
+        if snapshot.exists && !current.exists {
+            continue;
+        }
+        if snapshot.same_object_as(&current) {
+            snapshots.push(current);
+        } else {
+            snapshots.push(snapshot);
+        }
+        items.push(item);
+    }
+    plan.total_bytes = items.iter().map(|item| item.size_bytes).sum();
+    plan.items = items;
+    plan.snapshots = snapshots;
 }
 
 fn quit_and_wait_with(
@@ -856,6 +881,56 @@ mod tests {
         let err =
             quit_and_wait_with(&fake, &app("Foo", "com.acme.foo"), 3, Duration::ZERO).unwrap_err();
         assert!(err.to_string().contains("still running"));
+    }
+
+    #[test]
+    fn a_plan_settled_after_quit_survives_what_the_app_did_on_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config");
+        let lock = tmp.path().join("instance.lock");
+        let swapped = tmp.path().join("cache");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("SingletonLock"), "pid").unwrap();
+        std::fs::write(&lock, "pid").unwrap();
+        std::fs::create_dir_all(&swapped).unwrap();
+        let path = |p: &Path| p.to_str().unwrap().to_owned();
+        let mut p = plan_with(
+            app("Foo", "com.acme.foo"),
+            vec![
+                leftover(&path(&config), LeftoverKind::Data, MatchKind::Exact),
+                leftover(&path(&lock), LeftoverKind::Data, MatchKind::Exact),
+                leftover(&path(&swapped), LeftoverKind::Caches, MatchKind::Exact),
+            ],
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::remove_file(config.join("SingletonLock")).unwrap();
+        std::fs::write(config.join("settings.json"), "{}").unwrap();
+        std::fs::remove_file(&lock).unwrap();
+        let replacement = tmp.path().join("cache.new");
+        std::fs::create_dir_all(&replacement).unwrap();
+        std::fs::remove_dir_all(&swapped).unwrap();
+        std::fs::rename(&replacement, &swapped).unwrap();
+        let fake = FakePlat::default();
+        assert!(validate_plan_with(&fake, &p).is_err());
+
+        settle_after_quit(&mut p);
+
+        let paths: Vec<_> = p.items.iter().map(|item| item.path.clone()).collect();
+        assert!(paths.contains(&config));
+        assert!(
+            !paths.contains(&lock),
+            "a leftover the app removed is dropped"
+        );
+        assert_eq!(p.snapshots.len(), p.items.len());
+        let err = validate_plan_with(&fake, &p).unwrap_err();
+        assert!(
+            err.to_string().contains(&swapped.display().to_string()),
+            "a replaced leftover still aborts: {err}"
+        );
+        let swapped_at = paths.iter().position(|path| *path == swapped).unwrap();
+        p.items.remove(swapped_at);
+        p.snapshots.remove(swapped_at);
+        validate_plan_with(&fake, &p).unwrap();
     }
 
     #[test]
