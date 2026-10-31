@@ -12,6 +12,7 @@ use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::geometry::rect_label;
 use crate::capture::space::{self, CaptureKind, Level};
 use crate::{Monitor, Rect};
+use qol_gpui::dead_zone::{native_dead_zones, DeadZone};
 use qol_gpui::placement::{intersect_bounds, monitor_at_point, project_bounds, MonitorPlacement};
 use qol_gpui::theme::runtime_theme;
 use qol_gpui::toast::{Toast, ToastLayout, ToastTone};
@@ -960,19 +961,23 @@ impl RegionSelector {
             .borrow()
             .active_bounds
             .unwrap_or(self.window_bounds);
+        let zones = native_dead_zones(monitor);
         ToastLayout::status().placement().projected_bounds(
-            monitor,
+            top_stack_area(monitor, zones.zones()),
             ToastLayout::status().size(),
             self.window_bounds,
+            zones.zones(),
         )
     }
 
     fn chip_bounds(&self) -> Option<Bounds<Pixels>> {
         let monitor = self.state.borrow().active_bounds?;
+        let zones = native_dead_zones(monitor);
         MonitorPlacement::top_center(CHIP_TOP).projected_bounds(
             monitor,
             size(px(CHIP_W), px(CHIP_H)),
             self.window_bounds,
+            zones.zones(),
         )
     }
 
@@ -1036,6 +1041,10 @@ impl RegionSelector {
             let _ = peer.update(cx, |_view, _window, cx| cx.notify());
         }
     }
+}
+
+fn top_stack_area(monitor: Bounds<Pixels>, zones: &[DeadZone]) -> Bounds<Pixels> {
+    MonitorPlacement::top_center(CHIP_TOP).clear_area(monitor, size(px(CHIP_W), px(CHIP_H)), zones)
 }
 
 fn schedule_completion(completion: SelectionCompletion, cx: &mut Context<RegionSelector>) {
@@ -1518,12 +1527,14 @@ fn selected_rect(origin: Point<Pixels>, start: Point<Pixels>, end: Point<Pixels>
 mod tests {
     use super::{
         backdrop_segments, capture_estimate, format_duration, kind_label, local_from_global,
-        selected_rect, selection_bounds_in_window, selection_global_rect, shift_rect, ChipModel,
-        DetectedTarget, DetectedTargetRole, HoverTarget, SelectionState, CHIP_H, CHIP_TOP, CHIP_W,
+        selected_rect, selection_bounds_in_window, selection_global_rect, shift_rect,
+        top_stack_area, ChipModel, DetectedTarget, DetectedTargetRole, HoverTarget, SelectionState,
+        CHIP_H, CHIP_TOP, CHIP_W,
     };
     use crate::capture::space::{CaptureKind, DisplayScale, Quality};
     use crate::Rect;
     use gpui::{point, px, size, Bounds, Pixels, Point};
+    use qol_gpui::dead_zone::{DeadZone, Edge};
     use qol_gpui::placement::{monitor_at_point, MonitorPlacement};
     use qol_gpui::toast::ToastLayout;
     use std::sync::mpsc;
@@ -1636,6 +1647,7 @@ mod tests {
                 secondary,
                 ToastLayout::status().size(),
                 viewport,
+                &[],
             ),
             Some(Bounds::new(
                 point(px(3300.0), px(48.0)),
@@ -1648,6 +1660,7 @@ mod tests {
                 secondary,
                 size(px(CHIP_W), px(CHIP_H)),
                 viewport,
+                &[],
             ),
             Some(Bounds::new(
                 point(px(3370.0), px(CHIP_TOP)),
@@ -1655,6 +1668,39 @@ mod tests {
             )),
             "the capture chip uses the same monitor-relative projection contract"
         );
+    }
+
+    #[test]
+    fn the_capture_chip_and_guide_stack_below_a_notch() {
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(1512.0), px(982.0)));
+        let notch = [DeadZone {
+            edge: Edge::Top,
+            bounds: Bounds::new(point(px(663.5), px(0.0)), size(px(185.0), px(32.0))),
+        }];
+        let chip = MonitorPlacement::top_center(CHIP_TOP)
+            .projected_bounds(laptop, size(px(CHIP_W), px(CHIP_H)), laptop, &notch)
+            .unwrap();
+        let guide = ToastLayout::status()
+            .placement()
+            .projected_bounds(
+                top_stack_area(laptop, &notch),
+                ToastLayout::status().size(),
+                laptop,
+                &notch,
+            )
+            .unwrap();
+        assert_eq!(chip.origin, point(px(606.0), px(32.0 + CHIP_TOP)));
+        assert_eq!(guide.origin.y, px(32.0 + 48.0));
+        assert!(
+            chip.origin.y + chip.size.height <= guide.origin.y,
+            "the guide keeps its gap below the chip"
+        );
+    }
+
+    #[test]
+    fn displays_without_dead_zones_keep_the_chip_and_guide_where_they_were() {
+        let monitor = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        assert_eq!(top_stack_area(monitor, &[]), monitor);
     }
 
     #[test]
