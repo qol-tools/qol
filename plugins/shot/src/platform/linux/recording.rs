@@ -952,7 +952,7 @@ fn start_x11grab_capture(
     output_file: &Path,
     encoder: X11grabEncoder,
 ) -> Result<CaptureSession> {
-    let args = x11grab_args(rect, config, output_file, encoder);
+    let args = x11grab_args(rect, config, output_file, encoder, &x11_display());
     let log_file =
         File::create(super::super::CAPTURE_LOG).context("failed to create recording log file")?;
     let stdout_log = log_file
@@ -968,11 +968,29 @@ fn start_x11grab_capture(
     Ok(capture_session(child.id(), *rect, output_file, output_file))
 }
 
+const FALLBACK_X11_DISPLAY: &str = ":0.0";
+
+fn x11_display() -> String {
+    x11_display_from(std::env::var("DISPLAY").ok())
+}
+
+fn x11_display_from(value: Option<String>) -> String {
+    value
+        .map(|display| display.trim().to_owned())
+        .filter(|display| !display.is_empty())
+        .unwrap_or_else(|| FALLBACK_X11_DISPLAY.to_owned())
+}
+
+fn x11grab_input(display: &str, rect: &Rect) -> String {
+    format!("{display}+{},{}", rect.x, rect.y)
+}
+
 fn x11grab_args(
     rect: &Rect,
     config: &Config,
     output_file: &Path,
     encoder: X11grabEncoder,
+    display: &str,
 ) -> Vec<String> {
     let input = vec![
         "-thread_queue_size".to_string(),
@@ -984,7 +1002,7 @@ fn x11grab_args(
         "-framerate".to_string(),
         config.video.framerate.to_string(),
         "-i".to_string(),
-        format!(":0.0+{},{}", rect.x, rect.y),
+        x11grab_input(display, rect),
     ];
     let mut args = ffmpeg_args(input, config, encoder);
     args.push(output_file.to_string_lossy().to_string());
@@ -1027,7 +1045,7 @@ pub fn capture_screenshot(rect: &Rect, output_file: &Path) -> Result<()> {
         .try_clone()
         .context("failed to clone capture log file")?;
     let video_size = format!("{}x{}", rect.w, rect.h);
-    let input = format!(":0.0+{},{}", rect.x, rect.y);
+    let input = x11grab_input(&x11_display(), rect);
     let status = Command::new("ffmpeg")
         .args([
             "-y",
@@ -1166,7 +1184,8 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 mod tests {
     use super::{
         cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote, nvenc_accepts,
-        nvfbc_ffmpeg_args, x11grab_args, CinnamonCaptureRequest, CinnamonEncoder, X11grabEncoder,
+        nvfbc_ffmpeg_args, x11_display_from, x11grab_args, CinnamonCaptureRequest, CinnamonEncoder,
+        X11grabEncoder,
     };
     use crate::{Config, Rect};
 
@@ -1333,7 +1352,7 @@ mod tests {
             ),
         ];
         for (encoder, expected, absent) in cases {
-            let args = x11grab_args(&rect, &config, output, encoder);
+            let args = x11grab_args(&rect, &config, output, encoder, ":0.0");
             let joined = args.join(" ");
             assert!(joined.contains(":0.0+1920,0"), "{joined}");
             assert!(
@@ -1380,6 +1399,29 @@ mod tests {
     }
 
     #[test]
+    fn x11grab_captures_the_session_display() {
+        let rect = Rect {
+            x: 1920,
+            y: 40,
+            w: 800,
+            h: 600,
+        };
+        let args = x11grab_args(
+            &rect,
+            &Config::default(),
+            std::path::Path::new("/tmp/out.mp4"),
+            X11grabEncoder::X264,
+            &x11_display_from(Some(":1".to_string())),
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["-i", ":1+1920,40"]),
+            "{args:?}"
+        );
+        assert_eq!(x11_display_from(Some("  ".to_string())), ":0.0");
+        assert_eq!(x11_display_from(None), ":0.0");
+    }
+
+    #[test]
     fn x11grab_args_use_container_codecs_and_clamp_crf() {
         let rect = Rect {
             x: 0,
@@ -1398,7 +1440,7 @@ mod tests {
             config.audio.enabled = true;
             config.audio.inputs = vec!["mic".to_string()];
             let output = std::path::Path::new("/tmp/out");
-            let args = x11grab_args(&rect, &config, output, X11grabEncoder::X264);
+            let args = x11grab_args(&rect, &config, output, X11grabEncoder::X264, ":0.0");
             let has = |pair: [&str; 2]| args.windows(2).any(|window| window == pair);
             assert!(has(["-c:v", video]), "{format}: {args:?}");
             assert!(has(["-c:a", audio]), "{format}: {args:?}");
