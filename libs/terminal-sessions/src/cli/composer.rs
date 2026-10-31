@@ -153,6 +153,11 @@ pub fn is_rule(line: &str) -> bool {
     leading >= LABELED_RULE_MIN_RUN && label.ends_with(RULE)
 }
 
+pub(crate) fn is_plain_rule(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|character| character == RULE)
+}
+
 fn after_glyph<'a>(line: &'a str, glyphs: &[char]) -> Option<&'a str> {
     line.trim_start()
         .strip_prefix(glyphs)

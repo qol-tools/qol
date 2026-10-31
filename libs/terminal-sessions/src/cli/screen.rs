@@ -1,4 +1,4 @@
-use super::composer::is_rule;
+use super::composer::{is_plain_rule, is_rule};
 use crate::{ScreenReader, SessionBinding, TerminalError, TerminalSessionService};
 
 const STATUS_TAIL: usize = 8;
@@ -201,7 +201,7 @@ pub(super) fn pi_working(text: &str) -> bool {
         return true;
     }
     let lines = text.lines().collect::<Vec<_>>();
-    let Some(bottom) = lines.iter().rposition(|line| is_rule(line)) else {
+    let Some(bottom) = lines.iter().rposition(|line| is_plain_rule(line)) else {
         return false;
     };
     let Some(border) = lines[..bottom]
@@ -709,8 +709,27 @@ mod tests {
         claude_dialog, claude_working, composer_busy, contains_any, editor_draft,
         has_braille_spinner, has_choice_hint, has_done_marker, has_interrupt_hint,
         has_numbered_choice, has_picker_cluster, kimi_live, kimi_questionnaire, kimi_working,
-        pi_live, without_faint_text,
+        pi_live, pi_working, without_faint_text,
     };
+
+    #[test]
+    fn pi_working_reads_the_editor_border_above_a_labeled_widget_header() {
+        let rule = "\u{2500}".repeat(12);
+        let working = "\u{2500}\u{2500} \u{2819} Working \u{2500}\u{2500}";
+        let widget = "\u{2500}\u{2500}\u{2500} Tasks \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  [ ] lint\n";
+        let frame = |top: &str, below: &str| {
+            format!("assistant text\n{top}\nfix the parser\n{rule}\n{below}~/work 12k/200k")
+        };
+        let cases = [
+            ("working", frame(working, ""), true),
+            ("working above a widget", frame(working, widget), true),
+            ("idle", frame(&rule, ""), false),
+            ("idle above a widget", frame(&rule, widget), false),
+        ];
+        for (name, screen, expected) in cases {
+            assert_eq!(pi_working(&screen), expected, "case: {name}");
+        }
+    }
 
     #[test]
     fn editor_draft_reads_a_box_whose_top_rule_carries_a_label() {
