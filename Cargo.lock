@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.21.11"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6976,7 +6976,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.112.13"
+version = "1.113.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -7605,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.129.7"
+version = "3.130.0"
 dependencies = [
  "anyhow",
  "axum",
