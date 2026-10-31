@@ -138,37 +138,39 @@ fn install_is_current(root: &Path, package: &Path, target: &Path) -> Result<bool
 
 pub(crate) fn newest_setup_input(root: &Path, package: &Path) -> Result<SystemTime> {
     let mut newest = UNIX_EPOCH;
-    record_mtime(&package.join("Cargo.toml"), &mut newest)?;
     record_mtime(&root.join("Cargo.lock"), &mut newest)?;
-    record_tree_mtime(&package.join("src"), &mut newest)?;
+    record_crate_mtime(package, &mut newest)?;
     for dependency in workspace_path_dependencies(root, package)? {
-        record_mtime(&dependency.join("Cargo.toml"), &mut newest)?;
-        record_tree_mtime(&dependency.join("src"), &mut newest)?;
+        record_crate_mtime(&dependency, &mut newest)?;
     }
     Ok(newest)
 }
 
+fn record_crate_mtime(crate_dir: &Path, newest: &mut SystemTime) -> Result<()> {
+    record_mtime(&crate_dir.join("Cargo.toml"), newest)?;
+    record_mtime(&crate_dir.join("build.rs"), newest)?;
+    record_tree_mtime(&crate_dir.join("src"), newest)
+}
+
+const BUILD_DEPENDENCY_SECTIONS: [&str; 2] = ["dependencies", "build-dependencies"];
+
 fn workspace_path_dependencies(root: &Path, package: &Path) -> Result<Vec<PathBuf>> {
-    let manifest_content = fs::read_to_string(package.join("Cargo.toml"))
-        .with_context(|| format!("failed to read {}", package.join("Cargo.toml").display()))?;
-    let manifest: TomlValue = toml::from_str(&manifest_content)
-        .with_context(|| format!("failed to parse {}", package.join("Cargo.toml").display()))?;
-    let workspace_manifest_content = fs::read_to_string(root.join("Cargo.toml"))
-        .with_context(|| format!("failed to read {}", root.join("Cargo.toml").display()))?;
-    let workspace_manifest: TomlValue = toml::from_str(&workspace_manifest_content)
-        .with_context(|| format!("failed to parse {}", root.join("Cargo.toml").display()))?;
+    let workspace_manifest = read_manifest(&root.join("Cargo.toml"))?;
     let workspace_dependencies = workspace_manifest
         .get("workspace")
         .and_then(|workspace| workspace.get("dependencies"))
         .and_then(TomlValue::as_table);
+    let mut seen = std::collections::HashSet::new();
     let mut paths = Vec::new();
-    if let Some(dependencies) = manifest.get("dependencies").and_then(TomlValue::as_table) {
-        for (name, value) in dependencies {
+    let mut pending = vec![package.to_path_buf()];
+    while let Some(crate_dir) = pending.pop() {
+        let manifest = read_manifest(&crate_dir.join("Cargo.toml"))?;
+        for (name, value) in dependency_entries(&manifest) {
             let path = match value.as_table() {
                 Some(entry) if entry.contains_key("path") => entry
                     .get("path")
                     .and_then(TomlValue::as_str)
-                    .map(|path| package.join(path)),
+                    .map(|path| crate_dir.join(path)),
                 Some(entry)
                     if entry.get("workspace").and_then(TomlValue::as_bool) == Some(true) =>
                 {
@@ -180,12 +182,41 @@ fn workspace_path_dependencies(root: &Path, package: &Path) -> Result<Vec<PathBu
                 }
                 _ => None,
             };
-            if let Some(path) = path {
-                paths.push(path);
+            let Some(path) = path else {
+                continue;
+            };
+            let path = fs::canonicalize(&path).unwrap_or(path);
+            if !path.join("Cargo.toml").is_file() || !seen.insert(path.clone()) {
+                continue;
             }
+            pending.push(path.clone());
+            paths.push(path);
         }
     }
     Ok(paths)
+}
+
+fn read_manifest(path: &Path) -> Result<TomlValue> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    toml::from_str(&content).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn dependency_entries(manifest: &TomlValue) -> Vec<(&String, &TomlValue)> {
+    let targets = manifest
+        .get("target")
+        .and_then(TomlValue::as_table)
+        .into_iter()
+        .flat_map(|targets| targets.values());
+    std::iter::once(manifest)
+        .chain(targets)
+        .flat_map(|scope| {
+            BUILD_DEPENDENCY_SECTIONS
+                .iter()
+                .filter_map(|section| scope.get(*section).and_then(TomlValue::as_table))
+        })
+        .flat_map(|table| table.iter())
+        .collect()
 }
 
 fn record_tree_mtime(path: &Path, newest: &mut SystemTime) -> Result<()> {
@@ -306,6 +337,68 @@ mod tests {
             .unwrap();
 
         assert_eq!(newest, dependency_src);
+    }
+
+    #[test]
+    fn newest_setup_input_tracks_dependencies_of_dependencies() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("tools/cli");
+        for dir in [
+            "tools/cli/src",
+            "libs/lib/src",
+            "libs/leaf/src",
+            "libs/build/src",
+        ] {
+            fs::create_dir_all(root.path().join(dir)).unwrap();
+        }
+        fs::write(
+            root.path().join("Cargo.toml"),
+            "[workspace]\n[workspace.dependencies]\nqol-lib = { path = \"libs/lib\" }\n",
+        )
+        .unwrap();
+        fs::write(
+            package.join("Cargo.toml"),
+            "[package]\nversion = \"0.0.0\"\n[dependencies]\nqol-lib.workspace = true\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("libs/lib/Cargo.toml"),
+            "[package]\nname = \"qol-lib\"\nversion = \"0.0.0\"\n[target.'cfg(unix)'.dependencies]\nqol-leaf = { path = \"../leaf\" }\n[build-dependencies]\nqol-build = { path = \"../build\" }\n",
+        )
+        .unwrap();
+        for name in ["leaf", "build"] {
+            fs::write(
+                root.path().join(format!("libs/{name}/Cargo.toml")),
+                format!("[package]\nname = \"qol-{name}\"\nversion = \"0.0.0\"\n"),
+            )
+            .unwrap();
+        }
+        for file in [
+            "tools/cli/src/lib.rs",
+            "libs/lib/src/lib.rs",
+            "libs/leaf/src/lib.rs",
+            "libs/build/src/lib.rs",
+        ] {
+            fs::write(root.path().join(file), "").unwrap();
+        }
+        let base = fs::metadata(package.join("Cargo.toml"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        for (offset, file) in [(60, "libs/leaf/src/lib.rs"), (120, "libs/build/src/lib.rs")] {
+            let edited = base + std::time::Duration::from_secs(offset);
+            fs::File::options()
+                .write(true)
+                .open(root.path().join(file))
+                .unwrap()
+                .set_modified(edited)
+                .unwrap();
+            assert_eq!(
+                newest_setup_input(root.path(), &package).unwrap(),
+                edited,
+                "{file}"
+            );
+        }
     }
 
     #[test]
