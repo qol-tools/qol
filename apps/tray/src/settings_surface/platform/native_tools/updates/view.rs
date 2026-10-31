@@ -36,6 +36,7 @@ const POLL_STALE_AFTER: Duration = Duration::from_secs(5);
 enum Selection {
     None,
     Summary,
+    Check,
     Host,
     Plugin(String),
 }
@@ -43,6 +44,7 @@ enum Selection {
 enum PageRow {
     Header { title: String, detail: &'static str },
     Summary(Summary),
+    Check(TargetRow),
     Host(TargetRow),
     Plugin(TargetRow),
 }
@@ -52,7 +54,9 @@ impl PageRow {
         match self {
             PageRow::Header { .. } => None,
             PageRow::Summary(summary) => summary.action.as_ref(),
-            PageRow::Host(target) | PageRow::Plugin(target) => target.action.as_ref(),
+            PageRow::Check(target) | PageRow::Host(target) | PageRow::Plugin(target) => {
+                target.action.as_ref()
+            }
         }
     }
 
@@ -60,6 +64,7 @@ impl PageRow {
         Some(match self {
             PageRow::Header { .. } => return None,
             PageRow::Summary(_) => Selection::Summary,
+            PageRow::Check(_) => Selection::Check,
             PageRow::Host(_) => Selection::Host,
             PageRow::Plugin(target) => Selection::Plugin(target.id.clone()),
         })
@@ -69,7 +74,9 @@ impl PageRow {
         match self {
             PageRow::Header { .. } => None,
             PageRow::Summary(summary) => summary.action_label,
-            PageRow::Host(target) | PageRow::Plugin(target) => target.action_label,
+            PageRow::Check(target) | PageRow::Host(target) | PageRow::Plugin(target) => {
+                target.action_label
+            }
         }
     }
 }
@@ -223,6 +230,7 @@ impl UpdatesView {
                 detail: "What the last check found.",
             },
             PageRow::Summary(model.summary),
+            PageRow::Check(model.check),
             PageRow::Header {
                 title: "qol-tray".to_string(),
                 detail: "The tray itself.",
@@ -464,6 +472,7 @@ impl UpdatesView {
                     .into_any_element()
             }
             PageRow::Summary(summary) => self.render_summary(index, summary, cx),
+            PageRow::Check(target) => self.render_target(index, target, Selection::Check, cx),
             PageRow::Host(target) => self.render_target(index, target, Selection::Host, cx),
             PageRow::Plugin(target) => {
                 let selection = Selection::Plugin(target.id.clone());

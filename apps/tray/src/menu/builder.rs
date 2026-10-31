@@ -11,7 +11,7 @@ pub fn build_menu(
     feature_registry: Arc<FeatureRegistry>,
     update_available: bool,
     events: Arc<EventBus>,
-) -> Result<(Menu, EventRouter)> {
+) -> Result<(Menu, EventRouter, MenuItem)> {
     let menu = Menu::new();
     let mut all_routes = Vec::new();
     for (idx, feature) in feature_registry.features().iter().enumerate() {
@@ -25,11 +25,21 @@ pub fn build_menu(
         all_routes.push(route);
     }
     let _ = menu.append(&PredefinedMenuItem::separator());
+    let update_item = MenuItem::with_id(UPDATE_ITEM_ID, update_label(), true, None);
     if update_available {
-        all_routes.push(create_update_route(&menu, events));
+        let _ = menu.append(&update_item);
     }
+    all_routes.push(create_update_route(events));
     all_routes.push(create_quit_route(&menu));
-    Ok((menu, EventRouter::new(all_routes)))
+    Ok((menu, EventRouter::new(all_routes), update_item))
+}
+
+const UPDATE_ITEM_ID: &str = "__update__";
+
+pub(crate) fn update_label() -> String {
+    updates::latest_version()
+        .map(|v| format!("⬆ Update to v{}", v))
+        .unwrap_or_else(|| "⬆ Update available".to_string())
 }
 
 fn append_feature_items(menu: &Menu, items: &[PluginMenuItem], feature_id: &str) {
@@ -60,14 +70,9 @@ fn create_feature_route(
     }
 }
 
-fn create_update_route(menu: &Menu, events: Arc<EventBus>) -> EventRoute {
-    let version_label = updates::latest_version()
-        .map(|v| format!("⬆ Update to v{}", v))
-        .unwrap_or_else(|| "⬆ Update available".to_string());
-    let _ = menu.append(&MenuItem::with_id("__update__", &version_label, true, None));
-
+fn create_update_route(events: Arc<EventBus>) -> EventRoute {
     EventRoute {
-        pattern: EventPattern::Exact("__update__".to_string()),
+        pattern: EventPattern::Exact(UPDATE_ITEM_ID.to_string()),
         handler: EventHandler::Sync(Box::new(move |_| {
             log::info!("Starting update download and install");
             spawn_update_task(events.clone());
