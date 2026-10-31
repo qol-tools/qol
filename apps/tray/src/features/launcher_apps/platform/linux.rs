@@ -24,8 +24,10 @@ pub(super) fn sync(entries: &[LauncherEntry], target: &Path, marks: &MarkFiles) 
 
     let installed = OnceCell::new();
     for entry in entries {
-        let icon = icon_value(&entry.icon, marks, || {
-            installed.get_or_init(installed_apps).as_slice()
+        let icon = window_icon(entry, marks).unwrap_or_else(|| {
+            icon_value(&entry.icon, marks, || {
+                installed.get_or_init(installed_apps).as_slice()
+            })
         });
         write_desktop_file(&dir, entry, target, &icon)?;
     }
@@ -49,6 +51,14 @@ pub(super) fn publish_synced() {
 
 fn desktop_filename(entry: &LauncherEntry) -> String {
     format!("{}{}.desktop", DESKTOP_PREFIX, entry.file_stem)
+}
+
+fn window_icon(entry: &LauncherEntry, marks: &MarkFiles) -> Option<String> {
+    let LauncherIcon::Mark(mark) = &entry.icon else {
+        return None;
+    };
+    entry.window_class.as_ref()?;
+    marks.app_path(*mark).map(|path| path.display().to_string())
 }
 
 fn icon_value<'a>(
@@ -238,6 +248,27 @@ mod tests {
         });
 
         assert_eq!(icon, "/marks/sound.svg");
+    }
+
+    #[test]
+    fn an_app_window_entry_shows_its_app_art_and_others_keep_the_mark() {
+        let marks = MarkFiles::in_dir(PathBuf::from("/marks"), 0);
+        let explorer = |window_class: Option<&str>| LauncherEntry {
+            icon: LauncherIcon::Mark(Mark::Explorer),
+            window_class: window_class.map(str::to_string),
+            ..entry(&["exec"])
+        };
+        let linked_without_art = LauncherEntry {
+            window_class: Some("qol-sound".to_string()),
+            ..entry(&["exec"])
+        };
+
+        assert_eq!(
+            window_icon(&explorer(Some("qol-explorer")), &marks).as_deref(),
+            Some("/marks/explorer.app.svg")
+        );
+        assert_eq!(window_icon(&explorer(None), &marks), None);
+        assert_eq!(window_icon(&linked_without_art, &marks), None);
     }
 
     #[test]
