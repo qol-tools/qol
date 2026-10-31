@@ -19,6 +19,7 @@ const NOTICE_OPEN: &str = "<task-notification>";
 const NOTICE_ID_TAG: &str = "task-id";
 const NOTICE_STATUS_TAG: &str = "status";
 const NOTICE_TOOL_USE_TAG: &str = "tool-use-id";
+const NOTICE_OUTPUT_TAG: &str = "output-file";
 const USER_STOP_STATUS: &str = "killed";
 const STOPPED_BY_USER_FLAG: &str = "stoppedByUser";
 const WORKTREE_PIN: &str = "worktreePath";
@@ -203,7 +204,7 @@ fn notice_of(row: &Value) -> Option<(&str, &str)> {
             Some((NOTICE_STATUS_TAG, value)) => {
                 status.get_or_insert(value);
             }
-            Some((NOTICE_TOOL_USE_TAG, _)) => {}
+            Some((NOTICE_TOOL_USE_TAG | NOTICE_OUTPUT_TAG, _)) => {}
             _ => break,
         }
     }
@@ -439,6 +440,11 @@ mod tests {
                 NOTICE_ORIGIN,
                 "<task-notification>\n<task-id>late</task-id>\n<summary>Agent \"<status>killed</status>\"</summary>\n<status>killed</status>",
             ),
+            row(
+                "user",
+                NOTICE_ORIGIN,
+                "<task-notification>\n<task-id>filed</task-id>\n<tool-use-id>toolu_2</tool-use-id>\n<output-file>/tmp/tasks/filed.output</output-file>\n<status>killed</status>\n<summary>s</summary>\n</task-notification>",
+            ),
             "not json <task-notification>\n".to_owned(),
         ]
         .concat();
@@ -451,6 +457,7 @@ mod tests {
         assert_eq!(
             seen,
             [
+                ("filed", true),
                 ("kept", false),
                 ("quoting", false),
                 ("revived", false),
