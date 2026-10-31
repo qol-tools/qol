@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, unbounded, Receiver, RecvTimeoutError, Sender};
@@ -150,6 +150,20 @@ impl RequestEngine {
 }
 
 impl AreqWatch<'_> {
+    pub fn wait_matching(
+        &self,
+        timeout: Duration,
+        matches: impl Fn(&ZnpFrame) -> bool,
+    ) -> Result<ZnpFrame> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let frame = self.wait(deadline.saturating_duration_since(Instant::now()))?;
+            if matches(&frame) {
+                return Ok(frame);
+            }
+        }
+    }
+
     pub fn wait(&self, timeout: Duration) -> Result<ZnpFrame> {
         self.rx.recv_timeout(timeout).map_err(|_| {
             anyhow!(
@@ -310,6 +324,34 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    fn a_matching_wait_keeps_one_deadline_past_other_answers() {
+        let (engine, device) = engine_with(|_| Vec::new());
+        let watch = engine.watch_areq(ZDO, zdo::ACTIVE_EP_RSP);
+        for _ in 0..3 {
+            device
+                .send(ZnpFrame::areq(ZDO, zdo::ACTIVE_EP_RSP, vec![1]))
+                .unwrap();
+        }
+        device
+            .send(ZnpFrame::areq(ZDO, zdo::ACTIVE_EP_RSP, vec![2]))
+            .unwrap();
+
+        let started = Instant::now();
+        assert_eq!(
+            watch
+                .wait_matching(WAIT, |frame| frame.data == [2])
+                .unwrap()
+                .data,
+            vec![2]
+        );
+        let error = watch
+            .wait_matching(Duration::from_millis(100), |_| false)
+            .unwrap_err();
+        assert!(error.to_string().contains("AREQ timeout"), "{error}");
+        assert!(started.elapsed() < WAIT);
     }
 
     #[test]

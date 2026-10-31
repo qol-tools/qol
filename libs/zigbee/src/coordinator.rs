@@ -246,12 +246,9 @@ pub fn resolve_nwk_address(engine: &RequestEngine, ieee: &[u8; 8]) -> Result<u16
     data.push(0x00);
     let responses = engine.watch_areq(ZDO, zdo::NWK_ADDR_RSP);
     engine.sreq(ZDO, zdo::NWK_ADDR_REQ, data)?;
-    let rsp = loop {
-        let rsp = responses.wait(NWK_ADDR_TIMEOUT)?;
-        if rsp.data.get(1..9) == Some(&ieee[..]) {
-            break rsp;
-        }
-    };
+    let rsp = responses.wait_matching(NWK_ADDR_TIMEOUT, |rsp| {
+        rsp.data.get(1..9).is_none_or(|found| found == &ieee[..])
+    })?;
     let status = rsp.data.first().copied().unwrap_or(0xFF);
     ensure!(
         status == STATUS_SUCCESS,

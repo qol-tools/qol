@@ -289,12 +289,10 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
 }
 
 fn response_from(responses: &AreqWatch<'_>, nwk_addr: u16) -> Result<ZnpFrame> {
-    loop {
-        let rsp = responses.wait(EVENT_LOOP_TIMEOUT)?;
-        if rsp.data.get(3..5) == Some(&nwk_addr.to_le_bytes()[..]) {
-            return Ok(rsp);
-        }
-    }
+    let wanted = nwk_addr.to_le_bytes();
+    responses.wait_matching(EVENT_LOOP_TIMEOUT, |rsp| {
+        rsp.data.get(3..5).is_none_or(|addr| addr == &wanted[..])
+    })
 }
 
 fn format_ieee(addr: &[u8; 8]) -> String {
