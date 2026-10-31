@@ -1,7 +1,19 @@
 {
   "version": 1,
   "setup": [],
-  "protected": [".qac/**", ".github/**", "rust-toolchain.toml", "Cargo.lock"],
+  "protected": [
+    ".qac/**",
+    ".github/**",
+    "rust-toolchain.toml",
+    "Cargo.lock",
+    "**/rustfmt.toml",
+    "**/.rustfmt.toml",
+    "**/clippy.toml",
+    "**/.clippy.toml",
+    "**/.cargo/**",
+    "**/.claude/**",
+    "**/.gitattributes"
+  ],
   "tests": ["**/tests/**", "**/tests.rs", "**/*_test.rs"],
   "accept_prefixes": [["node", "--test"]],
   "defaults": { "test_runs_on_red": 3, "timeout_s": 600 },

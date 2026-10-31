@@ -283,8 +283,9 @@ Details:
   --task delivers the first round at spawn time so the round is already open
   when the command returns; the outcome JSON then reports task_submitted,
   completion_marker, receipt_path (the absolute path of the round's
-  receipt.json, written when the watcher confirms completion, for a single
-  lane and for each lane of a --lanes set), and next_command. Resume is automatic when the spawn
+  receipt.json, written when the watcher confirms completion, and not written
+  when a bridge call collects the round first; grouped lanes omit it because
+  the set delivers one combined report), and next_command. Resume is automatic when the spawn
   ledger holds a session id for the key (same tool and cwd), so a respawned
   lane continues the prior session; --no-resume opts out; the spawn JSON
   reports resume and resume_detail.
@@ -732,6 +733,11 @@ fn parse_bridge_args(args: &[OsString]) -> Result<BridgeArgs> {
                     .ok_or_else(|| anyhow!("usage: {usage}"))?;
                 acknowledge_marker = Some(value.to_owned());
                 index += 2;
+            }
+            "--gate" | "--no-gate" => {
+                bail!(
+                    "{argument} was removed; run qac gate in the worktree instead\nusage: {usage}"
+                )
             }
             other => {
                 task_parts.push(other.to_owned());
@@ -1728,6 +1734,30 @@ mod tests {
         assert_eq!(parsed.task, None);
         assert_eq!(parsed.timeout_ms, None);
         assert_eq!(parsed.acknowledge_marker, None);
+    }
+
+    #[test]
+    fn bridge_args_refuse_the_removed_gate_flags_instead_of_sending_them_as_a_task() {
+        for flag in ["--gate", "--no-gate"] {
+            let error = parse_bridge_args(&["v1:kitty:7:123".into(), flag.into()])
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains(&format!("{flag} was removed; run qac gate")),
+                "{error}"
+            );
+            let error = parse_bridge_args(&[
+                "v1:kitty:7:123".into(),
+                flag.into(),
+                "implement".into(),
+                "the fix".into(),
+            ])
+            .err()
+            .unwrap()
+            .to_string();
+            assert!(error.contains("was removed"), "{error}");
+        }
     }
 
     #[test]
