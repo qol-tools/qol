@@ -136,6 +136,11 @@ Claude and pi resolve their home live on every call and need no re-run.
 - Sessions limitation: the sessions builtins resolve one claude home per
   observing process (the tray's or watcher's own env), while memory ingests
   every registered home.
+  `sessions_closed` and `session_reopen` read the transcripts of every
+  registered claude home plus every config dir in `claude_accounts` in
+  sessions.toml and the account profiles registry, without registering
+  them here, so listing another account's conversations never turns on the
+  memory partition.
 - Ingest roots resolve once at daemon start: after `qol agents add` or
   `qol agents remove`, and after a declared home's transcript directory is
   first created, restart qol-tray before that home's transcripts are

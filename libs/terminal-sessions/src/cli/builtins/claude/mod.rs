@@ -139,18 +139,24 @@ impl CliSessionStrategy for ClaudeStrategy {
         self.metadata.resume_settings(session)
     }
 
-    fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
-        self.history.closed_conversations(&self.tool.id, since)
+    fn closed_conversations(
+        &self,
+        homes: &[qol_agent_homes::AgentHome],
+        since: std::time::SystemTime,
+    ) -> Vec<CliConversation> {
+        self.history
+            .closed_conversations(&self.tool.id, homes, since)
     }
 
     fn search_conversations(
         &self,
+        homes: &[qol_agent_homes::AgentHome],
         since: std::time::SystemTime,
         external_ids: &std::collections::HashSet<String>,
         terms: &[String],
     ) -> Vec<CliConversationMatch> {
         self.history
-            .search_conversations(since, external_ids, terms)
+            .search_conversations(homes, since, external_ids, terms)
     }
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

@@ -93,6 +93,33 @@ pub fn config_claude_accounts() -> Result<BTreeMap<String, ClaudeAccountSpec>> {
         .unwrap_or_default())
 }
 
+pub fn claude_account_dirs() -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    let configured = config_claude_accounts().unwrap_or_else(|error| {
+        log::warn!("the claude_accounts in the sessions config are unreadable: {error:#}");
+        BTreeMap::new()
+    });
+    account_dirs(
+        configured.into_keys().chain(
+            registered_accounts(home.as_deref())
+                .into_iter()
+                .map(|(dir, _)| dir),
+        ),
+        home.as_deref(),
+    )
+}
+
+fn account_dirs(dirs: impl IntoIterator<Item = String>, home: Option<&Path>) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
+        let dir = expand_home(dir.trim(), home);
+        if !dir.as_os_str().is_empty() && !found.contains(&dir) {
+            found.push(dir);
+        }
+    }
+    found
+}
+
 pub fn apply(
     launch: &mut CliLaunchProgram,
     tool: &CliToolId,
@@ -473,6 +500,28 @@ mod tests {
         .unwrap();
 
         assert_eq!(launch.args[3], "claude-personal");
+    }
+
+    #[test]
+    fn account_dirs_expand_the_home_and_list_each_dir_once() {
+        let dirs = account_dirs(
+            [
+                "~/.claude-deepmind",
+                " ~/.claude-deepmind/ ",
+                "/srv/claude-team",
+                "",
+            ]
+            .map(str::to_owned),
+            Some(Path::new("/home/me")),
+        );
+
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/home/me/.claude-deepmind"),
+                PathBuf::from("/srv/claude-team"),
+            ]
+        );
     }
 
     #[test]
