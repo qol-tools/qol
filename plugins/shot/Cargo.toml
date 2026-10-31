@@ -59,6 +59,7 @@ qol-conventions.workspace = true
 qol-platform.workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
 toml.workspace = true
 
 [lints]

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::capture::frozen_frame::FrozenFrame;
 use crate::capture::space::CaptureKind;
@@ -46,6 +46,7 @@ pub use window::{
 use window::{configure_selector_window, prepare_selector_window};
 
 const MIN_DETECTED_TARGET_PX: i32 = 24;
+const SLOW_SELECTOR_OPEN: Duration = Duration::from_millis(50);
 
 thread_local! {
     static SELECTOR_CACHE: selector_cache::SelectorCache = selector_cache::SelectorCache::default();
@@ -182,6 +183,7 @@ fn open_region_selector_with_sender(
     frozen_frame: Option<FrozenFrame>,
     cx: &mut gpui::App,
 ) {
+    let started = Instant::now();
     let (monitor, pointer) = match topology.cursor {
         Some((monitor, pointer)) => (Some(monitor), pointer),
         None => (None, None),
@@ -207,6 +209,19 @@ fn open_region_selector_with_sender(
         default_target,
         frozen_frame,
     );
+    let discovered = started.elapsed();
+    let path = present_selector(tx, quit_on_finish, kind, selector, bounds, cx);
+    report_selector_open(path, discovered, started.elapsed());
+}
+
+fn present_selector(
+    tx: mpsc::Sender<Option<Rect>>,
+    quit_on_finish: bool,
+    kind: CaptureKind,
+    selector: crate::ui::region_selector::SelectorWindow,
+    bounds: Bounds<Pixels>,
+    cx: &mut gpui::App,
+) -> SelectorOpenPath {
     if !quit_on_finish {
         let mut tx = Some(tx);
         let mut selector = Some(selector);
@@ -219,23 +234,86 @@ fn open_region_selector_with_sender(
         });
         if title.is_some() {
             cx.activate(true);
-            return;
+            return SelectorOpenPath::Reuse;
         }
-        let (Some(tx), Some(selector)) = (tx, selector) else {
-            return;
-        };
-        let title = selector.title().to_string();
-        if crate::ui::region_selector::open_all(tx, false, vec![selector], kind, cx) {
+        let adopted = SELECTOR_CACHE
+            .with(|cache| selector_cache::open_adopted(cache, &mut tx, &mut selector, kind, cx));
+        if let Some(title) = adopted {
             configure_selector_window(title, rect_from_bounds(bounds));
             cx.activate(true);
+            return SelectorOpenPath::Adopt;
         }
-        return;
+        let (Some(tx), Some(selector)) = (tx, selector) else {
+            return SelectorOpenPath::Failed;
+        };
+        return open_cold(tx, false, kind, selector, bounds, cx);
     }
+    open_cold(tx, true, kind, selector, bounds, cx)
+}
+
+fn open_cold(
+    tx: mpsc::Sender<Option<Rect>>,
+    quit_on_finish: bool,
+    kind: CaptureKind,
+    selector: crate::ui::region_selector::SelectorWindow,
+    bounds: Bounds<Pixels>,
+    cx: &mut gpui::App,
+) -> SelectorOpenPath {
     let title = selector.title().to_string();
-    if crate::ui::region_selector::open_all(tx, true, vec![selector], kind, cx) {
-        configure_selector_window(title, rect_from_bounds(bounds));
-        cx.activate(true);
+    if !crate::ui::region_selector::open_all(tx, quit_on_finish, vec![selector], kind, cx) {
+        return SelectorOpenPath::Failed;
     }
+    configure_selector_window(title, rect_from_bounds(bounds));
+    cx.activate(true);
+    SelectorOpenPath::Cold
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorOpenPath {
+    Reuse,
+    Adopt,
+    Cold,
+    Failed,
+}
+
+impl SelectorOpenPath {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Reuse => "reuse",
+            Self::Adopt => "adopt",
+            Self::Cold => "cold",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+fn report_selector_open(path: SelectorOpenPath, discovered: Duration, total: Duration) {
+    qol_runtime::probe!(
+        "SHOT_SELECT_LATENCY",
+        "path={} discover_ms={} open_ms={}",
+        path.label(),
+        discovered.as_millis(),
+        total.as_millis()
+    );
+    if let Some(message) = slow_selector_open_message(path, discovered, total) {
+        log::warn!("{message}");
+    }
+}
+
+fn slow_selector_open_message(
+    path: SelectorOpenPath,
+    discovered: Duration,
+    total: Duration,
+) -> Option<String> {
+    if total < SLOW_SELECTOR_OPEN {
+        return None;
+    }
+    Some(format!(
+        "capture selector took {} ms to open (path={}, target discovery {} ms)",
+        total.as_millis(),
+        path.label(),
+        discovered.as_millis()
+    ))
 }
 
 fn initial_default_target(
