@@ -5377,6 +5377,22 @@ mod tests {
         assert_eq!(deferrals, WAKE_UNREADABLE_POLLS - 1);
     }
 
+    const CLAUDE_LABELED_RULE: &str = "\u{1b}[m\u{1b}[38:2:136:136:136m\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500} \u{1b}[38:2:215:119:87multracode\u{1b}[38:2:136:136:136m \u{2500}";
+
+    #[test]
+    fn a_claude_box_with_a_labeled_top_rule_gets_the_wake_typed() {
+        let screen = format!(
+            "{CLAUDE_LABELED_RULE}\n\u{1b}[m\u{276F}\u{a0}\n{CLAUDE_RULE}\n{CLAUDE_FOOTER}\n"
+        );
+        let screens = completed_then([screen]);
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(deferrals, 0);
+    }
+
     #[test]
     fn completed_checkpoint_at_detection_stays_silent() {
         let root = tempfile::TempDir::new().unwrap();

@@ -1,6 +1,7 @@
 use super::CliComposer;
 
 const RULE: char = '\u{2500}';
+const LABELED_RULE_MIN_RUN: usize = 3;
 const CLAUDE_GLYPHS: [char; 2] = ['\u{276F}', '>'];
 const CLAUDE_CHIPS: [Chip; 1] = [Chip::new("[Pasted text #", "]")];
 const PI_CHIPS: [Chip; 1] = [Chip::new("[paste #", "]")];
@@ -114,7 +115,15 @@ fn marked(screen: &str, glyph: char, frame: Frame, chips: &[Chip]) -> CliCompose
 
 fn is_rule(line: &str) -> bool {
     let trimmed = line.trim();
-    !trimmed.is_empty() && trimmed.chars().all(|character| character == RULE)
+    if trimmed.is_empty() {
+        return false;
+    }
+    let label = trimmed.trim_start_matches(RULE);
+    if label.is_empty() {
+        return true;
+    }
+    let leading = trimmed.chars().count() - label.chars().count();
+    leading >= LABELED_RULE_MIN_RUN && label.ends_with(RULE)
 }
 
 fn after_glyph<'a>(line: &'a str, glyphs: &[char]) -> Option<&'a str> {
@@ -209,6 +218,45 @@ mod tests {
             claude("Do you want to proceed?\n\u{276F} 1. Yes\n  2. No"),
             CliComposer::Unreadable
         );
+    }
+
+    const LABELED_RULE: &str = "──────────────────────────────────────── ultracode ─";
+
+    fn framed_screen(top: &str, body: &str, bottom: &str) -> String {
+        format!(
+            "\u{276F} earlier prompt\n\u{25CF} Done.\n\n{top}\n{body}\n{bottom}\n  /work \u{2502} Opus 5.5 high"
+        )
+    }
+
+    #[test]
+    fn claude_reads_a_box_whose_top_rule_carries_a_label() {
+        let empty = framed_screen(LABELED_RULE, "\u{276F}\u{a0}", CLAUDE_RULE);
+        assert_eq!(claude(&empty), CliComposer::Empty);
+        let typed = framed_screen(LABELED_RULE, "\u{276F} hello wor", CLAUDE_RULE);
+        assert_eq!(claude(&typed), draft("hello wor", 0));
+    }
+
+    #[test]
+    fn claude_reads_a_box_whose_bottom_rule_carries_a_label() {
+        let empty = framed_screen(CLAUDE_RULE, "\u{276F}\u{a0}", LABELED_RULE);
+        assert_eq!(claude(&empty), CliComposer::Empty);
+        let typed = framed_screen(CLAUDE_RULE, "\u{276F} hello wor", LABELED_RULE);
+        assert_eq!(claude(&typed), draft("hello wor", 0));
+        let both = framed_screen(LABELED_RULE, "\u{276F}\u{a0}", LABELED_RULE);
+        assert_eq!(claude(&both), CliComposer::Empty);
+    }
+
+    #[test]
+    fn a_prose_line_starting_with_a_rule_character_is_not_a_rule() {
+        let lines = [
+            "\u{2500} the box is above",
+            "\u{2500}\u{2500} label \u{2500}",
+            "\u{2500}\u{2500}\u{2500} label",
+        ];
+        for line in lines {
+            let screen = framed_screen(CLAUDE_RULE, "\u{276F}\u{a0}", line);
+            assert_eq!(claude(&screen), CliComposer::Unreadable, "{line:?}");
+        }
     }
 
     #[test]
