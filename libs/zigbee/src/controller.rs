@@ -8,7 +8,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use super::coordinator::{self, NetworkConfig};
 use super::device::{Device, DeviceRegistry, Endpoint};
 use super::frame::ZnpFrame;
-use super::request::RequestEngine;
+use super::request::{AreqWatch, RequestEngine};
 use super::subsystem;
 use super::transport::{Transport, TransportConfig};
 use super::zcl::ZclFrame;
@@ -215,17 +215,13 @@ fn query_endpoints(engine: &RequestEngine, nwk_addr: u16) -> Result<Vec<Endpoint
     let addr_lo = (nwk_addr & 0xFF) as u8;
     let addr_hi = ((nwk_addr >> 8) & 0xFF) as u8;
 
+    let responses = engine.watch_areq(subsystem::ZDO, subsystem::zdo::ACTIVE_EP_RSP);
     engine.sreq(
         subsystem::ZDO,
         subsystem::zdo::ACTIVE_EP_REQ,
         vec![addr_lo, addr_hi, addr_lo, addr_hi],
     )?;
-
-    let rsp = engine.wait_for_areq(
-        subsystem::ZDO,
-        subsystem::zdo::ACTIVE_EP_RSP,
-        EVENT_LOOP_TIMEOUT,
-    )?;
+    let rsp = response_from(&responses, nwk_addr)?;
 
     if rsp.data.len() < 6 {
         return Ok(vec![]);
@@ -252,17 +248,13 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
     let addr_lo = (nwk_addr & 0xFF) as u8;
     let addr_hi = ((nwk_addr >> 8) & 0xFF) as u8;
 
+    let responses = engine.watch_areq(subsystem::ZDO, subsystem::zdo::SIMPLE_DESC_RSP);
     engine.sreq(
         subsystem::ZDO,
         subsystem::zdo::SIMPLE_DESC_REQ,
         vec![addr_lo, addr_hi, addr_lo, addr_hi, endpoint_id],
     )?;
-
-    let rsp = engine.wait_for_areq(
-        subsystem::ZDO,
-        subsystem::zdo::SIMPLE_DESC_RSP,
-        EVENT_LOOP_TIMEOUT,
-    )?;
+    let rsp = response_from(&responses, nwk_addr)?;
 
     if rsp.data.len() < 13 {
         return Ok(Endpoint {
@@ -293,6 +285,13 @@ fn query_simple_desc(engine: &RequestEngine, nwk_addr: u16, endpoint_id: u8) -> 
     Ok(Endpoint {
         id: endpoint_id,
         input_clusters,
+    })
+}
+
+fn response_from(responses: &AreqWatch<'_>, nwk_addr: u16) -> Result<ZnpFrame> {
+    let wanted = nwk_addr.to_le_bytes();
+    responses.wait_matching(EVENT_LOOP_TIMEOUT, |rsp| {
+        rsp.data.get(3..5).is_none_or(|addr| addr == &wanted[..])
     })
 }
 
