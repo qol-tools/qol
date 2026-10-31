@@ -251,10 +251,12 @@ impl EntryStore {
     }
 
     fn can_incremental_filter(previous: &FilterKey, next: &FilterKey) -> bool {
+        let previous_hint = search::extension_hint(&previous.query);
         previous.mode == next.mode
             && previous.fuzziness == next.fuzziness
             && !previous.query.is_empty()
             && next.query.starts_with(&previous.query)
+            && (previous_hint.is_none() || previous_hint == search::extension_hint(&next.query))
     }
 
     pub fn adjust_selected_boost(
@@ -526,6 +528,48 @@ mod tests {
         assert!(store
             .step_selected(0, true, "rank", SearchMode::Apps, Fuzziness::Balanced)
             .is_none());
+    }
+
+    #[test]
+    fn a_longer_extension_finds_files_the_shorter_one_filtered_out() {
+        let temp = TempDir::new().unwrap();
+        let mut store = EntryStore {
+            app_entries: Arc::new(Vec::new()),
+            file_entries: Arc::new(
+                ["notes.r", "notes.rs", "notes.rst"]
+                    .into_iter()
+                    .map(|name| discovery::FileEntry {
+                        name: name.to_string(),
+                        path: PathBuf::from(format!("/work/{name}")),
+                    })
+                    .collect(),
+            ),
+            flow_entries: Arc::new(Vec::new()),
+            cache: Vec::new(),
+            cache_key: None,
+            filter_history: Vec::new(),
+            frecency: FrequencyData::default(),
+            frecency_path: temp.path().join("frequency.json"),
+            boosts: HashMap::new(),
+            recent_entries: Vec::new(),
+            before_typing: BeforeTyping::default(),
+        };
+        let names = |store: &EntryStore| -> Vec<String> {
+            store
+                .results()
+                .iter()
+                .map(|scored| store.name(scored).to_owned())
+                .collect()
+        };
+
+        for (query, expected) in [
+            ("notes.r", "notes.r"),
+            ("notes.rs", "notes.rs"),
+            ("notes.rst", "notes.rst"),
+        ] {
+            store.ensure_filtered(query, SearchMode::Files, Fuzziness::Strict);
+            assert_eq!(names(&store), [expected], "query {query}");
+        }
     }
 
     #[test]
