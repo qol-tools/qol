@@ -484,7 +484,7 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(LocalListener, Option<Pat
                 return local_ipc::bind_listener(&socket_path)
                     .map(|listener| (listener, Some(socket_path)));
             }
-            if send_ping(config) {
+            if existing_instance_listens(config) {
                 #[cfg(debug_assertions)]
                 log::info!("existing instance alive, exiting");
                 return Err(io::Error::new(
@@ -499,6 +499,19 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(LocalListener, Option<Pat
     };
 
     Ok((listener, Some(socket_path)))
+}
+
+fn existing_instance_listens(config: &DaemonConfig) -> bool {
+    match send_ping_state(config) {
+        Ok(_) => true,
+        Err(error) => matches!(
+            error.kind(),
+            ErrorKind::WouldBlock
+                | ErrorKind::TimedOut
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::InvalidData
+        ),
+    }
 }
 
 fn replace_existing(config: &DaemonConfig) -> io::Result<bool> {

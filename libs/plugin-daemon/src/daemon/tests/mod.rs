@@ -312,6 +312,27 @@ fn bind_listener_replaces_stale_socket() {
     remove_socket_file(path);
 }
 
+#[cfg(unix)]
+#[test]
+fn bind_listener_leaves_a_busy_daemon_that_misses_the_ping() {
+    let _lock = daemon_listener_fd_env_lock();
+    let socket_name = temp_socket_name("busy");
+    let config = fallback_config(socket_name);
+    let path = socket_path(&config).unwrap();
+    remove_socket_file(&path);
+    let busy = local_ipc::bind_listener(&path).unwrap();
+
+    let error = bind_listener(&config).unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::AddrInUse, "{error}");
+    assert!(
+        socket_exists(&path),
+        "a live daemon that is too busy to answer must keep its socket"
+    );
+    drop(busy);
+    remove_socket_file(path);
+}
+
 #[test]
 fn bind_listener_replaces_a_running_daemon_when_requested() {
     let _lock = daemon_listener_fd_env_lock();
