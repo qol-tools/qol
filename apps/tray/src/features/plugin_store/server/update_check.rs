@@ -18,18 +18,19 @@ pub(super) fn claim(state: &AppState) -> Option<impl Future<Output = ()> + Send 
     let catalog = plugin_services::claim_catalog_revalidation(state);
     Some(async move {
         let _claim = claim;
-        let host = async {
-            if let Err(error) = crate::updates::check_for_updates().await {
-                log::debug!("Update check failed: {}", error);
-            }
-        };
         let catalog = async {
             if let Some(revalidation) = catalog {
                 revalidation.await;
             }
         };
-        tokio::join!(host, catalog);
+        tokio::join!(check_host(), catalog);
     })
+}
+
+pub(super) async fn check_host() {
+    if let Err(error) = crate::updates::check_for_updates().await {
+        log::debug!("Update check failed: {}", error);
+    }
 }
 
 pub(super) fn running(state: &AppState) -> bool {

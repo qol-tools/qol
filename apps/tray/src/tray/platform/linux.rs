@@ -15,7 +15,7 @@ static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> 
 
 pub(crate) const ICON_SIZE: u32 = 32;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
-const TONE_REFRESH_SECONDS: u32 = 10;
+const REFRESH_SECONDS: u32 = 10;
 const SLOW_STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub enum PlatformTray {
@@ -142,7 +142,7 @@ fn run_tray_thread(
         let _ = startup_tx.send(Err("Failed to initialize GTK".to_string()));
         return;
     }
-    let Some((tray_icon, router)) = build_menu_and_icon(
+    let Some((tray_icon, router, update_menu)) = build_menu_and_icon(
         &startup_tx,
         feature_registry,
         update_available,
@@ -152,26 +152,63 @@ fn run_tray_thread(
         return;
     };
     setup_event_loop(router, shutdown_tx);
-    follow_panel_tone(tray_icon, update_available);
+    follow_panel_tone_and_updates(tray_icon, update_menu, update_available);
     let _ = startup_tx.send(Ok(()));
     gtk::main();
 }
 
-fn follow_panel_tone(tray_icon: TrayIcon, update_available: bool) {
+fn follow_panel_tone_and_updates(
+    tray_icon: TrayIcon,
+    mut update_menu: UpdateMenu,
+    update_available: bool,
+) {
     use crate::tray::{icon, tone};
 
-    let mut shown = tone::current();
-    glib::timeout_add_seconds_local(TONE_REFRESH_SECONDS, move || {
-        let current = tone::current();
+    let mut shown = (tone::current(), update_available);
+    glib::timeout_add_seconds_local(REFRESH_SECONDS, move || {
+        let current = (tone::current(), crate::updates::host_update_available());
         if current != shown {
             shown = current;
-            let art = icon::tray_icon(update_available, current);
+            let art = icon::tray_icon(current.1, current.0);
             if let Err(error) = tray_icon.set_icon(Some(art)) {
-                log::warn!("failed to swap the tray icon for the panel tone: {error}");
+                log::warn!("failed to swap the tray icon: {error}");
             }
         }
+        update_menu.sync(current.1);
         glib::ControlFlow::Continue
     });
+}
+
+struct UpdateMenu {
+    menu: tray_icon::menu::Menu,
+    item: tray_icon::menu::MenuItem,
+    shown: bool,
+    label: String,
+}
+
+impl UpdateMenu {
+    fn sync(&mut self, available: bool) {
+        if available {
+            let label = crate::menu::builder::update_label();
+            if label != self.label {
+                self.item.set_text(&label);
+                self.label = label;
+            }
+        }
+        if available == self.shown {
+            return;
+        }
+        let result = if available {
+            let before_quit = self.menu.items().len().saturating_sub(1);
+            self.menu.insert(&self.item, before_quit)
+        } else {
+            self.menu.remove(&self.item)
+        };
+        match result {
+            Ok(()) => self.shown = available,
+            Err(error) => log::warn!("failed to update the tray menu's update item: {error}"),
+        }
+    }
 }
 
 fn build_menu_and_icon(
@@ -180,8 +217,8 @@ fn build_menu_and_icon(
     update_available: bool,
     events: Arc<EventBus>,
     icon: Icon,
-) -> Option<(TrayIcon, crate::menu::router::EventRouter)> {
-    let (menu, router) =
+) -> Option<(TrayIcon, crate::menu::router::EventRouter, UpdateMenu)> {
+    let (menu, router, update_item) =
         match crate::menu::builder::build_menu(feature_registry, update_available, events) {
             Ok(r) => r,
             Err(e) => {
@@ -189,6 +226,12 @@ fn build_menu_and_icon(
                 return None;
             }
         };
+    let update_menu = UpdateMenu {
+        menu: menu.clone(),
+        label: update_item.text(),
+        item: update_item,
+        shown: update_available,
+    };
     let built = catch_tray_panic(move || {
         TrayIconBuilder::new()
             .with_menu(Box::new(menu))
@@ -198,7 +241,7 @@ fn build_menu_and_icon(
             .map_err(|e| e.to_string())
     });
     match built {
-        Ok(t) => Some((t, router)),
+        Ok(t) => Some((t, router, update_menu)),
         Err(e) => {
             let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e)));
             None

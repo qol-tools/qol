@@ -116,7 +116,10 @@ Sections:
   present, otherwise an existing executable menu action id.
   `app_window` (default false) marks the one shortcut that opens the plugin's own
   app window. On Linux its launcher entry gets `StartupWMClass=<plugin id>`, so the
-  Cinnamon panel links the window to it and offers "Pin to panel". The window must
+  Cinnamon panel links the window to it and offers "Pin to panel". When the plugin's
+  mark has app art (`qol_theme::Mark::app_svg`, today only `explorer`), that entry's
+  `Icon=` is the art file `<mark>.app.svg` beside the line marks, so the panel shows
+  the same full-colour icon as the window. The launcher still draws the line mark. The window must
   set `.app_id(PLUGIN_ID)` with `PLUGIN_ID = env!("QOL_PLUGIN_ID")`; the
   `plugin_identity_ssot` workspace test fails when it does not. At most one
   shortcut per manifest may set it.

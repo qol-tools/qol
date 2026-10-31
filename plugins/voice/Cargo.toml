@@ -1,6 +1,6 @@
 [package]
 name = "qol-voice"
-version = "0.79.10"
+version = "0.79.11"
 edition.workspace = true
 license.workspace = true
 

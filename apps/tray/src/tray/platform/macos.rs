@@ -79,7 +79,7 @@ fn spawn_tray(
     update_available: bool,
     events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
-    let (menu, router) =
+    let (menu, router, _update_item) =
         crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()

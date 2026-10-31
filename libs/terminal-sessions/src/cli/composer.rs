@@ -50,11 +50,43 @@ impl Frame {
 }
 
 pub(crate) fn claude(screen: &str) -> CliComposer {
-    ruled(screen, &CLAUDE_GLYPHS, &CLAUDE_CHIPS)
+    let lines: Vec<&str> = screen.lines().collect();
+    let Some(bottom) = lines.iter().rposition(|line| is_rule(line)) else {
+        return CliComposer::Unreadable;
+    };
+    let indent = indentation(lines[bottom]);
+    let top = lines[..bottom]
+        .iter()
+        .rposition(|line| is_rule(line) && indentation(line) == indent);
+    let glyph = lines[..bottom].iter().rposition(|line| {
+        indentation(line) == indent && after_glyph(line, &CLAUDE_GLYPHS).is_some()
+    });
+    let hung_from_glyph = glyph.filter(|&glyph| {
+        glyph > 0
+            && lines[glyph - 1].trim().ends_with(RULE)
+            && top.is_none_or(|top| top + 1 < glyph)
+    });
+    let body = match (hung_from_glyph, top) {
+        (Some(glyph), _) => &lines[glyph..bottom],
+        (None, Some(top)) => &lines[top + 1..bottom],
+        (None, None) => return CliComposer::Unreadable,
+    };
+    glyph_draft(body, &CLAUDE_GLYPHS, &CLAUDE_CHIPS)
 }
 
 pub(crate) fn pi(screen: &str) -> CliComposer {
-    ruled(screen, &[], &PI_CHIPS)
+    let lines: Vec<&str> = screen.lines().collect();
+    let Some(bottom) = lines.iter().rposition(|line| is_rule(line)) else {
+        return CliComposer::Unreadable;
+    };
+    let Some(top) = lines[..bottom].iter().rposition(|line| is_rule(line)) else {
+        return CliComposer::Unreadable;
+    };
+    let body = &lines[top + 1..bottom];
+    if body.is_empty() {
+        return CliComposer::Unreadable;
+    }
+    draft(&body.join("\n"), &PI_CHIPS)
 }
 
 pub(crate) fn codex(screen: &str) -> CliComposer {
@@ -65,18 +97,7 @@ pub(crate) fn kimi(screen: &str) -> CliComposer {
     marked(screen, KIMI_GLYPH, Frame::Boxed, &[])
 }
 
-fn ruled(screen: &str, glyphs: &[char], chips: &[Chip]) -> CliComposer {
-    let lines: Vec<&str> = screen.lines().collect();
-    let Some(bottom) = lines.iter().rposition(|line| is_rule(line)) else {
-        return CliComposer::Unreadable;
-    };
-    let Some(top) = lines[..bottom].iter().rposition(|line| is_rule(line)) else {
-        return CliComposer::Unreadable;
-    };
-    let body = &lines[top + 1..bottom];
-    if glyphs.is_empty() {
-        return draft(&body.join("\n"), chips);
-    }
+fn glyph_draft(body: &[&str], glyphs: &[char], chips: &[Chip]) -> CliComposer {
     let Some(first) = body.iter().position(|line| !line.trim().is_empty()) else {
         return CliComposer::Unreadable;
     };
@@ -90,6 +111,12 @@ fn ruled(screen: &str, glyphs: &[char], chips: &[Chip]) -> CliComposer {
         ),
         None => draft(&body[first..].join("\n"), chips),
     }
+}
+
+fn indentation(line: &str) -> usize {
+    line.chars()
+        .take_while(|character| character.is_whitespace())
+        .count()
 }
 
 fn marked(screen: &str, glyph: char, frame: Frame, chips: &[Chip]) -> CliComposer {
@@ -113,7 +140,7 @@ fn marked(screen: &str, glyph: char, frame: Frame, chips: &[Chip]) -> CliCompose
     draft(&text, chips)
 }
 
-fn is_rule(line: &str) -> bool {
+pub fn is_rule(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return false;
@@ -124,6 +151,11 @@ fn is_rule(line: &str) -> bool {
     }
     let leading = trimmed.chars().count() - label.chars().count();
     leading >= LABELED_RULE_MIN_RUN && label.ends_with(RULE)
+}
+
+pub(crate) fn is_plain_rule(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|character| character == RULE)
 }
 
 fn after_glyph<'a>(line: &'a str, glyphs: &[char]) -> Option<&'a str> {
@@ -244,6 +276,75 @@ mod tests {
         assert_eq!(claude(&typed), draft("hello wor", 0));
         let both = framed_screen(LABELED_RULE, "\u{276F}\u{a0}", LABELED_RULE);
         assert_eq!(claude(&both), CliComposer::Empty);
+    }
+
+    #[test]
+    fn claude_reads_a_box_whose_top_label_is_the_history_marker() {
+        let rule = "────────────────────────────────────────";
+        let tops = [format!("─── History 3/42 {rule}"), format!("───  {rule}")];
+        for top in tops {
+            let empty = framed_screen(&top, "\u{276F}\u{a0}", CLAUDE_RULE);
+            assert_eq!(claude(&empty), CliComposer::Empty, "{top:?}");
+            let typed = framed_screen(&top, "\u{276F} hello wor", CLAUDE_RULE);
+            assert_eq!(claude(&typed), draft("hello wor", 0), "{top:?}");
+        }
+    }
+
+    #[test]
+    fn claude_reads_a_box_whose_top_label_leaves_fewer_than_three_rule_characters() {
+        let tops = [
+            "── ultracode  fast mode (cooling down) ─",
+            " ultracode  fast mode (cooling down) ─",
+        ];
+        let narrow_rule = "────────────────────────────────────────";
+        for top in tops {
+            let empty = framed_screen(top, "\u{276F}\u{a0}", narrow_rule);
+            assert_eq!(claude(&empty), CliComposer::Empty, "{top:?}");
+            let typed = framed_screen(top, "\u{276F} run the gate", narrow_rule);
+            assert_eq!(claude(&typed), draft("run the gate", 0), "{top:?}");
+        }
+    }
+
+    #[test]
+    fn a_rule_shaped_transcript_line_above_a_narrow_box_is_not_its_top() {
+        let top = "── ultracode  fast mode (cooling down) ─";
+        let screen = format!(
+            "\u{25CF} Plan\n  \u{2500}\u{2500}\u{2500} step 2 \u{2500}\n  run the gate\n{top}\n\u{276F}\u{a0}\n{CLAUDE_RULE}\n  /work"
+        );
+        assert_eq!(claude(&screen), CliComposer::Empty);
+        let without_box = format!(
+            "\u{25CF} Plan\n  \u{2500}\u{2500}\u{2500} step 2 \u{2500}\n  run the gate\n{CLAUDE_RULE}\n  /work"
+        );
+        assert_eq!(claude(&without_box), CliComposer::Unreadable);
+    }
+
+    #[test]
+    fn a_rule_shaped_line_inside_a_claude_draft_does_not_split_the_box() {
+        let screen = framed_screen(
+            CLAUDE_RULE,
+            "\u{276F} compare these:\n  ───── old ─────\n  >",
+            CLAUDE_RULE,
+        );
+        assert_eq!(
+            claude(&screen),
+            draft("compare these:\n  ───── old ─────\n  >", 0)
+        );
+    }
+
+    #[test]
+    fn pi_reads_a_scrolled_editor_whose_top_border_carries_an_indicator() {
+        let rule = "─────────";
+        let screen = format!("x\n{rule}\n───── ↑ 3 more ─────\nrow 9\n{rule}\n/work");
+        assert_eq!(pi(&screen), draft("row 9", 0));
+    }
+
+    #[test]
+    fn pi_reads_a_rule_shaped_widget_header_below_the_editor_as_unreadable() {
+        let rule = "────────────";
+        let screen = format!(
+            "assistant text\n{rule}\nfix the parser\n{rule}\n─── Tasks ────────\n  [ ] lint\n~/work 12k/200k"
+        );
+        assert_eq!(pi(&screen), CliComposer::Unreadable);
     }
 
     #[test]
