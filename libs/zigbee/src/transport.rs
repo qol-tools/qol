@@ -57,10 +57,8 @@ impl Transport {
         Ok(())
     }
 
-    pub fn recv(&self, timeout: Duration) -> Result<ZnpFrame> {
-        self.frames
-            .recv_timeout(timeout)
-            .map_err(|_| anyhow::anyhow!("receive timed out"))
+    pub fn frames(&self) -> Receiver<ZnpFrame> {
+        self.frames.clone()
     }
 }
 

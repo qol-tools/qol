@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 
-use super::request::RequestEngine;
+use super::request::{AreqWatch, RequestEngine};
 use super::subsystem::*;
 use super::transport::{Transport, TransportConfig};
 use super::zcl;
@@ -123,13 +123,14 @@ pub fn send_zcl_command(
     ];
     data.extend_from_slice(zcl_payload);
 
+    let confirms = engine.watch_areq(AF, af::DATA_CONFIRM);
     let resp = engine.sreq(AF, af::DATA_REQUEST, data)?;
     ensure!(
         resp.data.first().copied() == Some(STATUS_SUCCESS),
         "AF_DATA_REQUEST failed: status=0x{:02X}",
         resp.data.first().copied().unwrap_or(0xFF)
     );
-    wait_for_data_confirm(engine, trans_seq)?;
+    wait_for_data_confirm(&confirms, trans_seq)?;
     Ok(())
 }
 
@@ -137,9 +138,9 @@ fn next_af_trans_seq() -> u8 {
     AF_TRANS_SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-fn wait_for_data_confirm(engine: &RequestEngine, trans_seq: u8) -> Result<()> {
+fn wait_for_data_confirm(confirms: &AreqWatch<'_>, trans_seq: u8) -> Result<()> {
     loop {
-        let confirm = engine.wait_for_areq(AF, af::DATA_CONFIRM, DATA_CONFIRM_TIMEOUT)?;
+        let confirm = confirms.wait(DATA_CONFIRM_TIMEOUT)?;
         let Some(status) = confirm.data.first().copied() else {
             return Err(anyhow::anyhow!("AF_DATA_CONFIRM missing status byte"));
         };
@@ -162,8 +163,9 @@ fn wait_for_data_confirm(engine: &RequestEngine, trans_seq: u8) -> Result<()> {
 }
 
 fn reset(engine: &RequestEngine) -> Result<()> {
+    let reset_ind = engine.watch_areq(SYS, sys::RESET_IND);
     engine.areq(SYS, sys::RESET_REQ, vec![0x01])?;
-    engine.wait_for_areq(SYS, sys::RESET_IND, STARTUP_TIMEOUT)?;
+    reset_ind.wait(STARTUP_TIMEOUT)?;
     Ok(())
 }
 
@@ -242,8 +244,14 @@ pub fn resolve_nwk_address(engine: &RequestEngine, ieee: &[u8; 8]) -> Result<u16
     let mut data = ieee.to_vec();
     data.push(0x00);
     data.push(0x00);
+    let responses = engine.watch_areq(ZDO, zdo::NWK_ADDR_RSP);
     engine.sreq(ZDO, zdo::NWK_ADDR_REQ, data)?;
-    let rsp = engine.wait_for_areq(ZDO, zdo::NWK_ADDR_RSP, NWK_ADDR_TIMEOUT)?;
+    let rsp = loop {
+        let rsp = responses.wait(NWK_ADDR_TIMEOUT)?;
+        if rsp.data.get(1..9) == Some(&ieee[..]) {
+            break rsp;
+        }
+    };
     let status = rsp.data.first().copied().unwrap_or(0xFF);
     ensure!(
         status == STATUS_SUCCESS,
@@ -256,8 +264,9 @@ pub fn resolve_nwk_address(engine: &RequestEngine, ieee: &[u8; 8]) -> Result<u16
 }
 
 fn start_network(engine: &RequestEngine) -> Result<()> {
+    let state_changes = engine.watch_areq(ZDO, zdo::STATE_CHANGE_IND);
     engine.sreq(ZDO, zdo::STARTUP_FROM_APP, vec![0x00, 0x00])?;
-    let state_frame = engine.wait_for_areq(ZDO, zdo::STATE_CHANGE_IND, STARTUP_TIMEOUT)?;
+    let state_frame = state_changes.wait(STARTUP_TIMEOUT)?;
     ensure!(
         state_frame.data.first().copied() == Some(COORDINATOR_STATE_STARTED),
         "unexpected coordinator state: 0x{:02X}",
