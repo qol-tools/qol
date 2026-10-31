@@ -28,34 +28,53 @@ pub(super) struct SystemClaudeEnvironment;
 
 impl ClaudeEnvironment for SystemClaudeEnvironment {
     fn session(&self, pid: i32) -> Option<ClaudeSessionLocation> {
-        let home = Registry::load().current(Harness::Claude).path;
-        let record = read_record(&home, pid)?;
-        if record.session_id.is_empty() || record.cwd.is_empty() {
-            return None;
-        }
-        let project = encode_project_dir(&record.cwd);
-        let transcript_path = home
-            .join("projects")
-            .join(project)
-            .join(format!("{}.jsonl", record.session_id));
-        let config_dir = custom_config_dir(&home);
-        transcript_path.is_file().then_some(ClaudeSessionLocation {
-            external_id: record.session_id,
-            transcript_path,
-            config_dir,
-        })
+        let (home, record) = located_record(&Registry::load(), pid)?;
+        session_location(&home, record)
     }
 
     fn remote_control_session(&self, pid: i32) -> Option<String> {
-        read_record(&Registry::load().current(Harness::Claude).path, pid)?
+        located_record(&Registry::load(), pid)?
+            .1
             .bridge_session_id
             .filter(|id| !id.is_empty())
     }
 
     fn busy(&self, pid: i32) -> bool {
-        read_record(&Registry::load().current(Harness::Claude).path, pid)
-            .is_some_and(|record| record.busy())
+        located_record(&Registry::load(), pid).is_some_and(|(_, record)| record.busy())
     }
+}
+
+fn located_record(registry: &Registry, pid: i32) -> Option<(PathBuf, ClaudeSessionRecord)> {
+    let current = registry.current(Harness::Claude).path;
+    if let Some(record) = read_record(&current, pid) {
+        return Some((current, record));
+    }
+    let held = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    registry
+        .every_home()
+        .into_iter()
+        .filter(|home| home.harness == Harness::Claude && home.path != current)
+        .find_map(|home| {
+            read_record(&home.path, pid)
+                .filter(|record| record.held_by(held))
+                .map(|record| (home.path, record))
+        })
+}
+
+fn session_location(home: &Path, record: ClaudeSessionRecord) -> Option<ClaudeSessionLocation> {
+    if record.session_id.is_empty() || record.cwd.is_empty() {
+        return None;
+    }
+    let project = encode_project_dir(&record.cwd);
+    let transcript_path = home
+        .join("projects")
+        .join(project)
+        .join(format!("{}.jsonl", record.session_id));
+    transcript_path.is_file().then_some(ClaudeSessionLocation {
+        external_id: record.session_id,
+        transcript_path,
+        config_dir: custom_config_dir(home),
+    })
 }
 
 pub(super) fn custom_config_dir(home: &Path) -> Option<PathBuf> {
@@ -231,5 +250,43 @@ mod tests {
         );
         let work = user_home.join(".claude-work");
         assert_eq!(custom_config_dir(&work), Some(work));
+    }
+
+    #[test]
+    fn a_live_session_of_another_claude_home_is_found_by_its_own_pid() {
+        let user = tempfile::TempDir::new().unwrap();
+        let current = user.path().join(".claude");
+        let other = user.path().join(".claude-other");
+        fs::create_dir_all(current.join("sessions")).unwrap();
+        fs::create_dir_all(other.join("sessions")).unwrap();
+        fs::create_dir_all(other.join("projects")).unwrap();
+        fs::write(other.join(".claude.json"), "{}").unwrap();
+        let pid = std::process::id() as i32;
+        fs::write(
+            other.join("sessions").join(format!("{pid}.json")),
+            r#"{"sessionId":"other-chat","cwd":"/work/proj"}"#,
+        )
+        .unwrap();
+        fs::write(
+            other.join("sessions").join("0.json"),
+            r#"{"sessionId":"stale","cwd":"/work/proj"}"#,
+        )
+        .unwrap();
+        let registry =
+            Registry::load_from(None, user.path(), &|_: &str| None::<std::ffi::OsString>);
+
+        let (home, record) = located_record(&registry, pid).unwrap();
+
+        assert_eq!(home, other);
+        assert_eq!(record.session_id, "other-chat");
+        assert!(located_record(&registry, 0).is_none());
+        fs::write(
+            current.join("sessions").join(format!("{pid}.json")),
+            r#"{"sessionId":"current-chat","cwd":"/work/proj"}"#,
+        )
+        .unwrap();
+        let (home, record) = located_record(&registry, pid).unwrap();
+        assert_eq!(home, current);
+        assert_eq!(record.session_id, "current-chat");
     }
 }

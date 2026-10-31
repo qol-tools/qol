@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use qol_agent_homes::{AgentHome, Harness, Registry};
+use qol_agent_homes::AgentHome;
 use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
 use qol_terminal_sessions::closed::{self, ClosedRecord};
 
@@ -24,36 +24,6 @@ pub(super) struct History<'a> {
     pub(super) forks: &'a ForkStore,
     pub(super) switchboard_dir: &'a Path,
     pub(super) homes: Vec<AgentHome>,
-}
-
-pub(super) fn conversation_homes() -> Vec<AgentHome> {
-    let registry = Registry::load();
-    let mut accounts = qol_agent_launch::account::claude_account_dirs();
-    accounts.push(registry.current(Harness::Claude).path);
-    with_claude_homes(registry.homes().to_vec(), accounts)
-}
-
-fn with_claude_homes(
-    mut homes: Vec<AgentHome>,
-    accounts: impl IntoIterator<Item = PathBuf>,
-) -> Vec<AgentHome> {
-    for path in accounts {
-        if homes
-            .iter()
-            .any(|home| home.harness == Harness::Claude && home.path == path)
-        {
-            continue;
-        }
-        homes.push(AgentHome {
-            harness: Harness::Claude,
-            id: path.to_string_lossy().into_owned(),
-            path,
-            shared: false,
-            default: false,
-            declared: false,
-        });
-    }
-    homes
 }
 
 impl History<'_> {
@@ -182,50 +152,4 @@ fn prompt_title(prompt: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())?;
     Some(line.chars().take(PROMPT_TITLE_CHARS).collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn home(harness: Harness, path: &str, declared: bool) -> AgentHome {
-        AgentHome {
-            harness,
-            id: path.to_owned(),
-            path: PathBuf::from(path),
-            shared: false,
-            default: false,
-            declared,
-        }
-    }
-
-    #[test]
-    fn account_dirs_join_the_registered_homes_once_each() {
-        let registered = vec![
-            home(Harness::Claude, "/home/me/.claude", false),
-            home(Harness::Codex, "/home/me/.claude-deepmind", false),
-        ];
-
-        let homes = with_claude_homes(
-            registered,
-            [
-                PathBuf::from("/home/me/.claude-deepmind"),
-                PathBuf::from("/home/me/.claude/"),
-                PathBuf::from("/home/me/.claude-deepmind"),
-            ],
-        );
-
-        assert_eq!(
-            homes
-                .iter()
-                .map(|home| (home.harness, home.path.to_str().unwrap()))
-                .collect::<Vec<_>>(),
-            [
-                (Harness::Claude, "/home/me/.claude"),
-                (Harness::Codex, "/home/me/.claude-deepmind"),
-                (Harness::Claude, "/home/me/.claude-deepmind"),
-            ]
-        );
-        assert!(!homes[2].declared && !homes[2].default && !homes[2].shared);
-    }
 }

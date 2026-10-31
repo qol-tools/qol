@@ -133,14 +133,20 @@ Claude and pi resolve their home live on every call and need no re-run.
   today.
 - Fail closed in the hook: the qol-skills continue hook skips the recall when
   `qol agents current claude` fails, rather than answering from the wrong home.
-- Sessions limitation: the sessions builtins resolve one claude home per
-  observing process (the tray's or watcher's own env), while memory ingests
-  every registered home.
-  `sessions_closed` and `session_reopen` read the transcripts of every
-  registered claude home plus every config dir in `claude_accounts` in
-  sessions.toml and the account profiles registry, without registering
-  them here, so listing another account's conversations never turns on the
-  memory partition.
+- Sessions see every home: the sessions claude builtin and `sessions_closed`
+  read `Registry::every_home()`, which is every registered home, each
+  harness's env home, and every undeclared home found directly under the
+  user home.
+  A directory there is a claude home when it holds both `projects/` and
+  `.claude.json`, which Claude Code writes into every `CLAUDE_CONFIG_DIR`.
+  So a conversation run under any account, past or future, is listed,
+  resumed under its own config dir, and its live session is resolved,
+  without declaring that account anywhere.
+  Discovered homes are never registered: `homes()`, memory ingest and the
+  MCP fail-closed rule see only the registry, so finding another account
+  never turns on the memory partition.
+  A config dir outside the user home is seen only once it is declared or
+  set as the observing process's env home.
 - Ingest roots resolve once at daemon start: after `qol agents add` or
   `qol agents remove`, and after a declared home's transcript directory is
   first created, restart qol-tray before that home's transcripts are
