@@ -31,7 +31,7 @@ const READY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static KEY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-const LANE_EXEC_PREFIX: &[&str] = &["sessions", "lane-exec"];
+pub(super) const LANE_EXEC_PREFIX: &[&str] = &["sessions", "lane-exec"];
 
 #[cfg(not(test))]
 fn caller_config_dir() -> Option<PathBuf> {
@@ -2126,6 +2126,7 @@ pub(super) fn spawn_detached(
         assignment,
         park,
         &[],
+        None,
         false,
     )
 }
@@ -2151,6 +2152,7 @@ pub(super) fn launch_detached(
     assignment: Option<&AgentAssignment>,
     park: bool,
     env: &[(String, String)],
+    config_dir: Option<&Path>,
     in_active_window: bool,
 ) -> Result<DetachedLaunch> {
     require_model_for_launch(model)?;
@@ -2160,10 +2162,11 @@ pub(super) fn launch_detached(
     launch.args.extend(flags);
     launch.args.extend(extra_args.iter().cloned());
     remember_caller_login();
+    let config_dir = config_dir.map(Path::to_path_buf).or_else(caller_config_dir);
     qol_agent_launch::account::apply(
         &mut launch,
         &prepared.tool_id,
-        caller_config_dir().as_deref(),
+        config_dir.as_deref(),
         &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
     )?;
     launch
