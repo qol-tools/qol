@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(home, other);
         assert_eq!(record.session_id, "other-chat");
         assert!(held_record(&current, &homes, 0).is_none());
-        assert!(held_record(&other, &[other.clone()], pid).is_none());
+        assert!(held_record(&other, std::slice::from_ref(&other), pid).is_none());
     }
 
     #[test]
