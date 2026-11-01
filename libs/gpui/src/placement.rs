@@ -1,5 +1,7 @@
 use gpui::{point, px, size, Bounds, Pixels, Point, Size};
 
+use crate::dead_zone::{self, DeadZone};
+
 pub const CORNER_MARGIN: f32 = 24.0;
 pub const TOP_CENTER_MARGIN: f32 = 48.0;
 
@@ -125,13 +127,40 @@ impl MonitorPlacement {
         Bounds::new(point(x, y), content)
     }
 
+    pub fn clear_area(
+        self,
+        monitor: Bounds<Pixels>,
+        content: Size<Pixels>,
+        zones: &[DeadZone],
+    ) -> Bounds<Pixels> {
+        let mut area = monitor;
+        for _ in 0..zones.len() {
+            let next = dead_zone::clear_area(area, self.bounds(area, content), zones);
+            if next == area {
+                break;
+            }
+            area = next;
+        }
+        area
+    }
+
+    pub fn clear_bounds(
+        self,
+        monitor: Bounds<Pixels>,
+        content: Size<Pixels>,
+        zones: &[DeadZone],
+    ) -> Bounds<Pixels> {
+        self.bounds(self.clear_area(monitor, content, zones), content)
+    }
+
     pub fn projected_bounds(
         self,
         monitor: Bounds<Pixels>,
         content: Size<Pixels>,
         viewport: Bounds<Pixels>,
+        zones: &[DeadZone],
     ) -> Option<Bounds<Pixels>> {
-        project_bounds(self.bounds(monitor, content), viewport)
+        project_bounds(self.clear_bounds(monitor, content, zones), viewport)
     }
 }
 
@@ -331,6 +360,14 @@ mod tests {
         clamp_origin_to_monitor, intersect_bounds, monitor_at_point, project_bounds, Anchor,
         Corner, MonitorPlacement, CORNER_MARGIN,
     };
+    use crate::dead_zone::{DeadZone, Edge};
+
+    fn notch() -> DeadZone {
+        DeadZone {
+            edge: Edge::Top,
+            bounds: Bounds::new(point(px(663.5), px(0.0)), size(px(185.0), px(32.0))),
+        }
+    }
 
     #[test]
     fn clamping_leaves_an_on_screen_window_untouched() {
@@ -518,5 +555,48 @@ mod tests {
 
         let center = MonitorPlacement::center().resized(current, taller);
         assert_eq!(center.origin, point(px(1458.0), px(1135.0)));
+    }
+
+    #[test]
+    fn placements_move_below_a_dead_zone_they_would_land_on() {
+        let laptop = Bounds::new(point(px(0.0), px(0.0)), size(px(1512.0), px(982.0)));
+        let chip = size(px(300.0), px(30.0));
+        let cases = [
+            (
+                MonitorPlacement::top_center(12.0),
+                point(px(606.0), px(44.0)),
+            ),
+            (
+                MonitorPlacement::top_center(48.0),
+                point(px(606.0), px(48.0)),
+            ),
+            (
+                MonitorPlacement::corner(Corner::TopLeft, 12.0),
+                point(px(12.0), px(12.0)),
+            ),
+            (
+                MonitorPlacement::corner(Corner::BottomRight, 12.0),
+                point(px(1200.0), px(940.0)),
+            ),
+        ];
+        for (placement, origin) in cases {
+            assert_eq!(
+                placement.clear_bounds(laptop, chip, &[notch()]).origin,
+                origin,
+                "{placement:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn placements_without_dead_zones_keep_their_monitor_geometry() {
+        let monitor = Bounds::new(point(px(2560.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let content = size(px(300.0), px(30.0));
+        let placement = MonitorPlacement::top_center(12.0);
+        assert_eq!(
+            placement.clear_bounds(monitor, content, &[]),
+            placement.bounds(monitor, content)
+        );
+        assert_eq!(placement.clear_area(monitor, content, &[]), monitor);
     }
 }

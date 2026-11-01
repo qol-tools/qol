@@ -1,11 +1,54 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use qol_config::config_dir;
 
 pub const REGISTRY_FILE_NAME: &str = "agents.toml";
+
+const CLAUDE_SESSION_MARKER: &str = "CLAUDECODE";
+const CLAUDE_SESSION_ENV: [&str; 11] = [
+    CLAUDE_SESSION_MARKER,
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_AGENT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+];
+
+pub fn is_claude_session_env(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name == Harness::Claude.home_env_var() || CLAUDE_SESSION_ENV.contains(&name)
+    })
+}
+
+pub fn claude_session_env_names(names: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let names: Vec<OsString> = names.into_iter().collect();
+    if !names.iter().any(|name| name == CLAUDE_SESSION_MARKER) {
+        return Vec::new();
+    }
+    names
+        .into_iter()
+        .filter(|name| is_claude_session_env(name))
+        .collect()
+}
+
+pub fn inherited_claude_session_env() -> Vec<OsString> {
+    claude_session_env_names(std::env::vars_os().map(|(name, _)| name))
+}
+
+pub fn scrub_claude_session_env(command: &mut Command) {
+    for name in inherited_claude_session_env() {
+        command.env_remove(name);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -49,6 +92,13 @@ impl Harness {
             Harness::Codex => user_home.join(".codex"),
             Harness::Kimi => user_home.join(".kimi-code"),
             Harness::Pi => user_home.join(".pi").join("agent"),
+        }
+    }
+
+    pub fn holds_custom_home(self, dir: &Path) -> bool {
+        match self {
+            Harness::Claude => dir.join("projects").is_dir() && dir.join(".claude.json").is_file(),
+            Harness::Codex | Harness::Kimi | Harness::Pi => false,
         }
     }
 
@@ -243,6 +293,37 @@ impl Registry {
         Some(root)
     }
 
+    pub fn every_home(&self) -> Vec<AgentHome> {
+        let mut homes = self.homes.clone();
+        for harness in Harness::ALL {
+            let current = self.current(harness);
+            if !homes
+                .iter()
+                .any(|home| home.harness == harness && home.id == current.id)
+            {
+                homes.push(current);
+            }
+        }
+        for (harness, path) in discovered_homes(&self.user_home) {
+            let id = normalize(path.to_string_lossy().as_ref(), &self.user_home);
+            if homes
+                .iter()
+                .any(|home| home.harness == harness && home.id == id)
+            {
+                continue;
+            }
+            homes.push(AgentHome {
+                harness,
+                id,
+                path,
+                shared: false,
+                default: false,
+                declared: false,
+            });
+        }
+        homes
+    }
+
     pub fn transcript_roots(&self) -> Vec<(AgentHome, PathBuf)> {
         self.homes
             .iter()
@@ -290,6 +371,26 @@ fn declared_homes(file: Option<&Path>, user_home: &Path) -> (Vec<AgentHome>, Opt
         Err(error) => return (Vec::new(), Some(error.to_string())),
     };
     (homes, None)
+}
+
+fn discovered_homes(user_home: &Path) -> Vec<(Harness, PathBuf)> {
+    let Ok(entries) = fs::read_dir(user_home) else {
+        return Vec::new();
+    };
+    let mut dirs = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    dirs.sort();
+    dirs.into_iter()
+        .flat_map(|dir| {
+            Harness::ALL
+                .into_iter()
+                .filter(|harness| harness.holds_custom_home(&dir))
+                .map(|harness| (harness, dir.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn builtin_id(harness: Harness, user_home: &Path) -> String {
@@ -376,6 +477,63 @@ mod tests {
 
     fn transcripts_under(home: String, leaf: &str) -> String {
         Path::new(&home).join(leaf).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn a_launching_claude_sessions_account_and_session_variables_are_dropped() {
+        let cases = [
+            ("CLAUDE_CONFIG_DIR", true),
+            ("CLAUDECODE", true),
+            ("CLAUDE_EFFORT", true),
+            ("CLAUDE_PID", true),
+            ("CLAUDE_CODE_ENTRYPOINT", true),
+            ("CLAUDE_CODE_CHILD_SESSION", true),
+            ("CLAUDE_CODE_SESSION_ID", true),
+            ("CLAUDE_CODE_MESSAGING_SOCKET", true),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", true),
+            ("CLAUDE_CODE_SESSION_ATTENDED", true),
+            ("CLAUDE_CODE_AGENT", true),
+            ("CLAUDE_CODE_EXECPATH", true),
+            ("CLAUDE_CODE_OAUTH_TOKEN", false),
+            ("CLAUDE_CODE_USE_BEDROCK", false),
+            ("CLAUDE_CODE_USE_VERTEX", false),
+            ("CLAUDE_CODE_MAX_OUTPUT_TOKENS", false),
+            ("CLAUDE_CODE_", false),
+            ("CLAUDE", false),
+            ("CLAUDE_CODE", false),
+            ("CLAUDE_CONFIG_DIRS", false),
+            ("claudecode", false),
+            ("claude_code_entrypoint", false),
+            ("ANTHROPIC_API_KEY", false),
+            ("CODEX_HOME", false),
+            ("PATH", false),
+            ("HOME", false),
+            ("KITTY_WINDOW_ID", false),
+            ("MY_CLAUDE_CODE_X", false),
+        ];
+        for (name, dropped) in cases {
+            assert_eq!(is_claude_session_env(OsStr::new(name)), dropped, "{name}");
+        }
+        let names = claude_session_env_names(cases.map(|(name, _)| OsString::from(name)));
+        let expected: Vec<OsString> = cases
+            .iter()
+            .filter(|(_, dropped)| *dropped)
+            .map(|(name, _)| OsString::from(name))
+            .collect();
+        assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn nothing_is_dropped_outside_a_claude_session() {
+        let names = [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "PATH",
+        ]
+        .map(OsString::from);
+        assert!(claude_session_env_names(names).is_empty());
     }
 
     fn write_registry(content: &str) -> (tempfile::TempDir, PathBuf) {
@@ -782,5 +940,74 @@ path = "~/.claude-work"
             .map(|(_, root)| root.to_string_lossy().into_owned())
             .collect();
         assert!(roots.contains(&transcripts_under(pi_home(), "sessions")));
+    }
+
+    #[test]
+    fn every_home_adds_the_env_home_and_each_claude_dir_under_the_user_home() {
+        let user = tempfile::tempdir().unwrap();
+        for (dir, marker) in [
+            (".claude-deepmind", true),
+            (".claude-work", true),
+            ("team-claude", true),
+            (".cursor", false),
+        ] {
+            let path = user.path().join(dir);
+            fs::create_dir_all(path.join("projects")).unwrap();
+            if marker {
+                fs::write(path.join(".claude.json"), "{}").unwrap();
+            }
+        }
+        fs::create_dir_all(user.path().join("notes")).unwrap();
+        fs::write(user.path().join(".claude.json"), "{}").unwrap();
+        let registry_dir = tempfile::tempdir().unwrap();
+        let file = registry_dir.path().join(REGISTRY_FILE_NAME);
+        fs::write(
+            &file,
+            "[[home]]\nharness = \"claude\"\npath = \"~/.claude-work\"\n",
+        )
+        .unwrap();
+        let env = env_from(&[("CLAUDE_CONFIG_DIR", "/srv/claude-team")]);
+        let registry = Registry::load_from(Some(&file), user.path(), &env);
+        let under = |dir: &str| user.path().join(dir).to_string_lossy().into_owned();
+
+        let claude = registry
+            .every_home()
+            .into_iter()
+            .filter(|home| home.harness == Harness::Claude)
+            .map(|home| (home.id, home.declared))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            claude,
+            [
+                (under(".claude-work"), true),
+                (under(".claude"), false),
+                ("/srv/claude-team".to_owned(), false),
+                (under(".claude-deepmind"), false),
+                (under("team-claude"), false),
+            ]
+        );
+        assert!(!registry.is_registered(&under(".claude-deepmind")));
+        assert_eq!(
+            registry
+                .homes()
+                .iter()
+                .filter(|home| home.harness == Harness::Claude)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn only_a_claude_dir_with_its_config_file_and_projects_counts_as_a_home() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!Harness::Claude.holds_custom_home(dir.path()));
+        fs::create_dir_all(dir.path().join("projects")).unwrap();
+        assert!(!Harness::Claude.holds_custom_home(dir.path()));
+        fs::write(dir.path().join(".claude.json"), "{}").unwrap();
+        assert!(Harness::Claude.holds_custom_home(dir.path()));
+        for harness in [Harness::Codex, Harness::Kimi, Harness::Pi] {
+            assert!(!harness.holds_custom_home(dir.path()));
+        }
     }
 }

@@ -89,7 +89,9 @@ fn retry_due(failed_at: u64, now: u64) -> bool {
 
 fn maybe_spawn_revalidation(state: &AppState, refresh: bool, stale: bool) {
     if let Some(revalidation) = claim_revalidation(state, refresh, stale) {
-        tokio::spawn(revalidation);
+        tokio::spawn(async move {
+            tokio::join!(revalidation, super::super::update_check::check_host());
+        });
     }
 }
 

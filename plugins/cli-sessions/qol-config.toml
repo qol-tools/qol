@@ -45,7 +45,7 @@ placeholder = "e.g. cargo watch"
 
 [section.switchboard]
 label = "Switchboard"
-description = "The one control chat that starts, lists, reopens and closes your sessions."
+description = "The one control chat that starts, continues, lists and closes your sessions."
 
 [field.switchboard_model]
 type = "string"
@@ -64,7 +64,7 @@ config_key = "switchboard_effort"
 label = "Switchboard effort"
 description = "How hard the switchboard thinks before each short reply."
 card_description = "How hard the switchboard thinks."
-default = "low"
+default = "medium"
 options = ["low", "medium", "high", "xhigh", "max"]
 
 [field.switchboard_effort.option_labels]

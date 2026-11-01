@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use qol_runtime::local_ipc::{self, LocalListener, LocalStream};
 use qol_runtime::protocol::{DaemonRequest, DaemonResponse, ReadinessPhase};
 
+mod client_socket;
 mod platform;
 #[cfg(test)]
 mod tests;
@@ -140,10 +141,13 @@ pub fn send_request(
     input: serde_json::Value,
     timeout: std::time::Duration,
 ) -> io::Result<DaemonResponse> {
-    let Some(path) = socket_path(config) else {
+    let Some(path) = client_socket::resolve(config) else {
         return Err(io::Error::new(
             ErrorKind::NotFound,
-            format!("{} is unset", qol_conventions::ENV_DAEMON_SOCKET),
+            format!(
+                "{} is unset and no plugin.toml names a daemon socket",
+                qol_conventions::ENV_DAEMON_SOCKET
+            ),
         ));
     };
     let mut stream = LocalStream::connect(path)?;
@@ -169,7 +173,7 @@ fn send_request_without_reply(
     action: &str,
     input: serde_json::Value,
 ) -> bool {
-    let Some(path) = socket_path(config) else {
+    let Some(path) = client_socket::resolve(config) else {
         return false;
     };
     let Ok(mut stream) = LocalStream::connect(path) else {
@@ -480,7 +484,7 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(LocalListener, Option<Pat
                 return local_ipc::bind_listener(&socket_path)
                     .map(|listener| (listener, Some(socket_path)));
             }
-            if send_ping(config) {
+            if existing_instance_listens(config) {
                 #[cfg(debug_assertions)]
                 log::info!("existing instance alive, exiting");
                 return Err(io::Error::new(
@@ -495,6 +499,19 @@ fn bind_listener(config: &DaemonConfig) -> io::Result<(LocalListener, Option<Pat
     };
 
     Ok((listener, Some(socket_path)))
+}
+
+fn existing_instance_listens(config: &DaemonConfig) -> bool {
+    match send_ping_state(config) {
+        Ok(_) => true,
+        Err(error) => matches!(
+            error.kind(),
+            ErrorKind::WouldBlock
+                | ErrorKind::TimedOut
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::InvalidData
+        ),
+    }
 }
 
 fn replace_existing(config: &DaemonConfig) -> io::Result<bool> {

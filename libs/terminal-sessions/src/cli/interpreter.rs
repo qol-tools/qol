@@ -177,6 +177,18 @@ impl CliSessionInterpreter {
             .and_then(|strategy| strategy.launch())
     }
 
+    pub fn launch_blocker_for(
+        &self,
+        tool: &CliToolId,
+        cwd: &std::path::Path,
+        config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        self.strategies
+            .iter()
+            .find(|strategy| &strategy.tool().id == tool)
+            .and_then(|strategy| strategy.launch_blocker(cwd, config_dir))
+    }
+
     pub fn model_catalog_for(&self, tool: &CliToolId) -> Option<CliModelCatalog> {
         self.strategies
             .iter()
@@ -201,21 +213,26 @@ impl CliSessionInterpreter {
 
     pub fn search_conversations(
         &self,
+        homes: &[qol_agent_homes::AgentHome],
         since: std::time::SystemTime,
         external_ids: &HashSet<String>,
         terms: &[String],
     ) -> Vec<CliConversationMatch> {
         self.strategies
             .iter()
-            .flat_map(|strategy| strategy.search_conversations(since, external_ids, terms))
+            .flat_map(|strategy| strategy.search_conversations(homes, since, external_ids, terms))
             .collect()
     }
 
-    pub fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
+    pub fn closed_conversations(
+        &self,
+        homes: &[qol_agent_homes::AgentHome],
+        since: std::time::SystemTime,
+    ) -> Vec<CliConversation> {
         let mut conversations = self
             .strategies
             .iter()
-            .flat_map(|strategy| strategy.closed_conversations(since))
+            .flat_map(|strategy| strategy.closed_conversations(homes, since))
             .collect::<Vec<_>>();
         conversations.sort_by(|left, right| {
             right

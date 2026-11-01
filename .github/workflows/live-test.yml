@@ -1,0 +1,127 @@
+name: live test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# A new push replaces the build a person would download, so an older run of the
+# same pull request stops.
+concurrency:
+  group: live-test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Classify the live test
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
+    outputs:
+      needed: ${{ steps.classify.outputs.needed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - name: Post whether the change needs a live test
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/scripts/live_test.py
+
+  # A change a person must see working gets a Linux build of what it changes,
+  # made the way a release makes it, so the test downloads it instead of
+  # compiling on the tester's machine. A change the checks prove gets none.
+  build:
+    name: Build for the live test
+    needs: classify
+    if: needs.classify.outputs.needed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+      TARGET: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: plugin-release-x86_64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu
+          save-cache: "false"
+
+      - name: Plan what the live test needs built
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >
+          python .github/scripts/live_test_build.py plan
+          --manifest "${RUNNER_TEMP}/live-test-build/manifest.json"
+
+      - name: Export production artifact identity
+        if: steps.plan.outputs.build == 'true'
+        run: cargo run --locked --quiet -p qol-build-identity --bin qol-build-identity -- emit production >> "${GITHUB_ENV}"
+
+      - name: Build the plugins
+        if: steps.plan.outputs.plugin_tags != ''
+        env:
+          TAGS: ${{ steps.plan.outputs.plugin_tags }}
+        run: |
+          python .github/scripts/release_candidate.py build-plugins \
+            --tags "${TAGS}" \
+            --target "${TARGET}" \
+            --report-dir "${RUNNER_TEMP}/live-test-reports" \
+            --dist-dir "${RUNNER_TEMP}/live-test-build/plugins" \
+            --github-output "${RUNNER_TEMP}/plugin-builds"
+          failed=$(sed -n 's/^failed=//p' "${RUNNER_TEMP}/plugin-builds")
+          if [ -n "${failed}" ]; then
+            echo "::error::plugin builds failed: ${failed}"
+            exit 1
+          fi
+
+      - name: Install cargo-deb
+        if: steps.plan.outputs.tray_tag != ''
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
+        with:
+          tool: cargo-deb
+
+      - name: Build the tray
+        if: steps.plan.outputs.tray_tag != ''
+        run: |
+          python .github/scripts/release_candidate.py build \
+            --kind qol-tray-linux \
+            --report "${RUNNER_TEMP}/live-test-reports/qol-tray.json"
+          mkdir -p "${RUNNER_TEMP}/live-test-build/tray"
+          cp target/release/qol-tray target/debian/*.deb "${RUNNER_TEMP}/live-test-build/tray/"
+
+      - name: Upload the build
+        if: steps.plan.outputs.build == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-test-build-linux-x86_64
+          path: ${{ runner.temp }}/live-test-build
+          retention-days: 3
+          if-no-files-found: error

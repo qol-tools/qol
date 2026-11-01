@@ -56,7 +56,7 @@ impl UtteranceSegmenter {
                 SegmentedFrame::Started {
                     observed_at_ms,
                     level_permille,
-                    frames: self.pre_roll.drain(..).collect(),
+                    frames: self.take_pre_roll(),
                 }
             }
             DetectorTransition::Active => SegmentedFrame::Active(frame),
@@ -69,6 +69,11 @@ impl UtteranceSegmenter {
                 reason,
             },
         }
+    }
+
+    fn take_pre_roll(&mut self) -> Vec<AudioFrame> {
+        self.pre_roll_samples = 0;
+        self.pre_roll.drain(..).collect()
     }
 
     fn push_pre_roll(&mut self, frame: AudioFrame, samples: u64) {
@@ -247,6 +252,31 @@ mod tests {
         assert_eq!(frames.len(), 3);
         assert_eq!(frames[0].observed_at_ms, 50);
         assert_eq!(frames[2].observed_at_ms, 150);
+    }
+
+    #[test]
+    fn every_utterance_replays_its_own_preroll() {
+        let mut segmenter = segmenter(config(100, 100, 150, 1_000));
+        let mut at = 0;
+        for utterance in 0..3 {
+            for _ in 0..4 {
+                at += 50;
+                segmenter.observe(frame(at, 0, 50));
+            }
+            at += 50;
+            segmenter.observe(frame(at, 1_000, 50));
+            at += 50;
+            let SegmentedFrame::Started { frames, .. } = segmenter.observe(frame(at, 1_000, 50))
+            else {
+                panic!("expected utterance {utterance} to start");
+            };
+            assert_eq!(frames.len(), 3, "utterance {utterance}");
+            assert_eq!(frames[2].observed_at_ms, at, "utterance {utterance}");
+            for _ in 0..2 {
+                at += 50;
+                segmenter.observe(frame(at, 0, 50));
+            }
+        }
     }
 
     #[test]

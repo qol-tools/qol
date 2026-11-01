@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::hash::{read_inputs, FingerprintContent};
@@ -13,6 +13,50 @@ pub(super) fn collect_path_dep_contents(
         .into_iter()
         .filter_map(|(name, dep_path)| prefixed_contents(&name, &dep_path, cache))
         .collect()
+}
+
+fn resolve_path_deps(plugin_path: &Path) -> Vec<(String, PathBuf)> {
+    let workspace_deps = workspace_path_deps(plugin_path);
+    let mut seen = HashSet::new();
+    let mut resolved = Vec::new();
+    let mut pending = manifest_path_deps(plugin_path, &workspace_deps, Sections::WithDev);
+    pending.reverse();
+    while let Some((name, dep_path)) = pending.pop() {
+        if !seen.insert(dep_path.clone()) {
+            continue;
+        }
+        let mut nested = manifest_path_deps(&dep_path, &workspace_deps, Sections::BuildOnly);
+        nested.reverse();
+        pending.extend(nested);
+        resolved.push((name, dep_path));
+    }
+    resolved
+}
+
+#[derive(Clone, Copy)]
+enum Sections {
+    WithDev,
+    BuildOnly,
+}
+
+impl Sections {
+    fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::WithDev => &["dependencies", "dev-dependencies", "build-dependencies"],
+            Self::BuildOnly => &["dependencies", "build-dependencies"],
+        }
+    }
+}
+
+fn manifest_path_deps(
+    crate_path: &Path,
+    workspace_deps: &HashMap<String, PathBuf>,
+    sections: Sections,
+) -> Vec<(String, PathBuf)> {
+    let Some(table) = cargo_manifest(crate_path) else {
+        return Vec::new();
+    };
+    extract_path_deps(&table, crate_path, workspace_deps, sections)
 }
 
 fn prefixed_contents(
@@ -44,27 +88,21 @@ fn prefixed_contents(
     )
 }
 
-fn resolve_path_deps(plugin_path: &Path) -> Vec<(String, PathBuf)> {
-    let Some(table) = cargo_manifest(plugin_path) else {
-        return Vec::new();
-    };
-    extract_path_deps(&table, plugin_path, &workspace_path_deps(plugin_path))
-}
-
 fn extract_path_deps(
     table: &toml::Table,
-    plugin_path: &Path,
+    crate_path: &Path,
     workspace_deps: &HashMap<String, PathBuf>,
+    sections: Sections,
 ) -> Vec<(String, PathBuf)> {
-    dependency_tables(table)
+    dependency_tables(table, sections)
         .into_iter()
         .flat_map(|entries| entries.iter())
-        .filter_map(|(name, value)| dependency_path(name, value, plugin_path, workspace_deps))
+        .filter_map(|(name, value)| dependency_path(name, value, crate_path, workspace_deps))
         .collect()
 }
 
-fn dependency_tables(table: &toml::Table) -> Vec<&toml::Table> {
-    let mut tables = direct_dependency_tables(table);
+fn dependency_tables(table: &toml::Table, sections: Sections) -> Vec<&toml::Table> {
+    let mut tables = direct_dependency_tables(table, sections);
     let Some(targets) = table.get("target").and_then(toml::Value::as_table) else {
         return tables;
     };
@@ -72,27 +110,29 @@ fn dependency_tables(table: &toml::Table) -> Vec<&toml::Table> {
         let Some(target) = target.as_table() else {
             continue;
         };
-        tables.extend(direct_dependency_tables(target));
+        tables.extend(direct_dependency_tables(target, sections));
     }
     tables
 }
 
-fn direct_dependency_tables(table: &toml::Table) -> Vec<&toml::Table> {
-    ["dependencies", "dev-dependencies", "build-dependencies"]
-        .into_iter()
-        .filter_map(|section| table.get(section).and_then(toml::Value::as_table))
+fn direct_dependency_tables(table: &toml::Table, sections: Sections) -> Vec<&toml::Table> {
+    sections
+        .names()
+        .iter()
+        .filter_map(|section| table.get(*section).and_then(toml::Value::as_table))
         .collect()
 }
 
 fn dependency_path(
     name: &str,
     value: &toml::Value,
-    plugin_path: &Path,
+    crate_path: &Path,
     workspace_deps: &HashMap<String, PathBuf>,
 ) -> Option<(String, PathBuf)> {
     let path = direct_path(value)
-        .map(|path| plugin_path.join(path))
+        .map(|path| crate_path.join(path))
         .or_else(|| workspace_path(name, value, workspace_deps))?;
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
     path.is_dir().then(|| (name.to_string(), path))
 }
 

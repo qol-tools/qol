@@ -69,6 +69,8 @@ pub struct SpawnRequest {
     pub launch: CliLaunchProgram,
     pub cwd: PathBuf,
     pub title: Option<String>,
+    #[serde(default)]
+    pub in_active_window: bool,
 }
 
 pub trait SessionSpawner: Send + Sync {
@@ -98,6 +100,7 @@ mod tests {
             launch: CliLaunchProgram::new("codex"),
             cwd: std::path::PathBuf::from("/work/project"),
             title: None,
+            in_active_window: false,
         }
     }
 
@@ -177,6 +180,7 @@ mod tests {
             },
             cwd: std::path::PathBuf::from("/work/project"),
             title: Some("Codex".to_owned()),
+            in_active_window: false,
         };
         let encoded = serde_json::to_string(&request).unwrap();
         assert_eq!(
@@ -196,6 +200,7 @@ mod tests {
             launch,
             cwd: std::path::PathBuf::from("/work/project"),
             title: None,
+            in_active_window: false,
         };
         assert_eq!(request.launch.program, "codex");
         assert!(request.launch.args.is_empty());

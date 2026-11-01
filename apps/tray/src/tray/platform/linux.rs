@@ -15,7 +15,8 @@ static SHUTDOWN_RX: OnceCell<std::sync::Mutex<Option<broadcast::Receiver<()>>>> 
 
 pub(crate) const ICON_SIZE: u32 = 32;
 pub(crate) const ICON_SIDE_PADDING: u32 = 0;
-const TONE_REFRESH_SECONDS: u32 = 10;
+const REFRESH_SECONDS: u32 = 10;
+const SLOW_STARTUP_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub enum PlatformTray {
     Linux,
@@ -54,7 +55,7 @@ where
 
     run_event_loop();
 
-    shutdown_plugins(&plugin_manager);
+    crate::tray::shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
     log::info!("Shutdown signal received, exiting...");
     Ok(())
@@ -91,9 +92,41 @@ fn spawn_tray(
         )
     });
     match startup_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            log::warn!(
+                "The Linux tray icon is slow to start, so qol-tray keeps starting without it"
+            );
+            std::thread::spawn(move || {
+                follow_slow_startup(startup_rx, crate::tray::report_missing_icon)
+            });
+            Ok(())
+        }
+        received => startup_result(received),
+    }
+}
+
+fn follow_slow_startup(
+    startup_rx: std::sync::mpsc::Receiver<StartupResult>,
+    report: impl FnOnce(&anyhow::Error),
+) {
+    match startup_result(startup_rx.recv_timeout(SLOW_STARTUP_WAIT)) {
+        Ok(()) => log::info!("The Linux tray icon started late"),
+        Err(error) => report(&error),
+    }
+}
+
+fn startup_result(
+    received: std::result::Result<StartupResult, std::sync::mpsc::RecvTimeoutError>,
+) -> Result<()> {
+    match received {
         Ok(Ok(())) => Ok(()),
         Ok(Err(message)) => anyhow::bail!(message),
-        Err(_) => anyhow::bail!("Timed out while initializing Linux tray"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            anyhow::bail!("Timed out while initializing Linux tray")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            anyhow::bail!("The Linux tray thread stopped before the icon was ready")
+        }
     }
 }
 
@@ -109,7 +142,7 @@ fn run_tray_thread(
         let _ = startup_tx.send(Err("Failed to initialize GTK".to_string()));
         return;
     }
-    let Some((tray_icon, router)) = build_menu_and_icon(
+    let Some((tray_icon, router, update_menu)) = build_menu_and_icon(
         &startup_tx,
         feature_registry,
         update_available,
@@ -119,26 +152,63 @@ fn run_tray_thread(
         return;
     };
     setup_event_loop(router, shutdown_tx);
-    follow_panel_tone(tray_icon, update_available);
+    follow_panel_tone_and_updates(tray_icon, update_menu, update_available);
     let _ = startup_tx.send(Ok(()));
     gtk::main();
 }
 
-fn follow_panel_tone(tray_icon: TrayIcon, update_available: bool) {
+fn follow_panel_tone_and_updates(
+    tray_icon: TrayIcon,
+    mut update_menu: UpdateMenu,
+    update_available: bool,
+) {
     use crate::tray::{icon, tone};
 
-    let mut shown = tone::current();
-    glib::timeout_add_seconds_local(TONE_REFRESH_SECONDS, move || {
-        let current = tone::current();
+    let mut shown = (tone::current(), update_available);
+    glib::timeout_add_seconds_local(REFRESH_SECONDS, move || {
+        let current = (tone::current(), crate::updates::host_update_available());
         if current != shown {
             shown = current;
-            let art = icon::tray_icon(update_available, current);
+            let art = icon::tray_icon(current.1, current.0);
             if let Err(error) = tray_icon.set_icon(Some(art)) {
-                log::warn!("failed to swap the tray icon for the panel tone: {error}");
+                log::warn!("failed to swap the tray icon: {error}");
             }
         }
+        update_menu.sync(current.1);
         glib::ControlFlow::Continue
     });
+}
+
+struct UpdateMenu {
+    menu: tray_icon::menu::Menu,
+    item: tray_icon::menu::MenuItem,
+    shown: bool,
+    label: String,
+}
+
+impl UpdateMenu {
+    fn sync(&mut self, available: bool) {
+        if available {
+            let label = crate::menu::builder::update_label();
+            if label != self.label {
+                self.item.set_text(&label);
+                self.label = label;
+            }
+        }
+        if available == self.shown {
+            return;
+        }
+        let result = if available {
+            let before_quit = self.menu.items().len().saturating_sub(1);
+            self.menu.insert(&self.item, before_quit)
+        } else {
+            self.menu.remove(&self.item)
+        };
+        match result {
+            Ok(()) => self.shown = available,
+            Err(error) => log::warn!("failed to update the tray menu's update item: {error}"),
+        }
+    }
 }
 
 fn build_menu_and_icon(
@@ -147,8 +217,8 @@ fn build_menu_and_icon(
     update_available: bool,
     events: Arc<EventBus>,
     icon: Icon,
-) -> Option<(TrayIcon, crate::menu::router::EventRouter)> {
-    let (menu, router) =
+) -> Option<(TrayIcon, crate::menu::router::EventRouter, UpdateMenu)> {
+    let (menu, router, update_item) =
         match crate::menu::builder::build_menu(feature_registry, update_available, events) {
             Ok(r) => r,
             Err(e) => {
@@ -156,18 +226,32 @@ fn build_menu_and_icon(
                 return None;
             }
         };
-    match TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip("QoL Tray")
-        .with_icon(icon)
-        .build()
-    {
-        Ok(t) => Some((t, router)),
+    let update_menu = UpdateMenu {
+        menu: menu.clone(),
+        label: update_item.text(),
+        item: update_item,
+        shown: update_available,
+    };
+    let built = catch_tray_panic(move || {
+        TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_tooltip("QoL Tray")
+            .with_icon(icon)
+            .build()
+            .map_err(|e| e.to_string())
+    });
+    match built {
+        Ok(t) => Some((t, router, update_menu)),
         Err(e) => {
             let _ = startup_tx.send(Err(format!("Failed to create tray icon: {}", e)));
             None
         }
     }
+}
+
+fn catch_tray_panic<T>(build: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(build))
+        .unwrap_or_else(|panic| Err(crate::doctor::framework::panic_payload_message(&panic)))
 }
 
 fn setup_event_loop(router: crate::menu::router::EventRouter, shutdown_tx: broadcast::Sender<()>) {
@@ -218,17 +302,6 @@ fn handle_menu_event(
     true
 }
 
-fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
-            return;
-        }
-    };
-    manager.shutdown();
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -237,5 +310,47 @@ mod tests {
         super::request_shutdown(&shutdown_tx);
 
         assert!(shutdown_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn a_tray_library_that_panics_becomes_a_startup_error() {
+        let missing_library = super::catch_tray_panic::<()>(|| {
+            panic!("Failed to load ayatana-appindicator3 or appindicator3 dynamic library")
+        });
+        let refused = super::catch_tray_panic::<()>(|| Err("no status notifier".to_string()));
+        let built = super::catch_tray_panic(|| Ok(7));
+
+        assert_eq!(
+            missing_library,
+            Err(
+                "Failed to load ayatana-appindicator3 or appindicator3 dynamic library".to_string()
+            )
+        );
+        assert_eq!(refused, Err("no status notifier".to_string()));
+        assert_eq!(built, Ok(7));
+    }
+
+    #[test]
+    fn a_slow_tray_start_reports_the_icon_missing_only_if_it_fails() {
+        let follow = |result: Option<super::StartupResult>| {
+            let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+            if let Some(result) = result {
+                startup_tx.send(result).unwrap();
+            }
+            drop(startup_tx);
+            let mut reported = None;
+            super::follow_slow_startup(startup_rx, |error| reported = Some(format!("{error:#}")));
+            reported
+        };
+
+        assert_eq!(follow(Some(Ok(()))), None);
+        assert_eq!(
+            follow(Some(Err("no status notifier".to_string()))),
+            Some("no status notifier".to_string())
+        );
+        assert_eq!(
+            follow(None),
+            Some("The Linux tray thread stopped before the icon was ready".to_string())
+        );
     }
 }

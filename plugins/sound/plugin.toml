@@ -4,7 +4,7 @@ uid = "46f6cce7-a812-4ddb-b965-0c9b82472fbc"
 name = "Sound"
 icon = "sound"
 description = "Choose where sound plays, which microphone every app hears, and how loud each is"
-version = "0.38.1"
+version = "0.39.2"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
@@ -107,6 +107,7 @@ port = 42750
 [capabilities]
 gpui = true
 doctor = true
+headless = true
 
 [config.scope]
 output = "device"

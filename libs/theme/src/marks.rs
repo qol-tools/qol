@@ -145,6 +145,23 @@ impl Mark {
         qol_color::mix_rgb(ground.mark, ground.ink, LINE_LIFT)
     }
 
+    pub fn app_svg(self) -> Option<String> {
+        self.app_body().map(|body| {
+            format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">{body}</svg>"#
+            )
+        })
+    }
+
+    fn app_body(self) -> Option<&'static str> {
+        match self {
+            Self::Explorer => Some(
+                r##"<path d="M22.4 22H104L125.6 51.7H230A18 18 0 0 1 248 69.7V216A18 18 0 0 1 230 234H26A18 18 0 0 1 8 216V36.4A14.4 14.4 0 0 1 22.4 22z" fill="#f3f2f0" stroke="#16171a" stroke-width="16" paint-order="stroke"/><path d="M168.2 80.7L127.2 153.7L59.1 195.3L100 127.8z" fill="#16171a" stroke="#16171a" stroke-width="4.1" stroke-linejoin="round"/><path d="M141.9 157.1L113.6 173.5L85.3 157.1L85.3 124.4L113.6 108L141.9 124.4z" fill="#f3f2f0" stroke="#16171a" stroke-width="9.5" stroke-linejoin="round"/><circle cx="113.6" cy="140.7" r="10.9" fill="#16171a"/>"##,
+            ),
+            _ => None,
+        }
+    }
+
     fn document(self, stroke: &str) -> String {
         format!(
             r#"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="{stroke}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">{}</svg>"#,
@@ -296,6 +313,14 @@ mod tests {
             assert!(svg.contains(r##"stroke="#123456""##), "{}", mark.name());
             assert!(svg.ends_with("</svg>"), "{}", mark.name());
         }
+    }
+
+    #[test]
+    fn app_art_is_a_standalone_svg_only_where_drawn() {
+        let explorer = Mark::Explorer.app_svg().unwrap();
+        assert!(explorer.starts_with("<svg xmlns="));
+        assert!(explorer.ends_with("</svg>"));
+        assert_eq!(Mark::Sound.app_svg(), None);
     }
 
     #[test]

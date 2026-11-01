@@ -1122,7 +1122,7 @@ pub(super) fn entries_hints(
     if card.reorder {
         return reorder_hints(card, on_add);
     }
-    let left = vec![
+    let mut left = vec![
         SettingsHint::new(
             Key::ENTER,
             match on_add {
@@ -1133,6 +1133,9 @@ pub(super) fn entries_hints(
         SettingsHint::new(Key::UP_DOWN, "move"),
         SettingsHint::new(Key::letter('a'), "add"),
     ];
+    if !on_add {
+        left.push(SettingsHint::new(Key::BACKSPACE, "remove"));
+    }
     let right = vec![SettingsHint::new(Key::ESC, "back")];
     (left, right)
 }
@@ -1497,6 +1500,125 @@ mod tests {
         assert_eq!(level.rows[1].label, "/opt/zed");
     }
 
+    fn text_list_level_with_values(values: Vec<&str>) -> super::super::Level {
+        entries_card_level(
+            "Excluded apps",
+            "excluded_apps",
+            0,
+            EntriesOrigin {
+                object_array: None,
+                card: card(Some(values.into_iter().map(str::to_string).collect())),
+                description: None,
+                origin_row: Some(0),
+            },
+            SettingsDestination::from_static("Excluded apps"),
+        )
+    }
+
+    fn remove_text_list_entry_at(level: &mut super::super::Level, entry: usize) {
+        level.selected = entry + 1;
+        level
+            .entries
+            .as_mut()
+            .expect("text_list level has an entries card")
+            .values
+            .as_mut()
+            .expect("text_list level has a values vector")
+            .remove(entry);
+        sync_entries_level(level);
+    }
+
+    struct RemoveCase {
+        name: &'static str,
+        initial: &'static [&'static str],
+        entry: usize,
+        expected_values: &'static [&'static str],
+        expected_selected: usize,
+    }
+
+    #[test]
+    fn removing_a_text_list_entry_updates_values_rows_and_selection() {
+        let cases = &[
+            RemoveCase {
+                name: "first",
+                initial: &["a", "b", "c"],
+                entry: 0,
+                expected_values: &["b", "c"],
+                expected_selected: 1,
+            },
+            RemoveCase {
+                name: "middle",
+                initial: &["a", "b", "c"],
+                entry: 1,
+                expected_values: &["a", "c"],
+                expected_selected: 2,
+            },
+            RemoveCase {
+                name: "last",
+                initial: &["a", "b", "c"],
+                entry: 2,
+                expected_values: &["a", "b"],
+                expected_selected: 2,
+            },
+            RemoveCase {
+                name: "only",
+                initial: &["solo"],
+                entry: 0,
+                expected_values: &[],
+                expected_selected: 0,
+            },
+        ];
+        for RemoveCase {
+            name,
+            initial,
+            entry,
+            expected_values,
+            expected_selected,
+        } in cases
+        {
+            let mut level = text_list_level_with_values(initial.to_vec());
+            remove_text_list_entry_at(&mut level, *entry);
+            let values = level.entries.as_ref().unwrap().values.as_ref().unwrap();
+            let got: Vec<&str> = values.iter().map(String::as_str).collect();
+            assert_eq!(&got, expected_values, "case `{name}` values");
+            assert_eq!(
+                level.rows.len(),
+                expected_values.len() + 1,
+                "case `{name}` row count"
+            );
+            assert_eq!(
+                level.selected, *expected_selected,
+                "case `{name}` selection"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_text_list_entry_propagates_the_shortened_array_to_the_root_row() {
+        let mut root = level(0);
+        root.rows = rows(&[false]);
+        let initial = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        root.rows[0].control = RowControl::TextList(initial.clone());
+        let mut child = entries_card_level(
+            "Excluded apps",
+            "excluded_apps",
+            0,
+            EntriesOrigin {
+                object_array: None,
+                card: card(Some(initial)),
+                description: None,
+                origin_row: Some(0),
+            },
+            SettingsDestination::from_static("Excluded apps"),
+        );
+        remove_text_list_entry_at(&mut child, 1);
+        assert!(write_root_entries(&mut root.rows, &child));
+        let RowControl::TextList(stored) = &root.rows[0].control else {
+            panic!("root row holds a text list");
+        };
+        assert_eq!(stored, &vec!["a".to_string(), "c".to_string()]);
+    }
+
     #[test]
     fn a_directional_chip_row_renders_the_same_chips_item_chips_produces() {
         let state = ObjectArrayState::from_entries(
@@ -1651,7 +1773,7 @@ mod tests {
         assert_eq!(hint_labels(&right), vec!["back"]);
 
         let (left, right) = entries_hints(&card, false);
-        assert_eq!(hint_labels(&left), vec!["open", "move", "add"]);
+        assert_eq!(hint_labels(&left), vec!["open", "move", "add", "remove"]);
         assert_eq!(hint_labels(&right), vec!["back"]);
     }
 

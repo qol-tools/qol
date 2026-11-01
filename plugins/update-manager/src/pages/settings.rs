@@ -40,37 +40,23 @@ pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
     let row = Row::new("guard", "Wait while in use");
     let row = match failed {
         Some(refusal) if guard => could_not(row, refusal),
-        _ if guard => row
-            .detail(match session.in_use.as_ref() {
-                _ if asking => ASKING.to_string(),
-                Some(in_use) => format!("{} is playing, so updates wait", in_use.label),
-                None => "Updates wait while something plays".to_string(),
-            })
-            .toggle(true)
-            .busy(asking),
+        _ if guard && asking => row.detail(ASKING).toggle(true).busy(true),
+        _ if guard => match session.in_use.as_ref() {
+            Some(in_use) => row.detail(format!("{} is playing, so updates wait", in_use.label)),
+            None => row,
+        }
+        .toggle(true),
         _ if session.locked() => row.detail(LOCKED).toggle(false),
-        _ => row.detail("Updates install at their time").toggle(false),
+        _ => row.toggle(false),
     };
     sheet.press(row, Act::Guard);
-    let row = Row::new("hold", "Hold all updates");
+    let row = Row::new("hold", "Hold all");
     let (row, act) = match failed {
         Some(refusal) if hold => (could_not(row, refusal), Act::Hold(false)),
-        _ if hold => (
-            row.detail(if asking {
-                ASKING
-            } else {
-                "Nothing installs until you switch it off"
-            })
-            .toggle(true)
-            .busy(asking),
-            Act::Hold(false),
-        ),
+        _ if hold && asking => (row.detail(ASKING).toggle(true).busy(true), Act::Hold(false)),
+        _ if hold => (row.toggle(true), Act::Hold(false)),
         _ if session.locked() => (row.detail(LOCKED).toggle(false), Act::Hold(true)),
-        _ => (
-            row.detail("Nothing installs until you switch it off")
-                .toggle(false),
-            Act::Hold(true),
-        ),
+        _ => (row.toggle(false), Act::Hold(true)),
     };
     sheet.press(row, act);
     if failed.is_some() && (guard || hold) {
@@ -269,30 +255,21 @@ fn until(session: &Session) -> Sheet {
 
 fn auto(session: &Session) -> Sheet {
     let auto = session.auto();
-    let mut sheet = Sheet::new("auto", "install on their own");
-    sheet.group(
-        "install on their own",
-        if session.borrowed {
-            "the owner's switches. a change asks first, and stays after you leave."
-        } else {
-            "mint's own switches. they stay when qol stops."
-        },
-    );
+    let mut sheet = Sheet::new("auto", "installs on its own");
+    sheet.heading(if session.borrowed {
+        "the owner's switches"
+    } else {
+        "mint's switches"
+    });
     for key in AutoKey::ALL {
         let on = auto.get(key);
-        let detail = match key {
-            AutoKey::Packages if on => {
-                "Mint's automatic upgrades: every package, in the update hours"
-            }
-            AutoKey::Packages => "Packages install when you say",
-            AutoKey::Spices => {
-                "Mint's switch: they update when you log in; Cinnamon restarts if any did"
-            }
-            AutoKey::Flatpak => "Mint's switch: apps and runtimes update when you log in",
+        let value = match key {
+            AutoKey::Packages => "in hours",
+            AutoKey::Spices | AutoKey::Flatpak => "at login",
         };
         let row = with_error(
             Row::new(key.id(), key.name())
-                .detail(detail)
+                .value(value)
                 .toggle(on)
                 .busy(session.busy.contains(&Op::Auto(key))),
             session,
@@ -300,11 +277,7 @@ fn auto(session: &Session) -> Sheet {
         );
         press_auto(&mut sheet, session, row, key, !on);
     }
-    sheet.row(
-        Row::info("firmware", "Firmware")
-            .detail("Firmware never installs on its own")
-            .value("when you say"),
-    );
+    sheet.row(Row::info("firmware", "Firmware").value("never"));
     sheet
 }
 

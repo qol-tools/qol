@@ -76,7 +76,7 @@ mod tests {
             "service_commands defaults to an empty editable list"
         );
         assert_eq!(defaults.switchboard_model(), "claude-sonnet-5-5");
-        assert_eq!(defaults.switchboard_effort(), "low");
+        assert_eq!(defaults.switchboard_effort(), "medium");
     }
 
     #[test]
@@ -87,14 +87,14 @@ mod tests {
             ..CliSessionsConfig::default()
         };
         assert_eq!(config.switchboard_model(), "claude-sonnet-5-5");
-        assert_eq!(config.switchboard_effort(), "low");
+        assert_eq!(config.switchboard_effort(), "medium");
 
         let config = CliSessionsConfig {
             switchboard_model: Some("claude-opus-5-5".to_owned()),
-            switchboard_effort: Some("medium".to_owned()),
+            switchboard_effort: Some("high".to_owned()),
             ..CliSessionsConfig::default()
         };
         assert_eq!(config.switchboard_model(), "claude-opus-5-5");
-        assert_eq!(config.switchboard_effort(), "medium");
+        assert_eq!(config.switchboard_effort(), "high");
     }
 }

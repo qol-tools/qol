@@ -1,7 +1,8 @@
 use crate::command::ModifierKeys;
 use crate::config::ServerConfig;
 use crate::input::{
-    InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds, ScreenBoundsCache,
+    CursorTrack, InputHandlerTrait, InputReadiness, PlatformSupport, ScreenBounds,
+    ScreenBoundsCache,
 };
 use anyhow::Result;
 use std::sync::Mutex;
@@ -13,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 pub struct InputHandlerImpl {
-    current_pos: Mutex<Option<(f64, f64)>>,
+    cursor: CursorTrack,
     modifier_state: Mutex<ModifierKeys>,
     bounds: ScreenBoundsCache,
 }
@@ -40,7 +41,7 @@ pub(in crate::input) fn inspect_readiness() -> InputReadiness {
 impl InputHandlerImpl {
     pub fn new() -> Result<Self> {
         Ok(Self {
-            current_pos: Mutex::new(None),
+            cursor: CursorTrack::new(Self::get_cursor_position),
             modifier_state: Mutex::new(ModifierKeys::default()),
             bounds: ScreenBoundsCache::new(screen_bounds),
         })
@@ -65,18 +66,7 @@ fn screen_bounds() -> Option<ScreenBounds> {
 
 impl InputHandlerTrait for InputHandlerImpl {
     fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
-        let mut pos_opt = self
-            .current_pos
-            .lock()
-            .expect("Cursor position mutex poisoned");
-
-        let bounds = self.bounds.current();
-        let (px, py) = (*pos_opt)
-            .or_else(Self::get_cursor_position)
-            .unwrap_or_else(|| bounds.center());
-        let (new_x, new_y) = bounds.clamp(px + x, py + y);
-
-        *pos_opt = Some((new_x, new_y));
+        let (new_x, new_y) = self.cursor.advance(&self.bounds.current(), x, y);
 
         unsafe {
             SetCursorPos(new_x as i32, new_y as i32)?;

@@ -2,6 +2,7 @@ mod environment;
 mod history;
 mod metadata;
 mod search;
+mod trust;
 
 #[cfg(test)]
 mod tests;
@@ -29,7 +30,7 @@ pub(super) struct ClaudeStrategy {
 
 impl Default for ClaudeStrategy {
     fn default() -> Self {
-        Self::with_environment(Arc::new(SystemClaudeEnvironment))
+        Self::with_environment(Arc::new(SystemClaudeEnvironment::default()))
     }
 }
 
@@ -120,6 +121,16 @@ impl CliSessionStrategy for ClaudeStrategy {
         Some(CliLaunchProgram::new("claude"))
     }
 
+    fn launch_blocker(
+        &self,
+        cwd: &std::path::Path,
+        config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        let user_home = dirs::home_dir()?;
+        let config_file = config_dir.unwrap_or(&user_home).join(".claude.json");
+        trust::untrusted_folder(&config_file, cwd, &user_home)
+    }
+
     fn resume_args(&self, external_id: &str) -> Option<Vec<String>> {
         Some(vec!["--resume".to_owned(), external_id.to_owned()])
     }
@@ -128,18 +139,24 @@ impl CliSessionStrategy for ClaudeStrategy {
         self.metadata.resume_settings(session)
     }
 
-    fn closed_conversations(&self, since: std::time::SystemTime) -> Vec<CliConversation> {
-        self.history.closed_conversations(&self.tool.id, since)
+    fn closed_conversations(
+        &self,
+        homes: &[qol_agent_homes::AgentHome],
+        since: std::time::SystemTime,
+    ) -> Vec<CliConversation> {
+        self.history
+            .closed_conversations(&self.tool.id, homes, since)
     }
 
     fn search_conversations(
         &self,
+        homes: &[qol_agent_homes::AgentHome],
         since: std::time::SystemTime,
         external_ids: &std::collections::HashSet<String>,
         terms: &[String],
     ) -> Vec<CliConversationMatch> {
         self.history
-            .search_conversations(since, external_ids, terms)
+            .search_conversations(homes, since, external_ids, terms)
     }
 
     fn keep_open_reason(&self, session: &SessionFacts) -> Option<String> {

@@ -91,7 +91,7 @@ pub fn has_process_focus() -> bool {
     frontmost_pid() == Some(std::process::id() as i32)
 }
 
-pub fn square_window_corners(window: &mut gpui::Window) {
+pub fn square_window_corners(window: &mut gpui::Window, framed: bool) {
     use objc2_app_kit::NSWindowStyleMask;
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return;
@@ -105,7 +105,9 @@ pub fn square_window_corners(window: &mut gpui::Window) {
     let Some(native_window) = view.window() else {
         return;
     };
-    native_window.setStyleMask(NSWindowStyleMask::Borderless);
+    if !framed {
+        native_window.setStyleMask(NSWindowStyleMask::Borderless);
+    }
     native_window.makeFirstResponder(Some(&view));
     if native_window.isVisible() {
         native_window.makeKeyWindow();

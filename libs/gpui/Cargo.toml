@@ -23,6 +23,7 @@ qol-color.workspace = true
 qol-conventions.workspace = true
 qol-hotkeys.workspace = true
 qol-platform.workspace = true
+qol-process.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true
 qol-window-state.workspace = true
@@ -66,7 +67,6 @@ objc2-app-kit = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-qol-process.workspace = true
 raw-window-handle = { workspace = true }
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",

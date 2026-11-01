@@ -82,6 +82,41 @@ mod tests {
     }
 
     #[test]
+    fn an_edit_to_a_dependency_of_a_dependency_changes_the_fingerprint() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\nmembers = [\"plugin-a\", \"dependency\", \"leaf\", \"tests-only\"]\n\n[workspace.dependencies]\ndependency = { path = \"dependency\" }\nleaf = { path = \"leaf\" }\n",
+        )
+        .unwrap();
+        write_lib(
+            &tmp.path().join("dependency"),
+            "dependency",
+            "[dependencies]\nleaf = { workspace = true }\n\n[dev-dependencies]\ntests-only = { path = \"../tests-only\" }\n",
+        );
+        write_lib(&tmp.path().join("leaf"), "leaf", "");
+        write_lib(&tmp.path().join("tests-only"), "tests-only", "");
+        let plugin = tmp.path().join("plugin-a");
+        write_plugin(&plugin, "plugin-a", "fn main() {}\n");
+
+        let first = fingerprint_plugin(&plugin).unwrap();
+
+        fs::write(
+            tmp.path().join("tests-only/src/lib.rs"),
+            "pub fn v() -> u8 { 2 }\n",
+        )
+        .unwrap();
+        assert_eq!(first, fingerprint_plugin(&plugin).unwrap());
+
+        fs::write(
+            tmp.path().join("leaf/src/lib.rs"),
+            "pub fn v() -> u8 { 2 }\n",
+        )
+        .unwrap();
+        assert_ne!(first, fingerprint_plugin(&plugin).unwrap());
+    }
+
+    #[test]
     fn workspace_root_manifest_is_fingerprinted() {
         let tmp = TempDir::new().unwrap();
         let plugin = tmp.path().join("plugin-a");
@@ -112,6 +147,18 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn write_lib(path: &Path, name: &str, dependencies: &str) {
+        fs::create_dir_all(path.join("src")).unwrap();
+        fs::write(
+            path.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n{dependencies}"
+            ),
+        )
+        .unwrap();
+        fs::write(path.join("src/lib.rs"), "pub fn v() -> u8 { 1 }\n").unwrap();
     }
 
     fn write_plugin(path: &Path, name: &str, source: &str) {

@@ -65,7 +65,7 @@ where
 
     run_event_loop();
 
-    shutdown_plugins(&plugin_manager);
+    crate::tray::shutdown_plugins(&plugin_manager);
     drop(plugin_manager);
     release_toast_identity();
     log::info!("Shutdown signal received, exiting...");
@@ -79,7 +79,7 @@ fn spawn_tray(
     update_available: bool,
     events: Arc<EventBus>,
 ) -> Result<TrayIcon> {
-    let (menu, router) =
+    let (menu, router, _update_item) =
         crate::menu::builder::build_menu(feature_registry, update_available, events)?;
 
     let tray_icon = TrayIconBuilder::new()
@@ -164,15 +164,4 @@ fn handle_menu_event(
     log::info!("Quitting application");
     let _ = shutdown_tx.send(());
     true
-}
-
-fn shutdown_plugins(plugin_manager: &Arc<Mutex<PluginManager>>) {
-    let mut manager = match plugin_manager.lock() {
-        Ok(guard) => guard,
-        Err(error) => {
-            log::error!("Plugin manager lock poisoned during shutdown: {}", error);
-            return;
-        }
-    };
-    manager.shutdown();
 }

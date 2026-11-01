@@ -44,7 +44,7 @@ done
 release
 "#;
 
-const INSTALL_SH: &str = r#"echo ready; env LANG=C LC_ALL=C apt-get update -o DPkg::Lock::Timeout=30 2>&1; echo refreshed; exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1"#;
+const INSTALL_SH: &str = r#"echo ready; env LANG=C LC_ALL=C apt-get update -o DPkg::Lock::Timeout=30 2>&1; echo refreshed; set -f; held=$(apt-mark showhold "$@" 2>/dev/null); if [ -n "$held" ]; then apt-mark unhold $held 2>&1; fi; env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install --only-upgrade --no-remove -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=30 -o APT::Status-Fd=1 -o qol::update-manager=1 "$@" 2>&1; status=$?; if [ "$status" -ne 0 ] && [ -n "$held" ]; then apt-mark hold $held 2>&1; fi; exit "$status""#;
 
 pub(crate) struct Helper {
     child: Child,
@@ -331,12 +331,17 @@ mod tests {
             "echo ready;",
             "apt-get update -o DPkg::Lock::Timeout=30 2>&1;",
             "echo refreshed;",
-            "exec env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install ",
+            "held=$(apt-mark showhold \"$@\" 2>/dev/null);",
+            "apt-mark unhold $held 2>&1;",
+            "env DEBIAN_FRONTEND=noninteractive LANG=C LC_ALL=C apt-get install ",
+            "status=$?;",
+            "if [ \"$status\" -ne 0 ] && [ -n \"$held\" ]; then apt-mark hold $held 2>&1; fi;",
+            "exit \"$status\"",
         ]
         .iter()
         .filter_map(|step| INSTALL_SH.find(step))
         .collect();
-        assert_eq!(order.len(), 4);
+        assert_eq!(order.len(), 9);
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(HELPER_SH.contains("echo ready\n"));
     }

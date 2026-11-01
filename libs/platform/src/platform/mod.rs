@@ -51,6 +51,10 @@ pub(crate) trait PlatformApi {
     fn current_capabilities(&self) -> PlatformCapabilities;
     fn disk_space(&self, path: &Path) -> std::io::Result<DiskSpace>;
 
+    fn has_display(&self) -> bool {
+        true
+    }
+
     fn launch_working_dir(&self) -> Option<PathBuf> {
         dirs::home_dir().or_else(|| std::env::current_dir().ok())
     }

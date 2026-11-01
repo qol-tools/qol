@@ -9,7 +9,7 @@ mod platform;
 pub(crate) use clock::Clock;
 pub(crate) use platform::{
     boot_id, install, is_mint, missing, read_host, read_updates, restart_now, schedule_restart,
-    set_auto, set_hours, supported, Helper,
+    set_auto, set_hours, set_skips, supported, Helper,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -42,6 +42,8 @@ pub(crate) struct Package {
     pub(crate) detail: String,
     pub(crate) bytes: Option<u64>,
     pub(crate) target: String,
+    pub(crate) source: String,
+    pub(crate) version: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,6 +69,7 @@ pub(crate) struct Host {
     pub(crate) admin: bool,
     pub(crate) restart_at: Option<NaiveDateTime>,
     pub(crate) log: Option<String>,
+    pub(crate) skips: Vec<String>,
     pub(crate) problems: Vec<String>,
 }
 
@@ -184,6 +187,10 @@ impl Update {
         self.packages.len()
     }
 
+    pub(crate) fn installable(&self) -> bool {
+        matches!(self.held, None | Some(Held::Administrator))
+    }
+
     pub(crate) fn wait(&self) -> String {
         let what = format!(
             "{} {}",
@@ -200,6 +207,100 @@ impl Update {
             None => format!("{what}, restarts nothing"),
         }
     }
+
+    pub(crate) fn skippable(&self) -> bool {
+        !self.packages.is_empty()
+            && self
+                .packages
+                .iter()
+                .all(|package| !package.source.is_empty() && !package.version.is_empty())
+    }
+
+    pub(crate) fn never_entries(&self) -> Vec<String> {
+        distinct(self.packages.iter().map(|package| package.source.clone()))
+    }
+
+    pub(crate) fn skip_entries(&self) -> Vec<String> {
+        distinct(
+            self.packages
+                .iter()
+                .map(|package| format!("{}={}", package.source, package.version)),
+        )
+    }
+
+    pub(crate) fn bytes(&self) -> Option<u64> {
+        self.packages
+            .iter()
+            .map(|package| package.bytes)
+            .sum::<Option<u64>>()
+    }
+
+    fn without(&self, skips: &[String]) -> Option<Self> {
+        let packages: Vec<Package> = self
+            .packages
+            .iter()
+            .filter(|package| !package.skipped(skips))
+            .cloned()
+            .collect();
+        (!packages.is_empty()).then(|| Self {
+            packages,
+            ..self.clone()
+        })
+    }
+}
+
+impl Package {
+    pub(crate) fn skipped(&self, skips: &[String]) -> bool {
+        !self.source.is_empty()
+            && skips.iter().any(|entry| match entry.split_once('=') {
+                Some((source, version)) => glob(source, &self.source) && version == self.version,
+                None => glob(entry, &self.source),
+            })
+    }
+}
+
+fn distinct(items: impl Iterator<Item = String>) -> Vec<String> {
+    let mut seen = Vec::new();
+    for item in items {
+        if !seen.contains(&item) {
+            seen.push(item);
+        }
+    }
+    seen
+}
+
+pub(crate) fn visible(list: &[Update], skips: &[String]) -> Vec<Update> {
+    list.iter()
+        .filter_map(|update| update.without(skips))
+        .collect()
+}
+
+fn glob(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((at, from)) => {
+                    p = at + 1;
+                    t = from + 1;
+                    star = Some((at, from + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 impl Held {
@@ -216,14 +317,6 @@ impl Held {
             Self::Phasing(_) => "Held by Ubuntu",
             Self::Administrator => "Held by an administrator",
             Self::KeptBack => "Kept back by the system",
-        }
-    }
-
-    pub(crate) fn decides(self) -> &'static str {
-        match self {
-            Self::Phasing(_) => "Ubuntu's rollout decides when",
-            Self::Administrator => "An administrator decides when",
-            Self::KeptBack => "It waits until its packages fit together",
         }
     }
 }
@@ -364,6 +457,8 @@ mod tests {
                     detail: String::new(),
                     bytes: None,
                     target: format!("x{index}=1.0"),
+                    source: "x".into(),
+                    version: "1.0".into(),
                 })
                 .collect(),
             running: None,
@@ -396,6 +491,45 @@ mod tests {
             update(None, true, 1, Unit::Firmware).wait(),
             "1 firmware update, needs a restart"
         );
+    }
+
+    #[test]
+    fn skips_match_like_mints_ignore_list() {
+        let mut brave = update(None, false, 2, Unit::Packages);
+        brave.packages[0].source = "brave-browser".into();
+        brave.packages[0].version = "1.98.63".into();
+        let skips =
+            |entries: &[&str]| -> Vec<String> { entries.iter().map(ToString::to_string).collect() };
+        assert_eq!(brave.never_entries(), ["brave-browser", "x"]);
+        assert_eq!(brave.skip_entries(), ["brave-browser=1.98.63", "x=1.0"]);
+        assert!(brave.packages[0].skipped(&skips(&["brave-browser"])));
+        assert!(brave.packages[0].skipped(&skips(&["brave-*"])));
+        assert!(brave.packages[0].skipped(&skips(&["brave-browser=1.98.63"])));
+        assert!(!brave.packages[0].skipped(&skips(&["brave-browser=1.98.64"])));
+        assert!(!brave.packages[0].skipped(&skips(&["brave"])));
+        let shown = visible(std::slice::from_ref(&brave), &skips(&["brave-browser"]));
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].count(), 1);
+        assert!(visible(
+            std::slice::from_ref(&brave),
+            &skips(&["brave-browser", "x"])
+        )
+        .is_empty());
+        let mut flatpak = update(None, false, 1, Unit::Apps);
+        flatpak.packages[0].source = String::new();
+        assert!(!flatpak.skippable());
+        assert!(!flatpak.packages[0].skipped(&skips(&["*"])));
+        assert!(brave.skippable());
+    }
+
+    #[test]
+    fn globs_take_stars_and_question_marks() {
+        assert!(glob("linux-*", "linux-signed"));
+        assert!(glob("a*b", "axxb"));
+        assert!(glob("a?c", "abc"));
+        assert!(glob("*", "anything"));
+        assert!(!glob("a*b", "axxc"));
+        assert!(!glob("abc", "abcd"));
     }
 
     #[test]

@@ -206,6 +206,7 @@ fn picker_window_options(bounds: Bounds<Pixels>, transparent: bool, focus: bool)
 fn on_open_failure() {
     log::warn!("failed to open picker window");
     PICKER_VISIBLE.store(false, Ordering::Relaxed);
+    super::release_focus_priority();
     if let Ok(mut lock) = crate::app::ACTIVE_PICKER_MONITOR.lock() {
         *lock = None;
     }

@@ -1,0 +1,10 @@
+plugins/*/src/ui/**
+plugins/alt-tab/src/app/**
+plugins/alt-tab/src/picker/**
+apps/tray/src/surfaces/**
+apps/tray/src/settings_surface/**
+libs/gpui/**
+libs/theme/**
+vendor/gpui/**
+libs/sessions-engine/src/switchboard/rows.rs
+libs/sessions-engine/src/switchboard/plugin/**

@@ -9,6 +9,7 @@ description = "Resident-process OS plumbing for qol-tray plugins: unix-socket IP
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 qol-config.workspace = true
 qol-runtime.workspace = true
 qol-theme.workspace = true

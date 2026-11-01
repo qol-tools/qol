@@ -200,11 +200,12 @@ pub fn file_watch_roots() -> Vec<PathBuf> {
         PathBuf::from(format!("{home}/Projects")),
     ];
 
-    if let Some(config_root) = xdg_config_root(&home) {
-        roots.push(config_root);
+    let config_root = xdg_config_root(&home);
+    if let Some(config_root) = &config_root {
+        roots.push(config_root.clone());
     }
 
-    roots.extend(user_dirs_from_config(&home));
+    roots.extend(user_dirs_from_config(config_root.as_deref(), &home));
     roots.sort();
     roots.dedup();
     roots
@@ -224,13 +225,14 @@ fn xdg_config_root(home: &str) -> Option<PathBuf> {
         })
 }
 
-fn user_dirs_from_config(home: &str) -> Vec<PathBuf> {
+fn user_dirs_from_config(config_root: Option<&Path>, home: &str) -> Vec<PathBuf> {
     if home.is_empty() {
         return Vec::new();
     }
-
-    let config_path = PathBuf::from(format!("{home}/.config/user-dirs.dirs"));
-    let Ok(content) = fs::read_to_string(config_path) else {
+    let Some(config_root) = config_root else {
+        return Vec::new();
+    };
+    let Ok(content) = fs::read_to_string(config_root.join("user-dirs.dirs")) else {
         return Vec::new();
     };
 
@@ -251,12 +253,35 @@ fn parse_user_dir_line(line: &str, home: &str) -> Option<PathBuf> {
         return None;
     }
     value = value.replace("$HOME", home);
-    Some(PathBuf::from(value))
+    let path = PathBuf::from(value);
+    if path == Path::new(home) {
+        return None;
+    }
+    Some(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_dirs_skip_disabled_entries_and_read_the_xdg_config_root() {
+        let config = tempfile::TempDir::new().unwrap();
+        fs::write(
+            config.path().join("user-dirs.dirs"),
+            "# written by xdg-user-dirs-update\nXDG_DESKTOP_DIR=\"$HOME/Desktop\"\nXDG_TEMPLATES_DIR=\"$HOME/\"\nXDG_PUBLICSHARE_DIR=\"$HOME\"\nXDG_MUSIC_DIR=\"/media/music\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            user_dirs_from_config(Some(config.path()), "/home/user"),
+            [
+                PathBuf::from("/home/user/Desktop"),
+                PathBuf::from("/media/music")
+            ]
+        );
+        assert!(user_dirs_from_config(None, "/home/user").is_empty());
+    }
 
     #[test]
     fn kinds_come_from_the_last_real_category_in_plain_words() {

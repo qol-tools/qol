@@ -1702,6 +1702,15 @@ pub(super) fn maybe_deliver_group_combined(
     Ok(Some((combined, delivery)))
 }
 
+pub(super) fn round_receipt_path(
+    trace_dir: &std::path::Path,
+    session: &str,
+    marker: &str,
+) -> std::path::PathBuf {
+    let path = evidence::receipt_path(trace_dir, session, marker);
+    std::path::absolute(&path).unwrap_or(path)
+}
+
 #[cfg(test)]
 pub(super) fn combined_report_path(trace_dir: &std::path::Path, group: &str) -> std::path::PathBuf {
     settling_round_dir(trace_dir, group).join("combined.md")
@@ -5109,6 +5118,8 @@ mod tests {
         );
     }
 
+    const WAKE_TEST_SLEEP_LIMIT: usize = 5_000;
+
     fn run_wake(backend: Arc<FakeBackend>) -> (Vec<serde_json::Value>, Arc<FakeBackend>, usize) {
         run_wake_to(backend, "v1:fake:7:100")
     }
@@ -5137,7 +5148,13 @@ mod tests {
             &mut out,
             root.path(),
             fast_config(Duration::from_secs(3600)),
-            &mut |duration| sleeps.push(duration),
+            &mut |duration| {
+                sleeps.push(duration);
+                assert!(
+                    sleeps.len() <= WAKE_TEST_SLEEP_LIMIT,
+                    "the wake loop never ended after {WAKE_TEST_SLEEP_LIMIT} sleeps"
+                );
+            },
         )
         .unwrap();
         let deferrals = sleeps
@@ -5375,6 +5392,22 @@ mod tests {
         assert_eq!(events[0]["delivered"], false, "events: {events:?}");
         assert!(backend.sent.lock().unwrap().is_empty());
         assert_eq!(deferrals, WAKE_UNREADABLE_POLLS - 1);
+    }
+
+    const CLAUDE_LABELED_RULE: &str = "\u{1b}[m\u{1b}[38:2:136:136:136m\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500} \u{1b}[38:2:215:119:87multracode\u{1b}[38:2:136:136:136m \u{2500}";
+
+    #[test]
+    fn a_claude_box_with_a_labeled_top_rule_gets_the_wake_typed() {
+        let screen = format!(
+            "{CLAUDE_LABELED_RULE}\n\u{1b}[m\u{276F}\u{a0}\n{CLAUDE_RULE}\n{CLAUDE_FOOTER}\n"
+        );
+        let screens = completed_then([screen]);
+        let backend = claude_driver(FakeBackend::new(facts("7", 100), screens));
+        let (events, backend, deferrals) = run_wake_to(backend, "v1:fake:8:200");
+
+        assert_eq!(events[0]["delivered"], true, "events: {events:?}");
+        assert_eq!(backend.sent.lock().unwrap().len(), 1);
+        assert_eq!(deferrals, 0);
     }
 
     #[test]

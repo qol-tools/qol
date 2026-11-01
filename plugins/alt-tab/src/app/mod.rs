@@ -189,6 +189,7 @@ impl AltTabApp {
                             "outcome=refocused_alt_held visible={picker_visible} mode={:?} modifier_held={modifier_held}",
                             this.action_mode
                         );
+                        picker::claim_focus_priority();
                         this.focus_for_keys("focus-out/alt-held", None, window);
                         picker::platform::hold_picker_focus(&this.picker_title);
                     }
@@ -700,6 +701,7 @@ impl AltTabApp {
         }
         self._alt_poll_task = None;
         picker::platform::cancel_picker_focus_reassert();
+        picker::release_focus_priority();
         PICKER_VISIBLE.store(false, Ordering::Relaxed);
         if let Ok(mut lock) = ACTIVE_PICKER_MONITOR.lock() {
             *lock = None;

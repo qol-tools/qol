@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.121.2"
+version = "0.121.12"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6460,7 +6460,7 @@ dependencies = [
 
 [[package]]
 name = "qol-bluetooth"
-version = "0.79.1"
+version = "0.80.3"
 dependencies = [
  "anyhow",
  "bluer",
@@ -6532,7 +6532,7 @@ dependencies = [
 
 [[package]]
 name = "qol-cli-sessions"
-version = "0.121.1"
+version = "0.130.4"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6563,7 +6563,7 @@ dependencies = [
 
 [[package]]
 name = "qol-clipboard"
-version = "0.19.1"
+version = "0.19.5"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -6626,7 +6626,7 @@ dependencies = [
 
 [[package]]
 name = "qol-controllers"
-version = "0.69.1"
+version = "0.70.3"
 dependencies = [
  "anyhow",
  "evdev",
@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "qol-explorer"
-version = "0.21.3"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6920,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "qol-input"
-version = "0.19.1"
+version = "0.19.6"
 dependencies = [
  "anyhow",
  "libc",
@@ -6947,7 +6947,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.79.1"
+version = "1.79.5"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -6976,7 +6976,7 @@ dependencies = [
 
 [[package]]
 name = "qol-launcher"
-version = "1.112.2"
+version = "1.113.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -7023,7 +7023,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.80.1"
+version = "1.81.2"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -7073,7 +7073,7 @@ dependencies = [
 
 [[package]]
 name = "qol-memory"
-version = "0.46.1"
+version = "0.47.2"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7125,7 +7125,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.51.1"
+version = "0.52.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7160,7 +7160,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.82.1"
+version = "0.82.6"
 dependencies = [
  "anyhow",
  "libc",
@@ -7274,6 +7274,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "toml 0.9.12+spec-1.1.0",
  "windows 0.61.3",
  "windows-sys 0.59.0",
  "workspace-hack",
@@ -7315,7 +7316,7 @@ dependencies = [
 
 [[package]]
 name = "qol-pointz"
-version = "1.78.1"
+version = "1.78.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7375,7 +7376,7 @@ dependencies = [
 
 [[package]]
 name = "qol-removeapp"
-version = "0.97.2"
+version = "0.97.13"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -7469,6 +7470,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "qol-agent-homes",
  "qol-agent-launch",
  "qol-config",
  "qol-fs",
@@ -7489,7 +7491,7 @@ dependencies = [
 
 [[package]]
 name = "qol-shot"
-version = "1.110.3"
+version = "1.110.15"
 dependencies = [
  "anyhow",
  "block2",
@@ -7528,7 +7530,7 @@ dependencies = [
 
 [[package]]
 name = "qol-sound"
-version = "0.38.1"
+version = "0.39.2"
 dependencies = [
  "anyhow",
  "log",
@@ -7603,7 +7605,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.128.1"
+version = "3.130.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -7695,7 +7697,7 @@ dependencies = [
 
 [[package]]
 name = "qol-update-manager"
-version = "0.21.1"
+version = "0.23.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7720,7 +7722,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.79.2"
+version = "0.79.11"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -7761,7 +7763,7 @@ dependencies = [
 
 [[package]]
 name = "qol-window-actions"
-version = "2.77.1"
+version = "2.77.5"
 dependencies = [
  "log",
  "proptest",
@@ -8544,9 +8546,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "log",
  "once_cell",

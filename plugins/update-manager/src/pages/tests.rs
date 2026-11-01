@@ -32,6 +32,8 @@ fn update(id: &str, label: &str, count: usize, unit: Unit) -> Update {
                 detail: "A package".into(),
                 bytes: Some(95_900),
                 target: format!("{id}-{index}=1"),
+                source: format!("{id}-src"),
+                version: "1".into(),
             })
             .collect(),
         running: None,
@@ -54,6 +56,10 @@ fn mint() -> Session {
     apparmor.held = Some(Held::Phasing(10));
     let mut gl = update("flatpak:gl-nvidia", "NVIDIA GL runtimes", 8, Unit::Runtimes);
     gl.tag = "Flatpak".into();
+    for package in &mut gl.packages {
+        package.source.clear();
+        package.version.clear();
+    }
     gl.unattended = false;
     let mut dbx = update("fwupd:dbx", "UEFI Secure Boot list", 1, Unit::Firmware);
     dbx.tag = "Firmware".into();
@@ -138,6 +144,42 @@ fn broken(pages: &Pages) -> Vec<String> {
         .into_iter()
         .chain(pages.dead_ends())
         .collect()
+}
+
+fn value(pages: &Pages, page_id: &str, row: &str) -> String {
+    page(pages, page_id)
+        .row(row)
+        .and_then(|row| row.value.clone())
+        .unwrap_or_default()
+}
+
+fn ids<'a>(pages: &'a Pages, page_id: &str) -> Vec<&'a str> {
+    page(pages, page_id)
+        .rows()
+        .map(|row| row.id.as_str())
+        .filter(|id| id.starts_with("update:"))
+        .collect()
+}
+
+fn longer() -> Session {
+    let mut session = mint();
+    let mut list = session.list().to_vec();
+    for index in 0..3 {
+        list.push(update(
+            &format!("apt:extra{index}"),
+            &format!("Extra {index} 1.0"),
+            1,
+            Unit::Packages,
+        ));
+    }
+    session.apply_updates(
+        Updates {
+            list,
+            problems: Vec::new(),
+        },
+        at("2026-10-14 13:58"),
+    );
+    session
 }
 
 fn crowded() -> Session {
@@ -241,7 +283,7 @@ fn every_answer_fits_the_message_limit_with_hundreds_of_updates() {
     );
     assert_eq!(label(&board.pages, "waiting", "more"), "Show 41 to 80");
     assert_eq!(label(&board.pages, "waiting~10", "more"), "Show 1 to 40");
-    let big = format!("update:apt:007-{}", "x".repeat(48));
+    let big = format!("packages:apt:007-{}", "x".repeat(48));
     assert_eq!(label(&board.pages, &big, "more"), "Show 41 to 80");
     assert_eq!(
         label(&board.pages, &format!("{big}~4"), "more"),
@@ -283,56 +325,60 @@ fn every_page_is_consistent_in_every_state() {
 
 #[test]
 fn the_first_page_reads_like_the_design() {
-    let pages = build(&mint(), now()).pages;
+    let session = mint();
+    let pages = build(&session, now()).pages;
     assert_eq!(pages.root, ROOT);
-    assert_eq!(page(&pages, ROOT).title, "Update Manager");
-    assert_eq!(label(&pages, ROOT, "waiting"), "33 updates waiting");
+    let root = page(&pages, ROOT);
+    assert_eq!(root.title, "Update Manager");
+    let titles: Vec<&str> = root
+        .groups
+        .iter()
+        .map(|group| group.title.as_str())
+        .collect();
+    assert_eq!(titles, ["updates", "mint", "qol", "history"]);
+    assert!(root.groups.iter().all(|group| group.colophon.is_none()));
+    assert_eq!(label(&pages, ROOT, "install"), "5 waiting");
     assert_eq!(
-        detail(&pages, ROOT, "waiting"),
-        "30 can install, 3 held by Ubuntu"
+        root.row("install").and_then(|row| row.control.clone()),
+        Some(Control::Button("Install all".into()))
+    );
+    assert_eq!(
+        root.row("install").and_then(|row| row.enter.clone()),
+        Some(Enter::Open(super::updates::install_all(&session)))
     );
     assert_eq!(label(&pages, ROOT, "restart"), "Linux kernel 6.8.0-147");
     assert_eq!(
         detail(&pages, ROOT, "restart"),
         "6.8.0-146 runs until a restart"
     );
-    assert_eq!(
-        page(&pages, ROOT)
-            .row("auto")
-            .and_then(|row| row.value.clone())
-            .as_deref(),
-        Some("packages and spices")
-    );
-    assert_eq!(
-        page(&pages, ROOT)
-            .row("hours")
-            .and_then(|row| row.value.clone())
-            .as_deref(),
-        Some("00:00 to 01:00")
-    );
+    assert_eq!(label(&pages, ROOT, "auto"), "Installs on its own");
+    assert_eq!(value(&pages, ROOT, "auto"), "packages, spices");
+    assert_eq!(label(&pages, ROOT, "hours"), "Hours");
+    assert_eq!(value(&pages, ROOT, "hours"), "00:00 to 01:00");
+    assert_eq!(label(&pages, ROOT, "hold"), "Hold all");
+    assert_eq!(detail(&pages, ROOT, "hold"), "");
+    assert_eq!(detail(&pages, ROOT, "guard"), "");
+    assert_eq!(label(&pages, ROOT, "changes"), "Changed by qol");
+    assert_eq!(value(&pages, ROOT, "changes"), "0");
     assert_eq!(label(&pages, ROOT, "last"), "Today, 07:45");
     assert_eq!(
-        detail(&pages, ROOT, "last"),
-        "Mint upgraded 17 packages. Bluetooth restarted at 07:46."
+        root.row("last").and_then(|row| row.tag.clone()).as_deref(),
+        Some("mint")
     );
-    assert_eq!(detail(&pages, ROOT, "changes"), "Nothing so far");
+    assert_eq!(value(&pages, ROOT, "last"), "Bluetooth, kernel");
+    assert!(root.row("skipped").is_none());
     assert_eq!(
-        page(&pages, ROOT)
-            .row("guard")
-            .and_then(|row| row.control.clone()),
+        root.row("guard").and_then(|row| row.control.clone()),
         Some(Control::Toggle(false))
     );
 }
 
 #[test]
-fn the_waiting_page_puts_restarts_first_and_held_last() {
+fn the_first_page_lists_restarts_first_and_held_last() {
     let pages = build(&mint(), now()).pages;
-    let waiting = page(&pages, "waiting");
-    let ids: Vec<&str> = waiting.rows().map(|row| row.id.as_str()).collect();
     assert_eq!(
-        ids,
+        ids(&pages, ROOT),
         [
-            "install",
             "update:apt:nvidia",
             "update:fwupd:dbx",
             "update:apt:urllib3",
@@ -340,48 +386,42 @@ fn the_waiting_page_puts_restarts_first_and_held_last() {
             "update:apt:apparmor",
         ]
     );
-    assert_eq!(label(&pages, "waiting", "install"), "30 updates");
+    assert_eq!(value(&pages, ROOT, "update:apt:nvidia"), "restart");
+    assert_eq!(value(&pages, ROOT, "update:apt:urllib3"), "");
+    assert_eq!(value(&pages, ROOT, "update:apt:apparmor"), "held by Ubuntu");
+    let root = page(&pages, ROOT);
+    assert!(root.row("update:apt:apparmor").is_some_and(|row| row.dim));
+    assert!(root
+        .rows()
+        .filter(|row| row.id.starts_with("update:"))
+        .all(|row| row.tag.is_none() && row.detail.is_none()));
+    assert!(root.row("more").is_none());
+    assert!(pages.page("waiting").is_none());
+}
+
+#[test]
+fn a_long_list_moves_the_rest_to_the_waiting_page() {
+    let pages = build(&longer(), now()).pages;
+    assert_eq!(ids(&pages, ROOT).len(), 6);
+    assert_eq!(label(&pages, ROOT, "more"), "2 more");
     assert_eq!(
-        detail(&pages, "waiting", "install"),
-        "Installing asks for your password."
+        page(&pages, ROOT)
+            .row("more")
+            .and_then(|row| row.enter.clone()),
+        Some(Enter::Open("waiting".into()))
     );
-    let mut locked = mint();
-    locked.host.admin = false;
-    assert_eq!(
-        detail(&build(&locked, now()).pages, "waiting", "install"),
-        "Installing asks for an administrator's password."
-    );
-    assert_eq!(
-        waiting.row("install").and_then(|row| row.control.clone()),
-        Some(Control::Button("Install all".into()))
-    );
-    assert_eq!(
-        page(&pages, "waiting").groups[1].colophon.as_deref(),
-        Some("each tagged with its updater.")
-    );
+    let waiting = page(&pages, "waiting");
+    assert!(waiting.groups.iter().all(|group| group.colophon.is_none()));
+    assert_eq!(label(&pages, "waiting", "install"), "8 waiting");
+    assert_eq!(ids(&pages, "waiting").len(), 8);
     assert!(waiting
         .row("update:apt:nvidia")
         .is_some_and(|row| row.tag.as_deref() == Some("Update Manager")));
-    assert!(waiting
-        .row("update:apt:apparmor")
-        .is_some_and(|row| row.dim));
-    assert_eq!(
-        detail(&pages, "waiting", "update:apt:nvidia"),
-        "20 packages, needs a restart"
-    );
-    let one = page(&pages, "update:apt:nvidia");
-    assert_eq!(one.title, "nvidia driver 580.178");
-    assert_eq!(
-        one.rows()
-            .filter(|row| row.id.starts_with("package:"))
-            .count(),
-        20
-    );
 }
 
 #[test]
 fn one_shared_updater_is_said_once() {
-    let mut session = mint();
+    let mut session = longer();
     let list: Vec<Update> = session
         .list()
         .iter()
@@ -399,15 +439,121 @@ fn one_shared_updater_is_said_once() {
         at("2026-10-14 13:58"),
     );
     let pages = build(&session, now()).pages;
-    let waiting = page(&pages, "waiting");
-    assert_eq!(
-        waiting.groups[1].colophon.as_deref(),
-        Some("all from update manager.")
-    );
-    assert!(waiting
+    assert!(page(&pages, "waiting")
         .rows()
         .filter(|row| row.id.starts_with("update:"))
         .all(|row| row.tag.is_none()));
+}
+
+#[test]
+fn an_update_page_warns_then_installs_skips_or_never_updates() {
+    let mut session = mint();
+    let pages = build(&session, now()).pages;
+    let nvidia = page(&pages, "update:apt:nvidia");
+    assert_eq!(nvidia.title, "nvidia driver 580.178");
+    assert!(nvidia.groups.iter().all(|group| group.colophon.is_none()));
+    let rows: Vec<&str> = nvidia.rows().map(|row| row.id.as_str()).collect();
+    assert_eq!(
+        rows,
+        ["restart", "caution", "install", "skip", "never", "packages"]
+    );
+    assert_eq!(
+        label(&pages, "update:apt:nvidia", "restart"),
+        "Finishes at a restart"
+    );
+    assert_eq!(
+        label(&pages, "update:apt:nvidia", "caution"),
+        "Games opened before the restart may fail"
+    );
+    assert_eq!(value(&pages, "update:apt:nvidia", "install"), "20 packages");
+    assert_eq!(label(&pages, "update:apt:nvidia", "skip"), "Skip 580.178");
+    assert_eq!(value(&pages, "update:apt:nvidia", "packages"), "20");
+    assert_eq!(
+        page(&pages, "packages:apt:nvidia")
+            .rows()
+            .filter(|row| row.id.starts_with("package:"))
+            .count(),
+        20
+    );
+    let urllib3 = page(&pages, "update:apt:urllib3");
+    let rows: Vec<&str> = urllib3.rows().map(|row| row.id.as_str()).collect();
+    assert_eq!(rows, ["install", "skip", "never"]);
+    assert_eq!(value(&pages, "update:apt:urllib3", "install"), "96 kB");
+    assert_eq!(label(&pages, "update:apt:urllib3", "skip"), "Skip 2.0.7");
+    assert!(page(&pages, "update:flatpak:gl-nvidia")
+        .row("skip")
+        .is_none());
+    let installed = press(&mut session, "update:apt:urllib3", "install", now());
+    assert_eq!(installed.go, None);
+    assert!(matches!(installed.task, Some(Task::Install(ref list)) if list.len() == 1));
+}
+
+#[test]
+fn skipped_updates_hide_until_they_update_again() {
+    let mut session = mint();
+    let skip = press(&mut session, "update:apt:urllib3", "skip", now());
+    assert_eq!(skip.go, Some(Go::Back));
+    let task = skip.task.expect("skip task");
+    assert_eq!(
+        task,
+        Task::Skips {
+            add: vec!["apt:urllib3-src=1".into()],
+            remove: Vec::new(),
+            system: true,
+        }
+    );
+    session.done(&task, Ok(()), now());
+    let pages = build(&session, now()).pages;
+    assert!(session.update("apt:urllib3").is_none());
+    assert_eq!(value(&pages, ROOT, "skipped"), "1");
+    assert_eq!(
+        label(&pages, "skipped", "skip:apt:urllib3-src=1"),
+        "apt:urllib3-src"
+    );
+    let never = press(&mut session, "update:apt:nvidia", "never", now());
+    let task = never.task.expect("never task");
+    assert_eq!(
+        task,
+        Task::Skips {
+            add: vec!["apt:nvidia-src".into()],
+            remove: Vec::new(),
+            system: true,
+        }
+    );
+    session.done(&task, Ok(()), now());
+    let pages = build(&session, now()).pages;
+    assert!(session.update("apt:nvidia").is_none());
+    assert_eq!(value(&pages, ROOT, "skipped"), "2");
+    let titles: Vec<&str> = page(&pages, "skipped")
+        .groups
+        .iter()
+        .map(|group| group.title.as_str())
+        .collect();
+    assert_eq!(titles, ["never", "this version"]);
+    let again = press(&mut session, "skipped", "never:apt:nvidia-src", now());
+    let task = again.task.expect("update again task");
+    session.done(&task, Ok(()), now());
+    assert!(session.update("apt:nvidia").is_some());
+    let mut locked = mint();
+    locked.host.admin = false;
+    let Some(Task::Skips { system, .. }) =
+        press(&mut locked, "update:apt:urllib3", "never", now()).task
+    else {
+        panic!("never must change the skipped list");
+    };
+    assert!(!system);
+    locked.done(
+        &Task::Skips {
+            add: Vec::new(),
+            remove: Vec::new(),
+            system,
+        },
+        Err(Refusal::Denied),
+        now(),
+    );
+    let pages = build(&locked, now()).pages;
+    assert_eq!(broken(&pages), Vec::<String>::new());
+    assert!(page(&pages, "skipped").row("error").is_some());
 }
 
 #[test]
@@ -416,16 +562,13 @@ fn install_asks_first_then_starts_one_job() {
     let pages = build(&session, now()).pages;
     let all = super::updates::install_all(&session);
     let install = page(&pages, &all);
-    assert_eq!(install.groups[0].title, "install 30 updates now?");
+    assert_eq!(install.groups[0].title, "before you install");
     assert_eq!(
         label(&pages, &all, "restart"),
         "NVIDIA driver 580.178 and the Secure Boot list"
     );
     assert_eq!(label(&pages, &all, "held"), "AppArmor 4.0.1 stays held");
-    assert_eq!(
-        install.row("cancel").and_then(|row| row.enter.clone()),
-        Some(Enter::Back)
-    );
+    assert_eq!(label(&pages, &all, "go"), "Install 30 updates");
     let outcome = press(&mut session, &all, "go", now());
     assert_eq!(outcome.go, Some(Go::Back));
     let Some(Task::Install(list)) = outcome.task else {
@@ -434,9 +577,9 @@ fn install_asks_first_then_starts_one_job() {
     assert_eq!(list.len(), 4);
     let pages = build(&session, now()).pages;
     assert_eq!(label(&pages, ROOT, "waiting"), "Waiting for the password");
-    assert_eq!(detail(&pages, ROOT, "waiting"), "To install 30 updates");
+    assert_eq!(value(&pages, ROOT, "waiting"), "30 updates");
     assert_eq!(
-        detail(&pages, "waiting", "update:apt:nvidia"),
+        value(&pages, ROOT, "update:apt:nvidia"),
         "waits for the password"
     );
     session.progress(0);
@@ -444,17 +587,85 @@ fn install_asks_first_then_starts_one_job() {
     assert_eq!(label(&pages, ROOT, "waiting"), "Installing 30 updates");
     assert!(pages.page(&all).is_none());
     assert_eq!(
-        detail(&pages, "waiting", "update:apt:nvidia"),
+        value(&pages, ROOT, "update:apt:nvidia"),
         "installing, 0 of 20 packages"
     );
-    let again = press(&mut session, "waiting", "install", now());
+    let again = press(&mut session, "update:apt:urllib3", "install", now());
     assert!(matches!(again.notice, Some(Notice::Failure(_))));
+}
+
+#[test]
+fn install_all_starts_at_once_when_nothing_needs_a_warning() {
+    let mut session = mint();
+    let list: Vec<Update> = session
+        .list()
+        .iter()
+        .filter(|update| !update.restart)
+        .cloned()
+        .collect();
+    session.apply_updates(
+        Updates {
+            list,
+            problems: Vec::new(),
+        },
+        at("2026-10-14 13:58"),
+    );
+    let pages = build(&session, now()).pages;
+    assert_eq!(
+        page(&pages, ROOT)
+            .row("install")
+            .and_then(|row| row.enter.clone()),
+        Some(Enter::Press)
+    );
+    let outcome = press(&mut session, ROOT, "install", now());
+    assert!(matches!(outcome.task, Some(Task::Install(ref list)) if list.len() == 2));
+}
+
+#[test]
+fn an_administrator_hold_installs_like_any_update() {
+    let mut session = mint();
+    let held = session
+        .updates
+        .as_mut()
+        .and_then(|updates| {
+            updates
+                .list
+                .iter_mut()
+                .find(|update| update.id == "apt:nvidia")
+        })
+        .expect("nvidia");
+    held.held = Some(Held::Administrator);
+    held.why = "An administrator holds it at 580.173".into();
+    let pages = build(&session, now()).pages;
+    assert_eq!(label(&pages, ROOT, "install"), "5 waiting");
+    let row = page(&pages, ROOT)
+        .row("update:apt:nvidia")
+        .expect("nvidia row");
+    assert!(!row.dim);
+    assert_eq!(
+        label(&pages, "update:apt:nvidia", "release"),
+        "Its hold comes off"
+    );
+    let all = super::updates::install_all(&session);
+    assert_eq!(
+        label(&pages, &all, "release:apt:nvidia"),
+        "Its hold comes off"
+    );
+    assert_eq!(label(&pages, &all, "held"), "AppArmor 4.0.1 stays held");
+    assert!(page(&pages, "update:apt:apparmor").row("install").is_none());
+    let outcome = press(&mut session, &all, "go", now());
+    let Some(Task::Install(list)) = outcome.task else {
+        panic!("install all must take the held driver too");
+    };
+    assert!(list
+        .iter()
+        .any(|update| update.held == Some(Held::Administrator)));
 }
 
 #[test]
 fn a_failed_install_offers_a_retry_and_the_log() {
     let mut session = mint();
-    press(&mut session, "install:apt:nvidia", "go", now());
+    press(&mut session, "update:apt:nvidia", "install", now());
     session.installed(Err(Failure {
         done: 0,
         reason: Reason::Locked(Some("Mint's Update Manager".into())),
@@ -583,7 +794,7 @@ fn rules_and_changes_list_what_qol_holds() {
     session.rules.helper = Helper::Ready;
     session.host.restart_at = Some(at("2026-10-15 01:30"));
     let pages = build(&session, now()).pages;
-    assert_eq!(detail(&pages, ROOT, "changes"), "Restart tonight");
+    assert_eq!(value(&pages, ROOT, "changes"), "1");
     assert_eq!(label(&pages, "changes", "restart"), "Restart tonight");
     let cancel = press(&mut session, "changes", "restart", now());
     assert_eq!(cancel.task, Some(Task::Restart(None)));
@@ -601,14 +812,14 @@ fn a_hold_the_password_prompt_refused_is_not_listed_as_a_change() {
     assert_eq!(held.task, Some(Task::Rules));
     session.rules.helper = Helper::Starting;
     let pages = build(&session, now()).pages;
-    assert_eq!(detail(&pages, ROOT, "changes"), "Nothing so far");
+    assert_eq!(value(&pages, ROOT, "changes"), "0");
     assert_eq!(
         detail(&pages, ROOT, "hold"),
         "Waiting for the password, to hold Mint's run"
     );
     session.rules.helper = Helper::Failed(Refusal::Dismissed);
     let pages = build(&session, now()).pages;
-    assert_eq!(detail(&pages, ROOT, "changes"), "Nothing so far");
+    assert_eq!(value(&pages, ROOT, "changes"), "0");
     assert_eq!(
         detail(&pages, ROOT, "hold"),
         "The password prompt was closed."
@@ -640,10 +851,7 @@ fn rules_the_password_prompt_refused_switch_off_and_retry() {
     assert!(!session.rules.hold);
     assert!(!session.want_helper());
     let pages = build(&session, now()).pages;
-    assert_eq!(
-        detail(&pages, ROOT, "hold"),
-        "Nothing installs until you switch it off"
-    );
+    assert_eq!(detail(&pages, ROOT, "hold"), "");
     assert!(page(&pages, ROOT).row("retry").is_some());
     press(&mut session, ROOT, "retry", now());
     assert_eq!(session.rules.helper, Helper::Off);

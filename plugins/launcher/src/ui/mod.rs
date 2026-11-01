@@ -158,6 +158,7 @@ impl LauncherView {
         trace::dismiss(self, _from);
         self.set_showing(false);
         qol_gpui::popup_window::release_input(&self.window_title);
+        qol_gpui::focus_priority::release(qol_gpui::focus_priority::FocusPriority::Launcher);
         qol_gpui::ghost::dismiss_to_ghost(LAUNCHER_WINDOW_TITLE, &self.window_title);
         qol_gpui::popup_window::restore_composite(&self.window_title);
     }

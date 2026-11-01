@@ -1614,6 +1614,11 @@ fn input_hold_loop(
             if !window_is_visible(&conn, wid) {
                 break 'outer;
             }
+            if crate::focus_priority::must_yield() {
+                INPUT_HELD.store(false, Ordering::Relaxed);
+                qol_runtime::probe!("INPUT_HOLD_YIELD", "wid={wid}");
+                break 'outer;
+            }
             let now = Instant::now();
             refocus_times.retain(|at| now.duration_since(*at) <= Duration::from_millis(500));
             refocus_times.push(now);

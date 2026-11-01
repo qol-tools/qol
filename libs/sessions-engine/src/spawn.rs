@@ -31,7 +31,7 @@ const READY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const SPAWN_TASK_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static KEY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-const LANE_EXEC_PREFIX: &[&str] = &["sessions", "lane-exec"];
+pub(super) const LANE_EXEC_PREFIX: &[&str] = &["sessions", "lane-exec"];
 
 #[cfg(not(test))]
 fn caller_config_dir() -> Option<PathBuf> {
@@ -51,6 +51,46 @@ fn remember_caller_login() {
 #[cfg(test)]
 fn remember_caller_login() {}
 
+#[cfg(not(test))]
+fn launch_blocker(
+    interpreter: &CliSessionInterpreter,
+    tool: &CliToolId,
+    cwd: &Path,
+    launch: &CliLaunchProgram,
+) -> Option<String> {
+    let config_dir = launch
+        .env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == qol_agent_launch::account::CONFIG_DIR_ENV)
+        .map(|(_, value)| PathBuf::from(value))
+        .or_else(caller_config_dir);
+    interpreter.launch_blocker_for(tool, cwd, config_dir.as_deref())
+}
+
+#[cfg(test)]
+fn launch_blocker(
+    _interpreter: &CliSessionInterpreter,
+    _tool: &CliToolId,
+    _cwd: &Path,
+    _launch: &CliLaunchProgram,
+) -> Option<String> {
+    None
+}
+
+fn refuse_blocked_launch(
+    interpreter: &CliSessionInterpreter,
+    tool: &CliToolId,
+    key: &str,
+    cwd: &Path,
+    launch: &CliLaunchProgram,
+) -> Result<()> {
+    match launch_blocker(interpreter, tool, cwd, launch) {
+        Some(reason) => bail!("refusing to launch `{key}`: {reason}"),
+        None => Ok(()),
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(super) struct SpawnOutcome {
     pub(super) session: String,
@@ -63,6 +103,8 @@ pub(super) struct SpawnOutcome {
     pub(super) title: String,
     pub(super) task_submitted: Option<bool>,
     pub(super) completion_marker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) receipt_path: Option<String>,
     pub(super) screen: Option<String>,
     pub(super) next_command: Option<String>,
     pub(super) elapsed_ms: u128,
@@ -965,6 +1007,7 @@ pub(super) fn deliver_task(
     ledger: &SpawnLedger,
     dispatch: &AgentDispatch,
     assignment: Option<&AgentAssignment>,
+    receipt_dir: Option<&std::path::Path>,
 ) -> Result<SpawnOutcome> {
     let binding = outcome
         .session
@@ -984,6 +1027,17 @@ pub(super) fn deliver_task(
         assignment,
     )?;
     outcome.task_submitted = Some(true);
+    if let Some(trace_dir) = receipt_dir {
+        outcome.receipt_path = Some(
+            super::watch::round_receipt_path(
+                trace_dir,
+                &binding.token(),
+                &submitted.completion_marker,
+            )
+            .display()
+            .to_string(),
+        );
+    }
     outcome.completion_marker = Some(submitted.completion_marker);
     outcome.screen = Some(submitted.screen);
     outcome.next_command = Some(submitted.next_command);
@@ -1064,7 +1118,7 @@ impl SpawnArgs {
 }
 
 fn parse_args(args: &[OsString]) -> Result<SpawnArgs> {
-    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--remote-control] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, the [spawn_defaults.<harness>] entry for the harness the calling session runs when no model is named, or the harness tool_models declares for the model; --model and --effort fall back to that entry when the spawn launches its tool, then --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --remote-control starts a claude lane with Remote Control on, named after its key, so the user can follow it from claude.ai; spawn_remote_control in sessions.toml turns it on for every claude spawn, and a tool without Remote Control refuses the flag. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
+    let usage = "qol sessions spawn [--tool TOOL] --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL] [--effort LEVEL] [--title TITLE] [--task TASK] [--background] [--remote-control] [--resume] [--no-resume] [--group GROUP] [--agent-profile NAME] [--task-role ROLE] [--requires LIST] [--lanes JSON]\n--tool resolves from a pick, the selected agent profile, the [spawn_defaults.<harness>] entry for the harness the calling session runs when no model is named, or the harness tool_models declares for the model; --model and --effort fall back to that entry when the spawn launches its tool, then --model falls back to spawn_model. --tool, --model, --effort and --surface values pass through [aliases] in sessions.toml, and spawn_effort fills an effort left out. --effort (low, medium, high, xhigh, max) goes to tools that take one: claude as --effort, pi as --thinking. A claude launch starts with --dangerously-skip-permissions. --remote-control starts a claude lane with Remote Control on, named after its key, so the user can follow it from claude.ai; spawn_remote_control in sessions.toml turns it on for every claude spawn, and a tool without Remote Control refuses the flag. --background embeds the task in the launch and queues the round without waiting for the live UI; it requires --task. --silent-wake requires --background, skips the parent wake message, still writes the lane report plus a receipt json, and still closes the lane terminal. The --background spawn JSON reports completion_marker and receipt_path, the absolute path of that round's receipt.json, which appears once the watcher confirms the round (a bridge call that collects the round first returns the report itself and no receipt is written); grouped lanes (a --lanes set of two or more, or --group) omit it because the set delivers one combined report instead. A fresh lane closes its terminal when the watcher confirms the round's completion; a reused session is only closed when it carries a spawn identity. --resume forces a resume; resume is otherwise automatic when the spawn ledger holds a session id for the key (same tool and cwd); --no-resume opts out; the spawn JSON reports resume and resume_detail. --group registers the lane as a member of a grouped-research set so its completed rounds aggregate into a single combined wake under the sessions data dir. --agent-profile selects a named agent_profiles entry from sessions.toml; --task-role is one of scout, implement, architect, review, debug; --requires is a comma-separated list drawn from image_input and visual_review. A configured agent_profiles entry enables enforcement unless enforce_agent_profiles is false, and every constrained launch then needs a resolvable profile and an explicit role. --lanes takes a JSON array of {key, task, title?, agent_profile?, task_role?, requires?} objects and launches the whole set in one call; it replaces --key, --task and --title, and two or more lanes are grouped automatically so the set delivers one combined report instead of one wake per lane. A top-level assignment field is inherited by every lane, and setting the same field both top-level and on a lane is refused.";
     let mut tool = None;
     let mut cwd = None;
     let mut key = None;
@@ -1534,6 +1588,13 @@ pub(super) fn spawn_or_reuse(
                     caller_config_dir().as_deref(),
                     &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
                 )?;
+                refuse_blocked_launch(
+                    interpreter,
+                    &prepared.tool_id,
+                    prepared.key.as_str(),
+                    &requested_cwd,
+                    &launch,
+                )?;
                 let resumed = key.is_some()
                     && task.is_some()
                     && pending.has_key_history(prepared.key.as_str())?;
@@ -1552,6 +1613,7 @@ pub(super) fn spawn_or_reuse(
                                 &marker,
                                 super::bridge::Role::Lane,
                                 joined,
+                                None,
                             )
                         },
                         admission.assignment.as_ref(),
@@ -1562,6 +1624,7 @@ pub(super) fn spawn_or_reuse(
                         launch,
                         cwd: requested_cwd.clone(),
                         title: Some(prepared.title.clone()),
+                        in_active_window: false,
                     };
                     let mut outcome = launch_background(
                         terminals,
@@ -1590,6 +1653,7 @@ pub(super) fn spawn_or_reuse(
                         launch,
                         cwd: requested_cwd,
                         title: Some(prepared.title.clone()),
+                        in_active_window: false,
                     };
                     let mut outcome = launch_ready(
                         terminals,
@@ -1619,6 +1683,7 @@ pub(super) fn spawn_or_reuse(
                             ledger,
                             dispatch,
                             admission.assignment.as_ref(),
+                            None,
                         ),
                         None => Ok(outcome),
                     }
@@ -1672,6 +1737,7 @@ pub(super) fn spawn_or_reuse(
                         ledger,
                         dispatch,
                         admission.assignment.as_ref(),
+                        background.then_some(trace_dir),
                     ),
                     None => Ok(outcome),
                 }
@@ -1937,6 +2003,13 @@ fn launch_background(
     outcome.autoclose = autoclose;
     outcome.task_submitted = Some(true);
     outcome.completion_marker = Some(marker.to_owned());
+    if group.is_none() {
+        outcome.receipt_path = Some(
+            super::watch::round_receipt_path(trace_dir, &binding.token(), marker)
+                .display()
+                .to_string(),
+        );
+    }
     outcome.next_command = Some(format!("qol sessions next {}", binding.token()));
     outcome.agent_assignment = admission.assignment.clone();
     outcome.agent_status = admission.status();
@@ -2076,6 +2149,8 @@ pub(super) fn spawn_detached(
         assignment,
         park,
         &[],
+        None,
+        false,
     )
 }
 
@@ -2100,6 +2175,8 @@ pub(super) fn launch_detached(
     assignment: Option<&AgentAssignment>,
     park: bool,
     env: &[(String, String)],
+    config_dir: Option<&Path>,
+    in_active_window: bool,
 ) -> Result<DetachedLaunch> {
     require_model_for_launch(model)?;
     let prepared = prepare_spawn(interpreter, tool, Some(key), surface, title, config)?;
@@ -2108,10 +2185,11 @@ pub(super) fn launch_detached(
     launch.args.extend(flags);
     launch.args.extend(extra_args.iter().cloned());
     remember_caller_login();
+    let config_dir = config_dir.map(Path::to_path_buf).or_else(caller_config_dir);
     qol_agent_launch::account::apply(
         &mut launch,
         &prepared.tool_id,
-        caller_config_dir().as_deref(),
+        config_dir.as_deref(),
         &qol_agent_launch::account::LaneExecCommand::current(LANE_EXEC_PREFIX)?,
     )?;
     launch
@@ -2132,6 +2210,7 @@ pub(super) fn launch_detached(
         model,
         assignment,
         if dry_run { prompt } else { "" },
+        in_active_window,
     )
 }
 
@@ -2176,6 +2255,7 @@ pub(super) fn resume_detached(
         point.model,
         None,
         "",
+        false,
     )
 }
 
@@ -2191,6 +2271,7 @@ fn start_detached(
     model: Option<&str>,
     assignment: Option<&AgentAssignment>,
     typed_prompt: &str,
+    in_active_window: bool,
 ) -> Result<DetachedLaunch> {
     let _guard = locks.acquire(&prepared.key)?;
     let started = Instant::now();
@@ -2204,11 +2285,20 @@ fn start_detached(
             prepared.key
         );
     }
+    let cwd = canonicalize_cwd(cwd)?;
+    refuse_blocked_launch(
+        interpreter,
+        &prepared.tool_id,
+        prepared.key.as_str(),
+        &cwd,
+        &launch,
+    )?;
     let request = SpawnRequest {
         identity: prepared.identity.clone(),
         launch,
-        cwd: canonicalize_cwd(cwd)?,
+        cwd,
         title: Some(prepared.title.clone()),
+        in_active_window,
     };
     let session_id = terminals
         .spawn(&request)
@@ -2350,6 +2440,7 @@ fn outcome_from_facts(
         title: title.to_owned(),
         task_submitted: None,
         completion_marker: None,
+        receipt_path: None,
         screen: None,
         next_command: None,
         elapsed_ms: 0,
@@ -4195,6 +4286,16 @@ mod tests {
             outcome.next_command.as_deref(),
             Some("qol sessions next v1:kitty:spawn-lane-bg:10")
         );
+        let receipt = Path::new(outcome.receipt_path.as_deref().unwrap());
+        assert!(receipt.is_absolute(), "{receipt:?}");
+        assert_eq!(
+            receipt,
+            super::super::watch::round_receipt_path(Path::new("."), &outcome.session, marker)
+        );
+        assert_eq!(receipt.file_name().unwrap(), "receipt.json");
+        let encoded = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(encoded["completion_marker"], marker);
+        assert_eq!(encoded["receipt_path"], receipt.display().to_string());
 
         let request = backend.last_request.lock().unwrap().clone().unwrap();
         assert_eq!(request.launch.program, "pi");
@@ -6812,14 +6913,12 @@ mod tests {
     }
 
     fn switchboard_plan(root: &tempfile::TempDir) -> super::super::switchboard::LaunchPlan {
-        super::super::switchboard::LaunchPlan {
-            model: "claude-sonnet-5-5".to_owned(),
-            effort: "low".to_owned(),
-            cwd: PathBuf::from(managed_workdir(root)),
-            mcp_program: PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
-            projects: Vec::new(),
-            path: None,
-        }
+        super::super::switchboard::LaunchPlan::bare(
+            "claude-sonnet-5-5",
+            "low",
+            PathBuf::from(managed_workdir(root)),
+            PathBuf::from("/plugins/qol-cli-sessions/qol-cli-sessions"),
+        )
     }
 
     #[test]

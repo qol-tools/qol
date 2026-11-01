@@ -65,7 +65,7 @@ use crate::kit::Kit;
 use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
-use crate::surface::{PanelDragArea, SurfaceDismisser};
+use crate::surface::{DragGestureState, PanelDragArea, SurfaceDismisser};
 
 type QueryResult = Result<serde_json::Value, String>;
 type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
@@ -292,6 +292,7 @@ pub(super) struct SettingsPanelView {
     deck_motion: Option<DeckMotion>,
     closing: bool,
     back_target: Option<usize>,
+    drag_gesture: Rc<RefCell<DragGestureState>>,
     card_marks: Vec<Option<f32>>,
     render_level: std::cell::Cell<usize>,
     height_cap: f32,
@@ -500,6 +501,7 @@ impl SettingsPanelView {
             deck_transition: TransitionTracker::default(),
             closing: false,
             back_target: None,
+            drag_gesture: Rc::new(RefCell::new(DragGestureState::new(4.0))),
             card_marks: Vec::new(),
             render_level: std::cell::Cell::new(usize::MAX),
             deck_motion: None,
@@ -4755,15 +4757,28 @@ impl SettingsPanelView {
         rgba(self.kit.washes.hairline.packed())
     }
 
-    fn render_band(&self, cx: &App) -> Div {
+    fn render_band(&self, cx: &Context<Self>) -> Div {
         let trail = self.trail(cx);
-        settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit)
-            .panel_drag_area()
-            .child(CrumbTrail::new(
-                "settings-crumb-trail",
-                trail.iter().map(|crumb| crumb.to_lowercase()),
-                self.kit,
-            ))
+        let crumbs = CrumbTrail::new(
+            "settings-crumb-trail",
+            trail.iter().map(|crumb| crumb.to_lowercase()),
+            self.kit,
+        );
+        let band = settings_band_bar(super::PANEL_BAND_HEIGHT, self.kit);
+        if self.current_source_is_custom() {
+            return band.panel_drag_area().child(crumbs);
+        }
+        let first_card = trail.len().saturating_sub(self.stack.len() - 1);
+        let view = cx.weak_entity();
+        let gesture = self.drag_gesture.clone();
+        band.panel_drag_after(&self.drag_gesture)
+            .child(crumbs.on_crumb(move |index, window, cx| {
+                if gesture.borrow().is_moving() {
+                    return;
+                }
+                let level = crumb_level(index, first_card);
+                let _ = view.update(cx, |this, cx| this.back_to(level, window, cx));
+            }))
     }
 
     fn render_filter_field(&self) -> Div {
@@ -5065,11 +5080,9 @@ impl SettingsPanelView {
                     body_bounds.get(),
                     page_scroll.as_ref().map(ScrollHandle::bounds)
                 );
-                if dismisser.user_sized() {
-                    return;
-                }
+                let maximized = window.is_maximized() || window.is_fullscreen();
                 let current = window.viewport_size().height.to_f64() as f32;
-                if (target - current).abs() <= 1.0 {
+                if !refits_to_page(dismisser.user_sized(), maximized, target, current) {
                     return;
                 }
                 let next = size(dismisser.window_size().width, px(target));
@@ -5530,6 +5543,10 @@ fn list_fit_updates(
     updates
 }
 
+fn refits_to_page(user_sized: bool, maximized: bool, target: f32, current: f32) -> bool {
+    !user_sized && !maximized && (target - current).abs() > 1.0
+}
+
 fn source_window_height_for(
     rows: &[Row],
     sections: &[RowSection],
@@ -5916,6 +5933,10 @@ fn focus_enters_the_body(plugin_id: &str) -> bool {
     plugin_id != qol_conventions::CORE_PANEL_ID
 }
 
+fn crumb_level(index: usize, first_card: usize) -> usize {
+    (index + 1).saturating_sub(first_card)
+}
+
 fn crumb_labels(heading: &str, plugin: Option<String>, parents: Vec<String>) -> Vec<String> {
     let mut labels = vec![heading.to_string()];
     labels.extend(plugin.filter(|title| title != heading));
@@ -5974,18 +5995,19 @@ mod tests {
     use super::{
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
-        clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
-        escape_step, field_id_unit, focus_level, format_number, header_is_redundant,
-        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
-        live_card_sync_back, live_number_dispatch_plan, number_drag_effect, number_finish_plan,
-        number_unit, parsed_color, parsed_number, pending_edit_on_scrub, pointer_keys, pop_level,
-        push_level, query_is_due, rail_child_index, rail_group_breaks, release_slider_dispatch,
-        row_body_height, row_description, schedule_slider_generation, slider_fraction,
-        slider_generation_current, slider_protected, source_window_height_for, text_or_placeholder,
-        transition_in_flight, transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache,
-        Intent, Level, LevelHeader, LiveNumberDispatch, NumberDragEffect, NumberFinishPlan,
-        NumberRelease, NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
-        SettingsDestination, SliderStyle, TransitionAction, TransitionTracker,
+        clamp_selected, color_display, complete_action, crumb_labels, crumb_level,
+        due_query_indices, escape_step, field_id_unit, focus_level, format_number,
+        header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
+        live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_drag_effect,
+        number_finish_plan, number_unit, parsed_color, parsed_number, pending_edit_on_scrub,
+        pointer_keys, pop_level, push_level, query_is_due, rail_child_index, rail_group_breaks,
+        refits_to_page, release_slider_dispatch, row_body_height, row_description,
+        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
+        source_window_height_for, text_or_placeholder, transition_in_flight, transition_policy,
+        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
+        LiveNumberDispatch, NumberDragEffect, NumberFinishPlan, NumberRelease, NumberSpec,
+        ObjectArrayState, PendingEdit, Row, RowControl, RowSection, SettingsDestination,
+        SliderStyle, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -8656,6 +8678,14 @@ active_value_from = "active"
     }
 
     #[test]
+    fn a_crumb_goes_back_to_its_card_and_the_crumbs_above_the_cards_go_to_the_root() {
+        let first_card = 2;
+        for (index, level) in [(0, 0), (1, 0), (2, 1), (3, 2)] {
+            assert_eq!(crumb_level(index, first_card), level, "crumb {index}");
+        }
+    }
+
+    #[test]
     fn a_single_plugin_panel_does_not_repeat_its_own_name_in_the_trail() {
         assert_eq!(
             crumb_labels("Key remap", Some("Key remap".to_string()), Vec::new()),
@@ -8847,6 +8877,37 @@ active_value_from = "active"
             Vec::new(),
             "applying the updates settles the list"
         );
+    }
+
+    #[test]
+    fn only_a_panel_nobody_sized_or_maximized_refits_to_its_page() {
+        let cases = [
+            (
+                false,
+                false,
+                600.0,
+                724.0,
+                true,
+                "a panel that follows its page",
+            ),
+            (
+                true,
+                false,
+                600.0,
+                541.0,
+                false,
+                "a panel window-actions or a drag sized",
+            ),
+            (false, true, 600.0, 949.0, false, "a maximized panel"),
+            (false, false, 600.0, 600.5, false, "native rounding"),
+        ];
+        for (user_sized, maximized, target, current, expected, note) in cases {
+            assert_eq!(
+                refits_to_page(user_sized, maximized, target, current),
+                expected,
+                "{note}"
+            );
+        }
     }
 
     #[test]

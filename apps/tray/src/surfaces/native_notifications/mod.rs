@@ -27,6 +27,9 @@ pub fn show_plugin_notification(
 }
 
 pub fn show_startup_failed(reason: &str) {
+    if crate::headless_mode::active() {
+        return;
+    }
     platform::show_startup_failed(
         STARTUP_FAILED_TITLE,
         &startup_failure_body(reason, &qol_log::log_dir()),
@@ -43,7 +46,8 @@ fn startup_failure_body(reason: &str, log_dir: &std::path::Path) -> String {
 }
 
 fn native_gate_open() -> bool {
-    crate::features::notifications::native_handler() != NativeHandler::Qol
+    !crate::headless_mode::active()
+        && crate::features::notifications::native_handler() != NativeHandler::Qol
 }
 
 #[cfg(test)]

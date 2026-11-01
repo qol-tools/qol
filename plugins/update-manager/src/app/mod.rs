@@ -282,6 +282,11 @@ fn work(shared: &Shared, task: Task) {
         Task::Auto { key, on, .. } => updates::set_auto(*key, *on),
         Task::Restart(at) => updates::schedule_restart(*at),
         Task::RestartNow => updates::restart_now(),
+        Task::Skips {
+            add,
+            remove,
+            system,
+        } => updates::set_skips(add, remove, *system),
         Task::Open(path) => {
             if let Err(error) = qol_apps::desktop_integration::open_with_default_app_checked(path) {
                 log::warn!("update-manager: {path} could not be opened: {error}");

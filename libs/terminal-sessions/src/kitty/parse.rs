@@ -13,6 +13,8 @@ pub struct KittyLs(pub Vec<OsWindow>);
 pub struct OsWindow {
     #[serde(default)]
     pub is_focused: bool,
+    #[serde(default)]
+    pub last_focused: Option<bool>,
     pub tabs: Vec<Tab>,
 }
 
@@ -20,6 +22,8 @@ pub struct OsWindow {
 pub struct Tab {
     #[serde(default)]
     pub is_focused: bool,
+    #[serde(default)]
+    pub is_active: bool,
     pub windows: Vec<KittyWindow>,
 }
 
@@ -32,6 +36,8 @@ pub struct KittyWindow {
     pub pid: i32,
     #[serde(default)]
     pub is_focused: bool,
+    #[serde(default)]
+    pub is_active: bool,
     #[serde(default)]
     pub at_prompt: bool,
     #[serde(default)]
@@ -90,12 +96,11 @@ impl KittyWindow {
             .iter()
             .map(|process| process.pid)
             .collect();
-        let reported = self.last_reported_cmdline.trim();
-        let reported_cmd = if reported.is_empty() {
-            None
-        } else {
-            basename(&[reported.to_owned()]).or_else(|| Some(reported.to_owned()))
-        };
+        let reported_cmd = self
+            .last_reported_cmdline
+            .split_whitespace()
+            .next()
+            .map(|program| basename(&[program.to_owned()]).unwrap_or_else(|| program.to_owned()));
         let native_id = match instance {
             Some(instance) => format!("{instance}.{}", self.id),
             None => self.id.to_string(),
@@ -149,6 +154,29 @@ impl KittyLs {
     pub fn has_focus(&self) -> bool {
         self.0.iter().any(|os_window| os_window.is_focused)
     }
+
+    pub fn active_window_id(&self) -> Option<u64> {
+        let os_window = self
+            .0
+            .iter()
+            .find(|os_window| os_window.is_focused)
+            .or_else(|| {
+                self.0
+                    .iter()
+                    .find(|os_window| os_window.last_focused == Some(true))
+            })
+            .or_else(|| self.0.first())?;
+        let tab = os_window
+            .tabs
+            .iter()
+            .find(|tab| tab.is_active)
+            .or_else(|| os_window.tabs.first())?;
+        tab.windows
+            .iter()
+            .find(|window| window.is_active)
+            .or_else(|| tab.windows.first())
+            .map(|window| window.id)
+    }
 }
 
 pub fn parse_ls(body: &str, backend_id: &BackendId) -> Result<KittyLs, TerminalError> {
@@ -186,6 +214,34 @@ mod tests {
     }
 
     #[test]
+    fn reported_command_is_the_program_name_without_its_arguments() {
+        let cases = [
+            ("claude", Some("claude")),
+            ("/usr/bin/claude", Some("claude")),
+            ("vim /etc/hosts", Some("vim")),
+            ("ls /usr/bin", Some("ls")),
+            ("  claude --resume abc  ", Some("claude")),
+            ("/opt/tools/codex exec 'fix it'", Some("codex")),
+            ("", None),
+            ("   ", None),
+        ];
+        for (cmdline, expected) in cases {
+            let body = format!(
+                r#"[{{"tabs":[{{"windows":[{{"id":10,"title":"t","pid":100,"last_reported_cmdline":{}}}]}}]}}]"#,
+                serde_json::to_string(cmdline).unwrap()
+            );
+            let sessions = parse_ls(&body, backend_id())
+                .unwrap()
+                .sessions(backend_id());
+            assert_eq!(
+                sessions[0].reported_cmd.as_deref(),
+                expected,
+                "cmdline: {cmdline:?}"
+            );
+        }
+    }
+
+    #[test]
     fn only_the_active_window_of_the_active_tab_of_a_focused_os_window_is_focused() {
         let cases = [
             (true, true, true, true, "the window holding keyboard focus"),
@@ -214,6 +270,34 @@ mod tests {
                 .unwrap()
                 .sessions(backend_id());
             assert_eq!(sessions[0].focused, expected, "{note}");
+        }
+    }
+
+    #[test]
+    fn active_window_is_the_active_split_of_the_active_tab_of_the_last_used_os_window() {
+        let cases = [
+            (
+                r#"[{"is_focused":false,"last_focused":false,"tabs":[{"is_active":true,"windows":[{"id":11,"title":"a","pid":1,"is_active":true}]}]},
+{"is_focused":false,"last_focused":true,"tabs":[{"is_active":false,"windows":[{"id":15,"title":"b","pid":2,"is_active":true}]},{"is_active":true,"windows":[{"id":16,"title":"c","pid":3,"is_active":false},{"id":17,"title":"d","pid":4,"is_active":true}]}]}]"#,
+                Some(17),
+                "kitty is in the background, so the last focused os window wins",
+            ),
+            (
+                r#"[{"is_focused":true,"last_focused":false,"tabs":[{"is_active":true,"windows":[{"id":11,"title":"a","pid":1,"is_active":true}]}]},
+{"is_focused":false,"last_focused":true,"tabs":[{"is_active":true,"windows":[{"id":15,"title":"b","pid":2,"is_active":true}]}]}]"#,
+                Some(11),
+                "the focused os window wins over a stale last focused flag",
+            ),
+            (
+                r#"[{"last_focused":null,"tabs":[{"windows":[{"id":20,"title":"a","pid":1},{"id":21,"title":"b","pid":2}]}]}]"#,
+                Some(20),
+                "an older kitty without activity flags falls back to the first window",
+            ),
+            (r#"[]"#, None, "no kitty window is open"),
+        ];
+        for (body, expected, note) in cases {
+            let ls = parse_ls(body, backend_id()).unwrap();
+            assert_eq!(ls.active_window_id(), expected, "{note}");
         }
     }
 

@@ -61,6 +61,11 @@ impl Display for ActionExecutionError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PluginManagerPoisoned => write!(f, "plugin manager lock failed"),
+            Self::PluginNotFound(plugin_id) if crate::headless_mode::active() => write!(
+                f,
+                "plugin not found: {} (qol-tray runs headless and loads only plugins that declare headless = true)",
+                plugin_id
+            ),
             Self::PluginNotFound(plugin_id) => write!(f, "plugin not found: {}", plugin_id),
             Self::InvalidActionId(action_id) => write!(f, "invalid action id: {}", action_id),
             Self::RuntimeCommandEscapesPluginDir { plugin_id, command } => write!(

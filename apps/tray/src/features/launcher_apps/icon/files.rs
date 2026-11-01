@@ -27,12 +27,20 @@ impl MarkFiles {
         })?;
         for mark in Mark::ALL {
             write_if_changed(&self.path(mark), &self.svg(mark))?;
+            if let Some(art) = mark.app_svg() {
+                write_if_changed(&launcher_marks::app_path(&self.dir, mark), &art)?;
+            }
         }
         self.remove_stale()
     }
 
     pub fn path(&self, mark: Mark) -> PathBuf {
         launcher_marks::mark_path(&self.dir, mark)
+    }
+
+    pub fn app_path(&self, mark: Mark) -> Option<PathBuf> {
+        mark.app_svg()
+            .map(|_| launcher_marks::app_path(&self.dir, mark))
     }
 
     fn remove_stale(&self) -> Result<()> {
@@ -79,6 +87,10 @@ mod tests {
                 std::fs::read_to_string(files.path(mark)).unwrap(),
                 mark.svg(0x8a93f7)
             );
+            if let Some(art) = mark.app_svg() {
+                let path = files.app_path(mark).unwrap();
+                assert_eq!(std::fs::read_to_string(path).unwrap(), art);
+            }
         }
         assert!(!stray.exists());
     }

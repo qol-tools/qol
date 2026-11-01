@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use super::bridge::PendingBridgeStore;
 
@@ -121,7 +121,32 @@ impl ClientWatcher {
         read_owner_tokens(&self.dir, &self.owner_key)
     }
 
+    fn lock_state(&self) -> Option<fs::File> {
+        let path = self
+            .dir
+            .join(format!("watch-owner-{}.lock", self.owner_key));
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .and_then(|file| file.lock().map(|()| file));
+        match locked {
+            Ok(file) => Some(file),
+            Err(error) => {
+                self.wake_debug_log(&format!("state lock failed: {error}"));
+                None
+            }
+        }
+    }
+
     pub(super) fn record_token(&self, token: &str, pending: &PendingBridgeStore) {
+        if let Err(error) = fs::create_dir_all(&self.dir) {
+            self.wake_debug_log(&format!("state dir failed: {error}"));
+            return;
+        }
+        let _state_lock = self.lock_state();
         let mut tokens = self.read_tokens();
         if !tokens.iter().any(|candidate| candidate == token) {
             tokens.push(token.to_owned());
@@ -133,14 +158,8 @@ impl ClientWatcher {
                 .and_then(|binding| pending.pending_round(&binding).ok().flatten())
                 .is_some_and(|round| !round.completed)
         });
-        if let Err(error) = fs::create_dir_all(&self.dir) {
-            self.wake_debug_log(&format!("state dir failed: {error}"));
-            return;
-        }
-        match fs::write(
-            self.state_file(),
-            serde_json::to_string(&tokens).unwrap_or_default(),
-        ) {
+        let encoded = serde_json::to_string(&tokens).unwrap_or_default();
+        match qol_fs::atomic_write(&self.state_file(), encoded.as_bytes()) {
             Ok(()) => self.wake_debug_log(&format!("token recorded tokens={}", tokens.len())),
             Err(error) => self.wake_debug_log(&format!("state write failed: {error}")),
         }
@@ -196,11 +215,8 @@ impl ClientWatcher {
                 return;
             }
         };
-        self.wake_debug_log(&format!(
-            "watch spawn pid={} tokens={}",
-            child.id(),
-            tokens.len()
-        ));
+        let pid = child.id();
+        self.wake_debug_log(&format!("watch spawn pid={pid} tokens={}", tokens.len()));
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let slot = Arc::clone(&self.child);
@@ -267,29 +283,35 @@ impl ClientWatcher {
                     }
                 }
             }
-            let status = slot
-                .lock()
-                .unwrap()
-                .as_mut()
-                .map(|child| child.wait())
-                .transpose();
-            if let Ok(Some(status)) = status {
-                if let Ok(mut file) = fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&debug)
-                {
-                    let _ = writeln!(
-                        file,
-                        "{} watch child exit code={}",
-                        chrono::Utc::now().to_rfc3339(),
-                        status
-                            .code()
-                            .map_or_else(|| "signal".to_owned(), |code| code.to_string())
-                    );
+            let own_child = {
+                let mut held = slot.lock().unwrap_or_else(PoisonError::into_inner);
+                if held.as_ref().is_some_and(|child| child.id() == pid) {
+                    held.take()
+                } else {
+                    None
                 }
+            };
+            let exit = match own_child.map(|mut child| child.wait()) {
+                Some(Ok(status)) => format!(
+                    "exit code={}",
+                    status
+                        .code()
+                        .map_or_else(|| "signal".to_owned(), |code| code.to_string())
+                ),
+                Some(Err(error)) => format!("wait failed: {error}"),
+                None => "already reaped".to_owned(),
+            };
+            if let Ok(mut file) = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&debug)
+            {
+                let _ = writeln!(
+                    file,
+                    "{} watch child pid={pid} {exit}",
+                    chrono::Utc::now().to_rfc3339()
+                );
             }
-            *slot.lock().unwrap() = None;
         });
     }
 }
@@ -365,6 +387,98 @@ mod tests {
             vec![open.token()],
             "collected rounds must be pruned"
         );
+    }
+
+    #[test]
+    fn parallel_records_keep_every_open_token() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let watcher =
+            ClientWatcher::with_dir(root.path().to_path_buf(), "owner-parallel".to_owned());
+        let bindings: Vec<SessionBinding> = (0..16)
+            .map(|index| format!("v1:fake:{index}:{}", 100 + index).parse().unwrap())
+            .collect();
+        for (index, binding) in bindings.iter().enumerate() {
+            pending
+                .start(
+                    binding,
+                    &format!("QOL_BRIDGE_DONE_{index}"),
+                    "v1:fake:99:900",
+                    false,
+                    None,
+                )
+                .unwrap();
+        }
+        let barrier = std::sync::Barrier::new(bindings.len());
+        std::thread::scope(|scope| {
+            for binding in &bindings {
+                let (watcher, pending, barrier) = (&watcher, &pending, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    watcher.record_token(&binding.token(), pending);
+                });
+            }
+        });
+
+        let recorded: std::collections::HashSet<String> =
+            watcher.read_tokens().into_iter().collect();
+        let expected: std::collections::HashSet<String> =
+            bindings.iter().map(SessionBinding::token).collect();
+        assert_eq!(
+            recorded, expected,
+            "a parallel record must not drop a token"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exited_watcher_leaves_its_replacement_in_the_slot() {
+        let root = tempfile::TempDir::new().unwrap();
+        let pending = store(&root);
+        let program = sleeper_program(&root);
+        let watcher = ClientWatcher::with_program(
+            root.path().to_path_buf(),
+            "owner-replaced".to_owned(),
+            program.clone(),
+        );
+        let open: SessionBinding = "v1:fake:7:100".parse().unwrap();
+        pending
+            .start(&open, "QOL_BRIDGE_DONE_open", "v1:fake:9:900", false, None)
+            .unwrap();
+        watcher.record_token(&open.token(), &pending);
+        let mut first = watcher.child.lock().unwrap().take().unwrap();
+        let first_pid = first.id();
+        let replacement = Command::new(&program).spawn().unwrap();
+        let replacement_pid = replacement.id();
+        *watcher.child.lock().unwrap() = Some(replacement);
+        first.kill().unwrap();
+        first.wait().unwrap();
+
+        let log_path = root.path().join("wake-debug-owner-replaced.log");
+        let reaped = format!("watch child pid={first_pid} already reaped");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .contains(&reaped)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the first watcher's monitor never finished: {}",
+                std::fs::read_to_string(&log_path).unwrap_or_default()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let mut slot = watcher
+            .child
+            .try_lock()
+            .expect("the monitor must not hold the slot");
+        let held = slot
+            .as_mut()
+            .expect("the replacement must stay in the slot");
+        assert_eq!(held.id(), replacement_pid);
+        assert!(matches!(held.try_wait(), Ok(None)));
+        let _ = held.kill();
+        let _ = held.wait();
     }
 
     #[cfg(target_os = "linux")]

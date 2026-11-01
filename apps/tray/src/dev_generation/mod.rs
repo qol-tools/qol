@@ -71,9 +71,9 @@ impl GenerationContext {
     }
 
     pub fn state_socket_path(&self) -> PathBuf {
-        let path = qol_runtime::local_ipc::socket_path(
-            &crate::paths::runtime_dir().join("sockets"),
-            std::ffi::OsStr::new(STATE_SOCKET_FILE),
+        let path = qol_runtime::plugin_socket::assigned_socket_path_in(
+            &crate::paths::runtime_dir(),
+            STATE_SOCKET_FILE,
         );
         if !self.is_shadow() {
             return path;
@@ -82,13 +82,9 @@ impl GenerationContext {
     }
 
     pub fn daemon_socket_path(&self, socket: &str) -> PathBuf {
-        let file_name = Path::new(socket)
-            .file_name()
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| std::ffi::OsStr::new("qol-plugin.sock"));
-        let path = qol_runtime::local_ipc::socket_path(
-            &crate::paths::runtime_dir().join("sockets"),
-            file_name,
+        let path = qol_runtime::plugin_socket::assigned_socket_path_in(
+            &crate::paths::runtime_dir(),
+            socket,
         );
         if !self.is_shadow() {
             return path;

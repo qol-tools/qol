@@ -277,7 +277,7 @@ fn remove_execution(args: &[String]) -> CommandResult {
 fn run_remove(flags: &Flags) -> Result<CommandResult> {
     let inventory = core::installed_apps()?;
     let app = core::resolve_unique(&inventory, require_query(flags)?)?;
-    let plan = core::plan(&app, &inventory)?;
+    let mut plan = core::plan(&app, &inventory)?;
     let guards = core::guards(&app, &inventory);
 
     if flags.dry_run {
@@ -320,7 +320,7 @@ fn run_remove(flags: &Flags) -> Result<CommandResult> {
     }
 
     if guards.running && flags.quit {
-        core::quit_and_wait(&app)?;
+        core::quit_and_wait(&mut plan)?;
     }
     if !flags.trash_anyway && core::is_running(&app) {
         anyhow::bail!(

@@ -809,14 +809,18 @@ fn screenshot_preview_dimensions(trace: &str) -> Result<(u32, u32)> {
     ))
 }
 
-fn matching_probe_line<'a>(trace: &'a str, tag: &str, required: &[&str]) -> Option<&'a str> {
+pub(in crate::commands::emu::workflow) fn matching_probe_line<'a>(
+    trace: &'a str,
+    tag: &str,
+    required: &[&str],
+) -> Option<&'a str> {
     trace
         .lines()
         .rev()
         .find(|line| probe_line_matches(line, tag, required))
 }
 
-fn probe_timestamp_ms(line: &str) -> Result<u64> {
+pub(in crate::commands::emu::workflow) fn probe_timestamp_ms(line: &str) -> Result<u64> {
     line.split_ascii_whitespace()
         .next()
         .context("probe line had no timestamp")?

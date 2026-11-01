@@ -14,11 +14,11 @@ use crate::progress::{step_label, StepKind};
 
 use super::desktop::{
     command, connect_desktop_guest, current_trace_cursor, desktop_resolution, dispatch, exec,
-    fd_count, install_payload, key, launch_fixture, plugin_daemon_pid, post_action, probe_field,
-    require_exec, require_plugin_action_guards, require_visible_window_count, spawn,
-    start_tray_and_wait_plugin_with_env, wait_for_command, wait_for_probe_fields,
-    wait_for_probe_line, wait_for_window_id, window_geometry, within_fd_budget, TraceCursor,
-    WindowGeometry, ACTION_TIMEOUT, PLUGIN_ID, PREVIEW_PREFIX,
+    fd_count, install_payload, key, launch_fixture, matching_probe_line, plugin_daemon_pid,
+    post_action, probe_field, probe_timestamp_ms, require_exec, require_plugin_action_guards,
+    require_visible_window_count, spawn, start_tray_and_wait_plugin_with_env, wait_for_command,
+    wait_for_probe_fields, wait_for_probe_line, wait_for_window_id, window_geometry,
+    within_fd_budget, TraceCursor, WindowGeometry, ACTION_TIMEOUT, PLUGIN_ID, PREVIEW_PREFIX,
 };
 use super::Verdict;
 
@@ -200,9 +200,10 @@ fn run_storm_checks(
     let outcome = test_settings(guest, auth, qmp, &settings_first);
     produced.retain(|recorded| recorded.exists());
     outcome?;
-    let (fds_before, fds_after) = test_selector_cancel_storm(guest, auth)?;
+    let (fds_before, fds_after, open_ms) = test_selector_cancel_storm(guest, auth)?;
     counters.push(format!("selector_cancel_cycles={CANCEL_CYCLES}"));
     counters.push(format!("fd_count={fds_before}->{fds_after}"));
+    counters.push(selector_open_summary(&open_ms));
     test_screenshot_burst(guest, auth)?;
     counters.push(format!("screenshot_burst={SCREENSHOT_BURST}"));
     let preview = artifacts_dir.join("preview-reentry.ppm");
@@ -222,6 +223,7 @@ fn run_storm_checks(
     let outcome = test_settings(guest, auth, qmp, &settings_reentry);
     produced.retain(|recorded| recorded.exists());
     outcome?;
+    counters.push(test_selector_rewarm_after_mode_change(guest, auth)?);
     test_crash_recovery(guest, auth)?;
     Ok(())
 }
@@ -273,7 +275,40 @@ fn require_selector_clear(guest: &mut GuestControlClient, cursor: TraceCursor) -
     Ok(())
 }
 
-fn cancel_selector(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+struct SelectorOpen {
+    path: String,
+    latency_ms: u64,
+}
+
+fn selector_open(trace: &str) -> Result<SelectorOpen> {
+    let opened = matching_probe_line(trace, "SHOT_SELECT_LATENCY", &["path="])
+        .context("selector open trace was missing")?;
+    let path = probe_field(opened, "path")
+        .context("selector open path was missing")?
+        .to_string();
+    let received = matching_probe_line(trace, "SHOT_RECV", &["action=screenshot"])
+        .context("screenshot request trace was missing")?;
+    let mapped = matching_probe_line(trace, "SHOT_SELECT_OVERLAY", &["result=mapped"])
+        .context("selector overlay trace was missing")?;
+    let latency_ms = probe_timestamp_ms(mapped)?
+        .checked_sub(probe_timestamp_ms(received)?)
+        .context("selector overlay trace preceded its screenshot request")?;
+    Ok(SelectorOpen { path, latency_ms })
+}
+
+fn selector_open_summary(open_ms: &[u64]) -> String {
+    let mut sorted = open_ms.to_vec();
+    sorted.sort_unstable();
+    let median = sorted.get(sorted.len() / 2).copied().unwrap_or_default();
+    let max = sorted.last().copied().unwrap_or_default();
+    format!(
+        "selector_open_ms median={median} max={max} samples={}",
+        sorted.len()
+    )
+}
+
+fn cancel_selector(guest: &mut GuestControlClient, auth: &str) -> Result<SelectorOpen> {
     let cursor = dispatch(guest, auth, "screenshot")?;
     wait_for_probe_fields(
         guest,
@@ -282,6 +317,40 @@ fn cancel_selector(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
         &["state=presented"],
         ACTION_TIMEOUT,
     )?;
+    let open = finish_selector_cancel(guest, cursor)?;
+    if open.path != "reuse" {
+        bail!(
+            "selector opened on the {} path instead of its warm window",
+            open.path
+        );
+    }
+    Ok(open)
+}
+
+fn cancel_selector_on_any_path(guest: &mut GuestControlClient, auth: &str) -> Result<SelectorOpen> {
+    let cursor = dispatch(guest, auth, "screenshot")?;
+    finish_selector_cancel(guest, cursor)
+}
+
+fn finish_selector_cancel(
+    guest: &mut GuestControlClient,
+    cursor: TraceCursor,
+) -> Result<SelectorOpen> {
+    wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHOT_SELECT_OVERLAY",
+        &["result=mapped"],
+        ACTION_TIMEOUT,
+    )?;
+    let traced = wait_for_probe_fields(
+        guest,
+        cursor,
+        "SHOT_SELECT_LATENCY",
+        &["path="],
+        ACTION_TIMEOUT,
+    )?;
+    let open = selector_open(&traced.stdout)?;
     require_visible_window_count(guest, SELECTOR_PREFIX, 1)?;
     key(guest, "Escape")?;
     wait_for_probe_fields(
@@ -291,15 +360,134 @@ fn cancel_selector(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
         &["source=daemon-app", "rect=none"],
         ACTION_TIMEOUT,
     )?;
-    require_selector_clear(guest, cursor)
+    require_selector_clear(guest, cursor)?;
+    Ok(open)
 }
 
-fn test_selector_cancel_storm(guest: &mut GuestControlClient, auth: &str) -> Result<(u64, u64)> {
+struct ModeSwitch {
+    output: String,
+    current: String,
+    alternate: String,
+}
+
+fn alternate_mode(xrandr: &str) -> Option<ModeSwitch> {
+    let mut lines = xrandr.lines();
+    let output = lines.find_map(|line| {
+        let mut tokens = line.split_ascii_whitespace();
+        let name = tokens.next()?;
+        (tokens.next()? == "connected").then(|| name.to_string())
+    })?;
+    let modes = lines
+        .take_while(|line| line.starts_with(char::is_whitespace))
+        .filter_map(|line| {
+            let mut tokens = line.split_ascii_whitespace();
+            let name = tokens.next()?;
+            mode_size(name)?;
+            Some((name.to_string(), line.contains('*')))
+        })
+        .collect::<Vec<_>>();
+    let current = modes.iter().find(|(_, active)| *active)?.0.clone();
+    let alternate = modes
+        .iter()
+        .map(|(name, _)| name)
+        .find(|name| mode_size(name) != mode_size(&current))?
+        .clone();
+    Some(ModeSwitch {
+        output,
+        current,
+        alternate,
+    })
+}
+
+fn mode_size(name: &str) -> Option<(u32, u32)> {
+    let (width, height) = name.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
+}
+
+fn set_output_mode(guest: &mut GuestControlClient, output: &str, mode: &str) -> Result<()> {
+    require_exec(
+        guest,
+        command("/usr/bin/xrandr", &["--output", output, "--mode", mode]),
+        COMMAND_TIMEOUT,
+    )?;
+    Ok(())
+}
+
+fn rewarm_selector(
+    guest: &mut GuestControlClient,
+    auth: &str,
+) -> Result<(SelectorOpen, SelectorOpen)> {
+    let deadline = Instant::now() + ACTION_TIMEOUT;
+    let cold = loop {
+        let open = cancel_selector_on_any_path(guest, auth)?;
+        match open.path.as_str() {
+            "adopt" => break open,
+            "reuse" if Instant::now() < deadline => continue,
+            other => bail!("selector opened on the {other} path after a monitor mode change"),
+        }
+    };
+    let warm = cancel_selector_on_any_path(guest, auth)?;
+    if warm.path != "reuse" {
+        bail!(
+            "selector rebuilt after a monitor mode change was not reused: path={}",
+            warm.path
+        );
+    }
+    Ok((cold, warm))
+}
+
+fn test_selector_rewarm_after_mode_change(
+    guest: &mut GuestControlClient,
+    auth: &str,
+) -> Result<String> {
+    let listing = require_exec(
+        guest,
+        command("/usr/bin/xrandr", &["--current"]),
+        COMMAND_TIMEOUT,
+    )?;
+    let Some(switch) = alternate_mode(&listing.stdout) else {
+        step_label(
+            "rewarm",
+            StepKind::Info,
+            "skipped: the guest output lists no alternate mode",
+        );
+        return Ok("selector_rewarm=skipped".to_string());
+    };
+    set_output_mode(guest, &switch.output, &switch.alternate)?;
+    let changed = rewarm_selector(guest, auth);
+    let restored = set_output_mode(guest, &switch.output, &switch.current);
+    let (cold, warm) = changed?;
+    restored?;
+    let (restored_cold, restored_warm) = rewarm_selector(guest, auth)?;
+    step_label(
+        "rewarm",
+        StepKind::Success,
+        &format!(
+            "selector stayed warm across {} -> {} -> {}",
+            switch.current, switch.alternate, switch.current
+        ),
+    );
+    Ok(format!(
+        "selector_rewarm={}->{} cold_ms={} warm_ms={} restored_cold_ms={} restored_warm_ms={}",
+        switch.current,
+        switch.alternate,
+        cold.latency_ms,
+        warm.latency_ms,
+        restored_cold.latency_ms,
+        restored_warm.latency_ms
+    ))
+}
+
+fn test_selector_cancel_storm(
+    guest: &mut GuestControlClient,
+    auth: &str,
+) -> Result<(u64, u64, Vec<u64>)> {
     cancel_selector(guest, auth)?;
     let pid_before = daemon_pid(guest)?;
     let fds_before = fd_count(guest, &pid_before)?;
+    let mut open_ms = Vec::with_capacity(CANCEL_CYCLES);
     for _ in 0..CANCEL_CYCLES {
-        cancel_selector(guest, auth)?;
+        open_ms.push(cancel_selector(guest, auth)?.latency_ms);
     }
     let pid_after = daemon_pid(guest)?;
     if pid_before != pid_after {
@@ -314,7 +502,7 @@ fn test_selector_cancel_storm(guest: &mut GuestControlClient, auth: &str) -> Res
         StepKind::Success,
         &format!("{CANCEL_CYCLES} retained cancel cycles pid={pid_after} fds={fds_after}"),
     );
-    Ok((fds_before, fds_after))
+    Ok((fds_before, fds_after, open_ms))
 }
 
 fn test_screenshot_burst(guest: &mut GuestControlClient, auth: &str) -> Result<()> {
@@ -1798,9 +1986,85 @@ fn probe_size(line: &str, field: &str) -> Result<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_adjacent_origin, cursor_motion_frame_count, ffmpeg_timing_adjustments, probe_point,
-        probe_size, probe_usize, top_band_yavg_stats,
+        alternate_mode, cursor_adjacent_origin, cursor_motion_frame_count,
+        ffmpeg_timing_adjustments, probe_point, probe_size, probe_usize, selector_open,
+        selector_open_summary, top_band_yavg_stats, SelectorOpen,
     };
+
+    #[test]
+    fn selector_open_reads_the_path_and_request_to_overlay_latency() {
+        let trace = "1000 pid=7 SHOT_RECV action=screenshot\n\
+            1003 pid=7 SHOT_SELECT_LATENCY path=reuse discover_ms=2 open_ms=3\n\
+            1004 pid=7 SHOT_SELECT_REVEAL title=t generation=1 state=presented\n\
+            1009 pid=7 SHOT_SELECT_OVERLAY ms=4 attempt=1 result=mapped\n";
+
+        assert_eq!(
+            selector_open(trace).unwrap(),
+            SelectorOpen {
+                path: "reuse".to_string(),
+                latency_ms: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn selector_open_rejects_missing_and_reordered_traces() {
+        let missing_path = "1000 pid=7 SHOT_RECV action=screenshot\n\
+            1009 pid=7 SHOT_SELECT_OVERLAY ms=4 attempt=1 result=mapped\n";
+        let missing_overlay = "1000 pid=7 SHOT_RECV action=screenshot\n\
+            1003 pid=7 SHOT_SELECT_LATENCY path=adopt discover_ms=2 open_ms=180\n";
+        let reordered = "1009 pid=7 SHOT_RECV action=screenshot\n\
+            1003 pid=7 SHOT_SELECT_LATENCY path=reuse discover_ms=2 open_ms=3\n\
+            1000 pid=7 SHOT_SELECT_OVERLAY ms=4 attempt=1 result=mapped\n";
+
+        for trace in [missing_path, missing_overlay, reordered] {
+            assert!(selector_open(trace).is_err(), "{trace}");
+        }
+    }
+
+    #[test]
+    fn selector_open_summary_reports_median_and_max() {
+        assert_eq!(
+            selector_open_summary(&[9, 4, 30, 5, 6]),
+            "selector_open_ms median=6 max=30 samples=5"
+        );
+        assert_eq!(
+            selector_open_summary(&[]),
+            "selector_open_ms median=0 max=0 samples=0"
+        );
+    }
+
+    #[test]
+    fn alternate_mode_picks_a_different_size_on_the_connected_output() {
+        let xrandr = "Screen 0: minimum 320 x 200, current 1280 x 800, maximum 8192 x 8192\n\
+            Virtual-2 disconnected (normal left inverted right x axis y axis)\n\
+            Virtual-1 connected primary 1280x800+0+0 (normal left inverted right x axis y axis) 0mm x 0mm\n   \
+            1280x800      59.81*+\n   \
+            1280x800R     59.91\n   \
+            1920x1080i    60.00\n   \
+            1024x768      60.00\n   \
+            800x600       60.32\n\
+            Virtual-3 disconnected (normal left inverted right x axis y axis)\n";
+
+        let switch = alternate_mode(xrandr).unwrap();
+
+        assert_eq!(switch.output, "Virtual-1");
+        assert_eq!(switch.current, "1280x800");
+        assert_eq!(switch.alternate, "1024x768");
+    }
+
+    #[test]
+    fn alternate_mode_needs_a_current_mode_and_a_second_size() {
+        let single = "Virtual-1 connected primary 1280x800+0+0 (normal) 0mm x 0mm\n   \
+            1280x800      59.81*+\n";
+        let inactive = "Virtual-1 connected primary (normal) 0mm x 0mm\n   \
+            1280x800      59.81 +\n   \
+            1024x768      60.00\n";
+
+        assert!(alternate_mode(single).is_none());
+        assert!(alternate_mode(inactive).is_none());
+        assert!(alternate_mode("").is_none());
+    }
 
     #[test]
     fn top_band_stats_report_largest_adjacent_frame_change() {

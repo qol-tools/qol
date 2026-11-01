@@ -2134,18 +2134,7 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                     log::warn!("config reload failed: {error:#}");
                     DeviceConfig::default()
                 });
-                self.preferred = config::load_preferred(self.config_root.as_deref());
-                self.reload_config(&next);
-                self.night = NightState::default();
-                self.night_coordination =
-                    NightCoordination::parse(Some(&self.config().night_coordination));
-                if let Err(error) =
-                    config::save_night_state(self.config_root.as_deref(), &self.night)
-                {
-                    log::warn!("failed to clear night mode override: {error:#}");
-                }
-                self.evaluate_night(true);
-                self.release_unowned_applets();
+                self.apply_reload(&next);
                 true
             }
             Command::Night(request) => {
@@ -2201,6 +2190,21 @@ impl<C: DisplayControl + GammaStateControl + MonitorControl + ?Sized> Runtime<C>
                 false
             }
         }
+    }
+
+    fn apply_reload(&mut self, next: &DeviceConfig) {
+        let previous_schedule = self.config().night_schedule();
+        self.preferred = config::load_preferred(self.config_root.as_deref());
+        self.reload_config(next);
+        if next.night_schedule() != previous_schedule {
+            self.night = NightState::default();
+            if let Err(error) = config::save_night_state(self.config_root.as_deref(), &self.night) {
+                log::warn!("failed to clear night mode override: {error:#}");
+            }
+        }
+        self.night_coordination = NightCoordination::parse(Some(&self.config().night_coordination));
+        self.evaluate_night(true);
+        self.release_unowned_applets();
     }
 
     pub fn reload_config(&mut self, next: &DeviceConfig) -> usize {
@@ -3529,6 +3533,71 @@ mod tests {
         assert_eq!(payload["displays"][0]["tint_capped"], true);
         runtime.handle(Command::Night(NightRequest::Toggle));
         assert_eq!(runtime.night_payload()["state"], "inactive");
+    }
+
+    #[test]
+    fn reload_with_new_warmth_keeps_manual_night_mode_on_and_retints() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root.clone(), clock);
+        let config = DeviceConfig {
+            night_schedule: "daily".into(),
+            ..DeviceConfig::default()
+        };
+        runtime.start(&config);
+        runtime.handle(Command::Night(NightRequest::On));
+        assert_eq!(runtime.night_payload()["state"], "active");
+
+        runtime.apply_reload(&DeviceConfig {
+            night_temperature: 2500,
+            ..config
+        });
+
+        assert_eq!(runtime.night_payload()["state"], "active");
+        assert_eq!(
+            control.tints().last(),
+            Some(&("id-1".to_string(), Tint::from_kelvin(2500)))
+        );
+        assert_eq!(
+            config::load_night_state(Some(&config_root)).override_active,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn reload_with_new_schedule_clears_manual_night_mode_override() {
+        let (_session_dir, store) = runtime_store();
+        let (_root, config_root) = preferred_root();
+        let displays = vec![handle("id-1", "card0-DP-1")];
+        let control = Arc::new(FakeControl::new(displays, 70, BrightnessSource::Ddc));
+        let clock = Arc::new(StdMutex::new(Now {
+            unix: 100_000,
+            minute: Minute(12 * 60),
+        }));
+        let mut runtime = night_runtime(control.clone(), store, config_root.clone(), clock);
+        let config = DeviceConfig {
+            night_schedule: "daily".into(),
+            ..DeviceConfig::default()
+        };
+        runtime.start(&config);
+        runtime.handle(Command::Night(NightRequest::On));
+
+        runtime.apply_reload(&DeviceConfig {
+            night_from: "22:00".into(),
+            ..config
+        });
+
+        assert_eq!(runtime.night_payload()["state"], "inactive");
+        assert_eq!(
+            config::load_night_state(Some(&config_root)).override_active,
+            None
+        );
     }
 
     #[test]

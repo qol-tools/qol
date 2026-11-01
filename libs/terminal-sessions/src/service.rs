@@ -1101,6 +1101,7 @@ mod tests {
             launch: crate::cli::CliLaunchProgram::new("codex"),
             cwd: std::path::PathBuf::from("/work/project"),
             title: None,
+            in_active_window: false,
         }
     }
 

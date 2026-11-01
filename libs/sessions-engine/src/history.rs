@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
+use qol_agent_homes::AgentHome;
 use qol_terminal_sessions::cli::{CliConversation, CliSessionInterpreter, RESERVED_PROMPT_PREFIX};
 use qol_terminal_sessions::closed::{self, ClosedRecord};
 
@@ -14,6 +15,7 @@ pub(super) struct ClosedEntry {
     pub(super) record: ClosedRecord,
     pub(super) pr_urls: Vec<String>,
     pub(super) last_prompt: Option<String>,
+    pub(super) transcript: Option<PathBuf>,
 }
 
 pub(super) struct History<'a> {
@@ -21,6 +23,7 @@ pub(super) struct History<'a> {
     pub(super) closed_dir: &'a Path,
     pub(super) forks: &'a ForkStore,
     pub(super) switchboard_dir: &'a Path,
+    pub(super) homes: Vec<AgentHome>,
 }
 
 impl History<'_> {
@@ -32,6 +35,7 @@ impl History<'_> {
                 record,
                 pr_urls: Vec::new(),
                 last_prompt: None,
+                transcript: None,
             })
             .collect::<Vec<_>>();
         for conversation in self.conversations(now) {
@@ -41,6 +45,7 @@ impl History<'_> {
             {
                 entry.last_prompt = last_prompt(&conversation);
                 entry.pr_urls = conversation.pr_urls;
+                entry.transcript = conversation.transcript;
                 continue;
             }
             if let Some(record) = self.record(&conversation) {
@@ -48,6 +53,7 @@ impl History<'_> {
                     record,
                     last_prompt: last_prompt(&conversation),
                     pr_urls: conversation.pr_urls,
+                    transcript: conversation.transcript,
                 });
             }
         }
@@ -79,7 +85,7 @@ impl History<'_> {
         terms: &[String],
     ) -> HashMap<String, String> {
         self.interpreter
-            .search_conversations(self.since(now), external_ids, terms)
+            .search_conversations(&self.homes, self.since(now), external_ids, terms)
             .into_iter()
             .map(|found| (found.external_id, found.excerpt))
             .collect()
@@ -90,7 +96,8 @@ impl History<'_> {
     }
 
     fn conversations(&self, now: u64) -> Vec<CliConversation> {
-        self.interpreter.closed_conversations(self.since(now))
+        self.interpreter
+            .closed_conversations(&self.homes, self.since(now))
     }
 
     fn record(&self, conversation: &CliConversation) -> Option<ClosedRecord> {

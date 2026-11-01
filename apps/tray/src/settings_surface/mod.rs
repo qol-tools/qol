@@ -80,11 +80,19 @@ pub fn native_available() -> bool {
     platform::native_available()
 }
 
+const HEADLESS_REFUSAL: &str = "settings windows are off while qol-tray runs headless";
+
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
+    if crate::headless_mode::active() {
+        return Err(anyhow::anyhow!(HEADLESS_REFUSAL));
+    }
     platform::request(plugin_id)
 }
 
 pub(crate) fn request_core_tool(tool: CoreTool) -> anyhow::Result<bool> {
+    if crate::headless_mode::active() {
+        return Err(anyhow::anyhow!(HEADLESS_REFUSAL));
+    }
     platform::request(tool.wire_id())
 }
 
@@ -133,16 +141,25 @@ pub fn show_toast(
     layout: Option<NotificationLayout>,
     activate: Option<ToastActivate<'_>>,
 ) -> anyhow::Result<bool> {
+    if crate::headless_mode::active() {
+        return Ok(false);
+    }
     platform::show_toast(
         source, title, body, level, action, artifact, layout, activate,
     )
 }
 
 pub fn prewarm() {
+    if crate::headless_mode::active() {
+        return;
+    }
     platform::prewarm();
 }
 
 pub fn wait_until_ready(timeout: Duration) -> bool {
+    if crate::headless_mode::active() {
+        return false;
+    }
     platform::wait_until_ready(timeout)
 }
 

@@ -96,6 +96,8 @@ fn update(device: Device) -> Option<Update> {
             detail: release.summary,
             bytes: release.size,
             target: device.id,
+            source: String::new(),
+            version: String::new(),
         }],
         running: None,
         finish: if restart {

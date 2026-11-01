@@ -83,6 +83,9 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
         );
         return;
     }
+    if !is_visible {
+        claim_focus_priority();
+    }
     if try_cycle_existing(req.current, req.reverse, req.show_id, &placement, cx) {
         return;
     }
@@ -98,6 +101,17 @@ pub(crate) fn open_picker(req: &OpenPickerRequest, cx: &mut App) {
     }
     destroy_non_target_windows(req, &placement, cx);
     create_from_request(req, rendering, placement, gathered, cx);
+}
+
+pub(crate) fn claim_focus_priority() {
+    let _ = qol_gpui::focus_priority::summon(
+        qol_gpui::focus_priority::FocusPriority::AltTab,
+        create::PICKER_WINDOW_TITLE,
+    );
+}
+
+pub(crate) fn release_focus_priority() {
+    qol_gpui::focus_priority::release(qol_gpui::focus_priority::FocusPriority::AltTab);
 }
 
 fn resolve_placement(

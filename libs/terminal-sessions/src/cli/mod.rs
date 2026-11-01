@@ -22,6 +22,7 @@ pub use builtins::{
     PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
+pub use composer::is_rule;
 pub use evidence::{
     CliActivityEvidence, CliComposer, CliDraftStash, CliLaunchProgram, CliModelCatalog,
     CliRemoteControlToggle, CliRuntimeState, CliScreenEvidence, CliSessionEvidence,
@@ -64,6 +65,7 @@ pub struct CliConversation {
     pub last_active: u64,
     pub pr_urls: Vec<String>,
     pub settings: CliResumeSettings,
+    pub transcript: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +171,14 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn launch_blocker(
+        &self,
+        _cwd: &std::path::Path,
+        _config_dir: Option<&std::path::Path>,
+    ) -> Option<String> {
+        None
+    }
+
     fn model_catalog(&self) -> Option<CliModelCatalog> {
         None
     }
@@ -181,12 +191,17 @@ pub trait CliSessionStrategy: Send + Sync {
         CliResumeSettings::default()
     }
 
-    fn closed_conversations(&self, _since: std::time::SystemTime) -> Vec<CliConversation> {
+    fn closed_conversations(
+        &self,
+        _homes: &[qol_agent_homes::AgentHome],
+        _since: std::time::SystemTime,
+    ) -> Vec<CliConversation> {
         Vec::new()
     }
 
     fn search_conversations(
         &self,
+        _homes: &[qol_agent_homes::AgentHome],
         _since: std::time::SystemTime,
         _external_ids: &std::collections::HashSet<String>,
         _terms: &[String],

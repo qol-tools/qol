@@ -4,7 +4,7 @@ uid = "d3d4cda9-f9cf-44dc-aacd-07419b5b5ea0"
 name = "Display"
 icon = "display"
 description = "Control display brightness, night mode and resolution"
-version = "0.51.1"
+version = "0.52.3"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
@@ -80,6 +80,7 @@ args = ["settings"]
 [capabilities]
 gpui = true
 doctor = true
+headless = true
 
 [daemon]
 enabled = true

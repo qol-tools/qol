@@ -11,7 +11,14 @@ fn main() -> anyhow::Result<()> {
     qol_runtime::probe!("HOST_ENTRY", "phase=start");
     register_build_identity();
     scrub_inherited_daemon_handoff_env();
+    drop_launching_claude_session_env();
     app::run()
+}
+
+fn drop_launching_claude_session_env() {
+    for name in qol_agent_homes::inherited_claude_session_env() {
+        std::env::remove_var(name);
+    }
 }
 
 /// qol-tray hands pre-bound listener fds to the one daemon it spawns them for.

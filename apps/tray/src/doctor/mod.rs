@@ -3,7 +3,7 @@ mod checks;
 mod cli;
 mod de_bindings;
 mod diagnosis;
-mod framework;
+pub(crate) mod framework;
 mod host_bindings;
 mod host_cli;
 mod install_id;

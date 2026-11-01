@@ -8,6 +8,7 @@ description = "Terminal session orchestration: spawn, fork, bridge, close and th
 [dependencies]
 anyhow = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+qol-agent-homes.workspace = true
 qol-agent-launch.workspace = true
 qol-config.workspace = true
 qol-fs.workspace = true

@@ -14,7 +14,7 @@ import { Type } from "typebox";
 const BRIDGE_TIMEOUT_MS = 86_410_000;
 const LOOP_ENTRY = "qol-sessions-feature-loop";
 const LOOP_PHASES = new Set(["idle", "waiting", "review", "closing", "paused"]);
-const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining. Do not stop at a round boundary.`;
+const REVIEW_FOLLOW_UP = `The qol-sessions feature loop is still active. Personally inspect the implementation against the user's complete acceptance criteria. If anything remains, call session_bridge for the next bounded correction round and acknowledge the reviewed completion_marker; for a driver loop, run qols loop run for the next correction round instead of session_bridge. If the entire feature is accepted, call session_loop_close with the session, completion_marker, outcome accepted, landed, before, now, verification, and remaining; for a driver loop, run qols loop close with outcome accepted instead. If the user redirected the work or a genuine blocker requires user input, call session_loop_close with the session, completion_marker, outcome paused, and unfinished scope under remaining; for a driver loop, run qols loop close with outcome paused instead. Do not stop at a round boundary.`;
 const FINAL_REPORT_FOLLOW_UP = `The qol-sessions feature loop is closing. Return the exact canonical final report emitted by session_loop_close. Do not add or remove sections.`;
 
 function run(args, timeoutMs, input, signal) {
@@ -760,6 +760,15 @@ mod tests {
         );
         assert!(source.contains("pi.on(\"agent_settled\""));
         assert!(source.contains("pi.sendUserMessage(REVIEW_FOLLOW_UP"));
+    }
+
+    #[test]
+    fn pi_review_follow_up_routes_a_driver_loop_to_the_driver_verbs() {
+        let source = pi_extension().expect("render");
+        assert!(source
+            .contains("run qols loop run for the next correction round instead of session_bridge"));
+        assert!(source.contains("run qols loop close with outcome accepted instead"));
+        assert!(source.contains("run qols loop close with outcome paused instead"));
     }
 
     #[test]

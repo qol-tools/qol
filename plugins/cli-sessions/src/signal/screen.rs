@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use qol_terminal_sessions::cli::{CliTool, KIMI_TOOL_ID, PI_TOOL_ID};
+use qol_terminal_sessions::cli::{is_rule, CliTool, KIMI_TOOL_ID, PI_TOOL_ID};
 
 pub fn screen_hash(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
@@ -43,9 +43,6 @@ const PI_FOOTER_BELOW_MAX: usize = 6;
 
 fn pi_stable(text: &str) -> Cow<'_, str> {
     let lines: Vec<&str> = text.lines().collect();
-    let is_rule = |line: &str| {
-        !line.trim().is_empty() && line.trim().chars().all(|character| character == '\u{2500}')
-    };
     let Some(border) = lines.iter().rposition(|line| is_rule(line)) else {
         return Cow::Borrowed(text);
     };

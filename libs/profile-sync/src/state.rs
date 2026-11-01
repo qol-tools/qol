@@ -283,6 +283,10 @@ fn backup_file_reject_reason(file_name: &str) -> Option<&'static str> {
         Some("dot_entry")
     } else if file_name.contains('/') || file_name.contains('\\') {
         Some("separator")
+    } else if file_name.contains(':') {
+        Some("drive_or_stream")
+    } else if file_name.contains('\0') {
+        Some("nul")
     } else {
         None
     }
@@ -463,6 +467,10 @@ mod tests {
             "subdir\\backup.json",
             "/absolute.json",
             "\\absolute.json",
+            "C:backup.json",
+            "C:",
+            "backup.json:stream",
+            "backup\0.json",
         ];
 
         for file_name in invalid_names {

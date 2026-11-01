@@ -32,6 +32,10 @@ pub fn linux_display_backend() -> LinuxDisplayBackend {
     platform::Platform.linux_display_backend()
 }
 
+pub fn has_display() -> bool {
+    platform::Platform.has_display()
+}
+
 pub fn current_capabilities() -> PlatformCapabilities {
     platform::Platform.current_capabilities()
 }

@@ -153,6 +153,10 @@ pub(crate) fn reassert_focus_until_held_with(
         FOCUS_REASSERT_DELAYS_MS,
         move || {
             let poll_title = read_title(&title);
+            if crate::focus_priority::must_yield() {
+                qol_runtime::probe!("FOCUS_REASSERT", "title={poll_title} step=yielded");
+                return crate::platform::ReassertStep::Stop;
+            }
             let focused = window_holds_input_focus(&poll_title) == Some(true);
             let visible = focused || visible_windows_by_title_prefix(&poll_title) != 0;
             let step = focus_reassert_step(&mut held_streak, focused, visible, started.elapsed());
