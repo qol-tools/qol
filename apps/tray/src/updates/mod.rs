@@ -106,7 +106,9 @@ fn latest_update() -> Option<FoundUpdate> {
 }
 
 pub fn checks_enabled() -> bool {
-    !cfg!(feature = "dev") && platform::detect_install_kind() != platform::InstallKind::Development
+    !cfg!(feature = "dev")
+        && platform::detect_install_kind() != platform::InstallKind::Development
+        && !crate::installer::stand_in::is_stand_in()
 }
 
 pub fn host_update_available() -> bool {
@@ -436,12 +438,23 @@ fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)
     Some((tag, version))
 }
 
+const STAND_IN_REFUSAL: &str =
+    "This qol-tray build runs in place of the installed one and does not update itself. \
+     Update once the installed tray runs again.";
+
 pub(crate) async fn install_host_update(
     events: std::sync::Arc<crate::daemon::EventBus>,
     plugin_manager: std::sync::Arc<Mutex<crate::plugins::PluginManager>>,
     confirm_after_restart: bool,
     update_plugins: Vec<String>,
 ) -> Result<(), String> {
+    if crate::installer::stand_in::is_stand_in() {
+        log::warn!("Self-update refused: {STAND_IN_REFUSAL}");
+        events.send(crate::daemon::DaemonEvent::UpdateFailed {
+            message: STAND_IN_REFUSAL.to_string(),
+        });
+        return Err(STAND_IN_REFUSAL.to_string());
+    }
     let record = confirm_after_restart
         .then(|| write_restart_record(update_plugins))
         .flatten();

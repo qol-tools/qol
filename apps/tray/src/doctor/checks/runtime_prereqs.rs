@@ -1,6 +1,5 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
-use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 const PLUGINS_DIR_ID: &str = "plugins_dir";
@@ -19,10 +18,6 @@ impl DoctorCheck for PluginsDirCheck {
         };
         plugins_dir_diagnosis(plugins_dir)
     }
-}
-
-pub(super) fn current_exe() -> Result<PathBuf> {
-    std::env::current_exe().context("failed to resolve current executable")
 }
 
 fn plugins_dir_diagnosis(plugins_dir: PathBuf) -> CheckReport {

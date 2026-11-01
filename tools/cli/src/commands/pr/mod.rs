@@ -2,6 +2,7 @@ mod daemon;
 mod download;
 mod install;
 mod manifest;
+mod tray;
 
 use anyhow::{bail, Context, Result};
 use qol_platform::Os;
@@ -58,8 +59,24 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
     download::fetch(REPO, &run, &dir)?;
     let build = manifest::read(&dir.join(manifest::FILE))?;
     build.check(number, &head)?;
+    let tray_build = (!build.tray.is_empty()).then(|| dir.join("tray").join(tray::BINARY));
+    if let Some(source) = &tray_build {
+        install::verify_binary(source, tray::BINARY)?;
+    }
 
     println!("pull request #{number} at {}", short(&head));
+    if tray_build.is_none() {
+        if let Some(previous) = state.tray.clone() {
+            let put_back = tray::put_back(&previous, &installed_tray()?)?;
+            state.tray = None;
+            state.save(&places.state)?;
+            println!(
+                "  {}: no longer changed; {}",
+                tray::BINARY,
+                put_back.describe()
+            );
+        }
+    }
     for plugin in &build.plugins {
         let source = dir.join("plugins").join(&plugin.tag).join(&plugin.file);
         install::verify_binary(&source, &plugin.bin_name)?;
@@ -78,20 +95,28 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
             backup: &backup,
         };
         install::replace(&swap, &mut state, &places.state)?;
+        if tray_build.is_some() {
+            println!(
+                "  {} {}: installed; the tray build starts it",
+                plugin.id, plugin.version
+            );
+            continue;
+        }
         let restart = daemon::restart(&places.pids, &plugin.id, &target)?;
         println!("  {} {}: {}", plugin.id, plugin.version, restart.describe());
     }
-    if !build.tray.is_empty() {
-        println!(
-            "  {}: built in {}, but qol pr try installs plugins only",
-            build.tray,
-            dir.join("tray").display()
-        );
+    if let Some(source) = tray_build {
+        state.pull_request = Some(number);
+        state.head_sha = Some(head.clone());
+        state.tray = Some(source.clone());
+        state.save(&places.state)?;
+        let started = tray::run_in_place(&source)?;
+        println!("  {}: {}", build.tray, started.describe());
     }
-    if state.plugins.is_empty() {
+    if state.plugins.is_empty() && state.tray.is_none() {
         println!("nothing was installed");
     } else {
-        println!("`qol pr try --off` puts the replaced builds back");
+        println!("`qol pr try --off` puts the replaced builds and the installed tray back");
     }
     Ok(())
 }
@@ -103,19 +128,32 @@ fn turn_off(places: &install::Places) -> Result<()> {
         return Ok(());
     };
     println!("putting back the builds pull request #{number} replaced");
+    let tray_build = state.tray.clone();
     while let Some(swapped) = state.plugins.last().cloned() {
         let restored = install::restore(&swapped)?;
         state.plugins.pop();
         state.save(&places.state)?;
-        if restored == install::Restored::PutBack {
+        if restored != install::Restored::PutBack {
+            println!("  {}: {}", swapped.id, restored.describe());
+        } else if tray_build.is_some() {
+            println!("  {}: put back; the installed tray starts it", swapped.id);
+        } else {
             let restart = daemon::restart(&places.pids, &swapped.id, &swapped.target)?;
             println!("  {}: put back; {}", swapped.id, restart.describe());
-        } else {
-            println!("  {}: {}", swapped.id, restored.describe());
         }
+    }
+    if let Some(try_binary) = tray_build {
+        let put_back = tray::put_back(&try_binary, &installed_tray()?)?;
+        println!("  {}: {}", tray::BINARY, put_back.describe());
     }
     install::State::clear(&places.state)?;
     Ok(())
+}
+
+fn installed_tray() -> Result<std::path::PathBuf> {
+    qol_apps::tray_install::InstallProfile::Production
+        .installed_binary()
+        .context("could not find where the installed tray lives")
 }
 
 fn short(sha: &str) -> &str {

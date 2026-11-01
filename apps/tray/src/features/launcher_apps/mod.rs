@@ -277,7 +277,7 @@ fn sync_launcher_entries(
         if SYNC_GENERATION.load(Ordering::SeqCst) != gen {
             return;
         }
-        let bin = match std::env::current_exe() {
+        let bin = match crate::installer::stand_in::recorded_binary() {
             Ok(b) => b,
             Err(_) => return,
         };

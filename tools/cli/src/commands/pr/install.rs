@@ -47,6 +47,8 @@ pub(super) struct State {
     pub(super) pull_request: Option<u64>,
     pub(super) head_sha: Option<String>,
     pub(super) plugins: Vec<Swapped>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tray: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -322,6 +324,7 @@ mod tests {
             pull_request: Some(412),
             head_sha: Some("abc".into()),
             plugins: vec![swapped(&fixture)],
+            tray: Some(fixture.source.clone()),
         };
         state.save(&fixture.places.state).unwrap();
         assert_eq!(State::load(&fixture.places.state).unwrap(), state);
@@ -331,6 +334,20 @@ mod tests {
             State::load(&fixture.places.state).unwrap(),
             State::default()
         );
+    }
+
+    #[test]
+    fn a_record_written_before_tray_tries_still_loads() {
+        let fixture = fixture();
+        fs::create_dir_all(fixture.places.state.parent().unwrap()).unwrap();
+        fs::write(
+            &fixture.places.state,
+            r#"{"pull_request":412,"head_sha":"abc","plugins":[]}"#,
+        )
+        .unwrap();
+        let state = State::load(&fixture.places.state).unwrap();
+        assert_eq!(state.pull_request, Some(412));
+        assert_eq!(state.tray, None);
     }
 
     #[test]
