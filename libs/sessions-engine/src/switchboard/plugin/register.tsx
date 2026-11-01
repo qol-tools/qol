@@ -20,8 +20,8 @@ const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
 const DONE: readonly Kind[] = ['merged', 'note']
 const HEADER = new RegExp(`^[\\s*_\`#>-]*(${KINDS.join('|')})[*_\`]*\\s*:[*_\`]*\\s*(.+?)[\\s*_\`]*$`, 'i')
 const RECOMMEND = /^[\s*_`>-]*Recommend(?:ed)?(?: answer)?[*_`]*\s*:[*_`]*\s*(.+?)[\s*_`]*$/im
-const HANDBACK = /(<agent-message from="([^"]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)([\s\S]*?)(\n<\/agent-message>)/g
-const NOTIFICATION = /<task-notification>[\s\S]*?<\/task-notification>/g
+const HANDBACK = /^(Another Claude session sent a message:\n<agent-message from="([A-Za-z0-9_-]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)((?:(?: {2}[^\n]*)?\n)*?)(<\/agent-message>\n)/
+const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
 const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
@@ -38,6 +38,7 @@ const HAIKU_SYSTEM = `You file a coding agent's final report on a board. Answer 
 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
+const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 
 type Header = { kind: Kind; headline: string; recommend?: string }
 type Report = { agentId: string; name?: string; status: string; report: string }
@@ -172,29 +173,40 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   return entry
 }
 
-export const intake = async ($: EngineInterface, text: string, known: (agentId: string) => boolean): Promise<string | undefined> => {
-  let changed = false
-  let out = text
-  for (const [whole, head = '', agentId = '', body = '', tail = ''] of [...text.matchAll(HANDBACK)]) {
+const once = (text: string, needle: string): boolean => text.indexOf(needle) !== -1 && text.indexOf(needle) === text.lastIndexOf(needle)
+
+export type Origin = 'peer' | 'task-notification'
+
+export const intake = async (
+  $: EngineInterface,
+  text: string,
+  origin: Origin,
+  isFork: (agentId: string) => boolean,
+): Promise<string | undefined> => {
+  if (origin === 'peer') {
+    if (!once(text, '<agent-message ') || !once(text, '</agent-message>')) return undefined
+    const [whole, head, agentId, body, tail] = HANDBACK.exec(text) ?? []
+    if (whole === undefined || head === undefined || agentId === undefined || body === undefined || tail === undefined) return undefined
+    if (!isFork(agentId)) return undefined
     const entry = await file($, { agentId, status: 'completed', report: dedent(body).trim() })
-    out = out.replace(whole, `${head}  ${boardLine(entry).split('\n').join('\n  ')}${tail}`)
-    changed = true
+    return `${head}  ${boardLine(entry).split('\n').join('\n  ')}\n${tail}${text.slice(whole.length)}`
   }
-  const blocks = [...out.matchAll(NOTIFICATION)].map(match => match[0])
-  for (const block of blocks) {
-    const agentId = field(block, 'task-id')
-    const status = field(block, 'status') ?? ''
-    const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
-    if (agentId === undefined || (name === undefined && !known(agentId))) continue
-    const result = RESULT.exec(block)
-    const report = result?.[2]?.trim() ?? ''
-    if (HANDED_BACK.test(report)) continue
-    const entry = await file($, { agentId, name, status, report })
-    const line = boardLine(entry)
-    out = out.replace(block, result === null ? block.replace('</task-notification>', `<result>${line}</result>\n</task-notification>`) : block.replace(RESULT, `$1${line}$3`))
-    changed = true
+  const block = text.trim()
+  if (!NOTIFICATION.test(block)) return undefined
+  for (const tag of ['<task-notification>', '</task-notification>', '<task-id>', '<status>']) {
+    if (!once(block, tag)) return undefined
   }
-  return changed ? out : undefined
+  const agentId = field(block, 'task-id')
+  if (agentId === undefined || !isFork(agentId)) return undefined
+  const status = field(block, 'status') ?? ''
+  const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
+  const result = RESULT.exec(block)
+  if (result !== null && (!once(block, '<result>') || !once(block, '</result>'))) return undefined
+  const report = result?.[2]?.trim() ?? ''
+  if (HANDED_BACK.test(report)) return undefined
+  const entry = await file($, { agentId, name, status, report })
+  const line = boardLine(entry)
+  return text.replace(block, result === null ? block.replace('</task-notification>', `<result>${line}</result>\n</task-notification>`) : block.replace(RESULT, `$1${line}$3`))
 }
 
 const age = (ms: number): string => {
@@ -285,12 +297,13 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.append', async ($, e, next) => {
-    if (e.agentId !== undefined || !INTAKE_DOORS.includes(e.door)) return next(e)
+    const origin = e.origin.kind
+    if (e.agentId !== undefined || !INTAKE_DOORS.includes(e.door) || (origin !== 'peer' && origin !== 'task-notification')) return next(e)
     const content = e.message.content
     const text = textOf(content)
     if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return next(e)
     const list = await read($, board)
-    const rewritten = await intake($, text, agentId => list.some(entry => entry.agentId === agentId))
+    const rewritten = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (rewritten === undefined) return next(e)
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: rewritten }] } })
   }).catch(($, e, next) => next(e))
@@ -299,6 +312,7 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
+    const asking = await read($, confirming)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
@@ -317,7 +331,11 @@ export const register: Register = on => {
     const dismiss = (agentIds: string[]) => () => {
       void change($, all => all.map(one => (agentIds.includes(one.agentId) ? { ...one, isDismissed: true } : one)))
     }
+    const confirm = (agentId: string) => () => {
+      void update($, confirming, () => agentId)
+    }
     const send = (entry: Entry) => async () => {
+      await update($, confirming, () => '')
       const sent = await $.session.send({ to: { agentId: entry.agentId }, text: entry.recommend ?? '' })
       if (!sent.isDelivered) {
         $.ui.toast(`Not sent to ${keyName(entry.name)}: ${sent.reason}`)
@@ -362,9 +380,24 @@ export const register: Register = on => {
             <Box paddingLeft={2} flexDirection="column">
               <Text wrap="wrap">{entry.headline}</Text>
               {entry.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {entry.recommend}</Text>}
+              {entry.recommend !== undefined && asking === entry.agentId && (
+                <Text wrap="wrap">
+                  Send "{entry.recommend}" to {keyName(entry.name)}?
+                </Text>
+              )}
               <Box flexDirection="row" gap={2}>
-                {entry.recommend !== undefined && (
-                  <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk ? { hotkey: 'y' } : {})} onPress={send(entry)}>
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`confirm-${entry.agentId}`} plain hotkey="y" onPress={send(entry)}>
+                    send
+                  </Button>
+                )}
+                {entry.recommend !== undefined && asking === entry.agentId && (
+                  <Button key={`cancel-${entry.agentId}`} plain hotkey="n" onPress={confirm('')}>
+                    cancel
+                  </Button>
+                )}
+                {entry.recommend !== undefined && asking !== entry.agentId && (
+                  <Button key={`send-${entry.agentId}`} plain {...(entry === firstAsk && asking === '' ? { hotkey: 'y' } : {})} onPress={confirm(entry.agentId)}>
                     send recommended
                   </Button>
                 )}

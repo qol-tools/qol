@@ -100,9 +100,11 @@ mod tests {
     fn the_module_files_fork_reports_on_the_board_and_serves_its_tool_and_command() {
         for needle in [
             "on('session.append', async ($, e, next) => {",
-            "if (e.agentId !== undefined || !INTAKE_DOORS.includes(e.door)) return next(e)",
-            "<agent-message from=\"([^\"]+)\">\\n\\[Subagent hand-back\\]",
-            "const NOTIFICATION = /<task-notification>",
+            "(origin !== 'peer' && origin !== 'task-notification')) return next(e)",
+            "const HANDBACK = /^(Another Claude session sent a message:\\n<agent-message from=",
+            "const NOTIFICATION = /^<task-notification>\\n[\\s\\S]*<\\/task-notification>$/",
+            "if (agentId === undefined || !isFork(agentId)) return undefined",
+            "Send \"{entry.recommend}\" to {keyName(entry.name)}?",
             "const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']",
             "model: 'haiku'",
             "on('ui.render', { component: 'Pane', requestId: PANE }",

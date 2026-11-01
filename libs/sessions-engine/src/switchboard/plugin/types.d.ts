@@ -14,6 +14,6 @@ export type Entry = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'qol-switchboard': { board: Shaped<Entry[]>; isDoneOpen: boolean }
+    'qol-switchboard': { board: Shaped<Entry[]>; isDoneOpen: boolean; confirming: string }
   }
 }
