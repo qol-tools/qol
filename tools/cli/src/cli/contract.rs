@@ -191,6 +191,24 @@ fn app() -> HeadlessApp {
         ))
         .command(
             command(
+                "pr",
+                "Run a pull request's CI build in the installed tray.",
+                crate::commands::pr::USAGE,
+                "Downloads the Linux build the live test workflow uploaded for the pull request's head commit, so a live test needs no local build.",
+                "Progress on stdout; diagnostics on stderr.",
+                "Exits non-zero when the build is missing, still running, or for another commit, or when a swap fails.",
+            )
+            .subcommand(command(
+                "try",
+                "Install a pull request's plugin builds, or put the installed ones back.",
+                crate::commands::pr::USAGE,
+                "try <number> runs the pull request's code as your plugins, so it refuses a pull request from a fork: only a branch of qol-tools/qol, which only people with write access can push, is tried. It downloads the live-test-build-linux-x86_64 artifact of the newest successful live test run of that branch at the pull request's head through the GitHub API, then checks that its manifest names that pull request and commit and that each binary is an executable and, when it declares a build identity (most plugins declare none), a production build of its plugin; those checks catch a wrong or stale download, not a tampered one, since the pull request's own code writes them. It backs up each installed plugin binary once, swaps the build in atomically, and stops the plugin's daemon so the tray starts the new one. Plugins not installed here are skipped, and a tray build is left in the download folder. try --off puts every backed-up binary back and restarts those daemons. Only one pull request is installed at a time.",
+                "One line per plugin on stdout; diagnostics on stderr.",
+                "Exits non-zero when gh fails, the run is missing, unfinished or failed, the manifest does not match, or a swap or restore fails.",
+            )),
+        )
+        .command(
+            command(
                 "sync",
                 "Sync the active profile with its configured cloud repository.",
                 "qol sync",

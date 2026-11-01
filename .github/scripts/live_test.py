@@ -12,6 +12,8 @@ PATHS_FILE = Path(__file__).resolve().parents[1] / "live-test-paths"
 NEEDED_TITLE = "Live test needed"
 NOT_NEEDED_TITLE = "No live test needed"
 LISTED_FILES = 50
+BUILD_JOB = "Build for the live test"
+BUILD_ARTIFACT = "live-test-build-linux-x86_64"
 
 
 def patterns(text: str) -> list[str]:
@@ -52,7 +54,12 @@ def summary(found: list[str]) -> tuple[str, str]:
     if len(found) > LISTED_FILES:
         shown.append(f"- and {len(found) - LISTED_FILES} more")
     lead = "These changed files are on `.github/live-test-paths`, so a person must see the change working before it merges:"
-    return NEEDED_TITLE, "\n".join([lead, "", *shown])
+    build = (
+        f"The `{BUILD_JOB}` job of this run builds what they change for Linux and uploads it as "
+        f"`{BUILD_ARTIFACT}`, so the test needs no local build. When nothing they change runs on "
+        "Linux, that job says so and uploads nothing."
+    )
+    return NEEDED_TITLE, "\n".join([lead, "", *shown, "", build])
 
 
 def paths_of(entries: list[dict]) -> list[str]:
@@ -99,6 +106,10 @@ def main() -> int:
     found = needing(files, patterns(PATHS_FILE.read_text(encoding="utf-8")))
     title, text = summary(found)
     post(repo, os.environ["HEAD_SHA"], title, text, os.environ.get("RUN_URL", ""))
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as handle:
+            handle.write(f"needed={'true' if found else 'false'}\n")
     print(f"{title}: {len(found)} of {len(files)} changed files")
     return 0
 
