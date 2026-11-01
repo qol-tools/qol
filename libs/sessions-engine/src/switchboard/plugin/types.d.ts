@@ -12,6 +12,7 @@ export type Entry = {
   isDismissed: boolean
   project?: string
   successor?: string
+  launcher?: string
 }
 
 declare module 'claude-code' {
