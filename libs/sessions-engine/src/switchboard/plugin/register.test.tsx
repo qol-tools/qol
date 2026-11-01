@@ -281,3 +281,30 @@ test('a stopped fork from an older board is placed from its recorded folder, and
   expect(JSON.stringify(kept.result)).toContain('Agent b2 was stopped by the user.')
   expect(spawned).toHaveLength(1)
 })
+
+test('only a stopped fork is taken over, once however many messages race to it', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  on('env.get', () => ({ value: '/conv' }))
+  on('fs.exists', () => ({ value: false }))
+  on('tool.call', (_: unknown, e: any) =>
+    e.to === 'c1'
+      ? { result: { success: false, message: 'Agent c1 was stopped by the user and won\'t be resumed.' } }
+      : { result: { success: false, message: `Agent ${e.to} is busy.` } },
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'c1', 'stopped-fork: stopped')
+  await spawn($, 'c2', 'busy-fork: busy')
+
+  const busy = await $.tool.call({ tool: 'SendMessage', to: 'c2', message: 'hello' })
+  expect(JSON.stringify(busy.result)).toContain('Agent c2 is busy.')
+  expect(spawned).toHaveLength(2)
+
+  const raced = await Promise.all([
+    $.tool.call({ tool: 'SendMessage', to: 'c1', message: 'first' }),
+    $.tool.call({ tool: 'SendMessage', to: 'c1', message: 'second' }),
+  ])
+  expect(raced.filter(one => JSON.stringify(one.result).includes('continues as a new fork'))).toHaveLength(1)
+  expect(spawned).toHaveLength(3)
+  expect(spawned[2]?.prompt).toContain('\nfirst\n')
+})

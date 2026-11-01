@@ -27,6 +27,7 @@ const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
 const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
+const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
@@ -203,15 +204,27 @@ export const takeoverPrompt = (project: string, message: string, stopped: Entry,
 
 type Takeover = { isStarted: false } | { isStarted: true; agentId?: string }
 
-const takeOver = async ($: EngineInterface, stopped: Entry, message: string): Promise<Takeover> => {
-  const project = stopped.project ?? (await recordedProject($, stopped.agentId))
+const startTakeover = async ($: EngineInterface, stopped: Entry, message: string): Promise<Takeover> => {
+  const project = await (stopped.project !== undefined ? Promise.resolve(stopped.project) : recordedProject($, stopped.agentId)).catch(() => undefined)
   if (project === undefined) return { isStarted: false }
-  const transcript = await subagentFile($, stopped.agentId, '.jsonl')
+  const transcript = await subagentFile($, stopped.agentId, '.jsonl').catch(() => undefined)
   const started = await $.agent.spawn({ subagentType: FORK, description: stopped.name, prompt: takeoverPrompt(project, message, stopped, transcript) })
   if (started.deny !== undefined) return { isStarted: false }
   if (started.agentId === undefined) return { isStarted: true }
-  await succeed($, stopped.agentId, started.agentId)
+  await succeed($, stopped.agentId, started.agentId).catch(() => undefined)
   return { isStarted: true, agentId: started.agentId }
+}
+
+const takeovers = new Map<string, Promise<Takeover>>()
+
+const takeOver = async ($: EngineInterface, stopped: Entry, message: string): Promise<Takeover & { isFirst: boolean }> => {
+  const running = takeovers.get(stopped.agentId)
+  if (running !== undefined) return { ...(await running), isFirst: false }
+  const started = startTakeover($, stopped, message).catch((): Takeover => ({ isStarted: false }))
+  takeovers.set(stopped.agentId, started)
+  const takeover = await started
+  if (!takeover.isStarted) takeovers.delete(stopped.agentId)
+  return { ...takeover, isFirst: true }
 }
 
 const continued = (name: string, takeover: Takeover & { isStarted: true }): string =>
@@ -219,9 +232,12 @@ const continued = (name: string, takeover: Takeover & { isStarted: true }): stri
     ? `${keyName(name)} was stopped, so it continues as a new fork that reads its conversation and has your message.`
     : `${keyName(name)} was stopped, so it continues as a new fork, agent id ${takeover.agentId}, that reads its conversation and has your message. Address ${takeover.agentId} from now on.`
 
+const isStopped = (reason: unknown): boolean => STOPPED.test(typeof reason === 'string' ? reason : JSON.stringify(reason ?? ''))
+
 const isUndelivered = (answer: { deny?: string; isError?: true; result?: unknown }): boolean =>
   answer.deny === undefined &&
-  (answer.isError === true || (typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false))
+  (answer.isError === true || (typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)) &&
+  isStopped(answer.result)
 
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   const header =
@@ -389,9 +405,11 @@ export const register: Register = on => {
     if (target === undefined) return next(e)
     const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
     if (!isUndelivered(answer)) return answer
-    const takeover = await takeOver($, target, e.message).catch((): Takeover => ({ isStarted: false }))
+    const takeover = await takeOver($, target, e.message)
     if (!takeover.isStarted) return answer
-    return { result: { success: true, message: continued(target.name, takeover) } }
+    if (takeover.isFirst) return { result: { success: true, message: continued(target.name, takeover) } }
+    const successor = takeover.agentId ?? addressed(await read($, board), target.agentId)?.agentId
+    return successor === undefined || successor === target.agentId ? answer : next({ ...e, to: successor })
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
@@ -446,7 +464,7 @@ export const register: Register = on => {
       const text = entry.recommend ?? ''
       const sent = await $.session.send({ to: { agentId: entry.agentId }, text })
       if (!sent.isDelivered) {
-        const takeover = await takeOver($, entry, text).catch((): Takeover => ({ isStarted: false }))
+        const takeover = isStopped(sent.reason) ? await takeOver($, entry, text) : { isStarted: false }
         $.ui.toast(
           takeover.isStarted
             ? `${keyName(entry.name)} was stopped, so it continues as a new fork with: ${text}`
