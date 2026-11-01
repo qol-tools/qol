@@ -69,10 +69,15 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
             continue;
         }
         let backup = places.backup_for(&plugin.id, &plugin.bin_name);
-        install::replace(&source, &target, &backup, &plugin.id, &mut state)?;
         state.pull_request = Some(number);
         state.head_sha = Some(head.clone());
-        state.save(&places.state)?;
+        let swap = install::Swap {
+            id: &plugin.id,
+            source: &source,
+            target: &target,
+            backup: &backup,
+        };
+        install::replace(&swap, &mut state, &places.state)?;
         let restart = daemon::restart(&places.pids, &plugin.id, &target)?;
         println!("  {} {}: {}", plugin.id, plugin.version, restart.describe());
     }
@@ -99,11 +104,15 @@ fn turn_off(places: &install::Places) -> Result<()> {
     };
     println!("putting back the builds pull request #{number} replaced");
     while let Some(swapped) = state.plugins.last().cloned() {
-        install::restore(&swapped)?;
+        let restored = install::restore(&swapped)?;
         state.plugins.pop();
         state.save(&places.state)?;
-        let restart = daemon::restart(&places.pids, &swapped.id, &swapped.target)?;
-        println!("  {}: {}", swapped.id, restart.describe());
+        if restored == install::Restored::PutBack {
+            let restart = daemon::restart(&places.pids, &swapped.id, &swapped.target)?;
+            println!("  {}: put back; {}", swapped.id, restart.describe());
+        } else {
+            println!("  {}: {}", swapped.id, restored.describe());
+        }
     }
     install::State::clear(&places.state)?;
     Ok(())

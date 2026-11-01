@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 const RESPAWN_WAIT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(250);
+const REPLACED_SUFFIX: &str = " (deleted)";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Restart {
@@ -62,12 +63,14 @@ fn runs_binary(pid: u32, binary: &Path) -> bool {
     let wanted = binary
         .canonicalize()
         .unwrap_or_else(|_| binary.to_path_buf());
-    std::fs::read_link(PathBuf::from(format!("/proc/{pid}/exe")))
-        .map(|exe| {
-            exe.to_string_lossy()
-                .starts_with(&*wanted.to_string_lossy())
-        })
-        .unwrap_or(false)
+    let Ok(exe) = std::fs::read_link(PathBuf::from(format!("/proc/{pid}/exe"))) else {
+        return false;
+    };
+    same_binary(&exe.to_string_lossy(), &wanted.to_string_lossy())
+}
+
+fn same_binary(exe: &str, wanted: &str) -> bool {
+    exe == wanted || exe.strip_suffix(REPLACED_SUFFIX) == Some(wanted)
 }
 
 #[cfg(test)]
@@ -90,6 +93,15 @@ mod tests {
         let restart = restart(pids.path(), "qol-demo", Path::new("/nowhere/qol-demo")).unwrap();
         assert_eq!(restart, Restart::Foreign { pid: own });
         assert!(qol_process::is_pid_alive(own));
+    }
+
+    #[test]
+    fn only_the_binary_itself_or_its_replaced_file_matches() {
+        let wanted = "/home/u/.config/qol-tray/plugins/qol-demo/qol-demo";
+        assert!(same_binary(wanted, wanted));
+        assert!(same_binary(&format!("{wanted} (deleted)"), wanted));
+        assert!(!same_binary(&format!("{wanted}-helper"), wanted));
+        assert!(!same_binary(&format!("{wanted}.old (deleted)"), wanted));
     }
 
     #[test]

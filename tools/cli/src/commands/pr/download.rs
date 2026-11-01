@@ -6,6 +6,7 @@ use std::process::Command;
 const WORKFLOW: &str = "live-test.yml";
 const ARTIFACT: &str = "live-test-build-linux-x86_64";
 const BUILD_JOB: &str = "Build for the live test";
+const RUN_LIMIT: &str = "20";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,10 +65,12 @@ pub(super) fn live_test_run(repo: &str, pull: &PullRequest) -> Result<Run> {
         WORKFLOW,
         "--commit",
         head,
+        "--branch",
+        &pull.head_ref_name,
         "--event",
         "pull_request",
         "--limit",
-        "1",
+        RUN_LIMIT,
         "--json",
         "databaseId,status,conclusion,headBranch,url",
     ])?;
@@ -77,31 +80,29 @@ pub(super) fn live_test_run(repo: &str, pull: &PullRequest) -> Result<Run> {
 fn latest_run(listing: &str, head: &str, branch: &str) -> Result<Run> {
     let runs: Vec<Run> =
         serde_json::from_str(listing).context("gh run list printed something other than JSON")?;
-    let Some(run) = runs.into_iter().next() else {
-        bail!("no live test run exists for {head} yet");
+    let mut runs = runs.into_iter().filter(|run| run.head_branch == branch);
+    let Some(newest) = runs.next() else {
+        bail!("no live test run of {branch} exists for {head} yet");
     };
-    if run.head_branch != branch {
-        bail!(
-            "the live test run for {head} built branch {}, not {branch}: {}",
-            run.head_branch,
-            run.url
-        );
+    if newest.status == "completed" && newest.conclusion == "success" {
+        return Ok(newest);
     }
-    if run.status != "completed" {
+    if let Some(earlier) = runs.find(|run| run.status == "completed" && run.conclusion == "success")
+    {
+        return Ok(earlier);
+    }
+    if newest.status != "completed" {
         bail!(
             "the live test run for {head} is still {}; try again when `{BUILD_JOB}` finishes: {}",
-            run.status,
-            run.url
+            newest.status,
+            newest.url
         );
     }
-    if run.conclusion != "success" {
-        bail!(
-            "the live test run for {head} ended {}: {}",
-            run.conclusion,
-            run.url
-        );
-    }
-    Ok(run)
+    bail!(
+        "the live test run for {head} ended {}: {}",
+        newest.conclusion,
+        newest.url
+    )
 }
 
 pub(super) fn fetch(repo: &str, run: &Run, dir: &Path) -> Result<()> {
@@ -144,10 +145,14 @@ mod tests {
 
     const BRANCH: &str = "feat/demo";
 
-    fn listing(status: &str, conclusion: &str) -> String {
+    fn entry(id: u64, status: &str, conclusion: &str, branch: &str) -> String {
         format!(
-            r#"[{{"databaseId":41,"status":"{status}","conclusion":"{conclusion}","headBranch":"{BRANCH}","url":"https://example.invalid/41"}}]"#
+            r#"{{"databaseId":{id},"status":"{status}","conclusion":"{conclusion}","headBranch":"{branch}","url":"https://example.invalid/{id}"}}"#
         )
+    }
+
+    fn listing(status: &str, conclusion: &str) -> String {
+        format!("[{}]", entry(41, status, conclusion, BRANCH))
     }
 
     fn view(cross: bool) -> String {
@@ -176,11 +181,22 @@ mod tests {
     }
 
     #[test]
-    fn a_run_of_another_branch_is_refused() {
+    fn a_run_of_another_branch_is_never_used() {
         let error = latest_run(&listing("completed", "success"), "abc", "feat/other")
             .unwrap_err()
             .to_string();
-        assert!(error.contains("not feat/other"), "{error}");
+        assert!(error.contains("no live test run of feat/other"), "{error}");
+    }
+
+    #[test]
+    fn a_newer_cancelled_run_does_not_hide_an_earlier_success() {
+        let runs = format!(
+            "[{},{},{}]",
+            entry(43, "completed", "cancelled", BRANCH),
+            entry(42, "completed", "success", "feat/other"),
+            entry(41, "completed", "success", BRANCH)
+        );
+        assert_eq!(latest_run(&runs, "abc", BRANCH).unwrap().database_id, 41);
     }
 
     #[test]

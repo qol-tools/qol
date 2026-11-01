@@ -96,39 +96,74 @@ pub(super) fn verify_binary(path: &Path, binary: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn replace(
-    source: &Path,
-    target: &Path,
-    backup: &Path,
-    id: &str,
-    state: &mut State,
-) -> Result<()> {
-    if !state.plugins.iter().any(|swapped| swapped.id == id) {
-        if let Some(parent) = backup.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-        }
-        fs::copy(target, backup)
-            .with_context(|| format!("backing up {} to {}", target.display(), backup.display()))?;
-        state.plugins.push(Swapped {
-            id: id.to_string(),
-            target: target.to_path_buf(),
-            backup: backup.to_path_buf(),
-        });
-    }
-    swap_in(source, target)
+pub(super) struct Swap<'a> {
+    pub(super) id: &'a str,
+    pub(super) source: &'a Path,
+    pub(super) target: &'a Path,
+    pub(super) backup: &'a Path,
 }
 
-pub(super) fn restore(swapped: &Swapped) -> Result<()> {
-    if !swapped.backup.is_file() {
-        bail!(
-            "the backup of {} is gone from {}",
-            swapped.id,
-            swapped.backup.display()
-        );
+pub(super) fn replace(swap: &Swap<'_>, state: &mut State, state_path: &Path) -> Result<()> {
+    if !state.plugins.iter().any(|swapped| swapped.id == swap.id) {
+        if !swap.backup.is_file() {
+            back_up(swap.target, swap.backup)?;
+        }
+        state.plugins.push(Swapped {
+            id: swap.id.to_string(),
+            target: swap.target.to_path_buf(),
+            backup: swap.backup.to_path_buf(),
+        });
     }
-    swap_in(&swapped.backup, &swapped.target)?;
+    state.save(state_path)?;
+    swap_in(swap.source, swap.target)
+}
+
+fn back_up(target: &Path, backup: &Path) -> Result<()> {
+    let parent = backup
+        .parent()
+        .with_context(|| format!("{} has no folder", backup.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("staging in {}", parent.display()))?;
+    fs::copy(target, staged.path()).with_context(|| format!("backing up {}", target.display()))?;
+    staged
+        .persist(backup)
+        .with_context(|| format!("writing {}", backup.display()))?;
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Restored {
+    PutBack,
+    BackupGone,
+    PluginGone,
+}
+
+impl Restored {
+    pub(super) fn describe(&self) -> &'static str {
+        match self {
+            Self::PutBack => "put back",
+            Self::BackupGone => "its backup is gone, so the pull request build stays",
+            Self::PluginGone => "no longer installed, backup dropped",
+        }
+    }
+}
+
+pub(super) fn restore(swapped: &Swapped) -> Result<Restored> {
+    if !swapped.backup.is_file() {
+        return Ok(Restored::BackupGone);
+    }
+    let installed = swapped.target.parent().is_some_and(Path::is_dir);
+    if installed {
+        swap_in(&swapped.backup, &swapped.target)?;
+    }
     fs::remove_file(&swapped.backup)
-        .with_context(|| format!("removing {}", swapped.backup.display()))
+        .with_context(|| format!("removing {}", swapped.backup.display()))?;
+    Ok(if installed {
+        Restored::PutBack
+    } else {
+        Restored::PluginGone
+    })
 }
 
 fn swap_in(source: &Path, target: &Path) -> Result<()> {
@@ -140,7 +175,8 @@ fn swap_in(source: &Path, target: &Path) -> Result<()> {
     fs::copy(source, staged.path())
         .with_context(|| format!("copying {} into {}", source.display(), parent.display()))?;
     let permissions = fs::metadata(target)
-        .with_context(|| format!("reading {}", target.display()))?
+        .or_else(|_| fs::metadata(source))
+        .with_context(|| format!("reading {}", source.display()))?
         .permissions();
     fs::set_permissions(staged.path(), permissions)?;
     staged
@@ -180,36 +216,53 @@ mod tests {
         }
     }
 
+    fn swap<'a>(fixture: &'a Fixture, backup: &'a Path) -> Swap<'a> {
+        Swap {
+            id: "qol-demo",
+            source: &fixture.source,
+            target: &fixture.target,
+            backup,
+        }
+    }
+
+    fn swapped(fixture: &Fixture) -> Swapped {
+        Swapped {
+            id: "qol-demo".into(),
+            target: fixture.target.clone(),
+            backup: fixture.places.backup_for("qol-demo", "qol-demo"),
+        }
+    }
+
     #[test]
     fn replace_keeps_the_first_install_through_repeated_tries() {
         let fixture = fixture();
         let backup = fixture.places.backup_for("qol-demo", "qol-demo");
         let mut state = State::default();
-        replace(
-            &fixture.source,
-            &fixture.target,
-            &backup,
-            "qol-demo",
-            &mut state,
-        )
-        .unwrap();
+        replace(&swap(&fixture, &backup), &mut state, &fixture.places.state).unwrap();
         assert_eq!(fs::read(&fixture.target).unwrap(), b"pull request");
+        assert_eq!(State::load(&fixture.places.state).unwrap(), state);
         fs::write(&fixture.source, b"newer push").unwrap();
-        replace(
-            &fixture.source,
-            &fixture.target,
-            &backup,
-            "qol-demo",
-            &mut state,
-        )
-        .unwrap();
+        replace(&swap(&fixture, &backup), &mut state, &fixture.places.state).unwrap();
         assert_eq!(fs::read(&fixture.target).unwrap(), b"newer push");
         assert_eq!(fs::read(&backup).unwrap(), b"installed");
         assert_eq!(state.plugins.len(), 1);
 
-        restore(&state.plugins[0]).unwrap();
+        assert_eq!(restore(&state.plugins[0]).unwrap(), Restored::PutBack);
         assert_eq!(fs::read(&fixture.target).unwrap(), b"installed");
         assert!(!backup.exists(), "a restore removes its backup");
+    }
+
+    #[test]
+    fn a_backup_left_without_a_record_is_never_overwritten() {
+        let fixture = fixture();
+        let backup = fixture.places.backup_for("qol-demo", "qol-demo");
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::write(&backup, b"first install").unwrap();
+        fs::write(&fixture.target, b"pull request").unwrap();
+        let mut state = State::default();
+        replace(&swap(&fixture, &backup), &mut state, &fixture.places.state).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), b"first install");
+        assert_eq!(State::load(&fixture.places.state).unwrap().plugins.len(), 1);
     }
 
     #[cfg(unix)]
@@ -221,11 +274,9 @@ mod tests {
         fs::set_permissions(&fixture.source, fs::Permissions::from_mode(0o644)).unwrap();
         let backup = fixture.places.backup_for("qol-demo", "qol-demo");
         replace(
-            &fixture.source,
-            &fixture.target,
-            &backup,
-            "qol-demo",
+            &swap(&fixture, &backup),
             &mut State::default(),
+            &fixture.places.state,
         )
         .unwrap();
         let mode = fs::metadata(&fixture.target).unwrap().permissions().mode();
@@ -233,15 +284,28 @@ mod tests {
     }
 
     #[test]
-    fn restore_refuses_a_missing_backup_and_leaves_the_build() {
+    fn restore_settles_a_missing_backup_or_plugin_instead_of_failing() {
         let fixture = fixture();
-        let swapped = Swapped {
-            id: "qol-demo".into(),
-            target: fixture.target.clone(),
-            backup: fixture.places.backup_for("qol-demo", "qol-demo"),
-        };
-        assert!(restore(&swapped).is_err());
+        let swapped = swapped(&fixture);
+        assert_eq!(restore(&swapped).unwrap(), Restored::BackupGone);
         assert_eq!(fs::read(&fixture.target).unwrap(), b"installed");
+
+        fs::create_dir_all(swapped.backup.parent().unwrap()).unwrap();
+        fs::write(&swapped.backup, b"first install").unwrap();
+        fs::remove_dir_all(fixture.target.parent().unwrap()).unwrap();
+        assert_eq!(restore(&swapped).unwrap(), Restored::PluginGone);
+        assert!(!swapped.backup.exists());
+    }
+
+    #[test]
+    fn restore_puts_back_a_binary_that_was_deleted() {
+        let fixture = fixture();
+        let swapped = swapped(&fixture);
+        fs::create_dir_all(swapped.backup.parent().unwrap()).unwrap();
+        fs::write(&swapped.backup, b"first install").unwrap();
+        fs::remove_file(&fixture.target).unwrap();
+        assert_eq!(restore(&swapped).unwrap(), Restored::PutBack);
+        assert_eq!(fs::read(&fixture.target).unwrap(), b"first install");
     }
 
     #[test]
@@ -254,11 +318,7 @@ mod tests {
         let state = State {
             pull_request: Some(412),
             head_sha: Some("abc".into()),
-            plugins: vec![Swapped {
-                id: "qol-demo".into(),
-                target: fixture.target.clone(),
-                backup: fixture.places.backup_for("qol-demo", "qol-demo"),
-            }],
+            plugins: vec![swapped(&fixture)],
         };
         state.save(&fixture.places.state).unwrap();
         assert_eq!(State::load(&fixture.places.state).unwrap(), state);
