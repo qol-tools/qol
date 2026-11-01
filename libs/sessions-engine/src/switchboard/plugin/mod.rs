@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Starts each switchboard fork in its project folder and files each fork's final report on the fork board beside the chat.",
   "types": "./types/index.d.ts"
 }
@@ -110,6 +110,9 @@ mod tests {
             "on('ui.render', { component: 'Pane', requestId: PANE }",
             "$.ui.view({ agentId: entry.agentId })",
             "$.session.send({ to: { agentId: entry.agentId }, text: entry.recommend ?? '' })",
+            "on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {",
+            "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
+            "e.props.placement === 'inline' && viewed !== undefined",
             "on('turn.start', async ($, e, next) => {",
         ] {
             assert!(MODULE.contains(needle), "{needle}");

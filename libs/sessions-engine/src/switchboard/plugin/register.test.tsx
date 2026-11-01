@@ -16,6 +16,18 @@ const PANE = {
 
 const SURFACES = ['terminal', 'desktop'] as const
 
+const promptBand = (isFullscreen: boolean) =>
+  ({
+    plugin: 'qol-switchboard',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 120, scroll: { offset: 0, bodyRows: 6 }, view: {} },
+    viewport: { columns: 200, rows: 60, isFullscreen },
+  }) as const
+
+const runBoard = ($: any) =>
+  $.command.run({ command: 'board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })
+
 const notification = (agentId: string, name: string, result: string) =>
   `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent "${name}" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>${result}</result>\n<usage><subagent_tokens>10</subagent_tokens></usage>\n</task-notification>`
 
@@ -59,14 +71,22 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = []) => {
   on('ui.toast', () => ({ value: undefined }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_800_000_000_000 }))
+  const open = new Set<string>()
   on('ui.open', (_: unknown, e: { id: string }) => {
     panes.push(`open ${e.id}`)
+    open.add(e.id)
     return { value: { isPlaced: true } }
   })
   on('ui.close', (_: unknown, e: { id: string }) => {
     panes.push(`close ${e.id}`)
+    open.delete(e.id)
     return { value: undefined }
   })
+  on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'board' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__qol-switchboard__fork_board' } }))
@@ -185,29 +205,83 @@ test('the board names the key that reaches it until it holds the keys, and close
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
+  await runBoard($)
 
   const outside = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · ctrl\+x x closes it/ })).toBeDefined()
+  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · \/board or ctrl\+x x closes it/ })).toBeDefined()
   expect(await outside.find({ type: 'Text', text: /tab walks/ })).toBeUndefined()
   await outside.unmount()
 
   const inside = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await inside.find({ type: 'Text', text: /digit opens a fork · tab walks · esc back to the prompt/ })).toBeDefined()
+  expect(await inside.find({ type: 'Text', text: /digit opens a fork · tab walks · x closes · esc back to the prompt/ })).toBeDefined()
   await inside.press({ key: 'close' })
   await inside.unmount()
   expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('the board opens on its own only where the terminal docks it beside the chat', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual([])
+  const mainScreen = await $.ui.mount(promptBand(false))
+  await mainScreen.unmount()
+  const later = await $.ui.mount(promptBand(true))
+  await later.unmount()
+  expect(panes).toEqual([])
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const fullscreen = await $.ui.mount(promptBand(true))
+  await fullscreen.unmount()
+  const again = await $.ui.mount(promptBand(true))
+  await again.unmount()
+  expect(panes).toEqual(['open board'])
+})
+
+test('/board toggles the board, and a board it closed stays closed at the next start', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(String((await runBoard($)).text)).toContain('Fork board opened.')
+  expect(String((await runBoard($)).text)).toContain('Fork board closed.')
+  expect(panes).toEqual(['open board', 'close board'])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount(promptBand(true))
+  await band.unmount()
+  expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('an inline board shrinks to one line while an agent is on screen', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'ask: Which colour?\nRecommend: amber'))
+  const props = { ...PANE.props, isFocused: false, placement: 'inline', view: { agentId: 'a8' } } as const
+  const inline = await $.ui.mount({ ...PANE, surface: 'terminal', props })
+  expect(await inline.find({ type: 'Text', text: /Fork board · 1 needs you\. · ctrl\+x x closes it/ })).toBeDefined()
+  expect(await inline.find({ type: 'Text', text: /NEEDS YOU/ })).toBeUndefined()
+  await inline.unmount()
+  const docked = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...props, placement: 'dock' } })
+  expect(await docked.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
+  await docked.unmount()
 })
 
 test('a board the user closed stays closed at the next start until /board opens it', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const first = await $.ui.mount(promptBand(true))
+  await first.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'close' })
   await ui.unmount()
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const closed = await $.ui.mount(promptBand(true))
+  await closed.unmount()
   expect(panes).toEqual(['open board', 'close board'])
-  await $.command.run({ command: 'board' })
+  await runBoard($)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const reopened = await $.ui.mount(promptBand(true))
+  await reopened.unmount()
   expect(panes).toEqual(['open board', 'close board', 'open board', 'open board'])
 })
