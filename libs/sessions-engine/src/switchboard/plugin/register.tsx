@@ -45,6 +45,7 @@ const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
 const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
+const RESUMED_SUMMARY = /^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back after the switchboard restart.'
@@ -647,11 +648,24 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .join('\n')
 }
 
+export const resumedFork = (text: string, isFork: (agentId: string) => boolean): string | undefined => {
+  const block = text.trim()
+  if (!NOTIFICATION.test(block) || block.includes('<status>') || block.includes('<result>')) return undefined
+  for (const tag of ['<task-notification>', '</task-notification>', '<task-id>', '<summary>']) {
+    if (!once(block, tag)) return undefined
+  }
+  const agentId = field(block, 'task-id')
+  if (agentId === undefined || !isFork(agentId)) return undefined
+  return RESUMED_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
+}
+
 const quietReport = async ($: EngineInterface, text: string, origin: string | undefined): Promise<string | undefined> => {
   if (origin !== 'task-notification' && origin !== 'peer') return undefined
   if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return undefined
   try {
     const list = await read($, board)
+    const resumed = origin === 'task-notification' ? resumedFork(text, agentId => list.some(entry => entry.agentId === agentId)) : undefined
+    if (resumed !== undefined) return `${keyName(resumed)} resumed`
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     return filed === undefined ? undefined : `${keyName(filed.entry.name)}: ${filed.entry.headline}`
   } catch {

@@ -192,6 +192,18 @@ test('a fork notification or hand-back is filed on the board and never starts a 
   expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
 })
 
+test('a resumed fork never reaches the switchboard model, a stranger resumed still does', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  const resumed = (agentId: string, name: string) =>
+    `<task-notification>\n<task-id>${agentId}</task-id>\n<summary>Agent "${name}" was resumed by the user</summary>\n<note>The user resumed this agent from its transcript view; it is running again.</note>\n</task-notification>`
+  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'task-notification')).drop).toBe('quiet-fork resumed')
+  const stranger = resumed('z9', 'stranger: not a fork')
+  expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
+  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'composer')).drop).toBeUndefined()
+})
+
 test('notifications of other background tasks and plain agent messages pass unchanged', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
