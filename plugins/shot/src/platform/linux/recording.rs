@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitCode, Stdio};
@@ -24,6 +25,8 @@ const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(3);
 const HELPER_POLL_INTERVAL: Duration = Duration::from_millis(40);
 const NVFBC_HELPER_ENV: &str = "QOL_SHOT_NVFBC_CAPTURE_REQUEST";
 const NVFBC_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const NVFBC_FRAME_QUEUE: u32 = 16;
+const NVFBC_PIPE_BYTES: libc::c_int = 1 << 20;
 static CINNAMON_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 const CINNAMON_VP8_THREADS: u32 = 4;
 const NVENC_ELEMENT: &str = "nvh264enc";
@@ -444,7 +447,7 @@ fn nvfbc_ffmpeg_args(
 ) -> Vec<String> {
     let input = vec![
         "-thread_queue_size".to_string(),
-        "512".to_string(),
+        NVFBC_FRAME_QUEUE.to_string(),
         "-use_wallclock_as_timestamps".to_string(),
         "1".to_string(),
         "-f".to_string(),
@@ -469,7 +472,7 @@ fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
         serde_json::from_str(request_json).context("invalid NvFBC capture request")?;
     let stop = qol_process::CancellationToken::install()
         .context("failed to listen for the recording stop request")?;
-    let mut capture = super::nvfbc::Capture::open(&request.rect)?;
+    let mut capture = super::nvfbc::Capture::open(&request.rect, request.framerate)?;
     qol_runtime::probe!(
         "SHOT_RECORD_HELPER",
         "backend=nvfbc step=open output={}",
@@ -494,6 +497,7 @@ fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
         .stdin
         .take()
         .ok_or_else(|| anyhow!("ffmpeg has no frame input"))?;
+    widen_frame_pipe(&stdin);
     let pumped = pump_nvfbc_frames(&mut capture, stdin, request.framerate, &stop);
     drop(capture);
     let finished = finish_nvfbc_ffmpeg(&mut ffmpeg);
@@ -503,6 +507,17 @@ fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
         "backend=nvfbc step=exit frames={frames}"
     );
     finished
+}
+
+fn widen_frame_pipe(stdin: &std::process::ChildStdin) {
+    // SAFETY: the descriptor belongs to the live ChildStdin and F_SETPIPE_SZ only resizes its pipe.
+    let size = unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_SETPIPE_SZ, NVFBC_PIPE_BYTES) };
+    if size == -1 {
+        log::warn!(
+            "kept the default frame pipe size: {}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 fn pump_nvfbc_frames(
@@ -1386,6 +1401,7 @@ mod tests {
             ["-video_size", "2560x1440"],
             ["-framerate", "60"],
             ["-i", "pipe:0"],
+            ["-thread_queue_size", "16"],
             ["-use_wallclock_as_timestamps", "1"],
             ["-f", "pulse"],
             ["-c:v", "h264_nvenc"],

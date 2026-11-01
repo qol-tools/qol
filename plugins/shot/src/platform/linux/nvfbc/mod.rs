@@ -6,6 +6,7 @@ use crate::Rect;
 mod ffi;
 
 const LIBRARY: &CStr = c"libnvidia-fbc.so.1";
+const MILLIS_PER_SECOND: u32 = 1000;
 const GEFORCE_UNLOCK_KEY: [u8; 16] = [
     0xac, 0x10, 0xc9, 0x2e, 0xa5, 0xe6, 0x87, 0x4f, 0x8f, 0x4b, 0xf4, 0x61, 0xf8, 0x56, 0x27, 0xe9,
 ];
@@ -94,6 +95,10 @@ fn symbol(library: *mut c_void, name: &CStr) -> Result<*mut c_void> {
     Ok(address)
 }
 
+fn sampling_interval_ms(framerate: u32) -> u32 {
+    (MILLIS_PER_SECOND / framerate.max(1)).max(1)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Tracking {
     kind: u32,
@@ -149,7 +154,7 @@ pub(super) struct Capture {
 }
 
 impl Capture {
-    pub(super) fn open(rect: &Rect) -> Result<Self> {
+    pub(super) fn open(rect: &Rect, framerate: u32) -> Result<Self> {
         let api = Api::load()?;
         let mut capture = Self {
             api,
@@ -181,6 +186,7 @@ impl Capture {
             tracking.kind,
             tracking.output_id,
             tracking.capture_box,
+            sampling_interval_ms(framerate),
         );
         // SAFETY: the handle is live and session is a correctly versioned NvFBC 1.7 struct.
         capture
@@ -256,7 +262,7 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
-    use super::{ffi, tracking_for, Tracking};
+    use super::{ffi, sampling_interval_ms, tracking_for, Tracking};
     use crate::Rect;
 
     fn nv_box(x: u32, y: u32, w: u32, h: u32) -> ffi::NvBox {
@@ -312,6 +318,26 @@ mod tests {
         ];
         for (rect, expected) in cases {
             assert_eq!(tracking_for(&rect, &outputs).unwrap(), expected, "{rect:?}");
+        }
+    }
+
+    #[test]
+    fn sampling_refreshes_at_least_once_per_grab() {
+        let cases = [
+            (1, 1000),
+            (30, 33),
+            (60, 16),
+            (120, 8),
+            (144, 6),
+            (240, 4),
+            (0, 1000),
+        ];
+        for (framerate, expected) in cases {
+            let interval = sampling_interval_ms(framerate);
+            assert_eq!(interval, expected, "{framerate} fps");
+            if framerate > 0 {
+                assert!(interval * framerate <= 1000, "{framerate} fps");
+            }
         }
     }
 
