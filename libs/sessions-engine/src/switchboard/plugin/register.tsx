@@ -200,19 +200,24 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
   return index === -1 ? [...list, next] : [...list.slice(0, index), ...list.slice(index + 1), next]
 }
 
-export const mergeBoards = (earlier: readonly Entry[], own: readonly Entry[]): Entry[] => {
-  const owned = new Set(own.map(entry => entry.agentId))
+const isEntry = (entry: unknown): entry is Entry =>
+  typeof entry === 'object' && entry !== null && typeof (entry as { agentId?: unknown }).agentId === 'string' && typeof (entry as { name?: unknown }).name === 'string'
+
+export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]): Entry[] => {
+  const kept = own.filter(isEntry)
+  const owned = new Set(kept.map(entry => entry.agentId))
   const seen = new Set<string>()
-  const carried = [...earlier]
-    .sort((a, b) => b.at - a.at)
+  const carried = earlier
+    .filter(isEntry)
+    .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0))
     .filter(entry => {
-      if (typeof entry?.agentId !== 'string' || owned.has(entry.agentId) || seen.has(entry.agentId)) return false
+      if (owned.has(entry.agentId) || seen.has(entry.agentId)) return false
       seen.add(entry.agentId)
       return true
     })
     .map(entry => ({ ...entry, isWorking: false }))
     .reverse()
-  return [...carried, ...own].slice(-KEEP)
+  return [...carried, ...kept].slice(-KEEP)
 }
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string): Promise<void> => {
@@ -293,9 +298,22 @@ export const adoptFork = async ($: EngineInterface, fork: string, isFresh: boole
   }
 }
 
+const bringing = new Map<string, Promise<unknown>>()
+
 const bringBack = async ($: EngineInterface, agentId: string): Promise<void> => {
+  const running = bringing.get(agentId)
+  if (running !== undefined) {
+    await running
+    return
+  }
   if ((await subagentFile($, agentId, '.jsonl').catch(() => undefined)) !== undefined) return
-  await adoptFork($, agentId, false).catch(() => undefined)
+  const started = bringing.get(agentId) ?? adoptFork($, agentId, false).catch(() => undefined)
+  bringing.set(agentId, started)
+  try {
+    await started
+  } finally {
+    if (bringing.get(agentId) === started) bringing.delete(agentId)
+  }
 }
 
 const revivals = new Map<string, Promise<Adopted | undefined>>()
@@ -672,12 +690,12 @@ export const register: Register = on => {
       const others = (await $.store.keys()).filter(key => key.startsWith(STORE_PREFIX) && key !== STORE_PREFIX + id)
       const live = await read($, board)
       const saved = live.length === 0 ? await $.store.get(STORE_PREFIX + id) : live
-      const earlier: Entry[] = []
+      const earlier: unknown[] = []
       for (const key of others) {
         const rows = await $.store.get(key)
-        if (Array.isArray(rows)) earlier.push(...(rows as Entry[]))
+        if (Array.isArray(rows)) earlier.push(...rows)
       }
-      const merged = mergeBoards(earlier, Array.isArray(saved) ? (saved as Entry[]) : [])
+      const merged = mergeBoards(earlier, Array.isArray(saved) ? saved : [])
       if (merged.length > 0) await update($, board, () => merged)
       if (others.length > 0) await persist($)
       for (const key of others) await $.store.delete(key)

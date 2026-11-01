@@ -152,12 +152,15 @@ fn resumable_meta(meta: &serde_json::Map<String, Value>) -> Value {
 }
 
 fn copy_transcript(source: &Path, destination: &Path, from: &str, to: &str) -> Result<()> {
-    let partial = destination.with_extension(format!("jsonl{PARTIAL_SUFFIX}"));
+    let partial = destination.with_extension(format!(
+        "jsonl.{}{PARTIAL_SUFFIX}",
+        fresh_id(&destination.to_string_lossy())
+    ));
     let reader = BufReader::new(
         fs::File::open(source).with_context(|| format!("failed to open {}", source.display()))?,
     );
     let mut writer = BufWriter::new(
-        fs::File::create(&partial)
+        fs::File::create_new(&partial)
             .with_context(|| format!("failed to create {}", partial.display()))?,
     );
     for line in reader.split(b'\n') {
@@ -181,8 +184,10 @@ fn copy_transcript(source: &Path, destination: &Path, from: &str, to: &str) -> R
     }
     writer.flush()?;
     drop(writer);
-    fs::rename(&partial, destination)
-        .with_context(|| format!("failed to place {}", destination.display()))
+    fs::rename(&partial, destination).with_context(|| {
+        let _ = fs::remove_file(&partial);
+        format!("failed to place {}", destination.display())
+    })
 }
 
 fn bring(found: &Candidate, subagents: &Path, agent_id: &str) -> Result<()> {
@@ -190,13 +195,9 @@ fn bring(found: &Candidate, subagents: &Path, agent_id: &str) -> Result<()> {
         .with_context(|| format!("failed to create {}", subagents.display()))?;
     let transcript = subagents.join(format!("{AGENT_PREFIX}{agent_id}{TRANSCRIPT_SUFFIX}"));
     let meta = subagents.join(format!("{AGENT_PREFIX}{agent_id}{META_SUFFIX}"));
+    copy_transcript(&found.transcript, &transcript, &found.agent_id, agent_id)?;
     qol_fs::atomic_write(&meta, resumable_meta(&found.meta).to_string().as_bytes())
-        .with_context(|| format!("failed to write {}", meta.display()))?;
-    if fs::symlink_metadata(&transcript).is_ok() {
-        fs::remove_file(&transcript)
-            .with_context(|| format!("failed to replace {}", transcript.display()))?;
-    }
-    copy_transcript(&found.transcript, &transcript, &found.agent_id, agent_id)
+        .with_context(|| format!("failed to write {}", meta.display()))
 }
 
 pub(super) fn fresh_id(seed: &str) -> String {
@@ -428,7 +429,17 @@ mod tests {
             subagents.join("agent-a1.jsonl").exists(),
             "the stopped fork keeps its own conversation"
         );
-        assert!(!subagents.join("agent-a2.jsonl.partial").exists());
+        let partials = fs::read_dir(&subagents)
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(PARTIAL_SUFFIX)
+            })
+            .count();
+        assert_eq!(partials, 0);
     }
 
     #[test]

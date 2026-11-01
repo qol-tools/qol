@@ -442,7 +442,8 @@ test('a fork of an earlier board or conversation is brought back by agent id or 
   const reached: string[] = []
   const old = (agentId: string, name: string, isWorking = false) => ({ agentId, name, kind: 'note', headline: 'stopped', report: '', at: 1, isWorking, isDismissed: false })
   store.set('board:switchboard-session', [old('b1', 'old-fork: old'), old('b2', 'lost-fork: lost')])
-  store.set('board:earlier-session', [old('o1', 'older-fork: older', true), old('b1', 'stale: stale')])
+  store.set('board:earlier-session', [old('o1', 'older-fork: older', true), old('b1', 'stale: stale'), null, 'junk'])
+  store.set('board:broken-session', [{ agentId: 7 }])
   engine(on, [], [], [], store)
   adoptEngine(on, { b1: { name: 'old-fork: old', cwd: '/media/old' }, o1: { name: 'older-fork: older' }, k1: { name: 'kcd2-modding: aim the rifle', cwd: '/work/kcd2' } }, runs)
   const answer = stoppedAnswer(['b1', 'b2'])
