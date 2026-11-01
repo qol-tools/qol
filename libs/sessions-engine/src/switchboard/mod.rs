@@ -130,6 +130,7 @@ pub(super) struct LaunchPlan {
     config_home: PathBuf,
     fork: agents::ForkAgent,
     resume: Option<String>,
+    wake: Option<resume::Wake>,
     watches: Option<PathBuf>,
 }
 
@@ -147,6 +148,7 @@ impl LaunchPlan {
             path: None,
             fork: agents::ForkAgent::default(),
             resume: None,
+            wake: None,
             watches: None,
         }
     }
@@ -157,11 +159,25 @@ impl LaunchPlan {
         let config_home = config_dir.clone().unwrap_or_else(paths::claude_home);
         let resume = resume::latest_conversation(&config_home, &cwd, ROLE_REVISION_PREFIX);
         let watches = crate::fork_watch::WatchStore::system().ok();
+        let watched = |agent_id: &str| {
+            watches
+                .as_ref()
+                .is_some_and(|store| store.is_pending_for(agent_id))
+        };
+        let wake_path = cwd.join(resume::WAKE_FILE);
+        let launched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let wake = resume.as_deref().map(|conversation| {
+            let previous = resume::Wake::previous_launch(&wake_path, conversation);
+            let forks =
+                resume::sleeping_forks(&config_home, &cwd, conversation, previous.as_deref());
+            resume::Wake::of(conversation, launched_at, forks, watched)
+        });
         Ok(Self {
             fork: agents::ForkAgent::system(),
             config_dir,
             config_home,
             resume,
+            wake,
             watches: watches.map(|store| store.dir().to_path_buf()),
             model: profile.model.clone(),
             effort: profile.effort.clone(),
@@ -272,6 +288,7 @@ fn login_shell_path() -> Option<String> {
 
 const CONVERSATIONS_ENV: &str = "QOL_SWITCHBOARD_CONVERSATIONS";
 const CLI_SESSIONS_ENV: &str = "QOL_CLI_SESSIONS";
+const WAKE_ENV: &str = "QOL_SWITCHBOARD_WAKE";
 const WATCHES_ENV: &str = "QOL_SWITCHBOARD_WATCHES";
 
 fn claude_env(plan: &LaunchPlan) -> Vec<(String, String)> {
@@ -283,6 +300,7 @@ fn claude_env(plan: &LaunchPlan) -> Vec<(String, String)> {
         .chain([
             (CONVERSATIONS_ENV.to_owned(), text(&conversations)),
             (CLI_SESSIONS_ENV.to_owned(), text(&plan.mcp_program)),
+            (WAKE_ENV.to_owned(), text(&plan.cwd.join(resume::WAKE_FILE))),
         ])
         .chain(
             plan.watches
@@ -511,6 +529,13 @@ fn prepare(plan: &LaunchPlan) -> Result<()> {
             crate::cli::warn(format!(
                 "failed to remove the retired fork pins in {}: {error}",
                 sessions.display()
+            ));
+        }
+    }
+    if let Some(wake) = &plan.wake {
+        if let Err(error) = wake.write(&plan.cwd.join(resume::WAKE_FILE)) {
+            crate::cli::warn(format!(
+                "the forks the restart stopped will not continue on their own: {error:#}"
             ));
         }
     }
@@ -762,7 +787,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
 }
 
 pub(super) fn help() -> String {
-    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch, the fork board's fork_board tool and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message. Opened from a terminal, it runs in that terminal's Claude account (CLAUDE_CONFIG_DIR) and remembers it, so opening it from the tray or the launcher, which have no account of their own, uses the same account and its login.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. The {} plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder; a fork it did not start there says so in its report. It also files each fork's final report on the fork board: forks that need you, with a question, something to try by hand or a failure, on top with the fork's recommended answer, then forks still working, forks waiting on a pull request, and finished ones folded. Typing `qols board` or {} opens and closes it. Claude Code's fullscreen layout opens it on its own as a pane docked beside the chat once the terminal is 144 columns wide; on the main screen it opens above the prompt only when you run {}. The pane takes the keys after ctrl+x tab: then a digit opens that fork's view, y sends the top question its recommended answer, d shows the finished forks, c clears them, x closes the board and Esc hands the keys back to the prompt. ctrl+x x or the pane's close mark closes it from the prompt, a board you closed stays closed when the switchboard starts again until {} opens it, and the status line says how many forks need you. A fork's report opens with one plain sentence, such as `Pull request #412 merged, so the agent list has its colors.`, and the switchboard model reads only that sentence, so a long report never fills the chat; Haiku reads each report to sort it under needs you, waiting on a pull request or done, and to find the answer a question recommends. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its key-name, such as session-lookup-bug, then its model and effort, since the status line shows only the switchboard's, then its friendly description and what it is doing, and says idle once its turn has ended. A fork that waits on you, with a question, a draft or Ready, keeps a background hold (`sleep infinity`, which costs nothing) so it stays in that list; one with nothing left leaves the list 30 seconds after its last turn, because Claude Code drops an idle subagent with no background work, and the switchboard still resumes it with SendMessage when you ask. Esc in a fork's view stops that fork, so leave it by selecting the main thread.\n\nForks message each other with SendMessage when their work overlaps, and a fork starts, resumes and continues forks itself, just as the switchboard does. A closed session you ask it to bring back continues as a fork that reads the closed conversation's transcript, so no tab opens; session_reopen resumes it in a tab of its own only when its sessions_closed row has no transcript, as for another tool's conversation, or when you ask for a terminal or for Remote Control on it. A new or empty session is a fork too, and session_fork opens a terminal only when you ask for one or for another tool. Terminal sessions that still run are listed, closed and messaged with the sessions tools, and your words go to them as yours with session_send as_user true unless you ask it to report back.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation, also after an update that changed the switchboard instructions, so your chat and its forks stay, and the restart spends no turn of the switchboard's or of any fork's: every fork stays idle until you send it a message or its pull request watcher finishes. A restart ends the forks' holds, so a fork shows in the agent list again once one of those resumes it. A fork's pull request watcher runs under CLI Sessions (`qol-cli-sessions fork-watch`), so closing the switchboard stops none: a result that comes while the switchboard is closed waits, CLI Sessions shows a notification that opens the switchboard, and the plugin gives the fork its result. The board shows each fork's pull request as open with CLI Sessions watching, open with no watcher, or merged with its merge commit. A fork the restart stopped, or one you stopped yourself, stays stopped until a message is sent to it: a message the switchboard sends to a stopped fork, with SendMessage or the board's y, starts a new fork that reads the stopped fork's conversation and acts on the message, and the board lists the new fork under the old key-name. A message to a terminal session that has closed reopens it in a new tab when CLI Sessions parked it and lets it reopen, and otherwise the switchboard continues it as a fork with your words. A resumed conversation keeps the system prompt it started with, so after an update that changed the switchboard instructions a hook hands it the current ones when it resumes, and again after a compaction, without spending a turn. A watcher result for a fork of an older switchboard conversation goes to a new fork that reads its transcript. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "), plugin::NAME, plugin::BOARD_COMMAND, plugin::BOARD_COMMAND, plugin::BOARD_COMMAND)
+    format!("qol sessions switchboard [--here] [--model MODEL] [--effort LEVEL] [--surface tab|os-window]\n\nOpen the switchboard: your one control chat for your work. It is a claude session keyed and titled `{SWITCHBOARD_KEY}`, and its own tools are the Agent tool for forks, SendMessage, TaskStop, ToolSearch, the fork board's fork_board tool and the sessions MCP tools ({}) served by `{CLI_SESSIONS_BINARY} mcp --profile {MCP_PROFILE}`. Your hooks, status line, plugins and MCP servers load as in any other claude session, so `qols` commands work in it and forks get them too. It starts in its own folder under the sessions data directory, so you type its first message. Opened from a terminal, it runs in that terminal's Claude account (CLAUDE_CONFIG_DIR) and remembers it, so opening it from the tray or the launcher, which have no account of their own, uses the same account and its login.\n\nNew work runs as a fork: a Claude Code subagent inside this one chat, so ten forks cost far less memory than ten terminals and no tab opens per fork. The switchboard starts a fork with a project folder, and the fork works in that project, reads its instructions and memory, and delivers its own pull request with auto-merge armed. The {} plugin, which the switchboard writes to the `plugin` folder in its own folder and loads with --plugin-dir, starts each fork in its project folder; a fork it did not start there says so in its report. It also files each fork's final report on the fork board: forks that need you, with a question, something to try by hand or a failure, on top with the fork's recommended answer, then forks still working, forks waiting on a pull request, and finished ones folded. Typing `qols board` or {} opens and closes it. Claude Code's fullscreen layout opens it on its own as a pane docked beside the chat once the terminal is 144 columns wide; on the main screen it opens above the prompt only when you run {}. The pane takes the keys after ctrl+x tab: then a digit opens that fork's view, y sends the top question its recommended answer, d shows the finished forks, c clears them, x closes the board and Esc hands the keys back to the prompt. ctrl+x x or the pane's close mark closes it from the prompt, a board you closed stays closed when the switchboard starts again until {} opens it, and the status line says how many forks need you. A fork's report opens with one plain sentence, such as `Pull request #412 merged, so the agent list has its colors.`, and the switchboard model reads only that sentence, so a long report never fills the chat; Haiku reads each report to sort it under needs you, waiting on a pull request or done, and to find the answer a question recommends. To talk to a fork, select it in the agent list under the prompt and type; its row there shows its key-name, such as session-lookup-bug, then its model and effort, since the status line shows only the switchboard's, then its friendly description and what it is doing, and says idle once its turn has ended. A fork that waits on you, with a question, a draft or Ready, keeps a background hold (`sleep infinity`, which costs nothing) so it stays in that list; one with nothing left leaves the list 30 seconds after its last turn, because Claude Code drops an idle subagent with no background work, and the switchboard still resumes it with SendMessage when you ask. Esc in a fork's view stops that fork, so leave it by selecting the main thread.\n\nForks message each other with SendMessage when their work overlaps, and a fork starts, resumes and continues forks itself, just as the switchboard does. A closed session you ask it to bring back continues as a fork that reads the closed conversation's transcript, so no tab opens; session_reopen resumes it in a tab of its own only when its sessions_closed row has no transcript, as for another tool's conversation, or when you ask for a terminal or for Remote Control on it. A new or empty session is a fork too, and session_fork opens a terminal only when you ask for one or for another tool. Terminal sessions that still run are listed, closed and messaged with the sessions tools, and your words go to them as yours with session_send as_user true unless you ask it to report back.\n\nOne switchboard runs per machine: a live one is focused instead of opening another, a new one opens as a tab in the kitty window used last and is focused, and with no kitty running a new kitty is started for it. A new one resumes the newest switchboard conversation, also after an update that changed the switchboard instructions, so your chat and its forks stay, without spending a turn of its own. It brings back every fork that was working or waiting when the last switchboard ended, including those Claude Code marked stopped when it exited: the qol-switchboard plugin tells a fork that was mid-turn to continue, one whose background command stopped to start it again, and one that waited on you or on a pull request to start its hold again, so it is back in the agent list. That costs each of those forks one short turn, which the fork board does not file, so its last report stays. A fork's pull request watcher runs under CLI Sessions (`qol-cli-sessions fork-watch`), so closing the switchboard stops none: a result that comes while the switchboard is closed waits, CLI Sessions shows a notification that opens the switchboard, and the plugin gives the fork its result. The board shows each fork's pull request as open with CLI Sessions watching, open with no watcher, or merged with its merge commit. A fork you stopped yourself stays stopped until a message is sent to it: a message the switchboard sends to a stopped fork, with SendMessage or the board's y, starts a new fork that reads the stopped fork's conversation and acts on the message, and the board lists the new fork under the old key-name. A message to a terminal session that has closed reopens it in a new tab when CLI Sessions parked it and lets it reopen, and otherwise the switchboard continues it as a fork with your words. A resumed conversation keeps the system prompt it started with, so after an update that changed the switchboard instructions a hook hands it the current ones when it resumes, and again after a compaction, without spending a turn. A watcher result for a fork of an older switchboard conversation goes to a new fork that reads its transcript. The session tools never park, close or submit to the switchboard.\n--here makes this kitty window the switchboard when none is live; when one is, it starts nothing and exits non-zero.\n--model defaults to {DEFAULT_MODEL}.\n--effort defaults to {DEFAULT_EFFORT}.\n--surface defaults to tab; os-window opens it in a window of its own.", SWITCHBOARD_TOOLS.join(", "), plugin::NAME, plugin::BOARD_COMMAND, plugin::BOARD_COMMAND, plugin::BOARD_COMMAND)
 }
 
 pub(super) fn parse_args(args: &[OsString]) -> Result<SwitchboardArgs> {
@@ -815,6 +840,7 @@ mod tests {
             config_home: PathBuf::from("/home/u/.claude"),
             fork: agents::ForkAgent::default(),
             resume: None,
+            wake: None,
             watches: None,
         }
     }
@@ -914,6 +940,12 @@ mod tests {
     fn a_resumed_switchboard_passes_the_conversation_id_and_no_first_prompt() {
         let resumed = LaunchPlan {
             resume: Some("conv-1".to_owned()),
+            wake: Some(resume::Wake {
+                conversation: "conv-1".to_owned(),
+                launched_at: "2026-11-01T10:00:00.000Z".to_owned(),
+                forks: Vec::new(),
+                claimed: false,
+            }),
             ..plan(&[])
         };
         let args = profile_args(&resumed);
@@ -962,6 +994,13 @@ mod tests {
             CLI_SESSIONS_ENV.to_owned(),
             "/plugins/qol-cli-sessions/qol-cli-sessions".to_owned(),
         );
+        let wake = (
+            WAKE_ENV.to_owned(),
+            PathBuf::from("/data/sessions/switchboard")
+                .join(resume::WAKE_FILE)
+                .to_string_lossy()
+                .into_owned(),
+        );
         let with_path = LaunchPlan {
             path: Some("/home/u/.nvm/bin:/usr/bin".to_owned()),
             watches: Some(PathBuf::from("/data/sessions/fork-watches")),
@@ -973,13 +1012,14 @@ mod tests {
                 ("PATH".to_owned(), "/home/u/.nvm/bin:/usr/bin".to_owned()),
                 conversations.clone(),
                 program.clone(),
+                wake.clone(),
                 (
                     WATCHES_ENV.to_owned(),
                     "/data/sessions/fork-watches".to_owned()
                 ),
             ]
         );
-        assert_eq!(claude_env(&plan(&[])), [conversations, program]);
+        assert_eq!(claude_env(&plan(&[])), [conversations, program, wake]);
     }
 
     #[test]
@@ -1118,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn the_help_describes_forks_as_subagents_and_a_resume_without_turns() {
+    fn the_help_describes_forks_as_subagents_and_the_resume_with_wake() {
         let text = help();
         assert!(
             text.contains("a Claude Code subagent inside this one chat"),
@@ -1154,11 +1194,11 @@ mod tests {
             "{text}"
         );
         for needle in [
-            "the restart spends no turn of the switchboard's or of any fork's",
-            "every fork stays idle until you send it a message or its pull request watcher finishes",
+            "including those Claude Code marked stopped when it exited",
+            "without spending a turn of its own",
             "`qol-cli-sessions fork-watch`), so closing the switchboard stops none",
             "open with no watcher, or merged with its merge commit",
-            "A fork the restart stopped, or one you stopped yourself, stays stopped until a message is sent to it",
+            "A fork you stopped yourself stays stopped until a message is sent to it",
             "starts a new fork that reads the stopped fork's conversation and acts on the message",
             "otherwise the switchboard continues it as a fork with your words",
             "also after an update that changed the switchboard instructions, so your chat and its forks stay",
@@ -1166,6 +1206,8 @@ mod tests {
             "A watcher result for a fork of an older switchboard conversation goes to a new fork that reads its transcript",
             "Forks message each other with SendMessage when their work overlaps",
             "a fork starts, resumes and continues forks itself, just as the switchboard does",
+            "It brings back every fork that was working or waiting when the last switchboard ended",
+            "which the fork board does not file, so its last report stays",
             "continues as a fork that reads the closed conversation's transcript, so no tab opens",
             "session_fork opens a terminal only when you ask for one or for another tool",
         ] {
