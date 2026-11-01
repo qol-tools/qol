@@ -85,8 +85,11 @@ impl State {
 }
 
 pub(super) fn verify_binary(path: &Path, binary: &str) -> Result<()> {
-    let artifact = qol_artifact::inspect_path(path)
-        .map_err(|error| anyhow::anyhow!("{} is not a qol build: {error:?}", path.display()))?;
+    let artifact = match qol_artifact::inspect_path(path) {
+        Ok(artifact) => artifact,
+        Err(qol_artifact::InspectionError::MissingIdentity) => return Ok(()),
+        Err(error) => bail!("{} is not an executable: {error}", path.display()),
+    };
     let built = artifact.slices.iter().any(|slice| {
         slice.identity.binary == binary && slice.identity.intent == BuildIntent::Production
     });
@@ -334,5 +337,11 @@ mod tests {
     fn verify_binary_refuses_a_file_that_is_not_a_build() {
         let fixture = fixture();
         assert!(verify_binary(&fixture.source, "qol-demo").is_err());
+    }
+
+    #[test]
+    fn verify_binary_accepts_an_executable_that_declares_no_identity() {
+        let test_binary = std::env::current_exe().unwrap();
+        verify_binary(&test_binary, "qol-demo").unwrap();
     }
 }
