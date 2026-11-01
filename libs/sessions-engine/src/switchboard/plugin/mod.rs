@@ -88,7 +88,9 @@ mod tests {
             "const FORK = 'project-fork'",
             "on('agent.spawn', { subagentType: FORK }, ($, e, next) => {",
             "if (e.resume !== undefined) return next(e)",
-            "next({ ...e, cwd: project[1] })",
+            "next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })",
+            "on('session.send', async ($, e, next) => {",
+            "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
             "next.called ? next(e) : { deny:",
             "const PROJECT = /^\\s*Project:\\s*(.+?)\\s*$/",
         ] {
