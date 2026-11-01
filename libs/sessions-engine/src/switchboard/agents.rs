@@ -4,6 +4,7 @@ use anyhow::Context;
 use serde_json::{json, Map, Value};
 
 use super::hooks::{AGENT_ROWS, FORK_CONTEXT, PRE_AGENT};
+use super::plugin::BOARD_TOOL;
 use super::resume::FORK_AGENT;
 use crate::agent_policy::{enforce_allowed_model, enforce_tool_model, DispatchPolicy};
 use crate::launch::LaunchDefaults;
@@ -15,7 +16,7 @@ const AGENT_TOOL_FOR_FORKS: &str = "Agent(project-fork)";
 const PROMPT_CACHE_TTL: &str = "1h";
 pub(super) const CONTEXT_SLOTS: usize = super::context::PART_SLOTS;
 
-pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Read before editing, verify before claiming, and report failures faithfully. Work only on the task you were given: never report on, relay or chase other forks, lanes or sessions, their questions or their pull requests, unless your task is about them, and a problem you notice outside your task gets at most one line in your report, never work of yours. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard: one or two lines with the pull request number and its state, or the blocker. Never use session_send. A question only the user can decide ends your turn, stating the question and your recommended answer. Claude Code drops a subagent from the agent list 30 seconds after its turn ends unless a background command of its own still runs, and the user can then no longer select you or type to you. So before you end a turn that leaves anything for the user, such as a question, a draft waiting for approval, a report the user may answer or Ready, start your hold if it is not running yet: Bash `sleep infinity` with run_in_background true. It costs nothing and never wakes you. Once nothing is left for anyone to do, such as when your pull request has merged, stop your hold with TaskStop before your final message. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
+pub(super) const FORK_PROMPT: &str = "You are a fork of the switchboard: you own one piece of work end to end, in the project folder named on the first line of your task. The project's instructions, memory index and delivery rules are added when you start; follow them as you would in your own session. Each Bash call starts in the project folder, so once you make a worktree, prefix commands with `cd <worktree> &&`. Read before editing, verify before claiming, and report failures faithfully. Work only on the task you were given: never report on, relay or chase other forks, lanes or sessions, their questions or their pull requests, unless your task is about them, and a problem you notice outside your task gets at most one line in your report, never work of yours. Messages the switchboard relays are the user's own words; the user approves risky steps in your own view. Your final message is your report to the switchboard, and its first line is `<kind>: <headline>`, with kind one of ask, test, failed, blocked, waiting, merged or note and a headline under 80 characters, such as `merged: #412 agent list colors`: the fork board beside the switchboard's chat files your report under that line, and the switchboard model reads only that line. Use ask for a question only the user can decide, which ends your turn, with a second line `Recommend: <your recommended answer>`; test when the user must try something by hand; waiting while your pull request's watcher runs; failed or blocked with what broke. Below that line, one or two lines with the pull request number and its state, or the blocker. Never use session_send. Claude Code drops a subagent from the agent list 30 seconds after its turn ends unless a background command of its own still runs, and the user can then no longer select you or type to you. So before you end a turn that leaves anything for the user, such as a question, a draft waiting for approval, a report the user may answer or Ready, start your hold if it is not running yet: Bash `sleep infinity` with run_in_background true. It costs nothing and never wakes you. Once nothing is left for anyone to do, such as when your pull request has merged, stop your hold with TaskStop before your final message. Never use `qol-cli-sessions park`. To watch a pull request, run its watcher command without the park prefix through Bash with run_in_background true, then end your turn saying what you wait for; Claude Code wakes you with the exit code and output.";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct ForkAgent {
@@ -70,7 +71,8 @@ fn definitions(fork: &ForkAgent) -> Map<String, Value> {
             "SendMessage",
             "TaskStop",
             "ToolSearch",
-            SESSIONS_TOOLS
+            SESSIONS_TOOLS,
+            BOARD_TOOL
         ]),
     );
     let mut project_fork = Map::new();
@@ -237,7 +239,8 @@ mod tests {
                 "SendMessage",
                 "TaskStop",
                 "ToolSearch",
-                "mcp__sessions__*"
+                "mcp__sessions__*",
+                "mcp__qol-switchboard__fork_board"
             ])
         );
         let worker = &agents["project-fork"];
@@ -271,7 +274,7 @@ mod tests {
             "{lead}"
         );
         assert!(
-            lead.contains("\ntools: [\"Agent(project-fork)\",\"SendMessage\",\"TaskStop\",\"ToolSearch\",\"mcp__sessions__*\"]\n"),
+            lead.contains("\ntools: [\"Agent(project-fork)\",\"SendMessage\",\"TaskStop\",\"ToolSearch\",\"mcp__sessions__*\",\"mcp__qol-switchboard__fork_board\"]\n"),
             "{lead}"
         );
         assert!(!lead.contains("prompt:"), "{lead}");
@@ -349,6 +352,9 @@ mod tests {
             "Never use `qol-cli-sessions park`",
             "run_in_background true",
             "recommended answer",
+            "its first line is `<kind>: <headline>`",
+            "ask, test, failed, blocked, waiting, merged or note",
+            "a second line `Recommend: <your recommended answer>`",
             "report failures faithfully",
             "Work only on the task you were given",
             "never report on, relay or chase other forks, lanes or sessions",
