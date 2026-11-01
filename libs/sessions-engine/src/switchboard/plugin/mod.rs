@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Starts each switchboard fork in its project folder and files each fork's final report on the fork board beside the chat.",
   "types": "./types/index.d.ts"
 }
@@ -128,6 +128,8 @@ mod tests {
             "if (agentId === undefined || !isFork(agentId)) return undefined",
             "Send \"{entry.recommend}\" to {keyName(entry.name)}?",
             "const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']",
+            "const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`",
+            "headline: headlineOf(report)",
             "model: 'haiku'",
             "on('ui.render', { component: 'Pane', requestId: PANE }",
             "$.ui.view({ agentId: entry.agentId })",
@@ -145,6 +147,9 @@ mod tests {
         let command = BOARD_COMMAND.strip_prefix('/').unwrap();
         assert!(MODULE.contains(&format!("const PANE = '{command}'")));
         assert!(MODULE_TESTS.contains(BOARD_TOOL));
+        for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
+            assert!(!MODULE.contains(retired), "{retired}");
+        }
     }
 
     #[test]

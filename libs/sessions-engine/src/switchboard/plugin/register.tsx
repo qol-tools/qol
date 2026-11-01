@@ -20,8 +20,7 @@ const MINUTE = 60_000
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
 const DONE: readonly Kind[] = ['merged', 'note']
-const HEADER = new RegExp(`^[\\s*_\`#>-]*(${KINDS.join('|')})[*_\`]*\\s*:[*_\`]*\\s*(.+?)[\\s*_\`]*$`, 'i')
-const RECOMMEND = /^[\s*_`>-]*Recommend(?:ed)?(?: answer)?[*_`]*\s*:[*_`]*\s*(.+?)[\s*_`]*$/im
+const MARKUP = /^[\s*_`#>-]+|[\s*_`]+$/g
 const HANDBACK = /^(Another Claude session sent a message:\n<agent-message from="([A-Za-z0-9_-]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)((?:(?: {2}[^\n]*)?\n)*?)(<\/agent-message>\n)/
 const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
 const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
@@ -41,16 +40,17 @@ const COLOR: Record<Kind, string> = {
   merged: 'success',
   note: 'inactive',
 }
-const HAIKU_SYSTEM = `You file a coding agent's final report on a board. Answer with one line \`<kind>: <headline>\` and nothing else, where kind is one of ${KINDS.join(', ')} and the headline says in under 80 characters what happened. ask: the report asks the user a question; then add a second line \`Recommend: <the answer the report recommends>\` when it recommends one. test: the user must try something by hand. failed or blocked: something broke or stops the work. waiting: a pull request is open and waits on checks, review or the merge queue. merged: a pull request merged. note: anything else.`
+const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer with one of these words on the first line and nothing else on it: ${KINDS.join(', ')}. ask: the report asks the user a question. test: the user must try something by hand. failed or blocked: something broke or stops the work. waiting: a pull request is open and waits on checks, review or the merge queue. merged: a pull request merged. note: anything else. For ask, when the report recommends an answer to its question, write that answer on the second line, in the words the user would send back; otherwise write nothing more.`
 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 
-type Header = { kind: Kind; headline: string; recommend?: string }
+type Filing = { kind: Kind; headline: string; recommend?: string }
+type Sorting = { kind: Kind; recommend?: string }
 type Report = { agentId: string; name?: string; status: string; report: string }
 
-const pending = new Map<string, Promise<Header>>()
+const pending = new Map<string, Promise<Sorting>>()
 
 const textOf = (content: unknown): string =>
   Array.isArray(content)
@@ -70,16 +70,19 @@ const firstLine = (text: string): string => text.split('\n').find(line => line.t
 
 const clip = (text: string, length: number): string => (text.length > length ? `${text.slice(0, length - 1)}…` : text)
 
-export const parseHeader = (report: string): Header | undefined => {
-  const [, kind, headline] = HEADER.exec(firstLine(report)) ?? []
-  if (kind === undefined || headline === undefined) return undefined
-  const recommend = RECOMMEND.exec(report)?.[1]
-  return { kind: kind.toLowerCase() as Kind, headline, ...(recommend === undefined ? {} : { recommend }) }
+export const headlineOf = (report: string): string => clip(firstLine(report).replace(MARKUP, '') || 'no report', 100)
+
+export const parseSorting = (reply: string): Sorting | undefined => {
+  const [first = '', ...rest] = reply.split('\n').map(line => line.replace(MARKUP, '')).filter(line => line !== '')
+  const kind = KINDS.find(one => one === first.toLowerCase().replace(/[.:]$/, ''))
+  if (kind === undefined) return undefined
+  const recommend = kind === 'ask' ? rest[0] : undefined
+  return { kind, ...(recommend === undefined ? {} : { recommend }) }
 }
 
-const fallback = (report: string): Header => ({ kind: 'note', headline: clip(firstLine(report) || 'no report', 100) })
+const fallback: Sorting = { kind: 'note' }
 
-const summarize = async ($: EngineInterface, report: string): Promise<Header> => {
+const sort = async ($: EngineInterface, report: string): Promise<Sorting> => {
   try {
     const reply = await $.model.complete({
       model: 'haiku',
@@ -88,28 +91,34 @@ const summarize = async ($: EngineInterface, report: string): Promise<Header> =>
       maxTokens: 200,
       timeoutMs: HAIKU_MS,
     })
-    return (reply.isAnswered ? parseHeader(reply.text) : undefined) ?? fallback(report)
+    return (reply.isAnswered ? parseSorting(reply.text) : undefined) ?? fallback
   } catch {
-    return fallback(report)
+    return fallback
   }
 }
 
-const headerOf = ($: EngineInterface, report: string): Promise<Header> => {
-  const parsed = parseHeader(report)
-  if (parsed !== undefined) return Promise.resolve(parsed)
+const sortingOf = ($: EngineInterface, report: string): Promise<Sorting> => {
   const known = pending.get(report)
   if (known !== undefined) return known
-  const asked = summarize($, report).finally(() => {
+  const asked = sort($, report).finally(() => {
     pending.delete(report)
   })
   pending.set(report, asked)
   return asked
 }
 
-const boardLine = (entry: Entry): string =>
-  [`[fork board] ${keyName(entry.name)} · ${entry.kind ?? 'working'} · ${entry.headline}`, entry.recommend === undefined ? undefined : `Recommend: ${entry.recommend}`]
-    .filter(line => line !== undefined)
-    .join('\n')
+const filingOf = async ($: EngineInterface, report: string): Promise<Filing> => ({ ...(await sortingOf($, report)), headline: headlineOf(report) })
+
+const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`
+
+const stateOf = (entry: Entry): string =>
+  entry.isWorking
+    ? 'working'
+    : entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
+      ? 'needs the user'
+      : entry.kind === 'waiting'
+        ? 'waiting on its pull request'
+        : 'done'
 
 const rememberClosed = async ($: EngineInterface): Promise<void> => {
   try {
@@ -266,10 +275,10 @@ const isUndelivered = (answer: { deny?: string; isError?: true; result?: unknown
   isStopped(answer.result)
 
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
-  const header =
+  const filing: Filing =
     report.status === 'completed' || report.report !== ''
-      ? await headerOf($, report.report)
-      : { kind: report.status === 'failed' ? ('failed' as const) : ('note' as const), headline: report.status === 'failed' ? 'the fork failed' : 'stopped' }
+      ? await filingOf($, report.report)
+      : { kind: report.status === 'failed' ? 'failed' : 'note', headline: report.status === 'failed' ? 'The fork failed.' : 'Stopped.' }
   const now = await $.clock.now()
   let filed: Entry | undefined
   let isNew = true
@@ -280,7 +289,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
       filed = {
         agentId: report.agentId,
         name: report.name || entry?.name || report.agentId,
-        ...header,
+        ...filing,
         report: clip(report.report, REPORT_CHARS),
         at: isSame ? entry.at : now,
         isWorking: false,
@@ -291,7 +300,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (isNew && needsYou(entry)) {
-    void $.ui.notify(`${entry.kind}: ${entry.headline}`, { title: keyName(entry.name) }).catch(() => {})
+    void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
 }
@@ -353,7 +362,7 @@ const readText = (list: Entry[], fork: string | undefined): string => {
   const shown = list.filter(entry => !entry.isDismissed)
   if (shown.length === 0) return 'The fork board is empty.'
   return shown
-    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)} · working` : boardLine(entry)} (agent id ${entry.agentId})`)
+    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId})`)
     .join('\n')
 }
 
@@ -398,7 +407,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, kind (ask, test, failed, blocked, waiting, merged, note, or working) and headline. With fork set to a key-name or agent id, that fork's full last report.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
