@@ -1,7 +1,6 @@
 use super::super::diagnosis::FixAction;
 use super::super::framework::{CheckCategory, CheckMeta, CheckReport, DoctorCheck, DoctorContext};
 use super::super::install_id::{active_install_id_path, marker_path_for, read_install_id_file};
-use super::runtime_prereqs;
 use anyhow::{Context as _, Result};
 use qol_conventions::artifact::BuildIntent;
 use std::path::PathBuf;
@@ -32,8 +31,9 @@ struct Context {
 }
 
 fn build_context() -> Result<Context> {
-    let current_exe = runtime_prereqs::current_exe()?;
-    let marker_path = marker_path_for(&current_exe)?;
+    let installed = crate::installer::stand_in::recorded_binary()
+        .context("failed to resolve current executable")?;
+    let marker_path = marker_path_for(&installed)?;
     let active_path = active_install_id_path()?;
     let intent = qol_conventions::artifact::current()
         .map(|identity| identity.intent)
@@ -42,7 +42,7 @@ fn build_context() -> Result<Context> {
     let active_id = read_install_id_file(&active_path);
     let marker_required = requires_install_marker(
         intent,
-        super::super::platform::install_marker_required(&current_exe),
+        super::super::platform::install_marker_required(&installed),
     );
     log::trace!(
         "doctor install identity intent={intent:?} marker_present={} active_present={} marker_required={marker_required}",

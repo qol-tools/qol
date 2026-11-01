@@ -59,7 +59,7 @@ fn tracked_pid(pids: &Path, id: &str) -> Option<u32> {
         .ok()
 }
 
-fn runs_binary(pid: u32, binary: &Path) -> bool {
+pub(super) fn runs_binary(pid: u32, binary: &Path) -> bool {
     let wanted = binary
         .canonicalize()
         .unwrap_or_else(|_| binary.to_path_buf());

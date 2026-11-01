@@ -177,7 +177,7 @@ pub(crate) fn paths_equal_canonicalized(a: &Path, b: &Path) -> bool {
     canon_a == canon_b
 }
 
-fn existing_production_binary() -> Option<PathBuf> {
+pub(crate) fn existing_production_binary() -> Option<PathBuf> {
     crate::paths::tray_installed_binary(qol_apps::tray_install::InstallProfile::Production)
         .ok()
         .filter(|path| path.is_file() && super::has_install_marker(path))

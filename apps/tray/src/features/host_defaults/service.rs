@@ -88,7 +88,8 @@ pub(super) fn claim_on_host(declaration: &Declaration) -> Result<()> {
         ledger: &ledger,
         layers: &layers,
         slots: &LiveSlots,
-        exec: std::env::current_exe().context("locating the qol-tray binary")?,
+        exec: crate::installer::stand_in::recorded_binary()
+            .context("locating the qol-tray binary")?,
         lifetime: store::lifetime_for_role(declaration.role),
     };
     claim::claim(&env, declaration)

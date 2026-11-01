@@ -192,7 +192,7 @@ fn app() -> HeadlessApp {
         .command(
             command(
                 "pr",
-                "Run a pull request's CI build in the installed tray.",
+                "Run a pull request's CI build in place of the installed tray and plugins.",
                 crate::commands::pr::USAGE,
                 "Downloads the Linux build the live test workflow uploaded for the pull request's head commit, so a live test needs no local build.",
                 "Progress on stdout; diagnostics on stderr.",
@@ -200,11 +200,11 @@ fn app() -> HeadlessApp {
             )
             .subcommand(command(
                 "try",
-                "Install a pull request's plugin builds, or put the installed ones back.",
+                "Run a pull request's plugin and tray builds in place of the installed ones, or put the installed ones back.",
                 crate::commands::pr::USAGE,
-                "try <number> runs the pull request's code as your plugins, so it refuses a pull request from a fork: only a branch of qol-tools/qol, which only people with write access can push, is tried. It downloads the live-test-build-linux-x86_64 artifact of the newest successful live test run of that branch at the pull request's head through the GitHub API, then checks that its manifest names that pull request and commit and that each binary is an executable and, when it declares a build identity (most plugins declare none), a production build of its plugin; those checks catch a wrong or stale download, not a tampered one, since the pull request's own code writes them. It backs up each installed plugin binary once, swaps the build in atomically, and stops the plugin's daemon so the tray starts the new one. Plugins not installed here are skipped, and a tray build is left in the download folder. try --off puts every backed-up binary back and restarts those daemons. Only one pull request is installed at a time.",
-                "One line per plugin on stdout; diagnostics on stderr.",
-                "Exits non-zero when gh fails, the run is missing, unfinished or failed, the manifest does not match, or a swap or restore fails.",
+                "try <number> runs the pull request's code as your plugins, so it refuses a pull request from a fork: only a branch of qol-tools/qol, which only people with write access can push, is tried. It downloads the live-test-build-linux-x86_64 artifact of the newest successful live test run of that branch at the pull request's head through the GitHub API, then checks that its manifest names that pull request and commit and that each binary is an executable and, when it declares a build identity (most plugins declare none), a production build of its plugin; those checks catch a wrong or stale download, not a tampered one, since the pull request's own code writes them. It backs up each installed plugin binary once, swaps the build in atomically, and stops the plugin's daemon so the tray starts the new one. Plugins not installed here are skipped. When the build carries the tray (the pull request changed it), try stops the running tray and starts the build's qol-tray from the download folder in its place, and the plugin daemons start with it. The installed qol-tray is never replaced or moved: a tray build running outside the install names the installed tray in launcher entries, desktop entries and host defaults, writes no install marker, and does not update itself. try --off puts every backed-up binary back, stops the tray build and starts the installed tray again, or restarts the plugin daemons when no tray build ran. Only one pull request is installed at a time.",
+                "One line per plugin and one for the tray on stdout; diagnostics on stderr.",
+                "Exits non-zero when gh fails, the run is missing, unfinished or failed, the manifest does not match, a swap or restore fails, or a running tray does not stop.",
             )),
         )
         .command(

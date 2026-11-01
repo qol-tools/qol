@@ -16,6 +16,7 @@ pub mod housekeeping;
 pub mod mode;
 pub(crate) mod platform;
 mod source;
+pub mod stand_in;
 
 pub use boot_environment::BootEnvironment;
 pub use cli::{run, uninstall};
@@ -26,6 +27,9 @@ pub fn autostart_path() -> Result<PathBuf> {
 }
 
 pub fn bootstrap_current_install() -> Result<()> {
+    if stand_in::is_stand_in() {
+        return Ok(());
+    }
     let current_exe = env::current_exe().context("Failed to determine current executable")?;
     if !platform::should_bootstrap_current_install(&current_exe)? {
         return Ok(());
@@ -58,6 +62,10 @@ pub fn bootstrap_current_install() -> Result<()> {
 }
 
 pub fn ensure_installed_desktop_registration() {
+    if stand_in::is_stand_in() {
+        log::info!("standing in for the installed tray; its desktop entries stay as they are");
+        return;
+    }
     if let Err(error) = platform::ensure_desktop_registration() {
         log::warn!("desktop entry self-heal failed: {error:#}");
     }
