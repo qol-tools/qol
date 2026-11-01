@@ -104,7 +104,7 @@ fn truncate_pids(pids: &mut Vec<i32>, actual: i32) {
 
 fn managed_process(pid: i32, roots: &super::unix::ManagedRoots) -> Option<ManagedProcess> {
     let exe = pid_exe_path(pid)?;
-    if !roots.contains(&exe) {
+    if !roots.contains(&exe) || argument_count(pid) != Some(DAEMON_ARGUMENT_COUNT) {
         return None;
     }
     Some(ManagedProcess {
@@ -113,10 +113,69 @@ fn managed_process(pid: i32, roots: &super::unix::ManagedRoots) -> Option<Manage
     })
 }
 
+const DAEMON_ARGUMENT_COUNT: usize = 1;
+
+fn argument_count(pid: i32) -> Option<usize> {
+    let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let mut size: libc::size_t = 0;
+    let sized = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as libc::c_uint,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if sized != 0 || size < std::mem::size_of::<libc::c_int>() {
+        return None;
+    }
+    let mut buffer = vec![0u8; size];
+    let read = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as libc::c_uint,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 || size < std::mem::size_of::<libc::c_int>() {
+        return None;
+    }
+    let count = libc::c_int::from_ne_bytes(buffer[..4].try_into().ok()?);
+    usize::try_from(count).ok()
+}
+
 fn terminate_process(pid: i32, exe: &Path) {
     if !crate::process_utils::is_pid_alive(pid) {
         return;
     }
     log::info!("Killing orphan plugin process: {} ({})", pid, exe.display());
     crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(50));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argument_count;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn argument_count_tells_a_bare_daemon_launch_from_a_command_with_arguments() {
+        let cases: [(&[&str], usize); 3] = [(&[], 1), (&["-u"], 2), (&["-u", "-"], 3)];
+        for (args, expected) in cases {
+            let mut child = Command::new("cat")
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            let counted = argument_count(child.id() as i32);
+            child.kill().unwrap();
+            child.wait().unwrap();
+            assert_eq!(counted, Some(expected), "cat {args:?}");
+        }
+    }
 }

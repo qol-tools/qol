@@ -72,13 +72,20 @@ fn entry_pid(entry: &std::fs::DirEntry) -> Option<i32> {
 
 fn managed_process(pid: i32, roots: &super::unix::ManagedRoots) -> Option<ManagedProcess> {
     let target = pid_exe_path(pid)?;
-    if !roots.contains(&target) {
+    if !roots.contains(&target) || argument_count(pid) != Some(DAEMON_ARGUMENT_COUNT) {
         return None;
     }
     Some(ManagedProcess {
         pid,
         executable: target,
     })
+}
+
+const DAEMON_ARGUMENT_COUNT: usize = 1;
+
+fn argument_count(pid: i32) -> Option<usize> {
+    let cmdline = std::fs::read(Path::new("/proc").join(pid.to_string()).join("cmdline")).ok()?;
+    Some(cmdline.iter().filter(|byte| **byte == 0).count())
 }
 
 fn terminate_process(pid: i32, target: &Path) {
@@ -91,4 +98,27 @@ fn terminate_process(pid: i32, target: &Path) {
         target.display()
     );
     crate::process_utils::terminate_group(pid, std::time::Duration::from_millis(50));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argument_count;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn argument_count_tells_a_bare_daemon_launch_from_a_command_with_arguments() {
+        let cases: [(&[&str], usize); 3] = [(&[], 1), (&["-u"], 2), (&["-u", "-"], 3)];
+        for (args, expected) in cases {
+            let mut child = Command::new("cat")
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            let counted = argument_count(child.id() as i32);
+            child.kill().unwrap();
+            child.wait().unwrap();
+            assert_eq!(counted, Some(expected), "cat {args:?}");
+        }
+    }
 }
