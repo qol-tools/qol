@@ -47,7 +47,7 @@ UNITS = {
 class PlanTests(unittest.TestCase):
     def test_a_change_off_the_list_builds_nothing(self):
         result = build.plan(["libs/sessions-engine/src/switchboard/mod.rs"], LISTED, GRAPH, UNITS, "3.0.0")
-        self.assertEqual(result, {"found": [], "plugins": [], "tray": ""})
+        self.assertEqual(result, {"found": [], "orphans": [], "plugins": [], "units": [], "tray": ""})
 
     def test_the_agent_rows_build_the_plugin_that_draws_them(self):
         result = build.plan(
@@ -65,10 +65,35 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(result["plugins"], ["qol-cli-sessions-v0.127.1", "qol-shot-v1.4.0"])
         self.assertEqual(result["tray"], "qol-tray-v3.0.0")
 
-    def test_a_plugin_without_linux_is_left_out(self):
+    def test_a_plugin_without_linux_is_left_out_and_the_job_says_so(self):
         result = build.plan(["plugins/bluetooth/src/ui/panel.rs"], LISTED, GRAPH, UNITS, "3.0.0")
         self.assertEqual(result["plugins"], [])
         self.assertEqual(len(result["found"]), 1)
+        code, message = build.verdict(result)
+        self.assertEqual(code, 0)
+        self.assertTrue(message.startswith("::warning::"), message)
+
+    def test_a_patched_vendor_crate_builds_every_crate_that_uses_it(self):
+        patches = {"vendor/gpui": "gpui"}
+        users = {"gpui": {"qol-gpui", "qol-shot"}}
+        result = build.plan(["vendor/gpui/src/text.rs"], LISTED, GRAPH, UNITS, "3.0.0", patches, users)
+        self.assertEqual(result["orphans"], [])
+        self.assertEqual(result["plugins"], ["qol-cli-sessions-v0.127.1", "qol-shot-v1.4.0"])
+        self.assertEqual(result["tray"], "qol-tray-v3.0.0")
+
+    def test_a_listed_file_no_crate_builds_fails_the_job(self):
+        result = build.plan(["vendor/gpui/src/text.rs"], LISTED, GRAPH, UNITS, "3.0.0")
+        self.assertEqual(result["orphans"], ["vendor/gpui/src/text.rs"])
+        code, message = build.verdict(result)
+        self.assertEqual(code, 1)
+        self.assertIn("vendor/gpui/src/text.rs", message)
+
+    def test_the_repository_patches_name_the_vendored_gpui(self):
+        self.assertEqual(build.patched_paths(build.ROOT).get("vendor/gpui"), "gpui")
+        declared = build.declared_dependencies(
+            {"dependencies": {"a": "1"}, "target": {"cfg(unix)": {"dependencies": {"b": "1"}}}}
+        )
+        self.assertEqual(declared, {"a", "b"})
 
     def test_outputs_say_whether_anything_builds(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -88,11 +113,20 @@ class PlanTests(unittest.TestCase):
             )
 
     def test_the_manifest_names_the_pull_request_and_its_commit(self):
-        body = build.manifest({"plugins": ["a-v1.0.0"], "tray": "qol-tray-v3.0.0"}, "412", "abc", "77")
+        files = [{"id": "a", "version": "1.0.0", "tag": "a-v1.0.0", "file": "a-linux-x86_64", "bin_name": "a"}]
+        body = build.manifest({"plugins": ["a-v1.0.0"], "tray": "qol-tray-v3.0.0"}, "412", "abc", "77", files)
         self.assertEqual(body["pull_request"], 412)
+        self.assertEqual(body["plugins"], files)
         self.assertEqual(body["run_id"], 77)
         self.assertEqual(body["head_sha"], "abc")
         self.assertEqual(json.loads(json.dumps(body))["tray"], "qol-tray-v3.0.0")
+
+    def test_the_manifest_names_the_file_and_the_installed_binary(self):
+        units = build.plugin_units(build.ROOT)
+        entry = build.installed_files(build.ROOT, units["qol-cli-sessions"])
+        self.assertEqual(entry["bin_name"], "qol-cli-sessions")
+        self.assertEqual(entry["tag"], f"qol-cli-sessions-v{units['qol-cli-sessions']['version']}")
+        self.assertTrue(entry["file"].startswith("qol-cli-sessions"), entry)
 
     def test_every_repository_plugin_maps_to_an_id_and_its_version(self):
         units = build.plugin_units(build.ROOT)

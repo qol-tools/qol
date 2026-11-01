@@ -56,7 +56,8 @@ def summary(found: list[str]) -> tuple[str, str]:
     lead = "These changed files are on `.github/live-test-paths`, so a person must see the change working before it merges:"
     build = (
         f"The `{BUILD_JOB}` job of this run builds what they change for Linux and uploads it as "
-        f"`{BUILD_ARTIFACT}`, so the test needs no local build."
+        f"`{BUILD_ARTIFACT}`, so the test needs no local build. When nothing they change runs on "
+        "Linux, that job says so and uploads nothing."
     )
     return NEEDED_TITLE, "\n".join([lead, "", *shown, "", build])
 
