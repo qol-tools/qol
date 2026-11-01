@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 pub(crate) mod jobs;
 pub(crate) mod platform;
 pub mod version;
+mod workspace_build;
 
 pub use platform::recover_interrupted_update;
 
@@ -112,28 +113,6 @@ pub fn host_update_available() -> bool {
     checks_enabled() && lock_update_state().is_some_and(|state| state.update_found)
 }
 
-fn runs_a_workspace_build() -> bool {
-    commits_match(workspace_build_commit().as_deref(), running_source_commit())
-}
-
-fn commits_match(installed: Option<&str>, running: Option<&str>) -> bool {
-    matches!((installed, running), (Some(installed), Some(running)) if installed == running)
-}
-
-fn workspace_build_commit() -> Option<String> {
-    let path = qol_config::data_dir()?.join(qol_conventions::HOST_WORKSPACE_BUILD_FILE);
-    let commit = std::fs::read_to_string(path).ok()?;
-    let commit = commit.trim();
-    (!commit.is_empty()).then(|| commit.to_string())
-}
-
-fn running_source_commit() -> Option<&'static str> {
-    match &qol_conventions::artifact::current()?.source {
-        qol_conventions::artifact::SourceIdentity::Git { commit, .. } => Some(commit),
-        qol_conventions::artifact::SourceIdentity::Unspecified => None,
-    }
-}
-
 pub fn note_tray_start() {
     let _ = TRAY_START.set(SystemTime::now());
 }
@@ -234,7 +213,8 @@ async fn fetch_host_update() -> Result<FetchedRelease, String> {
     let Some(release) = newer_index_release(indexed, CURRENT_VERSION) else {
         return fetch_host_release().await;
     };
-    if runs_a_workspace_build() && !workspace_build_precedes_release(&release.revision).await {
+    if workspace_build::is_running() && !workspace_build::precedes_release(&release.revision).await
+    {
         return fetch_host_release().await;
     }
     log::info!(
@@ -317,7 +297,7 @@ async fn fetch_host_release() -> Result<FetchedRelease, String> {
     let newest = pick_latest_host_release(&releases);
     let update_found = match newest.as_ref() {
         Some((tag, version)) if version::is_newer_version(version, CURRENT_VERSION) => {
-            !runs_a_workspace_build() || workspace_build_precedes_release(tag).await
+            !workspace_build::is_running() || workspace_build::precedes_release(tag).await
         }
         _ => false,
     };
@@ -343,41 +323,6 @@ fn release_list_failure(unreadable: bool) -> &'static str {
     } else {
         NO_CONNECTION
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubComparison {
-    status: Option<String>,
-}
-
-async fn workspace_build_precedes_release(release: &str) -> bool {
-    let Some(commit) = running_source_commit() else {
-        return false;
-    };
-    let url = format!(
-        "https://api.github.com/repos/{}/compare/{}...{}",
-        GITHUB_REPO, release, commit
-    );
-    let token = crate::credentials::github_bearer_token();
-    let request = crate::features::plugin_store::github::build_github_request(
-        http_client(),
-        &url,
-        token.as_deref(),
-    );
-    let Ok(response) = request.send_observed().await else {
-        return false;
-    };
-    if !response.status().is_success() {
-        return false;
-    }
-    match response.json::<GitHubComparison>().await {
-        Ok(comparison) => release_newer_than_workspace_build(comparison.status.as_deref()),
-        Err(_) => false,
-    }
-}
-
-fn release_newer_than_workspace_build(status: Option<&str>) -> bool {
-    status == Some("behind")
 }
 
 pub(crate) fn github_status_message(status: u16) -> String {
@@ -683,24 +628,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_running_workspace_build_is_detected() {
-        let cases = [
-            (Some("abc123"), Some("abc123"), true),
-            (Some("abc123"), Some("def456"), false),
-            (None, Some("abc123"), false),
-            (Some("abc123"), None, false),
-            (None, None, false),
-        ];
-        for (installed, running, expected) in cases {
-            assert_eq!(
-                commits_match(installed, running),
-                expected,
-                "installed={installed:?} running={running:?}"
-            );
-        }
-    }
-
-    #[test]
     fn the_plugin_index_answers_only_when_it_names_a_newer_host() {
         let listed = |version: &str| Ok(Some(IndexedHostRelease::test_fixture(version, &[])));
         type Case = (
@@ -740,24 +667,6 @@ mod tests {
         ];
         for update in cases {
             assert_eq!(update.version(), "3.2.0", "{update:?}");
-        }
-    }
-
-    #[test]
-    fn a_release_is_offered_only_while_the_workspace_build_stays_behind_it() {
-        let cases = [
-            (Some("behind"), true),
-            (Some("ahead"), false),
-            (Some("identical"), false),
-            (Some("diverged"), false),
-            (None, false),
-        ];
-        for (status, expected) in cases {
-            assert_eq!(
-                release_newer_than_workspace_build(status),
-                expected,
-                "status={status:?}"
-            );
         }
     }
 
