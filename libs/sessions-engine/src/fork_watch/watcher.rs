@@ -277,7 +277,11 @@ mod tests {
     fn node_and_the_path_come_only_from_absolute_trusted_folders() {
         let (_folder, root) = config();
         let script = installed(&root, &CLONED_WATCHER);
-        let watched = check_watcher_in(&command(&["node", &script, URL]), &[root.clone()]).unwrap();
+        let watched = check_watcher_in(
+            &command(&["node", &script, URL]),
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
         let bin = root.join("tools");
         fs::create_dir_all(&bin).unwrap();
         let node = bin.join(format!("{WATCHER_PROGRAM}{}", std::env::consts::EXE_SUFFIX));
@@ -285,10 +289,7 @@ mod tests {
         let path = std::env::join_paths([PathBuf::from("relative"), bin.clone()]).unwrap();
         let path = path.to_str().unwrap();
         let trusted = watched.trusted_path(Some(path)).unwrap();
-        assert_eq!(
-            std::env::split_paths(&trusted).collect::<Vec<_>>(),
-            [bin.clone()]
-        );
+        assert_eq!(std::env::split_paths(&trusted).collect::<Vec<_>>(), [bin]);
         assert_eq!(
             watched
                 .tool(WATCHER_PROGRAM, Some(trusted.as_os_str()))
