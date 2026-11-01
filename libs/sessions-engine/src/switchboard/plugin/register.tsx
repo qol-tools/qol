@@ -50,7 +50,6 @@ const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back after the switchboard restart.'
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
-const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
   test: 'suggestion',
@@ -72,6 +71,8 @@ type Sorting = { kind: Kind; recommend?: string }
 type Report = { agentId: string; name?: string; status: string; report: string; filing?: Filing }
 type Delivery = { id: string; agent_id: string; conversation: string; name?: string | null; cwd: string; pull_request?: string | null; message: string }
 type ForkRecord = { agentId: string; name: string; cwd?: string; transcript?: string; isCurrent: boolean }
+type Adopted = { agentId: string; name?: string; cwd?: string; brought: string }
+type Sent = { isDelivered: boolean; reason?: unknown; agentId: string }
 type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
 type WakeFork = { agent_id: string; name?: string | null; description: string; cwd?: string | null; transcript: string; message: string }
 type Wake = { conversation: string; launched_at: string; forks: WakeFork[]; claimed?: boolean }
@@ -199,6 +200,21 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
   return index === -1 ? [...list, next] : [...list.slice(0, index), ...list.slice(index + 1), next]
 }
 
+export const mergeBoards = (earlier: readonly Entry[], own: readonly Entry[]): Entry[] => {
+  const owned = new Set(own.map(entry => entry.agentId))
+  const seen = new Set<string>()
+  const carried = [...earlier]
+    .sort((a, b) => b.at - a.at)
+    .filter(entry => {
+      if (typeof entry?.agentId !== 'string' || owned.has(entry.agentId) || seen.has(entry.agentId)) return false
+      seen.add(entry.agentId)
+      return true
+    })
+    .map(entry => ({ ...entry, isWorking: false }))
+    .reverse()
+  return [...carried, ...own].slice(-KEEP)
+}
+
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string): Promise<void> => {
   const now = await $.clock.now()
   const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }) }
@@ -254,62 +270,55 @@ const subagentFile = async ($: EngineInterface, agentId: string, suffix: string)
   return (await $.fs.exists(path)) ? path : undefined
 }
 
-const recordedProject = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
-  const meta = await subagentFile($, agentId, '.meta.json')
-  if (meta === undefined) return undefined
-  const cwd = JSON.parse(String(await $.fs.read(meta)))?.cwd
-  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
-}
-
-const stoppedFork = (prompt: string): string | undefined => TAKEOVER.exec(prompt.split('\n').at(-1) ?? '')?.[1]
-
 const succeed = async ($: EngineInterface, stopped: string, successor: string): Promise<void> => {
   if (stopped === successor) return
   await change($, list => list.map(one => (one.agentId === stopped ? { ...one, successor, isDismissed: true } : one)))
 }
 
-export const takeoverPrompt = (project: string, message: string, stopped: Entry, transcript: string | undefined): string =>
-  [
-    `Project: ${project}`,
-    launcherLine(undefined),
-    message,
-    '',
-    `The message above is for the fork ${keyName(stopped.name)}, agent id ${stopped.agentId}, which was stopped, so you take over its work and its conversation. ${
-      transcript === undefined
-        ? `Its conversation is the file agent-${stopped.agentId}.jsonl in a subagents folder under the projects folder of your Claude config directory`
-        : `Its conversation is in ${transcript}`
-    }: read the end of it to learn where it stopped and what it was doing, then act on the message above in that context, and start its pull request watcher again in the background if it was waiting on one.`,
-  ].join('\n')
-
-type Takeover = { isStarted: false } | { isStarted: true; agentId?: string }
-
-const startTakeover = async ($: EngineInterface, stopped: Entry, message: string, recorded?: string): Promise<Takeover> => {
-  const project = await (stopped.project !== undefined ? Promise.resolve(stopped.project) : recordedProject($, stopped.agentId)).catch(() => undefined)
-  if (project === undefined) return { isStarted: false }
-  const transcript = recorded ?? (await subagentFile($, stopped.agentId, '.jsonl').catch(() => undefined))
-  const started = await $.agent.spawn({ subagentType: FORK, description: stopped.name, prompt: takeoverPrompt(project, message, stopped, transcript) })
-  if (started.deny !== undefined) return { isStarted: false }
-  if (started.agentId === undefined) return { isStarted: true }
-  await succeed($, stopped.agentId, started.agentId).catch(() => undefined)
-  return { isStarted: true, agentId: started.agentId }
+export const adoptFork = async ($: EngineInterface, fork: string, isFresh: boolean): Promise<Adopted | undefined> => {
+  if (!ID.test(fork)) return undefined
+  const program = await $.env.get('QOL_CLI_SESSIONS')
+  const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
+  if (program === undefined || program === '' || conversations === undefined || conversations === '') return undefined
+  const argv = [program, 'sessions', 'switchboard', 'adopt', '--conversations', conversations, '--conversation', await $.session.id(), '--fork', fork, ...(isFresh ? ['--fresh'] : [])]
+  const ran = await $.process.run(argv, { timeoutMs: DELIVER_TIMEOUT_MS })
+  if (ran.exitCode !== 0) return undefined
+  const parsed = JSON.parse(ran.stdout) as { agent_id?: unknown; name?: unknown; cwd?: unknown; brought?: unknown }
+  if (typeof parsed.agent_id !== 'string' || !ID.test(parsed.agent_id)) return undefined
+  return {
+    agentId: parsed.agent_id,
+    ...(typeof parsed.name === 'string' && printable(parsed.name).trim() !== '' ? { name: printable(parsed.name).replace(/\s+/g, ' ').trim() } : {}),
+    ...(typeof parsed.cwd === 'string' && parsed.cwd !== '' ? { cwd: parsed.cwd } : {}),
+    brought: typeof parsed.brought === 'string' ? parsed.brought : '',
+  }
 }
 
-const takeovers = new Map<string, Promise<Takeover>>()
-
-const takeOver = async ($: EngineInterface, stopped: Entry, message: string, transcript?: string): Promise<Takeover & { isFirst: boolean }> => {
-  const running = takeovers.get(stopped.agentId)
-  if (running !== undefined) return { ...(await running), isFirst: false }
-  const started = startTakeover($, stopped, message, transcript).catch((): Takeover => ({ isStarted: false }))
-  takeovers.set(stopped.agentId, started)
-  const takeover = await started
-  if (!takeover.isStarted) takeovers.delete(stopped.agentId)
-  return { ...takeover, isFirst: true }
+const bringBack = async ($: EngineInterface, agentId: string): Promise<void> => {
+  if ((await subagentFile($, agentId, '.jsonl').catch(() => undefined)) !== undefined) return
+  await adoptFork($, agentId, false).catch(() => undefined)
 }
 
-const continued = (name: string, takeover: Takeover & { isStarted: true }): string =>
-  takeover.agentId === undefined
-    ? `${keyName(name)} was stopped, so it continues as a new fork that reads its conversation and has your message.`
-    : `${keyName(name)} was stopped, so it continues as a new fork, agent id ${takeover.agentId}, that reads its conversation and has your message. Address ${takeover.agentId} from now on.`
+const revivals = new Map<string, Promise<Adopted | undefined>>()
+
+const revive = async ($: EngineInterface, stopped: Entry): Promise<Entry | undefined> => {
+  let running = revivals.get(stopped.agentId)
+  if (running === undefined) {
+    running = adoptFork($, stopped.agentId, true).catch(() => undefined)
+    revivals.set(stopped.agentId, running)
+  }
+  const copy = await running
+  if (copy === undefined) {
+    revivals.delete(stopped.agentId)
+    return undefined
+  }
+  const known = (await read($, board)).find(one => one.agentId === copy.agentId)
+  if (known !== undefined) return known
+  const project = stopped.project ?? copy.cwd
+  const revived: Entry = { ...stand(copy.agentId, stopped.name, project), isDismissed: false, at: await $.clock.now() }
+  await change($, list => upsert(list, copy.agentId, () => revived))
+  await succeed($, stopped.agentId, copy.agentId)
+  return revived
+}
 
 const isStopped = (reason: unknown): boolean => STOPPED.test(typeof reason === 'string' ? reason : JSON.stringify(reason ?? ''))
 
@@ -329,6 +338,11 @@ const rested = async ($: EngineInterface, agentId: string): Promise<Entry | unde
   )
   return kept
 }
+
+const isSent = (answer: { deny?: string; isError?: true; result?: unknown }): boolean =>
+  answer.deny === undefined &&
+  answer.isError !== true &&
+  !(typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)
 
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   const filing: Filing =
@@ -453,17 +467,6 @@ const stand = (agentId: string, name: string, project: string | undefined): Entr
   ...(project === undefined ? {} : { project }),
 })
 
-const handOver = async ($: EngineInterface, target: Entry, name: string, message: string, transcript?: string): Promise<boolean> => {
-  const takeover = await takeOver($, target, message, transcript)
-  if (!takeover.isStarted) return false
-  if (takeover.isFirst) return true
-  const successor = takeover.agentId ?? addressed(await read($, board), target.agentId)?.agentId
-  if (successor === undefined || successor === target.agentId) return false
-  const sent = await $.session.send({ to: { agentId: successor }, text: message })
-  if (sent.isDelivered) await markWorking($, successor, name)
-  return sent.isDelivered
-}
-
 const placed = async ($: EngineInterface, agentId: string, name: string, project: string | undefined): Promise<Entry> => {
   const known = addressed(await read($, board), agentId)
   if (known !== undefined) return known
@@ -472,24 +475,26 @@ const placed = async ($: EngineInterface, agentId: string, name: string, project
   return target
 }
 
-const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
-  const target = await placed($, agentId, name, project)
-  const sent = await $.session.send({ to: { agentId: target.agentId }, text: message })
+export const sendTo = async ($: EngineInterface, target: Entry, text: string): Promise<Sent> => {
+  await bringBack($, target.agentId)
+  const sent = await $.session.send({ to: { agentId: target.agentId }, text })
   if (sent.isDelivered) {
-    await markWorking($, target.agentId, name)
-    return
+    await markWorking($, target.agentId, undefined)
+    return { ...sent, agentId: target.agentId }
   }
-  if (isStopped(sent.reason) && (await handOver($, target, name, message))) return
-  await undelivered($, target.agentId, name, String(sent.reason ?? 'not delivered'), message)
+  const revived = isStopped(sent.reason) ? await revive($, target) : undefined
+  if (revived === undefined) return { ...sent, agentId: target.agentId }
+  const again = await $.session.send({ to: { agentId: revived.agentId }, text })
+  if (again.isDelivered) await markWorking($, revived.agentId, undefined)
+  return { ...again, agentId: revived.agentId }
 }
 
-export const relay = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<void> => {
-  if (fork.isCurrent) return reach($, fork.agentId, fork.name, fork.cwd, result.message)
-  const target = await placed($, fork.agentId, fork.name, fork.cwd)
-  if (target.agentId !== fork.agentId) return reach($, target.agentId, fork.name, fork.cwd, result.message)
-  if (await handOver($, target, fork.name, result.message, fork.transcript)) return
-  await undelivered($, fork.agentId, fork.name, 'it belongs to an earlier switchboard conversation, and no new fork could take it over', result.message)
+const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
+  const sent = await sendTo($, await placed($, agentId, name, project), message)
+  if (!sent.isDelivered) await undelivered($, sent.agentId, name, String(sent.reason ?? 'not delivered'), message)
 }
+
+export const relay = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<void> => reach($, fork.agentId, fork.name, fork.cwd, result.message)
 
 let isDelivering = false
 let delivered = ''
@@ -656,8 +661,6 @@ export const register: Register = on => {
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined)
-    const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined
-    if (stopped !== undefined) await succeed($, stopped, agentId)
     return started
   }).catch(($, e, next) => next(e))
 
@@ -666,13 +669,18 @@ export const register: Register = on => {
     isAutoOpenPending = false
     try {
       const id = await $.session.id()
-      if ((await read($, board)).length === 0) {
-        const saved = await $.store.get(STORE_PREFIX + id)
-        if (Array.isArray(saved)) await update($, board, () => saved as Entry[])
+      const others = (await $.store.keys()).filter(key => key.startsWith(STORE_PREFIX) && key !== STORE_PREFIX + id)
+      const live = await read($, board)
+      const saved = live.length === 0 ? await $.store.get(STORE_PREFIX + id) : live
+      const earlier: Entry[] = []
+      for (const key of others) {
+        const rows = await $.store.get(key)
+        if (Array.isArray(rows)) earlier.push(...(rows as Entry[]))
       }
-      for (const key of await $.store.keys()) {
-        if (key.startsWith(STORE_PREFIX) && key !== STORE_PREFIX + id) await $.store.delete(key)
-      }
+      const merged = mergeBoards(earlier, Array.isArray(saved) ? (saved as Entry[]) : [])
+      if (merged.length > 0) await update($, board, () => merged)
+      if (others.length > 0) await persist($)
+      for (const key of others) await $.store.delete(key)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
         name: TOOL,
@@ -729,15 +737,21 @@ export const register: Register = on => {
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
     if (e.agentId !== undefined || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
-    const target = addressed(await read($, board), e.to)
-    if (target === undefined) return next(e)
+    let target = addressed(await read($, board), e.to)
+    if (target === undefined) {
+      const adopted = await adoptFork($, e.to, false).catch(() => undefined)
+      if (adopted === undefined) return next(e)
+      target = await placed($, adopted.agentId, adopted.name ?? adopted.agentId, adopted.cwd)
+    } else {
+      await bringBack($, target.agentId)
+    }
     const answer = await next(target.agentId === e.to ? e : { ...e, to: target.agentId })
     if (!isUndelivered(answer)) return answer
-    const takeover = await takeOver($, target, e.message)
-    if (!takeover.isStarted) return answer
-    if (takeover.isFirst) return { result: { success: true, message: continued(target.name, takeover) } }
-    const successor = takeover.agentId ?? addressed(await read($, board), target.agentId)?.agentId
-    return successor === undefined || successor === target.agentId ? answer : next({ ...e, to: successor })
+    const revived = await revive($, target)
+    if (revived === undefined) return answer
+    const again = await next({ ...e, to: revived.agentId })
+    if (isSent(again)) await markWorking($, revived.agentId, undefined)
+    return again
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
@@ -806,18 +820,8 @@ export const register: Register = on => {
     const send = (entry: Entry) => async () => {
       await update($, confirming, () => '')
       const text = entry.recommend ?? ''
-      const sent = await $.session.send({ to: { agentId: entry.agentId }, text })
-      if (!sent.isDelivered) {
-        const takeover = isStopped(sent.reason) ? await takeOver($, entry, text) : { isStarted: false }
-        $.ui.toast(
-          takeover.isStarted
-            ? `${keyName(entry.name)} was stopped, so it continues as a new fork with: ${text}`
-            : `Not sent to ${keyName(entry.name)}: ${sent.reason}`,
-        )
-        return
-      }
-      await markWorking($, entry.agentId, undefined)
-      $.ui.toast(`Sent to ${keyName(entry.name)}: ${entry.recommend}`)
+      const sent = await sendTo($, entry, text)
+      $.ui.toast(sent.isDelivered ? `Sent to ${keyName(entry.name)}: ${text}` : `Not sent to ${keyName(entry.name)}: ${sent.reason}`)
     }
     const title = (entry: Entry, label: string) => (
       <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>

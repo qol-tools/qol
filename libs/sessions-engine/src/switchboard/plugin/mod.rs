@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
   "types": "./types/index.d.ts"
 }
@@ -99,23 +99,38 @@ mod tests {
     }
 
     #[test]
-    fn a_message_to_a_stopped_fork_continues_it_as_a_new_fork_the_board_links() {
+    fn a_message_to_a_fork_brings_back_its_own_conversation_and_never_a_takeover() {
         for needle in [
             "on('tool.call', { tool: SEND }, async ($, e, next) => {",
             "if (!isUndelivered(answer)) return answer",
-            "const takeover = await takeOver($, target, e.message)",
+            "const revived = await revive($, target)",
+            "'sessions', 'switchboard', 'adopt', '--conversations', conversations, '--conversation'",
+            "...(isFresh ? ['--fresh'] : [])",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
-            "if (stopped !== undefined) await succeed($, stopped, agentId)",
-            "const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined",
+            "const adopted = await adoptFork($, e.to, false)",
+            "const merged = mergeBoards(earlier,",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
-        let sentence = "The message above is for the fork ";
-        let taken = ", which was stopped, so you take over its work and its conversation.";
-        assert!(MODULE.contains(sentence) && MODULE.contains(taken));
-        assert!(super::super::SWITCHBOARD_ROLE.contains(sentence));
-        assert!(super::super::SWITCHBOARD_ROLE.contains(taken));
-        assert!(MODULE_TESTS.contains("reaches it as a new fork that reads its conversation"));
+        assert!(MODULE.contains(&format!(
+            "'{}', '--conversations'",
+            super::super::adopt::ADOPT
+        )));
+        for retired in [
+            "take over",
+            "takeOver",
+            "takeoverPrompt",
+            "read the end of it",
+        ] {
+            assert!(!MODULE.contains(retired), "{retired}");
+        }
+        for retired in ["take over", "the stopped fork's own description"] {
+            assert!(
+                !super::super::SWITCHBOARD_ROLE.contains(retired),
+                "{retired}"
+            );
+        }
+        assert!(MODULE_TESTS.contains("reaches it in its own conversation under a new id"));
     }
 
     #[test]
@@ -134,7 +149,7 @@ mod tests {
             "on('ui.render', { component: 'Pane', requestId: PANE }",
             "$.ui.view({ agentId: entry.agentId })",
             "const text = entry.recommend ?? ''",
-            "$.session.send({ to: { agentId: entry.agentId }, text })",
+            "const sent = await sendTo($, entry, text)",
             "on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
