@@ -399,6 +399,40 @@ mod tests {
     }
 
     #[test]
+    fn read_hotkeys_keeps_the_hold_time_of_a_tap_and_a_hold_on_one_key() {
+        let tmp = TempDir::new().unwrap();
+        let paths = paths_in(&tmp);
+        std::fs::create_dir_all(paths.core_hotkeys_path().parent().unwrap()).unwrap();
+        std::fs::create_dir_all(paths.hotkeys_path().parent().unwrap()).unwrap();
+        let tap = serde_json::json!({
+            "id": "tap", "key": "Shift+Super+S", "plugin_uid": "shot",
+            "action": "screenshot-monitor", "enabled": true
+        });
+        let hold = serde_json::json!({
+            "id": "hold", "key": "Shift+Super+S", "plugin_uid": "shot",
+            "action": "screenshot", "enabled": true, "hold_ms": 1000
+        });
+        std::fs::write(
+            paths.core_hotkeys_path(),
+            serde_json::json!({ "hotkeys": [tap] }).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.hotkeys_path(),
+            serde_json::json!({ "hotkeys": [hold] }).to_string(),
+        )
+        .unwrap();
+
+        let merged = paths.read_hotkeys().unwrap().unwrap();
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0]["action"], "screenshot-monitor");
+        assert!(merged[0].get("hold_ms").is_none());
+        assert_eq!(merged[1]["action"], "screenshot");
+        assert_eq!(merged[1]["hold_ms"], serde_json::json!(1000));
+    }
+
+    #[test]
     fn active_profile_name_falls_back_on_invalid_marker_content() {
         let tmp = TempDir::new().unwrap();
         let paths = paths_in(&tmp);

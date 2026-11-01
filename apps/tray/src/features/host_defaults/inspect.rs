@@ -313,6 +313,7 @@ mod tests {
             action: "open".to_string(),
             enabled,
             os_only: false,
+            hold_ms: None,
         }
     }
 

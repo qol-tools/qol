@@ -154,6 +154,9 @@ fn get_hotkeys_inner() -> HttpResult<Response> {
 
 fn set_hotkeys_inner(state: &AppState, body: axum::body::Bytes) -> HttpResult<Response> {
     let config = parse_hotkeys(body)?;
+    if let Some(message) = crate::hotkeys::invalid_hold(&config, &state.plugin_manager) {
+        return Err(Box::new((StatusCode::BAD_REQUEST, message).into_response()));
+    }
     let manager = hotkey_manager()?;
     manager
         .save_config(&config)
@@ -229,6 +232,33 @@ mod tests {
         );
 
         let response = parse_hotkeys(body).expect_err("duplicate chord must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn one_tap_and_one_hold_may_share_a_chord() {
+        let body = axum::body::Bytes::from_static(
+            br#"{"hotkeys":[
+                {"id":"tap","key":"Shift+Super+S","plugin_uid":"shot","action":"screenshot-monitor","enabled":true},
+                {"id":"hold","key":"shift+super+s","plugin_uid":"shot","action":"screenshot","enabled":true,"hold_ms":1000}
+            ]}"#,
+        );
+
+        let config = parse_hotkeys(body).expect("a tap and a hold share a chord");
+        assert_eq!(config.hotkeys[1].hold_ms, Some(1000));
+        assert_eq!(config.hotkeys[0].hold_ms, None);
+    }
+
+    #[test]
+    fn two_holds_on_a_chord_are_rejected_before_persistence() {
+        let body = axum::body::Bytes::from_static(
+            br#"{"hotkeys":[
+                {"id":"first","key":"F12","plugin_uid":"plugin-a","action":"open","enabled":true,"hold_ms":500},
+                {"id":"second","key":"f12","plugin_uid":"plugin-a","action":"settings","enabled":true,"hold_ms":1000}
+            ]}"#,
+        );
+
+        let response = parse_hotkeys(body).expect_err("two holds must be rejected");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 

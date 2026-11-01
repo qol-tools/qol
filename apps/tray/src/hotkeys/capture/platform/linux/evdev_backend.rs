@@ -1029,6 +1029,7 @@ mod tests {
                 action: action.to_owned(),
                 raw_key: "F12".to_owned(),
                 continuous: false,
+                hold: None,
             },
             phase: super::super::super::super::Phase::START,
         }

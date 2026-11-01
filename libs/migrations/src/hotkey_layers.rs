@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 pub const OS_ONLY_FIELD: &str = "os_only";
+pub const HOLD_FIELD: &str = "hold_ms";
 
 pub fn merge(core: &[Value], os: &[Value]) -> Vec<Value> {
     core.iter()
@@ -58,7 +59,13 @@ fn hides(local: &Value, shared: &Value) -> bool {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     same_id(local, shared)
-        || (enabled && key(local).is_some_and(|local_key| Some(local_key) == key(shared)))
+        || (enabled
+            && holds(local) == holds(shared)
+            && key(local).is_some_and(|local_key| Some(local_key) == key(shared)))
+}
+
+fn holds(binding: &Value) -> bool {
+    binding.get(HOLD_FIELD).is_some_and(|hold| !hold.is_null())
 }
 
 fn same_id(left: &Value, right: &Value) -> bool {
@@ -70,6 +77,7 @@ fn same_binding(left: &Value, right: &Value) -> bool {
         && plugin(left) == plugin(right)
         && text(left, "action") == text(right, "action")
         && left.get("enabled") == right.get("enabled")
+        && left.get(HOLD_FIELD) == right.get(HOLD_FIELD)
 }
 
 fn key(binding: &Value) -> Option<String> {
@@ -218,5 +226,107 @@ mod tests {
                 binding("c", "Super+C", "three")
             ]
         );
+    }
+
+    fn with_hold(mut value: Value, hold_ms: u64) -> Value {
+        value["hold_ms"] = json!(hold_ms);
+        value
+    }
+
+    #[test]
+    fn merge_keeps_the_hold_time_of_both_layers() {
+        let core = [with_hold(binding("a", "Super+A", "one"), 1000)];
+        let os = [with_hold(binding("b", "Super+B", "two"), 250)];
+
+        let merged = merge(&core, &os);
+
+        assert_eq!(merged[0]["hold_ms"], json!(1000));
+        assert_eq!(merged[1]["hold_ms"], json!(250));
+        assert_eq!(merged[1][OS_ONLY_FIELD], json!(true));
+    }
+
+    #[test]
+    fn split_keeps_the_hold_time_in_the_layer_it_lands_in() {
+        let edited = [
+            with_hold(binding("a", "Super+A", "one"), 1000),
+            os_only(with_hold(binding("b", "Super+B", "two"), 400)),
+        ];
+
+        let (core, os) = split(&edited, &[], &[]);
+
+        assert_eq!(core, vec![with_hold(binding("a", "Super+A", "one"), 1000)]);
+        assert_eq!(os, vec![with_hold(binding("b", "Super+B", "two"), 400)]);
+    }
+
+    #[test]
+    fn a_split_then_merge_round_trip_loses_no_hold_time() {
+        let edited = vec![
+            binding("tap", "Shift+Super+S", "monitor"),
+            with_hold(binding("hold", "Shift+Super+S", "region"), 1000),
+            os_only(with_hold(binding("local", "Super+L", "lock"), 600)),
+        ];
+
+        let (core, os) = split(&edited, &[], &[]);
+        let merged = merge(&core, &os);
+
+        let hold_of = |id: &str| {
+            merged
+                .iter()
+                .find(|binding| binding["id"] == id)
+                .map(|binding| binding.get("hold_ms").cloned())
+        };
+        assert_eq!(hold_of("tap"), Some(None));
+        assert_eq!(hold_of("hold"), Some(Some(json!(1000))));
+        assert_eq!(hold_of("local"), Some(Some(json!(600))));
+    }
+
+    #[test]
+    fn a_local_tap_never_hides_a_shared_hold_on_the_same_key_and_the_reverse() {
+        let shared_hold = with_hold(binding("hold", "Shift+Super+S", "region"), 1000);
+        let local_tap = binding("tap", "shift+super+s", "monitor");
+
+        let merged = merge(
+            std::slice::from_ref(&shared_hold),
+            std::slice::from_ref(&local_tap),
+        );
+        assert_eq!(
+            merged,
+            vec![shared_hold.clone(), os_only(local_tap.clone())]
+        );
+
+        let shared_tap = binding("tap2", "Shift+Super+S", "monitor");
+        let local_hold = with_hold(binding("hold2", "shift+super+s", "region"), 700);
+        let merged = merge(
+            std::slice::from_ref(&shared_tap),
+            std::slice::from_ref(&local_hold),
+        );
+        assert_eq!(merged, vec![shared_tap, os_only(local_hold)]);
+    }
+
+    #[test]
+    fn a_local_hold_still_hides_a_shared_hold_on_the_same_key() {
+        let shared = with_hold(binding("a", "Shift+Super+S", "region"), 1000);
+        let local = with_hold(binding("b", "shift+super+s", "other"), 500);
+
+        assert_eq!(
+            merge(std::slice::from_ref(&shared), std::slice::from_ref(&local)),
+            vec![os_only(local)]
+        );
+    }
+
+    #[test]
+    fn absorb_treats_a_different_hold_time_as_a_different_binding() {
+        let mut core = vec![binding("a", "Super+A", "one")];
+
+        assert!(absorb(
+            &mut core,
+            &with_hold(binding("b", "Super+A", "one"), 1000)
+        ));
+        assert_eq!(core.len(), 2);
+        assert!(absorb(
+            &mut core,
+            &with_hold(binding("c", "super+a", "one"), 1000)
+        ));
+        assert_eq!(core.len(), 2);
     }
 }

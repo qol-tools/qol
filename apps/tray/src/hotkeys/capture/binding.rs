@@ -1,3 +1,4 @@
+use crate::hotkeys::hold::HoldPlan;
 use crate::plugins::PluginUid;
 use qol_hotkeys::grammar::{self, Key, Modifier};
 use std::collections::BTreeSet;
@@ -18,6 +19,21 @@ pub(crate) struct Binding {
     pub(crate) action: String,
     pub(crate) raw_key: String,
     pub(crate) continuous: bool,
+    pub(crate) hold: Option<HoldPlan>,
+}
+
+impl Binding {
+    pub(crate) fn reports_release(&self) -> bool {
+        self.continuous || self.hold.is_some()
+    }
+
+    pub(crate) fn forced_stop(&self) -> Phase {
+        if self.hold.is_some() {
+            Phase::CANCEL
+        } else {
+            Phase::STOP
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +43,7 @@ impl Phase {
     pub(crate) const START: Self = Self(0);
     pub(crate) const HEARTBEAT: Self = Self(1);
     pub(crate) const STOP: Self = Self(2);
+    pub(crate) const CANCEL: Self = Self(3);
 
     pub(crate) const fn as_str(self) -> &'static str {
         if self.0 == Self::START.0 {
@@ -35,6 +52,8 @@ impl Phase {
             "heartbeat"
         } else if self.0 == Self::STOP.0 {
             "stop"
+        } else if self.0 == Self::CANCEL.0 {
+            "cancel"
         } else {
             "unknown"
         }
