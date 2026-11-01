@@ -357,6 +357,20 @@ impl McpSessionServer {
             );
         }
         let live_keys = self.live_keys()?;
+        if from == super::switchboard::SWITCHBOARD_KEY
+            && !live_keys.iter().any(|key| key == to)
+            && self.messaging().knows(to)
+            && qol_terminal_sessions::park::wakeable(&self.parked_dir, to).is_none()
+        {
+            return serde_json::to_string(&json!({
+                "sent": false,
+                "to": to,
+                "live": false,
+                "reopens": false,
+                "note": format!("Nothing was sent: `{to}` is closed and nothing reopens it, so the message would wait unread. Continue it as a fork with the message instead: find it with sessions_closed, query `{to}`, and bring its newest row back."),
+            }))
+            .map_err(|error| format!("serialization failed: {error}"));
+        }
         let message = self
             .messaging()
             .send(
@@ -387,10 +401,20 @@ impl McpSessionServer {
             "live": live,
         });
         if !live {
-            sent["note"] = json!(format!(
-                "`{}` is closed: the message waits unread in its mailbox and nothing acts on it until a session with that key is resumed, so do not report it as delivered",
-                message.to
-            ));
+            let reopens =
+                qol_terminal_sessions::park::wakeable(&self.parked_dir, &message.to).is_some();
+            sent["reopens"] = json!(reopens);
+            sent["note"] = json!(if reopens {
+                format!(
+                    "`{}` is closed: CLI Sessions reopens it in a new tab with this message as its first prompt",
+                    message.to
+                )
+            } else {
+                format!(
+                    "`{}` is closed: the message waits unread in its mailbox and nothing acts on it until a session with that key is resumed, so do not report it as delivered",
+                    message.to
+                )
+            });
         }
         if let Some(via) = &message.via {
             sent["via"] = json!(via);
@@ -6767,30 +6791,87 @@ mod tests {
     }
 
     #[test]
-    fn a_send_says_whether_the_recipient_is_still_live() {
-        let (server, backend, _root) = keyed_server(&["switchboard", "open"]);
-        server.lineage.record("open", Some("switchboard")).unwrap();
-        server
-            .lineage
-            .record("closed", Some("switchboard"))
-            .unwrap();
+    fn a_send_says_whether_the_recipient_is_still_live_and_whether_it_reopens() {
+        let (server, backend, root) = keyed_server(&["switchboard", "open", "lead"]);
+        for key in ["open", "closed", "parked", "lead"] {
+            server.lineage.record(key, Some("switchboard")).unwrap();
+        }
+        write_park(&root, "park-1-1", "conv-parked", "finished");
+        std::fs::write(
+            qol_terminal_sessions::park::spawn_key_path(&root.path().join("parked"), "park-1-1"),
+            "parked",
+        )
+        .unwrap();
         act_as(&backend, "switchboard");
-        for (to, live) in [("open", true), ("closed", false)] {
+        for (to, live) in [("open", true), ("parked", false)] {
             let sent = tool_json(&tool_call(
                 &server,
                 "session_send",
-                json!({"to": to, "text": "note", "kind": "note"}),
+                json!({"to": to, "text": "note", "kind": "note", "as_user": true}),
             ));
             assert_eq!(sent["sent"], true, "{sent}");
             assert_eq!(sent["live"], live, "{to}: {sent}");
-            assert_eq!(
-                sent["note"]
-                    .as_str()
-                    .is_some_and(|note| note.contains("waits unread")),
-                !live,
-                "only a closed recipient's send says the message is not delivered: {sent}"
-            );
+            assert_eq!(sent.get("reopens").is_some(), !live, "{sent}");
         }
+        let parked = server.knocks.pending_knocks();
+        assert!(
+            parked.iter().any(|knock| knock.recipient_key == "parked"),
+            "a parked session's message waits as a knock that reopens it: {parked:?}"
+        );
+        let reopened = tool_json(&tool_call(
+            &server,
+            "session_send",
+            json!({"to": "parked", "text": "again", "kind": "note", "as_user": true}),
+        ));
+        assert_eq!(reopened["reopens"], true, "{reopened}");
+        assert!(reopened["note"]
+            .as_str()
+            .unwrap()
+            .contains("CLI Sessions reopens it in a new tab"));
+
+        let closed = tool_json(&tool_call(
+            &server,
+            "session_send",
+            json!({"to": "closed", "text": "note", "kind": "note", "as_user": true}),
+        ));
+        assert_eq!(closed["sent"], false, "{closed}");
+        assert_eq!(closed["reopens"], false, "{closed}");
+        assert!(
+            closed["note"]
+                .as_str()
+                .unwrap()
+                .contains("Continue it as a fork with the message instead: find it with sessions_closed, query `closed`"),
+            "{closed}"
+        );
+        assert!(
+            !server
+                .knocks
+                .pending_knocks()
+                .iter()
+                .any(|knock| knock.recipient_key == "closed"),
+            "nothing waits for a closed session the switchboard continues as a fork"
+        );
+        refused(
+            &tool_call(
+                &server,
+                "session_send",
+                json!({"to": "nobody", "text": "note", "kind": "note"}),
+            ),
+            "no session carries the key `nobody`",
+        );
+
+        act_as(&backend, "lead");
+        let queued = tool_json(&tool_call(
+            &server,
+            "session_send",
+            json!({"to": "closed", "text": "note", "kind": "note"}),
+        ));
+        assert_eq!(queued["sent"], true, "{queued}");
+        assert_eq!(queued["live"], false, "{queued}");
+        assert!(
+            queued["note"].as_str().unwrap().contains("waits unread"),
+            "a session other than the switchboard still leaves mail: {queued}"
+        );
     }
 
     #[test]

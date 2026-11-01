@@ -227,6 +227,10 @@ impl MailboxStore {
 }
 
 impl Messaging<'_> {
+    pub(super) fn knows(&self, key: &str) -> bool {
+        self.lineage.knows(key) || self.mail.exists(key)
+    }
+
     pub(super) fn send(&self, live_keys: &[String], request: &SendRequest<'_>) -> Result<Message> {
         validate_text(request.text, "message")?;
         if has_line_separator(request.text) {

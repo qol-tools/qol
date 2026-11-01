@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::SpawnKey;
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ParkState {
@@ -99,6 +101,38 @@ pub fn records(dir: &Path) -> std::io::Result<Vec<ParkRecord>> {
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(records)
+}
+
+pub fn spawn_key_path(dir: &Path, id: &str) -> PathBuf {
+    dir.join(format!("{id}.key"))
+}
+
+pub fn spawn_key(dir: &Path, id: &str) -> Option<SpawnKey> {
+    let key = fs::read_to_string(spawn_key_path(dir, id)).ok()?;
+    SpawnKey::new(key.trim()).ok()
+}
+
+pub fn lets_go(record: &ParkRecord) -> bool {
+    match record.state {
+        ParkState::Waiting => record.caller_closed,
+        ParkState::Finished | ParkState::Resumed | ParkState::Delivered => true,
+        ParkState::Exited | ParkState::Failed => false,
+    }
+}
+
+fn newest_wakeable(records: impl IntoIterator<Item = ParkRecord>) -> Option<ParkRecord> {
+    records
+        .into_iter()
+        .max_by_key(|record| record.created_at)
+        .filter(lets_go)
+}
+
+pub fn wakeable(dir: &Path, key: &str) -> Option<ParkRecord> {
+    let keyed = records(dir)
+        .ok()?
+        .into_iter()
+        .filter(|record| spawn_key(dir, &record.id).is_some_and(|kept| kept.as_str() == key));
+    newest_wakeable(keyed)
 }
 
 pub fn waiting(dir: &Path) -> Vec<ParkRecord> {
@@ -267,6 +301,55 @@ mod tests {
             serde_json::to_string(record).unwrap(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn only_a_newest_park_that_let_go_of_its_terminal_wakes() {
+        let cases = [
+            (ParkState::Waiting, false, false),
+            (ParkState::Waiting, true, true),
+            (ParkState::Exited, true, false),
+            (ParkState::Failed, true, false),
+            (ParkState::Delivered, false, true),
+            (ParkState::Resumed, true, true),
+            (ParkState::Finished, false, true),
+        ];
+        for (state, caller_closed, expected) in cases {
+            let older = record("park-1-1", 1, ParkState::Finished);
+            let newest = ParkRecord {
+                caller_closed,
+                ..record("park-2-2", 2, state)
+            };
+            assert_eq!(
+                newest_wakeable([newest, older]).map(|record| record.id),
+                expected.then(|| "park-2-2".to_owned()),
+                "{state:?} caller_closed={caller_closed}"
+            );
+        }
+        assert!(newest_wakeable([]).is_none());
+    }
+
+    #[test]
+    fn a_park_is_found_by_the_spawn_key_it_kept() {
+        let root = tempfile::tempdir().unwrap();
+        for (id, created_at, lane) in [
+            ("park-1-1", 1, "lane-a"),
+            ("park-2-2", 2, "lane-a"),
+            ("park-3-3", 3, "lane-b"),
+        ] {
+            write(root.path(), &record(id, created_at, ParkState::Finished));
+            fs::write(spawn_key_path(root.path(), id), lane).unwrap();
+        }
+        assert_eq!(
+            spawn_key(root.path(), "park-3-3").map(|key| key.as_str().to_owned()),
+            Some("lane-b".to_owned())
+        );
+        assert_eq!(
+            wakeable(root.path(), "lane-a").map(|record| record.id),
+            Some("park-2-2".to_owned())
+        );
+        assert!(wakeable(root.path(), "lane-c").is_none());
+        assert!(wakeable(&root.path().join("missing"), "lane-a").is_none());
     }
 
     #[test]

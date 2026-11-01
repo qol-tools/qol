@@ -37,7 +37,7 @@ impl ParkStore {
     }
 
     fn spawn_key_path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.key"))
+        qol_terminal_sessions::park::spawn_key_path(&self.dir, id)
     }
 
     pub fn record_spawn_key(&self, id: &str, key: &SpawnKey) -> Result<()> {
@@ -47,8 +47,11 @@ impl ParkStore {
     }
 
     pub fn spawn_key(&self, id: &str) -> Option<SpawnKey> {
-        let key = fs::read_to_string(self.spawn_key_path(id)).ok()?;
-        SpawnKey::new(key.trim()).ok()
+        qol_terminal_sessions::park::spawn_key(&self.dir, id)
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     fn claim_path(&self, id: &str) -> PathBuf {

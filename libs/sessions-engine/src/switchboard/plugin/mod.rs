@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Starts each switchboard fork in its project folder and files each fork's final report on the fork board beside the chat.",
   "types": "./types/index.d.ts"
 }
@@ -94,6 +94,25 @@ mod tests {
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
+    }
+
+    #[test]
+    fn a_message_to_a_stopped_fork_continues_it_as_a_new_fork_the_board_links() {
+        for needle in [
+            "on('tool.call', { tool: SEND }, async ($, e, next) => {",
+            "if (!isUndelivered(answer)) return answer",
+            "const takeover = await takeOver($, target, e.message)",
+            "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
+            "if (stopped !== undefined) await succeed($, stopped, agentId)",
+        ] {
+            assert!(MODULE.contains(needle), "{needle}");
+        }
+        let sentence = "The message above is for the fork ";
+        let taken = ", which was stopped, so you take over its work and its conversation.";
+        assert!(MODULE.contains(sentence) && MODULE.contains(taken));
+        assert!(super::super::SWITCHBOARD_ROLE.contains(sentence));
+        assert!(super::super::SWITCHBOARD_ROLE.contains(taken));
+        assert!(MODULE_TESTS.contains("reaches it as a new fork that reads its conversation"));
     }
 
     #[test]
