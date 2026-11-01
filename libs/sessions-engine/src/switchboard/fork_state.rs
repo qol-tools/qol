@@ -27,23 +27,25 @@ pub(super) fn transcript_of(conversation: &Path, agent_id: &str) -> Option<PathB
 }
 
 fn settled(running: &[Background]) -> ForkState {
-    let waits: Vec<&Background> = running.iter().filter(|work| !work.is_hold()).collect();
-    if waits.is_empty() {
-        return if running.is_empty() {
-            ForkState::Idle
-        } else {
-            ForkState::YourTurn
-        };
-    }
     let mut prs: Vec<String> = Vec::new();
-    for wait in waits {
-        for pr in crate::prs::pull_requests(wait.command.as_deref().unwrap_or_default()) {
+    for work in running.iter().filter(|work| !work.is_hold()) {
+        for pr in crate::prs::pull_requests(work.command.as_deref().unwrap_or_default()) {
             if !prs.contains(&pr) {
                 prs.push(pr);
             }
         }
     }
-    ForkState::Parked(prs)
+    if !prs.is_empty() {
+        return ForkState::Parked(prs);
+    }
+    if running.iter().any(Background::is_hold) {
+        return ForkState::YourTurn;
+    }
+    if running.is_empty() {
+        ForkState::Idle
+    } else {
+        ForkState::Parked(prs)
+    }
 }
 
 pub(super) fn state(status: Option<&str>, transcript: Option<&Path>) -> Option<ForkState> {
@@ -104,6 +106,10 @@ mod tests {
         assert_eq!(
             settle(&waiting("bbuild", "cargo build")),
             Some(ForkState::Parked(Vec::new()))
+        );
+        assert_eq!(
+            settle(&[hold.clone(), waiting("bgame", "./kcd2-forge play")].concat()),
+            Some(ForkState::YourTurn)
         );
         assert_eq!(
             settle(&[hold, watch, notice("bwatch", "completed")].concat()),
