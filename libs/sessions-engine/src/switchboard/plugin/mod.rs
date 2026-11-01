@@ -106,6 +106,7 @@ mod tests {
             "const takeover = await takeOver($, target, e.message)",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "if (stopped !== undefined) await succeed($, stopped, agentId)",
+            "const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }

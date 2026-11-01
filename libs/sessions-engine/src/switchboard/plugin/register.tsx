@@ -30,7 +30,7 @@ const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
 const FORK_TO_FORK =
-  'Not sent: a fork messages only the fork it started or the fork that started it. Another fork\'s work is not yours; put what it needs in your report instead.'
+  'Not sent: an agent inside a fork messages only, by agent id, the fork it started or the fork that started it. Another fork\'s work is not yours; put what it needs in your report instead.'
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
@@ -167,11 +167,15 @@ export const withLauncher = (prompt: string, parentAgentId: string | undefined):
   return [first, launcherLine(parentAgentId), ...body].join('\n')
 }
 
-export const mayMessage = (list: Entry[], from: string, to: string): boolean => {
-  const target = addressed(list, to)
-  if (target === undefined) return true
+const recipientId = (to: unknown): string | undefined =>
+  typeof to === 'string' ? to : typeof to === 'object' && to !== null && typeof (to as { agentId?: unknown }).agentId === 'string' ? (to as { agentId: string }).agentId : undefined
+
+export const mayMessage = (list: Entry[], from: string, to: unknown): boolean => {
+  const id = recipientId(to)
   const sender = list.find(one => one.agentId === from)
-  return target.launcher === from || (sender?.launcher !== undefined && sender.launcher === target.agentId)
+  const target = id === undefined ? undefined : list.find(one => one.agentId === id)
+  if (sender === undefined || target === undefined) return false
+  return target.launcher === from || (sender.launcher !== undefined && sender.launcher === target.agentId)
 }
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
@@ -371,7 +375,7 @@ export const register: Register = on => {
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined)
-    const stopped = isNew ? stoppedFork(e.prompt) : undefined
+    const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined
     if (stopped !== undefined) await succeed($, stopped, agentId)
     return started
   }).catch(($, e, next) => next(e))
