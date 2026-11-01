@@ -551,6 +551,8 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
 }
 
 export const register: Register = on => {
+  let isAutoOpenPending = false
+
   on('agent.spawn', { subagentType: FORK }, ($, e, next) => {
     if (e.resume !== undefined) return next(e)
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
@@ -574,6 +576,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    isAutoOpenPending = false
     try {
       const id = await $.session.id()
       if ((await read($, board)).length === 0) {
@@ -595,7 +598,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
-      if (e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true) void $.ui.open({ id: PANE, title: TITLE })
+      isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
       $.clock.after(WAKE_DELAY_MS, () => void wakeForks($).catch(() => undefined))
@@ -603,10 +606,26 @@ export const register: Register = on => {
     return started
   })
 
+  on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
+    const docks = e.viewport?.isFullscreen
+    if (isAutoOpenPending && docks !== undefined) {
+      isAutoOpenPending = false
+      if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
+    }
+    return next(e)
+  })
+
   on('command.run', { command: PANE }, async $ => {
+    isAutoOpenPending = false
+    const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+    if (isShown) {
+      await rememberClosed($)
+      await $.ui.close({ id: PANE })
+      return { text: 'Fork board closed. /board opens it again.' }
+    }
     await $.store.delete(CLOSED_KEY).catch(() => {})
     const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
-    return { text: opened.isPlaced ? 'Fork board opened.' : `The fork board waits for room: ${opened.reason}` }
+    return { text: opened.isPlaced ? 'Fork board opened. /board closes it.' : `The fork board waits for room: ${opened.reason}` }
   }).catch(() => ({ text: 'The fork board could not open.' }))
 
   on('ui.close', async ($, e, next) => {
@@ -729,7 +748,8 @@ export const register: Register = on => {
       </Box>
     )
 
-    const keys = isFocused ? 'digit opens a fork · tab walks · esc back to the prompt' : 'ctrl+x tab to use the board · ctrl+x x closes it'
+    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · /board or ctrl+x x closes it'
+    const summary = needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`
     const close = (
       <Button key="close" plain dimColor {...(isFocused ? { hotkey: 'x' } : {})} onPress={async () => {
           await rememberClosed($)
@@ -752,7 +772,7 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
-        <Text>{needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`}</Text>
+        <Text>{summary}</Text>
         <Box flexDirection="row" gap={2}>
           <Text dimColor wrap="wrap">
             {keys}
