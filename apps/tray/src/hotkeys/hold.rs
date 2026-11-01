@@ -8,6 +8,7 @@ pub(crate) const HOLD_MS_MIN: u32 = 100;
 pub(crate) const HOLD_MS_MAX: u32 = 10_000;
 pub(crate) const HOLD_MS_STEP: u32 = 100;
 pub(crate) const HOLD_MS_COARSE_STEP: u32 = 1000;
+const FIRED_STALE_AFTER: Duration = Duration::from_secs(60);
 
 pub(crate) fn clamp_hold_ms(hold_ms: u32) -> u32 {
     hold_ms.clamp(HOLD_MS_MIN, HOLD_MS_MAX)
@@ -78,6 +79,10 @@ impl HoldTimer {
 
     pub(crate) fn deadline(&self) -> Option<Instant> {
         (!self.fired).then_some(self.deadline)
+    }
+
+    pub(crate) fn is_stale(&self, now: Instant) -> bool {
+        self.fired && now >= self.deadline + FIRED_STALE_AFTER
     }
 
     pub(crate) fn expire(&mut self, now: Instant) -> Option<Fire> {
@@ -176,9 +181,9 @@ pub(crate) fn invalid_hold(
         .iter()
         .filter(|binding| binding.hold_ms.is_some())
         .find(|binding| {
-            is_continuous(*binding)
-                || (binding.enabled
-                    && chord_id(&binding.key).is_some_and(|id| continuous_chords.contains(&id)))
+            binding.enabled
+                && (is_continuous(*binding)
+                    || chord_id(&binding.key).is_some_and(|id| continuous_chords.contains(&id)))
         })
         .map(|binding| {
             format!(
@@ -279,6 +284,31 @@ mod tests {
         assert_eq!(timer.deadline(), None);
         assert_eq!(timer.expire(t0 + Duration::from_millis(900)), None);
         assert_eq!(timer.release(t0 + Duration::from_millis(900)), None);
+    }
+
+    #[test]
+    fn a_fired_timer_turns_stale_after_a_minute_without_a_release() {
+        let t0 = Instant::now();
+        let mut timer = HoldTimer::start(plan(500, None), t0);
+        assert!(!timer.is_stale(t0 + Duration::from_secs(600)));
+        timer.expire(t0 + ms_of(500));
+        assert!(!timer.is_stale(t0 + Duration::from_secs(59)));
+        assert!(timer.is_stale(t0 + Duration::from_secs(61)));
+    }
+
+    fn ms_of(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_disabled_hold_binding_never_blocks_a_save() {
+        let mut off = binding("a", "Shift+Super+S", "glide-left", Some(1000));
+        off.enabled = false;
+        let config = config(vec![off]);
+        assert_eq!(
+            invalid_hold(&config, chord_id, |b| b.action.starts_with("glide")),
+            None
+        );
     }
 
     #[test]

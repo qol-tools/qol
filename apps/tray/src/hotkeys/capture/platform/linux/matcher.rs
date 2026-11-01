@@ -258,9 +258,9 @@ mod matcher_tests {
         let mut matcher = BindingMatcher::new(vec![binding("Super+Space", false)]);
         assert!(matcher.observe(keycodes::KEY_LEFTMETA, 1).forward);
 
-        let press = matcher.observe(KEY_SPACE, 1);
-        let repeat = matcher.observe(KEY_SPACE, 2);
-        let release = matcher.observe(KEY_SPACE, 0);
+        let press = matcher.observe(keycodes::KEY_SPACE, 1);
+        let repeat = matcher.observe(keycodes::KEY_SPACE, 2);
+        let release = matcher.observe(keycodes::KEY_SPACE, 0);
 
         assert!(!press.forward);
         assert_eq!(press.events[0].phase, Phase::START);
@@ -379,21 +379,21 @@ mod matcher_tests {
     fn left_and_right_modifier_keys_are_equivalent() {
         let mut left = BindingMatcher::new(vec![binding("Super+Space", false)]);
         left.observe(keycodes::KEY_LEFTMETA, 1);
-        assert!(!left.observe(KEY_SPACE, 1).forward);
+        assert!(!left.observe(keycodes::KEY_SPACE, 1).forward);
 
         let mut right = BindingMatcher::new(vec![binding("Super+Space", false)]);
         right.observe(keycodes::KEY_RIGHTMETA, 1);
-        assert!(!right.observe(KEY_SPACE, 1).forward);
+        assert!(!right.observe(keycodes::KEY_SPACE, 1).forward);
     }
 
     #[test]
     fn reload_stops_active_binding_and_keeps_release_suppressed() {
         let mut matcher = BindingMatcher::new(vec![binding("Super+Space", true)]);
         matcher.observe(keycodes::KEY_LEFTMETA, 1);
-        matcher.observe(KEY_SPACE, 1);
+        matcher.observe(keycodes::KEY_SPACE, 1);
 
         let stopped = matcher.reload(Vec::new());
-        let release = matcher.observe(KEY_SPACE, 0);
+        let release = matcher.observe(keycodes::KEY_SPACE, 0);
 
         assert_eq!(stopped.len(), 1);
         assert_eq!(stopped[0].phase, Phase::STOP);

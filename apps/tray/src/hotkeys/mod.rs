@@ -40,7 +40,9 @@ pub(crate) fn invalid_hold(
     config: &HotkeyConfig,
     plugin_manager: &std::sync::Mutex<crate::plugins::PluginManager>,
 ) -> Option<String> {
-    let continuous = continuous_actions(plugin_manager).ok()?;
+    let Ok(continuous) = continuous_actions(plugin_manager) else {
+        return Some("Hotkeys cannot be checked right now. Try again.".to_string());
+    };
     hold::invalid_hold(config, chord_id, |binding| {
         continuous.contains(&(binding.plugin_uid.clone(), binding.action.clone()))
     })

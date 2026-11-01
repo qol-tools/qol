@@ -548,6 +548,12 @@ struct HeldActions {
     actions: HashMap<u32, Held>,
 }
 
+impl Held {
+    fn is_stale(&self, now: Instant) -> bool {
+        matches!(&self.state, HeldState::Timed(timer) if timer.is_stale(now))
+    }
+}
+
 impl HeldActions {
     fn is_empty(&self) -> bool {
         self.actions.is_empty()
@@ -620,7 +626,11 @@ impl HeldActions {
                 if registration.hold.is_none() && !registration.action.continuous {
                     return Some(HotkeyDispatch::OneShot(registration.action));
                 }
-                if self.actions.contains_key(&event.id) {
+                if self
+                    .actions
+                    .get(&event.id)
+                    .is_some_and(|held| !held.is_stale(now))
+                {
                     return None;
                 }
                 self.start(event.id, registration, now)
@@ -1135,6 +1145,28 @@ mod tests {
             None
         );
         assert!(held.is_empty());
+    }
+
+    #[test]
+    fn a_press_after_a_missed_release_starts_over_once_the_fired_hold_is_stale() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 500);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+        held.expire(t0 + ms(500));
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0 + ms(2000)),
+            None
+        );
+        assert_eq!(held.next_deadline(), None);
+
+        let later = t0 + ms(70_000);
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), later),
+            None
+        );
+        assert_eq!(held.next_deadline(), Some(later + ms(500)));
     }
 
     #[test]

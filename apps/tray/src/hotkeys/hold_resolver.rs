@@ -57,9 +57,17 @@ pub(crate) struct HoldResolver {
 impl HoldResolver {
     pub(crate) fn spawn(fire: impl Fn(Fire) + Send + 'static) -> std::io::Result<Self> {
         let (events, inbox) = unbounded::<CaptureEvent>();
+        let (decisions, outbox) = unbounded::<Fire>();
+        std::thread::Builder::new()
+            .name("hotkey-hold-actions".into())
+            .spawn(move || {
+                while let Ok(decision) = outbox.recv() {
+                    fire(decision);
+                }
+            })?;
         std::thread::Builder::new()
             .name("hotkey-hold-resolver".into())
-            .spawn(move || run(&inbox, &fire))?;
+            .spawn(move || run(&inbox, &decisions))?;
         Ok(Self { events })
     }
 
@@ -68,7 +76,7 @@ impl HoldResolver {
     }
 }
 
-fn run(inbox: &Receiver<CaptureEvent>, fire: &dyn Fn(Fire)) {
+fn run(inbox: &Receiver<CaptureEvent>, decisions: &Sender<Fire>) {
     let mut machine = HoldMachine::default();
     loop {
         let deadline = match machine.next_deadline() {
@@ -79,7 +87,7 @@ fn run(inbox: &Receiver<CaptureEvent>, fire: &dyn Fn(Fire)) {
             recv(inbox) -> event => match event {
                 Ok(event) => {
                     if let Some(decision) = machine.apply(&event, Instant::now()) {
-                        fire(decision);
+                        let _ = decisions.send(decision);
                     }
                 }
                 Err(_) => return,
@@ -87,7 +95,7 @@ fn run(inbox: &Receiver<CaptureEvent>, fire: &dyn Fn(Fire)) {
             recv(deadline) -> _ => {}
         }
         for decision in machine.expire(Instant::now()) {
-            fire(decision);
+            let _ = decisions.send(decision);
         }
     }
 }
