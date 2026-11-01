@@ -63,6 +63,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
   on('clock.every', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_800_000_000_000 }))
   on('ui.open', (_: unknown, e: { id: string }) => {
     panes.push(`open ${e.id}`)
@@ -307,4 +308,162 @@ test('only a stopped fork is taken over, once however many messages race to it',
   expect(raced.filter(one => JSON.stringify(one.result).includes('continues as a new fork'))).toHaveLength(1)
   expect(spawned).toHaveLength(3)
   expect(spawned[2]?.prompt).toContain('\nfirst\n')
+})
+
+const settle = async () => {
+  for (let turn = 0; turn < 20; turn += 1) await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+test("a fork's background pull request watcher runs under CLI Sessions, and no other command is rewritten", async ($, on) => {
+  const ran: string[] = []
+  engine(on)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/opt/qol cli/qol-cli-sessions' : undefined }))
+  on('tool.call', (_: unknown, e: any) => {
+    ran.push(String(e.command))
+    return { result: { stdout: '', stderr: '' } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'w1', "watch-fork: it's a fork")
+  const watcher = 'node /q/bin/pr-watch.cjs https://github.com/o/r/pull/7 --pretty'
+  for (const call of [
+    { command: watcher, run_in_background: true, agentId: 'w1' },
+    { command: watcher, run_in_background: false, agentId: 'w1' },
+    { command: watcher, run_in_background: true, agentId: 'stranger' },
+    { command: watcher, run_in_background: true },
+    { command: `${watcher}; rm -rf /tmp/x`, run_in_background: true, agentId: 'w1' },
+    { command: 'node $HOME/pr-watch.cjs https://github.com/o/r/pull/7', run_in_background: true, agentId: 'w1' },
+    { command: 'node /q/bin/pr-watch.cjs --help', run_in_background: true, agentId: 'w1' },
+  ]) {
+    await $.tool.call({ tool: 'Bash', ...call } as any)
+  }
+  expect(ran[0]).toBe(
+    "'/opt/qol cli/qol-cli-sessions' fork-watch --agent w1 --conversation switchboard-session --title 'watch-fork: it'\\''s a fork' -- node /q/bin/pr-watch.cjs https://github.com/o/r/pull/7 --pretty",
+  )
+  expect(ran.slice(1)).toEqual([
+    watcher,
+    watcher,
+    watcher,
+    `${watcher}; rm -rf /tmp/x`,
+    'node $HOME/pr-watch.cjs https://github.com/o/r/pull/7',
+    'node /q/bin/pr-watch.cjs --help',
+  ])
+})
+
+const WAKE = '/data/switchboard/wake.json'
+
+const wakeEngine = (on: any, wake: unknown, sent: unknown[], spawned: Spawned[], written: string[]) => {
+  engine(on, sent, [], spawned)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_WAKE' ? WAKE : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === WAKE }))
+  on('fs.read', () => ({ value: JSON.stringify(wake) }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written.push(e.text)
+    return { value: undefined }
+  })
+}
+
+const wakeFork = (agentId: string, message: string) => ({
+  agent_id: agentId,
+  name: `${agentId}-fork: a fork`,
+  description: `${agentId}-fork: a fork`,
+  cwd: '/work',
+  transcript: `/conv/old/subagents/agent-${agentId}.jsonl`,
+  model: 'opus',
+  effort: null,
+  message,
+})
+
+test('a restart continues the stopped forks with their own message and spends no switchboard turn', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  const wake = {
+    conversation: 'switchboard-session',
+    launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
+    is_handoff: false,
+    forks: [wakeFork('m1', 'Continue your work from where you left off.')],
+    claimed: false,
+  }
+  wakeEngine(on, wake, sent, [], written)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(1)
+  expect(JSON.stringify(sent[0].to)).toContain('m1')
+  expect(sent[0].text).toBe('Continue your work from where you left off.')
+  expect(JSON.parse(written[0] as string).claimed).toBe(true)
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] m1-fork · working (agent id m1)')
+})
+
+test('a claimed, stale or foreign wake is left alone, and a handoff starts each fork again', async ($, on) => {
+  const sent: any[] = []
+  const spawned: Spawned[] = []
+  const written: string[] = []
+  const at = new Date(1_800_000_000_000 - 5_000).toISOString()
+  wakeEngine(
+    on,
+    { conversation: 'old', launched_at: at, is_handoff: true, forks: [wakeFork('h1', 'You take over the work of a fork that stopped.')] },
+    sent,
+    spawned,
+    written,
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  expect(spawned).toHaveLength(1)
+  expect(spawned[0]?.description).toBe('h1-fork: a fork')
+  expect(spawned[0]?.prompt).toBe('Project: /work\nYou take over the work of a fork that stopped.')
+  expect(written).toHaveLength(1)
+})
+
+test('a wake of another conversation or from long ago sends nothing', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  wakeEngine(
+    on,
+    { conversation: 'other', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), is_handoff: false, forks: [wakeFork('x1', 'go')] },
+    sent,
+    [],
+    written,
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  expect(written).toHaveLength(0)
+})
+
+test('a watcher result nothing waited for reaches its fork, and the board shows each pull request', async ($, on) => {
+  const sent: any[] = []
+  const runs: string[][] = []
+  engine(on, sent)
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_WATCHES' ? '/data/fork-watches' : undefined,
+  }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === '/data/fork-watches' }))
+  on('fs.list', () => ({ value: [{ name: 'watch-1-2.json', kind: 'file', size: 10, mtimeMs: 1, isLink: false }] }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv)
+    return {
+      value: {
+        exitCode: 0,
+        stderr: '',
+        stdout: JSON.stringify({
+          results: [{ id: 'watch-1-2', agent_id: 'p1', conversation: 'switchboard-session', name: 'pr-fork: a fork', cwd: '/work', pull_request: 'https://github.com/o/r/pull/7', message: '[CLI Sessions] exited with code 6' }],
+          pulls: [
+            { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/7', number: 7, merge_commit: null, is_watched: false },
+            { agent_id: 'p2', pull_request: 'https://github.com/o/r/pull/8', number: 8, merge_commit: null, is_watched: true },
+            { agent_id: 'p3', pull_request: 'https://github.com/o/r/pull/9', number: 9, merge_commit: '1a4ac81fb6080dad', is_watched: false },
+          ],
+        }),
+      },
+    }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const id of ['p1', 'p2', 'p3']) await spawn($, id, `${id}-fork: a fork`)
+  await settle()
+  expect(runs[0]).toEqual(['/bin/qol-cli-sessions', 'fork-watch', '--deliver'])
+  expect(sent.some(one => JSON.stringify(one).includes('exited with code 6') && JSON.stringify(one.to).includes('p1'))).toBe(true)
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(agent id p1) [#7 open · no watcher]')
+  expect(board).toContain('(agent id p2) [#8 open · CLI Sessions watching]')
+  expect(board).toContain('(agent id p3) [#9 merged 1a4ac81]')
 })

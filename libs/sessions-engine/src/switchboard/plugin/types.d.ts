@@ -14,8 +14,16 @@ export type Entry = {
   successor?: string
 }
 
+export type Pull = {
+  agentId: string
+  pullRequest: string
+  number?: number
+  mergeCommit?: string
+  isWatched: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'qol-switchboard': { board: Shaped<Entry[]>; isDoneOpen: boolean; confirming: string }
+    'qol-switchboard': { board: Shaped<Entry[]>; isDoneOpen: boolean; confirming: string; pulls: Pull[] }
   }
 }

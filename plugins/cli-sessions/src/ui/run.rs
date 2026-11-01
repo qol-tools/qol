@@ -75,6 +75,7 @@ pub fn run(show_on_start: bool) -> anyhow::Result<()> {
     let reconcile_caches = Arc::new(Mutex::new(
         reconcile::ReconcileCaches::with_parked_dir(qol_terminal_sessions::park::parked_dir())
             .with_closed_dir(qol_terminal_sessions::closed::closed_dir())
+            .with_fork_watches(qol_sessions_engine::fork_watch::WatchStore::system().ok())
             .with_messaging(),
     ));
     let service_snapshot = SharedSnapshotCache::default();

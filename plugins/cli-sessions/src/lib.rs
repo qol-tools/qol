@@ -6,6 +6,7 @@ pub mod config;
 pub mod daemon;
 pub mod diagnostics;
 mod doctor;
+pub mod fork_watch;
 pub mod host;
 pub mod park;
 mod parking;

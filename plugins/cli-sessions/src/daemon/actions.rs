@@ -4,9 +4,7 @@ use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, S
 use qol_runtime::protocol::DaemonRequest;
 use qol_terminal_sessions::SessionId;
 
-use crate::ui::notify::{FOCUS_ACTION, REOPEN_ACTION};
-
-const SWITCHBOARD_ACTION: &str = "switchboard";
+use crate::ui::notify::{FOCUS_ACTION, REOPEN_ACTION, SWITCHBOARD_ACTION};
 
 pub const CONFIG: DaemonConfig = DaemonConfig {
     socket: SocketSource::EnvRequired,
@@ -130,6 +128,13 @@ mod tests {
             input: serde_json::Value::Null,
         };
         assert!(matches!(parse_request(&missing), ReadResult::Error(_)));
+    }
+
+    #[test]
+    fn a_fork_watch_notice_asks_for_the_switchboard() {
+        let request = crate::ui::notify::switchboard_request();
+        assert_eq!(request.action, super::SWITCHBOARD_ACTION);
+        assert!(request.input.is_null());
     }
 
     #[test]

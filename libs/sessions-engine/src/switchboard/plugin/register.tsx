@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Entry, Kind } from '../types'
+import type { Entry, Kind, Pull } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const FORK = 'project-fork'
@@ -17,6 +17,13 @@ const KEEP = 100
 const REPORT_CHARS = 16_000
 const HAIKU_MS = 20_000
 const MINUTE = 60_000
+const DELIVER_MS = 2_000
+const DELIVER_TIMEOUT_MS = 20_000
+const WAKE_DELAY_MS = 1_500
+const WAKE_FRESH_MS = 10 * MINUTE
+const SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
+const WATCHER = /^\s*node\s+([A-Za-z0-9_@%+=:,./-]*pr-watch\.cjs)((?:\s+[A-Za-z0-9_@%+=:,./-]+)*)\s*$/
+const HELP_ARGS: readonly string[] = ['help', '--help', '-h']
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
 const DONE: readonly Kind[] = ['merged', 'note']
@@ -43,9 +50,14 @@ const HAIKU_SYSTEM = `You file a coding agent's final report on a board. Answer 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
+const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
 type Header = { kind: Kind; headline: string; recommend?: string }
 type Report = { agentId: string; name?: string; status: string; report: string }
+type Delivery = { id: string; agent_id: string; conversation: string; name?: string | null; cwd: string; pull_request?: string | null; message: string }
+type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
+type WakeFork = { agent_id: string; name?: string | null; description: string; cwd?: string | null; transcript: string; model?: string | null; effort?: string | null; message: string }
+type Wake = { conversation: string; launched_at: string; is_handoff: boolean; forks: WakeFork[]; claimed?: boolean }
 
 const pending = new Map<string, Promise<Header>>()
 
@@ -204,10 +216,10 @@ export const takeoverPrompt = (project: string, message: string, stopped: Entry,
 
 type Takeover = { isStarted: false } | { isStarted: true; agentId?: string }
 
-const startTakeover = async ($: EngineInterface, stopped: Entry, message: string): Promise<Takeover> => {
+const startTakeover = async ($: EngineInterface, stopped: Entry, message: string, recorded?: string): Promise<Takeover> => {
   const project = await (stopped.project !== undefined ? Promise.resolve(stopped.project) : recordedProject($, stopped.agentId)).catch(() => undefined)
   if (project === undefined) return { isStarted: false }
-  const transcript = await subagentFile($, stopped.agentId, '.jsonl').catch(() => undefined)
+  const transcript = recorded ?? (await subagentFile($, stopped.agentId, '.jsonl').catch(() => undefined))
   const started = await $.agent.spawn({ subagentType: FORK, description: stopped.name, prompt: takeoverPrompt(project, message, stopped, transcript) })
   if (started.deny !== undefined) return { isStarted: false }
   if (started.agentId === undefined) return { isStarted: true }
@@ -217,10 +229,10 @@ const startTakeover = async ($: EngineInterface, stopped: Entry, message: string
 
 const takeovers = new Map<string, Promise<Takeover>>()
 
-const takeOver = async ($: EngineInterface, stopped: Entry, message: string): Promise<Takeover & { isFirst: boolean }> => {
+const takeOver = async ($: EngineInterface, stopped: Entry, message: string, transcript?: string): Promise<Takeover & { isFirst: boolean }> => {
   const running = takeovers.get(stopped.agentId)
   if (running !== undefined) return { ...(await running), isFirst: false }
-  const started = startTakeover($, stopped, message).catch((): Takeover => ({ isStarted: false }))
+  const started = startTakeover($, stopped, message, transcript).catch((): Takeover => ({ isStarted: false }))
   takeovers.set(stopped.agentId, started)
   const takeover = await started
   if (!takeover.isStarted) takeovers.delete(stopped.agentId)
@@ -270,6 +282,138 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   return entry
 }
 
+export const quote = (arg: string): string => (SAFE_ARG.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`)
+
+export const watcherArgs = (command: string): string[] | undefined => {
+  const match = WATCHER.exec(command)
+  if (match === null || match[1] === undefined) return undefined
+  const args = ['node', match[1], ...(match[2] ?? '').split(/\s+/).filter(arg => arg !== '')]
+  return args.some(arg => HELP_ARGS.includes(arg)) ? undefined : args
+}
+
+export const watchCommand = (program: string, agentId: string, conversation: string, name: string | undefined, args: readonly string[]): string =>
+  [program, 'fork-watch', '--agent', agentId, '--conversation', conversation, ...(name === undefined || name === '' ? [] : ['--title', name]), '--', ...args].map(quote).join(' ')
+
+export const pullText = (pull: Pull): string =>
+  `#${pull.number ?? '?'} ${pull.mergeCommit !== undefined ? `merged ${pull.mergeCommit.slice(0, 7)}` : pull.isWatched ? 'open · CLI Sessions watching' : 'open · no watcher'}`
+
+const pullsOf = (all: readonly Pull[], agentId: string): Pull[] => all.filter(pull => pull.agentId === agentId)
+
+const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
+  rows.map(row => ({
+    agentId: row.agent_id,
+    pullRequest: row.pull_request,
+    ...(typeof row.number === 'number' ? { number: row.number } : {}),
+    ...(typeof row.merge_commit === 'string' ? { mergeCommit: row.merge_commit } : {}),
+    isWatched: row.is_watched,
+  }))
+
+const conversationFile = async ($: EngineInterface, conversation: string, agentId: string): Promise<string | undefined> => {
+  const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
+  if (conversations === undefined || conversations === '') return undefined
+  const path = `${conversations}/${conversation}/subagents/agent-${agentId}.jsonl`
+  return (await $.fs.exists(path)) ? path : undefined
+}
+
+const undelivered = async ($: EngineInterface, agentId: string, name: string, reason: string, message: string): Promise<void> => {
+  await file($, {
+    agentId,
+    name,
+    status: 'failed',
+    report: `failed: the switchboard could not reach ${keyName(name)}\n\n${reason}\n\nWhat it would have been sent:\n${message}`,
+  })
+}
+
+const stand = (agentId: string, name: string, project: string | undefined): Entry => ({
+  agentId,
+  name,
+  headline: '',
+  report: '',
+  at: 0,
+  isWorking: false,
+  isDismissed: true,
+  ...(project === undefined ? {} : { project }),
+})
+
+const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
+  const target = addressed(await read($, board), agentId) ?? stand(agentId, name, project)
+  const sent = await $.session.send({ to: { agentId: target.agentId }, text: message })
+  if (sent.isDelivered) {
+    await markWorking($, target.agentId, name)
+    return
+  }
+  if (isStopped(sent.reason)) {
+    const takeover = await takeOver($, target, message)
+    if (takeover.isStarted) return
+  }
+  await undelivered($, target.agentId, name, String(sent.reason ?? 'not delivered'), message)
+}
+
+export const relay = async ($: EngineInterface, result: Delivery): Promise<void> => {
+  const name = result.name ?? result.agent_id
+  if (result.conversation === (await $.session.id())) return reach($, result.agent_id, name, result.cwd, result.message)
+  const transcript = await conversationFile($, result.conversation, result.agent_id).catch(() => undefined)
+  const takeover = await takeOver($, stand(result.agent_id, name, result.cwd), result.message, transcript)
+  if (!takeover.isStarted) await undelivered($, result.agent_id, name, 'it belongs to an earlier switchboard conversation, and no new fork could take it over', result.message)
+}
+
+let isDelivering = false
+let delivered = ''
+
+export const deliver = async ($: EngineInterface): Promise<void> => {
+  if (isDelivering) return
+  isDelivering = true
+  try {
+    const program = await $.env.get('QOL_CLI_SESSIONS')
+    const watches = await $.env.get('QOL_SWITCHBOARD_WATCHES')
+    if (program === undefined || program === '' || watches === undefined || watches === '' || !(await $.fs.exists(watches))) return
+    const listing = (await $.fs.list(watches))
+      .map(entry => `${entry.name}:${entry.size}:${entry.mtimeMs}`)
+      .sort()
+      .join('|')
+    if (listing === delivered) return
+    const ran = await $.process.run([program, 'fork-watch', '--deliver'], { timeoutMs: DELIVER_TIMEOUT_MS })
+    if (ran.exitCode !== 0) return
+    delivered = listing
+    const parsed = JSON.parse(ran.stdout) as { results?: Delivery[]; pulls?: LedgerRow[] }
+    await update($, pulls, () => ledgerOf(parsed.pulls ?? []))
+    for (const result of parsed.results ?? []) await relay($, result).catch(() => undefined)
+    $.ui.invalidate('ui.render')
+  } catch {
+  } finally {
+    isDelivering = false
+  }
+}
+
+const wakeFork = async ($: EngineInterface, wake: Wake, fork: WakeFork): Promise<void> => {
+  const name = fork.name ?? fork.description
+  if (!wake.is_handoff) return reach($, fork.agent_id, name, fork.cwd ?? undefined, fork.message)
+  if (fork.cwd === undefined || fork.cwd === null || fork.cwd === '') {
+    await undelivered($, fork.agent_id, name, 'its project folder is unknown, so no new fork could take over its work', fork.message)
+    return
+  }
+  const started = await $.agent.spawn({
+    subagentType: FORK,
+    description: fork.description,
+    prompt: `Project: ${fork.cwd}\n${fork.message}`,
+    ...(typeof fork.model === 'string' ? { model: fork.model } : {}),
+    ...(typeof fork.effort === 'string' ? { effort: fork.effort } : {}),
+  })
+  if (started.deny !== undefined) await undelivered($, fork.agent_id, name, started.deny, fork.message)
+}
+
+export const wakeForks = async ($: EngineInterface): Promise<void> => {
+  const path = await $.env.get('QOL_SWITCHBOARD_WAKE')
+  if (path === undefined || path === '' || !(await $.fs.exists(path))) return
+  const wake = JSON.parse(String(await $.fs.read(path))) as Wake
+  if (wake.claimed === true || !Array.isArray(wake.forks) || wake.forks.length === 0) return
+  const launched = Date.parse(wake.launched_at)
+  if (!Number.isFinite(launched) || (await $.clock.now()) - launched > WAKE_FRESH_MS) return
+  if (!wake.is_handoff && wake.conversation !== (await $.session.id())) return
+  await $.fs.write(path, JSON.stringify({ ...wake, claimed: true }))
+  for (const fork of wake.forks) await wakeFork($, wake, fork).catch(() => undefined)
+}
+
 const once = (text: string, needle: string): boolean => text.indexOf(needle) !== -1 && text.indexOf(needle) === text.lastIndexOf(needle)
 
 export type Origin = 'peer' | 'task-notification'
@@ -317,17 +461,24 @@ const age = (ms: number): string => {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
 }
 
-const readText = (list: Entry[], fork: string | undefined): string => {
+const pullNote = (all: readonly Pull[], agentId: string): string => {
+  const own = pullsOf(all, agentId)
+  return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
+}
+
+export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = []): string => {
   if (fork !== undefined && fork.trim() !== '') {
     const wanted = fork.trim()
     const entry = [...list].reverse().find(one => one.agentId === wanted || keyName(one.name) === wanted || one.name === wanted)
     if (entry === undefined) return `No fork board row for ${wanted}.`
-    return `${boardLine(entry)}\nagent id: ${entry.agentId}\n\n${entry.report || '(no report yet)'}`
+    const own = pullsOf(all, entry.agentId)
+    const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull)} ${pull.pullRequest}`).join('; ')}`
+    return `${boardLine(entry)}\nagent id: ${entry.agentId}${prs}\n\n${entry.report || '(no report yet)'}`
   }
   const shown = list.filter(entry => !entry.isDismissed)
   if (shown.length === 0) return 'The fork board is empty.'
   return shown
-    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)} · working` : boardLine(entry)} (agent id ${entry.agentId})`)
+    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)} · working` : boardLine(entry)} (agent id ${entry.agentId})${pullNote(all, entry.agentId)}`)
     .join('\n')
 }
 
@@ -378,6 +529,8 @@ export const register: Register = on => {
       await refreshStatus($)
       if (e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true) void $.ui.open({ id: PANE, title: TITLE })
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
+      $.clock.every(DELIVER_MS, () => void deliver($))
+      $.clock.after(WAKE_DELAY_MS, () => void wakeForks($).catch(() => undefined))
     } catch {}
     return started
   })
@@ -396,7 +549,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
-    return { result: readText(await read($, board), fork) }
+    return { result: readText(await read($, board), fork, await read($, pulls)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
@@ -410,6 +563,16 @@ export const register: Register = on => {
     if (takeover.isFirst) return { result: { success: true, message: continued(target.name, takeover) } }
     const successor = takeover.agentId ?? addressed(await read($, board), target.agentId)?.agentId
     return successor === undefined || successor === target.agentId ? answer : next({ ...e, to: successor })
+  }).catch(($, e, next) => next(e))
+
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.agentId === undefined || e.run_in_background !== true || typeof e.command !== 'string') return next(e)
+    const args = watcherArgs(e.command)
+    if (args === undefined) return next(e)
+    const entry = (await read($, board)).find(one => one.agentId === e.agentId)
+    const program = await $.env.get('QOL_CLI_SESSIONS')
+    if (entry === undefined || program === undefined || program === '') return next(e)
+    return next({ ...e, command: watchCommand(program, e.agentId, await $.session.id(), entry.name, args) })
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
@@ -437,6 +600,7 @@ export const register: Register = on => {
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
+    const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     const isFocused = e.props.isFocused
@@ -483,6 +647,12 @@ export const register: Register = on => {
         </Text>
       </Button>
     )
+    const prs = (entry: Entry) =>
+      pullsOf(ledger, entry.agentId).map(pull => (
+        <Text key={`pr-${entry.agentId}-${pull.pullRequest}`} dimColor={pull.mergeCommit === undefined && pull.isWatched} color={pull.mergeCommit !== undefined ? 'success' : pull.isWatched ? undefined : 'warning'} wrap="wrap">
+          {pullText(pull)}
+        </Text>
+      ))
     const heading = (text: string) => (
       <Box marginTop={1}>
         <Text dimColor bold>
@@ -527,6 +697,7 @@ export const register: Register = on => {
             {title(entry, entry.kind ?? 'note')}
             <Box paddingLeft={2} flexDirection="column">
               <Text wrap="wrap">{entry.headline}</Text>
+              {prs(entry)}
               {entry.recommend !== undefined && <Text dimColor wrap="wrap">Recommend: {entry.recommend}</Text>}
               {entry.recommend !== undefined && asking === entry.agentId && (
                 <Text wrap="wrap">
@@ -558,16 +729,22 @@ export const register: Register = on => {
         ))}
         {working.length > 0 && heading('WORKING')}
         {working.map(entry => (
-          <Box key={`work-${entry.agentId}`}>{title(entry, 'working')}</Box>
+          <Box key={`work-${entry.agentId}`} flexDirection="column">
+            {title(entry, 'working')}
+            <Box paddingLeft={2} flexDirection="column">
+              {prs(entry)}
+            </Box>
+          </Box>
         ))}
         {waiting.length > 0 && heading('WAITING ON A PULL REQUEST')}
         {waiting.map(entry => (
           <Box key={`wait-${entry.agentId}`} flexDirection="column">
             {title(entry, 'waiting')}
-            <Box paddingLeft={2}>
+            <Box paddingLeft={2} flexDirection="column">
               <Text dimColor wrap="wrap">
                 {entry.headline}
               </Text>
+              {prs(entry)}
             </Box>
           </Box>
         ))}
@@ -585,10 +762,11 @@ export const register: Register = on => {
           done.map(entry => (
             <Box key={`done-${entry.agentId}`} flexDirection="column">
               {title(entry, entry.kind ?? 'note')}
-              <Box paddingLeft={2}>
+              <Box paddingLeft={2} flexDirection="column">
                 <Text dimColor wrap="wrap">
                   {entry.headline}
                 </Text>
+                {prs(entry)}
               </Box>
             </Box>
           ))}

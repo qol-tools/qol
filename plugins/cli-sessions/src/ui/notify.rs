@@ -2,11 +2,14 @@ use crate::host::project_of;
 use crate::session::status::Status;
 use crate::session::tool::{is_generic, Tool};
 use qol_runtime::protocol::{DaemonRequest, NotificationLayout};
+use qol_sessions_engine::fork_watch::{ForkWatch, WatchState};
 use qol_terminal_sessions::park::{ParkRecord, ParkState};
 use qol_terminal_sessions::SessionId;
 
 pub const FOCUS_ACTION: &str = "focus";
 pub const REOPEN_ACTION: &str = "reopen";
+pub const SWITCHBOARD_ACTION: &str = "switchboard";
+const FORK_TITLE: &str = "Switchboard fork";
 const REPORT_MAX_CHARS: usize = 400;
 
 pub struct Notice {
@@ -64,6 +67,31 @@ impl Notice {
         }
     }
 
+    pub fn for_fork_watch(watch: &ForkWatch) -> Self {
+        let name = watch
+            .name
+            .as_deref()
+            .map(|name| name.split(':').next().unwrap_or(name).trim())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(FORK_TITLE);
+        let what = watch
+            .pull_request
+            .as_deref()
+            .and_then(|pull_request| pull_request.rsplit('/').next())
+            .map(|number| format!("The watcher of #{number}"))
+            .unwrap_or_else(|| "A watched command".to_owned());
+        let body = if watch.state == WatchState::Failed {
+            format!("{what} stopped: CLI Sessions lost its runner. Open the switchboard to tell the fork.")
+        } else {
+            format!("{what} finished. Open the switchboard to give the fork its result.")
+        };
+        Self {
+            title: name.to_owned(),
+            body,
+            activate: switchboard_request(),
+        }
+    }
+
     /// The action a click on the toast sends back.
     pub fn activate(&self) -> DaemonRequest {
         self.activate.clone()
@@ -81,6 +109,13 @@ pub fn reopen_request(park: &str) -> DaemonRequest {
     DaemonRequest {
         action: REOPEN_ACTION.to_string(),
         input: serde_json::json!({ "park": park }),
+    }
+}
+
+pub fn switchboard_request() -> DaemonRequest {
+    DaemonRequest {
+        action: SWITCHBOARD_ACTION.to_string(),
+        input: serde_json::Value::Null,
     }
 }
 
