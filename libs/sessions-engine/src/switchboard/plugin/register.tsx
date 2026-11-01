@@ -264,6 +264,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    isAutoOpenPending = false
     try {
       const id = await $.session.id()
       if ((await read($, board)).length === 0) {
