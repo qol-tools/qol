@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use args::ParkArgs;
 pub use args::HELP;
+pub(crate) use prompt::read_tail;
 use prompt::{kept_open_instruction, unpark_prompt, PARKED_INSTRUCTION, PARKING_OFF_REASON};
 use resume::resume;
 use runner::{caller_state, holder, turn_in_progress, watch_woken, CallerState, Holder};
@@ -214,10 +215,10 @@ pub(crate) fn spawn_runner(executable: &Path, record: &ParkRecord) -> Result<()>
     qol_process::spawn_detached(&mut runner).context("failed to start the park runner")
 }
 
-struct Detached(Option<PathBuf>);
+pub(crate) struct Detached(Option<PathBuf>);
 
 impl Detached {
-    fn register() -> Self {
+    pub(crate) fn register() -> Self {
         let runtime_dir = qol_config::runtime_dir();
         let registered = runtime_dir
             .as_deref()

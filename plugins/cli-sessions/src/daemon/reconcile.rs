@@ -31,6 +31,7 @@ use crate::ui::notify::{self, Notice};
 const SCREEN_FALLBACK_SECS: u64 = 60;
 const SUBSCRIPTION_RETRY_SECS: u64 = 30;
 const ATTENTION_HEARTBEAT_SECS: u64 = 10;
+const FORK_WATCH_NOTICE_GRACE_SECS: u64 = 15;
 
 #[derive(Default)]
 pub struct ReconcileCaches {
@@ -39,6 +40,7 @@ pub struct ReconcileCaches {
     screens: HashMap<SessionId, ScreenCache>,
     bridges: LiveBridgeReader,
     parked_dir: Option<std::path::PathBuf>,
+    fork_watches: Option<qol_sessions_engine::fork_watch::WatchStore>,
     messaging: Option<Messaging>,
     closed: ClosedLedger,
 }
@@ -49,6 +51,14 @@ impl ReconcileCaches {
             parked_dir,
             ..Self::default()
         }
+    }
+
+    pub fn with_fork_watches(
+        mut self,
+        store: Option<qol_sessions_engine::fork_watch::WatchStore>,
+    ) -> Self {
+        self.fork_watches = store;
+        self
     }
 
     pub fn with_closed_dir(mut self, dir: Option<std::path::PathBuf>) -> Self {
@@ -369,6 +379,7 @@ pub fn tick_with_caches(
         wall_now,
     );
     notices.extend(finished_park_notices(caches.parked_dir.as_deref()));
+    notices.extend(fork_watch_notices(caches.fork_watches.as_ref(), wall_now));
     if let Some(messaging) = caches.messaging.as_mut() {
         messaging.tick(registry, cli_interpreter, &panes, wall_now);
     }
@@ -937,6 +948,22 @@ fn finished_park_notices(dir: Option<&std::path::Path>) -> Vec<Notice> {
             },
         )
         .map(|record| Notice::for_park(&record))
+        .collect()
+}
+
+fn fork_watch_notices(
+    store: Option<&qol_sessions_engine::fork_watch::WatchStore>,
+    wall_now: u64,
+) -> Vec<Notice> {
+    let Some(store) = store else {
+        return Vec::new();
+    };
+    for id in crate::fork_watch::relaunch_stale(store, wall_now) {
+        log::warn!("[cli-sessions] fork watch {id} lost its runner too often and stopped");
+    }
+    crate::fork_watch::unannounced(store, wall_now, FORK_WATCH_NOTICE_GRACE_SECS)
+        .iter()
+        .map(Notice::for_fork_watch)
         .collect()
 }
 
