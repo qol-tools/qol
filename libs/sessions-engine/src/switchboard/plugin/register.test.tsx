@@ -28,6 +28,8 @@ const promptBand = (isFullscreen: boolean) =>
 const runBoard = ($: any) =>
   $.command.run({ command: 'board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })
 
+const typed = ($: any, text: string, kind = 'composer') => $.prompt.submit({ text, wait: false, origin: { kind } })
+
 const notification = (agentId: string, name: string, result: string) =>
   `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent "${name}" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>${result}</result>\n<usage><subagent_tokens>10</subagent_tokens></usage>\n</task-notification>`
 
@@ -82,6 +84,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = []) => {
     open.delete(e.id)
     return { value: undefined }
   })
+  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
     const { Box } = $.ui.resolve(e)
     return <Box />
@@ -208,7 +211,7 @@ test('the board names the key that reaches it until it holds the keys, and close
   await runBoard($)
 
   const outside = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · \/board or ctrl\+x x closes it/ })).toBeDefined()
+  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · qols board or ctrl\+x x closes it/ })).toBeDefined()
   expect(await outside.find({ type: 'Text', text: /tab walks/ })).toBeUndefined()
   await outside.unmount()
 
@@ -248,6 +251,18 @@ test('/board toggles the board, and a board it closed stays closed at the next s
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const band = await $.ui.mount(promptBand(true))
   await band.unmount()
+  expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('typing qols board toggles the board like /board and never reaches the model', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  expect((await typed($, '  QOLS   Board ')).drop).toContain('Fork board closed.')
+  expect(panes).toEqual(['open board', 'close board'])
+  expect((await typed($, 'qols board please')).text).toBe('qols board please')
+  expect((await typed($, 'qols status')).text).toBe('qols status')
   expect(panes).toEqual(['open board', 'close board'])
 })
 
