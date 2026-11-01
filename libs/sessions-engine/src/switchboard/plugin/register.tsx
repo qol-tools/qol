@@ -10,6 +10,7 @@ const TITLE = 'Fork board'
 const TOOL = 'fork_board'
 const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const STORE_PREFIX = 'board:'
+const CLOSED_KEY = 'pane-closed'
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -103,6 +104,12 @@ const boardLine = (entry: Entry): string =>
   [`[fork board] ${keyName(entry.name)} · ${entry.kind ?? 'working'} · ${entry.headline}`, entry.recommend === undefined ? undefined : `Recommend: ${entry.recommend}`]
     .filter(line => line !== undefined)
     .join('\n')
+
+const rememberClosed = async ($: EngineInterface): Promise<void> => {
+  try {
+    await $.store.set(CLOSED_KEY, true)
+  } catch {}
+}
 
 const persist = async ($: EngineInterface): Promise<void> => {
   try {
@@ -276,16 +283,23 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
-      if (e.isInteractive) void $.ui.open({ id: PANE, title: TITLE })
+      if (e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true) void $.ui.open({ id: PANE, title: TITLE })
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
     } catch {}
     return started
   })
 
   on('command.run', { command: PANE }, async $ => {
+    await $.store.delete(CLOSED_KEY).catch(() => {})
     const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
     return { text: opened.isPlaced ? 'Fork board opened.' : `The fork board waits for room: ${opened.reason}` }
   }).catch(() => ({ text: 'The fork board could not open.' }))
+
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE && e.origin?.kind === 'person') await rememberClosed($)
+    return closed
+  })
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
@@ -319,6 +333,7 @@ export const register: Register = on => {
     const asking = await read($, confirming)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
+    const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const working = list.filter(entry => entry.isWorking).sort((a, b) => a.at - b.at)
     const waiting = list.filter(entry => !entry.isWorking && entry.kind === 'waiting')
@@ -364,19 +379,36 @@ export const register: Register = on => {
       </Box>
     )
 
+    const keys = isFocused ? 'digit opens a fork · tab walks · esc back to the prompt' : 'ctrl+x tab to use the board · ctrl+x x closes it'
+    const close = (
+      <Button key="close" plain dimColor {...(isFocused ? { hotkey: 'x' } : {})} onPress={async () => {
+          await rememberClosed($)
+          await $.ui.close({ id: PANE })
+        }}>
+        close
+      </Button>
+    )
+
     if (list.length === 0) {
       return (
         <Box flexDirection="column">
           <Text dimColor>No forks yet. Each fork's report lands here as one line.</Text>
+          <Box flexDirection="row" gap={2}>
+            <Text dimColor>{keys}</Text>
+            {close}
+          </Box>
         </Box>
       )
     }
     return (
       <Box flexDirection="column">
-        <Text>
-          {needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`}{' '}
-          <Text dimColor>Digit opens a fork · tab walks · esc back</Text>
-        </Text>
+        <Text>{needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`}</Text>
+        <Box flexDirection="row" gap={2}>
+          <Text dimColor wrap="wrap">
+            {keys}
+          </Text>
+          {close}
+        </Box>
         {needs.length > 0 && heading('NEEDS YOU')}
         {needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">

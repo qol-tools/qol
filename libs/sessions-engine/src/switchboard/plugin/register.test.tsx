@@ -40,7 +40,7 @@ const spawn = async ($: any, agentId: string, description: string) => {
   expect(started.agentId).toBe(agentId)
 }
 
-const engine = (on: any, sent: unknown[] = []) => {
+const engine = (on: any, sent: unknown[] = [], panes: string[] = []) => {
   const store = new Map<string, unknown>()
   on('agent.spawn', (_: unknown, e: { prompt: string }) => ({ model: 'haiku', agentId: e.prompt.split(' ').pop() }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
@@ -59,7 +59,14 @@ const engine = (on: any, sent: unknown[] = []) => {
   on('ui.toast', () => ({ value: undefined }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_800_000_000_000 }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', (_: unknown, e: { id: string }) => {
+    panes.push(`open ${e.id}`)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_: unknown, e: { id: string }) => {
+    panes.push(`close ${e.id}`)
+    return { value: undefined }
+  })
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'board' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__qol-switchboard__fork_board' } }))
@@ -171,4 +178,36 @@ test('fork_board lists every row and returns one fork in full', async ($, on) =>
   expect(String(all.result)).toContain('[fork board] kcd2-modding · test · Hip light fix is live; 3 steps to try (agent id a4)')
   const one = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'kcd2-modding' })
   expect(String(one.result)).toContain('1. Walk backwards.')
+})
+
+test('the board names the key that reaches it until it holds the keys, and closes from a button', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+
+  const outside = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
+  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · ctrl\+x x closes it/ })).toBeDefined()
+  expect(await outside.find({ type: 'Text', text: /tab walks/ })).toBeUndefined()
+  await outside.unmount()
+
+  const inside = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await inside.find({ type: 'Text', text: /digit opens a fork · tab walks · esc back to the prompt/ })).toBeDefined()
+  await inside.press({ key: 'close' })
+  await inside.unmount()
+  expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('a board the user closed stays closed at the next start until /board opens it', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'close' })
+  await ui.unmount()
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual(['open board', 'close board'])
+  await $.command.run({ command: 'board' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual(['open board', 'close board', 'open board', 'open board'])
 })
