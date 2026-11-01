@@ -88,7 +88,9 @@ mod tests {
             "const FORK = 'project-fork'",
             "on('agent.spawn', { subagentType: FORK }, ($, e, next) => {",
             "if (e.resume !== undefined) return next(e)",
-            "next({ ...e, cwd: project[1] })",
+            "next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })",
+            "on('session.send', async ($, e, next) => {",
+            "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
             "next.called ? next(e) : { deny:",
             "const PROJECT = /^\\s*Project:\\s*(.+?)\\s*$/",
         ] {
@@ -104,6 +106,7 @@ mod tests {
             "const takeover = await takeOver($, target, e.message)",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "if (stopped !== undefined) await succeed($, stopped, agentId)",
+            "const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
