@@ -12,7 +12,7 @@ use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::{kit, Kit};
 use qol_gpui::pictures::PictureContext;
-use qol_gpui::scroll_list::{wheel_steps, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt,
@@ -24,6 +24,7 @@ use qol_gpui::settings_panel::{
     settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
 
@@ -59,6 +60,7 @@ pub(super) struct ProfilesView {
     field: TextField,
     selected: usize,
     list: ScrollList,
+    list_height: ListHeight,
     polling: bool,
     poller: bool,
 }
@@ -92,6 +94,7 @@ impl ProfilesView {
             field: TextField::new(),
             selected: 1,
             list: ScrollList::new(MAX_VISIBLE),
+            list_height: ListHeight::default(),
             polling: false,
             poller: false,
         }
@@ -760,15 +763,16 @@ impl ProfilesView {
                 cx,
             ));
         }
-        list.child(kit().scroll_cue(
-            ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
-                total,
-            },
-            kit().grounds.pane,
-        ))
-        .into_any_element()
+        list.child(self.list_height.recorder(cx.weak_entity()))
+            .child(kit().scroll_cue(
+                ScrollSource::Window {
+                    first: range.start,
+                    shown: range.len(),
+                    total,
+                },
+                kit().grounds.pane,
+            ))
+            .into_any_element()
     }
 
     fn render_deck(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -849,6 +853,10 @@ impl Render for ProfilesView {
         let focused = self.focus.is_focused(window);
         let rows = self.rows();
         self.sync_selection(&rows);
+        self.list
+            .fit_to(&self.list_height, rows.len(), SETTINGS_LIST_GAP, |index| {
+                row_height(&rows[index])
+            });
         let body = if self.snapshot.is_none() {
             settings_page()
                 .child(settings_busy_message(
@@ -899,5 +907,12 @@ fn row_id(level: Level) -> &'static str {
         Level::Profiles => "profiles-card-row",
         Level::Backups => "backups-card-row",
         Level::Review => "review-card-row",
+    }
+}
+
+fn row_height(row: &Row) -> f32 {
+    match row.header {
+        true => SettingsGroupHeader::height_with_detail(),
+        false => qol_theme::HEIGHT_SETTING_ROW,
     }
 }

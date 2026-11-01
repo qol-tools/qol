@@ -127,10 +127,12 @@ fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Opti
     }
 }
 
+const MASTHEAD_RULE_HEIGHT: f32 = 1.0;
+
 fn masthead_rule() -> gpui::Div {
     div()
         .flex_none()
-        .h(px(1.0))
+        .h(px(MASTHEAD_RULE_HEIGHT))
         .bg(rgba(kit().washes.hairline.packed()))
 }
 
@@ -381,6 +383,8 @@ pub fn settings_page() -> gpui::Div {
         .gap(px(qol_theme::SPACE_TIGHT))
 }
 
+pub const SETTINGS_LIST_GAP: f32 = qol_theme::SPACE_TIGHT;
+
 pub fn settings_list() -> gpui::Div {
     div()
         .relative()
@@ -388,7 +392,7 @@ pub fn settings_list() -> gpui::Div {
         .min_h_0()
         .flex()
         .flex_col()
-        .gap(px(qol_theme::SPACE_TIGHT))
+        .gap(px(SETTINGS_LIST_GAP))
         .mr(px(-qol_theme::SPACE_PAD))
         .pr(px(qol_theme::SPACE_PAD))
 }

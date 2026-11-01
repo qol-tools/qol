@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::*;
 use qol_gpui::deck;
 use qol_gpui::pictures::PictureContext;
-use qol_gpui::scroll_list::{wheel_steps, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
     settings_label_group, settings_message, settings_page, settings_tile_rows,
@@ -20,7 +20,7 @@ use qol_gpui::settings_panel::components::{
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_list, wrapping_visible_row, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
-    EscapeStep, Intent, SettingsDestination,
+    EscapeStep, Intent, SettingsDestination, SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
@@ -114,6 +114,7 @@ pub(super) struct NativeToolsView {
     registration_errors: Vec<RegistrationError>,
     shortcut_list: ScrollList,
     hotkey_list: ScrollList,
+    list_height: ListHeight,
     loading: bool,
     pending: bool,
     sequence: u64,
@@ -158,6 +159,7 @@ impl NativeToolsView {
             registration_errors: Vec::new(),
             shortcut_list: ScrollList::new(MAX_VISIBLE),
             hotkey_list: ScrollList::new(MAX_VISIBLE),
+            list_height: ListHeight::default(),
             loading: true,
             pending: false,
             sequence,
@@ -208,6 +210,16 @@ impl NativeToolsView {
 
     fn list_len(&self) -> usize {
         self.item_count() + 1
+    }
+
+    fn fit_list(&mut self) {
+        let total = self.list_len();
+        let measured = self.list_height.clone();
+        self.list_mut()
+            .fit_to(&measured, total, SETTINGS_LIST_GAP, |index| match index {
+                0 => qol_gpui::theme::HEIGHT_RULE_ROW,
+                _ => ROW_HEIGHT,
+            });
     }
 
     fn list(&self) -> &ScrollList {
@@ -1056,6 +1068,7 @@ impl NativeToolsView {
         if self.item_count() == 0 {
             list = list.child(self.render_message(self.empty_message(), false));
         }
+        list = list.child(self.list_height.recorder(cx.weak_entity()));
         list = list.child(qol_gpui::kit::kit().scroll_cue(
             qol_gpui::scrollbar::ScrollSource::Window {
                 first: range.start,
@@ -2151,6 +2164,7 @@ impl Render for NativeToolsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_editor_text();
         self.sync_lists();
+        self.fit_list();
         self.body_focused = self.focus_handle.is_focused(window);
         div()
             .id("qol-native-shortcuts-hotkeys-body")

@@ -2247,6 +2247,32 @@ fn every_scrolling_list_says_when_there_is_more() {
     );
 }
 
+#[test]
+fn every_settings_page_list_fills_the_page_height() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut problems = Vec::new();
+    for (relative, path) in surface_sources(&workspace) {
+        if !relative.starts_with("apps/tray/src/settings_surface/") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).expect("read gpui source");
+        let body = contents.split("#[cfg(test)]").next().unwrap_or_default();
+        let windows = body.matches(".visible_range(").count();
+        let fits = body.matches(".fit_to(").count();
+        let recorders = body.matches(".recorder(cx.weak_entity())").count();
+        if windows > 0 && (fits == 0 || recorders < windows) {
+            problems.push(format!(
+                "{relative} windows {windows} lists with {fits} fit_to calls and {recorders} height recorders"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "A settings page list shows as many rows as its height holds: fit its ScrollList with fit_to and put a ListHeight recorder in the list.\n{}",
+        problems.join("\n")
+    );
+}
+
 const WINDOW_OPENERS: [(&str, Option<(&str, &str)>); 9] = [
     (
         "libs/gpui/src/color_wheel.rs",
