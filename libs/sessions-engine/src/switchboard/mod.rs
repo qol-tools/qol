@@ -12,7 +12,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 mod agents;
+mod background;
 mod context;
+mod fork_state;
 mod hooks;
 mod paths;
 mod plugin;

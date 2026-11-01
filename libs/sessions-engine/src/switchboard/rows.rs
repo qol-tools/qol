@@ -7,23 +7,28 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::fork_state::{self, ForkState};
+
 const MODEL_COLOR: &str = "\x1b[33m";
 const COLOR_OFF: &str = "\x1b[39m";
+const WORKING_COLOR: &str = "\x1b[32m";
+const PARKED_COLOR: &str = "\x1b[34m";
+const YOUR_TURN_COLOR: &str = "\x1b[1;33m";
+const BOLD_OFF: &str = "\x1b[22m";
+const WORKING_LABEL: &str = "working";
+const PARKED_LABEL: &str = "parked";
+const YOUR_TURN_LABEL: &str = "your turn";
+const IDLE_LABEL: &str = "idle";
 const ELLIPSIS: char = '…';
 const GAP: &str = "  ";
 const TAIL_SEPARATOR: &str = " · ";
 const CLAUDE_PREFIX: &str = "claude-";
-const IDLE_STATUS: &str = "completed";
-const IDLE_LABEL: &str = "idle";
 const KEY_SEPARATOR: &str = ": ";
 const KEY_NAME_LIMIT: usize = 64;
 const NAME_SHARE: usize = 3;
 const NAME_MIN: usize = 12;
 const SUMMARY_MIN: usize = 4;
 const STARTED_FORMAT: &str = "%b %-d %H:%M";
-const SUBAGENTS_DIR: &str = "subagents";
-const AGENT_PREFIX: &str = "agent-";
-const TRANSCRIPT_SUFFIX: &str = ".jsonl";
 const FIRST_ROW_LIMIT: u64 = 256 * 1024;
 const COLOR_TAIL: u64 = 256 * 1024;
 const COLOR_ROW_TAG: &str = "\"type\":\"agent-color\"";
@@ -73,6 +78,7 @@ struct Fork {
 struct Clock<'a> {
     now_ms: u64,
     fork: &'a dyn Fn(&str) -> Fork,
+    state: &'a dyn Fn(&str, Option<&str>) -> Option<ForkState>,
     started_label: &'a dyn Fn(u64) -> Option<String>,
 }
 
@@ -237,16 +243,16 @@ const LADDER: [(HeadFit, TailFit); 6] = [
     (HeadFit::NameOnly, TailFit::NoTokens),
 ];
 
-struct Head {
+struct Drawn {
     text: String,
     width: usize,
 }
 
-fn head(name: &str, color: &str, task: &Task, fit: HeadFit) -> Head {
+fn head(name: &str, color: &str, task: &Task, fit: HeadFit) -> Drawn {
     let mut text = painted(name, color);
     let mut width = width(name);
     if fit == HeadFit::NameOnly {
-        return Head { text, width };
+        return Drawn { text, width };
     }
     if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
         let label = plain(&model_label(model));
@@ -261,21 +267,58 @@ fn head(name: &str, color: &str, task: &Task, fit: HeadFit) -> Head {
             }
         }
     }
-    Head { text, width }
+    Drawn { text, width }
+}
+
+struct StateLabel {
+    word: String,
+    color: Option<&'static str>,
+}
+
+fn state_label(state: &ForkState) -> StateLabel {
+    let (word, color) = match state {
+        ForkState::Working => (WORKING_LABEL.to_owned(), Some(WORKING_COLOR)),
+        ForkState::Parked(prs) => {
+            let numbers = prs
+                .iter()
+                .filter_map(|pr| pr.rsplit('/').next())
+                .map(|number| format!("#{number}"))
+                .collect::<Vec<_>>();
+            let word = if numbers.is_empty() {
+                PARKED_LABEL.to_owned()
+            } else {
+                format!("{PARKED_LABEL} {}", numbers.join(","))
+            };
+            (word, Some(PARKED_COLOR))
+        }
+        ForkState::YourTurn => (YOUR_TURN_LABEL.to_owned(), Some(YOUR_TURN_COLOR)),
+        ForkState::Idle => (IDLE_LABEL.to_owned(), None),
+    };
+    StateLabel { word, color }
 }
 
 struct Tail {
-    idle: bool,
+    state: Option<StateLabel>,
     started: Option<String>,
     elapsed: Option<String>,
     tokens: u64,
 }
 
 impl Tail {
-    fn text(&self, fit: TailFit) -> String {
+    fn drawn(&self, fit: TailFit) -> Drawn {
+        Drawn {
+            text: self.text(fit, true),
+            width: width(&self.text(fit, false)),
+        }
+    }
+
+    fn text(&self, fit: TailFit, paint: bool) -> String {
         let mut parts = Vec::new();
-        if self.idle {
-            parts.push(IDLE_LABEL.to_owned());
+        if let Some(state) = &self.state {
+            parts.push(match state.color.filter(|_| paint) {
+                Some(color) => format!("{color}{}{BOLD_OFF}{COLOR_OFF}", state.word),
+                None => state.word.clone(),
+            });
         }
         parts.extend(self.started.clone());
         if fit == TailFit::Full {
@@ -300,8 +343,11 @@ fn fitted(
 ) -> String {
     let name_floor = width(name).min(NAME_MIN);
     for (head_fit, tail_fit) in LADDER {
-        let tail = tail.text(tail_fit);
-        let fixed = head("", color, task, head_fit).width + GAP.len() + width(&tail);
+        let Drawn {
+            text: tail,
+            width: tail_width,
+        } = tail.drawn(tail_fit);
+        let fixed = head("", color, task, head_fit).width + GAP.len() + tail_width;
         if name_floor + fixed > columns {
             continue;
         }
@@ -315,7 +361,7 @@ fn fitted(
                 task,
                 head_fit,
             );
-            let room = columns.saturating_sub(capped.width + GAP.len() * 2 + width(&tail));
+            let room = columns.saturating_sub(capped.width + GAP.len() * 2 + tail_width);
             if room > 0 && room >= SUMMARY_MIN.min(width(summary)) {
                 let summary = truncate(summary, room);
                 let pad = room - width(&summary) + GAP.len();
@@ -323,16 +369,17 @@ fn fitted(
             }
         }
         let shown = head(&truncate(name, columns - fixed), color, task, head_fit);
-        let pad = columns - shown.width - width(&tail);
+        let pad = columns - shown.width - tail_width;
         return format!("{}{}{tail}", shown.text, " ".repeat(pad));
     }
-    let tail = tail.text(TailFit::NoTokens);
-    if tail.is_empty() || width(&tail) + 2 > columns {
+    let shown = tail.drawn(TailFit::NoTokens);
+    if shown.width == 0 || shown.width + 2 > columns {
+        let tail = tail.text(TailFit::NoTokens, false);
         return truncate(format!("{name} {tail}").trim_end(), columns);
     }
-    let name = truncate(name, columns - width(&tail) - 1);
-    let pad = columns - width(&name) - width(&tail);
-    format!("{}{}{tail}", painted(&name, color), " ".repeat(pad))
+    let name = truncate(name, columns - shown.width - 1);
+    let pad = columns - width(&name) - shown.width;
+    format!("{}{}{}", painted(&name, color), " ".repeat(pad), shown.text)
 }
 
 fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
@@ -363,7 +410,9 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
         .unwrap_or_else(|| key_color(&name));
     let started = fork.started_ms.or(task.start_time);
     let tail = Tail {
-        idle: task.status.as_deref() == Some(IDLE_STATUS),
+        state: (clock.state)(&task.id, task.status.as_deref())
+            .as_ref()
+            .map(state_label),
         started: started
             .and_then(clock.started_label)
             .map(|label| plain(&label)),
@@ -375,21 +424,18 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
         Some(columns) => Some(fitted(&name, color, summary, task, &tail, columns)),
         None => {
             let shown = head(&name, color, task, HeadFit::Full);
-            let line = [shown.text.as_str(), summary, &tail.text(TailFit::Full)]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join(GAP);
+            let line = [
+                shown.text.as_str(),
+                summary,
+                &tail.drawn(TailFit::Full).text,
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(GAP);
             Some(line)
         }
     }
-}
-
-fn agent_transcript(session_transcript: &Path, id: &str) -> PathBuf {
-    session_transcript
-        .with_extension("")
-        .join(SUBAGENTS_DIR)
-        .join(format!("{AGENT_PREFIX}{id}{TRANSCRIPT_SUFFIX}"))
 }
 
 struct FirstRow {
@@ -485,6 +531,14 @@ fn session_transcript(raw: &str) -> Option<PathBuf> {
     filled(rows.transcript_path.as_deref()).map(PathBuf::from)
 }
 
+fn agent_transcript(session: Option<&Path>, id: &str) -> Option<PathBuf> {
+    fork_state::transcript_of(session?, id)
+}
+
+fn session_state(session: Option<&Path>, id: &str, status: Option<&str>) -> Option<ForkState> {
+    fork_state::state(status, agent_transcript(session, id).as_deref())
+}
+
 pub(super) fn run() -> Result<()> {
     let mut raw = String::new();
     std::io::stdin()
@@ -497,14 +551,15 @@ pub(super) fn run() -> Result<()> {
         .unwrap_or_default();
     let session = session_transcript(&raw);
     let fork = |id: &str| {
-        session
-            .as_deref()
-            .map(|session| fork_facts(&agent_transcript(session, id)))
+        agent_transcript(session.as_deref(), id)
+            .map(|transcript| fork_facts(&transcript))
             .unwrap_or_default()
     };
+    let state = |id: &str, status: Option<&str>| session_state(session.as_deref(), id, status);
     let clock = Clock {
         now_ms,
         fork: &fork,
+        state: &state,
         started_label: &local_started_label,
     };
     for line in render(&raw, &clock)? {
@@ -533,10 +588,22 @@ mod tests {
         Some(STARTED.to_owned())
     }
 
+    fn status_state(_id: &str, status: Option<&str>) -> Option<ForkState> {
+        fork_state::state(status, None)
+    }
+
     fn content(raw: Value) -> Vec<String> {
+        content_with(raw, &status_state)
+    }
+
+    fn content_with(
+        raw: Value,
+        state: &dyn Fn(&str, Option<&str>) -> Option<ForkState>,
+    ) -> Vec<String> {
         let clock = Clock {
             now_ms: NOW,
             fork: &cyan_fork,
+            state,
             started_label: &fixed_label,
         };
         render(&raw.to_string(), &clock)
@@ -679,6 +746,7 @@ mod tests {
         let clock = Clock {
             now_ms: NOW,
             fork: &fork,
+            state: &status_state,
             started_label: &label,
         };
         let raw = json!({
@@ -788,7 +856,7 @@ mod tests {
     #[test]
     fn an_unnamed_fork_is_named_by_its_description_and_an_idle_one_says_so() {
         let rows = content(json!({
-            "columns": 50,
+            "columns": 60,
             "tasks": [
                 {"id": "a1", "agentType": "project-fork", "description": "kcd2-design", "label": "kcd2-design", "status": "completed"},
                 {"id": "a2", "agentType": "project-fork", "description": "forks-persist", "label": "Probing fork resume", "status": "running"},
@@ -799,19 +867,19 @@ mod tests {
             squeezed(&rows),
             [
                 "kcd2-design idle · 0 tokens",
-                "forks-persist Probing fork resume 0 tokens",
+                "forks-persist Probing fork resume working · 0 tokens",
                 "project-fork 0 tokens",
             ]
         );
         for row in &rows {
-            assert_eq!(visible(row).chars().count(), 50, "{row:?}");
+            assert_eq!(visible(row).chars().count(), 60, "{row:?}");
         }
     }
 
     #[test]
     fn a_key_name_description_shows_the_key_then_the_friendly_words_and_the_progress() {
         let rows = content(json!({
-            "columns": 90,
+            "columns": 100,
             "tasks": [
                 {"id": "a1", "description": "session-lookup-bug: Blocket session lookup", "label": "Creating pull request with gh", "status": "running"},
                 {"id": "a2", "description": "kcd2-design: KCD2 light-steer poses", "label": "kcd2-design: KCD2 light-steer poses", "status": "completed"},
@@ -822,7 +890,7 @@ mod tests {
         assert_eq!(
             squeezed(&rows),
             [
-                "session-lookup-bug Blocket session lookup · Creating pull request with gh 0 tokens",
+                "session-lookup-bug Blocket session lookup · Creating pull request with gh working · 0 tokens",
                 "kcd2-design KCD2 light-steer poses idle · 0 tokens",
                 "Fix qol shot open latency 0 tokens",
                 "Odd: Words Here 0 tokens",
@@ -873,6 +941,7 @@ mod tests {
         let clock = Clock {
             now_ms: NOW,
             fork: &cyan_fork,
+            state: &status_state,
             started_label: &fixed_label,
         };
         assert!(render("  ", &clock).unwrap().is_empty());
@@ -880,11 +949,112 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_transcript_sits_beside_the_session_transcript() {
+    fn each_fork_shows_its_cli_sessions_state_from_its_status_and_what_it_left_running() {
+        use super::super::background::fixtures::waiting;
+        use super::super::background::HOLD_COMMAND;
+        let root = tempfile::tempdir().unwrap();
+        let conversation = root.path().join("c0ab.jsonl");
+        let subagents = root.path().join("c0ab").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        let watch = "node /x/bin/pr-watch.cjs https://github.com/qol-tools/qol/pull/407 --pretty";
+        for (id, transcript) in [
+            ("aturn", waiting("bhold", HOLD_COMMAND)),
+            (
+                "apark",
+                [waiting("bhold", HOLD_COMMAND), waiting("bwatch", watch)].concat(),
+            ),
+            ("adone", String::new()),
+            ("awork", waiting("bwatch", watch)),
+        ] {
+            std::fs::write(subagents.join(format!("agent-{id}.jsonl")), transcript).unwrap();
+        }
+        let raw = json!({"transcript_path": conversation.to_str().unwrap()}).to_string();
+        let session = session_transcript(&raw);
+        let state = |id: &str, status: Option<&str>| session_state(session.as_deref(), id, status);
+        let task = |id: &str, status: &str| json!({"id": id, "description": format!("fork-{id}"), "status": status});
+        let tasks = json!([
+            task("aturn", "completed"),
+            task("apark", "completed"),
+            task("adone", "completed"),
+            task("awork", "running"),
+            task("amiss", "completed"),
+            task("akill", "killed"),
+        ]);
+        let rows = content_with(json!({"columns": 40, "tasks": tasks.clone()}), &state);
         assert_eq!(
-            agent_transcript(Path::new("/p/conv-1.jsonl"), "a9"),
-            Path::new("/p/conv-1/subagents/agent-a9.jsonl")
+            squeezed(&rows),
+            [
+                "fork-aturn your turn · 0 tokens",
+                "fork-apark parked #407 · 0 tokens",
+                "fork-adone idle · 0 tokens",
+                "fork-awork working · 0 tokens",
+                "fork-amiss idle · 0 tokens",
+                "fork-akill 0 tokens",
+            ]
         );
+        for row in &rows {
+            assert_eq!(visible(row).chars().count(), 40, "{row:?}");
+        }
+        assert!(
+            rows[0].ends_with("\x1b[1;33myour turn\x1b[22m\x1b[39m · 0 tokens"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(
+            rows[1].contains("\x1b[34mparked #407\x1b[22m\x1b[39m"),
+            "{:?}",
+            rows[1]
+        );
+        assert!(
+            rows[3].contains("\x1b[32mworking\x1b[22m\x1b[39m"),
+            "{:?}",
+            rows[3]
+        );
+        let unbounded = content_with(json!({"tasks": tasks}), &state);
+        assert_eq!(
+            unbounded
+                .iter()
+                .map(String::as_str)
+                .map(visible)
+                .collect::<Vec<_>>(),
+            [
+                "fork-aturn  your turn · 0 tokens",
+                "fork-apark  parked #407 · 0 tokens",
+                "fork-adone  idle · 0 tokens",
+                "fork-awork  working · 0 tokens",
+                "fork-amiss  idle · 0 tokens",
+                "fork-akill  0 tokens",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_narrow_row_keeps_the_state_and_never_cuts_through_its_color() {
+        let rows = content(json!({
+            "columns": 12,
+            "tasks": [{"id": "a1", "name": "fork-a", "description": "work", "status": "running"}],
+        }));
+        let shown = visible(&rows[0]);
+        assert_eq!(shown, "for… working");
+        assert!(
+            rows[0].ends_with("\x1b[32mworking\x1b[22m\x1b[39m"),
+            "{:?}",
+            rows[0]
+        );
+        let tiny = content(json!({
+            "columns": 6,
+            "tasks": [{"id": "a1", "name": "fork-a", "description": "work", "status": "running"}],
+        }));
+        assert_eq!(tiny, ["fork-…"]);
+    }
+
+    #[test]
+    fn the_session_transcript_comes_from_the_payload_and_a_fork_sits_beside_it() {
+        assert_eq!(
+            agent_transcript(Some(Path::new("/p/conv-1.jsonl")), "a9"),
+            Some(PathBuf::from("/p/conv-1/subagents/agent-a9.jsonl"))
+        );
+        assert_eq!(agent_transcript(None, "a9"), None);
         assert_eq!(
             session_transcript(r#"{"transcript_path":"/p/c.jsonl"}"#),
             Some(PathBuf::from("/p/c.jsonl"))
@@ -979,6 +1149,7 @@ mod tests {
             let clock = Clock {
                 now_ms: NOW,
                 fork,
+                state: &status_state,
                 started_label: &fixed_label,
             };
             let line: Value = serde_json::from_str(&render(&raw, &clock).unwrap()[0]).unwrap();
