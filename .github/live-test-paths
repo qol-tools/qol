@@ -7,6 +7,7 @@ libs/gpui/**
 libs/theme/**
 vendor/gpui/**
 libs/sessions-engine/src/switchboard/rows.rs
+libs/sessions-engine/src/switchboard/plugin/**
 plugins/shot/src/app/**
 plugins/shot/src/capture/**
 plugins/shot/src/platform/**

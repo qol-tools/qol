@@ -16,6 +16,18 @@ const PANE = {
 
 const SURFACES = ['terminal', 'desktop'] as const
 
+const promptBand = (isFullscreen: boolean) =>
+  ({
+    plugin: 'qol-switchboard',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 120, scroll: { offset: 0, bodyRows: 6 }, view: {} },
+    viewport: { columns: 200, rows: 60, isFullscreen },
+  }) as const
+
+const runBoard = ($: any) =>
+  $.command.run({ command: 'board', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })
+
 const notification = (agentId: string, name: string, result: string) =>
   `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Agent "${name}" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>${result}</result>\n<usage><subagent_tokens>10</subagent_tokens></usage>\n</task-notification>`
 
@@ -40,9 +52,14 @@ const spawn = async ($: any, agentId: string, description: string) => {
   expect(started.agentId).toBe(agentId)
 }
 
-const engine = (on: any, sent: unknown[] = [], panes: string[] = []) => {
-  const store = new Map<string, unknown>()
-  on('agent.spawn', (_: unknown, e: { prompt: string }) => ({ model: 'haiku', agentId: e.prompt.split(' ').pop() }))
+type Spawned = { prompt: string; description: string }
+
+const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>()) => {
+  on('agent.spawn', (_: unknown, e: Spawned) => {
+    spawned.push({ prompt: e.prompt, description: e.description })
+    const fork = /^Project: \/work\nfork (\S+)$/.exec(e.prompt)
+    return { model: 'haiku', agentId: fork === null ? `successor-${spawned.length}` : fork[1] }
+  })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: 'switchboard-session' }))
   on('store.get', (_: unknown, e: { key: string }) => ({ value: store.get(e.key) }))
@@ -59,14 +76,22 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = []) => {
   on('ui.toast', () => ({ value: undefined }))
   on('clock.every', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_800_000_000_000 }))
+  const open = new Set<string>()
   on('ui.open', (_: unknown, e: { id: string }) => {
     panes.push(`open ${e.id}`)
+    open.add(e.id)
     return { value: { isPlaced: true } }
   })
   on('ui.close', (_: unknown, e: { id: string }) => {
     panes.push(`close ${e.id}`)
+    open.delete(e.id)
     return { value: undefined }
   })
+  on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'board' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__qol-switchboard__fork_board' } }))
@@ -185,29 +210,173 @@ test('the board names the key that reaches it until it holds the keys, and close
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
+  await runBoard($)
 
   const outside = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, isFocused: false } })
-  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · ctrl\+x x closes it/ })).toBeDefined()
+  expect(await outside.find({ type: 'Text', text: /ctrl\+x tab to use the board · \/board or ctrl\+x x closes it/ })).toBeDefined()
   expect(await outside.find({ type: 'Text', text: /tab walks/ })).toBeUndefined()
   await outside.unmount()
 
   const inside = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await inside.find({ type: 'Text', text: /digit opens a fork · tab walks · esc back to the prompt/ })).toBeDefined()
+  expect(await inside.find({ type: 'Text', text: /digit opens a fork · tab walks · x closes · esc back to the prompt/ })).toBeDefined()
   await inside.press({ key: 'close' })
   await inside.unmount()
   expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('the board opens on its own only where the terminal docks it beside the chat', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual([])
+  const mainScreen = await $.ui.mount(promptBand(false))
+  await mainScreen.unmount()
+  const later = await $.ui.mount(promptBand(true))
+  await later.unmount()
+  expect(panes).toEqual([])
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const fullscreen = await $.ui.mount(promptBand(true))
+  await fullscreen.unmount()
+  const again = await $.ui.mount(promptBand(true))
+  await again.unmount()
+  expect(panes).toEqual(['open board'])
+})
+
+test('/board toggles the board, and a board it closed stays closed at the next start', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(String((await runBoard($)).text)).toContain('Fork board opened.')
+  expect(String((await runBoard($)).text)).toContain('Fork board closed.')
+  expect(panes).toEqual(['open board', 'close board'])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount(promptBand(true))
+  await band.unmount()
+  expect(panes).toEqual(['open board', 'close board'])
+})
+
+test('/board shows the whole board in an agent view too', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'ask: Which colour?\nRecommend: amber'))
+  await runBoard($)
+  const props = { ...PANE.props, isFocused: false, placement: 'inline', view: { agentId: 'a8' } } as const
+  const inline = await $.ui.mount({ ...PANE, surface: 'terminal', props })
+  expect(await inline.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
+  expect(await inline.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
+  await inline.unmount()
 })
 
 test('a board the user closed stays closed at the next start until /board opens it', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const first = await $.ui.mount(promptBand(true))
+  await first.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'close' })
   await ui.unmount()
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const closed = await $.ui.mount(promptBand(true))
+  await closed.unmount()
   expect(panes).toEqual(['open board', 'close board'])
-  await $.command.run({ command: 'board' })
+  await runBoard($)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const reopened = await $.ui.mount(promptBand(true))
+  await reopened.unmount()
   expect(panes).toEqual(['open board', 'close board', 'open board', 'open board'])
+})
+
+test('a message to a fork the user stopped reaches it as a new fork that reads its conversation', async ($, on) => {
+  const spawned: Spawned[] = []
+  const reached: string[] = []
+  const transcript = '/conv/switchboard-session/subagents/agent-a8.jsonl'
+  engine(on, [], [], spawned)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === transcript }))
+  on('tool.call', (_: unknown, e: any) => {
+    reached.push(String(e.to))
+    return e.to === 'a8'
+      ? { result: { success: false, message: "Agent a8 was stopped by the user and won't be resumed." } }
+      : { result: { success: true, message: `Message queued for delivery to ${e.to}.` } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'blocket: continue blocket couch ad')
+  await spawn($, 'a9', 'other-fork: other')
+
+  const relayed = await $.tool.call({ tool: 'SendMessage', to: 'a8', message: 'The user sent you this screenshot: /tmp/clip.png' })
+  expect(JSON.stringify(relayed.result)).toContain('"success":true')
+  expect(JSON.stringify(relayed.result)).toContain('blocket was stopped, so it continues as a new fork')
+  expect(spawned).toHaveLength(3)
+  const takeover = spawned[2] as Spawned
+  expect(takeover.description).toBe('blocket: continue blocket couch ad')
+  expect(takeover.prompt.startsWith('Project: /work\nThe user sent you this screenshot: /tmp/clip.png\n\n')).toBe(true)
+  expect(takeover.prompt).toContain('The message above is for the fork blocket, agent id a8, which was stopped')
+  expect(takeover.prompt).toContain(`Its conversation is in ${transcript}: read the end of it`)
+
+  await $.agent.spawn({ prompt: takeover.prompt, description: takeover.description, subagentType: 'project-fork' } as any)
+  const followUp = await $.tool.call({ tool: 'SendMessage', to: 'a8', message: 'and the price is 900' })
+  expect(JSON.stringify(followUp.result)).toContain('Message queued for delivery to successor-4')
+  const byName = await $.tool.call({ tool: 'SendMessage', to: 'blocket', message: 'one more' })
+  expect(JSON.stringify(byName.result)).toContain('Message queued for delivery to successor-4')
+  const live = await $.tool.call({ tool: 'SendMessage', to: 'a9', message: 'hi' })
+  expect(JSON.stringify(live.result)).toContain('Message queued for delivery to a9')
+  expect(reached).toEqual(['a8', 'successor-4', 'successor-4', 'a9'])
+  expect(spawned).toHaveLength(4)
+
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] blocket · working (agent id successor-4)')
+  expect(board).not.toContain('agent id a8')
+})
+
+test('a stopped fork from an older board is placed from its recorded folder, and kept stopped without one', async ($, on) => {
+  const spawned: Spawned[] = []
+  const store = new Map<string, unknown>()
+  const old = (agentId: string, name: string) => ({ agentId, name, kind: 'note', headline: 'stopped', report: '', at: 1, isWorking: false, isDismissed: false })
+  store.set('board:switchboard-session', [old('b1', 'old-fork: old'), old('b2', 'lost-fork: lost')])
+  const meta = '/conv/switchboard-session/subagents/agent-b1.meta.json'
+  engine(on, [], [], spawned, store)
+  on('env.get', () => ({ value: '/conv' }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === meta }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: e.path === meta ? '{"agentType":"project-fork","cwd":"/media/old"}' : '' }))
+  on('tool.call', (_: unknown, e: any) => ({ result: { success: false, message: `Agent ${e.to} was stopped by the user.` } }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const placed = await $.tool.call({ tool: 'SendMessage', to: 'b1', message: 'hello' })
+  expect(JSON.stringify(placed.result)).toContain('old-fork was stopped, so it continues as a new fork')
+  expect(spawned[0]?.prompt.startsWith('Project: /media/old\nhello\n')).toBe(true)
+  expect(spawned[0]?.prompt).toContain('Its conversation is the file agent-b1.jsonl in a subagents folder')
+
+  const kept = await $.tool.call({ tool: 'SendMessage', to: 'b2', message: 'hello' })
+  expect(JSON.stringify(kept.result)).toContain('Agent b2 was stopped by the user.')
+  expect(spawned).toHaveLength(1)
+})
+
+test('only a stopped fork is taken over, once however many messages race to it', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  on('env.get', () => ({ value: '/conv' }))
+  on('fs.exists', () => ({ value: false }))
+  on('tool.call', (_: unknown, e: any) =>
+    e.to === 'c1'
+      ? { result: { success: false, message: 'Agent c1 was stopped by the user and won\'t be resumed.' } }
+      : { result: { success: false, message: `Agent ${e.to} is busy.` } },
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'c1', 'stopped-fork: stopped')
+  await spawn($, 'c2', 'busy-fork: busy')
+
+  const busy = await $.tool.call({ tool: 'SendMessage', to: 'c2', message: 'hello' })
+  expect(JSON.stringify(busy.result)).toContain('Agent c2 is busy.')
+  expect(spawned).toHaveLength(2)
+
+  const raced = await Promise.all([
+    $.tool.call({ tool: 'SendMessage', to: 'c1', message: 'first' }),
+    $.tool.call({ tool: 'SendMessage', to: 'c1', message: 'second' }),
+  ])
+  expect(raced.filter(one => JSON.stringify(one.result).includes('continues as a new fork'))).toHaveLength(1)
+  expect(spawned).toHaveLength(3)
+  expect(spawned[2]?.prompt).toContain('\nfirst\n')
 })
