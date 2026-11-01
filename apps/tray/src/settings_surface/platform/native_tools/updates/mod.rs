@@ -10,7 +10,7 @@ use qol_gpui::settings_panel::{CustomPanelContext, CustomPanelFactory, CustomPan
 use view::UpdatesView;
 
 pub(super) fn factory() -> CustomPanelFactory {
-    Rc::new(move |context: CustomPanelContext, cx| {
+    Rc::new(|context: CustomPanelContext, cx| {
         let CustomPanelContext {
             dismisser,
             on_back,
