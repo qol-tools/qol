@@ -128,7 +128,8 @@ mod tests {
             "model: 'haiku'",
             "on('ui.render', { component: 'Pane', requestId: PANE }",
             "$.ui.view({ agentId: entry.agentId })",
-            "$.session.send({ to: { agentId: entry.agentId }, text: entry.recommend ?? '' })",
+            "const text = entry.recommend ?? ''",
+            "$.session.send({ to: { agentId: entry.agentId }, text })",
             "on('turn.start', async ($, e, next) => {",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
