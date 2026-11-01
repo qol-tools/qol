@@ -8,7 +8,7 @@ use qol_connection_health::Level;
 use qol_gpui::activity_animation::ActivityAnimation;
 use qol_gpui::kit::kit;
 use qol_gpui::kit::Kit;
-use qol_gpui::scroll_list::{wheel_steps, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
     SettingsHint,
@@ -18,7 +18,7 @@ use qol_gpui::settings_panel::{
     settings_connection_spinner, settings_description, settings_list, settings_value_text,
     CustomHints, CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
-    SettingsRow, SettingsValueTone,
+    SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 
@@ -88,6 +88,7 @@ pub(super) struct UpdatesView {
     on_back: Option<CustomPanelCallback>,
     notify: CustomPanelNotifier,
     list: ScrollList,
+    list_height: ListHeight,
     selection: Selection,
     selected: usize,
     snapshot: Option<UpdatesSnapshot>,
@@ -111,6 +112,7 @@ impl UpdatesView {
             on_back,
             notify,
             list: ScrollList::new(MAX_VISIBLE),
+            list_height: ListHeight::default(),
             selection: Selection::None,
             selected: 0,
             snapshot: None,
@@ -431,6 +433,7 @@ impl UpdatesView {
                 list = list.children(fold.map(|text| self.render_fold(text)));
             }
         }
+        list = list.child(self.list_height.recorder(cx.weak_entity()));
         list = list.child(kit().scroll_cue(
             qol_gpui::scrollbar::ScrollSource::Window {
                 first: range.start,
@@ -644,6 +647,12 @@ impl Render for UpdatesView {
         self.forget_faded();
         let (rows, fold) = self.page_rows();
         self.sync_selection(&rows);
+        let last = rows.len().checked_sub(1);
+        self.list
+            .fit_to(&self.list_height, rows.len(), SETTINGS_LIST_GAP, |index| {
+                let folded = fold.is_some() && Some(index) == last;
+                row_height(&rows[index], folded)
+            });
         div()
             .id("qol-native-updates-body")
             .track_focus(&self.focus_handle)
@@ -670,6 +679,17 @@ impl Render for UpdatesView {
                         self.render_body(&rows, fold.as_deref(), cx),
                     )),
             )
+    }
+}
+
+fn row_height(row: &PageRow, folded: bool) -> f32 {
+    let height = match row {
+        PageRow::Header { .. } => SettingsGroupHeader::height_with_detail(),
+        _ => qol_theme::HEIGHT_SETTING_ROW,
+    };
+    match folded {
+        true => height + SETTINGS_LIST_GAP + qol_theme::HEIGHT_CONTROL,
+        false => height,
     }
 }
 

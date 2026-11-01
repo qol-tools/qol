@@ -261,6 +261,103 @@ impl ScrollList {
         let end = (start + self.max_visible).min(count);
         start..end
     }
+
+    pub fn fit_height(
+        &mut self,
+        count: usize,
+        height: f32,
+        gap: f32,
+        row_height: impl Fn(usize) -> f32,
+    ) {
+        for _ in 0..FIT_PASSES {
+            let (first, shown) = fitted_window(self.scroll_offset, count, height, gap, &row_height);
+            let fitted = (first, shown) == (self.scroll_offset, self.max_visible);
+            self.scroll_offset = first;
+            self.max_visible = shown;
+            self.sync(count);
+            if fitted && self.scroll_offset == first {
+                return;
+            }
+        }
+    }
+
+    pub fn fit_to(
+        &mut self,
+        measured: &ListHeight,
+        count: usize,
+        gap: f32,
+        row_height: impl Fn(usize) -> f32,
+    ) {
+        if let Some(height) = measured.get() {
+            self.fit_height(count, height, gap, row_height);
+        }
+    }
+}
+
+const FIT_PASSES: usize = 8;
+
+fn fitted_window(
+    start: usize,
+    count: usize,
+    height: f32,
+    gap: f32,
+    row_height: impl Fn(usize) -> f32,
+) -> (usize, usize) {
+    if count == 0 {
+        return (0, 1);
+    }
+    let start = start.min(count - 1);
+    let mut used = 0.0;
+    let mut end = start;
+    while end < count {
+        let next = used + if end > start { gap } else { 0.0 } + row_height(end);
+        if next > height {
+            break;
+        }
+        used = next;
+        end += 1;
+    }
+    let mut first = start;
+    if end == count {
+        while first > 0 {
+            let next = used + gap + row_height(first - 1);
+            if next > height {
+                break;
+            }
+            used = next;
+            first -= 1;
+        }
+    }
+    (first, (end - first).max(1))
+}
+
+#[derive(Clone, Default)]
+pub struct ListHeight(std::rc::Rc<std::cell::Cell<Option<f32>>>);
+
+impl ListHeight {
+    pub fn get(&self) -> Option<f32> {
+        self.0.get()
+    }
+
+    pub fn recorder<V: 'static>(&self, view: gpui::WeakEntity<V>) -> impl gpui::IntoElement {
+        use gpui::Styled;
+        let store = self.0.clone();
+        gpui::canvas(
+            move |bounds, window, _| {
+                let height = bounds.size.height.to_f64() as f32;
+                if store.get() == Some(height) {
+                    return;
+                }
+                store.set(Some(height));
+                window.on_next_frame(move |_, cx| {
+                    let _ = view.update(cx, |_, cx| cx.notify());
+                });
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
 }
 
 pub fn wheel_rows(delta: &gpui::ScrollDelta, row_height: f32) -> isize {
@@ -364,6 +461,60 @@ mod tests {
                 window,
                 list.selected
             );
+        }
+    }
+
+    #[test]
+    fn a_fitted_window_holds_every_row_the_height_has_room_for() {
+        let row_height = |headers: bool| {
+            move |index: usize| match headers && index.is_multiple_of(4) {
+                true => 68.0,
+                false => 52.0,
+            }
+        };
+        let cases = [
+            ("tall window", 0, 40, 1200.0, false, (0, 21)),
+            ("exactly three rows", 0, 40, 164.0, false, (0, 3)),
+            ("a pixel short of three", 0, 40, 163.0, false, (0, 2)),
+            ("headers are taller", 0, 40, 300.0, true, (0, 4)),
+            ("everything fits", 0, 6, 1200.0, false, (0, 6)),
+            ("the end pulls rows in", 36, 40, 300.0, false, (35, 5)),
+            ("nothing fits", 0, 40, 10.0, false, (0, 1)),
+            ("an empty list", 0, 0, 300.0, false, (0, 1)),
+        ];
+        for (label, start, count, height, headers, expected) in cases {
+            assert_eq!(
+                fitted_window(start, count, height, 4.0, row_height(headers)),
+                expected,
+                "case: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fitted_list_shows_the_selection_and_never_overflows() {
+        let row_height = |index: usize| if index.is_multiple_of(5) { 68.0 } else { 52.0 };
+        for height in [120.0f32, 300.0, 700.0, 1400.0] {
+            let count = 60;
+            let mut list = ScrollList::new(9);
+            for step in 0..count * 2 {
+                if step < count {
+                    list.move_down(count);
+                } else {
+                    list.move_up();
+                }
+                list.sync(count);
+                list.fit_height(count, height, 4.0, row_height);
+                let range = list.visible_range(count);
+                let used: f32 = range.clone().map(row_height).sum::<f32>()
+                    + range.len().saturating_sub(1) as f32 * 4.0;
+                let label = format!("height={height} step={step} range={range:?}");
+                assert!(range.contains(&list.selected), "selection hidden: {label}");
+                assert!(
+                    used <= height || range.len() == 1,
+                    "rows overflow the list: {label}"
+                );
+            }
         }
     }
 

@@ -10,7 +10,7 @@ use gpui::{
 use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::kit;
-use qol_gpui::scroll_list::{wheel_steps, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
     settings_label_group, settings_page, settings_value_group, RowGround, SettingsFeedback,
@@ -20,7 +20,7 @@ use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
     settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
-    SettingsRow, SettingsValueTone,
+    SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
@@ -78,6 +78,7 @@ pub(super) struct LinkedDevicesView {
     poller: bool,
     selected: usize,
     list: ScrollList,
+    list_height: ListHeight,
     sequence: u64,
     notice: Option<(String, bool)>,
     editing: Editing,
@@ -114,6 +115,7 @@ impl LinkedDevicesView {
             poller: false,
             selected: 1,
             list: ScrollList::new(MAX_VISIBLE),
+            list_height: ListHeight::default(),
             sequence: 0,
             notice: None,
             editing: Editing::None,
@@ -692,15 +694,16 @@ impl LinkedDevicesView {
                 cx,
             ));
         }
-        list.child(kit().scroll_cue(
-            ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
-                total,
-            },
-            kit().grounds.pane,
-        ))
-        .into_any_element()
+        list.child(self.list_height.recorder(cx.weak_entity()))
+            .child(kit().scroll_cue(
+                ScrollSource::Window {
+                    first: range.start,
+                    shown: range.len(),
+                    total,
+                },
+                kit().grounds.pane,
+            ))
+            .into_any_element()
     }
 
     fn render_page(&self, rows: &[Row], focused: bool, cx: &mut Context<Self>) -> Div {
@@ -813,6 +816,10 @@ impl Render for LinkedDevicesView {
         }
         let rows = self.rows();
         self.sync_selection(&rows);
+        self.list
+            .fit_to(&self.list_height, rows.len(), SETTINGS_LIST_GAP, |index| {
+                row_height(&rows[index])
+            });
         let loading = self.snapshot.is_none() && (self.pending || self.polling);
         let body = if loading {
             let mut page = settings_page();
@@ -876,4 +883,11 @@ fn load(request: Option<Request>) -> tokio::sync::oneshot::Receiver<Loaded> {
         let _ = sender.send((response, snapshot, catalog.ok()));
     });
     receiver
+}
+
+fn row_height(row: &Row) -> f32 {
+    match row.header {
+        true => SettingsGroupHeader::height_with_detail(),
+        false => qol_theme::HEIGHT_SETTING_ROW,
+    }
 }

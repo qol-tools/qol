@@ -5,7 +5,7 @@ use qol_theme::TextStyle;
 
 use super::{
     masthead_rule, settings_action_spinner, settings_description, settings_search_mark,
-    settings_value_text, RowGround, SettingsValueTone, FINDER_MARK_SMALL,
+    settings_value_text, RowGround, SettingsValueTone, FINDER_MARK_SMALL, MASTHEAD_RULE_HEIGHT,
 };
 use crate::kit::Kit;
 use crate::search_mark::MarkState;
@@ -56,6 +56,20 @@ impl SettingsGroupHeader {
     pub fn summary(mut self, text: impl Into<SharedString>, live: bool) -> Self {
         self.summary = Some((text.into(), live));
         self
+    }
+
+    pub fn height_with_detail() -> f32 {
+        let line = |style: TextStyle| {
+            let spec = style.spec();
+            (spec.size * spec.line_height).ceil()
+        };
+        qol_theme::SPACE_PAD
+            + line(TextStyle::Heading)
+            + qol_theme::SPACE_STACK
+            + line(TextStyle::Colophon)
+            + qol_theme::SPACE_SNUG
+            + MASTHEAD_RULE_HEIGHT
+            + qol_theme::SPACE_SNUG
     }
 }
 
