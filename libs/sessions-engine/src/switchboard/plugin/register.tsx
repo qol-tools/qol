@@ -206,7 +206,11 @@ export const intake = async (
   if (HANDED_BACK.test(report)) return undefined
   const entry = await file($, { agentId, name, status, report })
   const line = boardLine(entry)
-  return text.replace(block, result === null ? block.replace('</task-notification>', `<result>${line}</result>\n</task-notification>`) : block.replace(RESULT, `$1${line}$3`))
+  const filed =
+    result === null
+      ? block.replace('</task-notification>', () => `<result>${line}</result>\n</task-notification>`)
+      : block.replace(RESULT, (_, open: string, __, close: string) => `${open}${line}${close}`)
+  return text.replace(block, () => filed)
 }
 
 const age = (ms: number): string => {

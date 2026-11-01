@@ -117,6 +117,15 @@ test('a hand-back report is rewritten in place and a report without a header get
   await ui.unmount()
 })
 
+test('a headline with replacement patterns is filed as written', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a6', 'dollar-fork: dollars')
+  const read = await deliver($, notification('a6', 'dollar-fork: dollars', "note: costs $& and $' and $1 and $$ now\n\nsecret body"))
+  expect(read).toContain("<result>[fork board] dollar-fork · note · costs $& and $' and $1 and $$ now</result>")
+  expect(read).not.toContain('secret body')
+})
+
 test('notifications of other background tasks and plain agent messages pass unchanged', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
