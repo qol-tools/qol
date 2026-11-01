@@ -950,7 +950,11 @@ mod tests {
     fn claude_gets_the_login_shell_path_and_where_its_forks_conversations_are() {
         let conversations = (
             CONVERSATIONS_ENV.to_owned(),
-            "/home/u/.claude/projects/-data-sessions-switchboard".to_owned(),
+            PathBuf::from("/home/u/.claude")
+                .join("projects")
+                .join("-data-sessions-switchboard")
+                .to_string_lossy()
+                .into_owned(),
         );
         let with_path = LaunchPlan {
             path: Some("/home/u/.nvm/bin:/usr/bin".to_owned()),
