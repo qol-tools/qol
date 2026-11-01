@@ -879,7 +879,7 @@ mod tests {
         let hooks = settings["hooks"].as_object().unwrap();
         assert_eq!(
             hooks.keys().collect::<Vec<_>>(),
-            ["PreToolUse", "SubagentStart"]
+            ["PreToolUse", "SessionStart", "SubagentStart"]
         );
         assert!(hooks["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()

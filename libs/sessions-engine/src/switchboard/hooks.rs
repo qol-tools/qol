@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn a_long_role_is_split_over_the_refresh_slots() {
-        let role = "r".repeat(context::PART_CHARS + 10);
+        let role = format!("{}\n", "r".repeat(99)).repeat(context::PART_CHARS / 100 + 1);
         let first = refreshed(0, "resume", "", &role).unwrap();
         let second = refreshed(1, "resume", "", &role).unwrap();
         let text = |value: &serde_json::Value| {
