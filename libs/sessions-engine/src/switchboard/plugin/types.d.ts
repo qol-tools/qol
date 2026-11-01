@@ -10,6 +10,8 @@ export type Entry = {
   at: number
   isWorking: boolean
   isDismissed: boolean
+  project?: string
+  successor?: string
 }
 
 declare module 'claude-code' {

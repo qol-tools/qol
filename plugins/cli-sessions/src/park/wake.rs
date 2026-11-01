@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use qol_sessions_engine::knocks;
 use qol_terminal_sessions::cli::{CliSessionInterpreter, ComposerGuard, Typed, Typing};
-use qol_terminal_sessions::park::{ParkRecord, ParkState};
+use qol_terminal_sessions::park::ParkRecord;
 use qol_terminal_sessions::{SessionBinding, SessionFacts, TerminalSessionService};
 
 use super::prompt::{message_wake_prompt, UNKNOCKED_WAKE};
@@ -12,27 +12,7 @@ pub fn wakeable(store: &ParkStore, key: &str) -> Option<ParkRecord> {
     if key == qol_sessions_engine::switchboard::SWITCHBOARD_KEY {
         return None;
     }
-    let keyed = store.list().ok()?.into_iter().filter(|record| {
-        store
-            .spawn_key(&record.id)
-            .is_some_and(|kept| kept.as_str() == key)
-    });
-    newest_wakeable(keyed)
-}
-
-fn newest_wakeable(records: impl IntoIterator<Item = ParkRecord>) -> Option<ParkRecord> {
-    records
-        .into_iter()
-        .max_by_key(|record| record.created_at)
-        .filter(lets_go)
-}
-
-fn lets_go(record: &ParkRecord) -> bool {
-    match record.state {
-        ParkState::Waiting => record.caller_closed,
-        ParkState::Finished | ParkState::Resumed | ParkState::Delivered => true,
-        ParkState::Exited | ParkState::Failed => false,
-    }
+    qol_terminal_sessions::park::wakeable(store.dir(), key)
 }
 
 pub fn wake(key: &str) -> Result<String> {
@@ -132,7 +112,7 @@ fn reopen(key: &str) -> Result<String> {
         bail!("`{}` is already being resumed", record.id);
     };
     let record = store.load(&record.id)?;
-    if !lets_go(&record) {
+    if !qol_terminal_sessions::park::lets_go(&record) {
         bail!("`{}` is no longer closed ({:?})", record.id, record.state);
     }
     let terminals = TerminalSessionService::system();
@@ -172,6 +152,7 @@ fn reopen(key: &str) -> Result<String> {
 mod tests {
     use super::*;
     use crate::park::tests::record;
+    use qol_terminal_sessions::park::ParkState;
 
     fn parked(id: &str, created_at: u64, state: ParkState, caller_closed: bool) -> ParkRecord {
         ParkRecord {
@@ -180,29 +161,6 @@ mod tests {
             caller_closed,
             ..record(state)
         }
-    }
-
-    #[test]
-    fn only_a_newest_park_that_let_go_of_its_terminal_wakes() {
-        let cases = [
-            (ParkState::Waiting, false, false),
-            (ParkState::Waiting, true, true),
-            (ParkState::Exited, true, false),
-            (ParkState::Failed, true, false),
-            (ParkState::Delivered, false, true),
-            (ParkState::Resumed, true, true),
-            (ParkState::Finished, false, true),
-        ];
-        for (state, caller_closed, expected) in cases {
-            let older = parked("park-1-1", 1, ParkState::Finished, false);
-            let newest = parked("park-2-2", 2, state, caller_closed);
-            assert_eq!(
-                newest_wakeable([newest, older]).map(|record| record.id),
-                expected.then(|| "park-2-2".to_owned()),
-                "{state:?} caller_closed={caller_closed}"
-            );
-        }
-        assert!(newest_wakeable([]).is_none());
     }
 
     #[test]

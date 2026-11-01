@@ -97,6 +97,12 @@ pub(super) struct SendRequest<'a> {
     pub(super) as_user: bool,
 }
 
+pub(super) struct Admitted {
+    pub(super) to: String,
+    answering: Option<Message>,
+    hops: u32,
+}
+
 pub(super) struct Messaging<'a> {
     pub(super) mail: &'a MailboxStore,
     pub(super) lineage: &'a LineageStore,
@@ -228,6 +234,15 @@ impl MailboxStore {
 
 impl Messaging<'_> {
     pub(super) fn send(&self, live_keys: &[String], request: &SendRequest<'_>) -> Result<Message> {
+        let admitted = self.admit(live_keys, request)?;
+        self.deliver(request, admitted)
+    }
+
+    pub(super) fn admit(
+        &self,
+        live_keys: &[String],
+        request: &SendRequest<'_>,
+    ) -> Result<Admitted> {
         validate_text(request.text, "message")?;
         if has_line_separator(request.text) {
             bail!("the message text contains a carriage return or Unicode line separator; use plain newlines");
@@ -309,6 +324,19 @@ impl Messaging<'_> {
         if unread >= BACKLOG_MAX {
             bail!("`{to}` already has {unread} unread messages; wait until it reads them");
         }
+        Ok(Admitted {
+            to,
+            answering,
+            hops,
+        })
+    }
+
+    pub(super) fn deliver(&self, request: &SendRequest<'_>, admitted: Admitted) -> Result<Message> {
+        let Admitted {
+            to,
+            answering,
+            hops,
+        } = admitted;
         let sent_at_ms = now_ms();
         let message = Message {
             id: unique_name("m", sent_at_ms),
