@@ -467,7 +467,7 @@ mod tests {
     #[test]
     fn a_fitted_window_holds_every_row_the_height_has_room_for() {
         let row_height = |headers: bool| {
-            move |index: usize| match headers && index % 4 == 0 {
+            move |index: usize| match headers && index.is_multiple_of(4) {
                 true => 68.0,
                 false => 52.0,
             }
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn a_fitted_list_shows_the_selection_and_never_overflows() {
-        let row_height = |index: usize| if index % 5 == 0 { 68.0 } else { 52.0 };
+        let row_height = |index: usize| if index.is_multiple_of(5) { 68.0 } else { 52.0 };
         for height in [120.0f32, 300.0, 700.0, 1400.0] {
             let count = 60;
             let mut list = ScrollList::new(9);
