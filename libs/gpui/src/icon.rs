@@ -210,16 +210,37 @@ pub struct MarkView {
     mark: Mark,
     size: f32,
     line: u32,
+    solid: bool,
 }
 
 pub fn mark(mark: Mark, size: f32, line: u32) -> MarkView {
-    MarkView { mark, size, line }
+    MarkView {
+        mark,
+        size,
+        line,
+        solid: false,
+    }
+}
+
+impl MarkView {
+    pub fn solid(mut self) -> Self {
+        self.solid = true;
+        self
+    }
 }
 
 impl RenderOnce for MarkView {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let name = format!("mark-{}", self.mark.name());
-        tinted(&name, &self.mark.markup(), self.size, self.line, window)
+        match self.mark.solid_markup().filter(|_| self.solid) {
+            Some(markup) => {
+                let name = format!("mark-solid-{}", self.mark.name());
+                tinted(&name, markup, self.size, self.line, window)
+            }
+            None => {
+                let name = format!("mark-{}", self.mark.name());
+                tinted(&name, &self.mark.markup(), self.size, self.line, window)
+            }
+        }
     }
 }
 
@@ -235,12 +256,33 @@ fn tinted(name: &str, markup: &str, size: f32, ink: u32, window: &Window) -> Div
 #[cfg(test)]
 mod tests {
     use super::Icon;
+    use qol_theme::Mark;
 
     #[test]
     fn every_icon_parses_as_svg() {
         for icon in Icon::ALL {
             let tree = resvg::usvg::Tree::from_str(&icon.markup(), &Default::default());
             assert!(tree.is_ok(), "{icon:?}");
+        }
+    }
+
+    #[test]
+    fn every_solid_mark_draws_ink_at_16_px() {
+        for mark in Mark::ALL {
+            let Some(markup) = mark.solid_markup() else {
+                continue;
+            };
+            let source = markup.replace("currentColor", "#9a9aa1");
+            let tree = resvg::usvg::Tree::from_str(&source, &Default::default())
+                .unwrap_or_else(|error| panic!("{}: {error}", mark.name()));
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(16, 16).unwrap();
+            resvg::render(&tree, Default::default(), &mut pixmap.as_mut());
+            let inked = pixmap
+                .pixels()
+                .iter()
+                .filter(|pixel| pixel.alpha() > 0)
+                .count();
+            assert!(inked > 16, "{} drew {inked} pixels", mark.name());
         }
     }
 }
