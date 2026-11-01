@@ -1,23 +1,44 @@
 use std::fs::{self, File};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use qol_sessions_engine::fork_watch::{ForkWatch, WatchState, WatchStore};
+use qol_sessions_engine::fork_watch::{check_watcher, ForkWatch, WatchState, WatchStore};
 
 const MERGED_EXIT: i32 = 0;
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
 const GH_OUTPUT_LIMIT: usize = 4096;
 const SIGNALLED: &str = "the watched command was stopped by a signal";
+const LOCK_TRIES: u32 = 20;
+const LOCK_RETRY: Duration = Duration::from_millis(50);
+
+fn lock_runner(store: &WatchStore, id: &str) -> Result<Option<File>> {
+    for _ in 1..LOCK_TRIES {
+        if let Some(lock) = store.lock_runner(id)? {
+            return Ok(Some(lock));
+        }
+        thread::sleep(LOCK_RETRY);
+    }
+    store.lock_runner(id)
+}
 
 pub fn run(store: &WatchStore, id: &str) -> Result<()> {
-    let Some(_running) = store.lock_runner(id)? else {
+    let Some(_running) = lock_runner(store, id)? else {
         return Ok(());
     };
     let watch = store.load(id)?;
     if watch.state != WatchState::Watching {
         return Ok(());
+    }
+    if let Err(error) = check_watcher(&watch.command) {
+        return store.record(&ForkWatch {
+            state: WatchState::Failed,
+            detail: Some(format!("{error:#}")),
+            exited_at: Some(super::now_seconds()),
+            ..watch
+        });
     }
     let exit = start(&watch, &store.log_path(id)).and_then(|mut child| {
         child

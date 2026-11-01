@@ -1,12 +1,14 @@
 use anyhow::{anyhow, bail, Result};
+use qol_sessions_engine::fork_watch::is_watch_id;
 
-pub const HELP: &str = "qol-cli-sessions fork-watch --agent AGENT_ID --conversation SESSION_ID [--title NAME] -- <command> [args...]\n       qol-cli-sessions fork-watch --deliver\n       qol-cli-sessions fork-watch --pulls\n\nRuns a switchboard fork's pull request watcher under CLI Sessions instead of the switchboard, so closing the switchboard stops no watcher. The switchboard plugin rewrites a fork's background `node .../pr-watch.cjs <pr-url> --pretty` call into the first form: it records the watch, starts a detached runner for the command unless one already runs for that fork and command, waits for it, then prints the command's output and exits with its exit code, as the bare command would.\nWhen that wait was stopped, as when the switchboard closed, the runner keeps watching. --deliver claims every result nobody waits for and prints it as JSON with the pull request ledger, for the switchboard plugin to send to its fork; when the switchboard is closed, the CLI Sessions daemon shows a notification that opens it.\n--pulls lists each fork's pull request and whether it is merged, with its merge commit, open with CLI Sessions watching it, or open with no watcher, and claims nothing.\n--agent is the fork's agent id, --conversation the switchboard conversation it belongs to and --title its board name.";
+pub const HELP: &str = "qol-cli-sessions fork-watch --agent AGENT_ID --conversation SESSION_ID [--title NAME] -- <command> [args...]\n       qol-cli-sessions fork-watch --deliver\n       qol-cli-sessions fork-watch --claim WATCH_ID\n       qol-cli-sessions fork-watch --pulls\n\nRuns a switchboard fork's pull request watcher under CLI Sessions instead of the switchboard, so closing the switchboard stops no watcher. The switchboard plugin rewrites a fork's background `node <qol-workflow>/bin/pr-watch.cjs <pr-url> --pretty` call into the first form. The command must be exactly that: node, the qol-workflow bin/pr-watch.cjs installed under a Claude plugins folder, a GitHub pull request URL, then only --pretty or --until-ready; anything else is refused, and a recorded watch whose command is not is marked failed instead of run. It records the watch, starts a detached runner for the command unless one already runs for that fork and command, waits for it, then prints the command's output and exits with its exit code, as the bare command would.\nWhen that wait was stopped, as when the switchboard closed, the runner keeps watching. --deliver prints every result nobody waits for or has claimed as JSON with the pull request ledger, and claims none; the switchboard plugin claims each one with --claim, which exits 0 only for the caller that claimed it, before it sends the result to its fork. A result's message carries the exit code, the path of the command's whole log and the end of its output in a fence the output cannot close, with terminal control codes removed; when the switchboard is closed, the CLI Sessions daemon shows a notification that opens it.\n--pulls lists each fork's pull request and whether it is merged, with its merge commit, open with CLI Sessions watching it, or open with no watcher, and claims nothing.\n--agent is the fork's agent id, --conversation the switchboard conversation it belongs to and --title its board name.";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Mode {
     Help,
     Run(String),
     Deliver,
+    Claim(String),
     Pulls,
     Watch {
         agent_id: String,
@@ -17,8 +19,8 @@ pub enum Mode {
 }
 
 pub fn parse(args: &[String]) -> Result<Mode> {
-    let (mut run, mut deliver, mut pulls, mut agent, mut conversation, mut name) =
-        (None, false, false, None, None, None);
+    let (mut run, mut deliver, mut claim, mut pulls) = (None, false, None, false);
+    let (mut agent, mut conversation, mut name) = (None, None, None);
     let mut command = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -33,6 +35,7 @@ pub fn parse(args: &[String]) -> Result<Mode> {
             "help" | "--help" | "-h" => return Ok(Mode::Help),
             "--run" => run = Some(value("--run")?),
             "--deliver" => deliver = true,
+            "--claim" => claim = Some(value("--claim")?),
             "--pulls" => pulls = true,
             "--agent" => agent = Some(value("--agent")?),
             "--conversation" => conversation = Some(value("--conversation")?),
@@ -45,11 +48,17 @@ pub fn parse(args: &[String]) -> Result<Mode> {
         }
         index += 1;
     }
+    if let Some(id) = run.iter().chain(&claim).find(|id| !is_watch_id(id)) {
+        bail!("`{id}` is not a fork watch id\nusage: {HELP}");
+    }
     if let Some(id) = run {
         return Ok(Mode::Run(id));
     }
     if deliver {
         return Ok(Mode::Deliver);
+    }
+    if let Some(id) = claim {
+        return Ok(Mode::Claim(id));
     }
     if pulls {
         return Ok(Mode::Pulls);
@@ -109,6 +118,10 @@ mod tests {
             Mode::Run("watch-1-2".to_owned())
         );
         assert_eq!(parse(&args(&["--deliver"])).unwrap(), Mode::Deliver);
+        assert_eq!(
+            parse(&args(&["--claim", "watch-1-2"])).unwrap(),
+            Mode::Claim("watch-1-2".to_owned())
+        );
         assert_eq!(parse(&args(&["--pulls"])).unwrap(), Mode::Pulls);
         assert_eq!(parse(&args(&["help"])).unwrap(), Mode::Help);
         for refused in [
@@ -118,6 +131,9 @@ mod tests {
             &["--agent", "a1", "--conversation", "c", "--"],
             &["--bogus", "--", "true"],
             &["--run"],
+            &["--claim"],
+            &["--claim", "../watch-1-2"],
+            &["--run", "watch-1"],
         ] {
             assert!(parse(&args(refused)).is_err(), "{refused:?}");
         }

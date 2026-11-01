@@ -236,15 +236,17 @@ where
             Command::new(crate::fork_watch::FORK_WATCH)
                 .about("Run a switchboard fork's pull request watcher so closing the switchboard stops none.")
                 .usage(format!(
-                    "{PLUGIN_ID} {} --agent AGENT_ID --conversation SESSION_ID [--title NAME] -- <command> [args...] | --deliver | --pulls",
+                    "{PLUGIN_ID} {} --agent AGENT_ID --conversation SESSION_ID [--title NAME] -- <command> [args...] | --deliver | --claim WATCH_ID | --pulls",
                     crate::fork_watch::FORK_WATCH
                 ))
-                .detail("The switchboard plugin rewrites a fork's background `node .../pr-watch.cjs <pr-url> --pretty` call into this. It records the watch, starts a detached runner for the command unless one already runs for that fork and command, waits for it, and prints the command's output and exits with its exit code, as the bare command would.")
+                .detail("The switchboard plugin rewrites a fork's background `node <qol-workflow>/bin/pr-watch.cjs <pr-url> --pretty` call into this. The command must be node, the qol-workflow bin/pr-watch.cjs installed under a Claude plugins folder, a GitHub pull request URL, then only --pretty or --until-ready; anything else is refused, and a recorded watch whose command is not is marked failed instead of run.")
+                .detail("It records the watch, starts a detached runner for the command unless one already runs for that fork and command, waits for it, and prints the command's output and exits with its exit code, as the bare command would.")
                 .detail("When that wait stops, as when the switchboard closes, the runner keeps watching. The switchboard plugin sends the result to the fork when it opens, and while it is closed the CLI Sessions daemon shows a notification that opens it.")
-                .detail("--deliver claims every result nothing waits for and prints it as JSON with the pull request ledger: each fork's pull request, its merge commit or null while it is open, and whether a watcher still runs for it.")
+                .detail("--deliver prints every result nothing waits for or has claimed as JSON with the pull request ledger: each fork's pull request, its merge commit or null while it is open, and whether a watcher still runs for it. It claims nothing. A result's message carries the exit code, the path of the command's whole log and the end of its output in a fence the output cannot close, with terminal control codes removed.")
+                .detail("--claim WATCH_ID claims one of those results, so only the caller that claimed it sends it to the fork.")
                 .detail("--pulls lists each fork's pull request as merged with its merge commit, open with CLI Sessions watching it, or open with no watcher, and claims nothing.")
                 .output("The command's output, the delivery JSON or the pull request lines on stdout; diagnostics on stderr.")
-                .exit_behavior("Exits with the watched command's exit code, 70 when CLI Sessions lost its runner, and non-zero when the watch cannot be recorded or started.")
+                .exit_behavior("Exits with the watched command's exit code, 70 when CLI Sessions lost its runner, 1 from --claim when the result is not there to claim, and non-zero when the watch cannot be recorded or started.")
                 .run_result(|context| Ok(fork_watch(context.args()))),
         )
         .command(
