@@ -51,8 +51,9 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
     if let Some(other) = state.pull_request.filter(|other| *other != number) {
         bail!("pull request #{other} is still installed; run `qol pr try --off` first");
     }
-    let head = download::head_sha(REPO, number)?;
-    let run = download::live_test_run(REPO, &head)?;
+    let pull = download::pull_request(REPO, number)?;
+    let head = pull.head_ref_oid.clone();
+    let run = download::live_test_run(REPO, &pull)?;
     let dir = places.download_dir(number, &head);
     download::fetch(REPO, &run, &dir)?;
     let build = manifest::read(&dir.join(manifest::FILE))?;
