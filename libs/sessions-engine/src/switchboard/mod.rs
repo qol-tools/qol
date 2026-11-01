@@ -170,7 +170,7 @@ impl LaunchPlan {
             let previous = resume::Wake::previous_launch(&wake_path, conversation);
             let forks =
                 resume::sleeping_forks(&config_home, &cwd, conversation, previous.as_deref());
-            resume::Wake::of(conversation, launched_at, forks, watched)
+            resume::Wake::of(conversation, launched_at, previous, forks, watched)
         });
         Ok(Self {
             fork: agents::ForkAgent::system(),
@@ -945,6 +945,7 @@ mod tests {
                 launched_at: "2026-11-01T10:00:00.000Z".to_owned(),
                 forks: Vec::new(),
                 claimed: false,
+                since: None,
             }),
             ..plan(&[])
         };

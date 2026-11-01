@@ -287,12 +287,15 @@ pub(super) struct Wake {
     pub(super) forks: Vec<WakeFork>,
     #[serde(default)]
     pub(super) claimed: bool,
+    #[serde(default)]
+    pub(super) since: Option<String>,
 }
 
 impl Wake {
     pub(super) fn of(
         conversation: &str,
         launched_at: String,
+        since: Option<String>,
         forks: Vec<SleepingFork>,
         watched: impl Fn(&str) -> bool,
     ) -> Self {
@@ -315,12 +318,20 @@ impl Wake {
             launched_at,
             forks,
             claimed: false,
+            since,
         }
     }
 
     pub(super) fn previous_launch(path: &Path, conversation: &str) -> Option<String> {
         let wake: Wake = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-        (wake.claimed && wake.conversation == conversation).then_some(wake.launched_at)
+        if wake.conversation != conversation {
+            return None;
+        }
+        if wake.claimed {
+            Some(wake.launched_at)
+        } else {
+            wake.since
+        }
     }
 
     pub(super) fn write(&self, path: &Path) -> Result<()> {
@@ -792,6 +803,7 @@ mod tests {
         let wake = Wake::of(
             "conv",
             "2026-11-01T10:00:00.000Z".to_owned(),
+            None,
             forks,
             |agent| agent == "tray",
         );
@@ -847,6 +859,7 @@ mod tests {
         let mut wake = Wake::of(
             "conv",
             "2026-11-01T10:00:00.000Z".to_owned(),
+            None,
             vec![sleeping("mid", false, &[])],
             |_| false,
         );
@@ -858,6 +871,19 @@ mod tests {
             Wake::previous_launch(&path, "conv").as_deref(),
             Some("2026-11-01T10:00:00.000Z")
         );
+        let unclaimed = Wake::of(
+            "conv",
+            "2026-11-01T11:00:00.000Z".to_owned(),
+            Wake::previous_launch(&path, "conv"),
+            vec![sleeping("mid", false, &[])],
+            |_| false,
+        );
+        unclaimed.write(&path).unwrap();
+        assert_eq!(
+            Wake::previous_launch(&path, "conv").as_deref(),
+            Some("2026-11-01T10:00:00.000Z")
+        );
+        wake.write(&path).unwrap();
         assert_eq!(Wake::previous_launch(&path, "other"), None);
         let read: Wake = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(read, wake);
