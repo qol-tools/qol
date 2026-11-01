@@ -43,6 +43,7 @@ pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
 pub use modifier_chip::SettingsModifierChip;
+pub use number_field::settings_number_chip;
 pub(super) use number_field::{number_field, NumberCue, NumberText, SliderStyle};
 pub use placement_preview::{
     placement_caption, placement_hold_progress, placement_toast, PlacementHold,

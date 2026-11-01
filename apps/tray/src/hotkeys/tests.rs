@@ -268,6 +268,7 @@ fn binding(uid: &str, action: &str, key: &str, enabled: bool) -> HotkeyBinding {
         action: action.to_string(),
         enabled,
         os_only: false,
+        hold_ms: None,
     }
 }
 
@@ -394,6 +395,7 @@ fn hotkey_binding_serializes_as_plugin_uid_not_plugin_id() {
         action: "run".to_string(),
         enabled: true,
         os_only: false,
+        hold_ms: None,
     };
     let value = serde_json::to_value(&binding).unwrap();
     assert_eq!(
@@ -401,4 +403,263 @@ fn hotkey_binding_serializes_as_plugin_uid_not_plugin_id() {
         "must serialize as plugin_uid"
     );
     assert!(value.get("plugin_id").is_none(), "must not emit plugin_id");
+}
+
+fn hold_binding(uid: &str, action: &str, key: &str, hold_ms: u32) -> HotkeyBinding {
+    HotkeyBinding {
+        id: format!("{uid}-{action}-hold"),
+        hold_ms: Some(hold_ms),
+        ..binding(uid, action, key, true)
+    }
+}
+
+fn shot_config(bindings: Vec<HotkeyBinding>) -> HotkeyConfig {
+    HotkeyConfig { hotkeys: bindings }
+}
+
+#[test]
+fn a_chord_may_hold_one_tap_and_one_hold_but_never_two_of_a_kind() {
+    let tap = binding("uid-shot", "screenshot-monitor", "Shift+Super+S", true);
+    let hold = hold_binding("uid-shot", "screenshot", "shift+super+s", 1000);
+    let other_tap = binding("uid-shot", "record", "SHIFT+SUPER+S", true);
+    let other_hold = hold_binding("uid-shot", "stop", "Shift+Super+S", 500);
+    let elsewhere = hold_binding("uid-shot", "stop", "Shift+Super+R", 500);
+
+    let cases = [
+        (vec![tap.clone()], None),
+        (vec![hold.clone()], None),
+        (vec![tap.clone(), hold.clone()], None),
+        (vec![hold.clone(), tap.clone()], None),
+        (vec![tap.clone(), other_tap.clone()], Some("SHIFT+SUPER+S")),
+        (
+            vec![hold.clone(), other_hold.clone()],
+            Some("Shift+Super+S"),
+        ),
+        (
+            vec![tap.clone(), hold.clone(), other_tap.clone()],
+            Some("SHIFT+SUPER+S"),
+        ),
+        (
+            vec![tap.clone(), hold.clone(), other_hold.clone()],
+            Some("Shift+Super+S"),
+        ),
+        (vec![tap.clone(), elsewhere.clone(), hold.clone()], None),
+    ];
+    for (bindings, expected) in cases {
+        let ids: Vec<_> = bindings.iter().map(|b| b.id.clone()).collect();
+        assert_eq!(
+            super::duplicate_enabled_chord(&shot_config(bindings)),
+            expected.map(str::to_string),
+            "{ids:?}"
+        );
+    }
+}
+
+#[test]
+fn a_disabled_tap_does_not_block_an_enabled_tap_beside_a_hold() {
+    let mut off = binding("uid-shot", "record", "Shift+Super+S", false);
+    off.id = "off".into();
+    let config = shot_config(vec![
+        off,
+        binding("uid-shot", "screenshot-monitor", "Shift+Super+S", true),
+        hold_binding("uid-shot", "screenshot", "Shift+Super+S", 1000),
+    ]);
+    assert_eq!(super::duplicate_enabled_chord(&config), None);
+}
+
+#[test]
+fn capture_bindings_fold_a_tap_and_a_hold_on_one_chord_into_one_timed_binding() {
+    let config = shot_config(vec![
+        binding("uid-shot", "screenshot-monitor", "Shift+Super+S", true),
+        binding("uid-shot", "record", "Shift+Super+R", true),
+        hold_binding("uid-shot", "screenshot", "shift+super+s", 1500),
+    ]);
+
+    let bindings = super::build_capture_bindings(config, &HashSet::new());
+
+    assert_eq!(bindings.len(), 2);
+    let timed = &bindings[0];
+    let plan = timed.hold.as_ref().expect("timed binding");
+    assert_eq!(plan.hold_ms, 1500);
+    assert_eq!(plan.hold.action, "screenshot");
+    assert_eq!(
+        plan.tap.as_ref().map(|tap| tap.action.as_str()),
+        Some("screenshot-monitor")
+    );
+    assert_eq!(timed.action, "screenshot-monitor");
+    assert!(!timed.continuous);
+    assert!(timed.reports_release());
+    assert_eq!(bindings[1].action, "record");
+    assert!(bindings[1].hold.is_none());
+    assert!(!bindings[1].reports_release());
+}
+
+#[test]
+fn capture_bindings_keep_a_lone_hold_and_a_lone_tap_each_on_their_own() {
+    let config = shot_config(vec![
+        hold_binding("uid-shot", "screenshot", "Shift+Super+S", 800),
+        binding("uid-shot", "record", "Shift+Super+R", true),
+    ]);
+
+    let bindings = super::build_capture_bindings(config, &HashSet::new());
+
+    assert_eq!(bindings.len(), 2);
+    let plan = bindings[0].hold.as_ref().unwrap();
+    assert_eq!(plan.tap, None);
+    assert_eq!(bindings[0].action, "screenshot");
+    assert!(bindings[1].hold.is_none());
+}
+
+#[test]
+fn capture_bindings_without_a_hold_stay_exactly_as_they_were() {
+    let config = shot_config(vec![
+        binding("uid-shot", "screenshot-monitor", "Shift+Super+S", true),
+        binding("uid-shot", "record", "Shift+Super+R", true),
+        binding("uid-shot", "disabled", "Shift+Super+D", false),
+    ]);
+
+    let bindings = super::build_capture_bindings(config, &HashSet::new());
+
+    assert_eq!(bindings.len(), 2);
+    assert!(bindings.iter().all(|binding| binding.hold.is_none()));
+    assert!(bindings.iter().all(|binding| !binding.reports_release()));
+}
+
+#[test]
+fn capture_bindings_ignore_a_hold_time_on_a_continuous_chord() {
+    let uid = PluginUid::new("uid-window-actions");
+    let config = shot_config(vec![
+        hold_binding(uid.as_str(), "glide-left", "Ctrl+Alt+Left", 1000),
+        binding(uid.as_str(), "center", "Ctrl+Alt+Left", true),
+    ]);
+    let continuous = HashSet::from([(uid, "glide-left".to_string())]);
+
+    let bindings = super::build_capture_bindings(config, &continuous);
+
+    assert_eq!(bindings.len(), 2);
+    assert!(bindings.iter().all(|binding| binding.hold.is_none()));
+    assert!(bindings[0].continuous);
+}
+
+#[test]
+fn capture_bindings_clamp_a_hold_time_outside_the_limits() {
+    for (asked, expected) in [(5, 100), (1000, 1000), (90_000, 10_000)] {
+        let config = shot_config(vec![hold_binding(
+            "uid-shot",
+            "screenshot",
+            "Shift+Super+S",
+            asked,
+        )]);
+        let bindings = super::build_capture_bindings(config, &HashSet::new());
+        assert_eq!(bindings[0].hold.as_ref().unwrap().hold_ms, expected);
+    }
+}
+
+#[test]
+fn plan_registrations_fold_a_tap_and_a_hold_into_one_grab() {
+    let available = make_available("uid-shot", &["screenshot", "screenshot-monitor", "record"]);
+    let config = shot_config(vec![
+        hold_binding("uid-shot", "screenshot", "Shift+Super+S", 1000),
+        binding("uid-shot", "record", "Shift+Super+R", true),
+        binding("uid-shot", "screenshot-monitor", "shift+super+s", true),
+    ]);
+
+    let plan = plan_registrations(&config, &available);
+
+    assert_eq!(plan.len(), 2);
+    let timed = plan
+        .iter()
+        .find(|registration| registration.hold.is_some())
+        .expect("timed grab");
+    let hold = timed.hold.as_ref().unwrap();
+    assert_eq!(hold.hold.action, "screenshot");
+    assert_eq!(
+        hold.tap.as_ref().map(|tap| tap.action.as_str()),
+        Some("screenshot-monitor")
+    );
+    assert_eq!(timed.action.action, "screenshot-monitor");
+    assert!(!timed.action.continuous);
+    assert_eq!(timed.binding_key, "Shift+Super+S");
+    let plain = plan
+        .iter()
+        .find(|registration| registration.hold.is_none())
+        .expect("plain grab");
+    assert_eq!(plain.action.action, "record");
+}
+
+#[test]
+fn plan_registrations_keep_a_continuous_chord_plain_even_with_a_hold_beside_it() {
+    let mut available = make_available("uid-window-actions", &["glide-left", "center"]);
+    *available
+        .get_mut(&PluginUid::new("uid-window-actions"))
+        .unwrap()
+        .get_mut("glide-left")
+        .unwrap() = true;
+    let config = shot_config(vec![
+        binding("uid-window-actions", "glide-left", "Ctrl+Alt+Left", true),
+        hold_binding("uid-window-actions", "center", "Ctrl+Alt+Left", 1000),
+    ]);
+
+    let plan = plan_registrations(&config, &available);
+
+    assert_eq!(plan.len(), 2);
+    assert!(plan.iter().all(|registration| registration.hold.is_none()));
+}
+
+#[test]
+fn plan_registrations_run_a_hold_alone_when_its_tap_partner_is_unavailable() {
+    let available = make_available("uid-shot", &["screenshot"]);
+    let config = shot_config(vec![
+        binding("uid-shot", "gone", "Shift+Super+S", true),
+        hold_binding("uid-shot", "screenshot", "Shift+Super+S", 1000),
+    ]);
+
+    let plan = plan_registrations(&config, &available);
+
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].hold.as_ref().unwrap().tap, None);
+}
+
+#[test]
+fn the_hold_time_survives_a_save_and_load_through_both_layers() {
+    let dir = tempfile::tempdir().unwrap();
+    let layers = super::HotkeyLayers {
+        core: dir.path().join("core.json"),
+        os: dir.path().join("os.json"),
+    };
+    let mut os_hold = hold_binding("uid-shot", "screenshot", "Shift+Super+S", 1200);
+    os_hold.os_only = true;
+    let config = shot_config(vec![
+        binding("uid-shot", "screenshot-monitor", "Shift+Super+S", true),
+        os_hold,
+    ]);
+
+    layers.save(&config).unwrap();
+    let loaded = layers.load().unwrap();
+
+    assert_eq!(loaded.hotkeys.len(), 2);
+    let tap = loaded.hotkeys.iter().find(|b| b.hold_ms.is_none()).unwrap();
+    let hold = loaded.hotkeys.iter().find(|b| b.hold_ms.is_some()).unwrap();
+    assert_eq!(tap.action, "screenshot-monitor");
+    assert_eq!(hold.hold_ms, Some(1200));
+    assert!(hold.os_only);
+    let core: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&layers.core).unwrap()).unwrap();
+    assert!(core["hotkeys"][0].get("hold_ms").is_none());
+    let os: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&layers.os).unwrap()).unwrap();
+    assert_eq!(os["hotkeys"][0]["hold_ms"], serde_json::json!(1200));
+}
+
+#[test]
+fn hotkey_binding_keeps_hold_ms_through_a_json_round_trip() {
+    let cases = [(None, false), (Some(1000), true), (Some(250), true)];
+    for (hold_ms, written) in cases {
+        let mut original = binding("uid-shot", "screenshot", "Shift+Super+S", true);
+        original.hold_ms = hold_ms;
+        let value = serde_json::to_value(&original).unwrap();
+        assert_eq!(value.get("hold_ms").is_some(), written, "{hold_ms:?}");
+        let back: HotkeyBinding = serde_json::from_value(value).unwrap();
+        assert_eq!(back.hold_ms, hold_ms);
+    }
 }

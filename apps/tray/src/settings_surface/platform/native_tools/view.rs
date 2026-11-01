@@ -12,10 +12,10 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
-    settings_label_group, settings_message, settings_page, settings_tile_rows,
-    settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone, RowGround,
-    SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow,
-    SettingsTextField, SettingsTile, SettingsToggle, TileArt,
+    settings_label_group, settings_message, settings_number_chip, settings_page,
+    settings_tile_rows, settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone,
+    RowGround, SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination,
+    SettingsRow, SettingsTextField, SettingsTile, SettingsToggle, TileArt,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_list, wrapping_visible_row, CustomHints,
@@ -32,14 +32,19 @@ use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
     available_actions, chord_from_keystroke, modifier_is_secondary, question_text,
     shortcut_is_managed, shortcut_kind_label, shortcut_summary, AppRefKind, EditorQuestion,
-    HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind,
+    HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind, HOLD_FIELD, HOTKEY_FIELDS,
+    OS_ONLY_FIELD,
 };
 
 const MAX_VISIBLE: usize = 9;
 const EDITOR_DEPTH: usize = 1;
 const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
-const HOTKEY_FIELDS: usize = 5;
 const OS_ONLY_LABEL: &str = "Only on this kind of computer";
+const HOLD_LABEL: (&str, &str) = (
+    "Hold to run",
+    "Runs once the keys are held this long. Off runs on press.",
+);
+const HOLD_UNIT: &str = "ms";
 const SHORTCUT_ENABLED: (&str, &str) = ("Enabled", "The shortcut does nothing while this is off.");
 const SHOW_IN_LAUNCHER: (&str, &str) = (
     "Show in launcher",
@@ -851,7 +856,12 @@ impl NativeToolsView {
                     self.start_capture(cx);
                     cx.notify();
                 }
-                4 if matches!(key, "enter" | "return" | "space") => {
+                HOLD_FIELD => {
+                    if draft.hold_key(key, event.keystroke.modifiers.shift) {
+                        cx.notify();
+                    }
+                }
+                OS_ONLY_FIELD if matches!(key, "enter" | "return" | "space") => {
                     draft.os_only = !draft.os_only;
                     cx.notify();
                 }
@@ -1141,11 +1151,7 @@ impl NativeToolsView {
             .and_then(|plugin| self.current_action(plugin, &hotkey.action))
             .map(|action| action.label.clone())
             .unwrap_or_else(|| hotkey.action.clone());
-        let action = if hotkey.os_only {
-            format!("{action} · this kind of computer only")
-        } else {
-            action
-        };
+        let action = hotkey_detail(&action, hotkey.hold_ms, hotkey.os_only);
         SettingsRow::setting(("native-hotkey-row", item), kit)
             .selected(selected, self.body_focused)
             .dimmed(!hotkey.enabled)
@@ -1372,14 +1378,15 @@ impl NativeToolsView {
                 cx,
             ))
             .child(self.capture_field(draft, cx))
+            .child(self.hold_field(draft, cx))
             .child(self.boolean_field(
-                4,
+                OS_ONLY_FIELD,
                 (
                     OS_ONLY_LABEL,
                     "Your other kinds of computer skip this hotkey.",
                 ),
                 draft.os_only,
-                draft.selected == 4,
+                draft.selected == OS_ONLY_FIELD,
                 cx,
             ))
             .into_any_element()
@@ -1561,6 +1568,34 @@ impl NativeToolsView {
             .into_any_element()
     }
 
+    fn hold_field(&self, draft: &HotkeyDraft, cx: &mut Context<Self>) -> AnyElement {
+        let kit = qol_gpui::kit::kit();
+        let selected = draft.selected == HOLD_FIELD;
+        let row = RowGround::of(selected, self.body_focused);
+        SettingsRow::rule(("native-tools-hold", HOLD_FIELD), kit)
+            .selected(selected, self.body_focused)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.select_editor_field(HOLD_FIELD);
+                this.activate_editor_field(cx);
+                cx.notify();
+            }))
+            .child(field_label(HOLD_LABEL, row, kit))
+            .child(
+                settings_value_group()
+                    .children(
+                        draft
+                            .hold_ms
+                            .map(|ms| settings_number_chip(ms.to_string(), HOLD_UNIT, row, kit)),
+                    )
+                    .child(SettingsToggle::new(draft.hold_ms.is_some(), row, kit)),
+            )
+            .child(deck::bounds_recorder(
+                Rc::clone(&self.field_bounds),
+                HOLD_FIELD,
+            ))
+            .into_any_element()
+    }
+
     fn select_editor_field(&mut self, index: usize) {
         match &mut self.mode {
             Mode::Shortcut(draft) => {
@@ -1584,7 +1619,8 @@ impl NativeToolsView {
             Mode::Hotkey(draft) => match draft.selected {
                 0 => draft.enabled = !draft.enabled,
                 3 => self.start_capture(cx),
-                4 => draft.os_only = !draft.os_only,
+                HOLD_FIELD => draft.flip_hold(),
+                OS_ONLY_FIELD => draft.os_only = !draft.os_only,
                 _ => {}
             },
             Mode::List => {}
@@ -1873,6 +1909,10 @@ impl NativeToolsView {
         ];
         if self.selected_field_is_text(selected) {
             left.push(SettingsHint::new(Key::TYPE, "edit"));
+        }
+        if matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == HOLD_FIELD && draft.hold_ms.is_some())
+        {
+            left.push(SettingsHint::new(Key::LEFT_RIGHT, "change"));
         }
         CustomHints {
             question: None,
@@ -2179,21 +2219,37 @@ impl Render for NativeToolsView {
 }
 
 fn navigate_form(selected: &mut usize, count: usize, event: &KeyDownEvent) -> bool {
+    navigate_form_key(
+        selected,
+        count,
+        event.keystroke.key.as_str(),
+        event.keystroke.modifiers.shift,
+    )
+}
+
+fn navigate_form_key(selected: &mut usize, count: usize, key: &str, shift: bool) -> bool {
     let visible = (0..count).collect::<Vec<_>>();
-    match intent(event.keystroke.key.as_str(), None, false) {
+    match intent(key, None, false) {
         Some(Intent::Up) => *selected = adjacent_visible_row(&visible, *selected, -1),
         Some(Intent::Down) => *selected = adjacent_visible_row(&visible, *selected, 1),
         Some(Intent::Tab) => {
-            let direction = if event.keystroke.modifiers.shift {
-                -1
-            } else {
-                1
-            };
+            let direction = if shift { -1 } else { 1 };
             *selected = wrapping_visible_row(&visible, *selected, direction);
         }
         _ => return false,
     }
     true
+}
+
+fn hotkey_detail(action: &str, hold_ms: Option<u32>, os_only: bool) -> String {
+    let mut detail = action.to_string();
+    if let Some(hold_ms) = hold_ms {
+        detail.push_str(&format!(" · hold {hold_ms} ms"));
+    }
+    if os_only {
+        detail.push_str(" · this kind of computer only");
+    }
+    detail
 }
 
 fn sync_shortcut_target(draft: &mut ShortcutDraft, field: &TextField) {
@@ -2312,6 +2368,84 @@ mod breadcrumb_tests {
             labels(&breadcrumbs("Docs", Some(SelectField::TargetKind))),
             ["Docs", "Find app by"]
         );
+    }
+}
+
+#[cfg(test)]
+mod hotkey_field_tests {
+    use super::{
+        hotkey_detail, navigate_form_key, HotkeyDraft, HOLD_FIELD, HOTKEY_FIELDS, OS_ONLY_FIELD,
+    };
+
+    fn press(selected: usize, key: &str, shift: bool) -> (usize, bool) {
+        let mut selected = selected;
+        let handled = navigate_form_key(&mut selected, HOTKEY_FIELDS, key, shift);
+        (selected, handled)
+    }
+
+    #[test]
+    fn down_walks_every_field_in_order_and_stops_at_the_last() {
+        let mut at = 0;
+        let mut seen = vec![at];
+        for _ in 0..HOTKEY_FIELDS + 2 {
+            at = press(at, "down", false).0;
+            if seen.last() != Some(&at) {
+                seen.push(at);
+            }
+        }
+        assert_eq!(seen, [0, 1, 2, 3, HOLD_FIELD, OS_ONLY_FIELD]);
+    }
+
+    #[test]
+    fn up_walks_back_through_the_hold_field_and_stops_at_the_first() {
+        assert_eq!(press(OS_ONLY_FIELD, "up", false), (HOLD_FIELD, true));
+        assert_eq!(press(HOLD_FIELD, "up", false), (3, true));
+        assert_eq!(press(0, "up", false), (0, true));
+    }
+
+    #[test]
+    fn tab_wraps_through_all_six_fields_both_ways() {
+        assert_eq!(press(3, "tab", false), (HOLD_FIELD, true));
+        assert_eq!(press(HOLD_FIELD, "tab", false), (OS_ONLY_FIELD, true));
+        assert_eq!(press(OS_ONLY_FIELD, "tab", false), (0, true));
+        assert_eq!(press(0, "tab", true), (OS_ONLY_FIELD, true));
+        assert_eq!(press(OS_ONLY_FIELD, "tab", true), (HOLD_FIELD, true));
+    }
+
+    #[test]
+    fn keys_the_hold_row_owns_never_move_the_cursor() {
+        for key in ["left", "right", "enter", "space", "1"] {
+            assert_eq!(press(HOLD_FIELD, key, false), (HOLD_FIELD, false), "{key}");
+        }
+    }
+
+    #[test]
+    fn the_cursor_keys_drive_the_hold_row_on_the_draft() {
+        let mut draft = HotkeyDraft::blank(&[], &[]);
+        draft.selected = HOLD_FIELD;
+        assert!(draft.hold_key("enter", false));
+        assert_eq!(draft.hold_ms, Some(1000));
+        assert!(draft.hold_key("right", false));
+        assert_eq!(draft.hold_ms, Some(1100));
+        assert!(draft.hold_key("space", false));
+        assert_eq!(draft.hold_ms, None);
+        assert_eq!(draft.selected, HOLD_FIELD);
+    }
+
+    #[test]
+    fn the_list_detail_adds_the_hold_before_the_computer_suffix() {
+        for (hold_ms, os_only, expected) in [
+            (None, false, "Take Screenshot"),
+            (Some(1000), false, "Take Screenshot · hold 1000 ms"),
+            (None, true, "Take Screenshot · this kind of computer only"),
+            (
+                Some(250),
+                true,
+                "Take Screenshot · hold 250 ms · this kind of computer only",
+            ),
+        ] {
+            assert_eq!(hotkey_detail("Take Screenshot", hold_ms, os_only), expected);
+        }
     }
 }
 

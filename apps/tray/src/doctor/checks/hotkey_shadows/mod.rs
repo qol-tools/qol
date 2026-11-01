@@ -281,7 +281,23 @@ mod tests {
             action: "open".into(),
             enabled: true,
             os_only: false,
+            hold_ms: None,
         }
+    }
+
+    #[test]
+    fn a_tap_and_a_hold_on_one_chord_make_one_shadow_candidate() {
+        let tap = binding("Shift+Super+S");
+        let hold = HotkeyBinding {
+            id: "hk-hold".into(),
+            action: "screenshot".into(),
+            hold_ms: Some(1000),
+            ..binding("shift+super+s")
+        };
+
+        let index = build_qol_index(&[tap, hold]);
+
+        assert_eq!(index.len(), 1);
     }
 
     #[test]

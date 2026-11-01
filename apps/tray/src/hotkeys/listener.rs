@@ -1,5 +1,6 @@
 use super::capture::HEARTBEAT_INTERVAL;
 use super::catalog::load_available_actions;
+use super::hold::{Fire, HoldTimer};
 use super::manager::{RegisteredHotkey, RegistrationScope};
 use super::platform::PhysicalHotkeyState;
 use super::reload;
@@ -173,6 +174,10 @@ impl<'a> HotkeyListenerLoop<'a> {
                 } else {
                     after(super::platform::POLL_INTERVAL)
                 };
+            let hold_rx: Receiver<Instant> = match self.held_actions.next_deadline() {
+                Some(deadline) => after(deadline.saturating_duration_since(Instant::now())),
+                None => never(),
+            };
             let reassert_rx: Receiver<Instant> =
                 match self.reassert_schedule.get(self.reassert_index) {
                     Some(offset) => after(*offset),
@@ -191,6 +196,7 @@ impl<'a> HotkeyListenerLoop<'a> {
                     self.handle_hotkey_event(event);
                 }
                 recv(physical_state_rx) -> _ => self.poll_physical_state(),
+                recv(hold_rx) -> _ => self.fire_due_holds(),
                 recv(reassert_rx) -> _ => {
                     self.reassert_index += 1;
                     self.reassert_hotkeys();
@@ -243,10 +249,20 @@ impl<'a> HotkeyListenerLoop<'a> {
             }
         );
         let action = self.manager.get_registration(&event).cloned();
-        let Some(dispatch) = self.held_actions.handle_event(event, action.as_ref()) else {
+        let Some(dispatch) = self
+            .held_actions
+            .handle_event(event, action.as_ref(), Instant::now())
+        else {
             return;
         };
         self.dispatch(dispatch, DispatchSource::GlobalEvent, "event");
+        self.finish_trace_session_if_idle();
+    }
+
+    fn fire_due_holds(&mut self) {
+        for dispatch in self.held_actions.expire(Instant::now()) {
+            self.dispatch(dispatch, DispatchSource::HoldTimer, "held");
+        }
         self.finish_trace_session_if_idle();
     }
 
@@ -261,13 +277,14 @@ impl<'a> HotkeyListenerLoop<'a> {
         };
         let dispatches = if snapshot.supports_reconciliation() {
             self.held_actions.reconcile_physical(
-                self.manager.continuous_registrations(),
+                self.manager.held_registrations(),
                 |registration| {
                     registration
                         .physical_chord
                         .as_ref()
                         .is_some_and(|chord| snapshot.chord_is_pressed(chord))
                 },
+                Instant::now(),
             )
         } else {
             Vec::new()
@@ -342,6 +359,30 @@ impl<'a> HotkeyListenerLoop<'a> {
                 qol_runtime::probe!(
                     "HOTKEY_DISPATCH",
                     "source={} kind=one-shot uid={} action={}",
+                    source.as_str(),
+                    qol_runtime::probe::token(action.plugin_uid.as_str()),
+                    qol_runtime::probe::token(&action.action)
+                );
+                crate::plugins::action_executor::execute_action(
+                    &self.plugin_manager,
+                    &plugin_id,
+                    &action.action,
+                );
+            }
+            HotkeyDispatch::Hold(action) => {
+                if let Err(error) = self.manager.release_active_grab() {
+                    log::error!(
+                        "Hold hotkey could not hand keyboard ownership to the window manager: {error}"
+                    );
+                }
+                log::info!(
+                    "Hotkey held: {}::{}",
+                    action.plugin_uid.as_str(),
+                    action.action
+                );
+                qol_runtime::probe!(
+                    "HOTKEY_DISPATCH",
+                    "source={} kind=hold uid={} action={}",
                     source.as_str(),
                     qol_runtime::probe::token(action.plugin_uid.as_str()),
                     qol_runtime::probe::token(&action.action)
@@ -442,6 +483,7 @@ enum DispatchSource {
     PhysicalState,
     Heartbeat,
     ForcedStop,
+    HoldTimer,
 }
 
 impl DispatchSource {
@@ -451,6 +493,7 @@ impl DispatchSource {
             Self::PhysicalState => "physical-state",
             Self::Heartbeat => "heartbeat",
             Self::ForcedStop => "forced-stop",
+            Self::HoldTimer => "hold-timer",
         }
     }
 }
@@ -475,6 +518,7 @@ impl ContinuousPhase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HotkeyDispatch {
     OneShot(HotkeyAction),
+    Hold(HotkeyAction),
     Continuous {
         action: HotkeyAction,
         phase: ContinuousPhase,
@@ -484,14 +528,24 @@ enum HotkeyDispatch {
 impl HotkeyDispatch {
     fn action(&self) -> &HotkeyAction {
         match self {
-            Self::OneShot(action) | Self::Continuous { action, .. } => action,
+            Self::OneShot(action) | Self::Hold(action) | Self::Continuous { action, .. } => action,
         }
     }
 }
 
+enum HeldState {
+    Continuous,
+    Timed(HoldTimer),
+}
+
+struct Held {
+    registration: RegisteredHotkey,
+    state: HeldState,
+}
+
 #[derive(Default)]
 struct HeldActions {
-    actions: HashMap<u32, RegisteredHotkey>,
+    actions: HashMap<u32, Held>,
 }
 
 impl HeldActions {
@@ -504,7 +558,7 @@ impl HeldActions {
         let mut directions = self
             .actions
             .values()
-            .filter_map(|registration| registration.action.action.strip_prefix("glide-"))
+            .filter_map(|held| held.registration.action.action.strip_prefix("glide-"))
             .collect::<Vec<_>>();
         directions.sort_unstable();
         if directions.is_empty() {
@@ -514,32 +568,66 @@ impl HeldActions {
         }
     }
 
+    fn start(
+        &mut self,
+        id: u32,
+        registration: RegisteredHotkey,
+        now: Instant,
+    ) -> Option<HotkeyDispatch> {
+        if let Some(plan) = registration.hold.clone() {
+            self.actions.insert(
+                id,
+                Held {
+                    registration,
+                    state: HeldState::Timed(HoldTimer::start(plan, now)),
+                },
+            );
+            return None;
+        }
+        let action = registration.action.clone();
+        self.actions.insert(
+            id,
+            Held {
+                registration,
+                state: HeldState::Continuous,
+            },
+        );
+        Some(HotkeyDispatch::Continuous {
+            action,
+            phase: ContinuousPhase::Start,
+        })
+    }
+
+    fn finish(held: Held, now: Instant) -> Option<HotkeyDispatch> {
+        match held.state {
+            HeldState::Continuous => Some(HotkeyDispatch::Continuous {
+                action: held.registration.action,
+                phase: ContinuousPhase::Stop,
+            }),
+            HeldState::Timed(timer) => timer.release(now).map(dispatch_of),
+        }
+    }
+
     fn handle_event(
         &mut self,
         event: GlobalHotKeyEvent,
         registered_action: Option<&RegisteredHotkey>,
+        now: Instant,
     ) -> Option<HotkeyDispatch> {
         match event.state {
             HotKeyState::Pressed => {
                 let registration = registered_action?.clone();
-                if !registration.action.continuous {
+                if registration.hold.is_none() && !registration.action.continuous {
                     return Some(HotkeyDispatch::OneShot(registration.action));
                 }
                 if self.actions.contains_key(&event.id) {
                     return None;
                 }
-                self.actions.insert(event.id, registration.clone());
-                Some(HotkeyDispatch::Continuous {
-                    action: registration.action,
-                    phase: ContinuousPhase::Start,
-                })
+                self.start(event.id, registration, now)
             }
             HotKeyState::Released => {
-                let registration = self.actions.remove(&event.id)?;
-                Some(HotkeyDispatch::Continuous {
-                    action: registration.action,
-                    phase: ContinuousPhase::Stop,
-                })
+                let held = self.actions.remove(&event.id)?;
+                Self::finish(held, now)
             }
         }
     }
@@ -548,6 +636,7 @@ impl HeldActions {
         &mut self,
         registrations: impl Iterator<Item = (u32, &'a RegisteredHotkey)>,
         is_pressed: impl Fn(&RegisteredHotkey) -> bool,
+        now: Instant,
     ) -> Vec<HotkeyDispatch> {
         let mut dispatches = Vec::new();
         let mut pressed_ids = HashSet::new();
@@ -559,11 +648,7 @@ impl HeldActions {
             if self.actions.contains_key(&id) {
                 continue;
             }
-            self.actions.insert(id, registration.clone());
-            dispatches.push(HotkeyDispatch::Continuous {
-                action: registration.action.clone(),
-                phase: ContinuousPhase::Start,
-            });
+            dispatches.extend(self.start(id, registration.clone(), now));
         }
         let released = self
             .actions
@@ -572,22 +657,40 @@ impl HeldActions {
             .copied()
             .collect::<Vec<_>>();
         for id in released {
-            let Some(registration) = self.actions.remove(&id) else {
+            let Some(held) = self.actions.remove(&id) else {
                 continue;
             };
-            dispatches.push(HotkeyDispatch::Continuous {
-                action: registration.action,
-                phase: ContinuousPhase::Stop,
-            });
+            dispatches.extend(Self::finish(held, now));
         }
         dispatches
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.actions
+            .values()
+            .filter_map(|held| match &held.state {
+                HeldState::Timed(timer) => timer.deadline(),
+                HeldState::Continuous => None,
+            })
+            .min()
+    }
+
+    fn expire(&mut self, now: Instant) -> Vec<HotkeyDispatch> {
+        self.actions
+            .values_mut()
+            .filter_map(|held| match &mut held.state {
+                HeldState::Timed(timer) => timer.expire(now).map(dispatch_of),
+                HeldState::Continuous => None,
+            })
+            .collect()
     }
 
     fn heartbeat_dispatches(&self) -> Vec<HotkeyDispatch> {
         self.actions
             .values()
-            .map(|registration| HotkeyDispatch::Continuous {
-                action: registration.action.clone(),
+            .filter(|held| matches!(held.state, HeldState::Continuous))
+            .map(|held| HotkeyDispatch::Continuous {
+                action: held.registration.action.clone(),
                 phase: ContinuousPhase::Heartbeat,
             })
             .collect()
@@ -596,13 +699,24 @@ impl HeldActions {
     fn stop_all(&mut self) -> Vec<HotkeyDispatch> {
         self.actions
             .drain()
-            .map(|(_, registration)| HotkeyDispatch::Continuous {
-                action: registration.action,
-                phase: ContinuousPhase::Stop,
+            .filter_map(|(_, held)| match held.state {
+                HeldState::Continuous => Some(HotkeyDispatch::Continuous {
+                    action: held.registration.action,
+                    phase: ContinuousPhase::Stop,
+                }),
+                HeldState::Timed(_) => None,
             })
             .collect()
     }
 }
+
+fn dispatch_of(fire: Fire) -> HotkeyDispatch {
+    match fire {
+        Fire::Tap(target) => HotkeyDispatch::OneShot(target.hotkey_action()),
+        Fire::Hold(target) => HotkeyDispatch::Hold(target.hotkey_action()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,7 +730,25 @@ mod tests {
                 action: name.to_string(),
                 continuous,
             },
+            hold: None,
             physical_chord: crate::hotkeys::capture::parse_combo("Ctrl+Shift+Super+Left"),
+        }
+    }
+
+    fn timed(name: &str, tap: Option<&str>, hold_ms: u32) -> RegisteredHotkey {
+        let target = |action: &str| crate::hotkeys::hold::Target {
+            plugin_uid: PluginUid::new("uid-shot"),
+            action: action.to_string(),
+        };
+        let plan = crate::hotkeys::hold::HoldPlan {
+            hold_ms,
+            hold: target(&format!("hold-{name}")),
+            tap: tap.map(|tap| target(&format!("{tap}-{name}"))),
+        };
+        RegisteredHotkey {
+            action: plan.primary().hotkey_action(),
+            hold: Some(plan),
+            physical_chord: crate::hotkeys::capture::parse_combo("Shift+Super+S"),
         }
     }
 
@@ -627,14 +759,15 @@ mod tests {
     #[test]
     fn one_shot_actions_dispatch_only_on_press() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let center = registration("center", false);
 
         assert_eq!(
-            held.handle_event(event(1, HotKeyState::Pressed), Some(&center)),
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&center), now),
             Some(HotkeyDispatch::OneShot(center.action))
         );
         assert_eq!(
-            held.handle_event(event(1, HotKeyState::Released), None),
+            held.handle_event(event(1, HotKeyState::Released), None, now),
             None
         );
         assert!(held.is_empty());
@@ -643,10 +776,11 @@ mod tests {
     #[test]
     fn continuous_actions_dispatch_start_heartbeats_and_stop() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let glide = registration("glide-left", true);
 
         assert_eq!(
-            held.handle_event(event(7, HotKeyState::Pressed), Some(&glide)),
+            held.handle_event(event(7, HotKeyState::Pressed), Some(&glide), now),
             Some(HotkeyDispatch::Continuous {
                 action: glide.action.clone(),
                 phase: ContinuousPhase::Start,
@@ -660,7 +794,7 @@ mod tests {
             }]
         );
         assert_eq!(
-            held.handle_event(event(7, HotKeyState::Released), Some(&glide)),
+            held.handle_event(event(7, HotKeyState::Released), Some(&glide), now),
             Some(HotkeyDispatch::Continuous {
                 action: glide.action,
                 phase: ContinuousPhase::Stop,
@@ -672,13 +806,14 @@ mod tests {
     #[test]
     fn continuous_actions_ignore_duplicate_press_events() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let glide = registration("glide-right", true);
 
         assert!(held
-            .handle_event(event(9, HotKeyState::Pressed), Some(&glide))
+            .handle_event(event(9, HotKeyState::Pressed), Some(&glide), now)
             .is_some());
         assert_eq!(
-            held.handle_event(event(9, HotKeyState::Pressed), Some(&glide)),
+            held.handle_event(event(9, HotKeyState::Pressed), Some(&glide), now),
             None
         );
         assert_eq!(
@@ -693,11 +828,12 @@ mod tests {
     #[test]
     fn physical_chord_break_stops_action_when_release_event_is_missing() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let glide = registration("glide-left", true);
-        held.handle_event(event(7, HotKeyState::Pressed), Some(&glide));
+        held.handle_event(event(7, HotKeyState::Pressed), Some(&glide), now);
 
         assert_eq!(
-            held.reconcile_physical(std::iter::empty(), |_| false),
+            held.reconcile_physical(std::iter::empty(), |_| false, now),
             vec![HotkeyDispatch::Continuous {
                 action: glide.action,
                 phase: ContinuousPhase::Stop,
@@ -709,12 +845,13 @@ mod tests {
     #[test]
     fn physical_reconciliation_starts_new_chord_during_existing_hold() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let right = registration("glide-right", true);
         let left = registration("glide-left", true);
-        held.handle_event(event(9, HotKeyState::Pressed), Some(&right));
+        held.handle_event(event(9, HotKeyState::Pressed), Some(&right), now);
 
         assert_eq!(
-            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |_| true),
+            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |_| true, now),
             vec![HotkeyDispatch::Continuous {
                 action: left.action,
                 phase: ContinuousPhase::Start,
@@ -725,10 +862,11 @@ mod tests {
     #[test]
     fn physical_reconciliation_recovers_a_missed_initial_press() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let left = registration("glide-left", true);
 
         assert_eq!(
-            held.reconcile_physical([(7, &left)].into_iter(), |_| true),
+            held.reconcile_physical([(7, &left)].into_iter(), |_| true, now),
             vec![HotkeyDispatch::Continuous {
                 action: left.action,
                 phase: ContinuousPhase::Start,
@@ -747,14 +885,17 @@ mod tests {
     #[test]
     fn physical_reconciliation_starts_replacement_before_stopping_old_chord() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let right = registration("glide-right", true);
         let left = registration("glide-left", true);
-        held.handle_event(event(9, HotKeyState::Pressed), Some(&right));
+        held.handle_event(event(9, HotKeyState::Pressed), Some(&right), now);
 
         assert_eq!(
-            held.reconcile_physical([(9, &right), (7, &left)].into_iter(), |registration| {
-                registration.action.action == "glide-left"
-            }),
+            held.reconcile_physical(
+                [(9, &right), (7, &left)].into_iter(),
+                |registration| registration.action.action == "glide-left",
+                now
+            ),
             vec![
                 HotkeyDispatch::Continuous {
                     action: left.action,
@@ -771,10 +912,11 @@ mod tests {
     #[test]
     fn stop_all_releases_every_held_continuous_action() {
         let mut held = HeldActions::default();
+        let now = Instant::now();
         let left = registration("glide-left", true);
         let up = registration("glide-up", true);
-        held.handle_event(event(1, HotKeyState::Pressed), Some(&left));
-        held.handle_event(event(2, HotKeyState::Pressed), Some(&up));
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&left), now);
+        held.handle_event(event(2, HotKeyState::Pressed), Some(&up), now);
 
         let mut stopped = held.stop_all();
         stopped.sort_by(|a, b| a.action().action.cmp(&b.action().action));
@@ -793,6 +935,220 @@ mod tests {
             ]
         );
         assert!(held.is_empty());
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    fn tap_of(name: &str) -> HotkeyDispatch {
+        HotkeyDispatch::OneShot(timed_action(&format!("tap-{name}")))
+    }
+
+    fn hold_of(name: &str) -> HotkeyDispatch {
+        HotkeyDispatch::Hold(timed_action(&format!("hold-{name}")))
+    }
+
+    fn timed_action(action: &str) -> HotkeyAction {
+        HotkeyAction {
+            plugin_uid: PluginUid::new("uid-shot"),
+            action: action.to_string(),
+            continuous: false,
+        }
+    }
+
+    #[test]
+    fn a_hold_press_dispatches_nothing_and_arms_a_deadline() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0),
+            None
+        );
+        assert!(!held.is_empty());
+        assert_eq!(held.next_deadline(), Some(t0 + ms(1000)));
+    }
+
+    #[test]
+    fn a_release_before_the_deadline_runs_the_tap() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None, t0 + ms(140)),
+            Some(tap_of("s"))
+        );
+        assert!(held.is_empty());
+        assert_eq!(held.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_hold_only_chord_released_early_runs_nothing() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", None, 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None, t0 + ms(300)),
+            None
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn reaching_the_deadline_runs_the_hold_once_and_the_release_runs_nothing() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(held.expire(t0 + ms(999)), Vec::new());
+        assert_eq!(held.expire(t0 + ms(1000)), vec![hold_of("s")]);
+        assert_eq!(held.expire(t0 + ms(2000)), Vec::new());
+        assert_eq!(held.next_deadline(), None);
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None, t0 + ms(2500)),
+            None
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn a_repeated_press_event_keeps_the_first_deadline() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0 + ms(500)),
+            None
+        );
+        assert_eq!(held.next_deadline(), Some(t0 + ms(1000)));
+    }
+
+    #[test]
+    fn heartbeats_skip_a_pending_hold_and_still_cover_continuous_actions() {
+        let mut held = HeldActions::default();
+        let now = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        let glide = registration("glide-left", true);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), now);
+        assert_eq!(held.heartbeat_dispatches(), Vec::new());
+
+        held.handle_event(event(2, HotKeyState::Pressed), Some(&glide), now);
+        assert_eq!(
+            held.heartbeat_dispatches(),
+            vec![HotkeyDispatch::Continuous {
+                action: glide.action,
+                phase: ContinuousPhase::Heartbeat,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_forced_stop_cancels_a_pending_hold_without_running_anything() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(held.stop_all(), Vec::new());
+        assert!(held.is_empty());
+        assert_eq!(held.expire(t0 + ms(5000)), Vec::new());
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None, t0 + ms(5100)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_missed_release_is_found_by_the_physical_poll_and_runs_the_tap() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(
+            held.reconcile_physical([(1, &shot)].into_iter(), |_| false, t0 + ms(200)),
+            vec![tap_of("s")]
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn a_missed_release_after_the_hold_ran_stays_silent() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 500);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+        held.expire(t0 + ms(500));
+
+        assert_eq!(
+            held.reconcile_physical([(1, &shot)].into_iter(), |_| false, t0 + ms(900)),
+            Vec::new()
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn a_missed_initial_press_arms_the_deadline_from_the_poll() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let shot = timed("s", Some("tap"), 1000);
+
+        assert_eq!(
+            held.reconcile_physical([(1, &shot)].into_iter(), |_| true, t0),
+            Vec::new()
+        );
+        assert_eq!(held.next_deadline(), Some(t0 + ms(1000)));
+        assert_eq!(
+            held.reconcile_physical([(1, &shot)].into_iter(), |_| true, t0 + ms(400)),
+            Vec::new()
+        );
+        assert_eq!(held.next_deadline(), Some(t0 + ms(1000)));
+    }
+
+    #[test]
+    fn two_hold_chords_interleaved_keep_separate_deadlines() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let first = timed("s", Some("tap"), 1000);
+        let second = timed("r", Some("tap"), 300);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&first), t0);
+        held.handle_event(event(2, HotKeyState::Pressed), Some(&second), t0 + ms(100));
+
+        assert_eq!(held.next_deadline(), Some(t0 + ms(400)));
+        assert_eq!(held.expire(t0 + ms(400)), vec![hold_of("r")]);
+        assert_eq!(held.next_deadline(), Some(t0 + ms(1000)));
+        assert_eq!(
+            held.handle_event(event(1, HotKeyState::Released), None, t0 + ms(600)),
+            Some(tap_of("s"))
+        );
+        assert_eq!(
+            held.handle_event(event(2, HotKeyState::Released), None, t0 + ms(700)),
+            None
+        );
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn a_plain_one_shot_beside_a_hold_chord_still_fires_on_press() {
+        let mut held = HeldActions::default();
+        let t0 = Instant::now();
+        let center = registration("center", false);
+        let shot = timed("s", Some("tap"), 1000);
+        held.handle_event(event(1, HotKeyState::Pressed), Some(&shot), t0);
+
+        assert_eq!(
+            held.handle_event(event(2, HotKeyState::Pressed), Some(&center), t0),
+            Some(HotkeyDispatch::OneShot(center.action))
+        );
     }
 
     #[test]

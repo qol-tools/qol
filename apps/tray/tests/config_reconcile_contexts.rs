@@ -98,6 +98,7 @@ fn enabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotkey
         action: action.to_string(),
         enabled: true,
         os_only: false,
+        hold_ms: None,
     }
 }
 
@@ -109,6 +110,7 @@ fn disabled_binding(id: &str, key: &str, plugin_id: &str, action: &str) -> Hotke
         action: action.to_string(),
         enabled: false,
         os_only: false,
+        hold_ms: None,
     }
 }
 

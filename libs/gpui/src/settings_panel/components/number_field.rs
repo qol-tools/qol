@@ -568,6 +568,39 @@ pub(in crate::settings_panel) fn number_field(
     ))
 }
 
+const NUMBER_CHIP_WIDEST: &str = "10000";
+
+pub fn settings_number_chip(
+    shown: String,
+    unit: &'static str,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    let cue = NumberCue {
+        level: 0.0,
+        editing: false,
+        dragging: false,
+        limit: None,
+        marked: false,
+        settle: None,
+        bloom: None,
+        glowing: false,
+    };
+    number_field(
+        NumberText {
+            shown,
+            widest: NUMBER_CHIP_WIDEST.to_string(),
+            selected: false,
+        },
+        Some(unit.into()),
+        None,
+        cue,
+        |element| element,
+        row,
+        kit,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
