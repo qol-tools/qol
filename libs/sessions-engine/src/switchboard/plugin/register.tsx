@@ -21,6 +21,8 @@ const HAIKU_MS = 20_000
 const MINUTE = 60_000
 const DELIVER_MS = 2_000
 const DELIVER_TIMEOUT_MS = 20_000
+const WAKE_DELAY_MS = 1_500
+const WAKE_FRESH_MS = 10 * MINUTE
 const SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
 const WATCHER = /^\s*node\s+([A-Za-z0-9_@%+=:,./-]*pr-watch\.cjs)((?:\s+[A-Za-z0-9_@%+=:,./-]+)*)\s*$/
 const CACHED_WATCHER = '/plugins/cache/qol-skills/qol-workflow/'
@@ -45,8 +47,9 @@ const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
+const RESTARTED_REPLY = 'Back after the switchboard restart.'
 const FORK_TO_FORK =
-  'Not sent: an agent inside a fork messages only, by agent id, the fork it started or the fork that started it. Another fork\'s work is not yours; put what it needs in your report instead.'
+  'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
@@ -70,6 +73,8 @@ type Report = { agentId: string; name?: string; status: string; report: string; 
 type Delivery = { id: string; agent_id: string; conversation: string; name?: string | null; cwd: string; pull_request?: string | null; message: string }
 type ForkRecord = { agentId: string; name: string; cwd?: string; transcript?: string; isCurrent: boolean }
 type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
+type WakeFork = { agent_id: string; name?: string | null; description: string; cwd?: string | null; transcript: string; message: string }
+type Wake = { conversation: string; launched_at: string; forks: WakeFork[]; claimed?: boolean }
 
 const pending = new Map<string, Promise<Sorting>>()
 
@@ -222,10 +227,8 @@ const recipientId = (to: unknown): string | undefined =>
 
 export const mayMessage = (list: Entry[], from: string, to: unknown): boolean => {
   const id = recipientId(to)
-  const sender = list.find(one => one.agentId === from)
-  const target = id === undefined ? undefined : list.find(one => one.agentId === id)
-  if (sender === undefined || target === undefined) return false
-  return target.launcher === from || (sender.launcher !== undefined && sender.launcher === target.agentId)
+  if (id === undefined || id === from) return false
+  return list.some(one => one.agentId === from) && list.some(one => one.agentId === id)
 }
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
@@ -314,6 +317,18 @@ const isUndelivered = (answer: { deny?: string; isError?: true; result?: unknown
   answer.deny === undefined &&
   (answer.isError === true || (typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)) &&
   isStopped(answer.result)
+
+const rested = async ($: EngineInterface, agentId: string): Promise<Entry | undefined> => {
+  let kept: Entry | undefined
+  await change($, list =>
+    list.map(one => {
+      if (one.agentId !== agentId || one.kind === undefined) return one
+      kept = { ...one, isWorking: false }
+      return kept
+    }),
+  )
+  return kept
+}
 
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   const filing: Filing =
@@ -527,23 +542,37 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+export const wakeForks = async ($: EngineInterface): Promise<void> => {
+  const path = await $.env.get('QOL_SWITCHBOARD_WAKE')
+  if (path === undefined || path === '' || !(await $.fs.exists(path))) return
+  const wake = JSON.parse(String(await $.fs.read(path))) as Wake
+  if (wake.claimed === true || !Array.isArray(wake.forks)) return
+  const launched = Date.parse(wake.launched_at)
+  if (!Number.isFinite(launched) || (await $.clock.now()) - launched > WAKE_FRESH_MS) return
+  if (wake.conversation !== (await $.session.id())) return
+  await $.fs.write(path, JSON.stringify({ ...wake, claimed: true }))
+  for (const fork of wake.forks) await reach($, fork.agent_id, fork.name ?? fork.description, fork.cwd ?? undefined, fork.message).catch(() => undefined)
+}
+
 const once = (text: string, needle: string): boolean => text.indexOf(needle) !== -1 && text.indexOf(needle) === text.lastIndexOf(needle)
 
 export type Origin = 'peer' | 'task-notification'
+
+type Intake = { text: string; entry: Entry }
 
 export const intake = async (
   $: EngineInterface,
   text: string,
   origin: Origin,
   isFork: (agentId: string) => boolean,
-): Promise<string | undefined> => {
+): Promise<Intake | undefined> => {
   if (origin === 'peer') {
     if (!once(text, '<agent-message ') || !once(text, '</agent-message>')) return undefined
     const [whole, head, agentId, body, tail] = HANDBACK.exec(text) ?? []
     if (whole === undefined || head === undefined || agentId === undefined || body === undefined || tail === undefined) return undefined
     if (!isFork(agentId)) return undefined
     const entry = await file($, { agentId, status: 'completed', report: dedent(body).trim() })
-    return `${head}  ${boardLine(entry).split('\n').join('\n  ')}\n${tail}${text.slice(whole.length)}`
+    return { text: `${head}  ${boardLine(entry).split('\n').join('\n  ')}\n${tail}${text.slice(whole.length)}`, entry }
   }
   const block = text.trim()
   if (!NOTIFICATION.test(block)) return undefined
@@ -558,13 +587,13 @@ export const intake = async (
   if (result !== null && (!once(block, '<result>') || !once(block, '</result>'))) return undefined
   const report = result?.[2]?.trim() ?? ''
   if (HANDED_BACK.test(report)) return undefined
-  const entry = await file($, { agentId, name, status, report })
+  const entry = (report === RESTARTED_REPLY ? await rested($, agentId) : undefined) ?? (await file($, { agentId, name, status, report }))
   const line = boardLine(entry)
   const filed =
     result === null
       ? block.replace('</task-notification>', () => `<result>${line}</result>\n</task-notification>`)
       : block.replace(RESULT, (_, open: string, __, close: string) => `${open}${line}${close}`)
-  return text.replace(block, () => filed)
+  return { text: text.replace(block, () => filed), entry }
 }
 
 const age = (ms: number): string => {
@@ -593,6 +622,18 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
   return shown
     .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId})${pullNote(all, entry.agentId)}`)
     .join('\n')
+}
+
+const quietReport = async ($: EngineInterface, text: string, origin: string | undefined): Promise<string | undefined> => {
+  if (origin !== 'task-notification' && origin !== 'peer') return undefined
+  if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return undefined
+  try {
+    const list = await read($, board)
+    const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
+    return filed === undefined ? undefined : `${keyName(filed.entry.name)}: ${filed.entry.headline}`
+  } catch {
+    return undefined
+  }
 }
 
 export const register: Register = on => {
@@ -647,6 +688,7 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
+      $.clock.after(WAKE_DELAY_MS, () => void wakeForks($).catch(() => undefined))
     } catch {}
     return started
   })
@@ -666,6 +708,8 @@ export const register: Register = on => {
   }).catch(() => ({ text: 'The fork board could not open.' }))
 
   on('prompt.submit', async ($, e, next) => {
+    const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
+    if (quiet !== undefined) return { drop: quiet }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
     clearTypedToggle($)
@@ -726,9 +770,9 @@ export const register: Register = on => {
     const text = textOf(content)
     if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return next(e)
     const list = await read($, board)
-    const rewritten = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
-    if (rewritten === undefined) return next(e)
-    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: rewritten }] } })
+    const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
+    if (filed === undefined) return next(e)
+    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

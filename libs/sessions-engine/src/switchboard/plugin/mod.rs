@@ -9,8 +9,8 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.6.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat, runs each fork's pull request watcher under CLI Sessions and gives each fork its watcher's result.",
+  "version": "1.8.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -154,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_no_fork_at_start() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_forks_without_a_turn() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -162,11 +162,19 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
+            "$.env.get('QOL_SWITCHBOARD_WAKE')",
+            "JSON.stringify({ ...wake, claimed: true })",
             "'open · CLI Sessions watching' : 'open · no watcher'",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
-        assert!(!MODULE.contains("QOL_SWITCHBOARD_WAKE"));
+        assert!(
+            MODULE.contains(&format!(
+                "const RESTARTED_REPLY = '{}'",
+                super::super::resume::RESTARTED_REPLY
+            )),
+            "the plugin keeps a woken fork's last report only for the reply the wake asks for"
+        );
         assert!(STATE_TYPES.contains("pulls: Pull[]"));
         assert!(MODULE_TESTS.contains("runs under CLI Sessions, and no other command is rewritten"));
     }

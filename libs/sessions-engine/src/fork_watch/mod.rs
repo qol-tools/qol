@@ -266,6 +266,12 @@ impl WatchStore {
         }
     }
 
+    pub fn is_pending_for(&self, agent_id: &str) -> bool {
+        self.list()
+            .iter()
+            .any(|watch| watch.agent_id == agent_id && self.is_pending(watch))
+    }
+
     pub fn pulls(&self) -> Vec<PullState> {
         pulls_of(&self.list())
     }
@@ -394,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn a_watch_is_pending_while_it_is_watched_or_its_result_is_unclaimed() {
+    fn a_fork_is_pending_while_it_is_watched_or_its_result_is_unclaimed() {
         let root = tempfile::tempdir().unwrap();
         let store = WatchStore::with_dir(root.path().join(DIR));
         for (id, agent, at, state) in [
@@ -406,9 +412,9 @@ mod tests {
             store.record(&watcher(id, agent, at, state)).unwrap();
         }
         store.claim("watch-3-3").unwrap();
-        let pending = ["watch-1-1", "watch-2-2", "watch-3-3", "watch-4-4"]
-            .map(|id| store.is_pending(&store.load(id).unwrap()));
-        assert_eq!(pending, [true, true, false, false]);
+        let pending = ["watching", "exited", "claimed", "delivered", "unknown"]
+            .map(|agent| store.is_pending_for(agent));
+        assert_eq!(pending, [true, true, false, false, false]);
     }
 
     #[test]

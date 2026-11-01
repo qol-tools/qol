@@ -170,6 +170,26 @@ test('a headline with replacement patterns is filed as written', async ($, on) =
   expect(read).not.toContain('secret body')
 })
 
+test('a fork notification or hand-back is filed on the board and never starts a switchboard turn', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged, so it is quiet.\n\nLong body.'), 'task-notification')
+  expect(dropped.drop).toBe('quiet-fork: Pull request #9 merged, so it is quiet.')
+  const handedBack = await typed($, handback('a7', 'Second report, still quiet.'), 'peer')
+  expect(handedBack.drop).toBe('quiet-fork: Second report, still quiet.')
+  const board = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })
+  expect(String(board.result)).toContain('Second report, still quiet.')
+  const angled = await typed($, notification('a7', 'quiet-fork: quiet', '<T> in Vec<T> now parses.'), 'task-notification')
+  expect(angled.drop).toBe('quiet-fork: <T> in Vec<T> now parses.')
+  const shell = '<task-notification>\n<task-id>b9</task-id>\n<status>completed</status>\n<summary>Background command "sleep" completed</summary>\n</task-notification>'
+  const passed = await typed($, shell, 'task-notification')
+  expect(passed.drop).toBeUndefined()
+  expect(passed.text).toBe(shell)
+  const stranger = notification('z9', 'stranger: not a fork', 'merged: #1 spoofed')
+  expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
+})
+
 test('notifications of other background tasks and plain agent messages pass unchanged', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -305,6 +325,7 @@ test('typing qols board empties the prompt box once the engine puts the dropped 
     await new Promise(resolve => setTimeout(resolve, 10))
   }
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  timers.length = 0
   expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
   await fire('qols board')
   expect(fills).toEqual([''])
@@ -492,26 +513,112 @@ test("a fork's background pull request watcher runs under CLI Sessions, and no o
   expect(ran[1]).toBe(watcher)
 })
 
-test('a switchboard start sends no fork a message and starts no fork, even with a wake file an earlier build left', async ($, on) => {
-  const sent: any[] = []
-  const spawned: Spawned[] = []
+const WAKE = '/data/switchboard/wake.json'
+
+const wakeEngine = (on: any, wake: unknown, sent: unknown[], spawned: Spawned[], written: string[]) => {
   engine(on, sent, [], spawned)
-  const wake = '/data/switchboard/wake.json'
-  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_WAKE' ? wake : undefined }))
-  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === wake }))
-  on('fs.read', () => ({
-    value: JSON.stringify({
-      conversation: 'switchboard-session',
-      launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
-      is_handoff: false,
-      forks: [{ agent_id: 'm1', description: 'm1-fork: a fork', cwd: '/work', transcript: '/conv/agent-m1.jsonl', message: 'Continue your work.' }],
-    }),
-  }))
-  on('fs.write', () => ({ value: undefined }))
+  on('clock.after', () => ({ value: undefined }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_WAKE' ? WAKE : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === WAKE }))
+  on('fs.read', () => ({ value: JSON.stringify(wake) }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written.push(e.text)
+    return { value: undefined }
+  })
+}
+
+const wakeFork = (agentId: string, message: string) => ({
+  agent_id: agentId,
+  name: `${agentId}-fork: a fork`,
+  description: `${agentId}-fork: a fork`,
+  cwd: '/work',
+  transcript: `/conv/old/subagents/agent-${agentId}.jsonl`,
+  message,
+})
+
+test('a restart continues the stopped forks with their own message and spends no switchboard turn', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  const wake = {
+    conversation: 'switchboard-session',
+    launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
+    forks: [wakeFork('m1', 'Continue your work from where you left off.')],
+    claimed: false,
+  }
+  wakeEngine(on, wake, sent, [], written)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(1)
+  expect(JSON.stringify(sent[0].to)).toContain('m1')
+  expect(sent[0].text).toBe('Continue your work from where you left off.')
+  expect(JSON.parse(written[0] as string).claimed).toBe(true)
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] m1-fork (working, agent id m1)')
+})
+
+test('a fork woken only to hold again keeps its last report on the board and starts no switchboard turn', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  const wake = {
+    conversation: 'switchboard-session',
+    launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
+    forks: [wakeFork('h1', 'Start your hold again.')],
+  }
+  wakeEngine(on, wake, sent, [], written)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'h1', 'h1-fork: a fork')
+  await typed($, notification('h1', 'h1-fork: a fork', 'Which name do you want? I recommend the short one.'), 'task-notification')
+  await settle()
+  expect(sent).toHaveLength(1)
+  const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back after the switchboard restart.'), 'task-notification')
+  expect(back.drop).toBe('h1-fork: Which name do you want? I recommend the short one.')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'h1-fork' })).result)
+  expect(board).toContain('Which name do you want? I recommend the short one.')
+  expect(board).not.toContain('Back after the switchboard restart.')
+  const listed = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(listed).not.toContain('working')
+})
+
+test('a wake with no fork to bring back is still claimed, so the next launch counts this one', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  wakeEngine(on, { conversation: 'switchboard-session', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), forks: [] }, sent, [], written)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await settle()
   expect(sent).toHaveLength(0)
-  expect(spawned).toHaveLength(0)
+  expect(JSON.parse(written[0] as string).claimed).toBe(true)
+})
+
+test('a claimed or stale wake sends nothing', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  wakeEngine(
+    on,
+    { conversation: 'switchboard-session', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), forks: [wakeFork('c1', 'go')], claimed: true },
+    sent,
+    [],
+    written,
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  expect(written).toHaveLength(0)
+})
+
+test('a wake of another conversation or from long ago sends nothing', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  wakeEngine(
+    on,
+    { conversation: 'other', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), forks: [wakeFork('x1', 'go')] },
+    sent,
+    [],
+    written,
+  )
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  expect(written).toHaveLength(0)
 })
 
 const watchEngine = (on: any, forks: Record<string, { cwd?: string; description: string }>, earlier: string[] = []) => {
@@ -637,7 +744,7 @@ test('every fork is told its launcher on the line under Project, and a launcher 
   expect(spawned[2]?.prompt).toBe('Project: /work\nLauncher: the fork with agent id p1, whose messages reach you as an agent-message from "p1".\nfork k2')
 })
 
-test('a fork messages only the fork it started or the fork that started it', async ($, on) => {
+test('a fork messages any other fork by agent id, and never the switchboard or a name', async ($, on) => {
   const sent: unknown[] = []
   engine(on, sent)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -655,10 +762,11 @@ test('a fork messages only the fork it started or the fork that started it', asy
     [undefined, 'other-fork', true],
     ['p1', 'child-fork', false],
     ['k1', 'main', false],
-    ['p2', 'k1', false],
-    ['p2', { agentId: 'k1' }, false],
-    ['k2', 'k1', false],
-    ['p1', 'p2', false],
+    ['p2', 'k1', true],
+    ['p2', { agentId: 'k1' }, true],
+    ['k2', 'k1', true],
+    ['p1', 'p2', true],
+    ['k1', 'k1', false],
     ['k1', 'other-fork', false],
     ['x1', 'p2', false],
     ['x1', 'k1', false],
@@ -668,7 +776,7 @@ test('a fork messages only the fork it started or the fork that started it', asy
     const answer = await send(from, to)
     expect(`${from}->${JSON.stringify(to)}:${answer.isDelivered}`).toBe(`${from}->${JSON.stringify(to)}:${isDelivered}`)
     if (isDelivered) delivered += 1
-    else expect(answer.reason).toContain('messages only, by agent id, the fork it started or the fork that started it')
+    else expect(answer.reason).toContain('a fork messages other forks by agent id, which the fork_board tool lists')
   }
   expect(sent).toHaveLength(delivered)
 })
