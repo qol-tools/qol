@@ -446,9 +446,11 @@ Three entry points converge on one executor:
   Key syntax `MOD+MOD+KEY`, case-insensitive; mods
   `ctrl`/`alt`/`shift`/`super` (+ aliases) plus a non-modifier key (zero keys is
   rejected; the parser does not error on extra keys, last one wins).
-- A binding may carry `hold_ms` (100 to 10000), which turns it into a **hold
+- A binding may carry `hold_ms` (50 to 3000), which turns it into a **hold
   binding**: it runs once the keys have been held that long, while they are still
-  down, and the release afterwards does nothing. A chord holds at most one tap
+  down, and the release afterwards does nothing. The hotkey editor sets it with
+  the "Hold to run" row, the settings slider plugin numbers use (0 to 3000 ms in
+  steps of 50); 0 runs on press and stores no `hold_ms`. A chord holds at most one tap
   binding (no `hold_ms`) and one hold binding, so one key combination can run a
   quick press and a long press. Saving refuses two taps or two holds on a chord,
   a `hold_ms` outside its range, and a `hold_ms` on a `continuous` action or on a

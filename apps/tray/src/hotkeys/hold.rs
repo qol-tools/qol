@@ -4,10 +4,9 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 pub(crate) const HOLD_MS_DEFAULT: u32 = 1000;
-pub(crate) const HOLD_MS_MIN: u32 = 100;
-pub(crate) const HOLD_MS_MAX: u32 = 10_000;
-pub(crate) const HOLD_MS_STEP: u32 = 100;
-pub(crate) const HOLD_MS_COARSE_STEP: u32 = 1000;
+pub(crate) const HOLD_MS_MIN: u32 = 50;
+pub(crate) const HOLD_MS_MAX: u32 = 3000;
+pub(crate) const HOLD_MS_STEP: u32 = 50;
 const FIRED_STALE_AFTER: Duration = Duration::from_secs(60);
 
 pub(crate) fn clamp_hold_ms(hold_ms: u32) -> u32 {
@@ -354,10 +353,10 @@ mod tests {
     fn the_hold_time_is_kept_inside_its_limits() {
         for (asked, expected) in [
             (0, HOLD_MS_MIN),
-            (50, HOLD_MS_MIN),
-            (100, 100),
+            (49, HOLD_MS_MIN),
+            (50, 50),
             (1000, 1000),
-            (10_000, 10_000),
+            (3000, 3000),
             (60_000, HOLD_MS_MAX),
         ] {
             let timed = timed_chord(&[member("region", Some(asked), false)]).unwrap();
@@ -411,7 +410,13 @@ mod tests {
 
     #[test]
     fn a_hold_time_outside_its_limits_is_refused() {
-        for (ms, refused) in [(Some(99), true), (Some(100), false), (Some(10_001), true)] {
+        for (ms, refused) in [
+            (Some(0), true),
+            (Some(49), true),
+            (Some(50), false),
+            (Some(3000), false),
+            (Some(3001), true),
+        ] {
             let config = config(vec![binding("a", "Shift+Super+S", "region", ms)]);
             assert_eq!(
                 invalid_hold(&config, chord_id, |_| false).is_some(),

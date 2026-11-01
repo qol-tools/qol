@@ -9,7 +9,7 @@ mod structured_list_editor;
 
 use crate::key::Key;
 use crate::kit::Chip;
-use list_card::{slider_value_from_fraction, SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
+use list_card::{SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
 use slider_flights::SliderFlights;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -23,13 +23,12 @@ use super::components::{
     settings_filter_overlay,
 };
 use super::components::{
-    number_field, one_line, paint_settings_selection, qr_code_display, rail_caption,
-    rail_caption_height, rail_item_label, settings_accent_dot, settings_action_affordance,
-    settings_action_spinner, settings_error_line, settings_finder_empty, settings_label_group,
-    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
-    settings_value_text, ChoiceArt, NumberCue, NumberText, RowGround, SettingsChoiceValue,
-    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone, SliderStyle,
+    one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
+    rail_item_label, settings_accent_dot, settings_action_affordance, settings_action_spinner,
+    settings_error_line, settings_finder_empty, settings_label_group, settings_page,
+    settings_query_spinner, settings_selected_text, settings_swatch, settings_value_text,
+    ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint,
+    SettingsHintBar, SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -37,6 +36,14 @@ use super::components::{
 use super::devices::Presence;
 use super::display_layout::DisplayLayoutState;
 use super::form_nav::{adjacent_visible_row, escape_step, intent, EscapeStep, Intent};
+use super::number_slider::edit::horizontal_step_direction;
+use super::number_slider::numbers::{
+    format_number, parsed_number, pending_edit_on_scrub, slider_fraction, PendingEdit,
+};
+use super::number_slider::{
+    compact_track, number_key, slider_track, FieldLook, NumberEdit, NumberKey, NumberRelease,
+    NumberSlider, NumberSpec, Scrub, SliderField,
+};
 use super::object_array_row::ObjectArrayState;
 use super::persistence::{panel_base, save_values};
 use super::rows::{
@@ -59,8 +66,6 @@ use crate::phantom_nav::{NavAxis, PhantomNavGuard};
 use crate::pictures::PictureContext;
 use crate::status_indicator::{StatusIndicator, StatusTone};
 use crate::surface::{PanelDragArea, SurfaceDismisser};
-use crate::text_edit::{Span, TextField};
-use qol_config::contract::NumberConstraints;
 
 type QueryResult = Result<serde_json::Value, String>;
 type SampledQueryResults = std::sync::Arc<std::sync::Mutex<Vec<(String, QueryResult)>>>;
@@ -69,7 +74,6 @@ const FRAME_PACED_QUERY_INTERVAL: std::time::Duration = std::time::Duration::fro
 const LEVEL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 const FILTER_OVERLAY_HEIGHT: f32 = super::PANEL_FILTER_HEIGHT + qol_theme::SPACE_GUTTER;
 const LIST_FIT_MIN_VISIBLE: usize = 3;
-const SCRUB_SLOP: f32 = 3.0;
 const RAIL_CARD_OVERLAP: f32 = 98.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PanelFocus {
@@ -301,13 +305,7 @@ pub(super) struct SettingsPanelView {
     runtime_poll_generation: u64,
     slider_dispatch_generation: std::collections::HashMap<(usize, String), u64>,
     slider_drag: Option<(usize, String)>,
-    slider_press: Option<SliderPress>,
-    number_hover: Option<(usize, String)>,
-    number_scrub: Option<f32>,
-    number_drag_start: Option<(usize, String, f64)>,
-    number_motion: RefCell<NumberMotion>,
-    number_key_glow: Option<((usize, String), usize)>,
-    number_key_glow_generation: usize,
+    number_slider: NumberSlider<(usize, String)>,
     slider_pending: std::collections::HashSet<(usize, String)>,
     slider_holds: std::collections::HashMap<(usize, String), SliderHold>,
     slider_flights: SliderFlights<(usize, String), SliderDispatch>,
@@ -355,7 +353,7 @@ pub(super) struct SettingsPanelState {
 }
 
 enum ActiveControl {
-    Edit(TextField, bool),
+    Edit(NumberEdit),
     Wheel(WheelControl),
 }
 
@@ -517,13 +515,7 @@ impl SettingsPanelView {
             runtime_poll_generation: 0,
             slider_dispatch_generation: std::collections::HashMap::new(),
             slider_drag: None,
-            slider_press: None,
-            number_hover: None,
-            number_scrub: None,
-            number_drag_start: None,
-            number_motion: RefCell::new(NumberMotion::default()),
-            number_key_glow: None,
-            number_key_glow_generation: 0,
+            number_slider: NumberSlider::default(),
             slider_pending: std::collections::HashSet::new(),
             slider_holds: std::collections::HashMap::new(),
             slider_flights: SliderFlights::default(),
@@ -1265,17 +1257,12 @@ impl SettingsPanelView {
 
     fn drop_slider_press(&mut self) {
         self.restore_number_drag();
-        self.slider_press = None;
         self.slider_drag = None;
-        self.number_scrub = None;
-        self.number_hover = None;
-        self.number_motion.get_mut().settles.clear();
-        self.number_motion.get_mut().blooms.clear();
-        self.number_key_glow = None;
+        self.number_slider.clear();
     }
 
     fn restore_number_drag(&mut self) {
-        let Some((row, id, value)) = self.number_drag_start.take() else {
+        let Some(((row, id), value)) = self.number_slider.take_drag_start() else {
             return;
         };
         if number_drag_effect(&self.level().rows, row) != NumberDragEffect::Preview {
@@ -2013,7 +2000,19 @@ impl SettingsPanelView {
                 if self.nav_guard.swallow(NavAxis::Horizontal, direction) {
                     return;
                 }
-                if self.step_number_edit(direction, event.keystroke.modifiers.shift, cx) {
+                let step = NumberKey::Step {
+                    direction,
+                    coarse: event.keystroke.modifiers.shift,
+                };
+                if self.press_number_edit(step, cx) {
+                    cx.notify();
+                    return;
+                }
+            }
+            if let Some(bound @ (NumberKey::Lowest | NumberKey::Highest)) =
+                number_key(key, None, false)
+            {
+                if self.press_number_edit(bound, cx) {
                     cx.notify();
                     return;
                 }
@@ -2054,25 +2053,19 @@ impl SettingsPanelView {
             Intent::Tab => return,
             Intent::CommitEdit => self.commit_edit(cx),
             Intent::Backspace => {
-                if let Some(ActiveControl::Edit(edit, capped)) =
-                    self.level_mut().active_control.as_mut()
-                {
-                    erase_typed(edit, capped);
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+                    edit.erase();
                     self.stream_edit();
                 }
             }
             Intent::Insert(ch) => {
-                let bounds = self
-                    .level()
-                    .rows
-                    .get(self.level().selected)
-                    .and_then(|row| number_bounds(&row.control));
-                if let Some(ActiveControl::Edit(edit, capped)) =
-                    self.level_mut().active_control.as_mut()
-                {
-                    match bounds {
-                        Some(bounds) => type_number(edit, capped, &ch, &bounds),
-                        None => edit.insert_str(&ch),
+                let number = self.selected_number_spec();
+                if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
+                    match number {
+                        Some(number) => {
+                            edit.press(&NumberKey::Type(ch), &number);
+                        }
+                        None => edit.insert(&ch),
                     }
                     self.stream_edit();
                 }
@@ -2498,7 +2491,7 @@ impl SettingsPanelView {
     }
 
     fn begin_edit(&mut self) {
-        if let Some(ActiveControl::Edit(edit, _)) = self.level_mut().active_control.as_mut() {
+        if let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() {
             edit.select_all();
             return;
         }
@@ -2513,8 +2506,8 @@ impl SettingsPanelView {
             return;
         };
         let edit = match &row.control {
-            RowControl::Text(value) => value.clone(),
-            RowControl::Number { value, .. } => format_number(*value),
+            RowControl::Text(value) => NumberEdit::with_text(value.clone()),
+            RowControl::Number { value, .. } => NumberEdit::begin(*value),
             RowControl::Page
             | RowControl::Toggle(_)
             | RowControl::TextList(_)
@@ -2531,9 +2524,7 @@ impl SettingsPanelView {
             | RowControl::Placement(_)
             | RowControl::Unsupported { .. } => return,
         };
-        let mut edit = TextField::with_text(edit);
-        edit.select_all();
-        self.level_mut().active_control = Some(ActiveControl::Edit(edit, false));
+        self.level_mut().active_control = Some(ActiveControl::Edit(edit));
         if row_streams(&self.level().rows, self.level().selected)
             && !stream_gated(&self.level().rows)
         {
@@ -2555,37 +2546,32 @@ impl SettingsPanelView {
         self.level_mut().active_control = None;
     }
 
-    fn step_number_edit(&mut self, direction: f64, coarse: bool, cx: &mut Context<Self>) -> bool {
-        let Some(RowControl::Number {
-            value,
-            min,
-            max,
-            step,
-            ..
-        }) = self
-            .level()
-            .rows
-            .get(self.level().selected)
-            .map(|row| &row.control)
-        else {
+    fn selected_number_spec(&self) -> Option<NumberSpec> {
+        match &self.level().rows.get(self.level().selected)?.control {
+            RowControl::Number {
+                value,
+                min,
+                max,
+                step,
+                ..
+            } => Some(NumberSpec {
+                value: *value,
+                min: *min,
+                max: *max,
+                step: *step,
+            }),
+            _ => None,
+        }
+    }
+
+    fn press_number_edit(&mut self, key: NumberKey, cx: &mut Context<Self>) -> bool {
+        let Some(number) = self.selected_number_spec() else {
             return false;
         };
-        let (value, min, max, step) = (*value, *min, *max, *step);
-        let Some(ActiveControl::Edit(edit, capped)) = self.level_mut().active_control.as_mut()
-        else {
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.as_mut() else {
             return false;
         };
-        let stepped = stepped_number(
-            edit.text(),
-            value,
-            min,
-            max,
-            step.unwrap_or(1.0),
-            direction * if coarse { COARSE_STEP } else { 1.0 },
-        );
-        let changed = edit.text() != stepped;
-        edit.set_text(stepped);
-        *capped = false;
+        let changed = edit.press(&key, &number);
         self.stream_edit();
         if changed {
             self.glow_number_key(cx);
@@ -2594,21 +2580,11 @@ impl SettingsPanelView {
     }
 
     fn selected_number_preview(&self) -> Option<f64> {
-        let row = self.level().rows.get(self.level().selected)?;
-        let RowControl::Number {
-            value,
-            min,
-            max,
-            step,
-            ..
-        } = &row.control
-        else {
+        let number = self.selected_number_spec()?;
+        let Some(ActiveControl::Edit(edit)) = &self.level().active_control else {
             return None;
         };
-        let Some(ActiveControl::Edit(edit, _)) = &self.level().active_control else {
-            return None;
-        };
-        Some(number_preview(Some(edit.text()), *value, *min, *max, *step))
+        Some(edit.preview(&number))
     }
 
     fn glow_number_key(&mut self, cx: &mut Context<Self>) {
@@ -2622,77 +2598,11 @@ impl SettingsPanelView {
         else {
             return;
         };
-        self.number_key_glow_generation = self.number_key_glow_generation.wrapping_add(1);
-        let generation = self.number_key_glow_generation;
-        self.number_key_glow = Some(((row, id), generation));
-        cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
-            let mut async_cx = cx.clone();
-            async move {
-                async_cx
-                    .background_executor()
-                    .timer(std::time::Duration::from_millis(260))
-                    .await;
-                let _ = this.update(&mut async_cx, |this, cx| {
-                    if this
-                        .number_key_glow
-                        .as_ref()
-                        .is_some_and(|(_, current)| *current == generation)
-                    {
-                        this.number_key_glow = None;
-                        cx.notify();
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-
-    fn hover_number(&mut self, row: usize, id: &str, hovered: bool) {
-        let key = (row, id.to_string());
-        if hovered {
-            self.number_hover = Some(key);
-        } else if self.number_hover.as_ref() == Some(&key) {
-            self.number_hover = None;
-        }
-    }
-
-    fn settle_number(&self, key: (usize, String), to: f32, follow: bool) -> Option<(f32, usize)> {
-        let now = std::time::Instant::now();
-        let mut motion = self.number_motion.borrow_mut();
-        let step = motion.step + 1;
-        let current = motion.settles.get(&key).copied();
-        if let Some(next) = next_settle(current, to, follow, step, now) {
-            motion.step = step;
-            motion.settles.insert(key.clone(), next);
-        }
-        motion
-            .settles
-            .get(&key)
-            .and_then(|settle| settle.in_flight(now))
-    }
-
-    fn bloom_number(&self, key: (usize, String), active: bool) -> Option<(f32, usize)> {
-        let now = std::time::Instant::now();
-        let mut motion = self.number_motion.borrow_mut();
-        let step = motion.step + 1;
-        let current = motion.blooms.get(&key).copied().or(Some(NumberSettle {
-            from: 0.0,
-            to: 0.0,
-            step: 0,
-            started: now,
-        }));
-        if let Some(next) = next_settle(current, if active { 1.0 } else { 0.0 }, false, step, now) {
-            motion.step = step;
-            motion.blooms.insert(key.clone(), next);
-        }
-        motion
-            .blooms
-            .get(&key)
-            .and_then(|bloom| bloom.in_flight(now))
+        self.number_slider.glow((row, id), panel_number_slider, cx);
     }
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(ActiveControl::Edit(edit, _)) = self.level_mut().active_control.take() else {
+        let Some(ActiveControl::Edit(edit)) = self.level_mut().active_control.take() else {
             return;
         };
         let edit = edit.into_text();
@@ -2848,7 +2758,7 @@ impl SettingsPanelView {
     }
 
     fn stream_edit(&mut self) {
-        let Some(ActiveControl::Edit(edit, _)) = self.level().active_control.as_ref() else {
+        let Some(ActiveControl::Edit(edit)) = self.level().active_control.as_ref() else {
             return;
         };
         let Some(RowControl::Number { min, max, step, .. }) = self
@@ -2950,7 +2860,7 @@ impl SettingsPanelView {
     }
 
     fn begin_number_slider_drag(&mut self, row: usize, cx: &mut Context<Self>) {
-        self.number_drag_start = self
+        let start = self
             .level()
             .rows
             .get(row)
@@ -2958,7 +2868,8 @@ impl SettingsPanelView {
                 RowControl::Number { value, .. } => Some((row.id.clone(), *value)),
                 _ => None,
             })
-            .map(|(id, value)| (row, id, value));
+            .map(|(id, value)| ((row, id), value));
+        self.number_slider.begin_drag(start);
         if matches!(self.level().active_control, Some(ActiveControl::Edit(..))) {
             match pending_edit_on_scrub(row, self.level().selected) {
                 PendingEdit::Commit => self.commit_edit(cx),
@@ -2977,10 +2888,6 @@ impl SettingsPanelView {
         }
     }
 
-    fn press_number_field(&mut self, fraction: f32) {
-        self.slider_press = Some(SliderPress::Held(fraction));
-    }
-
     fn scrub_number_field(
         &mut self,
         row: usize,
@@ -2988,19 +2895,13 @@ impl SettingsPanelView {
         coarse: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(press) = self.slider_press else {
-            return;
-        };
-        let next = pressed_slider(press, fraction, SliderStyle::Compact.track_width());
-        self.slider_press = Some(next);
-        if next != SliderPress::Scrubbing {
-            return;
-        }
-        if press != SliderPress::Scrubbing {
-            self.begin_number_slider_drag(row, cx);
+        match self.number_slider.scrub(fraction) {
+            Scrub::Still => return,
+            Scrub::Began => self.begin_number_slider_drag(row, cx),
+            Scrub::Moving => {}
         }
         self.set_number_slider(row, fraction, coarse, cx);
-        self.number_scrub = self
+        let follow = self
             .level()
             .rows
             .get(row)
@@ -3010,17 +2911,13 @@ impl SettingsPanelView {
                 } => Some(slider_fraction(*value, *min, *max)),
                 _ => None,
             });
+        self.number_slider.follow(follow);
     }
 
     fn release_number_field(&mut self, row: usize, cx: &mut Context<Self>) {
-        self.number_scrub = None;
         let editing = matches!(self.level().active_control, Some(ActiveControl::Edit(..)));
-        match number_release(
-            self.slider_press.take(),
-            row,
-            self.level().selected,
-            editing,
-        ) {
+        let selected = self.level().selected;
+        match self.number_slider.release(row, selected, editing) {
             NumberRelease::Finish => self.finish_number_slider(row, cx),
             NumberRelease::Edit { commit, begin } => {
                 if commit {
@@ -3042,37 +2939,30 @@ impl SettingsPanelView {
         coarse: bool,
         cx: &mut Context<Self>,
     ) {
-        let row_id = self.level().rows.get(row).map(|row| row.id.clone());
-        let start = self
-            .number_drag_start
-            .as_ref()
-            .filter(|(start_row, start_id, _)| {
-                *start_row == row && row_id.as_deref() == Some(start_id.as_str())
-            })
-            .map(|(_, _, value)| *value);
-        let effect = number_drag_effect(&self.level().rows, row);
-        let Some(RowControl::Number {
-            value,
+        let Some(target) = self.level().rows.get(row) else {
+            return;
+        };
+        let RowControl::Number {
             min: Some(min),
             max: Some(max),
             step,
-            live,
             ..
-        }) = self
+        } = &target.control
+        else {
+            return;
+        };
+        let bounds = (*min, *max, step.unwrap_or(1.0));
+        let dragged =
+            self.number_slider
+                .drag_value(&(row, target.id.clone()), fraction, coarse, bounds);
+        let effect = number_drag_effect(&self.level().rows, row);
+        let Some(RowControl::Number { value, live, .. }) = self
             .level_mut()
             .rows
             .get_mut(row)
             .map(|row| &mut row.control)
         else {
             return;
-        };
-        let step = step.unwrap_or(1.0);
-        let dragged = slider_value_from_fraction(*min, *max, step, fraction);
-        let dragged = match start {
-            Some(start_value) if coarse => {
-                coarse_drag(start_value, dragged, true, *min, *max, step)
-            }
-            _ => dragged,
         };
         let moved = *value != dragged;
         *value = dragged;
@@ -3166,12 +3056,12 @@ impl SettingsPanelView {
         if let Some(stream) = self.stream_for(row) {
             stream.close();
         }
-        let started = self.number_drag_start.take();
+        let started = self.number_slider.take_drag_start();
         match number_finish_plan(&self.level().rows, row) {
             NumberFinishPlan::Live => {}
             NumberFinishPlan::DispatchLive => {
                 let moved = match &started {
-                    Some((start_row, id, value)) => {
+                    Some(((start_row, id), value)) => {
                         self.number_value_at(*start_row, id) != Some(*value)
                     }
                     None => true,
@@ -3359,14 +3249,14 @@ impl SettingsPanelView {
         index == self.level().selected
             && matches!(
                 &self.level().active_control,
-                Some(ActiveControl::Edit(edit, _)) if edit.selected_range().is_some()
+                Some(ActiveControl::Edit(edit)) if edit.selects_all()
             )
     }
 
     fn display_value(&self, index: usize) -> String {
         if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit, _)) => return edit_display(edit),
+                Some(ActiveControl::Edit(edit)) => return edit.display(),
                 Some(ActiveControl::Wheel(wheel)) => return wheel.value.clone(),
                 None => {}
             }
@@ -3726,92 +3616,39 @@ impl SettingsPanelView {
         number: NumberSpec,
         cx: &mut Context<Self>,
     ) -> Div {
-        let NumberSpec {
-            value,
-            min,
-            max,
-            step,
-        } = number;
         let style = SliderStyle::from_variant(self.level().rows[index].variant.as_deref());
-        let (edit, capped) = match &self.level().active_control {
-            Some(ActiveControl::Edit(edit, capped)) if index == self.level().selected => {
-                (Some(edit.text()), *capped)
-            }
-            _ => (None, false),
+        let edit = match &self.level().active_control {
+            Some(ActiveControl::Edit(edit)) if index == self.level().selected => Some(edit),
+            _ => None,
         };
         let id = self.level().rows[index].id.clone();
         let key = (index, id.clone());
-        let on_drag = self.slider_drag.as_ref() == Some(&key);
-        let pointer = self.number_scrub.filter(|_| on_drag);
-        let preview = number_preview(edit, value, min, max, step);
-        let track = style.map(|style| {
-            let fraction = pointer.unwrap_or_else(|| slider_fraction(preview, min, max));
-            (fraction, style)
-        });
-        let mut cue = number_cue(
-            style,
-            edit.map(|edit| (edit, capped)),
-            on_drag,
-            self.slider_press,
-            match &self.level().rows[index].control {
-                RowControl::Number {
-                    level: Some(level), ..
-                } => level.value,
-                _ => 0.0,
-            },
-            min,
-            max,
-        );
-        if let Some((fraction, SliderStyle::Compact)) = track {
-            cue.marked = self.number_hover.as_ref() == Some(&key) || cue.dragging || cue.editing;
-            cue.glowing = cue.dragging
-                || (cue.editing
-                    && self
-                        .number_key_glow
-                        .as_ref()
-                        .is_some_and(|(glowing, _)| glowing == &key));
-            cue.bloom = self.bloom_number(key.clone(), cue.glowing);
-            cue.settle = self.settle_number(key, fraction, pointer.is_some());
-        }
-        let shown = match (style, edit) {
-            (Some(_), Some(edit)) => edit.to_string(),
-            _ => self.display_value(index),
+        let dragging = self.slider_drag.as_ref() == Some(&key);
+        let level = match &self.level().rows[index].control {
+            RowControl::Number {
+                level: Some(level), ..
+            } => level.value,
+            _ => 0.0,
         };
-        let reach = track.map_or(0.0, |(_, style)| style.thumb_reach());
+        let reach = style.map_or(0.0, SliderStyle::thumb_reach);
         let interact = move |element: Div| {
             if style == Some(SliderStyle::Compact) {
-                let hover_id = id.clone();
-                let drag_track = slider_drag_track(
+                return element.child(compact_track(
                     cx,
-                    index,
-                    id,
-                    reach,
-                    |panel: &mut SettingsPanelView,
-                     _row: usize,
-                     fraction: f32,
-                     _cx: &mut Context<SettingsPanelView>| {
-                        panel.press_number_field(fraction);
+                    (index, id),
+                    ("settings-number-hover", index),
+                    panel_slider_drag,
+                    panel_number_slider,
+                    move |panel: &mut SettingsPanelView,
+                          fraction: f32,
+                          coarse: bool,
+                          cx: &mut Context<SettingsPanelView>| {
+                        panel.scrub_number_field(index, fraction, coarse, cx);
                     },
-                    |panel: &mut SettingsPanelView,
-                     row: usize,
-                     fraction: f32,
-                     coarse: bool,
-                     cx: &mut Context<SettingsPanelView>| {
-                        panel.scrub_number_field(row, fraction, coarse, cx);
+                    move |panel: &mut SettingsPanelView, cx: &mut Context<SettingsPanelView>| {
+                        panel.release_number_field(index, cx);
                     },
-                    |panel: &mut SettingsPanelView,
-                     row: usize,
-                     cx: &mut Context<SettingsPanelView>| {
-                        panel.release_number_field(row, cx);
-                    },
-                )
-                .cursor(CursorStyle::ResizeLeftRight)
-                .id(("settings-number-hover", index));
-                let hover = cx.listener(move |panel, hovered: &bool, _, cx| {
-                    panel.hover_number(index, &hover_id, *hovered);
-                    cx.notify();
-                });
-                return element.child(drag_track.on_hover(hover));
+                ));
             }
             element.child(slider_drag_track(
                 cx,
@@ -3837,15 +3674,19 @@ impl SettingsPanelView {
                 },
             ))
         };
-        number_field(
-            NumberText {
-                widest: widest_number(&number, &shown),
-                shown,
-                selected: self.edit_selects_all(index),
+        self.number_slider.draw(
+            SliderField {
+                key,
+                number,
+                edit,
+                dragging,
+                unit: number_unit(&self.level().rows[index]),
             },
-            number_unit(&self.level().rows[index]),
-            track,
-            cue,
+            FieldLook {
+                style,
+                level,
+                display: self.display_value(index),
+            },
             interact,
             row,
             self.kit,
@@ -3873,7 +3714,7 @@ impl SettingsPanelView {
         };
         let text = if index == self.level().selected {
             match &self.level().active_control {
-                Some(ActiveControl::Edit(edit, _)) => edit.text(),
+                Some(ActiveControl::Edit(edit)) => edit.text(),
                 Some(ActiveControl::Wheel(wheel)) => return parsed_color(&wheel.value),
                 None => value,
             }
@@ -5245,307 +5086,8 @@ impl SettingsPanelView {
     }
 }
 
-fn parsed_number(edit: &str, min: Option<f64>, max: Option<f64>, step: Option<f64>) -> Option<f64> {
-    let bounds = NumberConstraints { min, max, step };
-    let value = bounds.clamp(edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?);
-    Some(match step {
-        Some(step) => align_to_step(value, Some(bounds.lowest()), Some(bounds.highest()), step),
-        None => value,
-    })
-}
-
-fn number_bounds(control: &RowControl) -> Option<NumberConstraints> {
-    match control {
-        RowControl::Number { min, max, step, .. } => Some(NumberConstraints {
-            min: *min,
-            max: *max,
-            step: *step,
-        }),
-        _ => None,
-    }
-}
-
-fn type_number(edit: &mut TextField, capped: &mut bool, typed: &str, bounds: &NumberConstraints) {
-    let signed = bounds.lowest() < 0.0;
-    if !typed
-        .chars()
-        .all(|ch| ch.is_ascii_digit() || ch == '.' || (signed && ch == '-'))
-    {
-        return;
-    }
-    edit.insert_str(typed);
-    *capped = edit
-        .text()
-        .trim()
-        .parse::<f64>()
-        .is_ok_and(|value| value > bounds.highest() && value.is_sign_positive());
-    if *capped {
-        edit.set_text(format_number(bounds.highest()));
-    }
-}
-
-fn erase_typed(edit: &mut TextField, capped: &mut bool) {
-    edit.backspace(Span::Char);
-    *capped = false;
-}
-
-fn edit_display(edit: &TextField) -> String {
-    if edit.selected_range().is_some() {
-        return edit.text().to_string();
-    }
-    format!("{}_", edit.text())
-}
-
-fn align_to_step(value: f64, min: Option<f64>, max: Option<f64>, step: f64) -> f64 {
-    let origin = min.unwrap_or(0.0);
-    let steps = (value - origin) / step;
-    let rounded = steps.round();
-    if (steps - rounded).abs() <= 1e-9 {
-        return value;
-    }
-    for n in [rounded, rounded - 1.0, rounded + 1.0] {
-        let candidate = origin + n * step;
-        if min.is_none_or(|min| candidate >= min) && max.is_none_or(|max| candidate <= max) {
-            return round_to_step_precision(candidate, step);
-        }
-    }
-    value
-}
-
-fn round_to_step_precision(value: f64, step: f64) -> f64 {
-    let decimals = format!("{step}")
-        .split('.')
-        .nth(1)
-        .map(|fraction| fraction.len() as i32)
-        .unwrap_or(0);
-    let factor = 10f64.powi(decimals);
-    (value * factor).round() / factor
-}
-
-fn stepped_number(
-    edit: &str,
-    fallback: f64,
-    min: Option<f64>,
-    max: Option<f64>,
-    step: f64,
-    direction: f64,
-) -> String {
-    let current = parsed_number(edit, min, max, Some(step)).unwrap_or(fallback);
-    let next = parsed_number(
-        &(current + direction * step).to_string(),
-        min,
-        max,
-        Some(step),
-    )
-    .unwrap_or(current);
-    format_number(next)
-}
-
-fn number_limit(edit: &str, capped: bool, min: Option<f64>, max: Option<f64>) -> Option<String> {
-    if let Some(max) = max.filter(|_| capped) {
-        return Some(format!("max {}", format_number(max)));
-    }
-    let typed = edit.trim().parse::<f64>().ok().filter(|v| v.is_finite())?;
-    if let Some(min) = min.filter(|min| typed < *min) {
-        return Some(format!("min {}", format_number(min)));
-    }
-    None
-}
-
-fn number_cue(
-    style: Option<SliderStyle>,
-    edit: Option<(&str, bool)>,
-    on_drag: bool,
-    press: Option<SliderPress>,
-    level: f32,
-    min: Option<f64>,
-    max: Option<f64>,
-) -> NumberCue {
-    NumberCue {
-        level,
-        editing: style.is_some() && edit.is_some(),
-        dragging: on_drag && !matches!(press, Some(SliderPress::Held(_))),
-        limit: match (style, edit) {
-            (Some(SliderStyle::Compact), Some((edit, capped))) => {
-                number_limit(edit, capped, min, max)
-            }
-            _ => None,
-        },
-        marked: false,
-        settle: None,
-        bloom: None,
-        glowing: false,
-    }
-}
-
-#[derive(Default)]
-struct NumberMotion {
-    settles: std::collections::HashMap<(usize, String), NumberSettle>,
-    blooms: std::collections::HashMap<(usize, String), NumberSettle>,
-    step: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct NumberSettle {
-    from: f32,
-    to: f32,
-    step: usize,
-    started: std::time::Instant,
-}
-
-impl NumberSettle {
-    fn at(&self, now: std::time::Instant) -> f32 {
-        let progress = crate::motion::progress(
-            NumberCue::SETTLE,
-            now.saturating_duration_since(self.started),
-        );
-        self.from + (self.to - self.from) * progress
-    }
-
-    fn in_flight(&self, now: std::time::Instant) -> Option<(f32, usize)> {
-        (self.from != self.to
-            && now.saturating_duration_since(self.started) < NumberCue::SETTLE.duration)
-            .then_some((self.from, self.step))
-    }
-}
-
-fn next_settle(
-    current: Option<NumberSettle>,
-    to: f32,
-    follow: bool,
-    step: usize,
-    now: std::time::Instant,
-) -> Option<NumberSettle> {
-    let from = match current {
-        Some(settle) if settle.to == to => return None,
-        Some(settle) if !follow => settle.at(now),
-        Some(_) | None => to,
-    };
-    Some(NumberSettle {
-        from,
-        to,
-        step,
-        started: now,
-    })
-}
-
 fn pointer_keys(filter_open: bool, editing: bool) -> (PanelFocus, bool) {
     (PanelFocus::Body, filter_open && !editing)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SliderPress {
-    Held(f32),
-    Scrubbing,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum NumberRelease {
-    Finish,
-    Edit { commit: bool, begin: bool },
-}
-
-fn number_release(
-    press: Option<SliderPress>,
-    row: usize,
-    selected: usize,
-    editing: bool,
-) -> NumberRelease {
-    match press {
-        Some(SliderPress::Scrubbing) => NumberRelease::Finish,
-        Some(SliderPress::Held(_)) | None => NumberRelease::Edit {
-            commit: row != selected,
-            begin: row != selected || !editing,
-        },
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum PendingEdit {
-    Commit,
-    Drop,
-}
-
-fn pending_edit_on_scrub(row: usize, selected: usize) -> PendingEdit {
-    match row == selected {
-        true => PendingEdit::Drop,
-        false => PendingEdit::Commit,
-    }
-}
-
-fn pressed_slider(press: SliderPress, fraction: f32, width: f32) -> SliderPress {
-    match press {
-        SliderPress::Held(origin) if ((fraction - origin) * width).abs() < SCRUB_SLOP => press,
-        SliderPress::Held(_) | SliderPress::Scrubbing => SliderPress::Scrubbing,
-    }
-}
-
-fn number_preview(
-    edit: Option<&str>,
-    fallback: f64,
-    min: Option<f64>,
-    max: Option<f64>,
-    step: Option<f64>,
-) -> f64 {
-    edit.and_then(|value| parsed_number(value, min, max, step))
-        .unwrap_or(fallback)
-}
-
-#[derive(Clone, Copy)]
-struct NumberSpec {
-    value: f64,
-    min: Option<f64>,
-    max: Option<f64>,
-    step: Option<f64>,
-}
-
-fn widest_number(number: &NumberSpec, shown: &str) -> String {
-    let fraction_digits = |text: &str| text.split_once('.').map_or(0, |(_, part)| part.len());
-    let whole_digits = |text: &str| {
-        text.trim_start_matches('-')
-            .split('.')
-            .next()
-            .map_or(0, str::len)
-    };
-    let decimals = [number.min, number.max, Some(number.value), number.step]
-        .into_iter()
-        .flatten()
-        .map(|candidate| fraction_digits(&format_number(candidate)))
-        .max()
-        .unwrap_or(0);
-    let bounds = [number.min, number.max, Some(number.value)]
-        .into_iter()
-        .flatten()
-        .map(format_number)
-        .collect::<Vec<_>>();
-    let digits = bounds
-        .iter()
-        .map(|text| whole_digits(text))
-        .max()
-        .unwrap_or(1);
-    let signed = bounds
-        .iter()
-        .any(|text| text.starts_with('-') && whole_digits(text) == digits);
-    let mut widest = String::new();
-    if signed {
-        widest.push('-');
-    }
-    widest.push_str(&"0".repeat(digits.max(1)));
-    if decimals > 0 {
-        widest.push('.');
-        widest.push_str(&"0".repeat(decimals));
-    }
-    if shown.chars().count() > widest.chars().count() {
-        return shown
-            .chars()
-            .map(|glyph| if glyph.is_ascii_digit() { '0' } else { glyph })
-            .collect();
-    }
-    widest
-}
-
-fn track_fraction(x: Pixels, area: Bounds<Pixels>) -> f32 {
-    (((x - area.left()).to_f64() / area.size.width.to_f64()).clamp(0.0, 1.0)) as f32
 }
 
 type SliderDispatch = Box<
@@ -5628,18 +5170,6 @@ enum NumberDragEffect {
     Apply,
 }
 
-const COARSE_DRAG: f64 = 4.0;
-const COARSE_STEP: f64 = 10.0;
-
-fn coarse_drag(start: f64, value: f64, coarse: bool, min: f64, max: f64, step: f64) -> f64 {
-    if !coarse || step <= 0.0 {
-        return value;
-    }
-    let pulled = start + (value - start) * COARSE_DRAG;
-    let aligned = align_to_step(pulled.clamp(min, max), Some(min), Some(max), step);
-    round_to_step_precision(aligned, step).clamp(min, max)
-}
-
 fn number_drag_effect(rows: &[Row], row: usize) -> NumberDragEffect {
     let compact = rows
         .get(row)
@@ -5672,6 +5202,14 @@ fn number_finish_plan(rows: &[Row], row: usize) -> NumberFinishPlan {
     }
 }
 
+fn panel_slider_drag(panel: &mut SettingsPanelView) -> &mut Option<(usize, String)> {
+    &mut panel.slider_drag
+}
+
+fn panel_number_slider(panel: &mut SettingsPanelView) -> &mut NumberSlider<(usize, String)> {
+    &mut panel.number_slider
+}
+
 fn slider_drag_track<O, M, R>(
     cx: &mut Context<SettingsPanelView>,
     row: usize,
@@ -5686,108 +5224,19 @@ where
     M: Fn(&mut SettingsPanelView, usize, f32, bool, &mut Context<SettingsPanelView>) + 'static,
     R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
 {
-    let bounds: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
-    let bounds_for_down = bounds.clone();
-    let id_for_down = id.clone();
-    let view = cx.weak_entity();
-    div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(-reach))
-        .right(px(-reach))
-        .cursor(CursorStyle::PointingHand)
-        .child(
-            canvas(
-                move |area, _, _| bounds.set(Some(area)),
-                move |area, _, window, _| {
-                    watch_slider_drag(window, view, row, id, area, move_to, release);
-                },
-            )
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left(px(reach))
-            .right(px(reach)),
-        )
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                let Some(area) = bounds_for_down.get() else {
-                    return;
-                };
-                this.slider_drag = Some((row, id_for_down.clone()));
-                on_down(this, row, track_fraction(event.position.x, area), cx);
-                cx.stop_propagation();
-                cx.notify();
-            }),
-        )
-}
-
-fn watch_slider_drag<M, R>(
-    window: &mut Window,
-    view: WeakEntity<SettingsPanelView>,
-    row: usize,
-    id: String,
-    bounds: Bounds<Pixels>,
-    move_to: M,
-    release: R,
-) where
-    M: Fn(&mut SettingsPanelView, usize, f32, bool, &mut Context<SettingsPanelView>) + 'static,
-    R: Fn(&mut SettingsPanelView, usize, &mut Context<SettingsPanelView>) + 'static,
-{
-    let move_view = view.clone();
-    let move_id = id.clone();
-    let release = Rc::new(release);
-    let release_for_move = release.clone();
-    window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
-        if phase != DispatchPhase::Capture {
-            return;
-        }
-        let _ = move_view.update(cx, |panel, cx| {
-            if panel.slider_drag.as_ref() != Some(&(row, move_id.clone())) {
-                return;
-            }
-            if event.dragging() {
-                move_to(
-                    panel,
-                    row,
-                    track_fraction(event.position.x, bounds),
-                    event.modifiers.shift,
-                    cx,
-                );
-            } else {
-                panel.slider_drag = None;
-                release_for_move(panel, row, cx);
-                cx.notify();
-            }
-        });
-    });
-    window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
-        if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
-            return;
-        }
-        let _ = view.update(cx, |panel, cx| {
-            if panel.slider_drag.as_ref() != Some(&(row, id.clone())) {
-                return;
-            }
-            panel.slider_drag = None;
-            release(panel, row, cx);
-            cx.notify();
-        });
-    });
+    slider_track(
+        cx,
+        (row, id),
+        reach,
+        panel_slider_drag,
+        move |panel, fraction, cx| on_down(panel, row, fraction, cx),
+        move |panel, fraction, coarse, cx| move_to(panel, row, fraction, coarse, cx),
+        move |panel, cx| release(panel, row, cx),
+    )
 }
 
 fn number_input(value: f64) -> serde_json::Value {
     serde_json::json!({ "value": super::rows::number_json(value) })
-}
-
-fn horizontal_step_direction(key: &str) -> Option<f64> {
-    match key {
-        "left" => Some(-1.0),
-        "right" => Some(1.0),
-        _ => None,
-    }
 }
 
 fn parsed_color(text: &str) -> Option<u32> {
@@ -5797,14 +5246,6 @@ fn parsed_color(text: &str) -> Option<u32> {
         return None;
     }
     u32::from_str_radix(hex, 16).ok()
-}
-
-fn format_number(value: f64) -> String {
-    if value.fract() == 0.0 {
-        format!("{value:.0}")
-    } else {
-        format!("{}", (value * 10_000.0).round() / 10_000.0)
-    }
 }
 
 fn color_display(value: &str) -> String {
@@ -5846,19 +5287,6 @@ fn field_id_unit(field_id: &str) -> Option<&'static str> {
         return Some("s");
     }
     None
-}
-
-fn slider_fraction(value: f64, min: Option<f64>, max: Option<f64>) -> f32 {
-    let Some(min) = min else {
-        return 0.0;
-    };
-    let Some(max) = max else {
-        return 0.0;
-    };
-    if max <= min {
-        return 0.0;
-    }
-    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
 }
 
 fn binary_state_label(active: bool) -> &'static str {
@@ -6546,25 +5974,28 @@ mod tests {
     use super::{
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
-        clamp_selected, coarse_drag, color_display, complete_action, crumb_labels,
-        due_query_indices, edit_display, erase_typed, escape_step, field_id_unit, focus_level,
-        format_number, header_is_redundant, horizontal_step_direction, intent, list_fit_updates,
-        live_card_level, live_card_sync, live_card_sync_back, live_number_dispatch_plan,
-        next_settle, number_cue, number_drag_effect, number_finish_plan, number_limit,
-        number_preview, number_release, number_unit, parsed_color, parsed_number,
-        pending_edit_on_scrub, pointer_keys, pop_level, pressed_slider, push_level, query_is_due,
-        rail_child_index, rail_group_breaks, release_slider_dispatch, row_body_height,
-        row_description, schedule_slider_generation, slider_fraction, slider_generation_current,
-        slider_protected, source_window_height_for, stepped_number, text_or_placeholder,
-        transition_in_flight, transition_policy, type_number, widest_number, AppliedQueryPayloads,
-        EscapeStep, HeightCache, Intent, Level, LevelHeader, LiveNumberDispatch, NumberCue,
-        NumberDragEffect, NumberFinishPlan, NumberRelease, NumberSpec, ObjectArrayState,
-        PendingEdit, Row, RowControl, RowSection, SettingsDestination, SliderPress, SliderStyle,
-        TransitionAction, TransitionTracker, SCRUB_SLOP,
+        clamp_selected, color_display, complete_action, crumb_labels, due_query_indices,
+        escape_step, field_id_unit, focus_level, format_number, header_is_redundant,
+        horizontal_step_direction, intent, list_fit_updates, live_card_level, live_card_sync,
+        live_card_sync_back, live_number_dispatch_plan, number_drag_effect, number_finish_plan,
+        number_unit, parsed_color, parsed_number, pending_edit_on_scrub, pointer_keys, pop_level,
+        push_level, query_is_due, rail_child_index, rail_group_breaks, release_slider_dispatch,
+        row_body_height, row_description, schedule_slider_generation, slider_fraction,
+        slider_generation_current, slider_protected, source_window_height_for, text_or_placeholder,
+        transition_in_flight, transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache,
+        Intent, Level, LevelHeader, LiveNumberDispatch, NumberDragEffect, NumberFinishPlan,
+        NumberRelease, NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
+        SettingsDestination, SliderStyle, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
     use crate::scroll_list::ScrollList;
+    use crate::settings_panel::components::NumberCue;
+    use crate::settings_panel::number_slider::edit::{edit_display, erase_typed, type_number};
+    use crate::settings_panel::number_slider::numbers::{
+        coarse_drag, next_settle, number_cue, number_limit, number_preview, number_release,
+        pressed_slider, stepped_number, widest_number, NumberSettle, SliderPress, SCRUB_SLOP,
+    };
     use crate::settings_panel::object_array_row::{Entry, Item};
     use crate::settings_panel::rows::{
         retire_number_holds, rows_from_resolved, visible_row_indices, LiveQuery, RowQueryState,
@@ -7916,7 +7347,7 @@ active_value_from = "active"
     #[test]
     fn glow_transition_stays_latched_and_reverses_from_its_current_strength() {
         let now = std::time::Instant::now();
-        let resting = super::NumberSettle {
+        let resting = NumberSettle {
             from: 0.0,
             to: 0.0,
             step: 0,

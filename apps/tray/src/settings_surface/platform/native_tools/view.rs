@@ -12,10 +12,13 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ScrollList};
 use qol_gpui::settings_panel::components::{
     choose_hints, choose_step, settings_busy_message, settings_description, settings_label,
-    settings_label_group, settings_message, settings_number_chip, settings_page,
-    settings_tile_rows, settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone,
-    RowGround, SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination,
-    SettingsRow, SettingsTextField, SettingsTile, SettingsToggle, TileArt,
+    settings_label_group, settings_message, settings_page, settings_tile_rows,
+    settings_value_group, tile_arts, tile_layout, ChoiceArt, HintTone, RowGround,
+    SettingsChoiceValue, SettingsGroupHeader, SettingsHint, SettingsKeyCombination, SettingsRow,
+    SettingsTextField, SettingsTile, SettingsToggle, TileArt,
+};
+use qol_gpui::settings_panel::number_slider::{
+    compact_track, NumberRelease, NumberSlider, Scrub, SliderField,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_list, wrapping_visible_row, CustomHints,
@@ -32,7 +35,7 @@ use super::data::{self, ActionOption, PluginOption, RegistrationError};
 use super::model::{
     available_actions, chord_from_keystroke, modifier_is_secondary, question_text,
     shortcut_is_managed, shortcut_kind_label, shortcut_summary, AppRefKind, EditorQuestion,
-    HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind, HOLD_FIELD, HOTKEY_FIELDS,
+    HoldKey, HotkeyDraft, ShortcutActionKind, ShortcutDraft, ToolKind, HOLD_FIELD, HOTKEY_FIELDS,
     OS_ONLY_FIELD,
 };
 
@@ -42,7 +45,7 @@ const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
 const OS_ONLY_LABEL: &str = "Only on this kind of computer";
 const HOLD_LABEL: (&str, &str) = (
     "Hold to run",
-    "Runs once the keys are held this long. Off runs on press.",
+    "Runs once the keys are held this long. 0 runs on press.",
 );
 const HOLD_UNIT: &str = "ms";
 const SHORTCUT_ENABLED: (&str, &str) = ("Enabled", "The shortcut does nothing while this is off.");
@@ -113,6 +116,8 @@ pub(super) struct NativeToolsView {
     closing: Option<(Mode, String)>,
     editor_text: TextField,
     editor_text_key: Option<(usize, ShortcutActionKind, bool)>,
+    hold_slider: NumberSlider<usize>,
+    hold_drag: Option<usize>,
     shortcuts: Vec<Shortcut>,
     hotkeys: Vec<HotkeyBinding>,
     plugins: Vec<PluginOption>,
@@ -157,6 +162,8 @@ impl NativeToolsView {
             closing: None,
             editor_text: TextField::new(),
             editor_text_key: None,
+            hold_slider: NumberSlider::default(),
+            hold_drag: None,
             shortcuts: Vec::new(),
             hotkeys: Vec::new(),
             plugins: Vec::new(),
@@ -267,6 +274,7 @@ impl NativeToolsView {
         });
         self.mode = mode;
         self.editor_text_key = None;
+        self.drop_hold_slider();
         self.editor_step = self.editor_step.wrapping_add(1);
         self.editor_motion = Some(deck::Motion::Push);
         self.marks.push(self.list_mark());
@@ -303,6 +311,7 @@ impl NativeToolsView {
         self.choose_closing = None;
         self.marks.clear();
         self.editor_text_key = None;
+        self.drop_hold_slider();
         let leaving = std::mem::replace(&mut self.mode, Mode::List);
         if matches!(leaving, Mode::List) {
             return;
@@ -794,6 +803,9 @@ impl NativeToolsView {
     fn on_editor_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         if modifier_is_secondary(&event.keystroke.modifiers) && matches!(key, "enter" | "return") {
+            if let Mode::Hotkey(draft) = &mut self.mode {
+                draft.commit_hold_edit();
+            }
             let question = EditorQuestion::for_empty(self.editor_first_empty());
             self.set_question(Some(question));
             if question == EditorQuestion::Save {
@@ -801,6 +813,19 @@ impl NativeToolsView {
             }
             cx.notify();
             return;
+        }
+        if let Mode::Hotkey(draft) = &mut self.mode {
+            let key_char = event.keystroke.key_char.as_deref();
+            match hotkey_form_key(draft, key, key_char, event.keystroke.modifiers.shift) {
+                HoldKey::Held { glow } => {
+                    if glow {
+                        self.hold_slider.glow(HOLD_FIELD, hold_slider, cx);
+                    }
+                    cx.notify();
+                    return;
+                }
+                HoldKey::Passed => {}
+            }
         }
         if matches!(key, "escape" | "esc") {
             self.escape_editor(window, cx);
@@ -855,11 +880,6 @@ impl NativeToolsView {
                 3 if matches!(key, "enter" | "return" | "space") => {
                     self.start_capture(cx);
                     cx.notify();
-                }
-                HOLD_FIELD => {
-                    if draft.hold_key(key, event.keystroke.modifiers.shift) {
-                        cx.notify();
-                    }
                 }
                 OS_ONLY_FIELD if matches!(key, "enter" | "return" | "space") => {
                     draft.os_only = !draft.os_only;
@@ -1572,6 +1592,35 @@ impl NativeToolsView {
         let kit = qol_gpui::kit::kit();
         let selected = draft.selected == HOLD_FIELD;
         let row = RowGround::of(selected, self.body_focused);
+        let interact = |element: Div| {
+            element.child(compact_track(
+                cx,
+                HOLD_FIELD,
+                ("native-tools-hold-track", HOLD_FIELD),
+                hold_drag,
+                hold_slider,
+                |view: &mut Self, fraction: f32, coarse: bool, cx: &mut Context<Self>| {
+                    view.scrub_hold(fraction, coarse);
+                    cx.notify();
+                },
+                |view: &mut Self, cx: &mut Context<Self>| {
+                    view.release_hold();
+                    cx.notify();
+                },
+            ))
+        };
+        let value = self.hold_slider.compact(
+            SliderField {
+                key: HOLD_FIELD,
+                number: draft.hold_number(),
+                edit: draft.hold_edit.as_ref().filter(|_| selected),
+                dragging: self.hold_drag == Some(HOLD_FIELD),
+                unit: Some(HOLD_UNIT.into()),
+            },
+            interact,
+            row,
+            kit,
+        );
         SettingsRow::rule(("native-tools-hold", HOLD_FIELD), kit)
             .selected(selected, self.body_focused)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -1580,15 +1629,7 @@ impl NativeToolsView {
                 cx.notify();
             }))
             .child(field_label(HOLD_LABEL, row, kit))
-            .child(
-                settings_value_group()
-                    .children(
-                        draft
-                            .hold_ms
-                            .map(|ms| settings_number_chip(ms.to_string(), HOLD_UNIT, row, kit)),
-                    )
-                    .child(SettingsToggle::new(draft.hold_ms.is_some(), row, kit)),
-            )
+            .child(value)
             .child(deck::bounds_recorder(
                 Rc::clone(&self.field_bounds),
                 HOLD_FIELD,
@@ -1596,12 +1637,61 @@ impl NativeToolsView {
             .into_any_element()
     }
 
+    fn scrub_hold(&mut self, fraction: f32, coarse: bool) {
+        let Mode::Hotkey(draft) = &mut self.mode else {
+            return;
+        };
+        let number = draft.hold_number();
+        let Some((scrub, value)) = self.hold_slider.drag(HOLD_FIELD, fraction, coarse, &number)
+        else {
+            return;
+        };
+        if scrub == Scrub::Began {
+            draft.selected = HOLD_FIELD;
+            draft.hold_edit = None;
+        }
+        draft.set_hold(value);
+    }
+
+    fn release_hold(&mut self) {
+        let Mode::Hotkey(draft) = &mut self.mode else {
+            self.hold_slider.clear();
+            return;
+        };
+        let editing = draft.hold_edit.is_some();
+        match self
+            .hold_slider
+            .release(HOLD_FIELD, draft.selected, editing)
+        {
+            NumberRelease::Finish => {
+                self.hold_slider.take_drag_start();
+            }
+            NumberRelease::Edit { begin, .. } => {
+                draft.selected = HOLD_FIELD;
+                if begin {
+                    draft.begin_hold_edit();
+                }
+            }
+        }
+    }
+
+    fn drop_hold_slider(&mut self) {
+        self.hold_drag = None;
+        self.hold_slider.clear();
+        self.hold_slider.take_drag_start();
+    }
+
     fn select_editor_field(&mut self, index: usize) {
         match &mut self.mode {
             Mode::Shortcut(draft) => {
                 draft.selected = index.min(draft.field_count().saturating_sub(1));
             }
-            Mode::Hotkey(draft) => draft.selected = index.min(HOTKEY_FIELDS - 1),
+            Mode::Hotkey(draft) => {
+                draft.selected = index.min(HOTKEY_FIELDS - 1);
+                if draft.selected != HOLD_FIELD {
+                    draft.commit_hold_edit();
+                }
+            }
             Mode::List => {}
         }
     }
@@ -1619,7 +1709,7 @@ impl NativeToolsView {
             Mode::Hotkey(draft) => match draft.selected {
                 0 => draft.enabled = !draft.enabled,
                 3 => self.start_capture(cx),
-                HOLD_FIELD => draft.flip_hold(),
+                HOLD_FIELD if draft.hold_edit.is_none() => draft.begin_hold_edit(),
                 OS_ONLY_FIELD => draft.os_only = !draft.os_only,
                 _ => {}
             },
@@ -1910,9 +2000,14 @@ impl NativeToolsView {
         if self.selected_field_is_text(selected) {
             left.push(SettingsHint::new(Key::TYPE, "edit"));
         }
-        if matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == HOLD_FIELD && draft.hold_ms.is_some())
-        {
+        if self.hold_editing() {
             left.push(SettingsHint::new(Key::LEFT_RIGHT, "change"));
+            left.push(SettingsHint::new(Key::TYPE, "type a time"));
+            return CustomHints {
+                question: None,
+                left,
+                right: vec![SettingsHint::new(Key::ESC, "restore")],
+            };
         }
         CustomHints {
             question: None,
@@ -1938,7 +2033,17 @@ impl NativeToolsView {
         if matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == 3) {
             return "record";
         }
+        if self.hold_editing() {
+            return "apply";
+        }
+        if matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == HOLD_FIELD) {
+            return "edit";
+        }
         "flip"
+    }
+
+    fn hold_editing(&self) -> bool {
+        matches!(&self.mode, Mode::Hotkey(draft) if draft.selected == HOLD_FIELD && draft.hold_edit.is_some())
     }
 
     fn selected_field_is_text(&self, selected: usize) -> bool {
@@ -2227,6 +2332,32 @@ fn navigate_form(selected: &mut usize, count: usize, event: &KeyDownEvent) -> bo
     )
 }
 
+fn hold_drag(view: &mut NativeToolsView) -> &mut Option<usize> {
+    &mut view.hold_drag
+}
+
+fn hold_slider(view: &mut NativeToolsView) -> &mut NumberSlider<usize> {
+    &mut view.hold_slider
+}
+
+fn hotkey_form_key(
+    draft: &mut HotkeyDraft,
+    key: &str,
+    key_char: Option<&str>,
+    shift: bool,
+) -> HoldKey {
+    let mut selected = draft.selected;
+    if navigate_form_key(&mut selected, HOTKEY_FIELDS, key, shift) {
+        draft.commit_hold_edit();
+        draft.selected = selected;
+        return HoldKey::Held { glow: false };
+    }
+    if draft.selected != HOLD_FIELD {
+        return HoldKey::Passed;
+    }
+    draft.hold_key(key, key_char, shift)
+}
+
 fn navigate_form_key(selected: &mut usize, count: usize, key: &str, shift: bool) -> bool {
     let visible = (0..count).collect::<Vec<_>>();
     match intent(key, None, false) {
@@ -2374,7 +2505,8 @@ mod breadcrumb_tests {
 #[cfg(test)]
 mod hotkey_field_tests {
     use super::{
-        hotkey_detail, navigate_form_key, HotkeyDraft, HOLD_FIELD, HOTKEY_FIELDS, OS_ONLY_FIELD,
+        hotkey_detail, hotkey_form_key, navigate_form_key, HoldKey, HotkeyDraft, HOLD_FIELD,
+        HOTKEY_FIELDS, OS_ONLY_FIELD,
     };
 
     fn press(selected: usize, key: &str, shift: bool) -> (usize, bool) {
@@ -2419,17 +2551,76 @@ mod hotkey_field_tests {
         }
     }
 
+    fn editor_key(draft: &mut HotkeyDraft, key: &str) -> HoldKey {
+        let key_char = (key.chars().count() == 1).then_some(key);
+        hotkey_form_key(draft, key, key_char, false)
+    }
+
     #[test]
-    fn the_cursor_keys_drive_the_hold_row_on_the_draft() {
+    fn the_editor_keys_walk_every_field_and_step_into_the_hold_row() {
+        let moved = HoldKey::Held { glow: false };
         let mut draft = HotkeyDraft::blank(&[], &[]);
-        draft.selected = HOLD_FIELD;
-        assert!(draft.hold_key("enter", false));
-        assert_eq!(draft.hold_ms, Some(1000));
-        assert!(draft.hold_key("right", false));
-        assert_eq!(draft.hold_ms, Some(1100));
-        assert!(draft.hold_key("space", false));
-        assert_eq!(draft.hold_ms, None);
+        draft.selected = 0;
+        let mut seen = vec![draft.selected];
+        for _ in 0..HOTKEY_FIELDS + 1 {
+            assert_eq!(editor_key(&mut draft, "down"), moved);
+            if seen.last() != Some(&draft.selected) {
+                seen.push(draft.selected);
+            }
+        }
+        assert_eq!(seen, [0, 1, 2, 3, HOLD_FIELD, OS_ONLY_FIELD]);
+        assert_eq!(editor_key(&mut draft, "enter"), HoldKey::Passed);
+        assert_eq!(editor_key(&mut draft, "up"), moved);
         assert_eq!(draft.selected, HOLD_FIELD);
+        assert_eq!(editor_key(&mut draft, "enter"), moved);
+        assert!(draft.hold_edit.is_some());
+        for digit in ["7", "5", "0"] {
+            editor_key(&mut draft, digit);
+        }
+        assert_eq!(draft.hold_ms, None, "typing only previews");
+        assert_eq!(editor_key(&mut draft, "tab"), moved);
+        assert_eq!(draft.selected, OS_ONLY_FIELD);
+        assert_eq!(draft.hold_ms, Some(750), "leaving the row applies the edit");
+        assert!(draft.hold_edit.is_none());
+        assert_eq!(editor_key(&mut draft, "escape"), HoldKey::Passed);
+    }
+
+    #[test]
+    fn typing_a_hold_time_then_enter_stores_it_and_zero_stores_none() {
+        let cases: [(&[&'static str], Option<u32>, usize); 7] = [
+            (
+                &["enter", "1", "5", "0", "0", "enter"],
+                Some(1500),
+                HOLD_FIELD,
+            ),
+            (&["enter", "0", "enter"], None, HOLD_FIELD),
+            (
+                &["enter", "2", "0", "0", "0", "down"],
+                Some(2000),
+                OS_ONLY_FIELD,
+            ),
+            (&["enter", "2", "0", "0", "0", "escape"], None, HOLD_FIELD),
+            (&["enter", "right", "right", "enter"], Some(100), HOLD_FIELD),
+            (&["enter", "end", "enter"], Some(3000), HOLD_FIELD),
+            (&["space", "4", "5", "enter"], Some(50), HOLD_FIELD),
+        ];
+        for (keys, stored, selected) in cases {
+            let mut draft = HotkeyDraft::blank(&[], &[]);
+            draft.selected = HOLD_FIELD;
+            for key in keys {
+                editor_key(&mut draft, key);
+            }
+            assert_eq!(draft.hold_ms, stored, "{keys:?}");
+            assert_eq!(draft.selected, selected, "{keys:?}");
+            assert!(draft.hold_edit.is_none(), "{keys:?}");
+        }
+        let mut held = HotkeyDraft::blank(&[], &[]);
+        held.selected = HOLD_FIELD;
+        held.hold_ms = Some(1500);
+        for key in ["enter", "0", "enter"] {
+            editor_key(&mut held, key);
+        }
+        assert_eq!(held.build(1).hold_ms, None);
     }
 
     #[test]

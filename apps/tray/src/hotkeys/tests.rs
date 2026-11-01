@@ -543,7 +543,7 @@ fn capture_bindings_ignore_a_hold_time_on_a_continuous_chord() {
 
 #[test]
 fn capture_bindings_clamp_a_hold_time_outside_the_limits() {
-    for (asked, expected) in [(5, 100), (1000, 1000), (90_000, 10_000)] {
+    for (asked, expected) in [(5, 50), (1000, 1000), (90_000, 3000)] {
         let config = shot_config(vec![hold_binding(
             "uid-shot",
             "screenshot",

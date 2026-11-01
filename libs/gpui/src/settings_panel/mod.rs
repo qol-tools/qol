@@ -3,6 +3,7 @@ mod display_layout;
 mod entry_form;
 mod form_nav;
 mod navigation;
+pub mod number_slider;
 mod object_array_row;
 mod pages;
 mod persistence;
