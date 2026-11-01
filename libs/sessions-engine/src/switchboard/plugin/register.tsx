@@ -19,8 +19,6 @@ const HAIKU_MS = 20_000
 const MINUTE = 60_000
 const DELIVER_MS = 2_000
 const DELIVER_TIMEOUT_MS = 20_000
-const WAKE_DELAY_MS = 1_500
-const WAKE_FRESH_MS = 10 * MINUTE
 const SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
 const WATCHER = /^\s*node\s+([A-Za-z0-9_@%+=:,./-]*pr-watch\.cjs)((?:\s+[A-Za-z0-9_@%+=:,./-]+)*)\s*$/
 const CACHED_WATCHER = '/plugins/cache/qol-skills/qol-workflow/'
@@ -67,8 +65,6 @@ type Report = { agentId: string; name?: string; status: string; report: string; 
 type Delivery = { id: string; agent_id: string; conversation: string; name?: string | null; cwd: string; pull_request?: string | null; message: string }
 type ForkRecord = { agentId: string; name: string; cwd?: string; transcript?: string; isCurrent: boolean }
 type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
-type WakeFork = { agent_id: string; name?: string | null; description: string; cwd?: string | null; transcript: string; model?: string | null; effort?: string | null; message: string }
-type Wake = { conversation: string; launched_at: string; is_handoff: boolean; forks: WakeFork[]; claimed?: boolean }
 
 const pending = new Map<string, Promise<Header>>()
 
@@ -474,35 +470,6 @@ export const deliver = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-const wakeFork = async ($: EngineInterface, wake: Wake, fork: WakeFork): Promise<void> => {
-  const name = fork.name ?? fork.description
-  if (!wake.is_handoff) return reach($, fork.agent_id, name, fork.cwd ?? undefined, fork.message)
-  if (fork.cwd === undefined || fork.cwd === null || fork.cwd === '') {
-    await undelivered($, fork.agent_id, name, 'its project folder is unknown, so no new fork could take over its work', fork.message)
-    return
-  }
-  const started = await $.agent.spawn({
-    subagentType: FORK,
-    description: fork.description,
-    prompt: `Project: ${fork.cwd}\n${fork.message}`,
-    ...(typeof fork.model === 'string' ? { model: fork.model } : {}),
-    ...(typeof fork.effort === 'string' ? { effort: fork.effort } : {}),
-  })
-  if (started.deny !== undefined) await undelivered($, fork.agent_id, name, started.deny, fork.message)
-}
-
-export const wakeForks = async ($: EngineInterface): Promise<void> => {
-  const path = await $.env.get('QOL_SWITCHBOARD_WAKE')
-  if (path === undefined || path === '' || !(await $.fs.exists(path))) return
-  const wake = JSON.parse(String(await $.fs.read(path))) as Wake
-  if (wake.claimed === true || !Array.isArray(wake.forks) || wake.forks.length === 0) return
-  const launched = Date.parse(wake.launched_at)
-  if (!Number.isFinite(launched) || (await $.clock.now()) - launched > WAKE_FRESH_MS) return
-  if (!wake.is_handoff && wake.conversation !== (await $.session.id())) return
-  await $.fs.write(path, JSON.stringify({ ...wake, claimed: true }))
-  for (const fork of wake.forks) await wakeFork($, wake, fork).catch(() => undefined)
-}
-
 const once = (text: string, needle: string): boolean => text.indexOf(needle) !== -1 && text.indexOf(needle) === text.lastIndexOf(needle)
 
 export type Origin = 'peer' | 'task-notification'
@@ -622,7 +589,6 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
-      $.clock.after(WAKE_DELAY_MS, () => void wakeForks($).catch(() => undefined))
     } catch {}
     return started
   })

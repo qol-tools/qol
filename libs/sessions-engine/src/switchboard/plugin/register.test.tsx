@@ -432,86 +432,26 @@ test("a fork's background pull request watcher runs under CLI Sessions, and no o
   expect(ran[1]).toBe(watcher)
 })
 
-const WAKE = '/data/switchboard/wake.json'
-
-const wakeEngine = (on: any, wake: unknown, sent: unknown[], spawned: Spawned[], written: string[]) => {
-  engine(on, sent, [], spawned)
-  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_WAKE' ? WAKE : undefined }))
-  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === WAKE }))
-  on('fs.read', () => ({ value: JSON.stringify(wake) }))
-  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
-    written.push(e.text)
-    return { value: undefined }
-  })
-}
-
-const wakeFork = (agentId: string, message: string) => ({
-  agent_id: agentId,
-  name: `${agentId}-fork: a fork`,
-  description: `${agentId}-fork: a fork`,
-  cwd: '/work',
-  transcript: `/conv/old/subagents/agent-${agentId}.jsonl`,
-  model: 'opus',
-  effort: null,
-  message,
-})
-
-test('a restart continues the stopped forks with their own message and spends no switchboard turn', async ($, on) => {
-  const sent: any[] = []
-  const written: string[] = []
-  const wake = {
-    conversation: 'switchboard-session',
-    launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
-    is_handoff: false,
-    forks: [wakeFork('m1', 'Continue your work from where you left off.')],
-    claimed: false,
-  }
-  wakeEngine(on, wake, sent, [], written)
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await settle()
-  expect(sent).toHaveLength(1)
-  expect(JSON.stringify(sent[0].to)).toContain('m1')
-  expect(sent[0].text).toBe('Continue your work from where you left off.')
-  expect(JSON.parse(written[0] as string).claimed).toBe(true)
-  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('[fork board] m1-fork · working (agent id m1)')
-})
-
-test('a claimed, stale or foreign wake is left alone, and a handoff starts each fork again', async ($, on) => {
+test('a switchboard start sends no fork a message and starts no fork, even with a wake file an earlier build left', async ($, on) => {
   const sent: any[] = []
   const spawned: Spawned[] = []
-  const written: string[] = []
-  const at = new Date(1_800_000_000_000 - 5_000).toISOString()
-  wakeEngine(
-    on,
-    { conversation: 'old', launched_at: at, is_handoff: true, forks: [wakeFork('h1', 'You take over the work of a fork that stopped.')] },
-    sent,
-    spawned,
-    written,
-  )
+  engine(on, sent, [], spawned)
+  const wake = '/data/switchboard/wake.json'
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_WAKE' ? wake : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path === wake }))
+  on('fs.read', () => ({
+    value: JSON.stringify({
+      conversation: 'switchboard-session',
+      launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
+      is_handoff: false,
+      forks: [{ agent_id: 'm1', description: 'm1-fork: a fork', cwd: '/work', transcript: '/conv/agent-m1.jsonl', message: 'Continue your work.' }],
+    }),
+  }))
+  on('fs.write', () => ({ value: undefined }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await settle()
   expect(sent).toHaveLength(0)
-  expect(spawned).toHaveLength(1)
-  expect(spawned[0]?.description).toBe('h1-fork: a fork')
-  expect(spawned[0]?.prompt).toBe('Project: /work\nYou take over the work of a fork that stopped.')
-  expect(written).toHaveLength(1)
-})
-
-test('a wake of another conversation or from long ago sends nothing', async ($, on) => {
-  const sent: any[] = []
-  const written: string[] = []
-  wakeEngine(
-    on,
-    { conversation: 'other', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), is_handoff: false, forks: [wakeFork('x1', 'go')] },
-    sent,
-    [],
-    written,
-  )
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await settle()
-  expect(sent).toHaveLength(0)
-  expect(written).toHaveLength(0)
+  expect(spawned).toHaveLength(0)
 })
 
 const watchEngine = (on: any, forks: Record<string, { cwd?: string; description: string }>, earlier: string[] = []) => {

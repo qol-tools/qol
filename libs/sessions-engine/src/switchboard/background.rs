@@ -19,7 +19,6 @@ const QUEUED_NOTICE: &str = "queued_command";
 pub(super) struct Background {
     pub(super) id: String,
     pub(super) command: Option<String>,
-    pub(super) started_at: Option<String>,
 }
 
 impl Background {
@@ -176,10 +175,6 @@ impl Reader {
             self.open.push(Background {
                 id,
                 command: self.commands.remove(call),
-                started_at: row
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
             });
         }
     }
@@ -244,17 +239,6 @@ pub(super) mod fixtures {
         }))
     }
 
-    pub(in crate::switchboard) fn started_at(call: &str, id: &str, at: &str) -> String {
-        line(json!({
-            "type": "user",
-            "timestamp": at,
-            "message": {"role": "user", "content": [{
-                "tool_use_id": call, "type": "tool_result",
-                "content": format!("Command running in background with ID: {id}. Output is being written to: /tmp/tasks/{id}.output"),
-            }]},
-        }))
-    }
-
     pub(in crate::switchboard) fn queued(id: &str, status: &str, origin: &str) -> String {
         line(json!({
             "type": "attachment",
@@ -304,11 +288,6 @@ pub(super) mod fixtures {
     pub(in crate::switchboard) fn waiting(id: &str, command: &str) -> String {
         let call = format!("toolu_{id}");
         [bash(&call, command, true), started(&call, id)].concat()
-    }
-
-    pub(in crate::switchboard) fn waiting_at(id: &str, command: &str, at: &str) -> String {
-        let call = format!("toolu_{id}");
-        [bash(&call, command, true), started_at(&call, id, at)].concat()
     }
 }
 
@@ -360,22 +339,10 @@ mod tests {
     fn a_notice_queued_while_the_fork_was_mid_turn_ends_its_command() {
         let started = [
             waiting("bwatch", "node pr-watch.cjs"),
-            waiting_at("bhold", HOLD_COMMAND, "2026-11-01T07:16:00.000Z"),
+            waiting("bhold", HOLD_COMMAND),
         ]
         .concat();
-        assert_eq!(
-            running(&started)
-                .into_iter()
-                .map(|background| (background.id, background.started_at))
-                .collect::<Vec<_>>(),
-            [
-                ("bwatch".to_owned(), None),
-                (
-                    "bhold".to_owned(),
-                    Some("2026-11-01T07:16:00.000Z".to_owned())
-                ),
-            ]
-        );
+        assert_eq!(ids(&started).len(), 2);
         assert_eq!(
             ids(&[started.clone(), queued("bwatch", "failed", NOTICE_ORIGIN)].concat()),
             [("bhold".to_owned(), Some(HOLD_COMMAND.to_owned()))]
@@ -461,7 +428,6 @@ mod tests {
         let hold = |command: Option<&str>| Background {
             id: "b1".to_owned(),
             command: command.map(str::to_owned),
-            started_at: None,
         };
         assert!(hold(Some(HOLD_COMMAND)).is_hold());
         assert!(hold(Some(" sleep infinity\n")).is_hold());
