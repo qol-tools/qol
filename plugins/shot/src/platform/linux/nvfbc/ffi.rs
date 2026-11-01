@@ -164,7 +164,12 @@ pub(super) struct CreateCaptureSessionParams {
 }
 
 impl CreateCaptureSessionParams {
-    pub(super) fn new(tracking_type: u32, output_id: u32, capture_box: NvBox) -> Self {
+    pub(super) fn new(
+        tracking_type: u32,
+        output_id: u32,
+        capture_box: NvBox,
+        sampling_rate_ms: u32,
+    ) -> Self {
         Self {
             version: struct_version::<Self>(6),
             capture_type: CAPTURE_TO_SYS,
@@ -175,7 +180,7 @@ impl CreateCaptureSessionParams {
             with_cursor: TRUE,
             disable_auto_modeset_recovery: 0,
             round_frame_size: 0,
-            sampling_rate_ms: 1,
+            sampling_rate_ms,
             push_model: 0,
             allow_direct_capture: 0,
         }
@@ -268,7 +273,7 @@ mod tests {
             (
                 size_of::<CreateCaptureSessionParams>(),
                 64,
-                CreateCaptureSessionParams::new(TRACKING_OUTPUT, 0, NvBox::default()).version,
+                CreateCaptureSessionParams::new(TRACKING_OUTPUT, 0, NvBox::default(), 16).version,
             ),
             (
                 size_of::<ToSysSetupParams>(),

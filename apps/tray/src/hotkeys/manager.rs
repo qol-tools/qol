@@ -1,5 +1,6 @@
 use super::capture::{parse_combo, Combo};
 use super::catalog::AvailableActions;
+use super::hold::HoldPlan;
 use super::planning::{plan_registrations, PlannedRegistration};
 use super::registration_status::{self, RegistrationError};
 use super::store::HotkeyLayers;
@@ -32,18 +33,24 @@ impl RegistrationScope {
             .contains(Modifiers::CONTROL | Modifiers::ALT);
         let layout_symbol = parse_combo(&registration.binding_key)
             .is_some_and(|combo| matches!(combo.key, Key::Symbol(_)));
-        self == Self::All || !(registration.action.continuous || altgr_chord || layout_symbol)
+        self == Self::All
+            || !(registration.action.continuous
+                || registration.hold.is_some()
+                || altgr_chord
+                || layout_symbol)
     }
 }
 
 struct AppliedHotkey {
     hotkey: HotKey,
     action: HotkeyAction,
+    hold: Option<HoldPlan>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RegisteredHotkey {
     pub(super) action: HotkeyAction,
+    pub(super) hold: Option<HoldPlan>,
     pub(super) physical_chord: Option<Combo>,
 }
 
@@ -85,12 +92,12 @@ impl HotkeyManager {
         self.bindings.get(&event.id())
     }
 
-    pub(super) fn continuous_registrations(
-        &self,
-    ) -> impl Iterator<Item = (u32, &RegisteredHotkey)> {
+    pub(super) fn held_registrations(&self) -> impl Iterator<Item = (u32, &RegisteredHotkey)> {
         self.bindings
             .iter()
-            .filter(|(_, registration)| registration.action.continuous)
+            .filter(|(_, registration)| {
+                registration.action.continuous || registration.hold.is_some()
+            })
             .map(|(id, registration)| (*id, registration))
     }
 
@@ -200,17 +207,19 @@ impl HotkeyManager {
         let Some(existing) = self.applied.get_mut(key) else {
             return;
         };
-        if existing.action == planned.action {
+        if existing.action == planned.action && existing.hold == planned.hold {
             return;
         }
         self.bindings.insert(
             existing.hotkey.id(),
             RegisteredHotkey {
                 action: planned.action.clone(),
+                hold: planned.hold.clone(),
                 physical_chord: parse_combo(key),
             },
         );
         existing.action = planned.action;
+        existing.hold = planned.hold;
         log_registered_hotkey(key, &existing.action);
     }
 
@@ -253,6 +262,7 @@ fn register_via(
         binding_key,
         hotkey,
         action,
+        hold,
     } = registration;
     if let Err(error) = manager.register(hotkey) {
         let msg = error.to_string();
@@ -286,11 +296,19 @@ fn register_via(
         hotkey.id(),
         RegisteredHotkey {
             action: action.clone(),
+            hold: hold.clone(),
             physical_chord: parse_combo(&binding_key),
         },
     );
     log_registered_hotkey(&binding_key, &action);
-    applied.insert(binding_key, AppliedHotkey { hotkey, action });
+    applied.insert(
+        binding_key,
+        AppliedHotkey {
+            hotkey,
+            action,
+            hold,
+        },
+    );
     None
 }
 
@@ -332,6 +350,22 @@ mod tests {
                 action: "open".into(),
                 continuous,
             },
+            hold: None,
+        }
+    }
+
+    fn planned_hold(key: &str) -> PlannedRegistration {
+        let target = super::super::hold::Target {
+            plugin_uid: crate::plugins::PluginUid::new("plugin"),
+            action: "open".into(),
+        };
+        PlannedRegistration {
+            hold: Some(HoldPlan {
+                hold_ms: 1000,
+                hold: target,
+                tap: None,
+            }),
+            ..planned(key, false)
         }
     }
 
@@ -353,5 +387,12 @@ mod tests {
             );
             assert!(RegistrationScope::All.admits(&registration));
         }
+    }
+
+    #[test]
+    fn the_one_shot_backup_never_registers_a_hold_chord() {
+        let registration = planned_hold("Shift+Super+S");
+        assert!(!RegistrationScope::OneShotBackup.admits(&registration));
+        assert!(RegistrationScope::All.admits(&registration));
     }
 }

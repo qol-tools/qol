@@ -78,8 +78,8 @@ impl KeyMatcher {
         self.active_continuous
             .drain()
             .map(|(_, (binding, _))| CaptureEvent {
+                phase: binding.forced_stop(),
                 binding,
-                phase: Phase::STOP,
             })
             .collect()
     }
@@ -114,7 +114,7 @@ impl KeyMatcher {
             return MatchOutcome::default();
         };
         self.swallowed_keys.insert(observed.key);
-        if binding.continuous {
+        if binding.reports_release() {
             self.active_continuous
                 .insert(observed.key, (binding.clone(), Instant::now()));
         }
@@ -126,7 +126,7 @@ impl KeyMatcher {
 
     fn heartbeat(&mut self, key: u16) -> Option<(Binding, Phase)> {
         let (binding, last_heartbeat) = self.active_continuous.get_mut(&key)?;
-        if last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
+        if !binding.continuous || last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
             return None;
         }
         *last_heartbeat = Instant::now();
@@ -257,6 +257,21 @@ mod tests {
             action: action.into(),
             raw_key: key.into(),
             continuous: false,
+            hold: None,
+        }
+    }
+
+    fn hold_binding_for(key: &str, plugin: &str, action: &str) -> Binding {
+        Binding {
+            hold: Some(crate::hotkeys::hold::HoldPlan {
+                hold_ms: 1000,
+                hold: crate::hotkeys::hold::Target {
+                    plugin_uid: crate::plugins::PluginUid::new(plugin),
+                    action: action.into(),
+                },
+                tap: None,
+            }),
+            ..binding_for(key, plugin, action)
         }
     }
 
@@ -406,6 +421,40 @@ mod tests {
         assert_eq!(stopped[0].phase, Phase::STOP);
         assert_eq!(stopped[0].binding.plugin_uid.as_str(), "first");
         assert_eq!(stopped[0].binding.action, "open");
+    }
+
+    #[test]
+    fn a_hold_hotkey_reports_press_and_release_and_no_heartbeats() {
+        let mut matcher = matcher(vec![hold_binding_for("Super+R", "first", "up")]);
+        let observed = combo_for("Super+R");
+
+        let press = matcher.match_event(KeyTransition::Press, &observed);
+        let repeat = matcher.match_event(KeyTransition::Repeat, &observed);
+        let release = matcher.match_event(KeyTransition::Release, &observed);
+
+        let phase = |outcome: MatchOutcome| outcome.fired.map(|(_, phase)| phase);
+        assert_eq!(phase(press), Some(Phase::START));
+        assert!(repeat.swallow);
+        assert_eq!(phase(repeat), None);
+        assert!(release.swallow);
+        assert_eq!(phase(release), Some(Phase::STOP));
+        assert!(!matcher.is_swallowing(observed.key));
+    }
+
+    #[test]
+    fn reload_cancels_a_pressed_hold_hotkey() {
+        let mut matcher = matcher(vec![hold_binding_for("Super+R", "first", "up")]);
+        let observed = combo_for("Super+R");
+        matcher.match_event(KeyTransition::Press, &observed);
+
+        let cancelled = matcher.reload(Vec::new());
+
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].phase, Phase::CANCEL);
+        assert!(matcher
+            .match_event(KeyTransition::Release, &observed)
+            .fired
+            .is_none());
     }
 
     #[test]

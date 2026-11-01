@@ -1,5 +1,7 @@
 pub(crate) mod capture;
 mod catalog;
+pub(crate) mod hold;
+mod hold_resolver;
 mod listener;
 mod manager;
 mod parser;
@@ -22,20 +24,28 @@ pub use reload::trigger_reload;
 pub use takeover::{restore_all as restore_desktop_bindings, RestoreSummary};
 pub use types::{HotkeyAction, HotkeyBinding, HotkeyConfig};
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 type ContinuousActions = HashSet<(crate::plugins::PluginUid, String)>;
 
+fn chord_id(key: &str) -> Option<u32> {
+    parser::parse_hotkey(key).map(|hotkey| hotkey.id())
+}
+
 pub(crate) fn duplicate_enabled_chord(config: &HotkeyConfig) -> Option<String> {
-    let mut registered = HashSet::new();
-    config
-        .hotkeys
-        .iter()
-        .filter(|binding| binding.enabled)
-        .filter_map(|binding| parser::parse_hotkey(&binding.key).map(|hotkey| (binding, hotkey)))
-        .find_map(|(binding, hotkey)| {
-            (!registered.insert(hotkey.id())).then(|| binding.key.clone())
-        })
+    hold::duplicate_slot(config, chord_id)
+}
+
+pub(crate) fn invalid_hold(
+    config: &HotkeyConfig,
+    plugin_manager: &std::sync::Mutex<crate::plugins::PluginManager>,
+) -> Option<String> {
+    let Ok(continuous) = continuous_actions(plugin_manager) else {
+        return Some("Hotkeys cannot be checked right now. Try again.".to_string());
+    };
+    hold::invalid_hold(config, chord_id, |binding| {
+        continuous.contains(&(binding.plugin_uid.clone(), binding.action.clone()))
+    })
 }
 
 pub fn start_recording(session_id: u64, events: std::sync::Arc<crate::daemon::EventBus>) -> bool {
@@ -54,24 +64,85 @@ pub fn cancel_recording(session_id: u64) {
     capture::cancel_recording(session_id);
 }
 
+enum ChordRole {
+    Leader(hold::HoldPlan),
+    Folded,
+}
+
 pub(crate) fn build_capture_bindings(
     config: HotkeyConfig,
     continuous_actions: &ContinuousActions,
 ) -> Vec<capture::Binding> {
-    config
+    let enabled: Vec<HotkeyBinding> = config
         .hotkeys
         .into_iter()
-        .filter(|h| h.enabled)
-        .map(|h| {
-            let continuous = continuous_actions.contains(&(h.plugin_uid.clone(), h.action.clone()));
-            capture::Binding {
-                combo: capture::parse_combo(&h.key),
-                plugin_uid: h.plugin_uid,
-                action: h.action,
-                raw_key: h.key,
-                continuous,
-            }
+        .filter(|binding| binding.enabled)
+        .collect();
+    let combos: Vec<Option<capture::Combo>> = enabled
+        .iter()
+        .map(|binding| capture::parse_combo(&binding.key))
+        .collect();
+    let continuous: Vec<bool> = enabled
+        .iter()
+        .map(|binding| {
+            continuous_actions.contains(&(binding.plugin_uid.clone(), binding.action.clone()))
         })
+        .collect();
+
+    let mut by_chord: HashMap<capture::Combo, Vec<usize>> = HashMap::new();
+    for (index, combo) in combos.iter().enumerate() {
+        if let Some(combo) = combo {
+            by_chord.entry(combo.clone()).or_default().push(index);
+        }
+    }
+    let mut roles: HashMap<usize, ChordRole> = HashMap::new();
+    for indices in by_chord.values() {
+        let members: Vec<hold::ChordMember> = indices
+            .iter()
+            .map(|&index| hold::ChordMember {
+                target: hold::Target::of(&enabled[index]),
+                hold_ms: enabled[index].hold_ms,
+                continuous: continuous[index],
+            })
+            .collect();
+        let Some(timed) = hold::timed_chord(&members) else {
+            continue;
+        };
+        for &index in indices {
+            roles.insert(index, ChordRole::Folded);
+        }
+        roles.insert(indices[timed.leader], ChordRole::Leader(timed.plan));
+    }
+
+    enabled
+        .into_iter()
+        .zip(combos)
+        .zip(continuous)
+        .enumerate()
+        .filter_map(
+            |(index, ((binding, combo), continuous))| match roles.remove(&index) {
+                Some(ChordRole::Folded) => None,
+                Some(ChordRole::Leader(plan)) => {
+                    let primary = plan.primary().clone();
+                    Some(capture::Binding {
+                        combo,
+                        plugin_uid: primary.plugin_uid,
+                        action: primary.action,
+                        raw_key: binding.key,
+                        continuous: false,
+                        hold: Some(plan),
+                    })
+                }
+                None => Some(capture::Binding {
+                    combo,
+                    plugin_uid: binding.plugin_uid,
+                    action: binding.action,
+                    raw_key: binding.key,
+                    continuous,
+                    hold: None,
+                }),
+            },
+        )
         .collect()
 }
 
@@ -88,44 +159,37 @@ pub fn start_capture(
     });
 
     let plugin_manager_for_fire = plugin_manager.clone();
+    let plugin_manager_for_holds = plugin_manager.clone();
+    let resolver = hold_resolver::HoldResolver::spawn(move |decision| match decision {
+        hold::Fire::Tap(target) => {
+            run_one_shot(&plugin_manager_for_holds, &target, "one-shot");
+        }
+        hold::Fire::Hold(target) => {
+            run_one_shot(&plugin_manager_for_holds, &target, "hold");
+        }
+    })?;
     let on_fire: capture::OnFire = Box::new(move |event| {
-        let plugin_id = match plugin_manager_for_fire.lock() {
-            Ok(manager) => manager
-                .identity_index()
-                .display_for(&event.binding.plugin_uid)
-                .map(|d| d.id.as_str().to_owned()),
-            Err(_) => {
-                log::error!("hotkey capture: plugin manager lock failed");
-                return;
-            }
-        };
-        let Some(plugin_id) = plugin_id else {
-            log::warn!(
-                "hotkey capture: no plugin found for uid {}",
-                event.binding.plugin_uid.as_str()
-            );
+        if event.binding.hold.is_some() {
+            resolver.feed(event);
             return;
+        }
+        let target = hold::Target {
+            plugin_uid: event.binding.plugin_uid.clone(),
+            action: event.binding.action.clone(),
         };
         if event.binding.continuous {
-            let phase = event.phase.as_str();
+            let plugin_id = match plugin_id_for(&plugin_manager_for_fire, &target) {
+                Some(plugin_id) => plugin_id,
+                None => return,
+            };
             action_executor::execute_action_with_input(
                 &plugin_manager_for_fire,
                 &plugin_id,
                 &event.binding.action,
-                serde_json::json!({ "phase": phase }),
+                serde_json::json!({ "phase": event.phase.as_str() }),
             );
         } else if event.phase == capture::Phase::START {
-            qol_runtime::probe!(
-                "HOTKEY_DISPATCH",
-                "source=native-capture kind=one-shot uid={} action={}",
-                qol_runtime::probe::token(event.binding.plugin_uid.as_str()),
-                qol_runtime::probe::token(&event.binding.action)
-            );
-            action_executor::execute_action(
-                &plugin_manager_for_fire,
-                &plugin_id,
-                &event.binding.action,
-            );
+            run_one_shot(&plugin_manager_for_fire, &target, "one-shot");
         }
     });
 
@@ -144,6 +208,42 @@ pub fn start_capture(
     #[cfg(debug_assertions)]
     trace_native_bindings("startup", &startup_bindings);
     Ok(())
+}
+
+type SharedPluginManager = std::sync::Arc<std::sync::Mutex<crate::plugins::PluginManager>>;
+
+fn plugin_id_for(plugin_manager: &SharedPluginManager, target: &hold::Target) -> Option<String> {
+    let plugin_id = match plugin_manager.lock() {
+        Ok(manager) => manager
+            .identity_index()
+            .display_for(&target.plugin_uid)
+            .map(|d| d.id.as_str().to_owned()),
+        Err(_) => {
+            log::error!("hotkey capture: plugin manager lock failed");
+            return None;
+        }
+    };
+    if plugin_id.is_none() {
+        log::warn!(
+            "hotkey capture: no plugin found for uid {}",
+            target.plugin_uid.as_str()
+        );
+    }
+    plugin_id
+}
+
+fn run_one_shot(plugin_manager: &SharedPluginManager, target: &hold::Target, kind: &str) {
+    let Some(plugin_id) = plugin_id_for(plugin_manager, target) else {
+        return;
+    };
+    qol_runtime::probe!(
+        "HOTKEY_DISPATCH",
+        "source=native-capture kind={} uid={} action={}",
+        kind,
+        qol_runtime::probe::token(target.plugin_uid.as_str()),
+        qol_runtime::probe::token(&target.action)
+    );
+    crate::plugins::action_executor::execute_action(plugin_manager, &plugin_id, &target.action);
 }
 
 pub fn start_capture_with_fallback(
@@ -189,7 +289,14 @@ fn load_bindings_for_capture(
 ) -> anyhow::Result<Vec<capture::Binding>> {
     let manager = HotkeyManager::new()?;
     let config = manager.load_config()?;
-    let continuous_actions = plugin_manager
+    let continuous_actions = continuous_actions(plugin_manager)?;
+    Ok(build_capture_bindings(config, &continuous_actions))
+}
+
+fn continuous_actions(
+    plugin_manager: &std::sync::Mutex<crate::plugins::PluginManager>,
+) -> anyhow::Result<ContinuousActions> {
+    Ok(plugin_manager
         .lock()
         .map_err(|_| anyhow::anyhow!("plugin manager lock failed"))?
         .plugins()
@@ -202,8 +309,7 @@ fn load_bindings_for_capture(
                 .filter(|(_, action)| action.continuous)
                 .map(move |(action_id, _)| (uid.clone(), action_id.clone()))
         })
-        .collect();
-    Ok(build_capture_bindings(config, &continuous_actions))
+        .collect())
 }
 
 #[cfg(debug_assertions)]

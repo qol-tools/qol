@@ -12,6 +12,8 @@ const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const CLOSED_KEY = 'pane-closed'
+const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -124,6 +126,26 @@ const rememberClosed = async ($: EngineInterface): Promise<void> => {
   try {
     await $.store.set(CLOSED_KEY, true)
   } catch {}
+}
+
+const toggleBoard = async ($: EngineInterface): Promise<string> => {
+  const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+  if (isShown) {
+    await rememberClosed($)
+    await $.ui.close({ id: PANE })
+    return 'Fork board closed. qols board or /board opens it again.'
+  }
+  await $.store.delete(CLOSED_KEY).catch(() => {})
+  const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
+  return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
+}
+
+const clearTypedToggle = ($: EngineInterface): void => {
+  $.clock.after(CLEAR_TYPED_MS, () => {
+    void (async () => {
+      if (TYPED_TOGGLE.test((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+    })().catch(() => {})
+  })
 }
 
 const persist = async ($: EngineInterface): Promise<void> => {
@@ -432,16 +454,15 @@ export const register: Register = on => {
 
   on('command.run', { command: PANE }, async $ => {
     isAutoOpenPending = false
-    const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
-    if (isShown) {
-      await rememberClosed($)
-      await $.ui.close({ id: PANE })
-      return { text: 'Fork board closed. /board opens it again.' }
-    }
-    await $.store.delete(CLOSED_KEY).catch(() => {})
-    const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
-    return { text: opened.isPlaced ? 'Fork board opened. /board closes it.' : `The fork board waits for room: ${opened.reason}` }
+    return { text: await toggleBoard($) }
   }).catch(() => ({ text: 'The fork board could not open.' }))
+
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
+    isAutoOpenPending = false
+    clearTypedToggle($)
+    return { drop: await toggleBoard($) }
+  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'The fork board could not open.' }))
 
   on('ui.close', async ($, e, next) => {
     const closed = await next(e)
@@ -551,7 +572,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · /board or ctrl+x x closes it'
+    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const summary = needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`
     const close = (
       <Button key="close" plain dimColor {...(isFocused ? { hotkey: 'x' } : {})} onPress={async () => {

@@ -410,7 +410,7 @@ mod tests {
                 &live,
                 "qol-alt-tab",
                 "qol-alt-tab",
-                std::time::Duration::from_millis(50),
+                std::time::Duration::from_secs(2),
             )
             .await
             .unwrap_err();
