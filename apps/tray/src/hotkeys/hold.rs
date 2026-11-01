@@ -173,7 +173,7 @@ pub(crate) fn invalid_hold(
     let continuous_chords: HashSet<u32> = config
         .hotkeys
         .iter()
-        .filter(|binding| binding.enabled && is_continuous(*binding))
+        .filter(|binding| binding.enabled && is_continuous(binding))
         .filter_map(|binding| chord_id(&binding.key))
         .collect();
     config
@@ -182,7 +182,7 @@ pub(crate) fn invalid_hold(
         .filter(|binding| binding.hold_ms.is_some())
         .find(|binding| {
             binding.enabled
-                && (is_continuous(*binding)
+                && (is_continuous(binding)
                     || chord_id(&binding.key).is_some_and(|id| continuous_chords.contains(&id)))
         })
         .map(|binding| {
