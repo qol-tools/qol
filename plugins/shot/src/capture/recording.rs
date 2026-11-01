@@ -26,6 +26,21 @@ enum StartedFeedback {
 }
 
 pub fn toggle_recording(config: &Config) -> Result<()> {
+    toggle_recording_area(config, || {
+        platform::select_region(crate::capture::space::CaptureKind::Recording, None)
+    })
+}
+
+pub fn toggle_monitor_recording(config: &Config) -> Result<()> {
+    toggle_recording_area(config, || {
+        crate::capture::monitor::active_monitor_rect().map(Some)
+    })
+}
+
+fn toggle_recording_area(
+    config: &Config,
+    pick_area: impl FnOnce() -> Result<Option<Rect>>,
+) -> Result<()> {
     trace_record_config("cli", config);
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli");
     if stop_active_recording_if_any(config)? {
@@ -39,9 +54,7 @@ pub fn toggle_recording(config: &Config) -> Result<()> {
     };
 
     qol_runtime::probe!("SHOT_SELECT_REQUEST", "source=cli");
-    let Some(selected) =
-        platform::select_region(crate::capture::space::CaptureKind::Recording, None)?
-    else {
+    let Some(selected) = pick_area()? else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=cli result=select-cancel");
         return Ok(());
     };

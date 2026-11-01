@@ -4,6 +4,7 @@ pub(crate) mod completion;
 pub(crate) mod frozen_frame;
 pub(crate) mod gate;
 pub(crate) mod geometry;
+pub(crate) mod monitor;
 pub(crate) mod output;
 pub mod recording;
 pub mod screenshot;

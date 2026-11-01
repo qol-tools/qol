@@ -244,7 +244,7 @@ fn dictionary_rect(dictionary: *const c_void, key: *const c_void) -> Option<Rect
     (rect.w > 0 && rect.h > 0).then_some(rect)
 }
 
-fn rect_from_bounds(bounds: gpui::Bounds<Pixels>) -> Rect {
+pub(super) fn rect_from_bounds(bounds: gpui::Bounds<Pixels>) -> Rect {
     Rect {
         x: f32::from(bounds.origin.x).round() as i32,
         y: f32::from(bounds.origin.y).round() as i32,

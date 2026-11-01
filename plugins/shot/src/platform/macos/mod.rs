@@ -15,7 +15,7 @@ pub use recording::{
     capture_screenshot, recording_format, recording_started, recording_stopped, start_capture,
     stop_capture,
 };
-pub use selector::{select_region, select_region_in_app};
+pub use selector::{monitor_capture_rect, select_region, select_region_in_app};
 
 pub fn pre_create_selector(_cx: &mut gpui::App) {}
 

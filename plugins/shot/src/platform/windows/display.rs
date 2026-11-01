@@ -260,6 +260,32 @@ mod tests {
     }
 
     #[test]
+    fn a_monitor_maps_to_the_logical_rect_the_selector_reports_for_it() {
+        let displays = [
+            display(rect(0, 213, 1920, 1080), 1.0),
+            display(rect(1920, 0, 3840, 2160), 2.0),
+            display(rect(-1920, 0, 1920, 1080), 1.25),
+        ];
+        let cases = [
+            ("unscaled, offset down", 0, rect(0, 213, 1920, 1080)),
+            ("scaled at 200%", 1, rect(1920, 0, 1920, 1080)),
+            (
+                "scaled at 125%, negative origin",
+                2,
+                rect(-1920, 0, 1536, 864),
+            ),
+        ];
+        for (name, index, expected) in cases {
+            assert_eq!(
+                logical_rect(displays[index].physical, &displays),
+                Some(expected),
+                "{name}"
+            );
+            assert_eq!(displays[index].logical(), expected, "{name}");
+        }
+    }
+
+    #[test]
     fn a_scaled_monitor_never_overlaps_its_neighbour() {
         let displays = [
             display(rect(0, 0, 1280, 800), 1.0),

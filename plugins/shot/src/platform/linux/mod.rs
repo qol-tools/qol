@@ -688,6 +688,10 @@ fn trace_default_target(
     let _ = (target, selector_bounds);
 }
 
+pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
+    positive_rect(rect_from_bounds(monitor))
+}
+
 fn rect_from_bounds(bounds: Bounds<Pixels>) -> Rect {
     Rect {
         x: f32::from(bounds.origin.x).round() as i32,
@@ -751,8 +755,8 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        capturable_window_type, framed_rect, initial_default_target, parse_xdotool_geometry,
-        selector_monitor_bounds, usable_target,
+        capturable_window_type, framed_rect, initial_default_target, monitor_capture_rect,
+        parse_xdotool_geometry, selector_monitor_bounds, usable_target,
     };
     use crate::ui::region_selector::{DetectedTarget, HoverTarget, SnapshotTargets};
     use crate::Rect;
@@ -888,6 +892,49 @@ mod tests {
             vec![viewport],
             "the viewport remains the last-resort fallback when topology is unavailable"
         );
+    }
+
+    #[test]
+    fn monitor_capture_rect_is_the_desktop_pixel_rect_of_the_monitor() {
+        let monitor = |x: f32, y: f32, width: f32, height: f32| {
+            Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+        };
+        let rect = |x: i32, y: i32, w: i32, h: i32| Some(Rect { x, y, w, h });
+        let cases = [
+            (
+                "left monitor, offset down",
+                monitor(0.0, 213.0, 1920.0, 1080.0),
+                rect(0, 213, 1920, 1080),
+            ),
+            (
+                "right monitor, taller than its neighbour",
+                monitor(1920.0, 0.0, 2560.0, 1440.0),
+                rect(1920, 0, 2560, 1440),
+            ),
+            (
+                "fractional runtime bounds round to whole pixels",
+                monitor(1919.6, 0.4, 2559.7, 1440.2),
+                rect(1920, 0, 2560, 1440),
+            ),
+            (
+                "negative origin to the left of the primary",
+                monitor(-1920.0, 0.0, 1920.0, 1080.0),
+                rect(-1920, 0, 1920, 1080),
+            ),
+            (
+                "zero width has no capture area",
+                monitor(0.0, 0.0, 0.0, 1080.0),
+                None,
+            ),
+            (
+                "zero height has no capture area",
+                monitor(0.0, 0.0, 1920.0, 0.0),
+                None,
+            ),
+        ];
+        for (name, monitor, expected) in cases {
+            assert_eq!(monitor_capture_rect(monitor), expected, "case: {name}");
+        }
     }
 
     #[test]

@@ -73,7 +73,7 @@ function automatedScenarios(binary, commands) {
 
   const help = run(binary, ["help"]);
   commands.push(help);
-  const expectedCommands = ["copy", "copy-path", "doctor", "preview", "record", "screenshot", "settings"];
+  const expectedCommands = ["copy", "copy-path", "doctor", "preview", "record", "record-monitor", "screenshot", "screenshot-monitor", "settings"];
   const missingCommands = expectedCommands.filter((command) => !new RegExp(`^  ${command}\\s`, "m").test(help.stdout));
 
   return [

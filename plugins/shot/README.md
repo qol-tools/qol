@@ -14,6 +14,8 @@ Install from the [QoL Tray](../../apps/tray) plugin store.
 
 Binds `qol-shot screenshot` and `qol-shot record` to hotkeys, and opens its own panel with `qol-shot settings`.
 
+`qol-shot screenshot-monitor` and `qol-shot record-monitor` do the same for the whole active monitor, with no region to select. Bind them to hotkeys as Screenshot Active Monitor and Record Active Monitor.
+
 On Linux and Windows, drag the screenshot editor's edges to resize it. The screenshot scales to fill the window, and the editor reopens at the size and place you left it.
 
 ## License
