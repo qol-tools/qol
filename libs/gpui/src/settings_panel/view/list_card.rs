@@ -16,13 +16,15 @@ use super::super::rows::{
 };
 use super::super::SettingsDestination;
 use super::{
-    align_to_step, horizontal_step_direction, round_to_step_precision, slider_drag_track,
-    slider_fraction, status_tone_color, Level, LevelHeader, ListItemCard, SettingsPanelView,
+    horizontal_step_direction, slider_drag_track, slider_fraction, status_tone_color, Level,
+    LevelHeader, ListItemCard, SettingsPanelView,
 };
 use crate::kit::Kit;
 use crate::phantom_nav::NavAxis;
 use crate::pictures::PictureContext;
 use crate::search_mark::MarkState;
+use crate::settings_panel::number_slider::numbers::round_to_step_precision;
+pub(super) use crate::settings_panel::number_slider::numbers::slider_value_from_fraction;
 use crate::status_indicator::StatusTone;
 
 pub(super) const SLIDER_DISPATCH_INTERVAL: std::time::Duration =
@@ -994,11 +996,6 @@ pub(super) fn stepped_slider_value(
 ) -> f64 {
     let next = round_to_step_precision(current + direction * step, step);
     next.clamp(min, max)
-}
-
-pub(super) fn slider_value_from_fraction(min: f64, max: f64, step: f64, fraction: f32) -> f64 {
-    let value = min + f64::from(fraction) * (max - min);
-    align_to_step(value, Some(min), Some(max), step)
 }
 
 pub(super) fn slider_percent_label(min: f64, max: f64, value: f64) -> String {

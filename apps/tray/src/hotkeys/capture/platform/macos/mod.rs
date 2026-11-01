@@ -296,6 +296,7 @@ mod tests {
             action: "open".into(),
             raw_key: key.into(),
             continuous: false,
+            hold: None,
         }
     }
 

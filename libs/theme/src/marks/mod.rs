@@ -1,3 +1,5 @@
+mod solid;
+
 use crate::Ground;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -135,6 +137,10 @@ impl Mark {
 
     pub fn markup(self) -> String {
         self.document("currentColor")
+    }
+
+    pub fn solid_markup(self) -> Option<&'static str> {
+        solid::markup(self)
     }
 
     pub fn svg(self, line: u32) -> String {
@@ -344,5 +350,65 @@ mod tests {
         );
         let band = crate::Grounds::from_theme(theme.mode, theme.system).band;
         assert_eq!(Mark::line_on(&band), band.ink);
+    }
+
+    const RAIL: [Mark; 28] = [
+        Mark::Settings,
+        Mark::Notifications,
+        Mark::Shortcuts,
+        Mark::Hotkeys,
+        Mark::Updates,
+        Mark::LinkedDevices,
+        Mark::Profiles,
+        Mark::Plugins,
+        Mark::AltTab,
+        Mark::Bluetooth,
+        Mark::CliSessions,
+        Mark::Clipboard,
+        Mark::Controllers,
+        Mark::Display,
+        Mark::Explorer,
+        Mark::Input,
+        Mark::KeyRemap,
+        Mark::Launcher,
+        Mark::Lights,
+        Mark::Memory,
+        Mark::OsThemes,
+        Mark::Pointz,
+        Mark::RemoveApp,
+        Mark::Session,
+        Mark::Shot,
+        Mark::Sound,
+        Mark::Voice,
+        Mark::WindowActions,
+    ];
+
+    #[test]
+    fn every_rail_mark_has_a_solid_16_px_drawing() {
+        for mark in Mark::ALL {
+            let solid = mark.solid_markup();
+            assert_eq!(solid.is_some(), RAIL.contains(&mark), "{}", mark.name());
+            if let Some(svg) = solid {
+                assert!(
+                    svg.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16""#),
+                    "{}",
+                    mark.name()
+                );
+                assert!(svg.ends_with("</svg>"), "{}", mark.name());
+            }
+        }
+    }
+
+    #[test]
+    fn solid_marks_take_the_ink_and_keep_their_masks_black_and_white() {
+        for mark in RAIL {
+            let svg = mark.solid_markup().unwrap();
+            let (head, drawing) = svg.split_once("</defs>").unwrap_or(("", svg));
+            assert!(drawing.contains("currentColor"), "{}", mark.name());
+            assert!(!drawing.contains("#000"), "{}", mark.name());
+            if let Some((_, mask)) = head.split_once("<mask") {
+                assert!(!mask.contains("currentColor"), "{}", mark.name());
+            }
+        }
     }
 }

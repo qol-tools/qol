@@ -17,6 +17,7 @@ pub(super) fn bound_on_every_key(
         };
         bindings.iter().any(|binding| {
             binding.enabled
+                && binding.hold_ms.is_none()
                 && binding.plugin_uid == *uid
                 && binding.action == action
                 && normalize(&binding.key).as_deref() == Some(wanted.as_str())
@@ -53,6 +54,7 @@ mod tests {
             action: action.to_string(),
             enabled,
             os_only: false,
+            hold_ms: None,
         }
     }
 
@@ -77,6 +79,22 @@ mod tests {
         assert!(!bound_on_every_key(
             &keys(&["print", "shift+print"]),
             &bindings,
+            &uid,
+            "screenshot",
+            lower
+        ));
+    }
+
+    #[test]
+    fn a_hold_binding_does_not_bind_the_tap_key() {
+        let uid = PluginUid::new("shot");
+        let held = HotkeyBinding {
+            hold_ms: Some(1000),
+            ..binding("a", "Print", "shot", "screenshot", true)
+        };
+        assert!(!bound_on_every_key(
+            &keys(&["print"]),
+            &[held],
             &uid,
             "screenshot",
             lower

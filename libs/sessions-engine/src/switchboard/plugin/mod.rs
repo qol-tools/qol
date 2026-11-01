@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat, runs each fork's pull request watcher under CLI Sessions and gives each fork its watcher's result.",
   "types": "./types/index.d.ts"
 }
@@ -88,7 +88,9 @@ mod tests {
             "const FORK = 'project-fork'",
             "on('agent.spawn', { subagentType: FORK }, ($, e, next) => {",
             "if (e.resume !== undefined) return next(e)",
-            "next({ ...e, cwd: project[1] })",
+            "next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })",
+            "on('session.send', async ($, e, next) => {",
+            "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
             "next.called ? next(e) : { deny:",
             "const PROJECT = /^\\s*Project:\\s*(.+?)\\s*$/",
         ] {
@@ -104,6 +106,7 @@ mod tests {
             "const takeover = await takeOver($, target, e.message)",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "if (stopped !== undefined) await succeed($, stopped, agentId)",
+            "const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
@@ -132,6 +135,7 @@ mod tests {
             "$.session.send({ to: { agentId: entry.agentId }, text })",
             "on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
+            "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
             "on('turn.start', async ($, e, next) => {",
         ] {
             assert!(MODULE.contains(needle), "{needle}");

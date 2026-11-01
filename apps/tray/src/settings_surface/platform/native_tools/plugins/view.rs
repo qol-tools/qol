@@ -11,7 +11,7 @@ use gpui::{
 use qol_gpui::deck;
 use qol_gpui::key::Key;
 use qol_gpui::kit::kit;
-use qol_gpui::scroll_list::{wheel_steps, ScrollList};
+use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
@@ -21,7 +21,7 @@ use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
     settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
-    SettingsDestination, SettingsGroupHeader, SettingsRow,
+    SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
 
@@ -48,6 +48,7 @@ pub(super) struct PluginsView {
     field: TextField,
     selected: usize,
     list: ScrollList,
+    list_height: ListHeight,
     last_render: Option<Instant>,
     activation: Option<Subscription>,
     body_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -78,6 +79,7 @@ impl PluginsView {
             field: TextField::new(),
             selected: 1,
             list: ScrollList::new(MAX_VISIBLE),
+            list_height: ListHeight::default(),
             last_render: None,
             activation: None,
             body_bounds: Rc::new(Cell::new(None)),
@@ -473,15 +475,24 @@ impl PluginsView {
                 cx,
             ));
         }
-        list.child(kit().scroll_cue(
-            ScrollSource::Window {
-                first: range.start,
-                shown: range.len(),
-                total,
-            },
-            kit().grounds.pane,
-        ))
-        .into_any_element()
+        list.child(self.list_height.recorder(cx.weak_entity()))
+            .child(kit().scroll_cue(
+                ScrollSource::Window {
+                    first: range.start,
+                    shown: range.len(),
+                    total,
+                },
+                kit().grounds.pane,
+            ))
+            .into_any_element()
+    }
+}
+
+fn row_height(row: &Row) -> f32 {
+    match row.kind {
+        RowKind::Header => SettingsGroupHeader::height_with_detail(),
+        RowKind::Add => qol_theme::HEIGHT_RULE_ROW,
+        _ => qol_theme::HEIGHT_SETTING_ROW,
     }
 }
 
@@ -538,6 +549,10 @@ impl Render for PluginsView {
         let focused = self.focus.is_focused(window);
         let rows = self.rows();
         self.sync_selection(&rows);
+        self.list
+            .fit_to(&self.list_height, rows.len(), SETTINGS_LIST_GAP, |index| {
+                row_height(&rows[index])
+            });
         let body = if self.snapshot.is_none() {
             settings_page()
                 .child(settings_busy_message(

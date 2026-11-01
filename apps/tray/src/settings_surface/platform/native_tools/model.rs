@@ -3,6 +3,9 @@ use std::collections::HashSet;
 use gpui::{Keystroke, Modifiers};
 use qol_hotkeys::grammar::{self, Hotkey, Modifier};
 
+use qol_gpui::settings_panel::number_slider::{number_key, NumberEdit, NumberKey, NumberSpec};
+
+use crate::hotkeys::hold::{clamp_hold_ms, HOLD_MS_MAX, HOLD_MS_STEP};
 use crate::hotkeys::HotkeyBinding;
 use crate::shortcuts::model::{AppRef, Shortcut, ShortcutAction, ShortcutSource};
 
@@ -318,6 +321,15 @@ impl ShortcutDraft {
 }
 
 pub(super) const MANAGED_FIELD_COUNT: usize = 2;
+pub(super) const HOTKEY_FIELDS: usize = 6;
+pub(super) const HOLD_FIELD: usize = 4;
+pub(super) const OS_ONLY_FIELD: usize = 5;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HoldKey {
+    Passed,
+    Held { glow: bool },
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct HotkeyDraft {
@@ -327,6 +339,8 @@ pub(super) struct HotkeyDraft {
     pub(super) key: String,
     pub(super) enabled: bool,
     pub(super) os_only: bool,
+    pub(super) hold_ms: Option<u32>,
+    pub(super) hold_edit: Option<NumberEdit>,
     pub(super) selected: usize,
     pub(super) recording: bool,
     pub(super) capture_session: Option<u64>,
@@ -352,6 +366,8 @@ impl HotkeyDraft {
             key: String::new(),
             enabled: true,
             os_only: false,
+            hold_ms: None,
+            hold_edit: None,
             selected: 3,
             recording: false,
             capture_session: None,
@@ -366,6 +382,8 @@ impl HotkeyDraft {
             key: hotkey.key.clone(),
             enabled: hotkey.enabled,
             os_only: hotkey.os_only,
+            hold_ms: hotkey.hold_ms,
+            hold_edit: None,
             selected: 0,
             recording: false,
             capture_session: None,
@@ -394,6 +412,60 @@ impl HotkeyDraft {
             && self.action == other.action
             && self.key == other.key
             && self.enabled == other.enabled
+            && self.hold_ms == other.hold_ms
+    }
+
+    pub(super) fn hold_number(&self) -> NumberSpec {
+        NumberSpec {
+            value: f64::from(self.hold_ms.unwrap_or(0)),
+            min: Some(0.0),
+            max: Some(f64::from(HOLD_MS_MAX)),
+            step: Some(f64::from(HOLD_MS_STEP)),
+        }
+    }
+
+    pub(super) fn set_hold(&mut self, value: f64) {
+        let ms = value.round().clamp(0.0, f64::from(HOLD_MS_MAX)) as u32;
+        self.hold_ms = (ms > 0).then(|| clamp_hold_ms(ms));
+    }
+
+    pub(super) fn begin_hold_edit(&mut self) {
+        self.hold_edit = Some(NumberEdit::begin(self.hold_number().value));
+    }
+
+    pub(super) fn commit_hold_edit(&mut self) {
+        let number = self.hold_number();
+        if let Some(value) = self.hold_edit.take().and_then(|edit| edit.value(&number)) {
+            self.set_hold(value);
+        }
+    }
+
+    pub(super) fn hold_key(&mut self, key: &str, key_char: Option<&str>, coarse: bool) -> HoldKey {
+        let number = self.hold_number();
+        let Some(edit) = self.hold_edit.as_mut() else {
+            if matches!(key, "enter" | "return" | "space") {
+                self.begin_hold_edit();
+                return HoldKey::Held { glow: false };
+            }
+            return HoldKey::Passed;
+        };
+        match number_key(key, key_char, coarse) {
+            Some(NumberKey::Apply) => {
+                self.commit_hold_edit();
+                HoldKey::Held { glow: false }
+            }
+            Some(NumberKey::Restore) => {
+                self.hold_edit = None;
+                HoldKey::Held { glow: false }
+            }
+            Some(key) => HoldKey::Held {
+                glow: edit.press(&key, &number),
+            },
+            None => {
+                self.commit_hold_edit();
+                HoldKey::Passed
+            }
+        }
     }
 
     pub(super) fn sub_header(&self) -> &'static str {
@@ -415,6 +487,7 @@ impl HotkeyDraft {
             action: self.action.clone(),
             enabled: self.enabled,
             os_only: self.os_only,
+            hold_ms: self.hold_ms,
         }
     }
 }
@@ -812,6 +885,196 @@ mod tests {
                 label: "Name",
             }
         );
+    }
+
+    fn existing_hotkey(hold_ms: Option<u32>) -> HotkeyBinding {
+        HotkeyBinding {
+            id: "hk-1".to_string(),
+            key: "Shift+Super+S".to_string(),
+            plugin_uid: crate::plugins::PluginUid::new("uid-shot"),
+            action: "screenshot".to_string(),
+            enabled: true,
+            os_only: false,
+            hold_ms,
+        }
+    }
+
+    #[test]
+    fn the_hold_field_sits_after_the_key_and_the_computer_toggle_moved_down() {
+        assert_eq!(HOTKEY_FIELDS, 6);
+        assert_eq!(HOLD_FIELD, 4);
+        assert_eq!(OS_ONLY_FIELD, 5);
+        assert_eq!(OS_ONLY_FIELD, HOTKEY_FIELDS - 1);
+        assert_eq!(HotkeyDraft::blank(&[], &[]).selected, 3);
+    }
+
+    #[test]
+    fn a_draft_carries_the_hold_time_from_and_back_to_the_binding() {
+        for hold_ms in [None, Some(250), Some(1000)] {
+            let draft = HotkeyDraft::from_hotkey(&existing_hotkey(hold_ms));
+            assert_eq!(draft.hold_ms, hold_ms);
+            assert_eq!(draft.build(7).hold_ms, hold_ms);
+        }
+        assert_eq!(HotkeyDraft::blank(&[], &[]).build(1).hold_ms, None);
+    }
+
+    #[test]
+    fn the_hold_slider_spans_zero_to_three_seconds_and_zero_stores_none() {
+        let mut draft = HotkeyDraft::blank(&[], &[]);
+        assert_eq!(draft.hold_number().value, 0.0);
+        assert_eq!(draft.hold_number().min, Some(0.0));
+        assert_eq!(draft.hold_number().max, Some(3000.0));
+        assert_eq!(draft.hold_number().step, Some(50.0));
+        for (value, stored) in [
+            (0.0, None),
+            (0.4, None),
+            (-50.0, None),
+            (50.0, Some(50)),
+            (1500.0, Some(1500)),
+            (1499.6, Some(1500)),
+            (3000.0, Some(3000)),
+            (9000.0, Some(3000)),
+        ] {
+            draft.set_hold(value);
+            assert_eq!(draft.hold_ms, stored, "{value}");
+            assert_eq!(
+                draft.hold_number().value,
+                f64::from(stored.unwrap_or(0)),
+                "{value}"
+            );
+        }
+    }
+
+    type Press = (&'static str, Option<&'static str>, bool);
+
+    const ENTER: Press = ("enter", None, false);
+
+    fn typed(text: &'static str) -> Press {
+        (text, Some(text), false)
+    }
+
+    fn named(key: &'static str, shift: bool) -> Press {
+        (key, None, shift)
+    }
+
+    #[test]
+    fn the_hold_row_edits_its_time_like_a_settings_slider() {
+        let cases: [(Option<u32>, Vec<Press>, Option<u32>); 13] = [
+            (
+                None,
+                vec![ENTER, typed("1"), typed("5"), typed("0"), typed("0"), ENTER],
+                Some(1500),
+            ),
+            (Some(1500), vec![ENTER, typed("0"), ENTER], None),
+            (
+                Some(1000),
+                vec![ENTER, named("right", false), ENTER],
+                Some(1050),
+            ),
+            (
+                Some(1000),
+                vec![ENTER, named("left", false), ENTER],
+                Some(950),
+            ),
+            (
+                Some(1000),
+                vec![ENTER, named("right", true), ENTER],
+                Some(1500),
+            ),
+            (Some(1000), vec![ENTER, named("home", false), ENTER], None),
+            (
+                Some(1000),
+                vec![ENTER, named("end", false), ENTER],
+                Some(3000),
+            ),
+            (
+                Some(1000),
+                vec![ENTER, typed("9"), typed("9"), typed("9"), typed("9"), ENTER],
+                Some(3000),
+            ),
+            (
+                Some(1000),
+                vec![ENTER, typed("1"), typed("2"), typed("0"), ENTER],
+                Some(100),
+            ),
+            (
+                Some(1000),
+                vec![
+                    ENTER,
+                    typed("1"),
+                    typed("5"),
+                    typed("0"),
+                    typed("0"),
+                    named("escape", false),
+                ],
+                Some(1000),
+            ),
+            (
+                Some(1000),
+                vec![ENTER, named("backspace", false), ENTER],
+                Some(1000),
+            ),
+            (None, vec![named("right", false), typed("5")], None),
+            (
+                Some(250),
+                vec![("space", Some(" "), false), typed("5"), ENTER],
+                None,
+            ),
+        ];
+        for (start, keys, stored) in cases {
+            let mut draft = HotkeyDraft::blank(&[], &[]);
+            draft.hold_ms = start;
+            for (key, key_char, shift) in &keys {
+                draft.hold_key(key, *key_char, *shift);
+            }
+            assert_eq!(draft.hold_ms, stored, "{start:?} {keys:?}");
+            assert!(draft.hold_edit.is_none(), "{start:?} {keys:?}");
+        }
+    }
+
+    #[test]
+    fn a_hold_key_glows_only_when_the_previewed_time_moves() {
+        let mut draft = HotkeyDraft::blank(&[], &[]);
+        draft.hold_ms = Some(1000);
+        let held = |glow| HoldKey::Held { glow };
+        for ((key, key_char, shift), expected) in [
+            (named("right", false), HoldKey::Passed),
+            (ENTER, held(false)),
+            (typed("x"), held(false)),
+            (typed("7"), held(true)),
+            (named("right", false), held(true)),
+            (named("left", true), held(true)),
+            (named("home", false), held(false)),
+            (named("end", false), held(true)),
+            (named("escape", false), held(false)),
+            (named("escape", false), HoldKey::Passed),
+        ] {
+            assert_eq!(draft.hold_key(key, key_char, shift), expected, "{key}");
+        }
+        assert_eq!(draft.hold_ms, Some(1000));
+    }
+
+    #[test]
+    fn a_key_the_hold_edit_does_not_own_applies_it_and_passes_on() {
+        let mut draft = HotkeyDraft::blank(&[], &[]);
+        draft.hold_key("enter", None, false);
+        for digit in ["5", "0", "0"] {
+            draft.hold_key(digit, Some(digit), false);
+        }
+        assert_eq!(draft.hold_ms, None, "typing only previews");
+        assert_eq!(draft.hold_key("up", None, false), HoldKey::Passed);
+        assert_eq!(draft.hold_ms, Some(500));
+        assert!(draft.hold_edit.is_none());
+    }
+
+    #[test]
+    fn editor_values_notice_a_changed_hold_time() {
+        let draft = HotkeyDraft::from_hotkey(&existing_hotkey(None));
+        let mut held = draft.clone();
+        held.hold_ms = Some(1000);
+        assert!(!draft.same_values(&held));
+        held.hold_ms = None;
+        assert!(draft.same_values(&held));
     }
 
     #[test]

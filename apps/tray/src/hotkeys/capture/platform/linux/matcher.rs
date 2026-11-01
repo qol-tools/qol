@@ -121,8 +121,8 @@ impl BindingMatcher {
         self.active_continuous
             .drain()
             .map(|(_, (_, binding, _))| CaptureEvent {
+                phase: binding.forced_stop(),
                 binding,
-                phase: Phase::STOP,
             })
             .collect()
     }
@@ -159,7 +159,7 @@ impl BindingMatcher {
             return CaptureDecision::forward();
         };
         self.suppressed_keys.insert(code);
-        if binding.continuous {
+        if binding.reports_release() {
             self.active_continuous
                 .insert(code, (combo, binding.clone(), Instant::now()));
         }
@@ -174,7 +174,7 @@ impl BindingMatcher {
             self.active_continuous
                 .get_mut(&code)
                 .and_then(|(_, binding, last_heartbeat)| {
-                    if last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
+                    if !binding.continuous || last_heartbeat.elapsed() < HEARTBEAT_INTERVAL {
                         return None;
                     }
                     *last_heartbeat = Instant::now();
@@ -233,6 +233,23 @@ mod matcher_tests {
             action: "action".into(),
             raw_key: key.into(),
             continuous,
+            hold: None,
+        }
+    }
+
+    const KEY_S: u16 = 31;
+
+    fn hold_binding(key: &str) -> Binding {
+        Binding {
+            hold: Some(crate::hotkeys::hold::HoldPlan {
+                hold_ms: 1000,
+                hold: crate::hotkeys::hold::Target {
+                    plugin_uid: crate::plugins::PluginUid::new("plugin"),
+                    action: "action".into(),
+                },
+                tap: None,
+            }),
+            ..binding(key, false)
         }
     }
 
@@ -289,6 +306,57 @@ mod matcher_tests {
         assert_eq!(stop.events[0].phase, Phase::STOP);
         assert!(!key_release.forward);
         assert!(key_release.events.is_empty());
+    }
+
+    #[test]
+    fn hold_binding_reports_start_and_stop_but_no_heartbeats() {
+        let mut matcher = BindingMatcher::new(vec![hold_binding("Shift+Super+S")]);
+        matcher.observe(keycodes::KEY_LEFTSHIFT, 1);
+        matcher.observe(keycodes::KEY_LEFTMETA, 1);
+
+        let start = matcher.observe(KEY_S, 1);
+        if let Some((_, _, last_heartbeat)) = matcher.active_continuous.get_mut(&KEY_S) {
+            *last_heartbeat = Instant::now() - HEARTBEAT_INTERVAL;
+        }
+        let repeat = matcher.observe(KEY_S, 2);
+        let stop = matcher.observe(KEY_S, 0);
+
+        assert_eq!(start.events[0].phase, Phase::START);
+        assert!(!repeat.forward);
+        assert!(repeat.events.is_empty());
+        assert_eq!(stop.events[0].phase, Phase::STOP);
+        assert!(!start.forward && !stop.forward);
+    }
+
+    #[test]
+    fn reload_cancels_a_held_hold_binding_and_stops_a_continuous_one() {
+        let mut matcher = BindingMatcher::new(vec![
+            hold_binding("Shift+Super+S"),
+            binding("Ctrl+Alt+Shift+Left", true),
+        ]);
+        matcher.observe(keycodes::KEY_LEFTSHIFT, 1);
+        matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        matcher.observe(KEY_S, 1);
+
+        let cancelled = matcher.reload(vec![hold_binding("Shift+Super+S")]);
+
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].phase, Phase::CANCEL);
+        assert!(cancelled[0].binding.hold.is_some());
+        assert!(matcher.observe(KEY_S, 0).events.is_empty());
+    }
+
+    #[test]
+    fn modifier_release_ends_a_hold_binding_like_a_release() {
+        let mut matcher = BindingMatcher::new(vec![hold_binding("Shift+Super+S")]);
+        matcher.observe(keycodes::KEY_LEFTSHIFT, 1);
+        matcher.observe(keycodes::KEY_LEFTMETA, 1);
+        matcher.observe(KEY_S, 1);
+
+        let stop = matcher.observe(keycodes::KEY_LEFTSHIFT, 0);
+
+        assert_eq!(stop.events[0].phase, Phase::STOP);
+        assert!(matcher.observe(KEY_S, 0).events.is_empty());
     }
 
     #[test]

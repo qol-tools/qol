@@ -12,6 +12,8 @@ const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const CLOSED_KEY = 'pane-closed'
+const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -43,6 +45,9 @@ const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
+const LAUNCHER = 'Launcher: '
+const FORK_TO_FORK =
+  'Not sent: an agent inside a fork messages only, by agent id, the fork it started or the fork that started it. Another fork\'s work is not yours; put what it needs in your report instead.'
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
@@ -133,6 +138,26 @@ const rememberClosed = async ($: EngineInterface): Promise<void> => {
   } catch {}
 }
 
+const toggleBoard = async ($: EngineInterface): Promise<string> => {
+  const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+  if (isShown) {
+    await rememberClosed($)
+    await $.ui.close({ id: PANE })
+    return 'Fork board closed. qols board or /board opens it again.'
+  }
+  await $.store.delete(CLOSED_KEY).catch(() => {})
+  const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
+  return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
+}
+
+const clearTypedToggle = ($: EngineInterface): void => {
+  $.clock.after(CLEAR_TYPED_MS, () => {
+    void (async () => {
+      if (TYPED_TOGGLE.test((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+    })().catch(() => {})
+  })
+}
+
 const persist = async ($: EngineInterface): Promise<void> => {
   try {
     await $.store.set(STORE_PREFIX + (await $.session.id()), await read($, board))
@@ -160,9 +185,9 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
   return index === -1 ? [...list, next] : [...list.slice(0, index), ...list.slice(index + 1), next]
 }
 
-const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string): Promise<void> => {
+const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string): Promise<void> => {
   const now = await $.clock.now()
-  const placed = project === undefined ? {} : { project }
+  const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }) }
   await change($, list =>
     upsert(list, agentId, entry =>
       entry === undefined
@@ -170,6 +195,28 @@ const markWorking = async ($: EngineInterface, agentId: string, name: string | u
         : { ...entry, name: name || entry.name, at: now, isWorking: true, isDismissed: false, ...placed },
     ),
   )
+}
+
+export const launcherLine = (parentAgentId: string | undefined): string =>
+  parentAgentId === undefined
+    ? `${LAUNCHER}the switchboard, whose messages reach you as from the coordinator.`
+    : `${LAUNCHER}the fork with agent id ${parentAgentId}, whose messages reach you as an agent-message from "${parentAgentId}".`
+
+export const withLauncher = (prompt: string, parentAgentId: string | undefined): string => {
+  const [first = '', ...rest] = prompt.split('\n')
+  const body = rest[0]?.startsWith(LAUNCHER) ? rest.slice(1) : rest
+  return [first, launcherLine(parentAgentId), ...body].join('\n')
+}
+
+const recipientId = (to: unknown): string | undefined =>
+  typeof to === 'string' ? to : typeof to === 'object' && to !== null && typeof (to as { agentId?: unknown }).agentId === 'string' ? (to as { agentId: string }).agentId : undefined
+
+export const mayMessage = (list: Entry[], from: string, to: unknown): boolean => {
+  const id = recipientId(to)
+  const sender = list.find(one => one.agentId === from)
+  const target = id === undefined ? undefined : list.find(one => one.agentId === id)
+  if (sender === undefined || target === undefined) return false
+  return target.launcher === from || (sender.launcher !== undefined && sender.launcher === target.agentId)
 }
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
@@ -212,6 +259,7 @@ const succeed = async ($: EngineInterface, stopped: string, successor: string): 
 export const takeoverPrompt = (project: string, message: string, stopped: Entry, transcript: string | undefined): string =>
   [
     `Project: ${project}`,
+    launcherLine(undefined),
     message,
     '',
     `The message above is for the fork ${keyName(stopped.name)}, agent id ${stopped.agentId}, which was stopped, so you take over its work and its conversation. ${
@@ -547,7 +595,7 @@ export const register: Register = on => {
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
     }
-    return next({ ...e, cwd: project[1] })
+    return next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: 'The qol-switchboard plugin could not start this fork in its project folder.' },
   )
@@ -556,8 +604,9 @@ export const register: Register = on => {
     const started = await next(e)
     const agentId = started.agentId ?? e.resume?.agentId
     if (agentId === undefined) return started
-    await markWorking($, agentId, e.description, e.resume === undefined ? projectOf(e.prompt) : undefined)
-    const stopped = e.resume === undefined ? stoppedFork(e.prompt) : undefined
+    const isNew = e.resume === undefined
+    await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined)
+    const stopped = isNew && e.parentAgentId === undefined ? stoppedFork(e.prompt) : undefined
     if (stopped !== undefined) await succeed($, stopped, agentId)
     return started
   }).catch(($, e, next) => next(e))
@@ -604,16 +653,15 @@ export const register: Register = on => {
 
   on('command.run', { command: PANE }, async $ => {
     isAutoOpenPending = false
-    const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
-    if (isShown) {
-      await rememberClosed($)
-      await $.ui.close({ id: PANE })
-      return { text: 'Fork board closed. /board opens it again.' }
-    }
-    await $.store.delete(CLOSED_KEY).catch(() => {})
-    const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
-    return { text: opened.isPlaced ? 'Fork board opened. /board closes it.' : `The fork board waits for room: ${opened.reason}` }
+    return { text: await toggleBoard($) }
   }).catch(() => ({ text: 'The fork board could not open.' }))
+
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
+    isAutoOpenPending = false
+    clearTypedToggle($)
+    return { drop: await toggleBoard($) }
+  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'The fork board could not open.' }))
 
   on('ui.close', async ($, e, next) => {
     const closed = await next(e)
@@ -647,6 +695,11 @@ export const register: Register = on => {
     const program = await $.env.get('QOL_CLI_SESSIONS')
     if (entry === undefined || program === undefined || program === '') return next(e)
     return next({ ...e, command: watchCommand(program, e.agentId, await $.session.id(), entry.name, args) })
+  }).catch(($, e, next) => next(e))
+
+  on('session.send', async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
@@ -735,7 +788,7 @@ export const register: Register = on => {
       </Box>
     )
 
-    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · /board or ctrl+x x closes it'
+    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const summary = needs.length === 0 ? 'Nothing needs you.' : `${needs.length} need${needs.length === 1 ? 's' : ''} you.`
     const close = (
       <Button key="close" plain dimColor {...(isFocused ? { hotkey: 'x' } : {})} onPress={async () => {

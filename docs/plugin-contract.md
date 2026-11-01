@@ -449,6 +449,21 @@ Three entry points converge on one executor:
   Key syntax `MOD+MOD+KEY`, case-insensitive; mods
   `ctrl`/`alt`/`shift`/`super` (+ aliases) plus a non-modifier key (zero keys is
   rejected; the parser does not error on extra keys, last one wins).
+- A binding may carry `hold_ms` (50 to 3000), which turns it into a **hold
+  binding**: it runs once the keys have been held that long, while they are still
+  down, and the release afterwards does nothing. The hotkey editor sets it with
+  the "Hold to run" row, the settings slider plugin numbers use (0 to 3000 ms in
+  steps of 50); 0 runs on press and stores no `hold_ms`. A chord holds at most one tap
+  binding (no `hold_ms`) and one hold binding, so one key combination can run a
+  quick press and a long press. Saving refuses two taps or two holds on a chord,
+  a `hold_ms` outside its range, and a `hold_ms` on a `continuous` action or on a
+  chord a continuous action uses. A chord with a hold binding runs its tap
+  binding on release (before `hold_ms`), not on press. The decision is one
+  platform-neutral resolver (`apps/tray/src/hotkeys/hold_resolver.rs`) fed by the
+  capture backends' press and release events; the `global_hotkey` fallback applies
+  the same rule with its own held-key tracking and hands the keyboard back to the
+  window manager before a hold action runs. The Windows one-shot backup never
+  registers a hold chord.
 - qol-tray **takes the key back from the desktop environment** via kernel-level
   capture (macOS `CGEventTap` at HID, dropping matched KeyDown; Linux evdev
   `EVIOCGRAB` + uinput re-emit). It uses kernel capture OR the `global_hotkey` crate,

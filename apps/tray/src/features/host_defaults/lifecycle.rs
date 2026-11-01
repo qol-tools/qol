@@ -241,6 +241,7 @@ mod tests {
             action: "screenshot".to_string(),
             enabled: true,
             os_only: false,
+            hold_ms: None,
         }
     }
 

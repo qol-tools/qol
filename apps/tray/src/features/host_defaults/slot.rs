@@ -78,7 +78,7 @@ pub(super) fn plan_bindings(
         let wanted = normalize(key).ok_or_else(|| anyhow!("{key} is not a key combination"))?;
         let holders: Vec<&HotkeyBinding> = existing
             .iter()
-            .filter(|binding| binding.enabled)
+            .filter(|binding| binding.enabled && binding.hold_ms.is_none())
             .filter(|binding| normalize(&binding.key).as_deref() == Some(wanted.as_str()))
             .collect();
         let ours = |binding: &&HotkeyBinding| {
@@ -114,6 +114,7 @@ pub(super) fn add_bindings(
         action: declaration.action.clone(),
         enabled: true,
         os_only: true,
+        hold_ms: None,
     }));
 }
 
@@ -416,6 +417,7 @@ mod tests {
             action: action.to_string(),
             enabled,
             os_only: false,
+            hold_ms: None,
         }
     }
 
@@ -508,6 +510,23 @@ mod tests {
             error.to_string(),
             "Print is already bound to uid-other grab. Change that key in Hotkeys first."
         );
+    }
+
+    #[test]
+    fn a_hold_binding_on_the_key_leaves_the_tap_free_to_claim() {
+        let existing = [HotkeyBinding {
+            hold_ms: Some(1000),
+            ..binding("theirs", "Print", "uid-other", "grab", true)
+        }];
+        let planned = plan_bindings(
+            &existing,
+            &declaration(),
+            &keys(&["Print"]),
+            lower,
+            label_of,
+        )
+        .expect("a hold does not hold the tap slot");
+        assert_eq!(planned.len(), 1);
     }
 
     #[test]

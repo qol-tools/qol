@@ -18,6 +18,8 @@ pub struct HotkeyBinding {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub os_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

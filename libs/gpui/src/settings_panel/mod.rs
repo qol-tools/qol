@@ -3,6 +3,7 @@ mod display_layout;
 mod entry_form;
 mod form_nav;
 mod navigation;
+pub mod number_slider;
 mod object_array_row;
 mod pages;
 mod persistence;
@@ -14,7 +15,7 @@ pub mod components;
 pub use components::{
     settings_action_affordance, settings_action_spinner, settings_busy_message,
     settings_connection_spinner, settings_description, settings_list, settings_query_spinner,
-    settings_value_text, SettingsGroupHeader, SettingsRow, SettingsValueTone,
+    settings_value_text, SettingsGroupHeader, SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 pub use form_nav::{
     adjacent_visible_row, escape_step, intent, wrapping_visible_row, EscapeStep, Intent,
