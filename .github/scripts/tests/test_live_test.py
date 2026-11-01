@@ -70,6 +70,8 @@ class SummaryTests(unittest.TestCase):
         title, text = live.summary(["a.rs"])
         self.assertEqual(title, live.NEEDED_TITLE)
         self.assertIn("- `a.rs`", text)
+        self.assertIn(f"`{live.BUILD_ARTIFACT}`", text)
+        self.assertNotIn(live.BUILD_ARTIFACT, live.summary([])[1])
 
     def test_a_long_list_is_cut(self):
         found = [f"f{index}.rs" for index in range(live.LISTED_FILES + 3)]
