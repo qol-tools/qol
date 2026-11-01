@@ -7,3 +7,4 @@ libs/gpui/**
 libs/theme/**
 vendor/gpui/**
 libs/sessions-engine/src/switchboard/rows.rs
+libs/sessions-engine/src/switchboard/plugin/**
