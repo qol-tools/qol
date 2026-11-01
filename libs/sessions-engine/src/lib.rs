@@ -24,6 +24,7 @@ mod close;
 mod contract;
 mod export;
 mod fork;
+pub mod fork_watch;
 mod history;
 pub mod knocks;
 mod last_send;
