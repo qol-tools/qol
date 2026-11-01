@@ -13,11 +13,13 @@ const NOTICE_PREAMBLE: &str = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
 const NOTICE_ID_TAG: &str = "task-id";
 const NOTICE_STATUS_TAG: &str = "status";
 const NOTICE_SKIPPED_TAGS: [&str; 2] = ["tool-use-id", "output-file"];
+const QUEUED_NOTICE: &str = "queued_command";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Background {
     pub(super) id: String,
     pub(super) command: Option<String>,
+    pub(super) started_at: Option<String>,
 }
 
 impl Background {
@@ -40,7 +42,22 @@ pub(super) fn notice_of(row: &Value) -> Option<(&str, &str)> {
     if !from_the_harness {
         return None;
     }
-    let mut lines = row.pointer("/message/content")?.as_str()?.lines();
+    envelope_of(row.pointer("/message/content")?.as_str()?)
+}
+
+fn queued_notice_of(row: &Value) -> Option<(&str, &str)> {
+    let attachment = row.get("attachment")?;
+    let from_the_harness = row.get("type").and_then(Value::as_str) == Some("attachment")
+        && attachment.get("type").and_then(Value::as_str) == Some(QUEUED_NOTICE)
+        && attachment.pointer("/origin/kind").and_then(Value::as_str) == Some(NOTICE_ORIGIN);
+    if !from_the_harness {
+        return None;
+    }
+    envelope_of(attachment.get("prompt")?.as_str()?)
+}
+
+fn envelope_of(content: &str) -> Option<(&str, &str)> {
+    let mut lines = content.lines();
     let mut first = lines.next()?;
     if first == NOTICE_PREAMBLE {
         lines.by_ref().find(|line| line.is_empty())?;
@@ -159,6 +176,10 @@ impl Reader {
             self.open.push(Background {
                 id,
                 command: self.commands.remove(call),
+                started_at: row
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             });
         }
     }
@@ -184,6 +205,11 @@ pub(super) fn running(transcript: &str) -> Vec<Background> {
         match row.get("type").and_then(Value::as_str) {
             Some("assistant") => reader.assistant(&row),
             Some("user") => reader.user(&row),
+            Some("attachment") => {
+                if let Some((id, _)) = queued_notice_of(&row) {
+                    reader.close(id);
+                }
+            }
             _ => {}
         }
     }
@@ -215,6 +241,29 @@ pub(super) mod fixtures {
                 "tool_use_id": call, "type": "tool_result",
                 "content": format!("Command running in background with ID: {id}. Output is being written to: /tmp/tasks/{id}.output"),
             }]},
+        }))
+    }
+
+    pub(in crate::switchboard) fn started_at(call: &str, id: &str, at: &str) -> String {
+        line(json!({
+            "type": "user",
+            "timestamp": at,
+            "message": {"role": "user", "content": [{
+                "tool_use_id": call, "type": "tool_result",
+                "content": format!("Command running in background with ID: {id}. Output is being written to: /tmp/tasks/{id}.output"),
+            }]},
+        }))
+    }
+
+    pub(in crate::switchboard) fn queued(id: &str, status: &str, origin: &str) -> String {
+        line(json!({
+            "type": "attachment",
+            "attachment": {
+                "type": "queued_command",
+                "prompt": envelope(id, status, ""),
+                "commandMode": origin,
+                "origin": {"kind": origin, "producer": "session-task"},
+            },
         }))
     }
 
@@ -255,6 +304,11 @@ pub(super) mod fixtures {
     pub(in crate::switchboard) fn waiting(id: &str, command: &str) -> String {
         let call = format!("toolu_{id}");
         [bash(&call, command, true), started(&call, id)].concat()
+    }
+
+    pub(in crate::switchboard) fn waiting_at(id: &str, command: &str, at: &str) -> String {
+        let call = format!("toolu_{id}");
+        [bash(&call, command, true), started_at(&call, id, at)].concat()
     }
 }
 
@@ -300,6 +354,43 @@ mod tests {
             ids(&ended),
             [("bbuild".to_owned(), Some("cargo build".to_owned()))]
         );
+    }
+
+    #[test]
+    fn a_notice_queued_while_the_fork_was_mid_turn_ends_its_command() {
+        let started = [
+            waiting("bwatch", "node pr-watch.cjs"),
+            waiting_at("bhold", HOLD_COMMAND, "2026-11-01T07:16:00.000Z"),
+        ]
+        .concat();
+        assert_eq!(
+            running(&started)
+                .into_iter()
+                .map(|background| (background.id, background.started_at))
+                .collect::<Vec<_>>(),
+            [
+                ("bwatch".to_owned(), None),
+                (
+                    "bhold".to_owned(),
+                    Some("2026-11-01T07:16:00.000Z".to_owned())
+                ),
+            ]
+        );
+        assert_eq!(
+            ids(&[started.clone(), queued("bwatch", "failed", NOTICE_ORIGIN)].concat()),
+            [("bhold".to_owned(), Some(HOLD_COMMAND.to_owned()))]
+        );
+        let typed = [
+            started,
+            queued("bwatch", "completed", "prompt"),
+            row(
+                "attachment",
+                NOTICE_ORIGIN,
+                &envelope("bhold", "completed", ""),
+            ),
+        ]
+        .concat();
+        assert_eq!(ids(&typed).len(), 2);
     }
 
     #[test]
@@ -370,6 +461,7 @@ mod tests {
         let hold = |command: Option<&str>| Background {
             id: "b1".to_owned(),
             command: command.map(str::to_owned),
+            started_at: None,
         };
         assert!(hold(Some(HOLD_COMMAND)).is_hold());
         assert!(hold(Some(" sleep infinity\n")).is_hold());
