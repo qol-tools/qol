@@ -1,11 +1,14 @@
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
-use qol_sessions_engine::fork_watch::{check_watcher, ForkWatch, WatchState, WatchStore};
+use anyhow::{Context, Result};
+use qol_sessions_engine::fork_watch::{
+    check_watcher, ForkWatch, WatchState, WatchStore, Watched, WATCHER_PROGRAM,
+};
 
 const MERGED_EXIT: i32 = 0;
 const GH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -13,6 +16,16 @@ const GH_OUTPUT_LIMIT: usize = 4096;
 const SIGNALLED: &str = "the watched command was stopped by a signal";
 const LOCK_TRIES: u32 = 20;
 const LOCK_RETRY: Duration = Duration::from_millis(50);
+const GH: &str = "gh";
+const LOADER_ENV: [&str; 6] = [
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+];
+const NODE_ENV_PREFIX: &str = "NODE_";
 
 fn lock_runner(store: &WatchStore, id: &str) -> Result<Option<File>> {
     for _ in 1..LOCK_TRIES {
@@ -32,15 +45,19 @@ pub fn run(store: &WatchStore, id: &str) -> Result<()> {
     if watch.state != WatchState::Watching {
         return Ok(());
     }
-    if let Err(error) = check_watcher(&watch.command) {
-        return store.record(&ForkWatch {
-            state: WatchState::Failed,
-            detail: Some(format!("{error:#}")),
-            exited_at: Some(super::now_seconds()),
-            ..watch
-        });
-    }
-    let exit = start(&watch, &store.log_path(id)).and_then(|mut child| {
+    let watched = match check_watcher(&watch.command) {
+        Ok(watched) => watched,
+        Err(error) => {
+            return store.record(&ForkWatch {
+                state: WatchState::Failed,
+                detail: Some(format!("{error:#}")),
+                exited_at: Some(super::now_seconds()),
+                ..watch
+            })
+        }
+    };
+    let path = trusted_path(&watched, &watch);
+    let exit = start(&watch, &watched, path.clone(), &store.log_path(id)).and_then(|mut child| {
         child
             .wait()
             .map(|status| status.code())
@@ -50,21 +67,41 @@ pub fn run(store: &WatchStore, id: &str) -> Result<()> {
     if latest.state != WatchState::Watching {
         return Ok(());
     }
-    store.record(&finished(latest, exit, super::now_seconds(), merge_commit))
+    let lookup = |_: &str, watch: &ForkWatch| merge_commit(&watched, path.clone(), watch);
+    store.record(&finished(latest, exit, super::now_seconds(), lookup))
 }
 
-fn start(watch: &ForkWatch, log_path: &Path) -> Result<Child> {
-    let (program, args) = watch
-        .command
-        .split_first()
-        .ok_or_else(|| anyhow!("the fork watch has no command"))?;
+fn trusted_path(watched: &Watched, watch: &ForkWatch) -> Option<OsString> {
+    let recorded = watch.path.clone().or_else(|| std::env::var("PATH").ok());
+    watched.trusted_path(recorded.as_deref())
+}
+
+fn scrub(command: &mut Command, path: Option<OsString>) {
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with(NODE_ENV_PREFIX) || LOADER_ENV.iter().any(|loader| text == *loader) {
+            command.env_remove(&name);
+        }
+    }
+    match path {
+        Some(path) => command.env("PATH", path),
+        None => command.env_remove("PATH"),
+    };
+}
+
+fn start(
+    watch: &ForkWatch,
+    watched: &Watched,
+    path: Option<OsString>,
+    log_path: &Path,
+) -> Result<Child> {
+    let node = watched.tool(WATCHER_PROGRAM, path.as_deref())?;
     let _ = fs::remove_file(log_path);
     let log = File::create(log_path).context("failed to create the fork watch log")?;
-    let mut command = Command::new(program);
+    let mut command = Command::new(&node);
     qol_process::hide_console_window(&mut command);
-    if let Some(path) = &watch.path {
-        command.env("PATH", path);
-    }
+    scrub(&mut command, path);
+    let args = watched.args();
     command
         .args(args)
         .current_dir(&watch.cwd)
@@ -75,7 +112,7 @@ fn start(watch: &ForkWatch, log_path: &Path) -> Result<Child> {
         )
         .stderr(log)
         .spawn()
-        .with_context(|| format!("failed to start `{program}`"))
+        .with_context(|| format!("failed to start `{}`", node.display()))
 }
 
 fn finished(
@@ -103,21 +140,21 @@ fn finished(
     }
 }
 
-fn merge_commit(pull_request: &str, watch: &ForkWatch) -> Option<String> {
-    let mut command = Command::new("gh");
+fn merge_commit(watched: &Watched, path: Option<OsString>, watch: &ForkWatch) -> Option<String> {
+    let gh = watched.tool(GH, path.as_deref()).ok()?;
+    let mut command = Command::new(gh);
     qol_process::hide_console_window(&mut command);
-    if let Some(path) = &watch.path {
-        command.env("PATH", path);
-    }
+    scrub(&mut command, path);
     command
         .args([
             "pr",
             "view",
-            pull_request,
             "--json",
             "mergeCommit",
             "--jq",
             ".mergeCommit.oid",
+            "--",
+            watched.url.as_str(),
         ])
         .current_dir(&watch.cwd);
     match qol_process::run_owned_with_output_timeout(command, GH_TIMEOUT, GH_OUTPUT_LIMIT) {
@@ -136,6 +173,7 @@ fn merge_hash(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use qol_sessions_engine::fork_watch::WatchRequest;
 
     const PR: &str = "https://github.com/qol-tools/qol-monorepo/pull/418";
