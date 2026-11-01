@@ -320,7 +320,7 @@ impl Wake {
 
     pub(super) fn previous_launch(path: &Path, conversation: &str) -> Option<String> {
         let wake: Wake = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-        (wake.conversation == conversation).then_some(wake.launched_at)
+        (wake.claimed && wake.conversation == conversation).then_some(wake.launched_at)
     }
 
     pub(super) fn write(&self, path: &Path) -> Result<()> {
@@ -840,16 +840,19 @@ mod tests {
     }
 
     #[test]
-    fn the_wake_file_keeps_the_launch_of_its_own_conversation() {
+    fn the_wake_file_keeps_the_launch_of_its_own_conversation_once_the_plugin_claimed_it() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(WAKE_FILE);
         assert_eq!(Wake::previous_launch(&path, "conv"), None);
-        let wake = Wake::of(
+        let mut wake = Wake::of(
             "conv",
             "2026-11-01T10:00:00.000Z".to_owned(),
             vec![sleeping("mid", false, &[])],
             |_| false,
         );
+        wake.write(&path).unwrap();
+        assert_eq!(Wake::previous_launch(&path, "conv"), None);
+        wake.claimed = true;
         wake.write(&path).unwrap();
         assert_eq!(
             Wake::previous_launch(&path, "conv").as_deref(),

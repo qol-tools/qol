@@ -579,6 +579,16 @@ test('a fork woken only to hold again keeps its last report on the board and sta
   expect(listed).not.toContain('working')
 })
 
+test('a wake with no fork to bring back is still claimed, so the next launch counts this one', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  wakeEngine(on, { conversation: 'switchboard-session', launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(), forks: [] }, sent, [], written)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  expect(JSON.parse(written[0] as string).claimed).toBe(true)
+})
+
 test('a claimed or stale wake sends nothing', async ($, on) => {
   const sent: any[] = []
   const written: string[] = []

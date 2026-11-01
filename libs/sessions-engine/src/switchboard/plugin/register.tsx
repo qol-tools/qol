@@ -546,7 +546,7 @@ export const wakeForks = async ($: EngineInterface): Promise<void> => {
   const path = await $.env.get('QOL_SWITCHBOARD_WAKE')
   if (path === undefined || path === '' || !(await $.fs.exists(path))) return
   const wake = JSON.parse(String(await $.fs.read(path))) as Wake
-  if (wake.claimed === true || !Array.isArray(wake.forks) || wake.forks.length === 0) return
+  if (wake.claimed === true || !Array.isArray(wake.forks)) return
   const launched = Date.parse(wake.launched_at)
   if (!Number.isFinite(launched) || (await $.clock.now()) - launched > WAKE_FRESH_MS) return
   if (wake.conversation !== (await $.session.id())) return
