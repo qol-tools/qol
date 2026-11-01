@@ -104,6 +104,18 @@ fn terminate_process(pid: i32, target: &Path) {
 mod tests {
     use super::argument_count;
     use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    fn settled_argument_count(pid: i32) -> Option<usize> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let counted = argument_count(pid);
+            if counted != Some(0) || Instant::now() >= deadline {
+                return counted;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn argument_count_tells_a_bare_daemon_launch_from_a_command_with_arguments() {
@@ -115,7 +127,7 @@ mod tests {
                 .stdout(Stdio::null())
                 .spawn()
                 .unwrap();
-            let counted = argument_count(child.id() as i32);
+            let counted = settled_argument_count(child.id() as i32);
             child.kill().unwrap();
             child.wait().unwrap();
             assert_eq!(counted, Some(expected), "cat {args:?}");
