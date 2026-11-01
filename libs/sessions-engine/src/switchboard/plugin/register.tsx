@@ -45,7 +45,6 @@ const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
-const FILED_LINE = /\[fork board\] ([^\n<]*)/
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
@@ -530,19 +529,21 @@ const once = (text: string, needle: string): boolean => text.indexOf(needle) !==
 
 export type Origin = 'peer' | 'task-notification'
 
+type Intake = { text: string; entry: Entry }
+
 export const intake = async (
   $: EngineInterface,
   text: string,
   origin: Origin,
   isFork: (agentId: string) => boolean,
-): Promise<string | undefined> => {
+): Promise<Intake | undefined> => {
   if (origin === 'peer') {
     if (!once(text, '<agent-message ') || !once(text, '</agent-message>')) return undefined
     const [whole, head, agentId, body, tail] = HANDBACK.exec(text) ?? []
     if (whole === undefined || head === undefined || agentId === undefined || body === undefined || tail === undefined) return undefined
     if (!isFork(agentId)) return undefined
     const entry = await file($, { agentId, status: 'completed', report: dedent(body).trim() })
-    return `${head}  ${boardLine(entry).split('\n').join('\n  ')}\n${tail}${text.slice(whole.length)}`
+    return { text: `${head}  ${boardLine(entry).split('\n').join('\n  ')}\n${tail}${text.slice(whole.length)}`, entry }
   }
   const block = text.trim()
   if (!NOTIFICATION.test(block)) return undefined
@@ -563,7 +564,7 @@ export const intake = async (
     result === null
       ? block.replace('</task-notification>', () => `<result>${line}</result>\n</task-notification>`)
       : block.replace(RESULT, (_, open: string, __, close: string) => `${open}${line}${close}`)
-  return text.replace(block, () => filed)
+  return { text: text.replace(block, () => filed), entry }
 }
 
 const age = (ms: number): string => {
@@ -599,8 +600,8 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
   if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return undefined
   try {
     const list = await read($, board)
-    const rewritten = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
-    return rewritten === undefined ? undefined : FILED_LINE.exec(rewritten)?.[1]
+    const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
+    return filed === undefined ? undefined : `${keyName(filed.entry.name)}: ${filed.entry.headline}`
   } catch {
     return undefined
   }
@@ -739,9 +740,9 @@ export const register: Register = on => {
     const text = textOf(content)
     if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return next(e)
     const list = await read($, board)
-    const rewritten = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
-    if (rewritten === undefined) return next(e)
-    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: rewritten }] } })
+    const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
+    if (filed === undefined) return next(e)
+    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

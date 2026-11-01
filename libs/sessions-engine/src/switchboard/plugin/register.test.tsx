@@ -180,6 +180,8 @@ test('a fork notification or hand-back is filed on the board and never starts a 
   expect(handedBack.drop).toBe('quiet-fork: Second report, still quiet.')
   const board = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })
   expect(String(board.result)).toContain('Second report, still quiet.')
+  const angled = await typed($, notification('a7', 'quiet-fork: quiet', '<T> in Vec<T> now parses.'), 'task-notification')
+  expect(angled.drop).toBe('quiet-fork: <T> in Vec<T> now parses.')
   const shell = '<task-notification>\n<task-id>b9</task-id>\n<status>completed</status>\n<summary>Background command "sleep" completed</summary>\n</task-notification>'
   const passed = await typed($, shell, 'task-notification')
   expect(passed.drop).toBeUndefined()
