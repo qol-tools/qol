@@ -491,6 +491,6 @@ mod tests {
             .into_iter()
             .map(|watch| watch.id)
             .collect::<Vec<_>>();
-        assert_eq!(ids, ["watch-3-3", "watch-2-2"]);
+        assert_eq!(ids, ["watch-2-2", "watch-3-3"]);
     }
 }

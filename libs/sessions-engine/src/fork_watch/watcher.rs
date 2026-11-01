@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn only_the_watcher_installed_in_a_claude_config_folder_is_watched() {
-        let (_folder, root) = config();
+        let (folder, root) = config();
         let roots = [root.clone()];
         let cached = |rest: &[&'static str]| {
             CACHED_WATCHER
@@ -241,7 +241,7 @@ mod tests {
         let renamed = renamed.to_string_lossy().into_owned();
         let escaped = format!(
             "{}/../../0.11.27/bin/{WATCHER_SCRIPT}",
-            under(&root, &cache).display()
+            under(&folder.path().join("config"), &cache).display()
         );
         for accepted in [
             command(&["node", &script, URL]),
