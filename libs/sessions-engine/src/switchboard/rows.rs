@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,6 +25,21 @@ const SUBAGENTS_DIR: &str = "subagents";
 const AGENT_PREFIX: &str = "agent-";
 const TRANSCRIPT_SUFFIX: &str = ".jsonl";
 const FIRST_ROW_LIMIT: u64 = 256 * 1024;
+const COLOR_TAIL: u64 = 256 * 1024;
+const COLOR_ROW_TAG: &str = "\"type\":\"agent-color\"";
+pub(super) const CONTINUE_LEAD: &str = "Its transcript is ";
+pub(super) const CONTINUE_END: &str = ": read the end of it";
+const SESSION_COLORS: [(&str, &str); 8] = [
+    ("red", "\x1b[31m"),
+    ("green", "\x1b[32m"),
+    ("yellow", "\x1b[33m"),
+    ("blue", "\x1b[34m"),
+    ("purple", "\x1b[35m"),
+    ("cyan", "\x1b[36m"),
+    ("orange", "\x1b[38;5;208m"),
+    ("pink", "\x1b[38;5;211m"),
+];
+const KEY_COLORS: [&str; 7] = ["red", "blue", "green", "purple", "orange", "pink", "cyan"];
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -49,10 +64,39 @@ struct Task {
     token_count: u64,
 }
 
+#[derive(Default)]
+struct Fork {
+    started_ms: Option<u64>,
+    color: Option<String>,
+}
+
 struct Clock<'a> {
     now_ms: u64,
-    first_row_ms: &'a dyn Fn(&str) -> Option<u64>,
+    fork: &'a dyn Fn(&str) -> Fork,
     started_label: &'a dyn Fn(u64) -> Option<String>,
+}
+
+fn session_color(name: &str) -> Option<&'static str> {
+    SESSION_COLORS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, code)| *code)
+}
+
+fn key_color(name: &str) -> &'static str {
+    let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    });
+    let folded = hash ^ (hash >> 32);
+    let pick = KEY_COLORS[(folded % KEY_COLORS.len() as u64) as usize];
+    session_color(pick).unwrap_or(COLOR_OFF)
+}
+
+fn painted(text: &str, color: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    format!("{color}{text}{COLOR_OFF}")
 }
 
 fn model_label(model: &str) -> String {
@@ -198,8 +242,8 @@ struct Head {
     width: usize,
 }
 
-fn head(name: &str, task: &Task, fit: HeadFit) -> Head {
-    let mut text = name.to_owned();
+fn head(name: &str, color: &str, task: &Task, fit: HeadFit) -> Head {
+    let mut text = painted(name, color);
     let mut width = width(name);
     if fit == HeadFit::NameOnly {
         return Head { text, width };
@@ -246,11 +290,18 @@ impl Tail {
     }
 }
 
-fn fitted(name: &str, summary: &str, task: &Task, tail: &Tail, columns: usize) -> String {
+fn fitted(
+    name: &str,
+    color: &str,
+    summary: &str,
+    task: &Task,
+    tail: &Tail,
+    columns: usize,
+) -> String {
     let name_floor = width(name).min(NAME_MIN);
     for (head_fit, tail_fit) in LADDER {
         let tail = tail.text(tail_fit);
-        let fixed = head("", task, head_fit).width + GAP.len() + width(&tail);
+        let fixed = head("", color, task, head_fit).width + GAP.len() + width(&tail);
         if name_floor + fixed > columns {
             continue;
         }
@@ -260,6 +311,7 @@ fn fitted(name: &str, summary: &str, task: &Task, tail: &Tail, columns: usize) -
                     name,
                     (columns / NAME_SHARE).max(NAME_MIN).min(columns - fixed),
                 ),
+                color,
                 task,
                 head_fit,
             );
@@ -270,17 +322,17 @@ fn fitted(name: &str, summary: &str, task: &Task, tail: &Tail, columns: usize) -
                 return format!("{}{GAP}{summary}{}{tail}", capped.text, " ".repeat(pad));
             }
         }
-        let shown = head(&truncate(name, columns - fixed), task, head_fit);
+        let shown = head(&truncate(name, columns - fixed), color, task, head_fit);
         let pad = columns - shown.width - width(&tail);
         return format!("{}{}{tail}", shown.text, " ".repeat(pad));
     }
     let tail = tail.text(TailFit::NoTokens);
     if tail.is_empty() || width(&tail) + 2 > columns {
-        return truncate(&format!("{name} {tail}").trim_end().to_owned(), columns);
+        return truncate(format!("{name} {tail}").trim_end(), columns);
     }
     let name = truncate(name, columns - width(&tail) - 1);
     let pad = columns - width(&name) - width(&tail);
-    format!("{name}{}{tail}", " ".repeat(pad))
+    format!("{}{}{tail}", painted(&name, color), " ".repeat(pad))
 }
 
 fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
@@ -303,7 +355,13 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
     .collect::<Vec<_>>()
     .join(" · ");
     let summary = summary.trim();
-    let started = (clock.first_row_ms)(&task.id).or(task.start_time);
+    let fork = (clock.fork)(&task.id);
+    let color = fork
+        .color
+        .as_deref()
+        .and_then(session_color)
+        .unwrap_or_else(|| key_color(&name));
+    let started = fork.started_ms.or(task.start_time);
     let tail = Tail {
         idle: task.status.as_deref() == Some(IDLE_STATUS),
         started: started
@@ -314,9 +372,9 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
     };
     match columns {
         Some(0) => None,
-        Some(columns) => Some(fitted(&name, summary, task, &tail, columns)),
+        Some(columns) => Some(fitted(&name, color, summary, task, &tail, columns)),
         None => {
-            let shown = head(&name, task, HeadFit::Full);
+            let shown = head(&name, color, task, HeadFit::Full);
             let line = [shown.text.as_str(), summary, &tail.text(TailFit::Full)]
                 .into_iter()
                 .filter(|part| !part.is_empty())
@@ -334,15 +392,75 @@ fn agent_transcript(session_transcript: &Path, id: &str) -> PathBuf {
         .join(format!("{AGENT_PREFIX}{id}{TRANSCRIPT_SUFFIX}"))
 }
 
-fn first_row_ms(transcript: &Path) -> Option<u64> {
+struct FirstRow {
+    started_ms: Option<u64>,
+    source: Option<PathBuf>,
+}
+
+fn prompt_text(row: &Value) -> String {
+    match row.pointer("/message/content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn continued_from(prompt: &str) -> Option<PathBuf> {
+    let (_, rest) = prompt.split_once(CONTINUE_LEAD)?;
+    let (path, _) = rest.split_once(CONTINUE_END)?;
+    let path = path.trim();
+    (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
+}
+
+fn first_row(transcript: &Path) -> Option<FirstRow> {
     let file = File::open(transcript).ok()?;
     let mut line = String::new();
     BufReader::new(file.take(FIRST_ROW_LIMIT))
         .read_line(&mut line)
         .ok()?;
     let row: Value = serde_json::from_str(&line).ok()?;
-    let stamp = chrono::DateTime::parse_from_rfc3339(row.get("timestamp")?.as_str()?).ok()?;
-    u64::try_from(stamp.timestamp_millis()).ok()
+    let started_ms = row
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+        .and_then(|stamp| u64::try_from(stamp.timestamp_millis()).ok());
+    Some(FirstRow {
+        started_ms,
+        source: continued_from(&prompt_text(&row)),
+    })
+}
+
+fn last_color(transcript: &Path) -> Option<String> {
+    let mut file = File::open(transcript).ok()?;
+    let length = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(COLOR_TAIL)))
+        .ok()?;
+    let mut tail = Vec::new();
+    file.take(COLOR_TAIL).read_to_end(&mut tail).ok()?;
+    String::from_utf8_lossy(&tail)
+        .lines()
+        .rev()
+        .filter(|line| line.contains(COLOR_ROW_TAG))
+        .find_map(|line| {
+            let row: Value = serde_json::from_str(line).ok()?;
+            row.get("agentColor")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+fn fork_facts(transcript: &Path) -> Fork {
+    let Some(first) = first_row(transcript) else {
+        return Fork::default();
+    };
+    Fork {
+        started_ms: first.started_ms,
+        color: first.source.as_deref().and_then(last_color),
+    }
 }
 
 fn render(raw: &str, clock: &Clock) -> Result<Vec<String>> {
@@ -378,14 +496,15 @@ pub(super) fn run() -> Result<()> {
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
         .unwrap_or_default();
     let session = session_transcript(&raw);
-    let first_row = |id: &str| {
+    let fork = |id: &str| {
         session
             .as_deref()
-            .and_then(|session| first_row_ms(&agent_transcript(session, id)))
+            .map(|session| fork_facts(&agent_transcript(session, id)))
+            .unwrap_or_default()
     };
     let clock = Clock {
         now_ms,
-        first_row_ms: &first_row,
+        fork: &fork,
         started_label: &local_started_label,
     };
     for line in render(&raw, &clock)? {
@@ -401,8 +520,13 @@ mod tests {
     const NOW: u64 = 1_000_000_000;
     const STARTED: &str = "Nov 1 07:58";
 
-    fn no_transcript(_id: &str) -> Option<u64> {
-        None
+    const CYAN: &str = "\x1b[36m";
+
+    fn cyan_fork(_id: &str) -> Fork {
+        Fork {
+            started_ms: None,
+            color: Some("cyan".to_owned()),
+        }
     }
 
     fn fixed_label(_ms: u64) -> Option<String> {
@@ -412,7 +536,7 @@ mod tests {
     fn content(raw: Value) -> Vec<String> {
         let clock = Clock {
             now_ms: NOW,
-            first_row_ms: &no_transcript,
+            fork: &cyan_fork,
             started_label: &fixed_label,
         };
         render(&raw.to_string(), &clock)
@@ -426,12 +550,30 @@ mod tests {
     }
 
     fn visible(row: &str) -> String {
-        row.replace(MODEL_COLOR, "").replace(COLOR_OFF, "")
+        let mut shown = String::new();
+        let mut chars = row.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                for skipped in chars.by_ref() {
+                    if skipped == 'm' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            shown.push(c);
+        }
+        shown
     }
 
     fn squeezed(rows: &[String]) -> Vec<String> {
         rows.iter()
-            .map(|row| row.split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(|row| {
+                visible(row)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
             .collect()
     }
 
@@ -469,7 +611,7 @@ mod tests {
         let row = &rows[0];
         assert!(
             row.starts_with(
-                "RTX 3080 limits research  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
+                "\x1b[36mRTX 3080 limits research\x1b[39m  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
             ),
             "{row:?}"
         );
@@ -521,17 +663,22 @@ mod tests {
         let unbounded = content(json!({"tasks": [task]}));
         assert_eq!(
             unbounded,
-            [format!("fork-a  work  idle · {STARTED} · 5s · 10 tokens")]
+            [format!(
+                "{CYAN}fork-a{COLOR_OFF}  work  idle · {STARTED} · 5s · 10 tokens"
+            )]
         );
     }
 
     #[test]
     fn the_transcript_start_outranks_the_run_start() {
-        let first_row = |id: &str| (id == "a1").then_some(NOW - 3_600_000);
+        let fork = |id: &str| Fork {
+            started_ms: (id == "a1").then_some(NOW - 3_600_000),
+            color: None,
+        };
         let label = |ms: u64| Some(format!("at {ms}"));
         let clock = Clock {
             now_ms: NOW,
-            first_row_ms: &first_row,
+            fork: &fork,
             started_label: &label,
         };
         let raw = json!({
@@ -635,7 +782,7 @@ mod tests {
                 {"id": "", "description": "dropped"},
             ],
         }));
-        assert_eq!(rows, ["Start [31ming  0 tokens"]);
+        assert_eq!(rows, [format!("{CYAN}Start [31ming{COLOR_OFF}  0 tokens")]);
     }
 
     #[test]
@@ -657,7 +804,7 @@ mod tests {
             ]
         );
         for row in &rows {
-            assert_eq!(row.chars().count(), 50, "{row:?}");
+            assert_eq!(visible(row).chars().count(), 50, "{row:?}");
         }
     }
 
@@ -715,7 +862,9 @@ mod tests {
         }));
         assert_eq!(
             rows,
-            ["fork-a  \x1b[33mevil [2J\x1b[39m hi ]0;x gh  work  0 tokens"]
+            [format!(
+                "{CYAN}fork-a{COLOR_OFF}  \x1b[33mevil [2J\x1b[39m hi ]0;x gh  work  0 tokens"
+            )]
         );
     }
 
@@ -723,7 +872,7 @@ mod tests {
     fn an_empty_payload_writes_nothing_and_bad_json_fails() {
         let clock = Clock {
             now_ms: NOW,
-            first_row_ms: &no_transcript,
+            fork: &cyan_fork,
             started_label: &fixed_label,
         };
         assert!(render("  ", &clock).unwrap().is_empty());
@@ -752,11 +901,124 @@ mod tests {
             "{\"type\":\"user\",\"timestamp\":\"2026-11-01T06:58:29.835Z\"}\n{\"type\":\"assistant\"}\n",
         )
         .unwrap();
-        assert_eq!(first_row_ms(&good), Some(1_793_516_309_835));
+        let started = |path: &Path| first_row(path).and_then(|row| row.started_ms);
+        assert_eq!(started(&good), Some(1_793_516_309_835));
         let bad = dir.path().join("bad.jsonl");
         std::fs::write(&bad, "{\"type\":\"user\"}\n").unwrap();
-        assert_eq!(first_row_ms(&bad), None);
-        assert_eq!(first_row_ms(&dir.path().join("missing.jsonl")), None);
+        assert_eq!(started(&bad), None);
+        assert_eq!(started(&dir.path().join("missing.jsonl")), None);
+    }
+
+    #[test]
+    fn the_role_writes_the_continue_line_the_rows_read() {
+        assert!(
+            super::super::SWITCHBOARD_ROLE
+                .contains(&format!("{CONTINUE_LEAD}<its transcript>{CONTINUE_END}")),
+            "the switchboard role no longer names the transcript the way the rows read it"
+        );
+        let prompt = format!(
+            "Project: /w/app\ncontinue it\n\nCarry on the closed conversation titled T. {CONTINUE_LEAD}/h/p/c1.jsonl{CONTINUE_END} to learn where it stopped."
+        );
+        assert_eq!(
+            continued_from(&prompt),
+            Some(PathBuf::from("/h/p/c1.jsonl"))
+        );
+        assert_eq!(continued_from("Project: /w/app\nnew work"), None);
+        let blocks = json!({"message": {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}});
+        assert_eq!(prompt_text(&blocks), "a\nb");
+    }
+
+    #[test]
+    fn a_continued_fork_takes_its_session_color_and_its_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("closed.jsonl");
+        std::fs::write(
+            &source,
+            concat!(
+                "{\"type\":\"agent-color\",\"agentColor\":\"blue\",\"sessionId\":\"s\"}\n",
+                "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+                "{\"type\":\"agent-color\",\"agentColor\":\"orange\",\"sessionId\":\"s\"}\n",
+                "{\"type\":\"custom-title\",\"customTitle\":\"T\"}\n",
+            ),
+        )
+        .unwrap();
+        let fork = dir.path().join("agent-a1.jsonl");
+        let prompt = format!(
+            "Project: /w\nCarry on. {CONTINUE_LEAD}{}{CONTINUE_END}, then continue.",
+            source.display()
+        );
+        let first = json!({
+            "type": "user",
+            "timestamp": "2026-11-01T06:58:29.835Z",
+            "message": {"role": "user", "content": prompt},
+        });
+        std::fs::write(&fork, format!("{first}\n")).unwrap();
+        let facts = fork_facts(&fork);
+        assert_eq!(facts.started_ms, Some(1_793_516_309_835));
+        assert_eq!(facts.color.as_deref(), Some("orange"));
+        assert_eq!(last_color(&dir.path().join("missing.jsonl")), None);
+        let fresh = dir.path().join("agent-a2.jsonl");
+        std::fs::write(
+            &fresh,
+            "{\"type\":\"user\",\"message\":{\"content\":\"Project: /w\\nnew\"}}\n",
+        )
+        .unwrap();
+        let facts = fork_facts(&fresh);
+        assert_eq!((facts.started_ms, facts.color), (None, None));
+    }
+
+    #[test]
+    fn the_key_is_painted_in_the_session_color_or_a_steady_one_of_its_own() {
+        let orange = |_id: &str| Fork {
+            started_ms: None,
+            color: Some("orange".to_owned()),
+        };
+        let plain_fork = |_id: &str| Fork::default();
+        let raw = json!({"columns": 40, "tasks": [{"id": "a1", "name": "kcd2-modding", "description": "x"}]}).to_string();
+        let row_with = |fork: &dyn Fn(&str) -> Fork| {
+            let clock = Clock {
+                now_ms: NOW,
+                fork,
+                started_label: &fixed_label,
+            };
+            let line: Value = serde_json::from_str(&render(&raw, &clock).unwrap()[0]).unwrap();
+            line["content"].as_str().unwrap().to_owned()
+        };
+        assert!(
+            row_with(&orange).starts_with("\x1b[38;5;208mkcd2-modding\x1b[39m"),
+            "{:?}",
+            row_with(&orange)
+        );
+        let own = key_color("kcd2-modding");
+        assert_eq!(own, key_color("kcd2-modding"));
+        assert_ne!(own, MODEL_COLOR, "a key never borrows the model's yellow");
+        assert!(
+            row_with(&plain_fork).starts_with(&format!("{own}kcd2-modding{COLOR_OFF}")),
+            "{:?}",
+            row_with(&plain_fork)
+        );
+        let unknown = |_id: &str| Fork {
+            started_ms: None,
+            color: Some("default".to_owned()),
+        };
+        assert!(
+            row_with(&unknown).starts_with(own),
+            "{:?}",
+            row_with(&unknown)
+        );
+        let spread: std::collections::BTreeSet<&str> = [
+            "a-b",
+            "kcd2-modding",
+            "qol-bug-verify",
+            "forks-persist",
+            "statusline-perf",
+            "tray-update",
+            "x",
+        ]
+        .iter()
+        .map(|name| key_color(name))
+        .collect();
+        assert!(spread.len() > 2, "{spread:?}");
     }
 
     #[test]
