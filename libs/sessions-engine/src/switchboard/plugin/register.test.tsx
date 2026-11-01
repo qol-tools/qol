@@ -251,19 +251,17 @@ test('/board toggles the board, and a board it closed stays closed at the next s
   expect(panes).toEqual(['open board', 'close board'])
 })
 
-test('an inline board shrinks to one line while an agent is on screen', async ($, on) => {
+test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await deliver($, notification('a8', 'asking-fork: asks', 'ask: Which colour?\nRecommend: amber'))
+  await runBoard($)
   const props = { ...PANE.props, isFocused: false, placement: 'inline', view: { agentId: 'a8' } } as const
   const inline = await $.ui.mount({ ...PANE, surface: 'terminal', props })
-  expect(await inline.find({ type: 'Text', text: /Fork board · 1 needs you\. · ctrl\+x x closes it/ })).toBeDefined()
-  expect(await inline.find({ type: 'Text', text: /NEEDS YOU/ })).toBeUndefined()
+  expect(await inline.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
+  expect(await inline.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
   await inline.unmount()
-  const docked = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...props, placement: 'dock' } })
-  expect(await docked.find({ type: 'Text', text: /NEEDS YOU/ })).toBeDefined()
-  await docked.unmount()
 })
 
 test('a board the user closed stays closed at the next start until /board opens it', async ($, on) => {

@@ -409,16 +409,6 @@ export const register: Register = on => {
       </Button>
     )
 
-    if (e.props.placement === 'inline' && viewed !== undefined) {
-      return (
-        <Box flexDirection="row" gap={2}>
-          <Text dimColor wrap="truncate-end">
-            Fork board · {summary} · ctrl+x x closes it
-          </Text>
-          {close}
-        </Box>
-      )
-    }
     if (list.length === 0) {
       return (
         <Box flexDirection="column">

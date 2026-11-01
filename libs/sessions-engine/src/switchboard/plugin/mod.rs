@@ -112,7 +112,6 @@ mod tests {
             "$.session.send({ to: { agentId: entry.agentId }, text: entry.recommend ?? '' })",
             "on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
-            "e.props.placement === 'inline' && viewed !== undefined",
             "on('turn.start', async ($, e, next) => {",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
