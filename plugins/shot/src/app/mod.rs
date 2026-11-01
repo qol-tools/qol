@@ -14,6 +14,7 @@ use qol_gpui::monitor::MonitorTracker;
 use qol_gpui::window::ActiveWindows;
 
 use crate::capture::geometry::rect_label;
+use crate::capture::monitor::{RECORD_MONITOR_ACTION, SCREENSHOT_MONITOR_ACTION};
 use crate::capture::screenshot::PreviewCapture;
 use crate::ui::preview::PreviewWindows;
 
@@ -30,6 +31,28 @@ struct State {
     flow: ShotFlowGate,
     recording_action: recording_action::RecordingActionController,
     capture_status: crate::ui::capture_status::CaptureStatusUi,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CaptureArea {
+    Selection,
+    ActiveMonitor,
+}
+
+impl CaptureArea {
+    fn screenshot_action(self) -> &'static str {
+        match self {
+            Self::Selection => "screenshot",
+            Self::ActiveMonitor => SCREENSHOT_MONITOR_ACTION,
+        }
+    }
+
+    fn record_action(self) -> &'static str {
+        match self {
+            Self::Selection => "record",
+            Self::ActiveMonitor => RECORD_MONITOR_ACTION,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -133,7 +156,7 @@ fn spawn_screenshot_loop(rx: mpsc::Receiver<daemon::Command>, state: State, cx: 
                 break;
             };
             trace_command("dequeued", &cmd);
-            let was_screenshot = matches!(cmd, daemon::Command::Screenshot);
+            let was_screenshot = is_screenshot_command(&cmd);
             let keep_running = handle_command(&cx, &state, cmd).await;
             if !keep_running {
                 break;
@@ -162,7 +185,7 @@ async fn next_command(
 
 async fn handle_command(cx: &AsyncApp, state: &State, cmd: daemon::Command) -> bool {
     match cmd {
-        daemon::Command::Screenshot => capture_and_preview(cx, state).await,
+        daemon::Command::Screenshot => capture_and_preview(cx, state, CaptureArea::Selection).await,
         daemon::Command::Preview => preview_latest(cx, state).await,
         daemon::Command::Reload => reload_config(cx, state).await,
         daemon::Command::Theme => {
@@ -208,13 +231,24 @@ async fn reload_config(cx: &AsyncApp, state: &State) {
     );
 }
 
+fn is_screenshot_command(cmd: &daemon::Command) -> bool {
+    match cmd {
+        daemon::Command::Screenshot => true,
+        daemon::Command::Cli(action) => action == SCREENSHOT_MONITOR_ACTION,
+        daemon::Command::Preview
+        | daemon::Command::Reload
+        | daemon::Command::Theme
+        | daemon::Command::Kill => false,
+    }
+}
+
 fn drain_stale_screenshot_commands(
     rx: &mut UnboundedReceiver<daemon::Command>,
     pending: &mut VecDeque<daemon::Command>,
 ) -> usize {
     let mut dropped = 0;
     while let Ok(cmd) = rx.try_recv() {
-        if matches!(cmd, daemon::Command::Screenshot) {
+        if is_screenshot_command(&cmd) {
             dropped += 1;
             continue;
         }
@@ -223,26 +257,60 @@ fn drain_stale_screenshot_commands(
     dropped
 }
 
-async fn capture_and_preview(cx: &AsyncApp, state: &State) {
-    qol_runtime::probe!("SHOT_RECV", "action=screenshot");
-    let Some(_flow) = begin_shot_flow(state, "screenshot") else {
+async fn capture_and_preview(cx: &AsyncApp, state: &State, area: CaptureArea) {
+    let action = area.screenshot_action();
+    qol_runtime::probe!("SHOT_RECV", "action={action}");
+    let Some(_flow) = begin_shot_flow(state, action) else {
         return;
     };
-    park_preview_before_capture(cx, state, "screenshot").await;
+    park_preview_before_capture(cx, state, action).await;
     let _ = cx.update(|cx| crate::ui::preview::pre_create(&state.windows, &state.tracker, cx));
     let frozen_frame = cx
         .background_spawn(async { crate::capture::screenshot::freeze_frame() })
         .await;
-    let Some(selected) = select_region(
-        cx,
-        state,
-        crate::capture::space::CaptureKind::Screenshot,
-        frozen_frame.clone(),
-    )
-    .await
+    let Some(selected) = resolve_screenshot_area(cx, state, area, frozen_frame.clone()).await
     else {
         return;
     };
+    capture_area_and_preview(cx, state, selected, frozen_frame).await;
+}
+
+async fn resolve_screenshot_area(
+    cx: &AsyncApp,
+    state: &State,
+    area: CaptureArea,
+    frozen_frame: Option<crate::capture::frozen_frame::FrozenFrame>,
+) -> Option<crate::Rect> {
+    match area {
+        CaptureArea::Selection => {
+            select_region(
+                cx,
+                state,
+                crate::capture::space::CaptureKind::Screenshot,
+                frozen_frame,
+            )
+            .await
+        }
+        CaptureArea::ActiveMonitor => {
+            let rect = active_monitor_rect(state);
+            if rect.is_none() {
+                show_screenshot_failure(
+                    cx,
+                    &state.capture_status,
+                    "Could not find the active monitor",
+                );
+            }
+            rect
+        }
+    }
+}
+
+async fn capture_area_and_preview(
+    cx: &AsyncApp,
+    state: &State,
+    selected: crate::Rect,
+    frozen_frame: Option<crate::capture::frozen_frame::FrozenFrame>,
+) {
     let captured = cx
         .background_spawn(async move {
             crate::capture::screenshot::capture_selected_for_preview(
@@ -331,6 +399,61 @@ fn show_capture_status(
     status: crate::ui::capture_status::CaptureStatus,
 ) -> bool {
     cx.update(|cx| ui.show(status, cx)).unwrap_or(false)
+}
+
+async fn resolve_recording_area(
+    cx: &AsyncApp,
+    state: &State,
+    area: CaptureArea,
+) -> Option<crate::Rect> {
+    match area {
+        CaptureArea::Selection => {
+            select_region(
+                cx,
+                state,
+                crate::capture::space::CaptureKind::Recording,
+                None,
+            )
+            .await
+        }
+        CaptureArea::ActiveMonitor => {
+            let rect = active_monitor_rect(state);
+            if rect.is_none() {
+                show_capture_status(
+                    cx,
+                    &state.capture_status,
+                    crate::ui::capture_status::CaptureStatus::timed(
+                        "recording",
+                        "failed",
+                        "Recording not started",
+                        "Could not find the active monitor",
+                        CAPTURE_STATUS_TIMEOUT,
+                    )
+                    .tone(qol_gpui::toast::ToastTone::Danger),
+                );
+            }
+            rect
+        }
+    }
+}
+
+fn active_monitor_rect(state: &State) -> Option<crate::Rect> {
+    let monitor = state.tracker.snapshot_monitor();
+    let Some(monitor) = monitor else {
+        qol_runtime::probe!("SHOT_SELECT_RESULT", "source=active-monitor rect=none");
+        return None;
+    };
+    match crate::capture::monitor::rect_for(monitor.bounds()) {
+        Ok(rect) => {
+            trace_selected("active-monitor", Some(rect));
+            Some(rect)
+        }
+        Err(error) => {
+            log::warn!("active monitor unusable: {error:#}");
+            trace_selected("active-monitor", None);
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -593,8 +716,18 @@ fn trace_selected(source: &'static str, selected: Option<crate::Rect>) {
 }
 
 async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
-    if action == "record" {
-        dispatch_recording(cx, state);
+    if action == CaptureArea::Selection.record_action() {
+        dispatch_recording(cx, state, CaptureArea::Selection);
+        return;
+    }
+
+    if action == CaptureArea::ActiveMonitor.record_action() {
+        dispatch_recording(cx, state, CaptureArea::ActiveMonitor);
+        return;
+    }
+
+    if action == CaptureArea::ActiveMonitor.screenshot_action() {
+        capture_and_preview(cx, state, CaptureArea::ActiveMonitor).await;
         return;
     }
 
@@ -618,7 +751,7 @@ async fn run_cli(cx: &AsyncApp, state: &State, action: String) {
         .await;
 }
 
-fn dispatch_recording(cx: &AsyncApp, state: &State) {
+fn dispatch_recording(cx: &AsyncApp, state: &State, area: CaptureArea) {
     if state.recording_action.cancel_countdown() {
         qol_runtime::probe!(
             "SHOT_RECORD_TOGGLE",
@@ -632,13 +765,13 @@ fn dispatch_recording(cx: &AsyncApp, state: &State) {
     };
     let state = state.clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        toggle_recording(cx, &state).await;
+        toggle_recording(cx, &state, area).await;
         drop(action);
     })
     .detach();
 }
 
-async fn toggle_recording(cx: &AsyncApp, state: &State) {
+async fn toggle_recording(cx: &AsyncApp, state: &State, area: CaptureArea) {
     qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon");
     let config = crate::config::load();
     let stop_config = config.clone();
@@ -695,18 +828,12 @@ async fn toggle_recording(cx: &AsyncApp, state: &State) {
         }
     }
 
-    let Some(_flow) = begin_shot_flow(state, "record") else {
+    let action = area.record_action();
+    let Some(_flow) = begin_shot_flow(state, action) else {
         return;
     };
-    park_preview_before_capture(cx, state, "record").await;
-    let Some(selected) = select_region(
-        cx,
-        state,
-        crate::capture::space::CaptureKind::Recording,
-        None,
-    )
-    .await
-    else {
+    park_preview_before_capture(cx, state, action).await;
+    let Some(selected) = resolve_recording_area(cx, state, area).await else {
         qol_runtime::probe!("SHOT_RECORD_TOGGLE", "source=daemon result=select-cancel");
         return;
     };
@@ -770,27 +897,92 @@ mod tests {
 
     use futures::channel::mpsc;
 
-    use super::{daemon, drain_stale_screenshot_commands};
+    use super::{daemon, drain_stale_screenshot_commands, CaptureArea};
+
+    fn drained(queued: Vec<daemon::Command>) -> (usize, Vec<String>) {
+        let (tx, mut rx) = mpsc::unbounded();
+        for cmd in queued {
+            tx.unbounded_send(cmd).expect("queue");
+        }
+        let mut pending = VecDeque::new();
+        let dropped = drain_stale_screenshot_commands(&mut rx, &mut pending);
+        let kept = pending
+            .into_iter()
+            .map(|cmd| match cmd {
+                daemon::Command::Screenshot => "screenshot".to_string(),
+                daemon::Command::Preview => "preview".to_string(),
+                daemon::Command::Reload => "reload".to_string(),
+                daemon::Command::Theme => "theme".to_string(),
+                daemon::Command::Kill => "kill".to_string(),
+                daemon::Command::Cli(action) => format!("cli:{action}"),
+            })
+            .collect();
+        (dropped, kept)
+    }
+
+    fn cli(action: &str) -> daemon::Command {
+        daemon::Command::Cli(action.to_string())
+    }
 
     #[test]
-    fn stale_screenshot_drain_preserves_record_toggle() {
-        let (tx, mut rx) = mpsc::unbounded();
-        tx.unbounded_send(daemon::Command::Screenshot)
-            .expect("screenshot");
-        tx.unbounded_send(daemon::Command::Cli("record".to_string()))
-            .expect("record");
-        tx.unbounded_send(daemon::Command::Preview)
-            .expect("preview");
-        let mut pending = VecDeque::new();
+    fn stale_screenshot_drain_drops_every_screenshot_start_and_keeps_the_rest() {
+        let cases: [(&str, Vec<daemon::Command>, usize, Vec<&str>); 6] = [
+            (
+                "record toggle survives",
+                vec![
+                    daemon::Command::Screenshot,
+                    cli("record"),
+                    daemon::Command::Preview,
+                ],
+                1,
+                vec!["cli:record", "preview"],
+            ),
+            (
+                "monitor screenshot is stale like a region screenshot",
+                vec![cli("screenshot-monitor"), daemon::Command::Screenshot],
+                2,
+                vec![],
+            ),
+            (
+                "monitor recording survives",
+                vec![cli("screenshot-monitor"), cli("record-monitor")],
+                1,
+                vec!["cli:record-monitor"],
+            ),
+            (
+                "unrelated cli actions survive in order",
+                vec![cli("copy"), cli("screenshot-monitor"), cli("settings")],
+                1,
+                vec!["cli:copy", "cli:settings"],
+            ),
+            (
+                "similar names are not screenshots",
+                vec![cli("screenshot-monitors"), cli("monitor-screenshot")],
+                0,
+                vec!["cli:screenshot-monitors", "cli:monitor-screenshot"],
+            ),
+            ("empty queue", vec![], 0, vec![]),
+        ];
+        for (name, queued, expected_dropped, expected_kept) in cases {
+            let (dropped, kept) = drained(queued);
+            assert_eq!(dropped, expected_dropped, "dropped: {name}");
+            assert_eq!(kept, expected_kept, "kept: {name}");
+        }
+    }
 
-        assert_eq!(drain_stale_screenshot_commands(&mut rx, &mut pending), 1);
-        assert!(matches!(
-            pending.pop_front(),
-            Some(daemon::Command::Cli(action)) if action == "record"
-        ));
-        assert!(matches!(
-            pending.pop_front(),
-            Some(daemon::Command::Preview)
-        ));
+    #[test]
+    fn capture_areas_name_their_daemon_actions() {
+        let cases = [
+            (CaptureArea::Selection, "screenshot", "record"),
+            (
+                CaptureArea::ActiveMonitor,
+                "screenshot-monitor",
+                "record-monitor",
+            ),
+        ];
+        for (area, screenshot, record) in cases {
+            assert_eq!(area.screenshot_action(), screenshot, "{area:?}");
+            assert_eq!(area.record_action(), record, "{area:?}");
+        }
     }
 }

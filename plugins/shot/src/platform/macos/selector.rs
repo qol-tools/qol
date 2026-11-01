@@ -51,6 +51,11 @@ pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Re
     })
 }
 
+pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
+    let rect = super::selector_target::rect_from_bounds(monitor);
+    (rect.w > 0 && rect.h > 0).then_some(rect)
+}
+
 pub fn select_region_in_app(
     cx: &mut gpui::App,
     kind: CaptureKind,

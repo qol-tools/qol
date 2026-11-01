@@ -44,6 +44,10 @@ pub fn select_region_in_app(
     Some(rx)
 }
 
+pub fn monitor_capture_rect(monitor: Bounds<Pixels>) -> Option<Rect> {
+    logical_rect(rect_from_bounds(monitor), &native_displays())
+}
+
 fn open_selectors(
     tx: mpsc::Sender<Option<Rect>>,
     quit_on_finish: bool,

@@ -11,7 +11,15 @@ const PREVIEW_MAX_WIDTH: u32 = 360;
 const PREVIEW_MAX_HEIGHT: u32 = 240;
 
 pub fn capture_screenshot() -> Result<Option<PathBuf>> {
-    let Some(output_file) = capture_to_file()? else {
+    finish_cli_screenshot(capture_to_file()?)
+}
+
+pub fn capture_monitor_screenshot() -> Result<Option<PathBuf>> {
+    finish_cli_screenshot(capture_monitor_to_file()?)
+}
+
+fn finish_cli_screenshot(output_file: Option<PathBuf>) -> Result<Option<PathBuf>> {
+    let Some(output_file) = output_file else {
         return Ok(None);
     };
     let config = crate::config::load();
@@ -25,16 +33,24 @@ pub fn capture_screenshot() -> Result<Option<PathBuf>> {
 }
 
 pub fn capture_to_file() -> Result<Option<PathBuf>> {
+    capture_area_to_file(|frozen_frame| {
+        platform::select_region(crate::capture::space::CaptureKind::Screenshot, frozen_frame)
+    })
+}
+
+pub fn capture_monitor_to_file() -> Result<Option<PathBuf>> {
+    capture_area_to_file(|_| crate::capture::monitor::active_monitor_rect().map(Some))
+}
+
+fn capture_area_to_file(
+    pick_area: impl FnOnce(Option<FrozenFrame>) -> Result<Option<Rect>>,
+) -> Result<Option<PathBuf>> {
     let Some(_capture) = crate::capture::gate::try_acquire("cli-screenshot") else {
         qol_runtime::probe!("SHOT_SKIP", "action=screenshot reason=busy");
         return Ok(None);
     };
     let frozen_frame = freeze_frame();
-    let Some(selected) = platform::select_region(
-        crate::capture::space::CaptureKind::Screenshot,
-        frozen_frame.clone(),
-    )?
-    else {
+    let Some(selected) = pick_area(frozen_frame.clone())? else {
         return Ok(None);
     };
     let rect = prepare_screenshot_rect(selected)?;

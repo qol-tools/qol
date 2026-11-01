@@ -31,6 +31,14 @@ args = ["record"]
 label = "Take Screenshot"
 args = ["screenshot"]
 
+[action.screenshot-monitor]
+label = "Screenshot Active Monitor"
+args = ["screenshot-monitor"]
+
+[action.record-monitor]
+label = "Record Active Monitor"
+args = ["record-monitor"]
+
 [action.preview]
 label = "Preview Last Screenshot"
 args = ["preview"]

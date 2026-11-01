@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
+use crate::capture::monitor::{RECORD_MONITOR_ACTION, SCREENSHOT_MONITOR_ACTION};
 use crate::capture::{actions, recording, screenshot};
 use crate::config::settings;
 use crate::{platform, Config, PLUGIN_ID};
@@ -23,6 +24,8 @@ fn app(binary_name: &'static str) -> HeadlessApp {
         .about("Capture screenshots and record screen regions.")
         .command(record_command(binary_name))
         .command(screenshot_command(binary_name))
+        .command(record_monitor_command(binary_name))
+        .command(screenshot_monitor_command(binary_name))
         .command(copy_command(binary_name))
         .command(copy_path_command(binary_name))
         .command(settings_command(binary_name));
@@ -60,7 +63,7 @@ fn record_command(binary_name: &'static str) -> Command {
         .output("No stdout on success; user-facing progress is delivered through platform UI.")
         .exit_behavior("Exits 0 when recording starts, stops, or selection is cancelled.")
         .run_plain_text(|_| {
-            if forward_host_fallback_record_to_daemon() {
+            if forward_host_fallback_to_daemon("record") {
                 return Ok(PlainTextOutput::empty());
             }
             let config = crate::config::load();
@@ -69,15 +72,38 @@ fn record_command(binary_name: &'static str) -> Command {
         })
 }
 
-fn forward_host_fallback_record_to_daemon() -> bool {
+fn record_monitor_command(binary_name: &'static str) -> Command {
+    Command::new("record-monitor")
+        .about("Toggle recording of the active monitor.")
+        .usage(format!("{binary_name} record-monitor"))
+        .detail("When idle, records the whole active monitor with no region selection.")
+        .detail("The active monitor is the one qol treats as active: the focused one, otherwise the one under the cursor, otherwise the first.")
+        .detail("When recording is active, stops the recorder and finalizes the output file, exactly like record; both commands share one recording.")
+        .detail("With the daemon running, a 3-2-1 countdown shows first so the countdown toast stays out of the video; running the command again during the countdown cancels it.")
+        .output("No stdout on success; user-facing progress is delivered through platform UI.")
+        .exit_behavior("Exits 0 when recording starts, stops, or the countdown is cancelled; exits non-zero when no active monitor is known.")
+        .run_plain_text(|_| {
+            if forward_host_fallback_to_daemon(RECORD_MONITOR_ACTION) {
+                return Ok(PlainTextOutput::empty());
+            }
+            let config = crate::config::load();
+            recording::toggle_monitor_recording(&config)?;
+            Ok(PlainTextOutput::empty())
+        })
+}
+
+fn forward_host_fallback_to_daemon(action: &str) -> bool {
     if std::env::var_os(qol_conventions::ENV_DAEMON_SOCKET).is_none()
         || std::env::var_os(qol_conventions::ENV_DAEMON_REPLACE_EXISTING).is_some()
     {
         return false;
     }
 
-    qol_runtime::probe!("SHOT_RECORD_FORWARD", "action=record reason=host-fallback");
-    crate::app::daemon::wait_and_send_action("record", Duration::from_millis(4_000))
+    qol_runtime::probe!(
+        "SHOT_RECORD_FORWARD",
+        "action={action} reason=host-fallback"
+    );
+    crate::app::daemon::wait_and_send_action(action, Duration::from_millis(4_000))
 }
 
 fn screenshot_command(binary_name: &'static str) -> Command {
@@ -89,6 +115,25 @@ fn screenshot_command(binary_name: &'static str) -> Command {
         .exit_behavior("Exits 0 when the screenshot is saved or selection is cancelled.")
         .run_result(|_| {
             let Some(path) = screenshot::capture_screenshot()? else {
+                return Ok(CommandResult::success(""));
+            };
+            Ok(CommandResult::success(format!("{}\n", path.display())))
+        })
+}
+
+fn screenshot_monitor_command(binary_name: &'static str) -> Command {
+    Command::new("screenshot-monitor")
+        .about("Capture a screenshot of the active monitor.")
+        .usage(format!("{binary_name} screenshot-monitor"))
+        .detail("Captures the whole active monitor with no region selection and saves a PNG.")
+        .detail("The active monitor is the one qol treats as active: the focused one, otherwise the one under the cursor, otherwise the first.")
+        .output("Prints the saved image path on success; prints nothing when the daemon handles the capture.")
+        .exit_behavior("Exits 0 when the screenshot is saved; exits non-zero when no active monitor is known.")
+        .run_result(|_| {
+            if forward_host_fallback_to_daemon(SCREENSHOT_MONITOR_ACTION) {
+                return Ok(CommandResult::success(""));
+            }
+            let Some(path) = screenshot::capture_monitor_screenshot()? else {
                 return Ok(CommandResult::success(""));
             };
             Ok(CommandResult::success(format!("{}\n", path.display())))
@@ -332,6 +377,58 @@ mod tests {
         assert!(execution
             .stdout
             .contains(&format!("{PLUGIN_ID} screenshot")));
+    }
+
+    #[test]
+    fn monitor_commands_are_registered_with_complete_help() {
+        let cases = [
+            (
+                "screenshot-monitor",
+                "Capture a screenshot of the active monitor.",
+            ),
+            ("record-monitor", "Toggle recording of the active monitor."),
+        ];
+        for (command, about) in cases {
+            for argv in [
+                vec!["help".to_string(), command.to_string()],
+                vec![command.to_string(), "help".to_string()],
+            ] {
+                let execution = app(PLUGIN_ID).execute(argv.clone());
+                assert_eq!(execution.exit_code, EXIT_SUCCESS, "{argv:?}");
+                for expected in [
+                    format!("{PLUGIN_ID} {command}"),
+                    about.to_string(),
+                    "Details".to_string(),
+                    "Output".to_string(),
+                    "Exit".to_string(),
+                    "active monitor".to_string(),
+                ] {
+                    assert!(
+                        execution.stdout.contains(&expected),
+                        "{argv:?} help should contain {expected:?}: {}",
+                        execution.stdout
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn root_help_lists_both_monitor_commands() {
+        let execution = app(PLUGIN_ID).execute(vec!["help".to_string()]);
+        assert_eq!(execution.exit_code, EXIT_SUCCESS);
+        for command in ["screenshot-monitor", "record-monitor"] {
+            assert!(execution.stdout.contains(command), "root help: {command}");
+        }
+    }
+
+    #[test]
+    fn monitor_commands_reject_json_output() {
+        for command in ["screenshot-monitor", "record-monitor"] {
+            let execution = app(PLUGIN_ID).execute(vec![command.to_string(), "--json".to_string()]);
+            assert_eq!(execution.exit_code, EXIT_USAGE, "{command}");
+            assert!(execution.stderr.contains("does not support --json"));
+        }
     }
 
     #[test]

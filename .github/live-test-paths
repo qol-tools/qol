@@ -1,6 +1,8 @@
 plugins/*/src/ui/**
 plugins/alt-tab/src/app/**
 plugins/alt-tab/src/picker/**
+plugins/shot/src/app/**
+plugins/shot/src/capture/**
 apps/tray/src/surfaces/**
 apps/tray/src/settings_surface/**
 libs/gpui/**
