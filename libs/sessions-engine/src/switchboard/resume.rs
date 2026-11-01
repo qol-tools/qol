@@ -15,15 +15,15 @@ const ASSISTANT_ROW: &str = "\"type\":\"assistant\"";
 const WORKTREE_PIN: &str = "worktreePath";
 const WORKTREE_KEYS: [&str; 3] = [WORKTREE_PIN, "worktreeBranch", "spawnedWithWorktree"];
 
-fn answered(path: &Path, revision: &str) -> bool {
+fn answered(path: &Path, marker: &str) -> bool {
     let Ok(file) = fs::File::open(path) else {
         return false;
     };
-    let (mut replied, mut current) = (false, false);
+    let (mut replied, mut marked) = (false, false);
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         replied |= line.contains(ASSISTANT_ROW);
-        current |= line.contains(revision);
-        if replied && current {
+        marked |= line.contains(marker);
+        if replied && marked {
             return true;
         }
     }
@@ -33,7 +33,7 @@ fn answered(path: &Path, revision: &str) -> bool {
 pub(super) fn latest_conversation(
     config_home: &Path,
     switchboard: &Path,
-    revision: &str,
+    marker: &str,
 ) -> Option<String> {
     let mut found: Vec<(SystemTime, String)> =
         fs::read_dir(conversations_dir(config_home, switchboard))
@@ -45,7 +45,7 @@ pub(super) fn latest_conversation(
                     return None;
                 }
                 let id = path.file_stem()?.to_str()?.to_owned();
-                if !answered(&path, revision) {
+                if !answered(&path, marker) {
                     return None;
                 }
                 Some((entry.metadata().ok()?.modified().ok()?, id))
@@ -129,34 +129,29 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_conversation_with_an_exchange_under_the_current_role_is_resumed() {
+    fn the_newest_switchboard_conversation_with_an_exchange_is_resumed_under_any_role() {
         let root = tempfile::tempdir().unwrap();
         let (home, board) = (root.path().join("h"), Path::new("/data/switchboard"));
-        let current = "Switchboard role revision b2.";
-        let answered = format!("{{\"systemPrompt\":\"{current}\"}}\n{{\"type\":\"assistant\"}}\n");
-        assert_eq!(latest_conversation(&home, board, current), None);
-        conversation(&home, board, "old", &answered);
+        let marker = "Switchboard role revision ";
+        let answered = |revision: &str| {
+            format!("{{\"systemPrompt\":\"{marker}{revision}.\"}}\n{{\"type\":\"assistant\"}}\n")
+        };
+        assert_eq!(latest_conversation(&home, board, marker), None);
+        conversation(&home, board, "old", &answered("b2"));
         std::thread::sleep(std::time::Duration::from_millis(30));
-        conversation(&home, board, "new", &answered);
+        conversation(&home, board, "before-update", &answered("a1"));
         std::thread::sleep(std::time::Duration::from_millis(30));
         conversation(
             &home,
             board,
             "empty",
-            &format!("{{\"systemPrompt\":\"{current}\"}}\n{{\"type\":\"attachment\"}}\n"),
+            &format!("{{\"systemPrompt\":\"{marker}b2.\"}}\n{{\"type\":\"attachment\"}}\n"),
         );
         std::thread::sleep(std::time::Duration::from_millis(30));
-        conversation(
-            &home,
-            board,
-            "stale",
-            "{\"systemPrompt\":\"Switchboard role revision a1.\"}\n{\"type\":\"assistant\"}\n",
-        );
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        conversation(&home, board, "unmarked", r#"{"type":"assistant"}"#);
+        conversation(&home, board, "plain-session", r#"{"type":"assistant"}"#);
         assert_eq!(
-            latest_conversation(&home, board, current).as_deref(),
-            Some("new")
+            latest_conversation(&home, board, marker).as_deref(),
+            Some("before-update")
         );
     }
 

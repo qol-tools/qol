@@ -17,6 +17,11 @@ use super::resume::FORK_AGENT;
 pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
+pub(super) const ROLE_REFRESH: &str = "role-refresh";
+pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
+pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
+const COMPACT_BOUNDARY: &str = "\"compact_boundary\"";
+const ROLE_REFRESH_LEAD: &str = "The switchboard's instructions changed after this conversation started, and a resumed conversation keeps the system prompt it started with. The instructions below are the current ones: where they differ from the switchboard instructions in your system prompt, follow these.\n\n";
 const RETIRED_POST_AGENT: &str = "post-agent";
 const RETIRED_WORKTREE_CREATE: &str = "worktree-create";
 const RETIRED_PINS: &str = "fork-pins";
@@ -36,6 +41,8 @@ struct ToolInput {
 struct Payload {
     cwd: Option<String>,
     tool_input: ToolInput,
+    source: Option<String>,
+    transcript_path: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -134,6 +141,50 @@ fn fork_context(
     }))
 }
 
+fn refreshed_since_compaction(transcript: &str, revision: &str) -> bool {
+    let rows: Vec<&str> = transcript.lines().collect();
+    let start = rows
+        .iter()
+        .rposition(|row| row.contains(COMPACT_BOUNDARY))
+        .map_or(0, |at| at + 1);
+    rows[start..].iter().any(|row| row.contains(revision))
+}
+
+fn role_refresh(
+    part: usize,
+    payload: &Payload,
+    transcript: &str,
+    revision: &str,
+    role: &dyn Fn() -> String,
+) -> Option<String> {
+    let source = payload.source.as_deref()?;
+    if !ROLE_REFRESH_SOURCES.split('|').any(|one| one == source) {
+        return None;
+    }
+    if refreshed_since_compaction(transcript, revision) {
+        return None;
+    }
+    let parts = context::split_parts(&format!("{ROLE_REFRESH_LEAD}{}", role()));
+    let text = parts.get(part)?;
+    let text = format!(
+        "[switchboard instructions part {}/{}]\n{text}",
+        part + 1,
+        parts.len()
+    );
+    Some(
+        json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}})
+            .to_string(),
+    )
+}
+
+fn current_role(cwd: Option<&str>) -> String {
+    let projects = match (crate::spawn::SpawnLedger::system(), cwd) {
+        (Ok(ledger), Some(cwd)) => ledger.recent_cwds(super::PROJECTS_SHOWN, Path::new(cwd)),
+        _ => Vec::new(),
+    };
+    super::role(&projects)
+}
+
 fn deny_json(reason: &str) -> String {
     json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -163,7 +214,9 @@ fn read_payload() -> Result<Payload> {
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
-        anyhow!("usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{AGENT_ROWS}>")
+        anyhow!(
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}>"
+        )
     })?;
     match name {
         AGENT_ROWS => super::rows::run(),
@@ -186,6 +239,26 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             let payload = read_payload()?;
             if let Some(line) =
                 fork_context(part, &payload, &claude_home(), switchboard_dir().as_deref())?
+            {
+                crate::cli::line(line);
+            }
+            Ok(())
+        }
+        ROLE_REFRESH => {
+            let part = args
+                .get(1)
+                .and_then(|arg| arg.to_str())
+                .and_then(|arg| arg.parse::<usize>().ok())
+                .ok_or_else(|| anyhow!("{ROLE_REFRESH} takes a part number"))?;
+            let payload = read_payload()?;
+            let transcript = payload
+                .transcript_path
+                .as_deref()
+                .and_then(|path| fs::read_to_string(path).ok())
+                .unwrap_or_default();
+            let role = || current_role(payload.cwd.as_deref());
+            if let Some(line) =
+                role_refresh(part, &payload, &transcript, &super::role_revision(), &role)
             {
                 crate::cli::line(line);
             }
@@ -423,5 +496,73 @@ mod tests {
             "why"
         );
         assert_eq!(value["hookSpecificOutput"]["hookEventName"], "PreToolUse");
+    }
+
+    fn session_start(source: &str) -> Payload {
+        Payload {
+            source: Some(source.to_owned()),
+            ..Payload::default()
+        }
+    }
+
+    fn refreshed(
+        part: usize,
+        source: &str,
+        transcript: &str,
+        role: &str,
+    ) -> Option<serde_json::Value> {
+        let role = role.to_owned();
+        role_refresh(
+            part,
+            &session_start(source),
+            transcript,
+            "Switchboard role revision new.",
+            &move || role.clone(),
+        )
+        .map(|line| serde_json::from_str(&line).unwrap())
+    }
+
+    #[test]
+    fn a_resumed_or_compacted_switchboard_gets_the_current_role_until_it_holds_it() {
+        let role = "the role\nSwitchboard role revision new.";
+        let stale = "{\"type\":\"attachment\",\"x\":\"Switchboard role revision old.\"}\n";
+        for source in ["resume", "compact"] {
+            let value = refreshed(0, source, stale, role).unwrap();
+            assert_eq!(value["hookSpecificOutput"]["hookEventName"], "SessionStart");
+            let text = value["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap();
+            assert!(text.starts_with("[switchboard instructions part 1/1]\n"));
+            assert!(text.contains(ROLE_REFRESH_LEAD));
+            assert!(text.ends_with(role));
+            assert!(refreshed(1, source, stale, role).is_none());
+        }
+        assert!(refreshed(0, "startup", stale, role).is_none());
+        assert!(refreshed(0, "clear", stale, role).is_none());
+        let current = format!("{stale}{{\"x\":\"Switchboard role revision new.\"}}\n");
+        assert!(refreshed(0, "resume", &current, role).is_none());
+        let compacted =
+            format!("{current}{{\"type\":\"system\",\"subtype\":\"compact_boundary\"}}\n");
+        assert!(refreshed(0, "compact", &compacted, role).is_some());
+    }
+
+    #[test]
+    fn a_long_role_is_split_over_the_refresh_slots() {
+        let role = "r".repeat(context::PART_CHARS + 10);
+        let first = refreshed(0, "resume", "", &role).unwrap();
+        let second = refreshed(1, "resume", "", &role).unwrap();
+        let text = |value: &serde_json::Value| {
+            value["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        assert!(text(&first).starts_with("[switchboard instructions part 1/2]\n"));
+        assert!(text(&second).starts_with("[switchboard instructions part 2/2]\n"));
+        assert!(refreshed(ROLE_REFRESH_SLOTS - 1, "resume", "", &role).is_none());
+        let full = super::super::role(&[]);
+        assert!(
+            context::split_parts(&format!("{ROLE_REFRESH_LEAD}{full}")).len() <= ROLE_REFRESH_SLOTS
+        );
     }
 }

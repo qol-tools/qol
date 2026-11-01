@@ -45,8 +45,9 @@ const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
+const FILED_LINE = /\[fork board\] ([^\n<]*)/
 const FORK_TO_FORK =
-  'Not sent: an agent inside a fork messages only, by agent id, the fork it started or the fork that started it. Another fork\'s work is not yours; put what it needs in your report instead.'
+  'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const TAKEOVER = /^The message above is for the fork .+, agent id ([A-Za-z0-9_-]+), which was stopped, so you take over /
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
@@ -222,10 +223,8 @@ const recipientId = (to: unknown): string | undefined =>
 
 export const mayMessage = (list: Entry[], from: string, to: unknown): boolean => {
   const id = recipientId(to)
-  const sender = list.find(one => one.agentId === from)
-  const target = id === undefined ? undefined : list.find(one => one.agentId === id)
-  if (sender === undefined || target === undefined) return false
-  return target.launcher === from || (sender.launcher !== undefined && sender.launcher === target.agentId)
+  if (id === undefined || id === from) return false
+  return list.some(one => one.agentId === from) && list.some(one => one.agentId === id)
 }
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
@@ -595,6 +594,18 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .join('\n')
 }
 
+const quietReport = async ($: EngineInterface, text: string, origin: string | undefined): Promise<string | undefined> => {
+  if (origin !== 'task-notification' && origin !== 'peer') return undefined
+  if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return undefined
+  try {
+    const list = await read($, board)
+    const rewritten = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
+    return rewritten === undefined ? undefined : FILED_LINE.exec(rewritten)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
 export const register: Register = on => {
   let isAutoOpenPending = false
 
@@ -666,6 +677,8 @@ export const register: Register = on => {
   }).catch(() => ({ text: 'The fork board could not open.' }))
 
   on('prompt.submit', async ($, e, next) => {
+    const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
+    if (quiet !== undefined) return { drop: quiet }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
     clearTypedToggle($)

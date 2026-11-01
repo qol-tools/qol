@@ -9,8 +9,8 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.6.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat, runs each fork's pull request watcher under CLI Sessions and gives each fork its watcher's result.",
+  "version": "1.7.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, runs each fork's pull request watcher under CLI Sessions and gives each fork its watcher's result.",
   "types": "./types/index.d.ts"
 }
 "#;

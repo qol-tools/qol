@@ -85,7 +85,7 @@ fn fits(chars: usize, encoded: usize) -> bool {
     chars <= PART_CHARS && encoded <= PART_ENCODED
 }
 
-fn split_parts(text: &str) -> Vec<String> {
+pub(super) fn split_parts(text: &str) -> Vec<String> {
     let mut parts = Vec::new();
     let mut part = String::new();
     let mut chars = 0;

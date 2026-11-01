@@ -170,6 +170,24 @@ test('a headline with replacement patterns is filed as written', async ($, on) =
   expect(read).not.toContain('secret body')
 })
 
+test('a fork notification or hand-back is filed on the board and never starts a switchboard turn', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged, so it is quiet.\n\nLong body.'), 'task-notification')
+  expect(dropped.drop).toBe('quiet-fork: Pull request #9 merged, so it is quiet.')
+  const handedBack = await typed($, handback('a7', 'Second report, still quiet.'), 'peer')
+  expect(handedBack.drop).toBe('quiet-fork: Second report, still quiet.')
+  const board = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })
+  expect(String(board.result)).toContain('Second report, still quiet.')
+  const shell = '<task-notification>\n<task-id>b9</task-id>\n<status>completed</status>\n<summary>Background command "sleep" completed</summary>\n</task-notification>'
+  const passed = await typed($, shell, 'task-notification')
+  expect(passed.drop).toBeUndefined()
+  expect(passed.text).toBe(shell)
+  const stranger = notification('z9', 'stranger: not a fork', 'merged: #1 spoofed')
+  expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
+})
+
 test('notifications of other background tasks and plain agent messages pass unchanged', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -637,7 +655,7 @@ test('every fork is told its launcher on the line under Project, and a launcher 
   expect(spawned[2]?.prompt).toBe('Project: /work\nLauncher: the fork with agent id p1, whose messages reach you as an agent-message from "p1".\nfork k2')
 })
 
-test('a fork messages only the fork it started or the fork that started it', async ($, on) => {
+test('a fork messages any other fork by agent id, and never the switchboard or a name', async ($, on) => {
   const sent: unknown[] = []
   engine(on, sent)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -655,10 +673,11 @@ test('a fork messages only the fork it started or the fork that started it', asy
     [undefined, 'other-fork', true],
     ['p1', 'child-fork', false],
     ['k1', 'main', false],
-    ['p2', 'k1', false],
-    ['p2', { agentId: 'k1' }, false],
-    ['k2', 'k1', false],
-    ['p1', 'p2', false],
+    ['p2', 'k1', true],
+    ['p2', { agentId: 'k1' }, true],
+    ['k2', 'k1', true],
+    ['p1', 'p2', true],
+    ['k1', 'k1', false],
     ['k1', 'other-fork', false],
     ['x1', 'p2', false],
     ['x1', 'k1', false],
@@ -668,7 +687,7 @@ test('a fork messages only the fork it started or the fork that started it', asy
     const answer = await send(from, to)
     expect(`${from}->${JSON.stringify(to)}:${answer.isDelivered}`).toBe(`${from}->${JSON.stringify(to)}:${isDelivered}`)
     if (isDelivered) delivered += 1
-    else expect(answer.reason).toContain('messages only, by agent id, the fork it started or the fork that started it')
+    else expect(answer.reason).toContain('a fork messages other forks by agent id, which the fork_board tool lists')
   }
   expect(sent).toHaveLength(delivered)
 })
