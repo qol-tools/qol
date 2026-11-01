@@ -13,6 +13,7 @@ const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const CLOSED_KEY = 'pane-closed'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -125,6 +126,14 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   await $.store.delete(CLOSED_KEY).catch(() => {})
   const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
+}
+
+const clearTypedToggle = ($: EngineInterface): void => {
+  $.clock.after(CLEAR_TYPED_MS, () => {
+    void (async () => {
+      if (TYPED_TOGGLE.test((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+    })().catch(() => {})
+  })
 }
 
 const persist = async ($: EngineInterface): Promise<void> => {
@@ -415,6 +424,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
+    clearTypedToggle($)
     return { drop: await toggleBoard($) }
   }).catch(($, e, next) => (next.called ? next(e) : { drop: 'The fork board could not open.' }))
 

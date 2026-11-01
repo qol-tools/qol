@@ -271,6 +271,43 @@ test('typing qols board toggles the board like /board and never reaches the mode
   expect(panes).toEqual(['open board', 'close board'])
 })
 
+test('typing qols board empties the prompt box once the engine puts the dropped text back', async ($, on) => {
+  engine(on)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  let box = ''
+  const reads: Array<() => void> = []
+  const fills: string[] = []
+  on('prompt.read', () => {
+    reads.shift()?.()
+    return { value: { text: box, cursor: box.length } }
+  })
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    box = e.text
+    return { isFilled: true }
+  })
+  const fire = async (draft: string) => {
+    box = draft
+    const read = new Promise<void>(resolve => reads.push(resolve))
+    expect(timers.length).toBe(1)
+    timers.splice(0).forEach(resolve => resolve())
+    await read
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  await fire('qols board')
+  expect(fills).toEqual([''])
+  expect(box).toBe('')
+  expect((await typed($, 'qols board')).drop).toContain('Fork board closed.')
+  await fire('qols board\nmore text')
+  expect(fills).toEqual([''])
+  expect(box).toBe('qols board\nmore text')
+  expect((await typed($, 'qols board please')).text).toBe('qols board please')
+  expect(timers).toEqual([])
+})
+
 test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })

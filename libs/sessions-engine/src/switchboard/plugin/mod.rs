@@ -9,7 +9,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Starts each switchboard fork in its project folder and files each fork's final report on the fork board beside the chat.",
   "types": "./types/index.d.ts"
 }
