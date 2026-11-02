@@ -374,6 +374,13 @@ const isSent = (answer: { deny?: string; isError?: true; result?: unknown }): bo
   answer.isError !== true &&
   !(typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)
 
+const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom'> => ({
+  ...(entry?.project === undefined ? {} : { project: entry.project }),
+  ...(entry?.successor === undefined ? {} : { successor: entry.successor }),
+  ...(entry?.launcher === undefined ? {} : { launcher: entry.launcher }),
+  ...(entry?.resumedFrom === undefined ? {} : { resumedFrom: entry.resumedFrom }),
+})
+
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   const filing: Filing =
     report.filing ??
@@ -388,6 +395,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
       const isSame = entry !== undefined && entry.kind !== undefined && entry.report === clip(report.report, REPORT_CHARS)
       isNew = !isSame
       filed = {
+        ...placementOf(entry),
         agentId: report.agentId,
         name: report.name || entry?.name || report.agentId,
         ...filing,
@@ -698,6 +706,22 @@ const pullNote = (all: readonly Pull[], agentId: string): string => {
   return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
 }
 
+const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
+  const path = await subagentFile($, agentId, '.meta.json')
+  if (path === undefined) return undefined
+  const meta = JSON.parse(String(await $.fs.read(path))) as { parentAgentId?: unknown }
+  return typeof meta.parentAgentId === 'string' && ID.test(meta.parentAgentId) ? meta.parentAgentId : undefined
+}
+
+const withLaunchers = ($: EngineInterface, list: Entry[]): Promise<Entry[]> =>
+  Promise.all(
+    list.map(async entry => {
+      if (entry.launcher !== undefined) return entry
+      const launcher = await metaLauncher($, entry.agentId).catch(() => undefined)
+      return launcher === undefined ? entry : { ...entry, launcher }
+    }),
+  )
+
 const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
   if (entry.launcher === undefined) return undefined
   const parent = list.find(one => one.agentId === entry.launcher)
@@ -908,7 +932,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
-    return { result: readText(await read($, board), fork, await read($, pulls)) }
+    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {

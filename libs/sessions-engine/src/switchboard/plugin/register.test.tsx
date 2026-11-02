@@ -312,6 +312,30 @@ test('fork_board names the fork a nested fork is listed under in the agent list'
   expect(all).toContain('[fork board] settings-rows-redesign (working, agent id p1)')
   const one = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'qol-shot-region-video' })).result)
   expect(one).toContain('agent id: c1\nagent list: under settings-rows-redesign, the fork that started it, not at the top level')
+
+  await deliver($, notification('c1', 'qol-shot-region-video: broken region recordings', 'Region recordings play again.'))
+  const reported = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(reported).toContain('agent id c1, listed under settings-rows-redesign)')
+})
+
+test("fork_board reads a nested fork's parent from its meta when the row never recorded one", async ($, on) => {
+  engine(on)
+  const metas: Record<string, string> = {
+    '/conv/switchboard-session/subagents/agent-m2.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'm1' }),
+    '/conv/switchboard-session/subagents/agent-m3.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'bad id!' }),
+  }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path in metas }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: metas[e.path] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'm1', 'parent-fork: parent')
+  await spawn($, 'm2', 'old-child: recorded before launchers')
+  await spawn($, 'm3', 'odd-child: bad meta')
+
+  const all = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(all).toContain('agent id m2, listed under parent-fork)')
+  expect(all).toContain('[fork board] odd-child (working, agent id m3)')
+  expect(all).toContain('[fork board] parent-fork (working, agent id m1)')
 })
 
 test('the board names the key that reaches it until it holds the keys, and closes from a button', async ($, on) => {
