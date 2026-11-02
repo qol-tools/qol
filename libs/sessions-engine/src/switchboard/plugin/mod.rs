@@ -10,7 +10,7 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
   "types": "./types/index.d.ts"
 }
@@ -151,7 +151,9 @@ mod tests {
             "$.ui.view({ agentId: entry.agentId })",
             "const text = entry.recommend ?? ''",
             "const sent = await sendTo($, entry, text)",
-            "on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {",
+            "on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {",
+            "<Text color={forkColor(one.fork)} bold>",
+            "return dropAs(quiet.fork)",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
             "on('turn.start', async ($, e, next) => {",
