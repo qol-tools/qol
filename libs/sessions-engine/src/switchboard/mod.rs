@@ -1135,7 +1135,7 @@ mod tests {
             "Pass message only when the user gave words meant for that session beyond asking to bring it back",
             "asking to resume, reopen or continue it is not a message for it",
             "that sessions_list shows still open in a terminal is not closed: say in one line that it is open in its tab, and never bring back an older closed conversation in its place",
-            "never start a fork that reads a closed session's transcript",
+            "Never start a fork that reads a closed session's transcript",
             "holds no conversation to resume, that row has nothing to bring back: bring back the next newest row the user's words fit",
             "only when its row has no transcript, when resume_session cannot read it, or when the user asks for it in a terminal of its own or with Remote Control on",
             "bring closed sessions back as forks with resume_session",
