@@ -145,7 +145,7 @@ fn keep_linked(request: &str) -> Result<()> {
         serde_json::from_str(request).context("invalid app audio request")?;
     let stop = qol_process::CancellationToken::install()
         .context("failed to listen for the stop request")?;
-    while !stop.is_cancelled() && request.processes.iter().any(CaptureProcess::alive) {
+    while !stop.is_cancelled() && request.processes.iter().any(recording) {
         let graph = match graph() {
             Ok(graph) => graph,
             Err(error) => {
@@ -157,17 +157,18 @@ fn keep_linked(request: &str) -> Result<()> {
         let Some(sink) = graph.node_with_serial(request.sink) else {
             bail!("the app audio sink {SINK} was removed during the recording");
         };
-        match link_graph(&graph, &request.apps, sink) {
-            Ok(0) => {}
-            Ok(linked) => {
-                qol_runtime::probe!("SHOT_RECORD_APP_AUDIO", "step=keep linked={linked}");
-            }
-            Err(error) => log::warn!("app audio linking failed: {error:#}"),
+        let linked = link_graph(&graph, &request.apps, sink);
+        if linked > 0 {
+            qol_runtime::probe!("SHOT_RECORD_APP_AUDIO", "step=keep linked={linked}");
         }
         std::thread::sleep(KEEP_INTERVAL);
     }
     qol_runtime::probe!("SHOT_RECORD_APP_AUDIO", "step=close");
     remove_sink(request.sink)
+}
+
+fn recording(process: &CaptureProcess) -> bool {
+    process.alive() && !qol_process::is_pid_zombie(process.pid)
 }
 
 fn sink_props() -> String {
@@ -195,15 +196,23 @@ fn wait_for_sink() -> Result<(u32, u64)> {
 }
 
 fn link_missing(apps: &[String], sink: u32) -> Result<usize> {
-    link_graph(&graph()?, apps, sink)
+    Ok(link_graph(&graph()?, apps, sink))
 }
 
-fn link_graph(graph: &Graph, apps: &[String], sink: u32) -> Result<usize> {
-    let missing = graph.missing_links(apps, sink);
-    for (output, input) in &missing {
-        run("pw-link", &[&output.to_string(), &input.to_string()])?;
-    }
-    Ok(missing.len())
+fn link_graph(graph: &Graph, apps: &[String], sink: u32) -> usize {
+    graph
+        .missing_links(apps, sink)
+        .into_iter()
+        .filter(|(output, input)| {
+            match run("pw-link", &[&output.to_string(), &input.to_string()]) {
+                Ok(_) => true,
+                Err(error) => {
+                    log::warn!("app audio port {output} stays out of the recording: {error:#}");
+                    false
+                }
+            }
+        })
+        .count()
 }
 
 fn remove_stale_sinks() -> Result<()> {
