@@ -12,32 +12,66 @@ use crate::platform::engine::remap::Modifiers;
 const MARKER_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Strategy {
+pub(crate) enum BackendId {
     EventTap,
-    VirtualHid,
+    HidHelper,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Capabilities {
+    pub(crate) survives_secure_input: bool,
+    pub(crate) owns_key_events: bool,
+}
+
+impl BackendId {
+    const ALL: [Self; 2] = [Self::EventTap, Self::HidHelper];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::EventTap => "event_tap",
+            Self::HidHelper => "hid_helper",
+        }
+    }
+
+    pub(crate) fn capabilities(self) -> Capabilities {
+        match self {
+            Self::EventTap => Capabilities {
+                survives_secure_input: false,
+                owns_key_events: false,
+            },
+            Self::HidHelper => Capabilities {
+                survives_secure_input: true,
+                owns_key_events: true,
+            },
+        }
+    }
 }
 
 #[derive(Default)]
-pub(crate) struct StrategyCell(AtomicU8);
+pub(crate) struct BackendCell(AtomicU8);
 
-impl StrategyCell {
-    pub(crate) fn get(&self) -> Strategy {
+impl BackendCell {
+    pub(crate) fn get(&self) -> BackendId {
         Self::decode(self.0.load(Ordering::SeqCst))
     }
 
-    pub(crate) fn set(&self, strategy: Strategy) -> Strategy {
-        Self::decode(
-            self.0
-                .swap(u8::from(strategy == Strategy::VirtualHid), Ordering::SeqCst),
-        )
+    pub(crate) fn set(&self, backend: BackendId) -> BackendId {
+        Self::decode(self.0.swap(Self::encode(backend), Ordering::SeqCst))
     }
 
-    fn decode(raw: u8) -> Strategy {
-        if raw == 1 {
-            Strategy::VirtualHid
-        } else {
-            Strategy::EventTap
-        }
+    fn encode(backend: BackendId) -> u8 {
+        BackendId::ALL
+            .iter()
+            .position(|id| *id == backend)
+            .and_then(|index| u8::try_from(index).ok())
+            .unwrap_or_default()
+    }
+
+    fn decode(raw: u8) -> BackendId {
+        BackendId::ALL
+            .get(usize::from(raw))
+            .copied()
+            .unwrap_or(BackendId::EventTap)
     }
 }
 
@@ -75,7 +109,7 @@ impl MarkerBook {
 
 #[derive(Default)]
 pub(crate) struct InputState {
-    pub(crate) strategy: StrategyCell,
+    pub(crate) backend: BackendCell,
     pub(crate) markers: MarkerBook,
 }
 
@@ -103,12 +137,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_strategy_starts_on_the_event_tap_and_reports_the_previous_one() {
-        let cell = StrategyCell::default();
-        assert_eq!(cell.get(), Strategy::EventTap);
-        assert_eq!(cell.set(Strategy::VirtualHid), Strategy::EventTap);
-        assert_eq!(cell.get(), Strategy::VirtualHid);
-        assert_eq!(cell.set(Strategy::EventTap), Strategy::VirtualHid);
+    fn the_backend_starts_on_the_event_tap_and_reports_the_previous_one() {
+        let cell = BackendCell::default();
+        assert_eq!(cell.get(), BackendId::EventTap);
+        for backend in BackendId::ALL {
+            let previous = cell.get();
+            assert_eq!(cell.set(backend), previous);
+            assert_eq!(cell.get(), backend);
+        }
     }
 
     #[test]

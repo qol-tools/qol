@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use super::input::backends::virtual_hid;
+use super::input::backends::hid_helper;
 use super::input::InputState;
 use super::layout::{LayoutSnapshot, LayoutStore};
 use super::tap::TapState;
@@ -47,7 +47,7 @@ pub(crate) fn run() -> Result<()> {
                 Arc::new(InputState::default()),
             ));
             super::tap::start_tap(Arc::clone(&state));
-            virtual_hid::start(Arc::clone(&state), Arc::clone(&layouts));
+            hid_helper::start(Arc::clone(&state), Arc::clone(&layouts));
             super::secure_input::watch(Arc::clone(state.input()));
             Ok(Services { state, layouts })
         },

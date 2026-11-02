@@ -18,7 +18,7 @@ use crate::platform::engine::remap::ResolvedConfig;
 use crate::platform::macos::hid_helper::protocol::{
     self, Role, ToDaemon, ToHelper, PROTOCOL_VERSION, SOCKET_PATH,
 };
-use crate::platform::macos::input::{InputState, Strategy};
+use crate::platform::macos::input::{BackendId, InputState};
 use crate::platform::macos::layout::LayoutStore;
 use keyboard::{KeyContext, KeyboardState, Output};
 
@@ -77,7 +77,7 @@ pub(crate) fn run_session(
     layouts: &LayoutStore,
 ) -> Result<()> {
     let result = session(stream, environment, layouts);
-    if environment.input().strategy.set(Strategy::EventTap) == Strategy::VirtualHid {
+    if environment.input().backend.set(BackendId::EventTap) == BackendId::HidHelper {
         log::info!("key input is back on the event tap");
     }
     result
@@ -176,13 +176,13 @@ fn read_keys(
                 if !active {
                     keyboard.reset();
                 }
-                let strategy = if active {
-                    Strategy::VirtualHid
+                let backend = if active {
+                    BackendId::HidHelper
                 } else {
-                    Strategy::EventTap
+                    BackendId::EventTap
                 };
-                if environment.input().strategy.set(strategy) != strategy {
-                    log::info!("key input strategy: {strategy:?}");
+                if environment.input().backend.set(backend) != backend {
+                    log::info!("key backend: {}", backend.label());
                 }
             }
             ToDaemon::Welcome { .. } | ToDaemon::Refused { .. } | ToDaemon::Status(_) => {}
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn keys_come_back_remapped_and_seized_flips_the_strategy() {
+    fn keys_come_back_remapped_and_seized_flips_the_backend() {
         let environment = Arc::new(environment(true));
         let (mut helper, session) = connect(Arc::clone(&environment));
         helper.say(&ToDaemon::Welcome {
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(helper.next_non_heartbeat(), emit(0xE0, false));
         assert_eq!(helper.next_non_heartbeat(), emit(0xE3, true));
         assert_eq!(helper.next_non_heartbeat(), emit(0x06, true));
-        assert_eq!(environment.input.strategy.get(), Strategy::VirtualHid);
+        assert_eq!(environment.input.backend.get(), BackendId::HidHelper);
         assert!(environment
             .input
             .markers
@@ -401,7 +401,7 @@ mod tests {
         helper.say(&ToDaemon::Seized { active: false });
         drop(helper);
         assert!(session.join().unwrap().is_ok());
-        assert_eq!(environment.input.strategy.get(), Strategy::EventTap);
+        assert_eq!(environment.input.backend.get(), BackendId::EventTap);
     }
 
     #[test]
