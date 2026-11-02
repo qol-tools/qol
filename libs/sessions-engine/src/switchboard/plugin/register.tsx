@@ -532,7 +532,7 @@ export const closedSession = (input: Record<string, unknown>): ClosedSession | u
   return { transcript, cwd, description, ...(title === undefined ? {} : { title }), ...(message === undefined ? {} : { message }) }
 }
 
-export const resumeSession = async ($: EngineInterface, session: ClosedSession): Promise<Resumed> => {
+export const resumeSession = async ($: EngineInterface, session: ClosedSession, caller?: string): Promise<Resumed> => {
   const program = await $.env.get('QOL_CLI_SESSIONS')
   const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
   if (program === undefined || program === '' || conversations === undefined || conversations === '') {
@@ -542,6 +542,7 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession):
     program, 'sessions', 'switchboard', 'adopt', '--conversations', conversations, '--conversation', await $.session.id(),
     '--transcript', session.transcript, '--cwd', session.cwd, '--description', session.description,
     ...(session.title === undefined ? [] : ['--title', session.title]),
+    ...(caller === undefined ? [] : ['--launcher', caller]),
   ]
   const ran = await $.process.run(argv, { timeoutMs: RESUME_TIMEOUT_MS })
   if (ran.exitCode !== 0) return { isResumed: false, reason: printable(ran.stderr).trim() || `adopt exited ${ran.exitCode}` }
@@ -549,7 +550,9 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession):
   if (typeof parsed.agent_id !== 'string' || !ID.test(parsed.agent_id)) return { isResumed: false, reason: 'adopt named no agent id.' }
   const name = typeof parsed.name === 'string' && printable(parsed.name).trim() !== '' ? printable(parsed.name).replace(/\s+/g, ' ').trim() : session.description
   const cwd = typeof parsed.cwd === 'string' && parsed.cwd !== '' ? parsed.cwd : session.cwd
-  const sent = await sendTo($, await placed($, parsed.agent_id, name, cwd), session.message ?? CARRY_ON)
+  const target = await placed($, parsed.agent_id, name, cwd)
+  if (caller !== undefined) await markWorking($, parsed.agent_id, undefined, undefined, caller)
+  const sent = await sendTo($, target, session.message ?? CARRY_ON)
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
@@ -828,7 +831,8 @@ export const register: Register = on => {
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
     const session = closedSession(e as unknown as Record<string, unknown>)
     if (session === undefined) return { deny: 'resume_session needs an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
-    const resumed = await resumeSession($, session)
+    if (e.agentId !== undefined && !ID.test(e.agentId)) return { deny: 'resume_session was called from a loop with no agent id it can name.' }
+    const resumed = await resumeSession($, session, e.agentId)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The closed session could not be brought back as a fork.' }))
 

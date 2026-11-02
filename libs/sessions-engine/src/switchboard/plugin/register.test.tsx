@@ -568,6 +568,10 @@ test('a closed terminal session comes back as a fork with its own conversation, 
   }
   expect(runs).toHaveLength(count)
   expect(sent).toHaveLength(2)
+
+  const fromFork = await $.tool.call({ tool, ...session, agentId: 'a9' } as any)
+  expect(String(fromFork.result)).toContain('Resumed as kcd2-hips')
+  expect(runs.at(-1)).toEqual(resumeArgv('/p/closed.jsonl', '--launcher', 'a9'))
 })
 
 const settle = async () => {

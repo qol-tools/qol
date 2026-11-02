@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::adopt_session::{adopt_session, ClosedSession};
-use super::paths::{claude_home, project_dir_name, switchboard_dir};
+use super::paths::{claude_home, claude_homes, project_dir_name, switchboard_dir};
 use super::resume::{meta_files, AGENT_PREFIX, FORK_AGENT};
 use crate::fork::flag_value;
 
@@ -21,7 +21,7 @@ pub(super) const PARTIAL_SUFFIX: &str = ".partial";
 const RESUME_BLOCKERS: [&str; 2] = ["stoppedByUser", "finished"];
 const AGENT_ID_KEY: &str = "agentId";
 const FRESH_ID_HEX: usize = 16;
-const USAGE: &str = "usage: switchboard adopt --conversations <dir> --conversation <id> (--fork <agent id or key-name> [--fresh] | --transcript <closed session .jsonl> --cwd <project folder> --description '<key-name>: <friendly description>' [--title <title>])";
+const USAGE: &str = "usage: switchboard adopt --conversations <dir> --conversation <id> (--fork <agent id or key-name> [--fresh] | --transcript <closed session .jsonl> --cwd <project folder> --description '<key-name>: <friendly description>' [--title <title>] [--launcher <agent id of the fork that asked>])";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -262,6 +262,7 @@ enum Source {
         cwd: PathBuf,
         description: String,
         title: String,
+        launcher: Option<String>,
     },
 }
 
@@ -281,6 +282,7 @@ struct Flags {
     cwd: Option<String>,
     description: Option<String>,
     title: Option<String>,
+    launcher: Option<String>,
 }
 
 fn parse(args: &[OsString]) -> Result<AdoptArgs> {
@@ -301,22 +303,26 @@ fn parse(args: &[OsString]) -> Result<AdoptArgs> {
             "--cwd" => &mut flags.cwd,
             "--description" => &mut flags.description,
             "--title" => &mut flags.title,
+            "--launcher" => &mut flags.launcher,
             other => bail!("unknown adopt flag `{other}`\n{USAGE}"),
         };
         *slot = Some(flag_value(args, &mut index, flag)?);
         index += 1;
     }
     let source = match (flags.fork, flags.transcript, flags.cwd, flags.description) {
-        (Some(fork), None, None, None) => Source::Fork {
-            fork,
-            is_fresh: flags.is_fresh,
-        },
+        (Some(fork), None, None, None) if flags.title.is_none() && flags.launcher.is_none() => {
+            Source::Fork {
+                fork,
+                is_fresh: flags.is_fresh,
+            }
+        }
         (None, Some(transcript), Some(cwd), Some(description)) if !flags.is_fresh => {
             Source::Session {
                 transcript: PathBuf::from(transcript),
                 cwd: PathBuf::from(cwd),
                 description,
                 title: flags.title.unwrap_or_default(),
+                launcher: flags.launcher,
             }
         }
         _ => bail!("{USAGE}"),
@@ -360,6 +366,7 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
             cwd,
             description,
             title,
+            launcher,
         } => {
             let cwd = fs::canonicalize(cwd)
                 .map(qol_platform::windows_path::strip_verbatim)
@@ -373,7 +380,9 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                     cwd: &cwd,
                     title,
                     description,
+                    launcher: launcher.as_deref(),
                 },
+                &claude_homes(),
                 &context,
                 fresh_id(&transcript.to_string_lossy()),
             )?
@@ -678,14 +687,15 @@ mod tests {
             all.extend_from_slice(extra);
             parse(&all.into_iter().map(OsString::from).collect::<Vec<_>>())
         };
-        let parsed = session(&["--title", "kcd2 asldsadsad"]).unwrap();
+        let parsed = session(&["--title", "kcd2 asldsadsad", "--launcher", "a9"]).unwrap();
         assert!(matches!(
             &parsed.source,
-            Source::Session { transcript, cwd, description, title }
+            Source::Session { transcript, cwd, description, title, launcher }
                 if transcript == Path::new("/p/closed.jsonl")
                     && cwd == Path::new("/p")
                     && description == "kcd2: aim"
                     && title == "kcd2 asldsadsad"
+                    && launcher.as_deref() == Some("a9")
         ));
         assert!(matches!(
             session(&[]).unwrap().source,

@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::adopt_session::RESUMED_FROM;
 use super::fork_state::{self, ForkState};
 
 const MODEL_COLOR: &str = "\x1b[33m";
@@ -34,8 +35,6 @@ const COLOR_TAIL: u64 = 256 * 1024;
 const COLOR_ROW_TAG: &str = "\"type\":\"agent-color\"";
 pub(super) const CONTINUE_LEAD: &str = "Its transcript is ";
 pub(super) const CONTINUE_END: &str = ": read the end of it";
-pub(super) const RESUMED_LEAD: &str = "The closed session's own transcript is ";
-pub(super) const RESUMED_END: &str = ", which stays as it was.";
 const SESSION_COLORS: [(&str, &str); 8] = [
     ("red", "\x1b[31m"),
     ("green", "\x1b[32m"),
@@ -458,14 +457,20 @@ fn prompt_text(row: &Value) -> String {
 }
 
 fn continued_from(prompt: &str) -> Option<PathBuf> {
-    [(RESUMED_LEAD, RESUMED_END), (CONTINUE_LEAD, CONTINUE_END)]
-        .into_iter()
-        .find_map(|(lead, end)| {
-            let (_, rest) = prompt.split_once(lead)?;
-            let (path, _) = rest.split_once(end)?;
-            let path = path.trim();
-            (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
-        })
+    let (_, rest) = prompt.split_once(CONTINUE_LEAD)?;
+    let (path, _) = rest.split_once(CONTINUE_END)?;
+    let path = path.trim();
+    (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
+}
+
+fn resumed_from(transcript: &Path) -> Option<PathBuf> {
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(transcript.with_extension("meta.json")).ok()?)
+            .ok()?;
+    meta.get(RESUMED_FROM)
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 fn first_row(transcript: &Path) -> Option<FirstRow> {
@@ -511,7 +516,10 @@ fn fork_facts(transcript: &Path) -> Fork {
     };
     Fork {
         started_ms: first.started_ms,
-        color: first.source.as_deref().and_then(last_color),
+        color: resumed_from(transcript)
+            .or(first.source)
+            .as_deref()
+            .and_then(last_color),
     }
 }
 
@@ -1086,17 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn a_resumed_session_and_an_older_continued_fork_name_the_transcript_the_rows_read() {
-        let head = super::super::adopt_session::head_text(
-            &super::super::adopt_session::ClosedSession {
-                transcript: Path::new("/h/p/c2.jsonl"),
-                cwd: Path::new("/w/app"),
-                title: "T",
-                description: "t: d",
-            },
-            "Your project folder is /w/app.\n",
-        );
-        assert_eq!(continued_from(&head), Some(PathBuf::from("/h/p/c2.jsonl")));
+    fn an_older_continued_fork_names_the_transcript_the_rows_read() {
         let prompt = format!(
             "Project: /w/app\ncontinue it\n\nCarry on the closed conversation titled T. {CONTINUE_LEAD}/h/p/c1.jsonl{CONTINUE_END} to learn where it stopped."
         );
@@ -1146,6 +1144,19 @@ mod tests {
         .unwrap();
         let facts = fork_facts(&fresh);
         assert_eq!((facts.started_ms, facts.color), (None, None));
+        let resumed = dir.path().join("agent-a3.jsonl");
+        std::fs::write(&resumed, format!("{}\n", json!({"type": "user", "timestamp": "2026-11-01T06:58:29.835Z", "message": {"content": format!("Project: /w\nIts own transcript, \"{}\", stays as it was.", dir.path().join("elsewhere.jsonl").display())}}))).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a3.meta.json"),
+            json!({RESUMED_FROM: source.to_string_lossy()}).to_string(),
+        )
+        .unwrap();
+        let facts = fork_facts(&resumed);
+        assert_eq!(
+            facts.color.as_deref(),
+            Some("orange"),
+            "the meta file names the source, never the prompt"
+        );
     }
 
     #[test]

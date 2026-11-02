@@ -9,6 +9,15 @@ pub(super) fn claude_home() -> PathBuf {
     Registry::load().current(Harness::Claude).path
 }
 
+pub(super) fn claude_homes() -> Vec<PathBuf> {
+    Registry::load()
+        .every_home()
+        .into_iter()
+        .filter(|home| home.harness == Harness::Claude)
+        .map(|home| home.path)
+        .collect()
+}
+
 pub(super) fn caller_config_dir() -> Option<PathBuf> {
     std::env::var_os(qol_agent_launch::account::CONFIG_DIR_ENV)
         .filter(|dir| !dir.is_empty())
