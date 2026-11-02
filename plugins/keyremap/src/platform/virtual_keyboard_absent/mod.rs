@@ -59,6 +59,14 @@ impl PlatformAdapter for Adapter {
         unavailable("hid_helper")
     }
 
+    fn key_backend(&self) -> DoctorCheckResult {
+        unavailable("key_backend")
+    }
+
+    fn karabiner_block(&self) -> DoctorCheckResult {
+        unavailable("karabiner_rules")
+    }
+
     fn secure_input(&self) -> DoctorCheckResult {
         unavailable("secure_input")
     }

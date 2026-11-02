@@ -14,7 +14,9 @@ use qol_headless::{CommandResult, DoctorCheckResult};
 
 use super::engine::{self, config, remap};
 use super::{ConfigInspection, PlatformAdapter};
-use doctor::{LayoutGap, Probe};
+use doctor::{KarabinerRules, LayoutGap, Probe};
+use input::selection::{self, Availability, Selection};
+use input::BackendId;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Adapter;
@@ -93,11 +95,27 @@ impl PlatformAdapter for Adapter {
         doctor::helper_result(&hid_helper::query_status())
     }
 
+    fn key_backend(&self) -> DoctorCheckResult {
+        doctor::key_backend_result(&selected_backend(&hid_helper::query_status()))
+    }
+
+    fn karabiner_block(&self) -> DoctorCheckResult {
+        let chosen =
+            config::load_config().key_backend == config::KeyBackendChoice::KarabinerElements;
+        doctor::karabiner_rules_result(chosen, &karabiner_rules_probe())
+    }
+
     fn secure_input(&self) -> DoctorCheckResult {
-        doctor::secure_input_result(
-            &Probe::Known(qol_platform::secure_input_holder()),
-            &hid_helper::query_status(),
-        )
+        let helper = hid_helper::query_status();
+        let seized = matches!(
+            &helper,
+            Probe::Known(doctor::HelperState::Running(report)) if !report.seized.is_empty()
+        );
+        let backend = match selected_backend(&helper).backend {
+            BackendId::HidHelper if !seized => BackendId::EventTap,
+            backend => backend,
+        };
+        doctor::secure_input_result(&Probe::Known(qol_platform::secure_input_holder()), backend)
     }
 
     fn layout_characters(&self) -> DoctorCheckResult {
@@ -109,6 +127,41 @@ fn compiled_rules() -> Result<karabiner::compile::Compiled> {
     let snapshot = layout::LayoutSnapshot::read_current()?;
     let resolved = remap::resolve(&config::load_config());
     Ok(karabiner::compile::compile(&resolved, &snapshot))
+}
+
+fn selected_backend(helper: &Probe<doctor::HelperState>) -> Selection {
+    selection::select(config::load_config().key_backend, |backend| match backend {
+        BackendId::EventTap => Availability::Ready,
+        BackendId::HidHelper => doctor::helper_availability(helper),
+        BackendId::KarabinerElements => match karabiner::store::Store::locate() {
+            Ok(store) => karabiner::service::probe(&store).availability,
+            Err(error) => Availability::Missing {
+                what: "a place for its rules".to_string(),
+                fix: format!("{error:#}"),
+            },
+        },
+    })
+}
+
+fn karabiner_rules_probe() -> Probe<KarabinerRules> {
+    let planned = compiled_rules().and_then(|compiled| {
+        let synced = karabiner::store::Store::locate()?.plan(&compiled)?;
+        Ok((compiled, synced))
+    });
+    match planned {
+        Ok((compiled, synced)) => Probe::Known(KarabinerRules {
+            current: !synced.changed,
+            profile: synced.profile,
+            count: compiled.rule["manipulators"].as_array().map_or(0, Vec::len),
+            conflicts: synced.conflicts,
+            gaps: compiled
+                .gaps
+                .iter()
+                .map(|gap| format!("{}: {}", gap.rule, gap.reason))
+                .collect(),
+        }),
+        Err(error) => Probe::Unknown(format!("{error:#}")),
+    }
 }
 
 fn layout_gaps() -> Probe<Vec<LayoutGap>> {

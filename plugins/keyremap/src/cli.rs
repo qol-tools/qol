@@ -212,6 +212,8 @@ where
     let driver = adapter.clone();
     let daemon = adapter.clone();
     let helper = adapter.clone();
+    let backend = adapter.clone();
+    let karabiner = adapter.clone();
     let secure = adapter.clone();
     let characters = adapter;
 
@@ -260,6 +262,20 @@ where
             move || {
                 supported_or(&helper, "hid_helper", |adapter| {
                     Ok(adapter.hid_helper_state())
+                })
+            },
+        ),
+        DoctorCheck::new(
+            "key_backend",
+            "Report which key backend Key Remap picks for the Key backend setting, and why.",
+            move || supported_or(&backend, "key_backend", |adapter| Ok(adapter.key_backend())),
+        ),
+        DoctorCheck::new(
+            "karabiner_rules",
+            "Compare Key Remap's rules in karabiner.json with the current rules without writing.",
+            move || {
+                supported_or(&karabiner, "karabiner_rules", |adapter| {
+                    Ok(adapter.karabiner_block())
                 })
             },
         ),
@@ -541,6 +557,14 @@ mod tests {
             DoctorCheckResult::ok("hid_helper", "sentinel")
         }
 
+        fn key_backend(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("key_backend", "sentinel")
+        }
+
+        fn karabiner_block(&self) -> DoctorCheckResult {
+            DoctorCheckResult::ok("karabiner_rules", "sentinel")
+        }
+
         fn secure_input(&self) -> DoctorCheckResult {
             DoctorCheckResult::ok("secure_input", "sentinel")
         }
@@ -649,7 +673,7 @@ mod tests {
         assert_eq!(before.stdout, after.stdout);
         let report: DoctorReport = serde_json::from_str(&before.stdout).unwrap();
         assert_eq!(report.plugin_id, PLUGIN_ID);
-        assert_eq!(report.checks.len(), 9);
+        assert_eq!(report.checks.len(), 11);
     }
 
     #[test]

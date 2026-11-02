@@ -5,6 +5,7 @@ use qol_plugin_api::manifest::{parse_version, PluginManifest, SystemDependency};
 pub(crate) use qol_platform::SecureInputHolder;
 
 use crate::cli::PLUGIN_ID;
+use crate::platform::macos::input::selection::{Availability, Reason, Selection};
 use crate::platform::macos::input::BackendId;
 
 const MANIFEST: &str = include_str!("../../../plugin.toml");
@@ -45,6 +46,15 @@ pub(crate) enum HelperState {
     NotRunning,
     VersionMismatch { helper: u32, expected: u32 },
     Running(HelperReport),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KarabinerRules {
+    pub(crate) current: bool,
+    pub(crate) profile: String,
+    pub(crate) count: usize,
+    pub(crate) conflicts: Vec<String>,
+    pub(crate) gaps: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,19 +217,113 @@ pub(super) fn helper_result(probe: &Probe<HelperState>) -> DoctorCheckResult {
     )
 }
 
+pub(super) fn helper_availability(probe: &Probe<HelperState>) -> Availability {
+    let missing = |what: &str, fix: String| Availability::Missing {
+        what: what.to_string(),
+        fix,
+    };
+    let report = match probe {
+        Probe::Known(HelperState::Running(report)) => report,
+        Probe::Unknown(reason) => {
+            return missing(
+                "the keyboard helper to answer",
+                format!("{reason}; {}", install_fix()),
+            )
+        }
+        Probe::Known(_) => return missing("the keyboard helper running", install_fix()),
+    };
+    if !report.input_monitoring {
+        return missing(
+            "Input Monitoring for the keyboard helper",
+            INPUT_MONITORING_FIX.to_string(),
+        );
+    }
+    if !report.conflicts.is_empty() {
+        return missing(
+            &format!("{} free of other apps", report.conflicts.join(", ")),
+            "quit the app that holds that keyboard, or unplug it".to_string(),
+        );
+    }
+    if !report.virtual_keyboard_ready {
+        return missing("the virtual keyboard ready", install_fix());
+    }
+    Availability::Ready
+}
+
+pub(super) fn key_backend_result(selection: &Selection) -> DoctorCheckResult {
+    let id = "key_backend";
+    match &selection.reason {
+        Reason::FellBack { wanted, what, fix } => DoctorCheckResult::warn(
+            id,
+            format!(
+                "The key backend is set to {} but it needs {what}, so Key Remap uses {}.",
+                wanted.label(),
+                selection.backend.label()
+            ),
+        )
+        .with_fix(fix.clone()),
+        Reason::Chosen | Reason::Auto => {
+            DoctorCheckResult::ok(id, format!("Key backend: {}.", selection.describe()))
+        }
+    }
+}
+
+pub(super) fn karabiner_rules_result(
+    chosen: bool,
+    probe: &Probe<KarabinerRules>,
+) -> DoctorCheckResult {
+    let id = "karabiner_rules";
+    if !chosen {
+        return DoctorCheckResult::ok(
+            id,
+            "The key backend is not karabiner_elements, so Key Remap keeps no rules in Karabiner-Elements.",
+        );
+    }
+    let rules = match probe {
+        Probe::Known(rules) => rules,
+        Probe::Unknown(reason) => return unknown(id, reason),
+    };
+    if !rules.current {
+        return DoctorCheckResult::warn(
+            id,
+            "karabiner.json does not have the current Key Remap rules.",
+        )
+        .with_fix(format!(
+            "Turn Key Remap on so it writes them, or run: {} karabiner-sync",
+            PLUGIN_ID
+        ));
+    }
+    if !rules.conflicts.is_empty() {
+        return DoctorCheckResult::warn(
+            id,
+            format!(
+                "karabiner.json already changes {}, so Key Remap's modifier key changes for them are not applied.",
+                rules.conflicts.join(", ")
+            ),
+        )
+        .with_fix("Remove those keys from Simple Modifications in Karabiner-Elements.");
+    }
+    if !rules.gaps.is_empty() {
+        return DoctorCheckResult::warn(
+            id,
+            format!("Karabiner-Elements cannot run {}.", rules.gaps.join("; ")),
+        )
+        .with_fix("Change those rules, or pick another key backend.");
+    }
+    DoctorCheckResult::ok(
+        id,
+        format!(
+            "karabiner.json has the current {} Key Remap rules in the \"{}\" profile.",
+            rules.count, rules.profile
+        ),
+    )
+}
+
 pub(super) fn secure_input_result(
     holder: &Probe<Option<SecureInputHolder>>,
-    helper: &Probe<HelperState>,
+    backend: BackendId,
 ) -> DoctorCheckResult {
     let id = "secure_input";
-    let backend = if matches!(
-        helper,
-        Probe::Known(HelperState::Running(report)) if !report.seized.is_empty()
-    ) {
-        BackendId::HidHelper
-    } else {
-        BackendId::EventTap
-    };
     let label = backend.label();
     match holder {
         Probe::Unknown(reason) => unknown(id, reason),
@@ -366,20 +470,129 @@ mod tests {
 
     #[test]
     fn secure_input_names_the_app_and_the_backend() {
-        let helper = Probe::Known(HelperState::NotRunning);
-        let result = secure_input_result(
-            &Probe::Known(Some(SecureInputHolder {
-                pid: 4242,
-                app: "kitty".to_string(),
-            })),
-            &helper,
-        );
+        let kitty = Probe::Known(Some(SecureInputHolder {
+            pid: 4242,
+            app: "kitty".to_string(),
+        }));
+        let result = secure_input_result(&kitty, BackendId::EventTap);
         assert_eq!(result.status, DoctorStatus::Warn);
         assert!(result.message.contains("kitty") && result.message.contains("4242"));
         assert!(result.message.contains("event_tap"));
 
-        let quiet = secure_input_result(&Probe::Known(None), &helper);
+        assert!(result
+            .message
+            .contains("Key Remap and qol hotkeys are paused"));
+
+        let karabiner = secure_input_result(&kitty, BackendId::KarabinerElements);
+        assert!(karabiner.message.contains("so qol hotkeys are paused"));
+        assert!(karabiner.message.contains("karabiner_elements"));
+
+        let quiet = secure_input_result(&Probe::Known(None), BackendId::EventTap);
         assert_eq!(quiet.status, DoctorStatus::Ok);
+    }
+
+    fn running(report: impl FnOnce(&mut HelperReport)) -> Probe<HelperState> {
+        let mut healthy = HelperReport {
+            virtual_keyboard_ready: true,
+            input_monitoring: true,
+            seized: Vec::new(),
+            conflicts: Vec::new(),
+        };
+        report(&mut healthy);
+        Probe::Known(HelperState::Running(healthy))
+    }
+
+    #[test]
+    fn the_helper_is_ready_only_when_it_can_take_the_keyboards() {
+        assert_eq!(helper_availability(&running(|_| ())), Availability::Ready);
+        let cases = [
+            (
+                Probe::Known(HelperState::NotInstalled),
+                "install-hid-helper",
+            ),
+            (
+                running(|report| report.input_monitoring = false),
+                "Input Monitoring",
+            ),
+            (
+                running(|report| report.conflicts = vec!["Keychron K2".to_string()]),
+                "quit the app",
+            ),
+            (
+                running(|report| report.virtual_keyboard_ready = false),
+                "install-hid-helper",
+            ),
+        ];
+        for (probe, fix_part) in cases {
+            match helper_availability(&probe) {
+                Availability::Missing { fix, .. } => assert!(fix.contains(fix_part), "{fix}"),
+                Availability::Ready => panic!("{probe:?} should not be ready"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_fallen_back_backend_warns_with_the_fix() {
+        let fell_back = Selection {
+            backend: BackendId::EventTap,
+            reason: Reason::FellBack {
+                wanted: BackendId::KarabinerElements,
+                what: "Karabiner-Elements running".to_string(),
+                fix: "open Karabiner-Elements".to_string(),
+            },
+        };
+        let result = key_backend_result(&fell_back);
+        assert_eq!(result.status, DoctorStatus::Warn);
+        assert!(
+            result.message.contains("uses event_tap"),
+            "{}",
+            result.message
+        );
+        assert!(result.fix.unwrap().contains("open Karabiner-Elements"));
+
+        let chosen = key_backend_result(&Selection {
+            backend: BackendId::KarabinerElements,
+            reason: Reason::Chosen,
+        });
+        assert_eq!(chosen.status, DoctorStatus::Ok);
+        assert!(chosen.message.contains("karabiner_elements, as chosen"));
+    }
+
+    #[test]
+    fn karabiner_rules_name_what_is_stale_or_skipped() {
+        let rules = |change: fn(&mut KarabinerRules)| {
+            let mut rules = KarabinerRules {
+                current: true,
+                profile: "Default profile".to_string(),
+                count: 39,
+                conflicts: Vec::new(),
+                gaps: Vec::new(),
+            };
+            change(&mut rules);
+            Probe::Known(rules)
+        };
+        let ok = karabiner_rules_result(true, &rules(|_| ()));
+        assert_eq!(ok.status, DoctorStatus::Ok);
+        assert!(ok.message.contains("39") && ok.message.contains("Default profile"));
+
+        let stale = karabiner_rules_result(true, &rules(|rules| rules.current = false));
+        assert_eq!(stale.status, DoctorStatus::Warn);
+        assert!(stale.fix.unwrap().contains("karabiner-sync"));
+
+        let conflict = karabiner_rules_result(
+            true,
+            &rules(|rules| rules.conflicts = vec!["caps_lock".to_string()]),
+        );
+        assert!(conflict.message.contains("caps_lock"));
+
+        let gap = karabiner_rules_result(
+            true,
+            &rules(|rules| rules.gaps = vec!["mouse rule: no mouse".to_string()]),
+        );
+        assert!(gap.message.contains("mouse rule"));
+
+        let unchosen = karabiner_rules_result(false, &Probe::Unknown("unused".to_string()));
+        assert_eq!(unchosen.status, DoctorStatus::Ok);
     }
 
     #[test]
@@ -404,5 +617,9 @@ mod tests {
         assert_eq!(daemon_result(&unknown()).status, DoctorStatus::Warn);
         assert_eq!(helper_result(&unknown()).status, DoctorStatus::Warn);
         assert_eq!(layout_result(&unknown()).status, DoctorStatus::Warn);
+        assert_eq!(
+            karabiner_rules_result(true, &unknown()).status,
+            DoctorStatus::Warn
+        );
     }
 }

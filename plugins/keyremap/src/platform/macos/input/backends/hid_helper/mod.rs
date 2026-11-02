@@ -77,7 +77,12 @@ pub(crate) fn run_session(
     layouts: &LayoutStore,
 ) -> Result<()> {
     let result = session(stream, environment, layouts);
-    if environment.input().backend.set(BackendId::EventTap) == BackendId::HidHelper {
+    if environment
+        .input()
+        .backend
+        .set_from_helper(BackendId::EventTap)
+        == BackendId::HidHelper
+    {
         log::info!("key input is back on the event tap");
     }
     result
@@ -127,7 +132,8 @@ fn heartbeat_loop(
     stop: &AtomicBool,
 ) {
     while !stop.load(Ordering::SeqCst) {
-        if environment.config().enabled && send(writer, &ToHelper::Heartbeat).is_err() {
+        let wanted = environment.config().enabled && environment.input().helper_allowed();
+        if wanted && send(writer, &ToHelper::Heartbeat).is_err() {
             return;
         }
         let due = caps_due
@@ -181,7 +187,7 @@ fn read_keys(
                 } else {
                     BackendId::EventTap
                 };
-                if environment.input().backend.set(backend) != backend {
+                if environment.input().backend.set_from_helper(backend) != backend {
                     log::info!("key backend: {}", backend.label());
                 }
             }

@@ -13,6 +13,22 @@ description = "Nothing is remapped until you turn it back on."
 section = "general"
 default = true
 
+[field.key_backend]
+type = "select"
+label = "Key backend"
+description = "What remaps your keys. Karabiner-Elements keeps your rules working while an app holds Secure Input."
+section = "general"
+platforms = ["macos"]
+default = "auto"
+card_description = "What remaps your keys."
+options = ["auto", "event_tap", "hid_helper", "karabiner_elements"]
+
+[field.key_backend.option_labels]
+auto = "Auto"
+event_tap = "Event tap"
+hid_helper = "Keyboard helper"
+karabiner_elements = "Karabiner-Elements"
+
 [field.excluded_apps]
 type = "string_array"
 label = "Excluded apps"

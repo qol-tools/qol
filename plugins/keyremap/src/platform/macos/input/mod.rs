@@ -1,7 +1,8 @@
 pub(crate) mod backends;
+pub(crate) mod selection;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -15,6 +16,7 @@ const MARKER_GRACE: Duration = Duration::from_millis(250);
 pub(crate) enum BackendId {
     EventTap,
     HidHelper,
+    KarabinerElements,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,12 +26,13 @@ pub(crate) struct Capabilities {
 }
 
 impl BackendId {
-    const ALL: [Self; 2] = [Self::EventTap, Self::HidHelper];
+    const ALL: [Self; 3] = [Self::EventTap, Self::HidHelper, Self::KarabinerElements];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::EventTap => "event_tap",
             Self::HidHelper => "hid_helper",
+            Self::KarabinerElements => "karabiner_elements",
         }
     }
 
@@ -39,7 +42,7 @@ impl BackendId {
                 survives_secure_input: false,
                 owns_key_events: false,
             },
-            Self::HidHelper => Capabilities {
+            Self::HidHelper | Self::KarabinerElements => Capabilities {
                 survives_secure_input: true,
                 owns_key_events: true,
             },
@@ -57,6 +60,18 @@ impl BackendCell {
 
     pub(crate) fn set(&self, backend: BackendId) -> BackendId {
         Self::decode(self.0.swap(Self::encode(backend), Ordering::SeqCst))
+    }
+
+    pub(crate) fn set_from_helper(&self, backend: BackendId) -> BackendId {
+        let karabiner = Self::encode(BackendId::KarabinerElements);
+        let wanted = Self::encode(backend);
+        let previous = self
+            .0
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |raw| {
+                (raw != karabiner).then_some(wanted)
+            })
+            .unwrap_or_else(|raw| raw);
+        Self::decode(previous)
     }
 
     fn encode(backend: BackendId) -> u8 {
@@ -107,10 +122,30 @@ impl MarkerBook {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct InputState {
     pub(crate) backend: BackendCell,
     pub(crate) markers: MarkerBook,
+    helper_allowed: AtomicBool,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            backend: BackendCell::default(),
+            markers: MarkerBook::default(),
+            helper_allowed: AtomicBool::new(true),
+        }
+    }
+}
+
+impl InputState {
+    pub(crate) fn helper_allowed(&self) -> bool {
+        self.helper_allowed.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn allow_helper(&self, allowed: bool) {
+        self.helper_allowed.store(allowed, Ordering::SeqCst);
+    }
 }
 
 pub(crate) fn marker_for(mods: Modifiers, key: u16) -> i64 {
@@ -145,6 +180,22 @@ mod tests {
             assert_eq!(cell.set(backend), previous);
             assert_eq!(cell.get(), backend);
         }
+    }
+
+    #[test]
+    fn the_keyboard_helper_never_takes_over_from_karabiner() {
+        let cell = BackendCell::default();
+        assert_eq!(
+            cell.set_from_helper(BackendId::HidHelper),
+            BackendId::EventTap
+        );
+        assert_eq!(cell.get(), BackendId::HidHelper);
+        cell.set(BackendId::KarabinerElements);
+        assert_eq!(
+            cell.set_from_helper(BackendId::EventTap),
+            BackendId::KarabinerElements
+        );
+        assert_eq!(cell.get(), BackendId::KarabinerElements);
     }
 
     #[test]

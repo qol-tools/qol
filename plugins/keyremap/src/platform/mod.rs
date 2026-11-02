@@ -69,6 +69,8 @@ pub(crate) trait PlatformAdapter: Clone + Send + Sync + 'static {
     fn virtual_hid_driver(&self) -> Result<DoctorCheckResult>;
     fn virtual_hid_daemon(&self) -> DoctorCheckResult;
     fn hid_helper_state(&self) -> DoctorCheckResult;
+    fn key_backend(&self) -> DoctorCheckResult;
+    fn karabiner_block(&self) -> DoctorCheckResult;
     fn secure_input(&self) -> DoctorCheckResult;
     fn layout_characters(&self) -> DoctorCheckResult;
 }
