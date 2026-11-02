@@ -221,6 +221,12 @@ pub(super) fn adopt(
     }
     let found = find(conversations, current, fork)
         .ok_or_else(|| anyhow!("no fork named {fork} has a conversation to bring back"))?;
+    if let Err(error) = super::stitch::join_fork(conversations, &found.transcript, &found.agent_id)
+    {
+        crate::cli::warn(format!(
+            "the fork comes back with only its conversation since the last /clear: {error:#}"
+        ));
+    }
     let subagents = conversations.join(current).join("subagents");
     match fresh {
         None if found.is_current => {
@@ -350,6 +356,46 @@ mod tests {
 
     fn read_meta(path: PathBuf) -> Value {
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_fork_split_by_clear_is_brought_back_with_its_earlier_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let conversations = root.path();
+        let row = |uuid: &str, parent: Option<&str>, at: &str| {
+            serde_json::json!({"agentId": "a1", "type": "user", "uuid": uuid, "parentUuid": parent, "timestamp": at}).to_string()
+        };
+        let described = meta("fix-board: fix it", "");
+        fork(
+            conversations,
+            "older",
+            "a1",
+            &described,
+            &[row("u1", None, "2026-11-02T07:00:00.000Z")],
+        );
+        fork(
+            conversations,
+            "current",
+            "a1",
+            &described,
+            &[row("u2", Some("lost"), "2026-11-02T09:00:00.000Z")],
+        );
+        let adopted = adopt(conversations, "current", "a1", None).unwrap();
+        assert_eq!(adopted.brought, Brought::Here);
+        let joined =
+            fs::read_to_string(conversations.join("current/subagents/agent-a1.jsonl")).unwrap();
+        let parents: Vec<(Value, Value)> = joined
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .map(|row| (row["uuid"].clone(), row["parentUuid"].clone()))
+            .collect();
+        assert_eq!(
+            parents,
+            vec![
+                (Value::from("u1"), Value::Null),
+                (Value::from("u2"), Value::from("u1")),
+            ]
+        );
     }
 
     #[test]
