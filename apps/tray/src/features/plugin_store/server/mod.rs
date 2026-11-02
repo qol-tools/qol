@@ -391,7 +391,8 @@ fn start_update_loop(app_state: &AppState) {
     tokio::spawn(async move {
         let mut shutdown_rx = state.shutdown_tx.subscribe();
         loop {
-            if let Some(check) = update_check::claim(&state) {
+            let paused = crate::installer::trial::current().is_some();
+            if let Some(check) = (!paused).then(|| update_check::claim(&state)).flatten() {
                 check.await;
             }
             tokio::select! {

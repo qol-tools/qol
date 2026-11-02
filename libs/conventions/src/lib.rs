@@ -88,6 +88,7 @@ pub mod artifact;
 
 pub mod operations;
 pub mod plugin_id;
+pub mod pr_try;
 
 pub mod api_routes {
     pub const HOTKEYS: &str = "/api/hotkeys";

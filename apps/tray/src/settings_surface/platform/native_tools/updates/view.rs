@@ -11,7 +11,7 @@ use qol_gpui::kit::Kit;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::settings_panel::components::{
     settings_label, settings_label_group, settings_page, settings_value_group, RowGround,
-    SettingsHint,
+    SettingsHint, DIMMED_OPACITY,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_busy_message,
@@ -75,7 +75,7 @@ impl PageRow {
             PageRow::Header { .. } => None,
             PageRow::Summary(summary) => summary.action_label,
             PageRow::Check(target) | PageRow::Host(target) | PageRow::Plugin(target) => {
-                target.action_label
+                target.action.as_ref().and(target.action_label)
             }
         }
     }
@@ -599,6 +599,7 @@ impl UpdatesView {
                         ground,
                         kit,
                     )
+                    .when(target.dimmed(), |control| control.opacity(DIMMED_OPACITY))
                 })),
         )
         .into_any_element()
@@ -762,6 +763,7 @@ mod tests {
             (TargetState::Queued, false),
             (TargetState::Updating, false),
             (TargetState::Failed, false),
+            (TargetState::Trial, false),
         ];
         for (state, expected) in cases {
             assert_eq!(finished(state), expected, "state: {state:?}");
@@ -785,7 +787,7 @@ mod tests {
             name: "Version".to_string(),
             value: "3.66.1".to_string(),
             tone: ValueTone::Muted,
-            description: Some("Updates come from rebuilding".to_string()),
+            description: Some("Updates come from Recompile".to_string()),
             action: None,
             action_label: None,
             attention: false,
@@ -839,6 +841,17 @@ mod tests {
             navigable,
             vec![(1, Selection::Summary), (3, Selection::Host)]
         );
+    }
+
+    #[test]
+    fn a_dimmed_button_shows_but_offers_no_enter_hint() {
+        let dimmed = TargetRow {
+            action_label: Some("Check now"),
+            ..target()
+        };
+        assert!(dimmed.dimmed());
+        assert_eq!(PageRow::Check(dimmed).action_label(), None);
+        assert!(!target().dimmed());
     }
 
     #[test]

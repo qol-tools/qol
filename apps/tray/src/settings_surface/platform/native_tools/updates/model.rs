@@ -15,6 +15,14 @@ pub(super) enum TargetState {
     Failed,
     DevBuild,
     DevLinked,
+    Trial,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub(super) struct Trial {
+    pub(super) pull_request: u64,
+    #[serde(default)]
+    pub(super) head: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -46,6 +54,8 @@ pub(super) struct UpdatesSnapshot {
     #[serde(default)]
     pub(super) connection: ConnectionHealth,
     pub(super) running: bool,
+    #[serde(default)]
+    pub(super) trial: Option<Trial>,
     pub(super) host: UpdateTarget,
     #[serde(default)]
     pub(super) plugins: Vec<UpdateTarget>,
@@ -98,6 +108,12 @@ pub(super) struct TargetRow {
     pub(super) spinner: bool,
 }
 
+impl TargetRow {
+    pub(super) fn dimmed(&self) -> bool {
+        self.action.is_none() && self.action_label.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PageModel {
     pub(super) summary: Summary,
@@ -109,7 +125,8 @@ pub(super) struct PageModel {
 }
 
 pub(super) fn page(snapshot: &UpdatesSnapshot, visited: &BTreeSet<String>) -> PageModel {
-    let plugins = plugin_rows(&snapshot.plugins, visited);
+    let trial = snapshot.trial.as_ref();
+    let plugins = plugin_rows(&snapshot.plugins, visited, trial);
     let checked = !snapshot
         .plugins
         .iter()
@@ -117,14 +134,18 @@ pub(super) fn page(snapshot: &UpdatesSnapshot, visited: &BTreeSet<String>) -> Pa
     PageModel {
         summary: summary(snapshot),
         check: check_row(snapshot),
-        host: host_row(&snapshot.host),
+        host: host_row(&snapshot.host, trial),
         fold: fold_text(snapshot.plugins.len(), plugins.len(), checked),
         plugin_total: snapshot.plugins.len(),
         plugins,
     }
 }
 
-pub(super) fn plugin_rows(plugins: &[UpdateTarget], visited: &BTreeSet<String>) -> Vec<TargetRow> {
+pub(super) fn plugin_rows(
+    plugins: &[UpdateTarget],
+    visited: &BTreeSet<String>,
+    trial: Option<&Trial>,
+) -> Vec<TargetRow> {
     let mut rows = plugins
         .iter()
         .filter_map(|plugin| match plugin.state {
@@ -134,7 +155,8 @@ pub(super) fn plugin_rows(plugins: &[UpdateTarget], visited: &BTreeSet<String>) 
             | TargetState::DevBuild => visited
                 .contains(&plugin.id)
                 .then(|| finished_row(plugin, &plugin.current)),
-            _ => Some(active_row(plugin)),
+            TargetState::Trial => Some(trial_row(plugin.id.clone(), plugin.name.clone(), trial)),
+            _ => Some(paused(active_row(plugin), trial)),
         })
         .collect::<Vec<_>>();
     rows.sort_by_key(|row| row.name.to_lowercase());
@@ -183,6 +205,39 @@ fn active_row(plugin: &UpdateTarget) -> TargetRow {
     row
 }
 
+fn trial_row(id: String, name: String, trial: Option<&Trial>) -> TargetRow {
+    TargetRow {
+        id,
+        name,
+        value: trial.map_or_else(
+            || "Pull request build".to_string(),
+            |trial| format!("PR #{}", trial.pull_request),
+        ),
+        tone: ValueTone::Normal,
+        description: trial
+            .filter(|trial| !trial.head.is_empty())
+            .map(|trial| format!("Built from {}", trial.head)),
+        action: None,
+        action_label: None,
+        attention: false,
+        spinner: false,
+    }
+}
+
+fn paused(mut row: TargetRow, trial: Option<&Trial>) -> TargetRow {
+    if trial.is_none() || row.action.is_none() {
+        return row;
+    }
+    row.action = None;
+    row.action_label = None;
+    row.attention = false;
+    row.tone = ValueTone::Muted;
+    row.description = Some(PAUSED_UNTIL.to_string());
+    row
+}
+
+const PAUSED_UNTIL: &str = "Waits until the try ends";
+
 fn finished_row(plugin: &UpdateTarget, version: &str) -> TargetRow {
     TargetRow {
         id: plugin.id.clone(),
@@ -197,7 +252,14 @@ fn finished_row(plugin: &UpdateTarget, version: &str) -> TargetRow {
     }
 }
 
-pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
+pub(super) fn host_row(host: &UpdateTarget, trial: Option<&Trial>) -> TargetRow {
+    if host.state == TargetState::Trial {
+        return trial_row(host.id.clone(), "Version".to_string(), trial);
+    }
+    paused(version_row(host), trial)
+}
+
+fn version_row(host: &UpdateTarget) -> TargetRow {
     let mut row = TargetRow {
         id: host.id.clone(),
         name: "Version".to_string(),
@@ -240,12 +302,12 @@ pub(super) fn host_row(host: &UpdateTarget) -> TargetRow {
         TargetState::DevBuild => {
             row.value = "Development build".to_string();
             row.tone = ValueTone::Muted;
-            row.description = Some("Updates come from rebuilding".to_string());
+            row.description = Some("Updates come from Recompile".to_string());
         }
         TargetState::Unchecked => {
             row.description = Some("Not checked for updates".to_string());
         }
-        TargetState::UpToDate | TargetState::DevLinked => {
+        TargetState::UpToDate | TargetState::DevLinked | TargetState::Trial => {
             row.description = host
                 .updated_from
                 .as_ref()
@@ -282,6 +344,19 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             description,
             action: plugins_queued.then_some(RowAction::StopUpdates),
             action_label: plugins_queued.then_some("Stop"),
+        };
+    }
+    if let Some(trial) = &snapshot.trial {
+        return Summary {
+            dot: None,
+            busy: false,
+            label: "Updates paused".to_string(),
+            description: format!(
+                "Trying pull request #{} until qol pr try --off.",
+                trial.pull_request
+            ),
+            action: None,
+            action_label: None,
         };
     }
     let failed = pending_names(snapshot, &[TargetState::Failed]);
@@ -368,6 +443,19 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
 }
 
 fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
+    if snapshot.trial.is_some() {
+        return TargetRow {
+            id: CHECK_ROW_ID.to_string(),
+            name: "Checks".to_string(),
+            value: "Paused".to_string(),
+            tone: ValueTone::Muted,
+            description: Some("Back after qol pr try --off".to_string()),
+            action: None,
+            action_label: Some("Check now"),
+            attention: false,
+            spinner: false,
+        };
+    }
     let failed = snapshot.check_error.is_some() && !snapshot.checking;
     let value = match (snapshot.checking, snapshot.last_checked_secs) {
         (true, _) => "Checking".to_string(),
@@ -514,7 +602,7 @@ fn pending_count(snapshot: &UpdatesSnapshot, state: TargetState) -> usize {
 }
 
 pub(super) fn can_check(snapshot: &UpdatesSnapshot) -> bool {
-    !snapshot.checking && !job_running(snapshot)
+    snapshot.trial.is_none() && !snapshot.checking && !job_running(snapshot)
 }
 
 fn job_running(snapshot: &UpdatesSnapshot) -> bool {
@@ -547,7 +635,8 @@ mod tests {
 
     use super::{
         can_check, check_row, fold_text, host_row, join_names, long_age, page, plugin_rows,
-        summary, RowAction, SummaryDot, TargetState, UpdateTarget, UpdatesSnapshot, ValueTone,
+        summary, RowAction, SummaryDot, TargetState, Trial, UpdateTarget, UpdatesSnapshot,
+        ValueTone,
     };
 
     #[test]
@@ -595,9 +684,95 @@ mod tests {
             check_error: None,
             connection: Default::default(),
             running: false,
+            trial: None,
             host,
             plugins,
         }
+    }
+
+    fn trying() -> Trial {
+        Trial {
+            pull_request: 435,
+            head: "eb1f5793b".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_try_pauses_checks_and_updates_and_names_the_pull_request() {
+        let mut during = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Trial),
+            vec![
+                target("launcher", "Launcher", TargetState::Trial),
+                target("shot", "Shot", TargetState::Available),
+                target("lights", "Lights", TargetState::UpToDate),
+            ],
+        );
+        during.trial = Some(trying());
+
+        let status = summary(&during);
+        assert_eq!(status.label, "Updates paused");
+        assert_eq!(
+            status.description,
+            "Trying pull request #435 until qol pr try --off."
+        );
+        assert_eq!(status.action, None);
+        assert_eq!(status.dot, None);
+
+        let check = check_row(&during);
+        assert_eq!(check.name, "Checks");
+        assert_eq!(check.value, "Paused");
+        assert_eq!(check.action, None);
+        assert_eq!(check.action_label, Some("Check now"));
+        assert!(check.dimmed());
+        assert!(!can_check(&during));
+
+        let host = host_row(&during.host, during.trial.as_ref());
+        assert_eq!(host.value, "PR #435");
+        assert_eq!(host.description.as_deref(), Some("Built from eb1f5793b"));
+        assert_eq!(host.action, None);
+
+        let rows = plugin_rows(&during.plugins, &BTreeSet::new(), during.trial.as_ref());
+        let names: Vec<_> = rows
+            .iter()
+            .map(|row| (row.name.as_str(), row.value.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("Launcher", "PR #435"), ("Shot", "1.0.0 \u{2192} 1.1.0")]
+        );
+        assert_eq!(rows[1].action, None);
+        assert!(!rows[1].attention);
+        assert_eq!(
+            rows[1].description.as_deref(),
+            Some("Waits until the try ends")
+        );
+    }
+
+    #[test]
+    fn a_plugin_only_try_keeps_the_tray_version_but_holds_its_update() {
+        let mut during = snapshot(
+            target("qol-tray", "qol-tray", TargetState::Available),
+            vec![target("launcher", "Launcher", TargetState::Trial)],
+        );
+        during.trial = Some(trying());
+        let host = host_row(&during.host, during.trial.as_ref());
+        assert_eq!(host.value, "1.0.0 \u{2192} 1.1.0");
+        assert_eq!(host.action, None);
+        assert!(!host.dimmed());
+        assert_eq!(
+            host.description.as_deref(),
+            Some("Waits until the try ends")
+        );
+    }
+
+    #[test]
+    fn an_update_running_when_the_try_began_still_reads_as_running() {
+        let mut during = snapshot(
+            target("qol-tray", "qol-tray", TargetState::UpToDate),
+            vec![target("shot", "Shot", TargetState::Updating)],
+        );
+        during.trial = Some(trying());
+        assert_eq!(summary(&during).label, "Updating plugins");
     }
 
     #[test]
@@ -672,7 +847,7 @@ mod tests {
             target("lights", "Lights", TargetState::UpToDate),
         ];
         let visited = BTreeSet::from(["qol-launcher".to_string()]);
-        let rows = plugin_rows(&plugins, &visited);
+        let rows = plugin_rows(&plugins, &visited, None);
 
         let names = rows.iter().map(|row| row.name.as_str()).collect::<Vec<_>>();
         assert_eq!(names, ["Bluetooth", "CLI Sessions", "Launcher"]);
@@ -689,7 +864,7 @@ mod tests {
     #[test]
     fn plugin_rows_never_show_an_unvisited_dev_linked_plugin() {
         let plugins = vec![target("os-themes", "OS Themes", TargetState::DevLinked)];
-        assert!(plugin_rows(&plugins, &BTreeSet::new()).is_empty());
+        assert!(plugin_rows(&plugins, &BTreeSet::new(), None).is_empty());
     }
 
     #[test]
@@ -698,10 +873,10 @@ mod tests {
             target("cli", "CLI Sessions", TargetState::Unchecked),
             target("lights", "Lights", TargetState::Unchecked),
         ];
-        assert!(plugin_rows(&plugins, &BTreeSet::new()).is_empty());
+        assert!(plugin_rows(&plugins, &BTreeSet::new(), None).is_empty());
 
         let visited = BTreeSet::from(["cli".to_string()]);
-        let rows = plugin_rows(&plugins, &visited);
+        let rows = plugin_rows(&plugins, &visited, None);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].value, "Updated to 1.0.0");
         assert_eq!(rows[0].tone, ValueTone::Success);
@@ -891,7 +1066,10 @@ mod tests {
 
     #[test]
     fn host_row_derives_every_state() {
-        let available = host_row(&target("qol-tray", "qol-tray", TargetState::Available));
+        let available = host_row(
+            &target("qol-tray", "qol-tray", TargetState::Available),
+            None,
+        );
         assert_eq!(available.name, "Version");
         assert_eq!(available.value, "1.0.0 \u{2192} 1.1.0");
         assert_eq!(available.tone, ValueTone::Attention);
@@ -902,7 +1080,7 @@ mod tests {
         );
         assert!(available.attention);
 
-        let queued = host_row(&target("qol-tray", "qol-tray", TargetState::Queued));
+        let queued = host_row(&target("qol-tray", "qol-tray", TargetState::Queued), None);
         assert_eq!(queued.value, "Waiting");
         assert_eq!(queued.tone, ValueTone::Muted);
         assert_eq!(queued.action, None);
@@ -913,35 +1091,38 @@ mod tests {
 
         let mut updating = target("qol-tray", "qol-tray", TargetState::Updating);
         updating.progress = Some(42.4);
-        let updating = host_row(&updating);
+        let updating = host_row(&updating, None);
         assert_eq!(updating.value, "Downloading 42%");
         assert!(updating.spinner);
         assert_eq!(updating.tone, ValueTone::Muted);
 
         let mut failed = target("qol-tray", "qol-tray", TargetState::Failed);
         failed.error = Some("The download stopped".to_string());
-        let failed = host_row(&failed);
+        let failed = host_row(&failed, None);
         assert_eq!(failed.value, "Update failed");
         assert_eq!(failed.tone, ValueTone::Danger);
         assert_eq!(failed.description.as_deref(), Some("The download stopped"));
         assert_eq!(failed.action_label, Some("Retry"));
 
-        let dev = host_row(&target("qol-tray", "qol-tray", TargetState::DevBuild));
+        let dev = host_row(&target("qol-tray", "qol-tray", TargetState::DevBuild), None);
         assert_eq!(dev.value, "Development build");
         assert_eq!(
             dev.description.as_deref(),
-            Some("Updates come from rebuilding")
+            Some("Updates come from Recompile")
         );
         assert_eq!(dev.action, None);
 
         let mut current = target("qol-tray", "qol-tray", TargetState::UpToDate);
         current.updated_from = Some("1.0.0".to_string());
-        let current = host_row(&current);
+        let current = host_row(&current, None);
         assert_eq!(current.value, "1.0.0");
         assert_eq!(current.description.as_deref(), Some("Updated from 1.0.0"));
         assert_eq!(current.tone, ValueTone::Normal);
 
-        let unchecked = host_row(&target("qol-tray", "qol-tray", TargetState::Unchecked));
+        let unchecked = host_row(
+            &target("qol-tray", "qol-tray", TargetState::Unchecked),
+            None,
+        );
         assert_eq!(unchecked.value, "1.0.0");
         assert_eq!(
             unchecked.description.as_deref(),
