@@ -21,6 +21,7 @@ mod paths;
 mod plugin;
 mod resume;
 mod rows;
+mod stitch;
 
 use super::agent_policy::{AgentAssignment, AgentDispatch, AssignmentRequest};
 use super::contract::SWITCHBOARD_TOOLS;
@@ -169,6 +170,12 @@ impl LaunchPlan {
         let launched_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let wake = resume.as_deref().map(|conversation| {
             let previous = resume::Wake::previous_launch(&wake_path, conversation);
+            let conversations = paths::conversations_dir(&config_home, &cwd);
+            for failure in stitch::join_split_forks(&conversations, conversation) {
+                crate::cli::warn(format!(
+                    "a fork keeps only its conversation since the last /clear: {failure}"
+                ));
+            }
             let forks =
                 resume::sleeping_forks(&config_home, &cwd, conversation, previous.as_deref());
             resume::Wake::of(conversation, launched_at, previous, forks, watched)

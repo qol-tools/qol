@@ -140,7 +140,7 @@ pub(super) fn unpin_forks(config_home: &Path, switchboard: &Path) -> Vec<String>
     failures
 }
 
-fn agent_id_of(meta_path: &Path) -> Option<String> {
+pub(super) fn agent_id_of(meta_path: &Path) -> Option<String> {
     let name = meta_path.file_name()?.to_str()?;
     Some(
         name.strip_prefix(AGENT_PREFIX)?
