@@ -44,6 +44,17 @@ pub(super) enum Action {
     Import,
 }
 
+impl Action {
+    /// Whether this action goes one level deeper, so its row ends in the open
+    /// part whatever its verb says.
+    pub(super) fn opens_a_level(&self) -> bool {
+        matches!(
+            self,
+            Action::OpenProfiles | Action::OpenReview | Action::OpenBackups | Action::OpenBackup(_)
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Dot {
     Idle,
@@ -78,6 +89,7 @@ pub(super) struct Row {
 
 impl Row {
     fn new(label: impl Into<String>, detail: impl Into<String>, action: Option<Action>) -> Self {
+        let opens = action.as_ref().is_some_and(Action::opens_a_level);
         Self {
             label: label.into(),
             detail: detail.into(),
@@ -86,7 +98,7 @@ impl Row {
             spinner: false,
             value: Value::None,
             verb: None,
-            opens: false,
+            opens,
             chip_when_selected: false,
             action,
         }
