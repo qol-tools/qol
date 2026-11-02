@@ -47,12 +47,30 @@ impl PlatformAdapter for Adapter {
     }
 
     fn karabiner_rules(&self) -> Result<CommandResult> {
-        let snapshot = layout::LayoutSnapshot::read_current()?;
-        let resolved = remap::resolve(&config::load_config());
-        let compiled = karabiner::compile::compile(&resolved, &snapshot);
+        let compiled = compiled_rules()?;
         Ok(CommandResult::success(format!(
             "{}\n",
             serde_json::to_string_pretty(&karabiner::report(&compiled))?
+        )))
+    }
+
+    fn karabiner_sync(&self) -> Result<CommandResult> {
+        let compiled = compiled_rules()?;
+        let store = karabiner::store::Store::locate()?;
+        let synced = store.sync(&compiled)?;
+        Ok(CommandResult::success(karabiner::sync_summary(
+            &synced,
+            &compiled,
+            store.config_path(),
+        )))
+    }
+
+    fn karabiner_remove(&self) -> Result<CommandResult> {
+        let store = karabiner::store::Store::locate()?;
+        let removed = store.remove()?;
+        Ok(CommandResult::success(karabiner::remove_summary(
+            &removed,
+            store.config_path(),
         )))
     }
 
@@ -85,6 +103,12 @@ impl PlatformAdapter for Adapter {
     fn layout_characters(&self) -> DoctorCheckResult {
         doctor::layout_result(&layout_gaps())
     }
+}
+
+fn compiled_rules() -> Result<karabiner::compile::Compiled> {
+    let snapshot = layout::LayoutSnapshot::read_current()?;
+    let resolved = remap::resolve(&config::load_config());
+    Ok(karabiner::compile::compile(&resolved, &snapshot))
 }
 
 fn layout_gaps() -> Probe<Vec<LayoutGap>> {

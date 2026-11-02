@@ -39,6 +39,8 @@ where
     let install = adapter.clone();
     let uninstall = adapter.clone();
     let karabiner = adapter.clone();
+    let karabiner_sync = adapter.clone();
+    let karabiner_remove = adapter.clone();
 
     HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control native key, mouse, and scroll remapping.")
@@ -142,6 +144,33 @@ where
                 .run_result(move |context| {
                     no_args(context)?;
                     karabiner.karabiner_rules()
+                }),
+        )
+        .command(
+            Command::new("karabiner-sync")
+                .about("Write Key Remap's rules into Karabiner-Elements' karabiner.json now.")
+                .usage(format!("{PLUGIN_ID} karabiner-sync"))
+                .detail("Replaces the one rule block Key Remap owns in the selected profile and adds its modifier key changes to simple_modifications.")
+                .detail("Leaves every other rule, field and profile alone, and never overwrites a simple_modifications entry you wrote.")
+                .detail("Backs karabiner.json up to karabiner.json.qol-keyremap.bak before its first write, and writes through a symlink.")
+                .detail("The rules stay off until the qol_keyremap_active variable is 1.")
+                .output("A summary on stdout: the profile written, rules left alone, and rules that could not be compiled.")
+                .exit_behavior("Exits non-zero when karabiner.json is missing or has no selected profile, and on platforms other than macOS.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    karabiner_sync.karabiner_sync()
+                }),
+        )
+        .command(
+            Command::new("karabiner-remove")
+                .about("Remove Key Remap's rules and modifier key changes from karabiner.json.")
+                .usage(format!("{PLUGIN_ID} karabiner-remove"))
+                .detail("Removes only the block and the simple_modifications entries Key Remap wrote.")
+                .output("One line on stdout saying whether anything was removed.")
+                .exit_behavior("Exits non-zero when karabiner.json is missing, and on platforms other than macOS.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    karabiner_remove.karabiner_remove()
                 }),
         )
         .command(settings_command(settings))
@@ -470,6 +499,14 @@ mod tests {
         }
 
         fn karabiner_rules(&self) -> Result<CommandResult> {
+            Ok(CommandResult::success(""))
+        }
+
+        fn karabiner_sync(&self) -> Result<CommandResult> {
+            Ok(CommandResult::success(""))
+        }
+
+        fn karabiner_remove(&self) -> Result<CommandResult> {
             Ok(CommandResult::success(""))
         }
 
