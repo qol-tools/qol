@@ -15,8 +15,9 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt, Launch,
-    RowGround, SettingsChoiceValue, SettingsHint, SettingsTextField, SettingsToggle,
+    settings_label, settings_label_group, settings_launch_description, settings_page,
+    settings_value_group, ChoiceArt, Launch, RowGround, SettingsChoiceValue, SettingsHint,
+    SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
@@ -580,6 +581,25 @@ impl ProfilesView {
     }
 
     fn render_label(&self, index: usize, row: &Row, ground: RowGround, kit: Kit) -> Div {
+        if let Some(launch) = row
+            .launch
+            .as_ref()
+            .filter(|launch| launch.file_name().is_some())
+        {
+            return div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(qol_theme::SPACE_STACK))
+                .child(settings_label(row.label.clone(), kit))
+                .child(settings_launch_description(
+                    launch,
+                    &row.detail,
+                    ground,
+                    kit,
+                ));
+        }
         if row.dot.is_none() && !row.spinner {
             return settings_label_group(
                 row.label.clone(),
@@ -938,7 +958,7 @@ mod tests {
             "open"
         );
         assert_eq!(
-            enter_label("open github", Some(&Launch::link("github.com"))),
+            enter_label("open github", Some(&Launch::link())),
             "open github"
         );
         assert_eq!(enter_label("turn on", None), "turn on");
