@@ -110,8 +110,12 @@ impl<K: Karabiner> Backend<K> {
             State::Active {
                 layout: compiled_for,
                 next_probe,
+                enabled,
                 ..
-            } => (*compiled_for != layout.id, now >= *next_probe),
+            } => (
+                *compiled_for != layout.id || *enabled != config.enabled,
+                now >= *next_probe,
+            ),
             State::Unknown | State::Off => return,
         };
         if matches!(self.state, State::Waiting { .. }) {
@@ -129,10 +133,21 @@ impl<K: Karabiner> Backend<K> {
     }
 
     pub(crate) fn stop(&mut self) {
-        if matches!(self.state, State::Active { .. }) {
-            self.report("turning off", self.karabiner.set_active(false));
+        match self.state {
+            State::Active { .. } => self.report("turning off", self.karabiner.set_active(false)),
+            State::Waiting { .. } => self.turn_off_if_running(self.karabiner.probe().core_pid),
+            State::Unknown | State::Off => {}
         }
         self.state = State::Off;
+    }
+
+    fn turn_off_if_running(&self, core_pid: Option<u32>) {
+        if core_pid.is_none() {
+            return;
+        }
+        if let Err(error) = self.karabiner.set_active(false) {
+            log::debug!("could not turn the Key Remap variable off: {error:#}");
+        }
     }
 
     fn try_activate(
@@ -160,7 +175,16 @@ impl<K: Karabiner> Backend<K> {
             return;
         }
         input.backend.set(BackendId::KarabinerElements);
-        self.report("turning on", self.karabiner.set_active(config.enabled));
+        if let Err(error) = self.karabiner.set_active(config.enabled) {
+            input.backend.set(BackendId::EventTap);
+            self.say(format!(
+                "could not set the Key Remap variable in Karabiner-Elements, so the event tap remaps keys: {error:#}"
+            ));
+            self.state = State::Waiting {
+                next_probe: now + PROBE_INTERVAL,
+            };
+            return;
+        }
         log::info!("key backend: karabiner_elements");
         self.said.clear();
         self.state = State::Active {
@@ -173,22 +197,36 @@ impl<K: Karabiner> Backend<K> {
 
     fn refresh(&mut self, config: &ResolvedConfig, layout: &LayoutSnapshot) {
         let compiled = compile::compile(config, layout);
-        self.write(&compiled);
+        let written = self.write(&compiled);
+        let result = self.karabiner.set_active(config.enabled);
+        let set = result.is_ok();
+        self.report("updating", result);
         if let State::Active {
             layout: compiled_for,
             enabled,
             ..
         } = &mut self.state
         {
-            *compiled_for = layout.id.clone();
-            *enabled = config.enabled;
+            if written {
+                *compiled_for = layout.id.clone();
+            }
+            if set {
+                *enabled = config.enabled;
+            }
         }
-        let result = self.karabiner.set_active(config.enabled);
-        self.report("updating", result);
     }
 
     fn check_service(&mut self, config: &ResolvedConfig, input: &InputState, now: Instant) {
         let probe = self.karabiner.probe();
+        if let Availability::Missing { what, fix } = probe.availability {
+            self.turn_off_if_running(probe.core_pid);
+            input.backend.set(BackendId::EventTap);
+            log::warn!("Karabiner-Elements needs {what}, so the event tap remaps keys until it is back: {fix}");
+            self.state = State::Waiting {
+                next_probe: now + PROBE_INTERVAL,
+            };
+            return;
+        }
         let State::Active {
             core_pid,
             enabled,
@@ -199,20 +237,16 @@ impl<K: Karabiner> Backend<K> {
             return;
         };
         *next_probe = now + PROBE_INTERVAL;
-        if let Availability::Missing { what, fix } = probe.availability {
-            input.backend.set(BackendId::EventTap);
-            log::warn!("Karabiner-Elements needs {what}, so the event tap remaps keys until it is back: {fix}");
-            self.state = State::Waiting {
-                next_probe: now + PROBE_INTERVAL,
-            };
-            return;
-        }
         if probe.core_pid != *core_pid {
             *core_pid = probe.core_pid;
-            *enabled = config.enabled;
-            let result = self.karabiner.set_active(config.enabled);
             log::info!("Karabiner-Elements restarted; setting the Key Remap variable again");
-            self.report("turning on", result);
+            match self.karabiner.set_active(config.enabled) {
+                Ok(()) => *enabled = config.enabled,
+                Err(error) => {
+                    *enabled = !config.enabled;
+                    self.report("turning on", Err(error));
+                }
+            }
         }
     }
 
@@ -226,9 +260,7 @@ impl<K: Karabiner> Backend<K> {
                 log::info!("key backend: left karabiner_elements");
             }
             State::Unknown | State::Waiting { .. } => {
-                if self.karabiner.probe().availability == Availability::Ready {
-                    let _ = self.karabiner.set_active(false);
-                }
+                self.turn_off_if_running(self.karabiner.probe().core_pid);
                 if let Err(error) = self.karabiner.remove() {
                     log::debug!("no Karabiner-Elements rules to clean up: {error:#}");
                 }
@@ -297,6 +329,7 @@ mod tests {
     struct Fake {
         calls: Rc<RefCell<Vec<String>>>,
         probe: Rc<RefCell<Option<Probe>>>,
+        cli_fails: Rc<std::cell::Cell<bool>>,
     }
 
     impl Fake {
@@ -308,12 +341,16 @@ mod tests {
         }
 
         fn missing(&self) {
+            self.missing_with(None);
+        }
+
+        fn missing_with(&self, core_pid: Option<u32>) {
             *self.probe.borrow_mut() = Some(Probe {
                 availability: Availability::Missing {
                     what: "Karabiner-Elements running".to_string(),
                     fix: "open it".to_string(),
                 },
-                core_pid: None,
+                core_pid,
             });
         }
 
@@ -347,6 +384,9 @@ mod tests {
 
         fn set_active(&self, active: bool) -> Result<()> {
             self.calls.borrow_mut().push(format!("active {active}"));
+            if self.cli_fails.get() {
+                anyhow::bail!("karabiner_cli failed");
+            }
             Ok(())
         }
     }
@@ -539,5 +579,78 @@ mod tests {
 
         backend.stop();
         assert_eq!(fake.take(), vec!["active false"]);
+    }
+
+    #[test]
+    fn karabiner_still_running_but_not_ready_turns_the_variable_off_on_fallback() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        fake.take();
+
+        fake.missing_with(Some(10));
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start + PROBE_INTERVAL * 2,
+        );
+        assert_eq!(fake.take(), vec!["active false"]);
+        assert_eq!(input.backend.get(), BackendId::EventTap);
+
+        backend.apply(
+            KeyBackendChoice::EventTap,
+            &config(true),
+            &layout("us"),
+            &input,
+        );
+        assert_eq!(fake.take(), vec!["active false", "remove"]);
+    }
+
+    #[test]
+    fn a_failed_variable_keeps_keys_on_the_tap_and_retries() {
+        let fake = Fake::default();
+        fake.ready(10);
+        fake.cli_fails.set(true);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        assert_eq!(fake.take(), vec!["sync 1", "active true"]);
+        assert_eq!(input.backend.get(), BackendId::EventTap);
+
+        fake.cli_fails.set(false);
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start + PROBE_INTERVAL * 2,
+        );
+        assert_eq!(fake.take(), vec!["sync 1", "active true"]);
+        assert_eq!(input.backend.get(), BackendId::KarabinerElements);
+    }
+
+    #[test]
+    fn a_failed_toggle_is_retried_on_the_next_idle() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        fake.take();
+
+        fake.cli_fails.set(true);
+        backend.apply(CHOSEN, &config(false), &layout("us"), &input);
+        fake.take();
+        fake.cli_fails.set(false);
+        backend.idle_at(&config(false), &layout("us"), &input, start);
+        assert_eq!(fake.take(), vec!["sync 1", "active false"]);
+        backend.idle_at(&config(false), &layout("us"), &input, start);
+        assert!(fake.take().is_empty());
     }
 }

@@ -96,7 +96,7 @@ impl PlatformAdapter for Adapter {
     }
 
     fn key_backend(&self) -> DoctorCheckResult {
-        doctor::key_backend_result(&selected_backend())
+        doctor::key_backend_result(&selected_backend(&hid_helper::query_status()))
     }
 
     fn karabiner_block(&self) -> DoctorCheckResult {
@@ -106,10 +106,16 @@ impl PlatformAdapter for Adapter {
     }
 
     fn secure_input(&self) -> DoctorCheckResult {
-        doctor::secure_input_result(
-            &Probe::Known(qol_platform::secure_input_holder()),
-            selected_backend().backend,
-        )
+        let helper = hid_helper::query_status();
+        let seized = matches!(
+            &helper,
+            Probe::Known(doctor::HelperState::Running(report)) if !report.seized.is_empty()
+        );
+        let backend = match selected_backend(&helper).backend {
+            BackendId::HidHelper if !seized => BackendId::EventTap,
+            backend => backend,
+        };
+        doctor::secure_input_result(&Probe::Known(qol_platform::secure_input_holder()), backend)
     }
 
     fn layout_characters(&self) -> DoctorCheckResult {
@@ -123,10 +129,10 @@ fn compiled_rules() -> Result<karabiner::compile::Compiled> {
     Ok(karabiner::compile::compile(&resolved, &snapshot))
 }
 
-fn selected_backend() -> Selection {
+fn selected_backend(helper: &Probe<doctor::HelperState>) -> Selection {
     selection::select(config::load_config().key_backend, |backend| match backend {
         BackendId::EventTap => Availability::Ready,
-        BackendId::HidHelper => doctor::helper_availability(&hid_helper::query_status()),
+        BackendId::HidHelper => doctor::helper_availability(helper),
         BackendId::KarabinerElements => match karabiner::store::Store::locate() {
             Ok(store) => karabiner::service::probe(&store).availability,
             Err(error) => Availability::Missing {
