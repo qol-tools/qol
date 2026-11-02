@@ -99,6 +99,44 @@ fn sampling_interval_ms(framerate: u32) -> u32 {
     (MILLIS_PER_SECOND / framerate.max(1)).max(1)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FrameFormat {
+    Nv12,
+    Bgra,
+}
+
+impl FrameFormat {
+    pub(super) fn preferred_for(rect: &Rect) -> Self {
+        if rect.w % 4 == 0 && rect.h % 2 == 0 {
+            Self::Nv12
+        } else {
+            Self::Bgra
+        }
+    }
+
+    pub(super) fn ffmpeg_pix_fmt(self) -> &'static str {
+        match self {
+            Self::Nv12 => "nv12",
+            Self::Bgra => "bgra",
+        }
+    }
+
+    fn buffer_format(self) -> u32 {
+        match self {
+            Self::Nv12 => ffi::BUFFER_FORMAT_NV12,
+            Self::Bgra => ffi::BUFFER_FORMAT_BGRA,
+        }
+    }
+
+    fn frame_len(self, rect: &Rect) -> usize {
+        let pixels = rect.w.max(0) as usize * rect.h.max(0) as usize;
+        match self {
+            Self::Nv12 => pixels * 3 / 2,
+            Self::Bgra => pixels * 4,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Tracking {
     kind: u32,
@@ -154,14 +192,14 @@ pub(super) struct Capture {
 }
 
 impl Capture {
-    pub(super) fn open(rect: &Rect, framerate: u32) -> Result<Self> {
+    pub(super) fn open(rect: &Rect, framerate: u32, format: FrameFormat) -> Result<Self> {
         let api = Api::load()?;
         let mut capture = Self {
             api,
             handle: 0,
             session_created: false,
             buffer: Box::new(std::ptr::null_mut()),
-            frame_len: rect.w as usize * rect.h as usize * 4,
+            frame_len: format.frame_len(rect),
             output_name: String::new(),
         };
         capture.create_handle()?;
@@ -193,7 +231,7 @@ impl Capture {
             .check(unsafe { (capture.api.create_capture_session)(capture.handle, &mut session) })?;
         capture.session_created = true;
         let buffer: *mut *mut c_void = &mut *capture.buffer;
-        let mut setup = ffi::ToSysSetupParams::new(buffer);
+        let mut setup = ffi::ToSysSetupParams::new(buffer, format.buffer_format());
         // SAFETY: the buffer slot is boxed, so NvFBC can keep writing the frame pointer into it for the session's life.
         capture.check(unsafe { (capture.api.to_sys_set_up)(capture.handle, &mut setup) })?;
         capture.grab()?;
@@ -207,7 +245,7 @@ impl Capture {
     pub(super) fn grab(&mut self) -> Result<&[u8]> {
         let mut info = ffi::FrameGrabInfo::default();
         let mut grab = ffi::ToSysGrabFrameParams::new(&mut info);
-        // SAFETY: the session is set up for system-memory BGRA frames and info outlives the call.
+        // SAFETY: the session is set up for system-memory frames and info outlives the call.
         self.check(unsafe { (self.api.to_sys_grab_frame)(self.handle, &mut grab) })?;
         if info.byte_size as usize != self.frame_len || self.buffer.is_null() {
             return Err(anyhow!(
@@ -263,11 +301,36 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
-    use super::{ffi, sampling_interval_ms, tracking_for, Tracking};
+    use super::{ffi, sampling_interval_ms, tracking_for, FrameFormat, Tracking};
     use crate::Rect;
 
     fn nv_box(x: u32, y: u32, w: u32, h: u32) -> ffi::NvBox {
         ffi::NvBox { x, y, w, h }
+    }
+
+    #[test]
+    fn nv12_frames_need_a_width_of_four_and_cost_a_third_of_bgra() {
+        let cases = [
+            (2560, 1440, FrameFormat::Nv12, 5_529_600),
+            (1920, 1080, FrameFormat::Nv12, 3_110_400),
+            (1126, 724, FrameFormat::Bgra, 3_260_896),
+            (1124, 724, FrameFormat::Nv12, 1_220_664),
+        ];
+        for (w, h, format, len) in cases {
+            let rect = Rect { x: 0, y: 0, w, h };
+            assert_eq!(FrameFormat::preferred_for(&rect), format, "{w}x{h}");
+            assert_eq!(format.frame_len(&rect), len, "{w}x{h}");
+        }
+        let full = Rect {
+            x: 0,
+            y: 0,
+            w: 2560,
+            h: 1440,
+        };
+        assert_eq!(
+            FrameFormat::Bgra.frame_len(&full),
+            FrameFormat::Nv12.frame_len(&full) * 8 / 3
+        );
     }
 
     #[test]

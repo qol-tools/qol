@@ -18,6 +18,7 @@ use crate::{Config, Rect};
 
 use super::super::recorder;
 pub use super::super::recorder::recording_format;
+use super::nvfbc::FrameFormat;
 use qol_plugin_daemon::notification::send_notification;
 
 const CINNAMON_HELPER_ENV: &str = "QOL_SHOT_CINNAMON_CAPTURE_REQUEST";
@@ -27,6 +28,16 @@ const NVFBC_HELPER_ENV: &str = "QOL_SHOT_NVFBC_CAPTURE_REQUEST";
 const NVFBC_FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const NVFBC_FRAME_QUEUE: u32 = 16;
 const NVFBC_PIPE_BYTES: libc::c_int = 1 << 20;
+const NVFBC_NV12_COLOR: [&str; 8] = [
+    "-color_range",
+    "tv",
+    "-colorspace",
+    "bt709",
+    "-color_primaries",
+    "bt709",
+    "-color_trc",
+    "bt709",
+];
 static CINNAMON_STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
 const CINNAMON_VP8_THREADS: u32 = 4;
 const NVENC_ELEMENT: &str = "nvh264enc";
@@ -126,7 +137,7 @@ struct CinnamonCaptureRequest {
 struct NvfbcCaptureRequest {
     rect: Rect,
     framerate: u32,
-    ffmpeg_args: Vec<String>,
+    ffmpeg_args_after_video: Vec<String>,
 }
 
 pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
@@ -401,7 +412,7 @@ fn start_nvfbc_capture(rect: &Rect, config: &Config, output_file: &Path) -> Resu
     let request = NvfbcCaptureRequest {
         rect: *rect,
         framerate,
-        ffmpeg_args: nvfbc_ffmpeg_args(rect, framerate, config, output_file),
+        ffmpeg_args_after_video: nvfbc_ffmpeg_args_after_video(config, output_file),
     };
     let request_json =
         serde_json::to_string(&request).context("failed to encode capture request")?;
@@ -451,13 +462,8 @@ fn start_nvfbc_capture(rect: &Rect, config: &Config, output_file: &Path) -> Resu
     Err(anyhow!("NvFBC capture did not create its output file"))
 }
 
-fn nvfbc_ffmpeg_args(
-    rect: &Rect,
-    framerate: u32,
-    config: &Config,
-    output_file: &Path,
-) -> Vec<String> {
-    let input = vec![
+fn nvfbc_video_input(rect: &Rect, framerate: u32, format: FrameFormat) -> Vec<String> {
+    let mut input = vec![
         "-thread_queue_size".to_string(),
         NVFBC_FRAME_QUEUE.to_string(),
         "-use_wallclock_as_timestamps".to_string(),
@@ -465,18 +471,40 @@ fn nvfbc_ffmpeg_args(
         "-f".to_string(),
         "rawvideo".to_string(),
         "-pix_fmt".to_string(),
-        "bgra".to_string(),
+        format.ffmpeg_pix_fmt().to_string(),
         "-video_size".to_string(),
         format!("{}x{}", rect.w, rect.h),
         "-framerate".to_string(),
         framerate.to_string(),
-        "-i".to_string(),
-        "pipe:0".to_string(),
     ];
-    let mut args = ffmpeg_args(input, config, X11grabEncoder::Nvenc);
+    if format == FrameFormat::Nv12 {
+        input.extend(NVFBC_NV12_COLOR.map(str::to_string));
+    }
+    input.extend(["-i", "pipe:0"].map(str::to_string));
+    input
+}
+
+fn nvfbc_ffmpeg_args_after_video(config: &Config, output_file: &Path) -> Vec<String> {
+    let mut args = ffmpeg_args(Vec::new(), config, X11grabEncoder::Nvenc);
     args.extend(["-fps_mode", "cfr", "-shortest"].map(str::to_string));
     args.push(output_file.to_string_lossy().to_string());
     args
+}
+
+fn open_nvfbc_capture(rect: &Rect, framerate: u32) -> Result<(super::nvfbc::Capture, FrameFormat)> {
+    let preferred = FrameFormat::preferred_for(rect);
+    match super::nvfbc::Capture::open(rect, framerate, preferred) {
+        Ok(capture) => Ok((capture, preferred)),
+        Err(error) if preferred != FrameFormat::Bgra => {
+            log::warn!(
+                "NvFBC gave no {} frames, capturing bgra: {error:#}",
+                preferred.ffmpeg_pix_fmt()
+            );
+            let capture = super::nvfbc::Capture::open(rect, framerate, FrameFormat::Bgra)?;
+            Ok((capture, FrameFormat::Bgra))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
@@ -484,15 +512,17 @@ fn run_nvfbc_capture_helper(request_json: &str) -> Result<()> {
         serde_json::from_str(request_json).context("invalid NvFBC capture request")?;
     let stop = qol_process::CancellationToken::install()
         .context("failed to listen for the recording stop request")?;
-    let mut capture = super::nvfbc::Capture::open(&request.rect, request.framerate)?;
+    let (mut capture, format) = open_nvfbc_capture(&request.rect, request.framerate)?;
     qol_runtime::probe!(
         "SHOT_RECORD_HELPER",
-        "backend=nvfbc step=open output={}",
-        capture.output_name()
+        "backend=nvfbc step=open output={} format={}",
+        capture.output_name(),
+        format.ffmpeg_pix_fmt()
     );
     let mut command = Command::new("ffmpeg");
     command
-        .args(&request.ffmpeg_args)
+        .args(nvfbc_video_input(&request.rect, request.framerate, format))
+        .args(&request.ffmpeg_args_after_video)
         .env_remove(NVFBC_HELPER_ENV)
         .stdin(Stdio::piped());
     // SAFETY: prctl is async-signal-safe and only changes the forked child before exec.
@@ -1213,8 +1243,8 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 mod tests {
     use super::{
         audio_inputs, cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote,
-        nvenc_accepts, nvfbc_ffmpeg_args, x11_display_from, x11grab_args, CinnamonCaptureRequest,
-        CinnamonEncoder, X11grabEncoder,
+        nvenc_accepts, nvfbc_ffmpeg_args_after_video, nvfbc_video_input, x11_display_from,
+        x11grab_args, CinnamonCaptureRequest, CinnamonEncoder, FrameFormat, X11grabEncoder,
     };
     use crate::{Config, Rect};
 
@@ -1432,25 +1462,45 @@ mod tests {
         let mut config = Config::default();
         config.audio.enabled = true;
         config.audio.inputs = vec!["system".to_string()];
-        let args = nvfbc_ffmpeg_args(&rect, 60, &config, std::path::Path::new("/tmp/out.mp4"));
-        let joined = args.join(" ");
-        for pair in [
-            ["-f", "rawvideo"],
-            ["-pix_fmt", "bgra"],
-            ["-video_size", "2560x1440"],
-            ["-framerate", "60"],
-            ["-i", "pipe:0"],
-            ["-thread_queue_size", "16"],
-            ["-use_wallclock_as_timestamps", "1"],
-            ["-f", "pulse"],
-            ["-c:v", "h264_nvenc"],
-            ["-fps_mode", "cfr"],
-        ] {
-            assert!(args.windows(2).any(|window| window == pair), "{joined}");
+        let tail = nvfbc_ffmpeg_args_after_video(&config, std::path::Path::new("/tmp/out.mp4"));
+        let cases = [
+            (FrameFormat::Nv12, "nv12", true),
+            (FrameFormat::Bgra, "bgra", false),
+        ];
+        for (format, pix_fmt, tagged) in cases {
+            let mut args = nvfbc_video_input(&rect, 60, format);
+            let input_end = args.len();
+            args.extend(tail.iter().cloned());
+            let joined = args.join(" ");
+            assert_eq!(
+                &args[input_end - 2..input_end],
+                ["-i", "pipe:0"],
+                "{joined}"
+            );
+            for pair in [
+                ["-f", "rawvideo"],
+                ["-pix_fmt", pix_fmt],
+                ["-video_size", "2560x1440"],
+                ["-framerate", "60"],
+                ["-thread_queue_size", "16"],
+                ["-use_wallclock_as_timestamps", "1"],
+                ["-f", "pulse"],
+                ["-c:v", "h264_nvenc"],
+                ["-fps_mode", "cfr"],
+            ] {
+                assert!(args.windows(2).any(|window| window == pair), "{joined}");
+            }
+            for pair in [["-colorspace", "bt709"], ["-color_range", "tv"]] {
+                assert_eq!(
+                    args[..input_end].windows(2).any(|window| window == pair),
+                    tagged,
+                    "{joined}"
+                );
+            }
+            assert!(args.iter().any(|arg| arg == "-shortest"), "{joined}");
+            assert!(!joined.contains("x11grab"), "{joined}");
+            assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
         }
-        assert!(args.iter().any(|arg| arg == "-shortest"), "{joined}");
-        assert!(!joined.contains("x11grab"), "{joined}");
-        assert_eq!(args.last().map(String::as_str), Some("/tmp/out.mp4"));
     }
 
     #[test]
