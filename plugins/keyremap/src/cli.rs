@@ -38,6 +38,7 @@ where
     let helper = adapter.clone();
     let install = adapter.clone();
     let uninstall = adapter.clone();
+    let karabiner = adapter.clone();
 
     HeadlessApp::new(PLUGIN_ID, PLUGIN_ID)
         .about("Run and control native key, mouse, and scroll remapping.")
@@ -128,6 +129,19 @@ where
                 .run_result(move |context| {
                     no_args(context)?;
                     uninstall.uninstall_hid_helper()
+                }),
+        )
+        .command(
+            Command::new("karabiner-rules")
+                .about("Print the Karabiner-Elements rules Key Remap's config compiles to.")
+                .usage(format!("{PLUGIN_ID} karabiner-rules"))
+                .detail("Compiles key, character and modifier key rules for the current keyboard layout.")
+                .detail("Writes nothing; Karabiner-Elements does not need to be installed.")
+                .output("JSON on stdout: the complex_modifications rule, the simple_modifications, and the rules that could not be compiled.")
+                .exit_behavior("Exits non-zero on platforms other than macOS.")
+                .run_result(move |context| {
+                    no_args(context)?;
+                    karabiner.karabiner_rules()
                 }),
         )
         .command(settings_command(settings))
@@ -452,6 +466,10 @@ mod tests {
 
         fn uninstall_hid_helper(&self) -> Result<CommandResult> {
             self.calls.uninstall.fetch_add(1, Ordering::SeqCst);
+            Ok(CommandResult::success(""))
+        }
+
+        fn karabiner_rules(&self) -> Result<CommandResult> {
             Ok(CommandResult::success(""))
         }
 

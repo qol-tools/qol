@@ -59,6 +59,7 @@ pub(crate) trait PlatformAdapter: Clone + Send + Sync + 'static {
     fn hid_helper(&self) -> Result<CommandResult>;
     fn install_hid_helper(&self) -> Result<CommandResult>;
     fn uninstall_hid_helper(&self) -> Result<CommandResult>;
+    fn karabiner_rules(&self) -> Result<CommandResult>;
     fn inspect_config(&self) -> Result<ConfigInspection>;
     fn input_permission(&self) -> PermissionState {
         qol_platform::permission_status(qol_platform::Permission::InputCapture)

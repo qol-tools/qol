@@ -27,6 +27,10 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
+    fn karabiner_rules(&self) -> Result<CommandResult> {
+        Ok(unsupported())
+    }
+
     fn uninstall_hid_helper(&self) -> Result<CommandResult> {
         Ok(unsupported())
     }

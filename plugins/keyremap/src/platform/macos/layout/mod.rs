@@ -88,6 +88,10 @@ impl CharTable {
         (!strokes.is_empty()).then_some(strokes)
     }
 
+    pub(crate) fn stroke_for(&self, symbol: char) -> Option<KeyStroke> {
+        self.direct.get(&symbol).copied()
+    }
+
     pub(crate) fn char_at(&self, keycode: u16, shift: bool, option: bool) -> Option<&str> {
         self.typed
             .get(&(keycode, shift, option))
