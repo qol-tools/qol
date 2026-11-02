@@ -221,7 +221,12 @@ pub(super) fn adopt(
     }
     let found = find(conversations, current, fork)
         .ok_or_else(|| anyhow!("no fork named {fork} has a conversation to bring back"))?;
-    super::stitch::join_fork(conversations, &found.transcript, &found.agent_id)?;
+    if let Err(error) = super::stitch::join_fork(conversations, &found.transcript, &found.agent_id)
+    {
+        crate::cli::warn(format!(
+            "the fork comes back with only its conversation since the last /clear: {error:#}"
+        ));
+    }
     let subagents = conversations.join(current).join("subagents");
     match fresh {
         None if found.is_current => {

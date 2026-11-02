@@ -103,10 +103,12 @@ fn earlier_parts(conversations: &Path, transcript: &Path, agent_id: &str) -> Vec
         .collect()
 }
 
-fn part_before(parts: &[PathBuf], starts_at: &str) -> Result<Option<(PathBuf, Segment)>> {
+fn part_before(parts: &[PathBuf], starts_at: &str) -> Option<(PathBuf, Segment)> {
     let mut best: Option<(PathBuf, Segment)> = None;
     for path in parts {
-        let segment = Segment::read(path)?;
+        let Ok(segment) = Segment::read(path) else {
+            continue;
+        };
         let (Some(ends_at), Some(_)) = (segment.ends_at.as_deref(), segment.leaf.as_deref()) else {
             continue;
         };
@@ -117,7 +119,7 @@ fn part_before(parts: &[PathBuf], starts_at: &str) -> Result<Option<(PathBuf, Se
             best = Some((path.clone(), segment));
         }
     }
-    Ok(best)
+    best
 }
 
 pub(super) fn join_fork(conversations: &Path, transcript: &Path, agent_id: &str) -> Result<bool> {
@@ -132,7 +134,7 @@ pub(super) fn join_fork(conversations: &Path, transcript: &Path, agent_id: &str)
         .filter(|segment| segment.continues())
         .and_then(|segment| segment.starts_at.clone())
     {
-        let Some((path, segment)) = part_before(&parts, &starts_at)? else {
+        let Some((path, segment)) = part_before(&parts, &starts_at) else {
             break;
         };
         parts.retain(|part| part != &path);
@@ -264,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn each_clear_adds_a_part_and_the_newest_earlier_copy_wins() {
+    fn each_clear_adds_a_part_the_newest_earlier_copy_wins_and_an_unreadable_one_is_skipped() {
         let root = tempfile::tempdir().unwrap();
         let conversations = root.path();
         write(
@@ -290,6 +292,9 @@ mod tests {
                 "second",
             )],
         );
+        let unreadable = transcript_of(&conversations.join("broken"), "afork");
+        fs::create_dir_all(unreadable.parent().unwrap()).unwrap();
+        fs::write(&unreadable, [0xff, 0xfe, b'\n']).unwrap();
         write(
             conversations,
             "later",
