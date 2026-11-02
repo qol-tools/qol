@@ -438,6 +438,7 @@ impl PluginsView {
         }
         SettingsRow::setting(("plugins-row", index), kit)
             .selected(selected, focused)
+            .opens(row.opens())
             .on_click(on_click)
             .child(settings_label_group(
                 row.label.clone(),

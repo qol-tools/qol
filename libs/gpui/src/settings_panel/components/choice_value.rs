@@ -56,7 +56,6 @@ pub struct SettingsChoiceValue {
     context: PictureContext,
     kit: Kit,
     word_color: Option<u32>,
-    chevron: bool,
 }
 
 impl SettingsChoiceValue {
@@ -74,13 +73,7 @@ impl SettingsChoiceValue {
             context,
             kit,
             word_color: None,
-            chevron: true,
         }
-    }
-
-    pub fn chevron(mut self, chevron: bool) -> Self {
-        self.chevron = chevron;
-        self
     }
 
     pub fn word_color(mut self, color: Option<u32>) -> Self {
@@ -98,7 +91,6 @@ impl RenderOnce for SettingsChoiceValue {
             context,
             kit,
             word_color,
-            chevron,
         } = self;
         let font = window.text_style().font();
         let text = crate::text::truncate_to_width(
@@ -127,7 +119,6 @@ impl RenderOnce for SettingsChoiceValue {
             .gap(px(qol_theme::SPACE_CELL))
             .child(word.child(text))
             .child(SettingsChoiceArt::new(art, row, context, kit))
-            .children(chevron.then(|| SettingsChevron::new(row, kit)))
     }
 }
 
@@ -220,14 +211,16 @@ impl RenderOnce for SettingsChoiceArt {
     }
 }
 
+/// The open part. Only `SettingsRow::opens` draws it, so a row that opens
+/// something always ends in it and nothing else draws one.
 #[derive(IntoElement)]
-pub struct SettingsChevron {
+pub(super) struct SettingsChevron {
     row: RowGround,
     kit: Kit,
 }
 
 impl SettingsChevron {
-    pub fn new(row: RowGround, kit: Kit) -> Self {
+    pub(super) fn new(row: RowGround, kit: Kit) -> Self {
         Self { row, kit }
     }
 }

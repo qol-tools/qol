@@ -25,10 +25,11 @@ use super::components::{
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     rail_item_label, settings_accent_dot, settings_action_affordance, settings_action_spinner,
-    settings_error_line, settings_finder_empty, settings_label_group, settings_page,
-    settings_query_spinner, settings_selected_text, settings_swatch, settings_value_text,
-    ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint,
-    SettingsHintBar, SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_block_header, settings_error_line, settings_finder_empty, settings_label_group,
+    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
+    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback,
+    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
+    SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -3797,6 +3798,7 @@ impl SettingsPanelView {
         let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
+            .opens(self.level().list_item.is_none() && row_opens(&row.control))
             .child(label_group)
             .child(self.row_bounds_canvas(index));
         line = line.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -4024,27 +4026,23 @@ impl SettingsPanelView {
         if index == self.level().selected {
             container = self.mark_selected(container, true);
         }
-        container = container.child(
-            div()
-                .flex()
-                .flex_none()
-                .flex_row()
-                .items_center()
-                .h(px(list_header_height(row)))
-                .justify_between()
-                .gap(px(qol_theme::SPACE_CELL))
-                .child(settings_label_group(
-                    if filter.trim().is_empty() {
-                        row.label.clone()
-                    } else {
-                        filter.clone()
-                    },
-                    row.description.clone().map(Into::into),
-                    ground,
-                    self.kit,
-                ))
-                .child(header_status),
-        );
+        container = container.child(settings_block_header(
+            list_header_height(row),
+            settings_label_group(
+                if filter.trim().is_empty() {
+                    row.label.clone()
+                } else {
+                    filter.clone()
+                },
+                row.description.clone().map(Into::into),
+                ground,
+                self.kit,
+            ),
+            header_status,
+            row_opens(&row.control),
+            ground,
+            self.kit,
+        ));
         container.child(self.row_bounds_canvas(index))
     }
 
@@ -4095,36 +4093,29 @@ impl SettingsPanelView {
             container = self.mark_selected(container, true);
         }
         container = container.child(
-            div()
-                .id(("settings-block-header", index))
-                .cursor(CursorStyle::PointingHand)
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    if !event.standard_click() {
-                        return;
-                    }
-                    this.level_mut().selected = index;
-                    this.activate(window, cx);
-                    cx.notify();
-                }))
-                .flex()
-                .flex_none()
-                .flex_row()
-                .items_center()
-                .h(px(list_header_height(row)))
-                .justify_between()
-                .gap(px(qol_theme::SPACE_CELL))
-                .child(settings_label_group(
+            settings_block_header(
+                list_header_height(row),
+                settings_label_group(
                     row.label.clone(),
                     row.description.clone().map(Into::into),
                     ground,
                     self.kit,
-                ))
-                .child(settings_value_text(
-                    value,
-                    self.value_tone(index),
-                    ground,
-                    self.kit,
-                )),
+                ),
+                settings_value_text(value, self.value_tone(index), ground, self.kit),
+                row_opens(&row.control),
+                ground,
+                self.kit,
+            )
+            .id(("settings-block-header", index))
+            .cursor(CursorStyle::PointingHand)
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if !event.standard_click() {
+                    return;
+                }
+                this.level_mut().selected = index;
+                this.activate(window, cx);
+                cx.notify();
+            })),
         );
         container.child(self.row_bounds_canvas(index))
     }
@@ -4967,17 +4958,8 @@ impl SettingsPanelView {
                 }
                 return bar;
             }
-            let mut left = vec![
-                SettingsHint::new(Key::UP_DOWN, "move"),
-                SettingsHint::new(Key::ENTER, "open"),
-                SettingsHint::new(Key::letter('a'), "add"),
-                SettingsHint::new(Key::BACKSPACE, "delete"),
-            ];
-            if self.custom_tool_is_shortcuts() {
-                left.push(SettingsHint::new(Key::letter('r'), "run"));
-            }
             return bar
-                .left(left)
+                .left(vec![SettingsHint::new(Key::UP_DOWN, "move")])
                 .right(vec![SettingsHint::new(Key::ESC, "back")]);
         }
         if self.level().choose.is_some() && !self.filter_open {
@@ -5042,13 +5024,6 @@ impl SettingsPanelView {
             right.push(SettingsHint::new(Key::ESC, "back"));
         }
         bar.left(left).right(right)
-    }
-
-    fn custom_tool_is_shortcuts(&self) -> bool {
-        self.panel
-            .sources
-            .get(self.materialized_source)
-            .is_some_and(|source| source.plugin_id == "__core-shortcuts")
     }
 
     fn render_failure_bar(&self, message: String) -> impl IntoElement {
@@ -5886,6 +5861,12 @@ fn filtered_visible_rows(
         }
     }
     out
+}
+
+/// Whether enter on this row goes one level deeper, so the row ends in the
+/// open part.
+fn row_opens(control: &RowControl) -> bool {
+    matches!(control, RowControl::Page) || opens_a_card(control)
 }
 
 fn opens_a_card(control: &RowControl) -> bool {

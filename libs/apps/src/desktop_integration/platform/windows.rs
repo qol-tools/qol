@@ -1,14 +1,19 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
-use std::os::windows::ffi::OsStringExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use windows_sys::Win32::UI::Shell::{
+    AssocQueryStringW, ASSOCF_NOTRUNCATE, ASSOCSTR_FRIENDLYAPPNAME,
+};
 
 use super::RevealPlan;
 
 const EXPLORER: &str = "explorer.exe";
 const WINDOWS_DIRECTORY_CAPACITY: usize = 32_768;
+const APP_NAME_CAPACITY: usize = 512;
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -22,6 +27,43 @@ pub(super) use super::unsupported::{
 
 pub(super) fn open(target: &OsStr) -> io::Result<()> {
     crate::shell_execute::shell_execute(target, &[])
+}
+
+pub(super) fn default_app_name(path: &Path) -> Option<String> {
+    let association = extension_association(path)?;
+    let mut buffer = vec![0u16; APP_NAME_CAPACITY];
+    let mut length = buffer.len() as u32;
+    let result = unsafe {
+        AssocQueryStringW(
+            ASSOCF_NOTRUNCATE,
+            ASSOCSTR_FRIENDLYAPPNAME,
+            association.as_ptr(),
+            std::ptr::null(),
+            buffer.as_mut_ptr(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return None;
+    }
+    let end = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    let name = String::from_utf16_lossy(&buffer[..end]);
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn extension_association(path: &Path) -> Option<Vec<u16>> {
+    let extension = path.extension()?;
+    Some(
+        OsStr::new(".")
+            .encode_wide()
+            .chain(extension.encode_wide())
+            .chain(std::iter::once(0))
+            .collect(),
+    )
 }
 
 pub(super) fn terminal_commands(folder: &Path) -> Vec<Command> {
@@ -75,6 +117,14 @@ fn windows_directory() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_association_is_the_dotted_extension() {
+        let association = extension_association(Path::new(r"C:\backups\a-conflict.json"))
+            .expect("a file with an extension has an association");
+        assert_eq!(String::from_utf16_lossy(&association), ".json\0");
+        assert_eq!(extension_association(Path::new(r"C:\backups\README")), None);
+    }
 
     #[test]
     fn reveal_selects_the_path_with_explorer_from_the_windows_directory() {

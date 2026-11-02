@@ -15,16 +15,14 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt,
-    RowGround, SettingsChevron, SettingsChoiceValue, SettingsHint, SettingsTextField,
-    SettingsToggle,
+    settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt, Launch,
+    RowGround, SettingsChoiceValue, SettingsHint, SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
     adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
     settings_busy_message, settings_description, settings_list, settings_value_text, CustomHints,
     CustomPanelCallback, CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs,
-    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsValueTone,
-    SETTINGS_LIST_GAP,
+    EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
 
@@ -296,7 +294,7 @@ impl ProfilesView {
                 },
                 cx,
             ),
-            Action::OpenGitHub => {
+            Action::VisitGitHub => {
                 if let Some(GitHubConnect::Waiting {
                     user_code,
                     verification_uri,
@@ -362,7 +360,7 @@ impl ProfilesView {
                     cx,
                 );
             }
-            Action::OpenBackup(file_name) => {
+            Action::LaunchBackup(file_name) => {
                 self.run(move || data::open_backup(&file_name), |_, (), _| {}, cx)
             }
             Action::Export => self.export(window, cx),
@@ -631,20 +629,17 @@ impl ProfilesView {
             Value::Text(text, tone) => {
                 values.child(settings_value_text(text.clone(), *tone, ground, kit))
             }
-            Value::Choice { word, art, chevron } => values
-                .child(
-                    SettingsChoiceValue::new(
-                        word.clone(),
-                        ChoiceArt::Picture(art.clone()),
-                        ground,
-                        PictureContext::for_accent(
-                            qol_theme::runtime_theme().mode,
-                            qol_theme::runtime_accent_key(),
-                        ),
-                        kit,
-                    )
-                    .chevron(*chevron),
-                )
+            Value::Choice { word, art } => values
+                .child(SettingsChoiceValue::new(
+                    word.clone(),
+                    ChoiceArt::Picture(art.clone()),
+                    ground,
+                    PictureContext::for_accent(
+                        qol_theme::runtime_theme().mode,
+                        qol_theme::runtime_accent_key(),
+                    ),
+                    kit,
+                ))
                 .children(
                     (row.chip_when_selected && selected)
                         .then_some(row.verb)
@@ -660,14 +655,6 @@ impl ProfilesView {
                             )
                         }),
                 ),
-            Value::Open(text) => values
-                .child(settings_value_text(
-                    text.clone(),
-                    SettingsValueTone::Normal,
-                    ground,
-                    kit,
-                ))
-                .child(SettingsChevron::new(ground, kit)),
             Value::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
             Value::Chip => values.children(
                 (!row.chip_when_selected || selected)
@@ -712,6 +699,8 @@ impl ProfilesView {
         let action = row.action.clone();
         SettingsRow::setting((row_id(level), index), kit)
             .selected(selected, focused)
+            .opens(row.opens)
+            .launches(row.launch.clone())
             .on_click(cx.listener(move |view, _, window, cx| {
                 if view.naming && action != Some(Action::NewProfile) {
                     return;
@@ -829,8 +818,14 @@ impl CustomSettingsBreadcrumbs for ProfilesView {
             });
         }
         let mut left = Vec::new();
-        if let Some(verb) = self.rows().get(self.selected).and_then(|row| row.verb) {
-            left.push(SettingsHint::new(Key::ENTER, verb));
+        let rows = self.rows();
+        if let Some(row) = rows.get(self.selected) {
+            if let Some(verb) = row.verb {
+                left.push(SettingsHint::new(
+                    Key::ENTER,
+                    enter_label(verb, row.launch.as_ref()),
+                ));
+            }
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
@@ -914,5 +909,38 @@ fn row_height(row: &Row) -> f32 {
     match row.header {
         true => SettingsGroupHeader::height_with_detail(),
         false => qol_theme::HEIGHT_SETTING_ROW,
+    }
+}
+
+fn enter_label(verb: &'static str, launch: Option<&Launch>) -> String {
+    match launch
+        .filter(|launch| launch.tag().is_some())
+        .and_then(Launch::app)
+    {
+        Some(app) => format!("{verb} in {app}"),
+        None => verb.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enter_label, Launch};
+
+    #[test]
+    fn a_file_names_the_app_it_opens_in() {
+        let file = Launch::file("a-conflict.json", Some("Visual Studio Code".to_string()));
+        assert_eq!(
+            enter_label("open", Some(&file)),
+            "open in Visual Studio Code"
+        );
+        assert_eq!(
+            enter_label("open", Some(&Launch::file("a-conflict.json", None))),
+            "open"
+        );
+        assert_eq!(
+            enter_label("open github", Some(&Launch::link("github.com"))),
+            "open github"
+        );
+        assert_eq!(enter_label("turn on", None), "turn on");
     }
 }

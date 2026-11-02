@@ -4,8 +4,10 @@ use gpui::{div, px, rgb, AnyElement, App, ClickEvent, ElementId, RenderOnce, Win
 use crate::kit::kit;
 use crate::kit::Kit;
 
+use super::choice_value::SettingsChevron;
+use super::launch::{Launch, SettingsLaunch};
 use super::{
-    attention_dot, paint_settings_attention, paint_settings_selection, DIMMED_OPACITY,
+    attention_dot, paint_settings_attention, paint_settings_selection, RowGround, DIMMED_OPACITY,
     SETTINGS_ROW_GROUP,
 };
 
@@ -29,6 +31,8 @@ pub struct SettingsRow {
     dimmed: bool,
     attention: bool,
     lift: f32,
+    opens: bool,
+    launch: Option<Launch>,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
 }
@@ -60,6 +64,8 @@ impl SettingsRow {
             dimmed: false,
             attention: false,
             lift: 0.0,
+            opens: false,
+            launch: None,
             children: Vec::new(),
             on_click: None,
         }
@@ -83,6 +89,19 @@ impl SettingsRow {
 
     pub fn lifted(mut self, lift: f32) -> Self {
         self.lift = lift.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Marks a row whose enter goes one level deeper: a page, a card or a
+    /// chooser. The row then draws the open part, the chevron, as its last
+    /// part, so every row that opens something shows it the same way.
+    pub fn opens(mut self, opens: bool) -> Self {
+        self.opens = opens;
+        self
+    }
+
+    pub fn launches(mut self, launch: Option<Launch>) -> Self {
+        self.launch = launch;
         self
     }
 
@@ -140,7 +159,20 @@ impl RenderOnce for SettingsRow {
             .py(px(qol_theme::SPACE_TIGHT))
             .rounded_none()
             .when(attention, |row| row.child(attention_dot(self.kit)))
-            .children(self.children);
+            .children(self.children)
+            .when(self.opens, |row| {
+                row.child(SettingsChevron::new(
+                    RowGround::of(self.selected, self.focused),
+                    self.kit,
+                ))
+            })
+            .when_some(self.launch, |row, launch| {
+                row.child(SettingsLaunch::new(
+                    launch,
+                    RowGround::of(self.selected, self.focused),
+                    self.kit,
+                ))
+            });
         if self.kind == RowKind::Rule {
             row = row.rounded(px(qol_theme::RADIUS_CONTROL));
         }

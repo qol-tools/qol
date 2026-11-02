@@ -737,7 +737,8 @@ impl SettingsPanelView {
                 resolution_ground,
                 palette,
             ))
-            .child(mode_value);
+            .child(mode_value)
+            .opens(modes_available);
         if modes_available {
             mode_row = mode_row.on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                 if !event.standard_click() {

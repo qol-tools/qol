@@ -1145,6 +1145,7 @@ impl NativeToolsView {
         let kind = shortcut_kind_label(shortcut);
         SettingsRow::setting(("native-shortcut-row", item), kit)
             .selected(selected, self.body_focused)
+            .opens(true)
             .dimmed(!shortcut.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_selected_index(item + 1);
@@ -1187,6 +1188,7 @@ impl NativeToolsView {
         let action = hotkey_detail(&action, hotkey.hold_ms, hotkey.os_only);
         SettingsRow::setting(("native-hotkey-row", item), kit)
             .selected(selected, self.body_focused)
+            .opens(true)
             .dimmed(!hotkey.enabled)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.set_selected_index(item + 1);
@@ -1518,6 +1520,7 @@ impl NativeToolsView {
         );
         SettingsRow::rule(("native-tools-select", index), kit)
             .selected(selected, self.body_focused)
+            .opens(true)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_editor_field(index);
                 this.activate_editor_field(cx);
@@ -1997,6 +2000,28 @@ impl NativeToolsView {
         }
     }
 
+    fn list_hints(&self) -> CustomHints {
+        let enter = if self.list().selected == 0 {
+            "add"
+        } else {
+            "open"
+        };
+        let mut left = vec![
+            SettingsHint::new(Key::UP_DOWN, "move"),
+            SettingsHint::new(Key::ENTER, enter),
+            SettingsHint::new(Key::letter('a'), "add"),
+            SettingsHint::new(Key::BACKSPACE, "delete"),
+        ];
+        if self.tool == ToolKind::Shortcuts {
+            left.push(SettingsHint::new(Key::letter('r'), "run"));
+        }
+        CustomHints {
+            question: None,
+            left,
+            right: Vec::new(),
+        }
+    }
+
     fn field_hints(&self) -> CustomHints {
         let selected = self.editor_selected();
         if self.capture_recording() {
@@ -2153,7 +2178,9 @@ impl CustomSettingsBreadcrumbs for NativeToolsView {
     }
 
     fn settings_hints(&self) -> Option<CustomHints> {
-        let editor = self.editor.as_ref()?;
+        let Some(editor) = self.editor.as_ref() else {
+            return Some(self.list_hints());
+        };
         let choose = editor.choose;
         let question = editor.question;
         if let Some(choose) = choose {

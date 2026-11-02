@@ -641,6 +641,7 @@ impl LinkedDevicesView {
         };
         SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)
+            .opens(row.opens)
             .on_click(cx.listener(move |view, _, _, cx| {
                 if !matches!(view.editing, Editing::None) {
                     return;

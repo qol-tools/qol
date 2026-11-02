@@ -876,6 +876,7 @@ impl SettingsPanelView {
         let word_color = (row == RowGround::Pane).then(|| list_card_word_color(item, self.kit));
         let mut line = SettingsRow::rule(("settings-list-card-item", index), self.kit)
             .selected(selected, self.body_has_focus())
+            .opens(true)
             .child(
                 settings_label(item.label.clone(), self.kit)
                     .flex_1()

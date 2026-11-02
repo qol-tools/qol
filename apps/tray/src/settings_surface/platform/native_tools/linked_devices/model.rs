@@ -42,6 +42,7 @@ pub(super) struct Row {
     pub detail: String,
     pub control: Control,
     pub verb: Option<&'static str>,
+    pub opens: bool,
     pub action: Option<Action>,
     pub remove: Option<(&'static str, Action)>,
     pub header: bool,
@@ -54,6 +55,7 @@ impl Row {
             detail: detail.into(),
             control: Control::None,
             verb: None,
+            opens: false,
             action,
             remove: None,
             header: false,
@@ -86,6 +88,12 @@ impl Row {
 
     fn verb(mut self, verb: &'static str) -> Self {
         self.verb = Some(verb);
+        self
+    }
+
+    fn opens(mut self) -> Self {
+        self.verb = Some("open");
+        self.opens = true;
         self
     }
 
@@ -179,7 +187,7 @@ fn request_rows(snapshot: &Snapshot, expected: ExpectedAuthority) -> Vec<Row> {
                     format!("Link if {} shows the same code", device.name),
                     Some(Action::Open(device.peer_id)),
                 )
-                .verb("open")
+                .opens()
                 .remove("decline", decline),
             ),
             NearbyState::WaitingForPeer {} => rows.push(
@@ -385,7 +393,7 @@ fn linked_rows(snapshot: &Snapshot, expected: ExpectedAuthority) -> Vec<Row> {
                 connection_detail(snapshot, peer.peer_id),
                 Some(Action::Open(peer.peer_id)),
             )
-            .verb("open")
+            .opens()
             .remove(
                 "unlink",
                 Action::Send(Request::Revoke {

@@ -20,8 +20,7 @@ use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
     settings_busy_message, settings_label_group, settings_message, settings_page,
-    settings_value_group, RowGround, SettingsChevron, SettingsFeedback, SettingsHint, SettingsTick,
-    SettingsToggle,
+    settings_value_group, RowGround, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
 };
 use super::{
     escape_step, intent, settings_action_affordance, settings_action_spinner, settings_value_text,
@@ -567,13 +566,11 @@ impl PagesView {
                 kit,
             )),
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
-            None if matches!(row.enter, Some(Enter::Open(_) | Enter::Replace(_))) => {
-                values.child(SettingsChevron::new(ground, kit))
-            }
             None => values,
         };
         let mut element = SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)
+            .opens(model::opens(row))
             .attention(row.attention)
             .dimmed(row.dim)
             .child(settings_label_group(

@@ -42,10 +42,23 @@ pub(in super::super) fn file_type(path: &Path) -> io::Result<String> {
 
 pub(in super::super) fn open_handlers(path: &Path) -> io::Result<Vec<OpenHandler>> {
     let mime = file_type(path)?;
-    let mut command = Command::new("xdg-mime");
-    command.arg("query").arg("default").arg(&mime);
-    let default = query(command).ok().filter(|id| !id.is_empty());
+    let default = default_handler(&mime);
     Ok(handlers_for(&candidates(), &mime, default.as_deref()))
+}
+
+pub(in super::super) fn default_app_name(path: &Path) -> Option<String> {
+    let id = default_handler(&file_type(path).ok()?)?;
+    linux_app_roots()
+        .iter()
+        .flat_map(scan_desktop_root)
+        .find(|entry| entry.path.file_name().and_then(|name| name.to_str()) == Some(id.as_str()))
+        .map(|entry| entry.name)
+}
+
+fn default_handler(mime: &str) -> Option<String> {
+    let mut command = Command::new("xdg-mime");
+    command.arg("query").arg("default").arg(mime);
+    query(command).ok().filter(|id| !id.is_empty())
 }
 
 pub(in super::super) fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {

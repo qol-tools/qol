@@ -36,6 +36,10 @@ pub fn open_handlers(path: &Path) -> io::Result<Vec<OpenHandler>> {
     platform::open_handlers(path)
 }
 
+pub fn default_app_name(path: &Path) -> Option<String> {
+    platform::default_app_name(path)
+}
+
 pub fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {
     platform::open_with_handler(handler, paths)
 }

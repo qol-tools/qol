@@ -336,6 +336,7 @@ impl SettingsPanelView {
             Some((carried, lift)) if carried == index => self.carried_slot(index, lift),
             _ => SettingsRow::rule(("settings-entry", index), self.kit)
                 .selected(selected, focused)
+                .opens(index != 0 && level.entries.as_ref().is_some_and(|card| !card.reorder))
                 .child(self.row_bounds_canvas(index))
                 .children(self.entries_row_content(index, RowGround::of(selected, focused))),
         };

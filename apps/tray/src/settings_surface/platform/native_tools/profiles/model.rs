@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use qol_gpui::settings_panel::components::Launch;
 use qol_gpui::settings_panel::SettingsValueTone;
 use serde_json::Value as Json;
 
@@ -29,7 +30,7 @@ pub(super) enum Action {
     NewProfile,
     Sync,
     Connect,
-    OpenGitHub,
+    VisitGitHub,
     Auto {
         pull_on_launch: bool,
         push_on_change: bool,
@@ -39,9 +40,20 @@ pub(super) enum Action {
     Pick(usize),
     Resolve,
     OpenBackups,
-    OpenBackup(String),
+    LaunchBackup(String),
     Export,
     Import,
+}
+
+impl Action {
+    /// Whether this action goes one level deeper, so its row ends in the open
+    /// part whatever its verb says.
+    pub(super) fn opens_a_level(&self) -> bool {
+        matches!(
+            self,
+            Action::OpenProfiles | Action::OpenReview | Action::OpenBackups
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +68,7 @@ pub(super) enum Dot {
 pub(super) enum Value {
     None,
     Text(String, SettingsValueTone),
-    Choice {
-        word: String,
-        art: String,
-        chevron: bool,
-    },
-    Open(String),
+    Choice { word: String, art: String },
     Toggle(bool),
     Chip,
     Name,
@@ -76,12 +83,15 @@ pub(super) struct Row {
     pub(super) spinner: bool,
     pub(super) value: Value,
     pub(super) verb: Option<&'static str>,
+    pub(super) opens: bool,
+    pub(super) launch: Option<Launch>,
     pub(super) chip_when_selected: bool,
     pub(super) action: Option<Action>,
 }
 
 impl Row {
     fn new(label: impl Into<String>, detail: impl Into<String>, action: Option<Action>) -> Self {
+        let opens = action.as_ref().is_some_and(Action::opens_a_level);
         Self {
             label: label.into(),
             detail: detail.into(),
@@ -90,6 +100,8 @@ impl Row {
             spinner: false,
             value: Value::None,
             verb: None,
+            opens,
+            launch: None,
             chip_when_selected: false,
             action,
         }
@@ -109,6 +121,17 @@ impl Row {
 
     fn verb(mut self, verb: &'static str) -> Self {
         self.verb = Some(verb);
+        self
+    }
+
+    fn opens(mut self) -> Self {
+        self.verb = Some("open");
+        self.opens = true;
+        self
+    }
+
+    fn launches(mut self, launch: Launch) -> Self {
+        self.launch = Some(launch);
         self
     }
 
@@ -164,12 +187,8 @@ pub(super) fn main_rows(page: &Page<'_>) -> Vec<Row> {
             page.note.unwrap_or_default(),
             Some(Action::OpenProfiles),
         )
-        .value(Value::Choice {
-            word,
-            art,
-            chevron: true,
-        })
-        .verb("open"),
+        .value(Value::Choice { word, art })
+        .opens(),
     );
     rows.push(Row::header("sync", "keep your profiles on every computer"));
     rows.push(status_row(sync, page.syncing, page.now_secs));
@@ -250,7 +269,6 @@ pub(super) fn profile_rows(page: &Page<'_>) -> Vec<Row> {
                 String::new()
             },
             art,
-            chevron: false,
         }));
     }
     let active = profiles
@@ -299,14 +317,15 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
     rows.extend(backups.iter().map(|backup| {
         Row::new(
             backup_when(&backup.file_name).unwrap_or_else(|| backup.file_name.clone()),
-            backup_kind(&backup.file_name),
-            Some(Action::OpenBackup(backup.file_name.clone())),
+            format!("{} · {}", backup.file_name, backup_kind(&backup.file_name)),
+            Some(Action::LaunchBackup(backup.file_name.clone())),
         )
         .value(Value::Text(
             qol_gpui::format::format_bytes(backup.size_bytes),
             SettingsValueTone::Muted,
         ))
         .verb("open")
+        .launches(Launch::file(&backup.file_name, backup.opens_with.clone()))
     }));
     rows
 }
@@ -326,10 +345,11 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
                     "Enter {user_code} at {}. The code is copied.",
                     strip_scheme(verification_uri)
                 ),
-                Some(Action::OpenGitHub),
+                Some(Action::VisitGitHub),
             )
             .dot(Dot::Warning)
-            .chip("open github")
+            .verb("open github")
+            .launches(Launch::link(url_host(verification_uri)))
         }
         GitHubConnect::Connecting => {
             return Row::new(
@@ -586,8 +606,11 @@ fn backups_row(sync: &SyncStatus) -> Row {
         format!("Saved before sync replaced anything{newest}"),
         Some(Action::OpenBackups),
     )
-    .value(Value::Open(sync.backup_count.to_string()))
-    .verb("open")
+    .value(Value::Text(
+        sync.backup_count.to_string(),
+        SettingsValueTone::Normal,
+    ))
+    .opens()
 }
 
 fn synced_label(sync: &SyncStatus, now: i64) -> String {
@@ -663,6 +686,11 @@ fn backup_day(file_name: &str) -> Option<String> {
 fn backup_when(file_name: &str) -> Option<String> {
     let (month, day, year, hour, minute) = backup_parts(file_name)?;
     Some(format!("{day} {} {year}, {hour}:{minute}", MONTHS[month]))
+}
+
+fn url_host(url: &str) -> String {
+    let rest = strip_scheme(url);
+    rest.split('/').next().unwrap_or(rest).to_string()
 }
 
 fn backup_kind(file_name: &str) -> &'static str {
@@ -779,7 +807,11 @@ mod tests {
             rows[8].detail,
             "Saved before sync replaced anything · newest 11 Aug"
         );
-        assert_eq!(rows[8].value, Value::Open("9".to_string()));
+        assert_eq!(
+            rows[8].value,
+            Value::Text("9".to_string(), SettingsValueTone::Normal)
+        );
+        assert!(rows[8].opens);
     }
 
     #[test]
@@ -791,9 +823,9 @@ mod tests {
             Value::Choice {
                 word: "default".to_string(),
                 art: "letters:D".to_string(),
-                chevron: true,
             }
         );
+        assert!(rows[1].opens);
         assert_eq!(rows[1].action, Some(Action::OpenProfiles));
     }
 
@@ -822,7 +854,9 @@ mod tests {
             rows[3].detail,
             "Enter WDJB-MJHT at github.com/login/device. The code is copied."
         );
-        assert_eq!(rows[3].action, Some(Action::OpenGitHub));
+        assert_eq!(rows[3].action, Some(Action::VisitGitHub));
+        assert_eq!(rows[3].launch, Some(Launch::link("github.com")));
+        assert!(!rows[3].opens);
         snapshot.sync.github_connect = GitHubConnect::Connecting;
         let rows = main_rows(&page(&snapshot));
         assert_eq!(rows[3].label, "Connecting to GitHub");
@@ -1021,21 +1055,37 @@ mod tests {
             Backup {
                 file_name: "20260811-103430-conflict.json".to_string(),
                 size_bytes: 97_280,
+                opens_with: Some("Visual Studio Code".to_string()),
             },
             Backup {
                 file_name: "20260426-075742-pushed.json".to_string(),
                 size_bytes: 7_900,
+                opens_with: None,
             },
         ]));
         assert_eq!(
             labels(&rows),
             ["backups", "11 Aug 2026, 10:34", "26 Apr 2026, 07:57"]
         );
-        assert_eq!(rows[1].detail, "Saved when both sides had changes");
-        assert_eq!(rows[2].detail, "Saved before sync replaced it");
+        assert_eq!(
+            rows[1].detail,
+            "20260811-103430-conflict.json · Saved when both sides had changes"
+        );
+        assert_eq!(
+            rows[2].detail,
+            "20260426-075742-pushed.json · Saved before sync replaced it"
+        );
+        assert_eq!(
+            rows[1].launch,
+            Some(Launch::file(
+                "20260811-103430-conflict.json",
+                Some("Visual Studio Code".to_string())
+            ))
+        );
+        assert!(!rows[1].opens);
         assert_eq!(
             rows[1].action,
-            Some(Action::OpenBackup(
+            Some(Action::LaunchBackup(
                 "20260811-103430-conflict.json".to_string()
             ))
         );
