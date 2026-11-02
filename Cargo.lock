@@ -6362,7 +6362,7 @@ dependencies = [
 
 [[package]]
 name = "qol-alt-tab"
-version = "0.122.0"
+version = "0.123.0"
 dependencies = [
  "block2",
  "core-foundation 0.10.0",
@@ -6947,7 +6947,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.84.1"
+version = "1.85.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -7161,7 +7161,7 @@ dependencies = [
 
 [[package]]
 name = "qol-os-themes"
-version = "0.83.0"
+version = "0.84.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -7606,7 +7606,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.133.0"
+version = "3.134.0"
 dependencies = [
  "anyhow",
  "axum",
