@@ -234,6 +234,9 @@ pub fn validation_issues(config: &RemapConfig) -> Vec<String> {
                 to_key,
                 ..
             } => {
+                if typed_character_rule(rule).is_some() {
+                    continue;
+                }
                 validate_modifiers(
                     &format!("key_rules[{index}].from_mods"),
                     from_mods,
@@ -335,6 +338,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
             global: true,
         });
     }
+    char_swap_rules.extend(config.key_rules.iter().filter_map(typed_character_rule));
     for rule in &config.char_rules {
         match rule {
             CharRule::ByKey { .. } => {
@@ -647,6 +651,32 @@ fn resolve_char_rule(rule: &CharRule) -> Option<ResolvedCharRule> {
     }
 }
 
+fn typed_character_rule(rule: &KeyRule) -> Option<ResolvedCharSwapRule> {
+    let KeyRule::Single {
+        from_mods,
+        from_key,
+        to_mods,
+        to_key,
+        global,
+    } = rule
+    else {
+        return None;
+    };
+    let from = from_key.trim();
+    let to = to_key.trim();
+    let one_character = |text: &str| text.chars().count() == 1;
+    let typed = from_mods.is_empty()
+        && to_mods.is_empty()
+        && keycode::parse_key(from).is_none()
+        && one_character(from)
+        && one_character(to);
+    typed.then(|| ResolvedCharSwapRule {
+        from_char: from.to_string(),
+        to_char: to.to_string(),
+        global: *global,
+    })
+}
+
 fn resolve_key_rule(rule: &KeyRule) -> Vec<ResolvedKeyRule> {
     match rule {
         KeyRule::Batch {
@@ -914,6 +944,39 @@ mod tests {
             ),
             KeyAction::Char { text: "$".into() }
         );
+    }
+
+    #[test]
+    fn a_key_rule_from_a_typed_character_swaps_that_character() {
+        let raw: RemapConfig = serde_json::from_value(serde_json::json!({
+            "key_rules": [
+                { "from_key": "$", "from_mods": [], "to_key": "<", "to_mods": [], "keys": [], "global": true },
+                { "from_key": "§", "to_key": ">", "keys": [], "global": true }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(validation_issues(&raw), Vec::<String>::new());
+        let config = resolve(&raw);
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        };
+
+        assert_eq!(
+            process_key_event(
+                &config,
+                Modifiers::NONE,
+                0x0A,
+                Some("$"),
+                "com.apple.Safari"
+            ),
+            KeyAction::Char { text: "<".into() }
+        );
+        assert_eq!(
+            process_key_event(&config, shift, 0x0A, Some("§"), "com.apple.Safari"),
+            KeyAction::Char { text: ">".into() }
+        );
+        assert!(config.key_rules.is_empty());
     }
 
     #[test]
