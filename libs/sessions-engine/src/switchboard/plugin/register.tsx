@@ -50,7 +50,9 @@ const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
 const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
-const RESUMED_SUMMARY = /^Agent "([\s\S]*)" was resumed by the user$/
+const DROP_NOTICE = 'Prompt dropped by a hook: '
+const DROPS_KEPT = 20
+const RESUMED_SUMMARY =/^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back after the switchboard restart.'
@@ -737,6 +739,12 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
 
 export const register: Register = on => {
   let isAutoOpenPending = false
+  const dropped: string[] = []
+  const dropAs = (reason: string): { drop: string } => {
+    dropped.push(reason)
+    if (dropped.length > DROPS_KEPT) dropped.shift()
+    return { drop: reason }
+  }
 
   on('agent.spawn', { subagentType: FORK }, ($, e, next) => {
     if (e.resume !== undefined) return next(e)
@@ -828,12 +836,21 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
-    if (quiet !== undefined) return { drop: quiet }
+    if (quiet !== undefined) return dropAs(quiet)
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
     clearTypedToggle($)
-    return { drop: await toggleBoard($) }
-  }).catch(($, e, next) => (next.called ? next(e) : { drop: 'The fork board could not open.' }))
+    return dropAs(await toggleBoard($))
+  }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
+
+  on('session.append', { door: 'notice' }, async ($, e, next) => {
+    if (e.agentId !== undefined || dropped.length === 0) return next(e)
+    const text = textOf(e.message.content)
+    const at = text.startsWith(DROP_NOTICE) ? dropped.indexOf(text.slice(DROP_NOTICE.length)) : -1
+    if (at === -1) return next(e)
+    const [reason] = dropped.splice(at, 1)
+    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reason ?? text }] } })
+  }).catch(($, e, next) => next(e))
 
   on('ui.close', async ($, e, next) => {
     const closed = await next(e)
