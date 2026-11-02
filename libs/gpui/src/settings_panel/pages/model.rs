@@ -83,6 +83,11 @@ pub(super) fn enter_verb(row: &Row) -> Option<String> {
     }
 }
 
+/// Whether enter on this row opens a page, so the row ends in the open part.
+pub(super) fn opens(row: &Row) -> bool {
+    enter_verb(row).as_deref() == Some("open")
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Place {
     pub(super) page: String,

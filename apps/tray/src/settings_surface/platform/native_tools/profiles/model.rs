@@ -56,12 +56,7 @@ pub(super) enum Dot {
 pub(super) enum Value {
     None,
     Text(String, SettingsValueTone),
-    Choice {
-        word: String,
-        art: String,
-        chevron: bool,
-    },
-    Open(String),
+    Choice { word: String, art: String },
     Toggle(bool),
     Chip,
     Name,
@@ -76,6 +71,7 @@ pub(super) struct Row {
     pub(super) spinner: bool,
     pub(super) value: Value,
     pub(super) verb: Option<&'static str>,
+    pub(super) opens: bool,
     pub(super) chip_when_selected: bool,
     pub(super) action: Option<Action>,
 }
@@ -90,6 +86,7 @@ impl Row {
             spinner: false,
             value: Value::None,
             verb: None,
+            opens: false,
             chip_when_selected: false,
             action,
         }
@@ -109,6 +106,12 @@ impl Row {
 
     fn verb(mut self, verb: &'static str) -> Self {
         self.verb = Some(verb);
+        self
+    }
+
+    fn opens(mut self) -> Self {
+        self.verb = Some("open");
+        self.opens = true;
         self
     }
 
@@ -164,12 +167,8 @@ pub(super) fn main_rows(page: &Page<'_>) -> Vec<Row> {
             page.note.unwrap_or_default(),
             Some(Action::OpenProfiles),
         )
-        .value(Value::Choice {
-            word,
-            art,
-            chevron: true,
-        })
-        .verb("open"),
+        .value(Value::Choice { word, art })
+        .opens(),
     );
     rows.push(Row::header("sync", "keep your profiles on every computer"));
     rows.push(status_row(sync, page.syncing, page.now_secs));
@@ -250,7 +249,6 @@ pub(super) fn profile_rows(page: &Page<'_>) -> Vec<Row> {
                 String::new()
             },
             art,
-            chevron: false,
         }));
     }
     let active = profiles
@@ -306,7 +304,7 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
             qol_gpui::format::format_bytes(backup.size_bytes),
             SettingsValueTone::Muted,
         ))
-        .verb("open")
+        .opens()
     }));
     rows
 }
@@ -586,8 +584,11 @@ fn backups_row(sync: &SyncStatus) -> Row {
         format!("Saved before sync replaced anything{newest}"),
         Some(Action::OpenBackups),
     )
-    .value(Value::Open(sync.backup_count.to_string()))
-    .verb("open")
+    .value(Value::Text(
+        sync.backup_count.to_string(),
+        SettingsValueTone::Normal,
+    ))
+    .opens()
 }
 
 fn synced_label(sync: &SyncStatus, now: i64) -> String {
@@ -779,7 +780,11 @@ mod tests {
             rows[8].detail,
             "Saved before sync replaced anything · newest 11 Aug"
         );
-        assert_eq!(rows[8].value, Value::Open("9".to_string()));
+        assert_eq!(
+            rows[8].value,
+            Value::Text("9".to_string(), SettingsValueTone::Normal)
+        );
+        assert!(rows[8].opens);
     }
 
     #[test]
@@ -791,9 +796,9 @@ mod tests {
             Value::Choice {
                 word: "default".to_string(),
                 art: "letters:D".to_string(),
-                chevron: true,
             }
         );
+        assert!(rows[1].opens);
         assert_eq!(rows[1].action, Some(Action::OpenProfiles));
     }
 

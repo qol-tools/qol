@@ -25,7 +25,8 @@ mod text_field;
 mod tile;
 mod toggle;
 
-pub use choice_value::{ChoiceArt, SettingsChevron, SettingsChoiceArt, SettingsChoiceValue};
+use choice_value::SettingsChevron;
+pub use choice_value::{ChoiceArt, SettingsChoiceArt, SettingsChoiceValue};
 pub use device_entry::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
     DEVICE_KIND_HEIGHT, DEVICE_LIST_WIDTH,
@@ -210,6 +211,29 @@ pub fn settings_description(text: impl Into<SharedString>, row: RowGround, kit: 
         rgb(rest),
         hover.map(rgb),
     )
+}
+
+/// The header line of a block row (a list or an entry array drawn as a card):
+/// its label, its value and, when enter opens the block, the open part last.
+pub fn settings_block_header(
+    height: f32,
+    label: impl IntoElement,
+    value: impl IntoElement,
+    opens: bool,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_none()
+        .flex_row()
+        .items_center()
+        .h(px(height))
+        .justify_between()
+        .gap(px(qol_theme::SPACE_CELL))
+        .child(label)
+        .child(value)
+        .when(opens, |header| header.child(SettingsChevron::new(row, kit)))
 }
 
 pub fn settings_value_group() -> gpui::Div {

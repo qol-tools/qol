@@ -131,6 +131,11 @@ impl Row {
         self
     }
 
+    /// Whether enter opens a deeper level, so the row ends in the open part.
+    pub(super) fn opens(&self) -> bool {
+        matches!(self.enter, Some((Enter::OpenSources, _)))
+    }
+
     fn enter(mut self, enter: Enter, verb: &'static str) -> Self {
         self.enter = Some((enter, verb));
         self
