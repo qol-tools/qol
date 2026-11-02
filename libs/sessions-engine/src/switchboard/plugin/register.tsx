@@ -686,6 +686,7 @@ export const intake = async (
   const agentId = field(block, 'task-id')
   if (agentId === undefined || !isFork(agentId)) return undefined
   const status = field(block, 'status') ?? ''
+  if (status === USER_STOP) await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isStoppedByUser: true } : one)))
   const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
   const result = RESULT.exec(block)
   if (result !== null && (!once(block, '<result>') || !once(block, '</result>'))) return undefined

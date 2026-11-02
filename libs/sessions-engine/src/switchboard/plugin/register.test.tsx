@@ -804,6 +804,9 @@ test('a restart never wakes a fork the user stopped, until the user brings it ba
   expect(sent).toHaveLength(0)
   for (const id of ['s1', 's2', 'm1']) await spawn($, id, `${id}-fork: a fork`)
   for (const id of ['s1', 's2']) expect((await typed($, killed(id, `${id}-fork: a fork`), 'task-notification')).drop).toBe(`${id}-fork`)
+  await spawn($, 'r1', 'r1-fork: a fork')
+  await typed($, killed('r1', 'r1-fork: a fork').replace('</task-notification>', '<result>The report was delivered to you as a message from this agent.</result>\n</task-notification>'), 'task-notification')
+  wake.forks.push(wakeFork('r1', 'Continue.'))
   await typed($, notification('m1', 'm1-fork: a fork', 'Working on it.'), 'task-notification')
   await $.turn.start({ turnId: 't1', agentId: 's2' } as any)
 
