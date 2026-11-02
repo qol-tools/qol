@@ -9,18 +9,19 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::paths::{project_dir_name, switchboard_dir};
+use super::adopt_session::{adopt_session, ClosedSession};
+use super::paths::{claude_home, project_dir_name, switchboard_dir};
 use super::resume::{meta_files, AGENT_PREFIX, FORK_AGENT};
 use crate::fork::flag_value;
 
 pub(super) const ADOPT: &str = "adopt";
-const META_SUFFIX: &str = ".meta.json";
-const TRANSCRIPT_SUFFIX: &str = ".jsonl";
-const PARTIAL_SUFFIX: &str = ".partial";
+pub(super) const META_SUFFIX: &str = ".meta.json";
+pub(super) const TRANSCRIPT_SUFFIX: &str = ".jsonl";
+pub(super) const PARTIAL_SUFFIX: &str = ".partial";
 const RESUME_BLOCKERS: [&str; 2] = ["stoppedByUser", "finished"];
 const AGENT_ID_KEY: &str = "agentId";
 const FRESH_ID_HEX: usize = 16;
-const USAGE: &str = "usage: switchboard adopt --conversations <dir> --conversation <id> --fork <agent id or key-name> [--fresh]";
+const USAGE: &str = "usage: switchboard adopt --conversations <dir> --conversation <id> (--fork <agent id or key-name> [--fresh] | --transcript <closed session .jsonl> --cwd <project folder> --description '<key-name>: <friendly description>' [--title <title>])";
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -28,6 +29,7 @@ pub(super) enum Brought {
     Here,
     Copied,
     Fresh,
+    Session,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,14 +77,14 @@ impl Candidate {
     }
 }
 
-fn is_id(text: &str) -> bool {
+pub(super) fn is_id(text: &str) -> bool {
     (1..=128).contains(&text.len())
         && text
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn is_real_file(path: &Path) -> bool {
+pub(super) fn is_real_file(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
 }
 
@@ -250,36 +252,80 @@ pub(super) fn adopt(
     }
 }
 
+enum Source {
+    Fork {
+        fork: String,
+        is_fresh: bool,
+    },
+    Session {
+        transcript: PathBuf,
+        cwd: PathBuf,
+        description: String,
+        title: String,
+    },
+}
+
 struct AdoptArgs {
     conversations: PathBuf,
     conversation: String,
-    fork: String,
+    source: Source,
+}
+
+#[derive(Default)]
+struct Flags {
+    conversations: Option<String>,
+    conversation: Option<String>,
+    fork: Option<String>,
     is_fresh: bool,
+    transcript: Option<String>,
+    cwd: Option<String>,
+    description: Option<String>,
+    title: Option<String>,
 }
 
 fn parse(args: &[OsString]) -> Result<AdoptArgs> {
-    let (mut conversations, mut conversation, mut fork, mut is_fresh) = (None, None, None, false);
+    let mut flags = Flags::default();
     let mut index = 0;
     while index < args.len() {
-        match args[index].to_str().ok_or_else(|| anyhow!("{USAGE}"))? {
-            "--conversations" => {
-                conversations = Some(flag_value(args, &mut index, "--conversations")?)
+        let flag = args[index].to_str().ok_or_else(|| anyhow!("{USAGE}"))?;
+        let slot = match flag {
+            "--fresh" => {
+                flags.is_fresh = true;
+                index += 1;
+                continue;
             }
-            "--conversation" => {
-                conversation = Some(flag_value(args, &mut index, "--conversation")?)
-            }
-            "--fork" => fork = Some(flag_value(args, &mut index, "--fork")?),
-            "--fresh" => is_fresh = true,
+            "--conversations" => &mut flags.conversations,
+            "--conversation" => &mut flags.conversation,
+            "--fork" => &mut flags.fork,
+            "--transcript" => &mut flags.transcript,
+            "--cwd" => &mut flags.cwd,
+            "--description" => &mut flags.description,
+            "--title" => &mut flags.title,
             other => bail!("unknown adopt flag `{other}`\n{USAGE}"),
-        }
+        };
+        *slot = Some(flag_value(args, &mut index, flag)?);
         index += 1;
     }
-    match (conversations, conversation, fork) {
-        (Some(conversations), Some(conversation), Some(fork)) => Ok(AdoptArgs {
+    let source = match (flags.fork, flags.transcript, flags.cwd, flags.description) {
+        (Some(fork), None, None, None) => Source::Fork {
+            fork,
+            is_fresh: flags.is_fresh,
+        },
+        (None, Some(transcript), Some(cwd), Some(description)) if !flags.is_fresh => {
+            Source::Session {
+                transcript: PathBuf::from(transcript),
+                cwd: PathBuf::from(cwd),
+                description,
+                title: flags.title.unwrap_or_default(),
+            }
+        }
+        _ => bail!("{USAGE}"),
+    };
+    match (flags.conversations, flags.conversation) {
+        (Some(conversations), Some(conversation)) => Ok(AdoptArgs {
             conversations: PathBuf::from(conversations),
             conversation,
-            fork,
-            is_fresh,
+            source,
         }),
         _ => bail!("{USAGE}"),
     }
@@ -295,19 +341,44 @@ fn is_switchboards(conversations: &Path, switchboard: Option<&Path>) -> bool {
 
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let parsed = parse(args)?;
-    if !is_switchboards(&parsed.conversations, switchboard_dir().as_deref()) {
+    let switchboard = switchboard_dir();
+    if !is_switchboards(&parsed.conversations, switchboard.as_deref()) {
         bail!(
             "{} is not the switchboard's conversations folder",
             parsed.conversations.display()
         );
     }
-    let fresh = parsed.is_fresh.then(|| fresh_id(&parsed.fork));
-    let adopted = adopt(
-        &parsed.conversations,
-        &parsed.conversation,
-        &parsed.fork,
-        fresh,
-    )?;
+    let adopted = match &parsed.source {
+        Source::Fork { fork, is_fresh } => adopt(
+            &parsed.conversations,
+            &parsed.conversation,
+            fork,
+            is_fresh.then(|| fresh_id(fork)),
+        )?,
+        Source::Session {
+            transcript,
+            cwd,
+            description,
+            title,
+        } => {
+            let cwd = fs::canonicalize(cwd)
+                .map(qol_platform::windows_path::strip_verbatim)
+                .with_context(|| format!("{} is not an existing folder", cwd.display()))?;
+            let context = super::context::whole(&cwd, &claude_home(), switchboard.as_deref());
+            adopt_session(
+                &parsed.conversations,
+                &parsed.conversation,
+                &ClosedSession {
+                    transcript,
+                    cwd: &cwd,
+                    title,
+                    description,
+                },
+                &context,
+                fresh_id(&transcript.to_string_lossy()),
+            )?
+        }
+    };
     crate::cli::line(serde_json::to_string(&adopted)?);
     Ok(())
 }
@@ -583,13 +654,45 @@ mod tests {
         .collect();
         let parsed = parse(&args).unwrap();
         assert_eq!(parsed.conversations, PathBuf::from("/c"));
-        assert_eq!(
-            (parsed.conversation.as_str(), parsed.fork.as_str()),
-            ("s", "kcd2")
-        );
-        assert!(parsed.is_fresh);
+        assert_eq!(parsed.conversation, "s");
+        assert!(matches!(
+            &parsed.source,
+            Source::Fork { fork, is_fresh: true } if fork == "kcd2"
+        ));
         let error = parse(&args[..4]).err().unwrap().to_string();
         assert!(error.contains("--fork"), "{error}");
         assert!(parse(&[OsString::from("--bogus")]).is_err());
+        let session = |extra: &[&str]| {
+            let mut all = vec![
+                "--conversations",
+                "/c",
+                "--conversation",
+                "s",
+                "--transcript",
+                "/p/closed.jsonl",
+                "--cwd",
+                "/p",
+                "--description",
+                "kcd2: aim",
+            ];
+            all.extend_from_slice(extra);
+            parse(&all.into_iter().map(OsString::from).collect::<Vec<_>>())
+        };
+        let parsed = session(&["--title", "kcd2 asldsadsad"]).unwrap();
+        assert!(matches!(
+            &parsed.source,
+            Source::Session { transcript, cwd, description, title }
+                if transcript == Path::new("/p/closed.jsonl")
+                    && cwd == Path::new("/p")
+                    && description == "kcd2: aim"
+                    && title == "kcd2 asldsadsad"
+        ));
+        assert!(matches!(
+            session(&[]).unwrap().source,
+            Source::Session { title, .. } if title.is_empty()
+        ));
+        for refused in [&["--fresh"][..], &["--fork", "kcd2"], &["--cwd"]] {
+            assert!(session(refused).is_err(), "{refused:?}");
+        }
     }
 }

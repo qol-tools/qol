@@ -9,6 +9,10 @@ const PANE = 'board'
 const TITLE = 'Fork board'
 const TOOL = 'fork_board'
 const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
+const RESUME = 'resume_session'
+const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
+const RESUME_TIMEOUT_MS = 60_000
+const CARRY_ON = 'Carry on from where this conversation stopped.'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const CLOSED_KEY = 'pane-closed'
@@ -74,6 +78,8 @@ type Delivery = { id: string; agent_id: string; conversation: string; name?: str
 type ForkRecord = { agentId: string; name: string; cwd?: string; transcript?: string; isCurrent: boolean }
 type Adopted = { agentId: string; name?: string; cwd?: string; brought: string }
 type Sent = { isDelivered: boolean; reason?: unknown; agentId: string }
+type ClosedSession = { transcript: string; cwd: string; description: string; title?: string; message?: string }
+type Resumed = { isResumed: true; text: string } | { isResumed: false; reason: string }
 type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
 type WakeFork = { agent_id: string; name?: string | null; description: string; cwd?: string | null; transcript: string; message: string }
 type Wake = { conversation: string; launched_at: string; forks: WakeFork[]; claimed?: boolean }
@@ -513,6 +519,41 @@ const reach = async ($: EngineInterface, agentId: string, name: string, project:
   if (!sent.isDelivered) await undelivered($, sent.agentId, name, String(sent.reason ?? 'not delivered'), message)
 }
 
+const textField = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value : undefined)
+
+export const closedSession = (input: Record<string, unknown>): ClosedSession | undefined => {
+  const transcript = textField(input.transcript)
+  const cwd = textField(input.cwd)
+  const description = textField(input.description)
+  if (transcript === undefined || cwd === undefined || description === undefined) return undefined
+  if (!transcript.startsWith('/') || !transcript.endsWith('.jsonl') || !cwd.startsWith('/')) return undefined
+  const title = textField(input.title)
+  const message = textField(input.message)
+  return { transcript, cwd, description, ...(title === undefined ? {} : { title }), ...(message === undefined ? {} : { message }) }
+}
+
+export const resumeSession = async ($: EngineInterface, session: ClosedSession): Promise<Resumed> => {
+  const program = await $.env.get('QOL_CLI_SESSIONS')
+  const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
+  if (program === undefined || program === '' || conversations === undefined || conversations === '') {
+    return { isResumed: false, reason: 'The switchboard was started without CLI Sessions, so it cannot bring a closed session back as a fork.' }
+  }
+  const argv = [
+    program, 'sessions', 'switchboard', 'adopt', '--conversations', conversations, '--conversation', await $.session.id(),
+    '--transcript', session.transcript, '--cwd', session.cwd, '--description', session.description,
+    ...(session.title === undefined ? [] : ['--title', session.title]),
+  ]
+  const ran = await $.process.run(argv, { timeoutMs: RESUME_TIMEOUT_MS })
+  if (ran.exitCode !== 0) return { isResumed: false, reason: printable(ran.stderr).trim() || `adopt exited ${ran.exitCode}` }
+  const parsed = JSON.parse(ran.stdout) as { agent_id?: unknown; name?: unknown; cwd?: unknown }
+  if (typeof parsed.agent_id !== 'string' || !ID.test(parsed.agent_id)) return { isResumed: false, reason: 'adopt named no agent id.' }
+  const name = typeof parsed.name === 'string' && printable(parsed.name).trim() !== '' ? printable(parsed.name).replace(/\s+/g, ' ').trim() : session.description
+  const cwd = typeof parsed.cwd === 'string' && parsed.cwd !== '' ? parsed.cwd : session.cwd
+  const sent = await sendTo($, await placed($, parsed.agent_id, name, cwd), session.message ?? CARRY_ON)
+  if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }
+  return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
+}
+
 export const relay = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<void> => reach($, fork.agentId, fork.name, fork.cwd, result.message)
 
 let isDelivering = false
@@ -724,6 +765,23 @@ export const register: Register = on => {
         },
         isDeferred: false,
       })
+      await $.tool.register({
+        name: RESUME,
+        description:
+          "Brings a closed terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, and sends it a message, so it continues with its history. Pass the transcript, cwd and title from its sessions_closed row, a `<key-name>: <friendly description>` description and the user's words as message; with no message it carries on from where it stopped. Fails when the transcript holds no answered prompt or is not a Claude Code conversation.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            transcript: { type: 'string', description: "The absolute path of the closed session's .jsonl transcript, from its sessions_closed row." },
+            cwd: { type: 'string', description: 'The absolute project folder the session ran in, from its sessions_closed row.' },
+            description: { type: 'string', description: '`<key-name>: <friendly description>`, as for a new fork.' },
+            title: { type: 'string', description: "The session's title, from its sessions_closed row." },
+            message: { type: 'string', description: "The user's own words for the fork." },
+          },
+          required: ['transcript', 'cwd', 'description'],
+        },
+        isDeferred: false,
+      })
       await refreshStatus($)
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
@@ -766,6 +824,13 @@ export const register: Register = on => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
     return { result: readText(await read($, board), fork, await read($, pulls)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
+
+  on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
+    const session = closedSession(e as unknown as Record<string, unknown>)
+    if (session === undefined) return { deny: 'resume_session needs an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
+    const resumed = await resumeSession($, session)
+    return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
+  }).catch(() => ({ deny: 'The closed session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
     if (e.agentId !== undefined || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)

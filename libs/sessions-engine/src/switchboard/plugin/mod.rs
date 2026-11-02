@@ -5,11 +5,12 @@ use anyhow::{Context, Result};
 
 pub(super) const NAME: &str = "qol-switchboard";
 pub(super) const BOARD_TOOL: &str = "mcp__qol-switchboard__fork_board";
+pub(super) const RESUME_TOOL: &str = "mcp__qol-switchboard__resume_session";
 pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
   "types": "./types/index.d.ts"
 }
@@ -163,6 +164,11 @@ mod tests {
         let command = BOARD_COMMAND.strip_prefix('/').unwrap();
         assert!(MODULE.contains(&format!("const PANE = '{command}'")));
         assert!(MODULE_TESTS.contains(BOARD_TOOL));
+        assert!(MODULE.contains(&format!("const RESUME_NAME = '{RESUME_TOOL}'")));
+        let resume = RESUME_TOOL.strip_prefix(&format!("mcp__{NAME}__")).unwrap();
+        assert!(MODULE.contains(&format!("const RESUME = '{resume}'")));
+        assert!(MODULE.contains("'adopt', '--conversations', conversations"));
+        assert!(MODULE_TESTS.contains(RESUME_TOOL));
         for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
             assert!(!MODULE.contains(retired), "{retired}");
         }

@@ -34,6 +34,8 @@ const COLOR_TAIL: u64 = 256 * 1024;
 const COLOR_ROW_TAG: &str = "\"type\":\"agent-color\"";
 pub(super) const CONTINUE_LEAD: &str = "Its transcript is ";
 pub(super) const CONTINUE_END: &str = ": read the end of it";
+pub(super) const RESUMED_LEAD: &str = "The closed session's own transcript is ";
+pub(super) const RESUMED_END: &str = ", which stays as it was.";
 const SESSION_COLORS: [(&str, &str); 8] = [
     ("red", "\x1b[31m"),
     ("green", "\x1b[32m"),
@@ -456,10 +458,14 @@ fn prompt_text(row: &Value) -> String {
 }
 
 fn continued_from(prompt: &str) -> Option<PathBuf> {
-    let (_, rest) = prompt.split_once(CONTINUE_LEAD)?;
-    let (path, _) = rest.split_once(CONTINUE_END)?;
-    let path = path.trim();
-    (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
+    [(RESUMED_LEAD, RESUMED_END), (CONTINUE_LEAD, CONTINUE_END)]
+        .into_iter()
+        .find_map(|(lead, end)| {
+            let (_, rest) = prompt.split_once(lead)?;
+            let (path, _) = rest.split_once(end)?;
+            let path = path.trim();
+            (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
+        })
 }
 
 fn first_row(transcript: &Path) -> Option<FirstRow> {
@@ -1080,12 +1086,17 @@ mod tests {
     }
 
     #[test]
-    fn the_role_writes_the_continue_line_the_rows_read() {
-        assert!(
-            super::super::SWITCHBOARD_ROLE
-                .contains(&format!("{CONTINUE_LEAD}<its transcript>{CONTINUE_END}")),
-            "the switchboard role no longer names the transcript the way the rows read it"
+    fn a_resumed_session_and_an_older_continued_fork_name_the_transcript_the_rows_read() {
+        let head = super::super::adopt_session::head_text(
+            &super::super::adopt_session::ClosedSession {
+                transcript: Path::new("/h/p/c2.jsonl"),
+                cwd: Path::new("/w/app"),
+                title: "T",
+                description: "t: d",
+            },
+            "Your project folder is /w/app.\n",
         );
+        assert_eq!(continued_from(&head), Some(PathBuf::from("/h/p/c2.jsonl")));
         let prompt = format!(
             "Project: /w/app\ncontinue it\n\nCarry on the closed conversation titled T. {CONTINUE_LEAD}/h/p/c1.jsonl{CONTINUE_END} to learn where it stopped."
         );
