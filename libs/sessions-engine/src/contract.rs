@@ -100,9 +100,19 @@ pub(crate) struct SessionRow {
     pub(crate) remote_control_url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) prs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcript: Option<String>,
 }
 
 impl SessionRow {
+    pub(crate) fn with_transcript(mut self, transcript: Option<std::path::PathBuf>) -> Self {
+        self.transcript = transcript
+            .as_deref()
+            .and_then(std::path::Path::to_str)
+            .map(str::to_owned);
+        self
+    }
+
     pub(crate) fn with_links(
         mut self,
         remote_control_url: Option<String>,
@@ -181,6 +191,7 @@ pub(crate) fn session_row(
         attention_stale: None,
         remote_control_url: None,
         prs: Vec::new(),
+        transcript: None,
     }
 }
 
@@ -315,13 +326,13 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_list",
             label: "List terminal sessions",
-            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty.",
+            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty. transcript is the path of the conversation's transcript file when the tool's history holds it, which the switchboard's resume_session tool brings back as a fork while the tab keeps running on its own.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
             name: "sessions_closed",
             label: "List closed sessions",
-            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back: the switchboard continues one as a fork that reads its transcript, and session_reopen resumes one in a new terminal tab. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (the Claude Code transcripts of every Claude config dir: the agents.toml homes, the server's own CLAUDE_CONFIG_DIR and every folder directly under the user home that holds projects/ and .claude.json, so a conversation run under any account is listed and reopens under it), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, last_prompt (the first line of the newest prompt typed in it, from the tool's history, so rows sharing a title can be told apart), excerpt when text is given, transcript (the path of the conversation's transcript file when the tool's history holds it, so a fork can read where it stopped and carry it on), closed_at in local time, closed_ago (for a history row, when the conversation last wrote) and work_day (today, yesterday, or the weekday and date of the work day it closed on; a work day starts at 05:00 local time, so a conversation closed after midnight counts as the evening before). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). A conversation whose park finished and closed its tab is an ordinary row, though the CLI Sessions panel keeps showing it as parked. With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
+            description: "List the conversations closed in the last 14 days, newest first, so one can be brought back: the switchboard continues one as a fork whose view shows its conversation, and session_reopen resumes one in a new terminal tab. Two sources feed it: the conversations the CLI Sessions daemon saw close, and the tool's own conversation history (the Claude Code transcripts of every Claude config dir: the agents.toml homes, the server's own CLAUDE_CONFIG_DIR and every folder directly under the user home that holds projects/ and .claude.json, so a conversation run under any account is listed and reopens under it), so a conversation that closed before the daemon recorded closes, or while it was not running, is listed too. Returns {closed, omitted}: each closed row carries external_id, tool, cwd, its title (the title it last showed, else the tool's own title for the conversation, else its first prompt), its spawn key when it had one, last_prompt (the first line of the newest prompt typed in it, from the tool's history, so rows sharing a title can be told apart), excerpt when text is given, transcript (the path of the conversation's transcript file when the tool's history holds it, which the switchboard's resume_session tool brings back as a fork), closed_at in local time, closed_ago (for a history row, when the conversation last wrote) and work_day (today, yesterday, or the weekday and date of the work day it closed on; a work day starts at 05:00 local time, so a conversation closed after midnight counts as the evening before). A conversation closes when its tool exits or its terminal goes; one a live session or a running tool process holds is left out, and so are headless runs and the switchboard. With text, only conversations whose content holds every word are listed, each with an excerpt of the passage holding the most words, so a conversation whose title does not describe it can be found by what was done in it. omitted counts the matching conversations left out: lanes (spawned lanes, unless include_lanes is true), missing_cwd (their cwd no longer exists), parked (a park still waits on them, and CLI Sessions resumes them when it ends) and beyond_limit (past limit). A conversation whose park finished and closed its tab is an ordinary row, though the CLI Sessions panel keeps showing it as parked. With text, a conversation that lanes, missing_cwd or parked would leave out is not searched, so those three stay 0 and only beyond_limit is counted.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

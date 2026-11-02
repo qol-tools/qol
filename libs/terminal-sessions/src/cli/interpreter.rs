@@ -109,6 +109,10 @@ impl CliSessionInterpreter {
         self.strategy_for(session).chat_transcript(session)
     }
 
+    pub fn conversation_transcript(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
+        self.strategy_for(session).conversation_transcript(session)
+    }
+
     pub fn current_model(&self, session: &SessionFacts) -> Option<String> {
         self.strategy_for(session).current_model(session)
     }

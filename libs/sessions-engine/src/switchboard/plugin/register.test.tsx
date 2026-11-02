@@ -521,6 +521,68 @@ test('only a stopped fork is copied under a new id, once however many messages r
   expect(reached.filter(to => to === 'c1-copy')).toHaveLength(2)
 })
 
+const resumeArgv = (transcript: string, ...rest: string[]) => [
+  '/bin/qol-cli-sessions', 'sessions', 'switchboard', 'adopt', '--conversations', '/conv', '--conversation', 'switchboard-session',
+  '--transcript', transcript, '--cwd', '/p', '--description', 'kcd2-hips: aim the light', ...rest,
+]
+
+test('a terminal session comes back as a fork with its own conversation once, and one with nothing to resume is refused', async ($, on) => {
+  const sent: any[] = []
+  const runs: string[][] = []
+  const FORKS: Record<string, string> = { '/p/closed.jsonl': 'a5', '/p/open.jsonl': 'a6', '/p/third.jsonl': 'a7' }
+  engine(on, sent)
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined,
+  }))
+  on('fs.exists', () => ({ value: true }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv)
+    const transcript = e.argv[e.argv.indexOf('--transcript') + 1]
+    return {
+      value:
+        transcript === '/p/empty.jsonl'
+          ? { exitCode: 1, stdout: '', stderr: 'qol sessions: /p/empty.jsonl holds no conversation to resume: no prompt was answered in it\n' }
+          : { exitCode: 0, stderr: '', stdout: JSON.stringify({ agent_id: FORKS[transcript] ?? 'a0', name: 'kcd2-hips: aim the light', cwd: '/p', brought: 'session' }) },
+    }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const tool = 'mcp__qol-switchboard__resume_session'
+  const session = { transcript: '/p/closed.jsonl', cwd: '/p', description: 'kcd2-hips: aim the light' }
+
+  const resumed = await $.tool.call({ tool, ...session, title: 'kcd2 asldsadsad', message: 'it is the next day; continue' } as any)
+  expect(String(resumed.result)).toContain('Resumed as kcd2-hips, agent id a5')
+  expect(runs).toEqual([resumeArgv('/p/closed.jsonl', '--title', 'kcd2 asldsadsad')])
+  expect(sent.map(one => [one.to, one.text])).toEqual([['a5', 'it is the next day; continue']])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] kcd2-hips (working, agent id a5)')
+
+  const twice = await $.tool.call({ tool, ...session } as any)
+  expect(String(twice.result)).toContain('Already resumed as kcd2-hips, agent id a5: nothing was sent')
+  expect(runs).toHaveLength(1)
+  expect(sent).toHaveLength(1)
+  await $.tool.call({ tool, ...session, message: 'and the hips' } as any)
+  expect(runs).toHaveLength(1)
+  expect(sent.at(-1)).toMatchObject({ to: 'a5', text: 'and the hips' })
+
+  await $.tool.call({ tool, ...session, transcript: '/p/open.jsonl' } as any)
+  expect(runs.at(-1)).toEqual(resumeArgv('/p/open.jsonl'))
+  expect(sent.at(-1)).toMatchObject({ to: 'a6', text: 'The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.' })
+
+  const empty = await $.tool.call({ tool, ...session, transcript: '/p/empty.jsonl' } as any)
+  expect(String(empty.deny)).toContain('holds no conversation to resume')
+  const count = runs.length
+  for (const wrong of [{ transcript: 'closed.jsonl' }, { transcript: '/p/closed.txt' }, { cwd: 'p' }, { description: ' ' }]) {
+    const refused = await $.tool.call({ tool, ...session, ...wrong } as any)
+    expect(String(refused.deny)).toContain('resume_session needs an absolute .jsonl transcript')
+  }
+  expect(runs).toHaveLength(count)
+  expect(sent).toHaveLength(3)
+
+  const fromFork = await $.tool.call({ tool, ...session, transcript: '/p/third.jsonl', agentId: 'a9' } as any)
+  expect(String(fromFork.result)).toContain('Resumed as kcd2-hips, agent id a7')
+  expect(runs.at(-1)).toEqual(resumeArgv('/p/third.jsonl', '--launcher', 'a9'))
+})
+
 const settle = async () => {
   for (let turn = 0; turn < 20; turn += 1) await new Promise(resolve => setTimeout(resolve, 0))
 }

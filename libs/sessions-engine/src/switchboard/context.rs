@@ -139,6 +139,13 @@ fn cut_notice(undelivered: &[&Path]) -> String {
     )
 }
 
+pub(super) fn whole(cwd: &Path, config_home: &Path, switchboard_dir: Option<&Path>) -> String {
+    sections(cwd, config_home, switchboard_dir)
+        .into_iter()
+        .map(|section| section.text)
+        .collect()
+}
+
 pub(super) fn parts(cwd: &Path, config_home: &Path, switchboard_dir: Option<&Path>) -> Vec<String> {
     let sections = sections(cwd, config_home, switchboard_dir);
     let text: String = sections

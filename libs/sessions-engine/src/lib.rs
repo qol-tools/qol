@@ -387,7 +387,7 @@ Details:
   the tool's own conversation history (the Claude Code transcripts of every
   Claude config dir, declared in agents.toml or found under the user home),
   and brings
-  one back as a fork that reads its transcript, or in a new tab with
+  one back as a fork that shows its conversation, or in a new tab with
   session_reopen when it has none or a terminal is asked for.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
   filters them with `query` (title, cwd, key, tool, id or a linked pull

@@ -523,6 +523,11 @@ fn a_resolved_transcript_hit_stays_cached_without_another_scan() {
         "a hit keeps its full cache window even when the answer changes underneath"
     );
     assert_eq!(environment.scans(), 1);
+    assert_eq!(
+        strategy.conversation_transcript(&session()).as_deref(),
+        Some(transcript.as_path()),
+        "a live session names the transcript it writes"
+    );
 }
 
 #[test]

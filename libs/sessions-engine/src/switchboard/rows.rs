@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::adopt_session::RESUMED_FROM;
 use super::fork_state::{self, ForkState};
 
 const MODEL_COLOR: &str = "\x1b[33m";
@@ -462,6 +463,16 @@ fn continued_from(prompt: &str) -> Option<PathBuf> {
     (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
 }
 
+fn resumed_from(transcript: &Path) -> Option<PathBuf> {
+    let meta: Value =
+        serde_json::from_slice(&std::fs::read(transcript.with_extension("meta.json")).ok()?)
+            .ok()?;
+    meta.get(RESUMED_FROM)
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
 fn first_row(transcript: &Path) -> Option<FirstRow> {
     let file = File::open(transcript).ok()?;
     let mut line = String::new();
@@ -505,7 +516,10 @@ fn fork_facts(transcript: &Path) -> Fork {
     };
     Fork {
         started_ms: first.started_ms,
-        color: first.source.as_deref().and_then(last_color),
+        color: resumed_from(transcript)
+            .or(first.source)
+            .as_deref()
+            .and_then(last_color),
     }
 }
 
@@ -1080,12 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn the_role_writes_the_continue_line_the_rows_read() {
-        assert!(
-            super::super::SWITCHBOARD_ROLE
-                .contains(&format!("{CONTINUE_LEAD}<its transcript>{CONTINUE_END}")),
-            "the switchboard role no longer names the transcript the way the rows read it"
-        );
+    fn an_older_continued_fork_names_the_transcript_the_rows_read() {
         let prompt = format!(
             "Project: /w/app\ncontinue it\n\nCarry on the closed conversation titled T. {CONTINUE_LEAD}/h/p/c1.jsonl{CONTINUE_END} to learn where it stopped."
         );
@@ -1135,6 +1144,19 @@ mod tests {
         .unwrap();
         let facts = fork_facts(&fresh);
         assert_eq!((facts.started_ms, facts.color), (None, None));
+        let resumed = dir.path().join("agent-a3.jsonl");
+        std::fs::write(&resumed, format!("{}\n", json!({"type": "user", "timestamp": "2026-11-01T06:58:29.835Z", "message": {"content": format!("Project: /w\nIts own transcript, \"{}\", stays as it was.", dir.path().join("elsewhere.jsonl").display())}}))).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a3.meta.json"),
+            json!({RESUMED_FROM: source.to_string_lossy()}).to_string(),
+        )
+        .unwrap();
+        let facts = fork_facts(&resumed);
+        assert_eq!(
+            facts.color.as_deref(),
+            Some("orange"),
+            "the meta file names the source, never the prompt"
+        );
     }
 
     #[test]
