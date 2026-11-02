@@ -381,7 +381,7 @@ pub fn resolve(config: &RemapConfig) -> ResolvedConfig {
     }
 }
 
-fn rule_label(mods: &Modifiers, key: u16) -> String {
+pub(crate) fn rule_label(mods: &Modifiers, key: u16) -> String {
     format!("{}+{}", mods.label(), keycode::key_name(key))
 }
 

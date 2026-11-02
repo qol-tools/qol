@@ -3,6 +3,7 @@ mod app_tracker;
 mod doctor;
 mod hid_helper;
 mod input;
+mod karabiner;
 mod layout;
 mod secure_input;
 mod tap;
@@ -43,6 +44,16 @@ impl PlatformAdapter for Adapter {
 
     fn uninstall_hid_helper(&self) -> Result<CommandResult> {
         Ok(summary_result(hid_helper::install::uninstall()))
+    }
+
+    fn karabiner_rules(&self) -> Result<CommandResult> {
+        let snapshot = layout::LayoutSnapshot::read_current()?;
+        let resolved = remap::resolve(&config::load_config());
+        let compiled = karabiner::compile::compile(&resolved, &snapshot);
+        Ok(CommandResult::success(format!(
+            "{}\n",
+            serde_json::to_string_pretty(&karabiner::report(&compiled))?
+        )))
     }
 
     fn inspect_config(&self) -> Result<ConfigInspection> {

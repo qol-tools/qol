@@ -120,7 +120,7 @@ Every manipulator keyremap writes has the condition `variable_if qol_keyremap_ac
 - The result matches today: rules run only while the keyremap daemon is running and enabled.
   If the daemon crashes, the rules keep running until Karabiner restarts; the keyboard never dies.
 - `stop` (switching to another backend) removes the block and keyremap's `simple_modifications` entries, then sets the variable to 0.
-  `qol-keyremap karabiner remove` does the same by hand.
+  `qol-keyremap karabiner-remove` does the same by hand.
 
 ### Compiling the rules
 
@@ -160,7 +160,7 @@ If it is not reliably first, the tap holds a key-down whose keycode is the outpu
 
 - `qol-config.toml`: `key_backend`, a `select` in General, macOS only, default `auto`, plus a `status` field showing the active backend and its reason.
 - `qol-keyremap backend` prints the active backend, the reason, and every backend's probe.
-- `qol-keyremap karabiner print` prints the compiled block without writing. `karabiner sync` writes now. `karabiner remove` removes keyremap's block and entries.
+- `qol-keyremap karabiner-rules` prints the compiled block without writing. `karabiner-sync` writes now. `karabiner-remove` removes keyremap's block and entries.
 - `plugin.toml` gains a second `[[dependencies.system]]` entry, Karabiner-Elements, with the minimum version the probe shows supports `send_user_command` with `endpoint`.
 
 ## Doctor
@@ -170,7 +170,7 @@ If it is not reliably first, the tap holds a key-down whose keycode is the outpu
 | `key_backend` | The chosen backend is not the active one | The missing piece and its fix |
 | `karabiner_installed` | The app or `karabiner_cli` is missing or older than the minimum | Install Karabiner-Elements |
 | `karabiner_running` | The core service is not running or its driver is not active | Open Karabiner-Elements and finish its setup |
-| `karabiner_rules` | The block is missing from the selected profile or is out of date | `qol-keyremap karabiner sync` |
+| `karabiner_rules` | The block is missing from the selected profile or is out of date | `qol-keyremap karabiner-sync` |
 | `karabiner_coverage` | A rule could not be compiled | Names the rule and why |
 | `karabiner_conflicts` | A user `simple_modifications` entry sits on a key keyremap wants | Names the key |
 
@@ -223,7 +223,7 @@ By hand on this Mac, after the probe: set Key backend to Karabiner-Elements, tur
 
 1. The probe.
 2. The trait, `BackendCell` and `select`, with `event_tap` and `hid_helper` behind them and no behaviour change.
-3. `compile` and `document`, with `karabiner print` to inspect output.
+3. `compile` and `document`, with `karabiner-rules` to inspect output.
 4. The Karabiner backend, the setting, doctor checks and `sync`/`remove`.
 5. Hotkey markers through `send_user_command`.
 6. The Key Remap skill and README describe the backends.

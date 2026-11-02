@@ -48,6 +48,12 @@ impl PlatformAdapter for Adapter {
         ))
     }
 
+    fn karabiner_rules(&self) -> Result<CommandResult> {
+        Ok(CommandResult::runtime_error(
+            "keyremap: Karabiner-Elements only exists on macOS; Windows remaps in low-level hooks",
+        ))
+    }
+
     fn inspect_config(&self) -> Result<ConfigInspection> {
         engine::inspection(keys::modifier_key_issues)
     }
