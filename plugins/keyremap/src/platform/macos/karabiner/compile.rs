@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use super::key_codes;
+use super::system_modifier_keys::DeviceModifiers;
 use crate::platform::engine::config::{ModifierKeys, ModifierTarget};
 use crate::platform::engine::remap::{self, Modifiers, ResolvedConfig, ResolvedKeyTarget};
 use crate::platform::macos::layout::{KeyStroke, LayoutSnapshot};
@@ -13,6 +14,14 @@ pub(crate) struct Compiled {
     pub(crate) rule: Value,
     pub(crate) simple_modifications: Vec<Value>,
     pub(crate) gaps: Vec<Gap>,
+    pub(crate) device_modifications: Vec<DeviceModifiers>,
+}
+
+impl Compiled {
+    pub(crate) fn with_system_modifier_keys(mut self, devices: Vec<DeviceModifiers>) -> Self {
+        self.device_modifications = devices;
+        self
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,6 +68,7 @@ pub(crate) fn compile(config: &ResolvedConfig, layout: &LayoutSnapshot) -> Compi
         }),
         simple_modifications: simple_modifications(&config.modifier_keys),
         gaps: compiler.gaps,
+        device_modifications: Vec::new(),
     }
 }
 

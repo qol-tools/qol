@@ -4,6 +4,7 @@ pub(crate) mod document;
 mod key_codes;
 pub(crate) mod service;
 pub(crate) mod store;
+pub(crate) mod system_modifier_keys;
 
 use std::path::Path;
 
@@ -15,6 +16,7 @@ pub(crate) fn report(compiled: &compile::Compiled) -> Value {
     json!({
         "complex_modifications_rule": compiled.rule,
         "simple_modifications": compiled.simple_modifications,
+        "system_modifier_keys": compiled.device_modifications,
         "not_compiled": compiled
             .gaps
             .iter()
@@ -43,6 +45,17 @@ pub(crate) fn sync_summary(
         compile::ACTIVE_VARIABLE,
         compile::ACTIVE_VARIABLE
     ));
+    let carried: usize = synced
+        .sidecar
+        .device_modifications
+        .iter()
+        .map(|device| device.simple_modifications.len())
+        .sum();
+    if carried > 0 {
+        lines.push(format!(
+            "Carried {carried} System Settings modifier key change(s) to the same keyboards in Karabiner-Elements."
+        ));
+    }
     if synced.edited_by_hand {
         lines.push(
             "The Key Remap block had been edited in Karabiner-Elements; it was replaced."

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::compile::{Compiled, RULE_DESCRIPTION};
+use super::system_modifier_keys::DeviceModifiers;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Sidecar {
@@ -12,6 +13,8 @@ pub(crate) struct Sidecar {
     pub(crate) simple_modifications: Vec<Value>,
     #[serde(default)]
     pub(crate) block: Option<Value>,
+    #[serde(default)]
+    pub(crate) device_modifications: Vec<DeviceModifiers>,
 }
 
 #[derive(Debug)]
@@ -47,6 +50,7 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
     for (index, profile) in profiles.iter_mut().enumerate() {
         if owned[index] {
             remove_simple(profile, &sidecar.simple_modifications);
+            remove_device_simple(profile, &sidecar.device_modifications);
         }
         if index != selected {
             remove_block(profile);
@@ -59,6 +63,7 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
     };
     put_block(profile, &compiled.rule);
     let (written, conflicts) = put_simple(profile, &compiled.simple_modifications);
+    let device_modifications = put_device_simple(profile, &compiled.device_modifications);
     let changed = updated != *document;
     Ok(Synced {
         document: updated,
@@ -66,6 +71,7 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
             profile: Some(name.clone()),
             simple_modifications: written,
             block: Some(compiled.rule.clone()),
+            device_modifications,
         },
         profile: name,
         changed,
@@ -84,6 +90,7 @@ pub(crate) fn remove(document: &Value, sidecar: &Sidecar) -> Removed {
             remove_block(profile);
             if owned[index] {
                 remove_simple(profile, &sidecar.simple_modifications);
+                remove_device_simple(profile, &sidecar.device_modifications);
             }
         }
     }
@@ -187,6 +194,83 @@ fn put_simple(profile: &mut Value, wanted: &[Value]) -> (Vec<Value>, Vec<String>
     (written, conflicts)
 }
 
+fn remove_device_simple(profile: &mut Value, ours: &[DeviceModifiers]) {
+    let Some(devices) = profile.get_mut("devices").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for recorded in ours {
+        for device in devices
+            .iter_mut()
+            .filter(|device| device.get("identifiers") == Some(&recorded.identifiers))
+        {
+            remove_simple(device, &recorded.simple_modifications);
+        }
+    }
+    devices.retain(|device| {
+        let touched = ours
+            .iter()
+            .any(|recorded| device.get("identifiers") == Some(&recorded.identifiers));
+        !(touched && only_an_empty_mapping(device))
+    });
+}
+
+fn only_an_empty_mapping(device: &Value) -> bool {
+    let Some(fields) = device.as_object() else {
+        return false;
+    };
+    let empty = device
+        .get("simple_modifications")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
+    empty
+        && fields
+            .keys()
+            .all(|key| key == "identifiers" || key == "simple_modifications")
+}
+
+fn put_device_simple(profile: &mut Value, wanted: &[DeviceModifiers]) -> Vec<DeviceModifiers> {
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let devices = child_array(profile, "devices");
+    let mut written = Vec::new();
+    for device in wanted {
+        let index = match devices
+            .iter()
+            .position(|existing| existing.get("identifiers") == Some(&device.identifiers))
+        {
+            Some(index) => index,
+            None => {
+                devices.push(json!({ "identifiers": device.identifiers }));
+                devices.len() - 1
+            }
+        };
+        let entries = child_array(&mut devices[index], "simple_modifications");
+        let mut added = Vec::new();
+        for entry in &device.simple_modifications {
+            if entries
+                .iter()
+                .any(|existing| existing.get("from") == entry.get("from"))
+            {
+                continue;
+            }
+            entries.push(entry.clone());
+            added.push(entry.clone());
+        }
+        if added.is_empty() {
+            if only_an_empty_mapping(&devices[index]) {
+                devices.remove(index);
+            }
+            continue;
+        }
+        written.push(DeviceModifiers {
+            identifiers: device.identifiers.clone(),
+            simple_modifications: added,
+        });
+    }
+    written
+}
+
 fn child_object<'a>(parent: &'a mut Value, key: &str) -> &'a mut Value {
     if !parent.get(key).is_some_and(Value::is_object) {
         parent[key] = json!({});
@@ -216,6 +300,7 @@ mod tests {
                 .map(|(from, to)| json!({ "from": { "key_code": from }, "to": [{ "key_code": to }] }))
                 .collect(),
             gaps: Vec::new(),
+            device_modifications: Vec::new(),
         }
     }
 
@@ -468,5 +553,83 @@ mod tests {
         assert!(removed.changed);
         assert_eq!(removed.document, karabiner());
         assert!(!remove(&removed.document, &Sidecar::default()).changed);
+    }
+
+    fn swap(from: &str, to: &str) -> Value {
+        json!({ "from": { "key_code": from }, "to": [{ "key_code": to }] })
+    }
+
+    #[test]
+    fn system_modifier_keys_go_to_their_keyboard_and_leave_cleanly() {
+        let mut document = karabiner();
+        document["profiles"][0]["devices"] = json!([
+            { "identifiers": { "is_keyboard": true }, "ignore": false },
+            { "identifiers": { "is_keyboard": true, "vendor_id": 9, "product_id": 9 } }
+        ]);
+        let built_in = json!({ "is_keyboard": true });
+        let logitech = json!({ "is_keyboard": true, "product_id": 45952, "vendor_id": 1133 });
+        let mut wanted = compiled(1, &[]);
+        wanted.device_modifications = vec![
+            DeviceModifiers {
+                identifiers: built_in.clone(),
+                simple_modifications: vec![
+                    swap("left_command", "left_option"),
+                    swap("left_option", "left_command"),
+                ],
+            },
+            DeviceModifiers {
+                identifiers: logitech.clone(),
+                simple_modifications: vec![swap("right_command", "right_option")],
+            },
+        ];
+
+        let synced = sync(&document, &wanted, &Sidecar::default()).unwrap();
+        let devices = &synced.document["profiles"][0]["devices"];
+        assert_eq!(devices[0]["ignore"], json!(false));
+        assert_eq!(
+            devices[0]["simple_modifications"],
+            json!([
+                swap("left_command", "left_option"),
+                swap("left_option", "left_command")
+            ])
+        );
+        assert_eq!(devices[2]["identifiers"], logitech);
+        assert_eq!(
+            synced.sidecar.device_modifications,
+            wanted.device_modifications
+        );
+
+        let again = sync(&synced.document, &wanted, &synced.sidecar).unwrap();
+        assert!(!again.changed);
+
+        let removed = remove(&synced.document, &synced.sidecar);
+        assert_eq!(
+            removed.document["profiles"][0]["devices"],
+            json!([
+                { "identifiers": { "is_keyboard": true }, "ignore": false, "simple_modifications": [] },
+                { "identifiers": { "is_keyboard": true, "vendor_id": 9, "product_id": 9 } }
+            ])
+        );
+    }
+
+    #[test]
+    fn a_key_already_mapped_in_karabiner_for_that_keyboard_is_left_alone() {
+        let mut document = karabiner();
+        document["profiles"][0]["devices"] = json!([{
+            "identifiers": { "is_keyboard": true },
+            "simple_modifications": [swap("left_command", "escape")]
+        }]);
+        let mut wanted = compiled(0, &[]);
+        wanted.device_modifications = vec![DeviceModifiers {
+            identifiers: json!({ "is_keyboard": true }),
+            simple_modifications: vec![swap("left_command", "left_option")],
+        }];
+
+        let synced = sync(&document, &wanted, &Sidecar::default()).unwrap();
+        assert_eq!(
+            synced.document["profiles"][0]["devices"][0]["simple_modifications"],
+            json!([swap("left_command", "escape")])
+        );
+        assert!(synced.sidecar.device_modifications.is_empty());
     }
 }
