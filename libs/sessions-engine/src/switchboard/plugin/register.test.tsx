@@ -296,6 +296,22 @@ test('fork_board lists every row and returns one fork in full', async ($, on) =>
   expect(String(all.result)).toContain('[fork board] kcd2-modding: Hip light fix is live; 3 steps to try. (needs the user, agent id a4)')
   const one = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'kcd2-modding' })
   expect(String(one.result)).toContain('1. Walk backwards.')
+  expect(String(one.result)).not.toContain('agent list:')
+})
+
+test('fork_board names the fork a nested fork is listed under in the agent list', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'settings-rows-redesign: slim settings rows')
+  await spawn($, 'c1', 'qol-shot-region-video: broken region recordings', 'p1')
+  await spawn($, 'c2', 'orphan-child: parent gone', 'gone1')
+
+  const all = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(all).toContain('[fork board] qol-shot-region-video (working, agent id c1, listed under settings-rows-redesign)')
+  expect(all).toContain('[fork board] orphan-child (working, agent id c2, listed under the fork gone1)')
+  expect(all).toContain('[fork board] settings-rows-redesign (working, agent id p1)')
+  const one = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'qol-shot-region-video' })).result)
+  expect(one).toContain('agent id: c1\nagent list: under settings-rows-redesign, the fork that started it, not at the top level')
 })
 
 test('the board names the key that reaches it until it holds the keys, and closes from a button', async ($, on) => {

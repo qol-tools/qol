@@ -698,6 +698,12 @@ const pullNote = (all: readonly Pull[], agentId: string): string => {
   return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
 }
 
+const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
+  if (entry.launcher === undefined) return undefined
+  const parent = list.find(one => one.agentId === entry.launcher)
+  return parent === undefined ? `the fork ${entry.launcher}` : keyName(parent.name)
+}
+
 export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = []): string => {
   if (fork !== undefined && fork.trim() !== '') {
     const wanted = fork.trim()
@@ -705,12 +711,18 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     if (entry === undefined) return `No fork board row for ${wanted}.`
     const own = pullsOf(all, entry.agentId)
     const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull)} ${pull.pullRequest}`).join('; ')}`
-    return `${boardLine(entry)}\nagent id: ${entry.agentId}${prs}\n\n${entry.report || '(no report yet)'}`
+    const under = listedUnder(list, entry)
+    const place = under === undefined ? '' : `\nagent list: under ${under}, the fork that started it, not at the top level`
+    return `${boardLine(entry)}\nagent id: ${entry.agentId}${place}${prs}\n\n${entry.report || '(no report yet)'}`
   }
   const shown = list.filter(entry => !entry.isDismissed)
   if (shown.length === 0) return 'The fork board is empty.'
   return shown
-    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId})${pullNote(all, entry.agentId)}`)
+    .map(entry => {
+      const under = listedUnder(list, entry)
+      const place = under === undefined ? '' : `, listed under ${under}`
+      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId)}`
+    })
     .join('\n')
 }
 
@@ -799,7 +811,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
