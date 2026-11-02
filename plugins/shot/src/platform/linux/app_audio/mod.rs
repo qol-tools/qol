@@ -29,10 +29,10 @@ impl OnScreen {
         if pid <= 1 {
             return None;
         }
-        let process = CaptureProcess::spawned(pid);
-        if process.identity.is_none() {
-            return None;
-        }
+        let process = CaptureProcess {
+            pid,
+            identity: Some(qol_process::process_identity(pid).ok()?),
+        };
         let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
         let mut binaries = vec![executable.file_name()?.to_str()?.to_string()];
         let command_line = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
@@ -330,7 +330,8 @@ mod tests {
 
     #[test]
     fn apps_are_recorded_when_chosen_and_not_covered_by_system_audio() {
-        let cases: [(bool, &[&str], &[&str], bool, bool); 8] = [
+        type Case<'a> = (bool, &'a [&'a str], &'a [&'a str], bool, bool);
+        let cases: [Case; 8] = [
             (true, &[], &["KCD2"], false, true),
             (true, &["mic"], &["KCD2"], false, true),
             (true, &["mic"], &[], true, true),

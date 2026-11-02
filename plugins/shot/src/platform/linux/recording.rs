@@ -1220,7 +1220,8 @@ mod tests {
 
     #[test]
     fn audio_inputs_record_the_chosen_devices_and_apps() {
-        let cases: [(&[&str], &[&str], &[&str]); 6] = [
+        type Case<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let cases: [Case; 6] = [
             (&["mic"], &[], &["mic-in"]),
             (&["system"], &[], &["speakers.monitor"]),
             (&[], &["KCD2"], &["qol_shot_apps.monitor"]),

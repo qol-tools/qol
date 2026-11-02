@@ -307,7 +307,8 @@ mod tests {
     #[test]
     fn missing_links_cover_every_stream_of_the_chosen_apps_only() {
         let graph = graph();
-        let cases: [(&[&str], Vec<(u32, u32)>); 4] = [
+        type Case<'a> = (&'a [&'a str], Vec<(u32, u32)>);
+        let cases: [Case; 4] = [
             (&["KCD2"], vec![(12, 52), (21, 51), (21, 52)]),
             (&["WEBRTC VoiceEngine"], vec![(31, 51)]),
             (&["mpv"], vec![]),
