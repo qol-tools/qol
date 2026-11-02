@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::compile::Compiled;
-use super::document::{self, Sidecar, Synced};
+use super::document::{self, Removed, Sidecar, Synced};
 
 const CONFIG_PATH: &str = ".config/karabiner/karabiner.json";
 const BACKUP_SUFFIX: &str = ".qol-keyremap.bak";
@@ -48,7 +48,7 @@ impl Store {
         Ok(synced)
     }
 
-    pub(crate) fn remove(&self) -> Result<bool> {
+    pub(crate) fn remove(&self) -> Result<Removed> {
         let (target, current) = self.read_config()?;
         let sidecar = self.read_sidecar()?;
         let removed = document::remove(&current, &sidecar);
@@ -58,7 +58,7 @@ impl Store {
         if sidecar != Sidecar::default() {
             self.write_sidecar(&Sidecar::default())?;
         }
-        Ok(removed.changed)
+        Ok(removed)
     }
 
     fn read_config(&self) -> Result<(PathBuf, Value)> {
@@ -172,7 +172,7 @@ mod tests {
         let backup = dir.join("dotfiles").join("karabiner.json.qol-keyremap.bak");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
 
-        assert!(store.remove().unwrap());
+        assert!(store.remove().unwrap().changed);
         let removed: Value =
             serde_json::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
         assert_eq!(removed["profiles"][0]["simple_modifications"], json!([]));

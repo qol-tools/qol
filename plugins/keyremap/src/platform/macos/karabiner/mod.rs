@@ -49,7 +49,7 @@ pub(crate) fn sync_summary(
     }
     for key in &synced.conflicts {
         lines.push(format!(
-            "Your own Karabiner-Elements change on {key} stays, so Key Remap's modifier key change for {key} is not applied."
+            "karabiner.json already changes {key}, so Key Remap's modifier key change for {key} is not applied."
         ));
     }
     for gap in &compiled.gaps {
@@ -58,11 +58,15 @@ pub(crate) fn sync_summary(
     lines.join("\n") + "\n"
 }
 
-pub(crate) fn remove_summary(removed: bool, path: &Path) -> String {
+pub(crate) fn remove_summary(removed: &document::Removed, path: &Path) -> String {
     let path = path.display();
-    if removed {
-        format!("Removed Key Remap's rules and modifier key changes from {path}.\n")
+    let mut text = if removed.changed {
+        format!("Removed Key Remap's rules from {path}.\n")
     } else {
         format!("{path} has no Key Remap rules.\n")
+    };
+    if removed.untracked {
+        text.push_str("Key Remap has no record of the modifier key changes it wrote, so remove any left in simple_modifications in Karabiner-Elements.\n");
     }
+    text
 }

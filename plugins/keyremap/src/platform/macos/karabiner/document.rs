@@ -1,7 +1,6 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use super::compile::{Compiled, RULE_DESCRIPTION};
 
@@ -10,9 +9,9 @@ pub(crate) struct Sidecar {
     #[serde(default)]
     pub(crate) profile: Option<String>,
     #[serde(default)]
-    pub(crate) simple_modifications: Vec<String>,
+    pub(crate) simple_modifications: Vec<Value>,
     #[serde(default)]
-    pub(crate) block_hash: Option<String>,
+    pub(crate) block: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -29,6 +28,7 @@ pub(crate) struct Synced {
 pub(crate) struct Removed {
     pub(crate) document: Value,
     pub(crate) changed: bool,
+    pub(crate) untracked: bool,
 }
 
 pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> Result<Synced> {
@@ -43,23 +43,21 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
         bail!("karabiner.json has no selected profile; pick one in Karabiner-Elements");
     };
     let name = profile_name(&profiles[selected]);
-    let mut edited_by_hand = false;
+    let owned = owned_profiles(profiles, sidecar);
     for (index, profile) in profiles.iter_mut().enumerate() {
+        if owned[index] {
+            remove_simple(profile, &sidecar.simple_modifications);
+        }
         if index != selected {
             remove_block(profile);
-            if sidecar.profile.as_deref() == Some(profile_name(profile).as_str()) {
-                remove_simple(profile, &sidecar.simple_modifications);
-            }
         }
     }
     let profile = &mut profiles[selected];
-    if let (Some(previous), Some(recorded)) = (find_block(profile), &sidecar.block_hash) {
-        edited_by_hand = &hash(previous) != recorded;
-    }
+    let edited_by_hand = match (find_block(profile), &sidecar.block) {
+        (Some(previous), Some(recorded)) => previous != recorded,
+        _ => false,
+    };
     put_block(profile, &compiled.rule);
-    if sidecar.profile.as_deref() == Some(name.as_str()) {
-        remove_simple(profile, &sidecar.simple_modifications);
-    }
     let (written, conflicts) = put_simple(profile, &compiled.simple_modifications);
     let changed = updated != *document;
     Ok(Synced {
@@ -67,7 +65,7 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
         sidecar: Sidecar {
             profile: Some(name.clone()),
             simple_modifications: written,
-            block_hash: Some(hash(&compiled.rule)),
+            block: Some(compiled.rule.clone()),
         },
         profile: name,
         changed,
@@ -78,10 +76,13 @@ pub(crate) fn sync(document: &Value, compiled: &Compiled, sidecar: &Sidecar) -> 
 
 pub(crate) fn remove(document: &Value, sidecar: &Sidecar) -> Removed {
     let mut updated = document.clone();
+    let mut found_block = false;
     if let Some(profiles) = updated.get_mut("profiles").and_then(Value::as_array_mut) {
-        for profile in profiles {
+        let owned = owned_profiles(profiles, sidecar);
+        for (index, profile) in profiles.iter_mut().enumerate() {
+            found_block |= find_block(profile).is_some();
             remove_block(profile);
-            if sidecar.profile.as_deref() == Some(profile_name(profile).as_str()) {
+            if owned[index] {
                 remove_simple(profile, &sidecar.simple_modifications);
             }
         }
@@ -90,7 +91,18 @@ pub(crate) fn remove(document: &Value, sidecar: &Sidecar) -> Removed {
     Removed {
         document: updated,
         changed,
+        untracked: found_block && *sidecar == Sidecar::default(),
     }
+}
+
+fn owned_profiles(profiles: &[Value], sidecar: &Sidecar) -> Vec<bool> {
+    let names: Vec<String> = profiles.iter().map(profile_name).collect();
+    let recorded = sidecar.profile.as_deref();
+    let renamed = recorded.is_some_and(|recorded| !names.iter().any(|name| name == recorded));
+    names
+        .iter()
+        .map(|name| renamed || recorded == Some(name.as_str()))
+        .collect()
 }
 
 fn profile_name(profile: &Value) -> String {
@@ -145,16 +157,16 @@ fn from_key(entry: &Value) -> Option<&str> {
     entry.pointer("/from/key_code").and_then(Value::as_str)
 }
 
-fn remove_simple(profile: &mut Value, ours: &[String]) {
+fn remove_simple(profile: &mut Value, ours: &[Value]) {
     if let Some(entries) = profile
         .get_mut("simple_modifications")
         .and_then(Value::as_array_mut)
     {
-        entries.retain(|entry| !from_key(entry).is_some_and(|key| ours.iter().any(|o| o == key)));
+        entries.retain(|entry| !ours.contains(entry));
     }
 }
 
-fn put_simple(profile: &mut Value, wanted: &[Value]) -> (Vec<String>, Vec<String>) {
+fn put_simple(profile: &mut Value, wanted: &[Value]) -> (Vec<Value>, Vec<String>) {
     let entries = child_array(profile, "simple_modifications");
     let mut written = Vec::new();
     let mut conflicts = Vec::new();
@@ -170,7 +182,7 @@ fn put_simple(profile: &mut Value, wanted: &[Value]) -> (Vec<String>, Vec<String
             continue;
         }
         entries.push(entry.clone());
-        written.push(key.to_string());
+        written.push(entry.clone());
     }
     (written, conflicts)
 }
@@ -187,13 +199,6 @@ fn child_array<'a>(parent: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
         parent[key] = json!([]);
     }
     parent[key].as_array_mut().expect("just made an array")
-}
-
-fn hash(block: &Value) -> String {
-    Sha256::digest(block.to_string().as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 #[cfg(test)]
@@ -337,7 +342,10 @@ mod tests {
         );
         let synced = sync(&karabiner(), &wanted, &Sidecar::default()).unwrap();
         assert_eq!(synced.conflicts, vec!["right_command"]);
-        assert_eq!(synced.sidecar.simple_modifications, vec!["caps_lock"]);
+        assert_eq!(
+            synced.sidecar.simple_modifications,
+            vec![wanted.simple_modifications[1].clone()]
+        );
         let entries = synced.document["profiles"][0]["simple_modifications"]
             .as_array()
             .unwrap()
@@ -373,7 +381,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rules(&synced.document, 1).len(), 1);
-        assert_eq!(synced.sidecar.simple_modifications, vec!["fn"]);
+        assert_eq!(synced.sidecar.simple_modifications.len(), 1);
     }
 
     #[test]
@@ -387,6 +395,65 @@ mod tests {
         document["profiles"][0]["selected"] = json!(false);
         let error = sync(&document, &compiled(1, &[]), &Sidecar::default()).unwrap_err();
         assert!(error.to_string().contains("no selected profile"), "{error}");
+    }
+
+    #[test]
+    fn an_entry_the_user_edited_after_a_sync_becomes_theirs() {
+        let wanted = compiled(0, &[("caps_lock", "escape")]);
+        let first = sync(&karabiner(), &wanted, &Sidecar::default()).unwrap();
+        let mut edited = first.document.clone();
+        edited["profiles"][0]["simple_modifications"][1]["to"][0]["key_code"] =
+            json!("left_control");
+        let second = sync(&edited, &wanted, &first.sidecar).unwrap();
+        assert_eq!(second.conflicts, vec!["caps_lock"]);
+        assert_eq!(
+            second.document["profiles"][0]["simple_modifications"][1]["to"][0]["key_code"],
+            "left_control"
+        );
+        let removed = remove(&edited, &first.sidecar);
+        assert_eq!(
+            removed.document["profiles"][0]["simple_modifications"][1]["to"][0]["key_code"],
+            "left_control"
+        );
+    }
+
+    #[test]
+    fn key_order_does_not_count_as_a_hand_edit() {
+        let first = sync(&karabiner(), &compiled(1, &[]), &Sidecar::default()).unwrap();
+        let mut reordered = first.document.clone();
+        let block = &mut reordered["profiles"][0]["complex_modifications"]["rules"][1];
+        *block = json!({ "manipulators": block["manipulators"].clone(), "description": RULE_DESCRIPTION });
+        let second = sync(&reordered, &compiled(1, &[]), &first.sidecar).unwrap();
+        assert!(!second.edited_by_hand);
+        assert!(!second.changed);
+    }
+
+    #[test]
+    fn a_renamed_profile_still_gives_back_our_entries() {
+        let wanted = compiled(1, &[("caps_lock", "escape")]);
+        let first = sync(&karabiner(), &wanted, &Sidecar::default()).unwrap();
+        let mut renamed = first.document.clone();
+        renamed["profiles"][0]["name"] = json!("Work");
+        let second = sync(&renamed, &wanted, &first.sidecar).unwrap();
+        assert!(second.conflicts.is_empty());
+        let removed = remove(&renamed, &first.sidecar);
+        assert_eq!(
+            removed.document["profiles"][0]["simple_modifications"],
+            karabiner()["profiles"][0]["simple_modifications"]
+        );
+    }
+
+    #[test]
+    fn a_lost_record_is_reported_on_remove() {
+        let synced = sync(
+            &karabiner(),
+            &compiled(1, &[("caps_lock", "escape")]),
+            &Sidecar::default(),
+        )
+        .unwrap();
+        let removed = remove(&synced.document, &Sidecar::default());
+        assert!(removed.changed && removed.untracked);
+        assert!(!remove(&karabiner(), &Sidecar::default()).untracked);
     }
 
     #[test]

@@ -69,7 +69,7 @@ impl PlatformAdapter for Adapter {
         let store = karabiner::store::Store::locate()?;
         let removed = store.remove()?;
         Ok(CommandResult::success(karabiner::remove_summary(
-            removed,
+            &removed,
             store.config_path(),
         )))
     }
