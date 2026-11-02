@@ -14,6 +14,7 @@ pub(super) const TRUE: Bool = 1;
 pub(super) const CAPTURE_TO_SYS: u32 = 0;
 pub(super) const TRACKING_OUTPUT: u32 = 1;
 pub(super) const TRACKING_SCREEN: u32 = 2;
+pub(super) const BUFFER_FORMAT_NV12: u32 = 2;
 pub(super) const BUFFER_FORMAT_BGRA: u32 = 5;
 pub(super) const TOSYS_GRAB_NOWAIT: u32 = 1;
 pub(super) const OUTPUT_MAX: usize = 5;
@@ -202,10 +203,10 @@ pub(super) struct ToSysSetupParams {
 }
 
 impl ToSysSetupParams {
-    pub(super) fn new(buffer: *mut *mut c_void) -> Self {
+    pub(super) fn new(buffer: *mut *mut c_void, buffer_format: u32) -> Self {
         Self {
             version: struct_version::<Self>(3),
-            buffer_format: BUFFER_FORMAT_BGRA,
+            buffer_format,
             buffer,
             with_diff_map: 0,
             diff_map: std::ptr::null_mut(),
@@ -281,7 +282,7 @@ mod tests {
             (
                 size_of::<ToSysSetupParams>(),
                 48,
-                ToSysSetupParams::new(std::ptr::null_mut()).version,
+                ToSysSetupParams::new(std::ptr::null_mut(), BUFFER_FORMAT_NV12).version,
             ),
             (
                 size_of::<ToSysGrabFrameParams>(),
