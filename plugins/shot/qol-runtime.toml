@@ -7,3 +7,7 @@ poll_interval_ms = 5000
 [query.audio_sinks]
 description = "PulseAudio sinks or WASAPI outputs whose audio is recorded as system audio"
 poll_interval_ms = 5000
+
+[query.audio_apps]
+description = "Apps playing sound now through PipeWire, by the name they give their sound"
+poll_interval_ms = 5000

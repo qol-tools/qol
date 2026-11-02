@@ -71,6 +71,19 @@ default = "System default"
 [field.audio_system_device.option_pictures]
 default = "speaker-default"
 
+[field.audio_apps]
+type = "string_array"
+config_key = "audio.apps"
+label = "Apps to record"
+description = "With system audio off, recordings take the sound of only these apps, such as a game, and leave out Discord or a video. You still hear everything as usual. Start the app first so it shows up here. Needs PipeWire."
+section = "audio"
+platforms = ["linux"]
+placeholder = "No apps"
+default = []
+query = "audio_apps"
+lookup_label = "apps"
+card_description = "The apps whose sound recordings capture."
+
 [section.video]
 label = "Video"
 description = "Encoding defaults for the recording output."

@@ -18,6 +18,7 @@ fn query_options(query: &str) -> Result<serde_json::Value, String> {
     let devices = match query {
         "audio_sources" => crate::platform::list_audio_sources(),
         "audio_sinks" => crate::platform::list_audio_sinks(),
+        "audio_apps" => crate::platform::list_audio_apps(),
         _ => Vec::new(),
     };
     Ok(serde_json::json!(devices))

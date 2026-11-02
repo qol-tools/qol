@@ -13,6 +13,7 @@ use crate::capture::space::CaptureKind;
 use crate::ui::region_selector::{DetectedTarget, SnapshotTargets};
 use crate::{Monitor, Rect};
 
+mod app_audio;
 mod clipboard;
 mod display;
 mod nvfbc;
@@ -36,8 +37,8 @@ pub use recording::{
 };
 use system::resolve_command;
 pub use system::{
-    external_services_check, list_audio_sinks, list_audio_sources, platform_supported_check,
-    required_binaries_check,
+    external_services_check, list_audio_apps, list_audio_sinks, list_audio_sources,
+    platform_supported_check, required_binaries_check,
 };
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,
@@ -124,7 +125,7 @@ pub fn after_pin_open(title: &str) {
 }
 
 pub fn run_internal_mode() -> Option<std::process::ExitCode> {
-    recording::run_internal_capture_helper()
+    recording::run_internal_capture_helper().or_else(app_audio::run_internal_helper)
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
