@@ -56,6 +56,7 @@ const BAND_ROWS = 3
 const FORK_COLORS: readonly string[] = ['#f47067', '#f69d50', '#daaa3f', '#57ab5a', '#39c5cf', '#539bf5', '#b083f0', '#e275ad']
 const RESUMED_SUMMARY =/^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
+const USER_STOP = 'killed'
 const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back after the switchboard restart.'
 const FORK_TO_FORK =
@@ -232,6 +233,8 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
   return [...carried, ...kept].slice(-KEEP)
 }
 
+const unstopped = ({ isStoppedByUser: _, ...entry }: Entry): Entry => entry
+
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string): Promise<void> => {
   const now = await $.clock.now()
   const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }) }
@@ -239,7 +242,7 @@ const markWorking = async ($: EngineInterface, agentId: string, name: string | u
     upsert(list, agentId, entry =>
       entry === undefined
         ? { agentId, name: name ?? agentId, headline: '', report: '', at: now, isWorking: true, isDismissed: false, ...placed }
-        : { ...entry, name: name || entry.name, at: now, isWorking: true, isDismissed: false, ...placed },
+        : { ...unstopped(entry), name: name || entry.name, at: now, isWorking: true, isDismissed: false, ...placed },
     ),
   )
 }
@@ -403,6 +406,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
         at: isSame ? entry.at : now,
         isWorking: false,
         isDismissed: isSame ? entry.isDismissed : false,
+        ...(report.status === USER_STOP ? { isStoppedByUser: true } : {}),
       }
       return filed
     }),
@@ -649,7 +653,9 @@ export const wakeForks = async ($: EngineInterface): Promise<void> => {
   if (!Number.isFinite(launched) || (await $.clock.now()) - launched > WAKE_FRESH_MS) return
   if (wake.conversation !== (await $.session.id())) return
   await $.fs.write(path, JSON.stringify({ ...wake, claimed: true }))
-  for (const fork of wake.forks) await reach($, fork.agent_id, fork.name ?? fork.description, fork.cwd ?? undefined, fork.message).catch(() => undefined)
+  const list = await read($, board)
+  const woken = wake.forks.filter(fork => addressed(list, fork.agent_id)?.isStoppedByUser !== true)
+  for (const fork of woken) await reach($, fork.agent_id, fork.name ?? fork.description, fork.cwd ?? undefined, fork.message).catch(() => undefined)
 }
 
 const once = (text: string, needle: string): boolean => text.indexOf(needle) !== -1 && text.indexOf(needle) === text.lastIndexOf(needle)

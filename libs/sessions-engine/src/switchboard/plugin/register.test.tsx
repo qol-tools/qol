@@ -786,6 +786,34 @@ test('a fork woken only to hold again keeps its last report on the board and sta
   expect(listed).not.toContain('working')
 })
 
+const killed = (agentId: string, name: string) =>
+  `<task-notification>\n<task-id>${agentId}</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>killed</status>\n<summary>Agent "${name}" was stopped by user</summary>\n<note>A task-notification fires each time this agent stops.</note>\n</task-notification>`
+
+test('a restart never wakes a fork the user stopped, until the user brings it back', async ($, on) => {
+  const sent: any[] = []
+  const written: string[] = []
+  const wake = {
+    conversation: 'earlier-session',
+    launched_at: new Date(1_800_000_000_000 - 5_000).toISOString(),
+    forks: [wakeFork('s1', 'Continue.'), wakeFork('s2', 'Continue.'), wakeFork('m1', 'Continue.')],
+  }
+  wakeEngine(on, wake, sent, [], written)
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent).toHaveLength(0)
+  for (const id of ['s1', 's2', 'm1']) await spawn($, id, `${id}-fork: a fork`)
+  for (const id of ['s1', 's2']) expect((await typed($, killed(id, `${id}-fork: a fork`), 'task-notification')).drop).toBe(`${id}-fork`)
+  await typed($, notification('m1', 'm1-fork: a fork', 'Working on it.'), 'task-notification')
+  await $.turn.start({ turnId: 't1', agentId: 's2' } as any)
+
+  wake.conversation = 'switchboard-session'
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(sent.map(one => one.to)).toEqual(['s2', 'm1'])
+  expect(JSON.parse(written.at(-1) as string).claimed).toBe(true)
+})
+
 test('a wake with no fork to bring back is still claimed, so the next launch counts this one', async ($, on) => {
   const sent: any[] = []
   const written: string[] = []

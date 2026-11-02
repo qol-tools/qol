@@ -14,6 +14,7 @@ export type Entry = {
   successor?: string
   launcher?: string
   resumedFrom?: string
+  isStoppedByUser?: boolean
 }
 
 export type Pull = {
