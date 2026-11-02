@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 
@@ -15,6 +15,7 @@ use crate::platform::macos::input::{BackendId, InputState};
 use crate::platform::macos::layout::LayoutSnapshot;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
+const RELOAD_SETTLE: Duration = Duration::from_secs(1);
 
 pub(crate) trait Karabiner {
     fn probe(&self) -> Probe;
@@ -22,6 +23,7 @@ pub(crate) trait Karabiner {
     fn remove(&self) -> Result<()>;
     fn set_active(&self, active: bool) -> Result<()>;
     fn system_modifier_keys(&self) -> Vec<DeviceModifiers>;
+    fn config_modified(&self) -> Option<SystemTime>;
 }
 
 pub(crate) struct Installed(pub(crate) Store);
@@ -46,6 +48,12 @@ impl Karabiner for Installed {
     fn system_modifier_keys(&self) -> Vec<DeviceModifiers> {
         system_modifier_keys::read()
     }
+
+    fn config_modified(&self) -> Option<SystemTime> {
+        std::fs::metadata(self.0.config_path())
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -60,6 +68,7 @@ enum State {
         layout: String,
         enabled: bool,
         system_keys: Vec<DeviceModifiers>,
+        set_after: Option<SystemTime>,
         next_probe: Instant,
     },
 }
@@ -215,6 +224,7 @@ impl<K: Karabiner> Backend<K> {
             layout: layout.id.clone(),
             enabled: config.enabled,
             system_keys: compiled.device_modifications,
+            set_after: None,
             next_probe: now + PROBE_INTERVAL,
         };
     }
@@ -253,9 +263,11 @@ impl<K: Karabiner> Backend<K> {
             };
             return;
         }
+        let modified = self.karabiner.config_modified();
         let State::Active {
             core_pid,
             enabled,
+            set_after,
             next_probe,
             ..
         } = &mut self.state
@@ -263,15 +275,24 @@ impl<K: Karabiner> Backend<K> {
             return;
         };
         *next_probe = now + PROBE_INTERVAL;
-        if probe.core_pid != *core_pid {
-            *core_pid = probe.core_pid;
+        let restarted = probe.core_pid != *core_pid;
+        if !restarted && modified == *set_after {
+            return;
+        }
+        if restarted {
             log::info!("Karabiner-Elements restarted; setting the Key Remap variable again");
-            match self.karabiner.set_active(config.enabled) {
-                Ok(()) => *enabled = config.enabled,
-                Err(error) => {
-                    *enabled = !config.enabled;
-                    self.report("turning on", Err(error));
+        }
+        *core_pid = probe.core_pid;
+        match self.karabiner.set_active(config.enabled) {
+            Ok(()) => {
+                *enabled = config.enabled;
+                if modified.is_none_or(settled) {
+                    *set_after = modified;
                 }
+            }
+            Err(error) => {
+                *enabled = !config.enabled;
+                self.report("turning on", Err(error));
             }
         }
     }
@@ -338,6 +359,12 @@ impl<K: Karabiner> Backend<K> {
     }
 }
 
+fn settled(modified: SystemTime) -> bool {
+    SystemTime::now()
+        .duration_since(modified)
+        .is_ok_and(|age| age >= RELOAD_SETTLE)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -357,6 +384,7 @@ mod tests {
         probe: Rc<RefCell<Option<Probe>>>,
         cli_fails: Rc<std::cell::Cell<bool>>,
         system_keys: Rc<RefCell<Vec<DeviceModifiers>>>,
+        modified: Rc<std::cell::Cell<Option<SystemTime>>>,
     }
 
     impl Fake {
@@ -419,6 +447,10 @@ mod tests {
 
         fn system_modifier_keys(&self) -> Vec<DeviceModifiers> {
             self.system_keys.borrow().clone()
+        }
+
+        fn config_modified(&self) -> Option<SystemTime> {
+            self.modified.get()
         }
     }
 
@@ -723,6 +755,42 @@ mod tests {
             &input,
             start + PROBE_INTERVAL * 6,
         );
+        assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn a_karabiner_json_reload_gets_the_variable_set_again_once_it_settles() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+        let tick = |backend: &mut Backend<Fake>, n: u32| {
+            backend.idle_at(
+                &config(true),
+                &layout("us"),
+                &input,
+                start + PROBE_INTERVAL * n,
+            );
+        };
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        fake.take();
+
+        fake.modified
+            .set(Some(SystemTime::now() + Duration::from_secs(3600)));
+        tick(&mut backend, 2);
+        assert_eq!(fake.take(), vec!["active true"]);
+        tick(&mut backend, 4);
+        assert_eq!(
+            fake.take(),
+            vec!["active true"],
+            "not settled yet, so it is set again"
+        );
+
+        fake.modified.set(Some(SystemTime::UNIX_EPOCH));
+        tick(&mut backend, 6);
+        assert_eq!(fake.take(), vec!["active true"]);
+        tick(&mut backend, 8);
         assert!(fake.take().is_empty());
     }
 }
