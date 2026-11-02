@@ -421,10 +421,39 @@ fn runtime_monitor_rects() -> Vec<Rect> {
 }
 
 fn x11_stacked_window_rects(include_frame: bool) -> Vec<Rect> {
-    x11_stacked_window_rects_impl(include_frame).unwrap_or_default()
+    x11_stacked_windows(include_frame)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect()
 }
 
-fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
+fn window_process_at(x: i32, y: i32) -> Option<u32> {
+    let (window, _) = x11_stacked_windows(false)?.into_iter().find(|(_, rect)| {
+        x >= rect.x && y >= rect.y && x < rect.x + rect.w && y < rect.y + rect.h
+    })?;
+    x11_window_pid(window)
+}
+
+fn x11_window_pid(window: u32) -> Option<u32> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+
+    let (conn, _) = x11rb::connect(None).ok()?;
+    let pid_atom = conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    conn.get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()?
+        .reply()
+        .ok()?
+        .value32()?
+        .next()
+}
+
+fn x11_stacked_windows(include_frame: bool) -> Option<Vec<(u32, Rect)>> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
@@ -528,7 +557,7 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
         if include_frame {
             rect = framed_rect(rect, extents(id, net_frame), extents(id, gtk_frame));
         }
-        rects.push(rect);
+        rects.push((id, rect));
     }
     qol_runtime::probe!(
         "SHOT_SELECT_DISCOVERY",

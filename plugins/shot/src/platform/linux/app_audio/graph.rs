@@ -10,6 +10,7 @@ struct Node {
     serial: Option<u64>,
     name: Option<String>,
     app: Option<String>,
+    pid: Option<u32>,
     class: Option<String>,
 }
 
@@ -65,6 +66,7 @@ impl Graph {
                     serial: serial(props),
                     name: text(props, "node.name"),
                     app: text(props, "application.name"),
+                    pid: number(props, "application.process.id"),
                     class: text(props, "media.class"),
                 }),
                 Some("PipeWire:Interface:Port") => {
@@ -136,7 +138,11 @@ impl Graph {
             .any(|port| port.node == node && port.is_playback_input())
     }
 
-    pub(super) fn missing_links(&self, apps: &[String], sink: u32) -> Vec<(u32, u32)> {
+    pub(super) fn missing_links(
+        &self,
+        sink: u32,
+        chosen: impl Fn(Option<&str>, Option<u32>) -> bool,
+    ) -> Vec<(u32, u32)> {
         let inputs = self
             .ports
             .iter()
@@ -146,10 +152,7 @@ impl Graph {
             .nodes
             .iter()
             .filter(|node| node.is_app_stream())
-            .filter(|node| {
-                node.app_name()
-                    .is_some_and(|name| apps.iter().any(|app| app == name))
-            })
+            .filter(|node| chosen(node.app_name(), node.pid))
             .map(|node| node.id)
             .collect::<HashSet<_>>();
         let mut missing = Vec::new();
@@ -214,8 +217,12 @@ mod tests {
     use super::{sink_channels, Graph};
 
     fn node(id: u32, name: &str, app: Option<&str>, class: &str) -> serde_json::Value {
-        let mut props =
-            json!({ "node.name": name, "media.class": class, "object.serial": id + 1000 });
+        let mut props = json!({
+            "node.name": name,
+            "media.class": class,
+            "object.serial": id + 1000,
+            "application.process.id": (id + 5000).to_string()
+        });
         if let Some(app) = app {
             props["application.name"] = json!(app);
         }
@@ -289,9 +296,12 @@ mod tests {
             (&["Firefox"], vec![]),
         ];
         for (apps, expected) in cases {
-            let apps = apps.iter().map(|app| app.to_string()).collect::<Vec<_>>();
-            assert_eq!(graph.missing_links(&apps, 50), expected, "{apps:?}");
+            let links =
+                graph.missing_links(50, |name, _| name.is_some_and(|name| apps.contains(&name)));
+            assert_eq!(links, expected, "{apps:?}");
         }
+        let by_process = graph.missing_links(50, |_, pid| pid == Some(5030));
+        assert_eq!(by_process, [(31, 51)]);
     }
 
     #[test]

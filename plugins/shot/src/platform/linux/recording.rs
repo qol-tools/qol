@@ -150,7 +150,8 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
-    let tap = super::app_audio::Tap::open(config).context("failed to record the chosen apps")?;
+    let tap =
+        super::app_audio::Tap::open(config, rect).context("failed to record the chosen apps")?;
     let started = start_backend(rect, config, output_file);
     match (tap, &started) {
         (Some(tap), Ok(session)) => tap.keep(session),
@@ -1235,6 +1236,9 @@ mod tests {
             config.audio.inputs = inputs.iter().map(|input| (*input).to_string()).collect();
             config.audio.apps = apps.iter().map(|app| (*app).to_string()).collect();
             assert_eq!(audio_inputs(&config), expected, "{inputs:?} {apps:?}");
+            config.audio.apps.clear();
+            config.audio.on_screen_app = !apps.is_empty();
+            assert_eq!(audio_inputs(&config), expected, "on screen {inputs:?}");
         }
     }
 
