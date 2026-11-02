@@ -374,6 +374,13 @@ const isSent = (answer: { deny?: string; isError?: true; result?: unknown }): bo
   answer.isError !== true &&
   !(typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)
 
+const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom'> => ({
+  ...(entry?.project === undefined ? {} : { project: entry.project }),
+  ...(entry?.successor === undefined ? {} : { successor: entry.successor }),
+  ...(entry?.launcher === undefined ? {} : { launcher: entry.launcher }),
+  ...(entry?.resumedFrom === undefined ? {} : { resumedFrom: entry.resumedFrom }),
+})
+
 const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   const filing: Filing =
     report.filing ??
@@ -388,6 +395,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
       const isSame = entry !== undefined && entry.kind !== undefined && entry.report === clip(report.report, REPORT_CHARS)
       isNew = !isSame
       filed = {
+        ...placementOf(entry),
         agentId: report.agentId,
         name: report.name || entry?.name || report.agentId,
         ...filing,
@@ -698,6 +706,28 @@ const pullNote = (all: readonly Pull[], agentId: string): string => {
   return own.length === 0 ? '' : ` [${own.map(pullText).join('; ')}]`
 }
 
+const metaLauncher = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
+  const path = await subagentFile($, agentId, '.meta.json')
+  if (path === undefined) return undefined
+  const meta = JSON.parse(String(await $.fs.read(path))) as { parentAgentId?: unknown }
+  return typeof meta.parentAgentId === 'string' && ID.test(meta.parentAgentId) ? meta.parentAgentId : undefined
+}
+
+const withLaunchers = ($: EngineInterface, list: Entry[]): Promise<Entry[]> =>
+  Promise.all(
+    list.map(async entry => {
+      if (entry.launcher !== undefined) return entry
+      const launcher = await metaLauncher($, entry.agentId).catch(() => undefined)
+      return launcher === undefined ? entry : { ...entry, launcher }
+    }),
+  )
+
+const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
+  if (entry.launcher === undefined) return undefined
+  const parent = list.find(one => one.agentId === entry.launcher)
+  return parent === undefined ? `the fork ${entry.launcher}` : keyName(parent.name)
+}
+
 export const readText = (list: Entry[], fork: string | undefined, all: readonly Pull[] = []): string => {
   if (fork !== undefined && fork.trim() !== '') {
     const wanted = fork.trim()
@@ -705,12 +735,18 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     if (entry === undefined) return `No fork board row for ${wanted}.`
     const own = pullsOf(all, entry.agentId)
     const prs = own.length === 0 ? '' : `\npull requests: ${own.map(pull => `${pullText(pull)} ${pull.pullRequest}`).join('; ')}`
-    return `${boardLine(entry)}\nagent id: ${entry.agentId}${prs}\n\n${entry.report || '(no report yet)'}`
+    const under = listedUnder(list, entry)
+    const place = under === undefined ? '' : `\nagent list: under ${under}, the fork that started it, not at the top level`
+    return `${boardLine(entry)}\nagent id: ${entry.agentId}${place}${prs}\n\n${entry.report || '(no report yet)'}`
   }
   const shown = list.filter(entry => !entry.isDismissed)
   if (shown.length === 0) return 'The fork board is empty.'
   return shown
-    .map(entry => `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId})${pullNote(all, entry.agentId)}`)
+    .map(entry => {
+      const under = listedUnder(list, entry)
+      const place = under === undefined ? '' : `, listed under ${under}`
+      return `${entry.isWorking ? `[fork board] ${keyName(entry.name)}` : boardLine(entry)} (${stateOf(entry)}, agent id ${entry.agentId}${place})${pullNote(all, entry.agentId)}`
+    })
     .join('\n')
 }
 
@@ -799,7 +835,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -896,7 +932,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
-    return { result: readText(await read($, board), fork, await read($, pulls)) }
+    return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
