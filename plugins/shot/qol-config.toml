@@ -91,7 +91,7 @@ placeholder = "No apps"
 default = []
 query = "audio_apps"
 lookup_label = "apps"
-card_description = "The apps whose sound recordings capture."
+card_description = "Apps recordings always capture."
 
 [section.video]
 label = "Video"
