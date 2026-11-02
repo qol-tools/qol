@@ -588,8 +588,7 @@ mod tests {
         assert_eq!(meta["description"], "kcd2-hips: aim the light");
         assert_eq!(
             meta[RESUMED_FROM],
-            fs::canonicalize(&source)
-                .unwrap()
+            qol_platform::windows_path::strip_verbatim(fs::canonicalize(&source).unwrap())
                 .to_string_lossy()
                 .as_ref()
         );
