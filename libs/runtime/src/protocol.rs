@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use qol_connection_health::ConnectionHealth;
 use serde::{Deserialize, Serialize};
 
+use crate::hotkey_relay::HotkeyCombo;
 use crate::MonitorBounds;
 
 pub use crate::client::peers::PeerAdminClientError;
@@ -184,6 +185,7 @@ pub enum RuntimeEventKind {
     ConnectionHealthChanged,
     CursorMoved,
     FocusChanged,
+    HotkeysChanged,
     LauncherAppsSynced,
     MonitorsChanged,
     WindowListChanged,
@@ -209,6 +211,12 @@ pub enum RuntimeEvent {
         monitor: Option<MonitorBounds>,
         #[serde(default)]
         window_id: Option<u32>,
+    },
+    HotkeysChanged {
+        #[serde(default)]
+        hotkeys: Vec<HotkeyCombo>,
+        #[serde(default)]
+        relay: Option<PathBuf>,
     },
     LauncherAppsSynced {
         #[serde(default)]

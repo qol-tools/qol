@@ -143,6 +143,7 @@ fn event_kind(event: &RuntimeEvent) -> RuntimeEventKind {
         RuntimeEvent::ConnectionHealthChanged { .. } => RuntimeEventKind::ConnectionHealthChanged,
         RuntimeEvent::CursorMoved { .. } => RuntimeEventKind::CursorMoved,
         RuntimeEvent::FocusChanged { .. } => RuntimeEventKind::FocusChanged,
+        RuntimeEvent::HotkeysChanged { .. } => RuntimeEventKind::HotkeysChanged,
         RuntimeEvent::LauncherAppsSynced { .. } => RuntimeEventKind::LauncherAppsSynced,
         RuntimeEvent::MonitorsChanged { .. } => RuntimeEventKind::MonitorsChanged,
         RuntimeEvent::WindowListChanged => RuntimeEventKind::WindowListChanged,
@@ -253,6 +254,13 @@ mod tests {
             ),
             (cursor_moved(1.0, 2.0), RuntimeEventKind::CursorMoved),
             (focus_changed(), RuntimeEventKind::FocusChanged),
+            (
+                RuntimeEvent::HotkeysChanged {
+                    hotkeys: Vec::new(),
+                    relay: None,
+                },
+                RuntimeEventKind::HotkeysChanged,
+            ),
             (launcher_apps_synced(), RuntimeEventKind::LauncherAppsSynced),
             (monitors_changed(), RuntimeEventKind::MonitorsChanged),
             (window_list_changed(), RuntimeEventKind::WindowListChanged),
@@ -312,6 +320,11 @@ mod tests {
             (
                 "window list has its own thread",
                 &[RuntimeEventKind::WindowListChanged],
+                false,
+            ),
+            (
+                "hotkeys are published on reload",
+                &[RuntimeEventKind::HotkeysChanged],
                 false,
             ),
             (

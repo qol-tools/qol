@@ -9,7 +9,7 @@ mod secure_input;
 mod tap;
 mod virtual_hid;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use qol_headless::{CommandResult, DoctorCheckResult};
 
 use super::engine::{self, config, remap};
@@ -126,8 +126,13 @@ impl PlatformAdapter for Adapter {
 fn compiled_rules() -> Result<karabiner::compile::Compiled> {
     let snapshot = layout::LayoutSnapshot::read_current()?;
     let resolved = remap::resolve(&config::load_config());
+    let hotkeys = karabiner::hotkeys::from_tray().context(
+        "qol-tray did not send its hotkeys; start qol-tray so they go into Karabiner-Elements with the rules",
+    )?;
+    let physical = snapshot.physical;
     Ok(karabiner::compile::compile(&resolved, &snapshot)
-        .with_system_modifier_keys(karabiner::system_modifier_keys::read()))
+        .with_system_modifier_keys(karabiner::system_modifier_keys::read())
+        .with_hotkeys(&hotkeys, physical))
 }
 
 fn selected_backend(helper: &Probe<doctor::HelperState>) -> Selection {

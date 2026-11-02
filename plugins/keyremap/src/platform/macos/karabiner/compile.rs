@@ -1,5 +1,7 @@
+use qol_hotkeys::macos_keycode::PhysicalLayout;
 use serde_json::{json, Value};
 
+use super::hotkeys::Hotkeys;
 use super::key_codes;
 use super::system_modifier_keys::DeviceModifiers;
 use crate::platform::engine::config::{ModifierKeys, ModifierTarget};
@@ -20,6 +22,15 @@ pub(crate) struct Compiled {
 impl Compiled {
     pub(crate) fn with_system_modifier_keys(mut self, devices: Vec<DeviceModifiers>) -> Self {
         self.device_modifications = devices;
+        self
+    }
+
+    pub(crate) fn with_hotkeys(mut self, hotkeys: &Hotkeys, physical: PhysicalLayout) -> Self {
+        let (manipulators, gaps) = hotkeys.manipulators(physical);
+        if let Some(all) = self.rule["manipulators"].as_array_mut() {
+            all.extend(manipulators);
+        }
+        self.gaps.extend(gaps);
         self
     }
 }
