@@ -204,6 +204,30 @@ test('a resumed fork never reaches the switchboard model, a stranger resumed sti
   expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'composer')).drop).toBeUndefined()
 })
 
+const notice = async ($: any, text: string) => {
+  const stored = await $.session.append({
+    message: { type: 'system', content: [{ type: 'text', text }] },
+    door: 'notice',
+    origin: { kind: 'engine' },
+    uuid: `notice-${Math.random()}`,
+  })
+  return stored.message.content.map((block: { text?: string }) => block.text ?? '').join('')
+}
+
+test("the switchboard's own dropped prompts show without the hook prefix, other notices pass unchanged", async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged.'), 'task-notification')
+  expect(dropped.drop).toBe('quiet-fork: Pull request #9 merged.')
+  const foreign = 'Prompt dropped by a hook: some other plugin said no'
+  expect(await notice($, foreign)).toBe(foreign)
+  expect(await notice($, 'Prompt dropped by a hook: quiet-fork: Pull request #9 merged.')).toBe('quiet-fork: Pull request #9 merged.')
+  expect(await notice($, 'Prompt dropped by a hook: quiet-fork: Pull request #9 merged.')).toBe('Prompt dropped by a hook: quiet-fork: Pull request #9 merged.')
+  const toggled = await typed($, 'qols board')
+  expect(await notice($, `Prompt dropped by a hook: ${toggled.drop}`)).toBe(toggled.drop)
+})
+
 test('notifications of other background tasks and plain agent messages pass unchanged', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
