@@ -107,7 +107,7 @@ pub(crate) fn follow(mut changed: impl FnMut(Hotkeys) + Send + 'static) {
     }
 }
 
-pub(crate) fn from_tray() -> Hotkeys {
+pub(crate) fn from_tray() -> Option<Hotkeys> {
     let (tx, rx) = mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("keyremap-hotkeys-snapshot".into())
@@ -118,10 +118,7 @@ pub(crate) fn from_tray() -> Hotkeys {
                 .and_then(|subscription| subscription.events().find_map(Hotkeys::from_event));
             let _ = tx.send(first);
         });
-    rx.recv_timeout(SNAPSHOT_WAIT)
-        .ok()
-        .flatten()
-        .unwrap_or_default()
+    rx.recv_timeout(SNAPSHOT_WAIT).ok().flatten()
 }
 
 #[cfg(test)]
