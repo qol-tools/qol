@@ -37,7 +37,7 @@ extern "C" {
 
 use super::app_tracker::AppTracker;
 use super::input::backends::event_tap::{self, build_flags, extract_modifiers};
-use super::input::{InputState, Strategy};
+use super::input::InputState;
 use crate::platform::engine::remap::{
     self, MouseAction, MouseButton, ResolvedConfig, ScrollAction,
 };
@@ -85,7 +85,7 @@ impl TapState {
     }
 }
 
-impl super::input::backends::virtual_hid::KeyEnvironment for TapState {
+impl super::input::backends::hid_helper::KeyEnvironment for TapState {
     fn config(&self) -> Arc<ResolvedConfig> {
         TapState::config(self)
     }
@@ -322,7 +322,7 @@ fn stamp_virtual_key(
     event_type: CGEventType,
     event: &core_graphics::event::CGEvent,
 ) -> CallbackResult {
-    if state.input.strategy.get() != Strategy::VirtualHid || !state.config().enabled {
+    if !state.input.backend.get().capabilities().owns_key_events || !state.config().enabled {
         return CallbackResult::Keep;
     }
     event_tap::stamp_marker(
@@ -357,12 +357,13 @@ fn handle_event(
     let bundle_id = state.app_tracker.bundle_id_for_target(target_pid);
 
     match event_type {
-        CGEventType::KeyDown | CGEventType::KeyUp => match state.input.strategy.get() {
-            Strategy::EventTap => {
+        CGEventType::KeyDown | CGEventType::KeyUp => {
+            if state.input.backend.get().capabilities().owns_key_events {
+                CallbackResult::Keep
+            } else {
                 event_tap::handle_key_event(config.as_ref(), event, target_pid, &bundle_id)
             }
-            Strategy::VirtualHid => CallbackResult::Keep,
-        },
+        }
         CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => {
             handle_mouse_event(config.as_ref(), event, MouseButton::Left, &bundle_id)
         }

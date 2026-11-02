@@ -236,7 +236,7 @@ where
         ),
         DoctorCheck::new(
             "secure_input",
-            "Report which app holds Secure Input and which key strategy is active.",
+            "Report which app holds Secure Input and which key backend is active.",
             move || {
                 supported_or(
                     &secure,

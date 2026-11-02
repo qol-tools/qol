@@ -5,6 +5,7 @@ use qol_plugin_api::manifest::{parse_version, PluginManifest, SystemDependency};
 pub(crate) use qol_platform::SecureInputHolder;
 
 use crate::cli::PLUGIN_ID;
+use crate::platform::macos::input::BackendId;
 
 const MANIFEST: &str = include_str!("../../../plugin.toml");
 const DRIVER_NAME: &str = "Karabiner-DriverKit-VirtualHIDDevice";
@@ -211,23 +212,23 @@ pub(super) fn secure_input_result(
     helper: &Probe<HelperState>,
 ) -> DoctorCheckResult {
     let id = "secure_input";
-    let virtual_hid = matches!(
+    let backend = if matches!(
         helper,
         Probe::Known(HelperState::Running(report)) if !report.seized.is_empty()
-    );
-    let strategy = if virtual_hid {
-        "virtual_hid"
+    ) {
+        BackendId::HidHelper
     } else {
-        "event_tap"
+        BackendId::EventTap
     };
+    let label = backend.label();
     match holder {
         Probe::Unknown(reason) => unknown(id, reason),
         Probe::Known(None) => DoctorCheckResult::ok(
             id,
-            format!("No app holds Secure Input. Key input strategy: {strategy}."),
+            format!("No app holds Secure Input. Key backend: {label}."),
         ),
         Probe::Known(Some(holder)) => {
-            let paused = if virtual_hid {
+            let paused = if backend.capabilities().survives_secure_input {
                 "qol hotkeys are paused"
             } else {
                 "Key Remap and qol hotkeys are paused"
@@ -235,7 +236,7 @@ pub(super) fn secure_input_result(
             DoctorCheckResult::warn(
                 id,
                 format!(
-                    "{} (pid {}) holds Secure Input, so {paused}. Key input strategy: {strategy}.",
+                    "{} (pid {}) holds Secure Input, so {paused}. Key backend: {label}.",
                     holder.app, holder.pid
                 ),
             )
@@ -364,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn secure_input_names_the_app_and_the_strategy() {
+    fn secure_input_names_the_app_and_the_backend() {
         let helper = Probe::Known(HelperState::NotRunning);
         let result = secure_input_result(
             &Probe::Known(Some(SecureInputHolder {

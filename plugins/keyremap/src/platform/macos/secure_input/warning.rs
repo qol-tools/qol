@@ -1,5 +1,5 @@
 use crate::platform::macos::doctor::SecureInputHolder;
-use crate::platform::macos::input::Strategy;
+use crate::platform::macos::input::BackendId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Toast {
@@ -16,7 +16,7 @@ impl SecureInputWatch {
     pub(crate) fn observe(
         &mut self,
         holder: Option<&SecureInputHolder>,
-        strategy: Strategy,
+        backend: BackendId,
     ) -> Option<Toast> {
         let Some(holder) = holder else {
             self.warned_for = None;
@@ -26,27 +26,29 @@ impl SecureInputWatch {
             return None;
         }
         self.warned_for = Some(holder.pid);
-        Some(toast(holder, strategy))
+        Some(toast(holder, backend))
     }
 }
 
-pub(crate) fn toast(holder: &SecureInputHolder, strategy: Strategy) -> Toast {
+pub(crate) fn toast(holder: &SecureInputHolder, backend: BackendId) -> Toast {
     let app = &holder.app;
-    match strategy {
-        Strategy::EventTap => Toast {
-            title: format!("Key Remap and qol hotkeys are paused: {app} has turned on Secure Input."),
+    if !backend.capabilities().survives_secure_input {
+        return Toast {
+            title: format!(
+                "Key Remap and qol hotkeys are paused: {app} has turned on Secure Input."
+            ),
             body: format!(
                 "Quit {app} or turn off its secure keyboard entry to get them back. \
 Installing the virtual keyboard driver keeps Key Remap working through this; \
 qol-keyremap doctor shows the steps."
             ),
-        },
-        Strategy::VirtualHid => Toast {
-            title: format!("qol hotkeys are paused: {app} has turned on Secure Input."),
-            body: format!(
-                "Key Remap keeps working. Quit {app} or turn off its secure keyboard entry to get qol hotkeys back."
-            ),
-        },
+        };
+    }
+    Toast {
+        title: format!("qol hotkeys are paused: {app} has turned on Secure Input."),
+        body: format!(
+            "Key Remap keeps working. Quit {app} or turn off its secure keyboard entry to get qol hotkeys back."
+        ),
     }
 }
 
@@ -71,32 +73,32 @@ mod tests {
     #[test]
     fn warns_once_per_episode() {
         let mut watch = SecureInputWatch::default();
-        assert!(watch.observe(Some(&kitty()), Strategy::EventTap).is_some());
-        assert!(watch.observe(Some(&kitty()), Strategy::EventTap).is_none());
+        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_some());
+        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_none());
         assert!(watch
-            .observe(Some(&kitty()), Strategy::VirtualHid)
+            .observe(Some(&kitty()), BackendId::HidHelper)
             .is_none());
     }
 
     #[test]
     fn a_new_holder_starts_a_new_episode() {
         let mut watch = SecureInputWatch::default();
-        watch.observe(Some(&kitty()), Strategy::EventTap);
-        let toast = watch.observe(Some(&teams()), Strategy::EventTap).unwrap();
+        watch.observe(Some(&kitty()), BackendId::EventTap);
+        let toast = watch.observe(Some(&teams()), BackendId::EventTap).unwrap();
         assert!(toast.title.contains("Microsoft Teams"));
     }
 
     #[test]
     fn secure_input_turning_off_ends_the_episode() {
         let mut watch = SecureInputWatch::default();
-        watch.observe(Some(&kitty()), Strategy::EventTap);
-        assert!(watch.observe(None, Strategy::EventTap).is_none());
-        assert!(watch.observe(Some(&kitty()), Strategy::EventTap).is_some());
+        watch.observe(Some(&kitty()), BackendId::EventTap);
+        assert!(watch.observe(None, BackendId::EventTap).is_none());
+        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_some());
     }
 
     #[test]
     fn the_event_tap_text_says_key_remap_is_paused() {
-        let toast = toast(&kitty(), Strategy::EventTap);
+        let toast = toast(&kitty(), BackendId::EventTap);
         assert_eq!(
             toast.title,
             "Key Remap and qol hotkeys are paused: kitty has turned on Secure Input."
@@ -107,7 +109,7 @@ mod tests {
 
     #[test]
     fn the_virtual_hid_text_says_key_remap_keeps_working() {
-        let toast = toast(&kitty(), Strategy::VirtualHid);
+        let toast = toast(&kitty(), BackendId::HidHelper);
         assert_eq!(
             toast.title,
             "qol hotkeys are paused: kitty has turned on Secure Input."

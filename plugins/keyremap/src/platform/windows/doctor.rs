@@ -85,15 +85,15 @@ fn elevation_result(elevated: Option<bool>) -> DoctorCheckResult {
     match elevated {
         Some(true) => DoctorCheckResult::ok(
             id,
-            "Windows has no Secure Input, and Key Remap runs as administrator, so it reaches every window. Key input strategy: low_level_hook.",
+            "Windows has no Secure Input, and Key Remap runs as administrator, so it reaches every window. Key backend: low_level_hook.",
         ),
         Some(false) => DoctorCheckResult::ok(
             id,
-            "Windows has no Secure Input. Windows that run as administrator keep their original keys while Key Remap runs without elevation. Key input strategy: low_level_hook.",
+            "Windows has no Secure Input. Windows that run as administrator keep their original keys while Key Remap runs without elevation. Key backend: low_level_hook.",
         ),
         None => DoctorCheckResult::warn(
             id,
-            "Could not tell whether Key Remap runs as administrator. Key input strategy: low_level_hook.",
+            "Could not tell whether Key Remap runs as administrator. Key backend: low_level_hook.",
         ),
     }
 }
@@ -105,7 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn elevation_maps_to_a_status_that_names_the_strategy() {
+    fn elevation_maps_to_a_status_that_names_the_backend() {
         let cases = [
             (Some(true), DoctorStatus::Ok, "every window"),
             (Some(false), DoctorStatus::Ok, "run as administrator"),

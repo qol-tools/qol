@@ -1,2 +1,2 @@
 pub(crate) mod event_tap;
-pub(crate) mod virtual_hid;
+pub(crate) mod hid_helper;
