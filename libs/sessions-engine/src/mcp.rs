@@ -594,7 +594,9 @@ impl McpSessionServer {
             let row =
                 super::contract::session_row(session, &binding, &descriptor, assignment.as_ref());
             let linked = prs.of(&forks, &row.session, row.key.as_deref());
-            let row = row.with_links(self.interpreter.remote_control_url(session), linked);
+            let row = row
+                .with_links(self.interpreter.remote_control_url(session), linked)
+                .with_transcript(self.interpreter.conversation_transcript(session));
             let (parent, counts) = match row.key.as_deref() {
                 Some(key) => (
                     self.lineage

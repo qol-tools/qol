@@ -13,6 +13,7 @@ export type Entry = {
   project?: string
   successor?: string
   launcher?: string
+  resumedFrom?: string
 }
 
 export type Pull = {

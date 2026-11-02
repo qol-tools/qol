@@ -83,6 +83,10 @@ impl CliSessionStrategy for ClaudeStrategy {
         metadata::chat_transcript(&path)
     }
 
+    fn conversation_transcript(&self, session: &SessionFacts) -> Option<std::path::PathBuf> {
+        self.metadata.subscription_path(session)
+    }
+
     fn current_model(&self, session: &SessionFacts) -> Option<String> {
         let path = self.metadata.subscription_path(session)?;
         metadata::current_model(&path)

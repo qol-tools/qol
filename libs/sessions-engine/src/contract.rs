@@ -100,9 +100,19 @@ pub(crate) struct SessionRow {
     pub(crate) remote_control_url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) prs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcript: Option<String>,
 }
 
 impl SessionRow {
+    pub(crate) fn with_transcript(mut self, transcript: Option<std::path::PathBuf>) -> Self {
+        self.transcript = transcript
+            .as_deref()
+            .and_then(std::path::Path::to_str)
+            .map(str::to_owned);
+        self
+    }
+
     pub(crate) fn with_links(
         mut self,
         remote_control_url: Option<String>,
@@ -181,6 +191,7 @@ pub(crate) fn session_row(
         attention_stale: None,
         remote_control_url: None,
         prs: Vec::new(),
+        transcript: None,
     }
 }
 
@@ -315,7 +326,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
         ToolSpec {
             name: "sessions_list",
             label: "List terminal sessions",
-            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty.",
+            description: "List live terminal sessions on this host with their role-neutral tool identity, display name, activity hint, cwd, capabilities, and stable session token. Use it once to choose the implementation terminal for session_bridge. Each row also carries its spawn key, its recorded parent key, master (true for the switchboard), its unread message and open ask counts, and attention (needs_you, your_turn, working, idle, parked or ready) from the CLI Sessions panel, with attention_stale true when that snapshot is older than 30 seconds. remote_control_url is the https://claude.ai/code link of a session with Remote Control on, and prs lists the GitHub pull request URLs the session linked in its session_send messages or parked on, and CLI Sessions leads its tab title with their numbers; both are left out when empty. transcript is the path of the conversation's transcript file when the tool's history holds it, which the switchboard's resume_session tool brings back as a fork while the tab keeps running on its own.",
             input_schema: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {

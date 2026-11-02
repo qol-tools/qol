@@ -109,6 +109,10 @@ pub trait CliSessionStrategy: Send + Sync {
         None
     }
 
+    fn conversation_transcript(&self, _session: &SessionFacts) -> Option<std::path::PathBuf> {
+        None
+    }
+
     fn current_model(&self, _session: &SessionFacts) -> Option<String> {
         None
     }
