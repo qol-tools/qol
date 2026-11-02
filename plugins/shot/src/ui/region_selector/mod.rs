@@ -365,6 +365,10 @@ impl SelectionState {
         }
     }
 
+    fn shows_overlays(&self) -> bool {
+        self.drag_start.is_none()
+    }
+
     pub(crate) fn record_display(&mut self, bounds: Rect, scale: f64) {
         if self.displays.iter().any(|display| display.bounds == bounds) {
             return;
@@ -929,9 +933,6 @@ impl RegionSelector {
     }
 
     fn guide_title(&self) -> &'static str {
-        if self.state.borrow().drag_start.is_some() {
-            return "Release mouse to capture";
-        }
         self.state
             .borrow()
             .default_target
@@ -940,9 +941,6 @@ impl RegionSelector {
     }
 
     fn guide_subtitle(&self) -> &'static str {
-        if self.state.borrow().drag_start.is_some() {
-            return "Press Esc to cancel";
-        }
         if self.state.borrow().default_target.is_some() {
             return "Click to capture or drag to select area";
         }
@@ -1117,7 +1115,8 @@ impl Render for RegionSelector {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         qol_gpui::kit::enter_window(qol_gpui::kit::WindowLook::Live);
         self.schedule_reveal_after_present(window, cx);
-        let guide_bounds = self.guide_bounds();
+        let overlays = self.state.borrow().shows_overlays();
+        let guide_bounds = self.guide_bounds().filter(|_| overlays);
         let selection = self.selection_bounds();
         let mut root = div()
             .text(TextStyle::Value)
@@ -1179,7 +1178,7 @@ impl Render for RegionSelector {
             }
         }
 
-        if let Some(bounds) = self.chip_bounds() {
+        if let Some(bounds) = self.chip_bounds().filter(|_| overlays) {
             let (text, level) = self.chip_status();
             root = root.child(chip_element(bounds, text, level));
         }
@@ -1844,6 +1843,27 @@ mod tests {
             Some(laptop),
             "an in-progress drag still anchors the message to the dragged monitor"
         );
+    }
+
+    #[test]
+    fn dragging_a_region_clears_every_overlay_off_the_screen() {
+        let (tx, _rx) = mpsc::channel();
+        let screen = Bounds::new(point(px(0.0), px(0.0)), size(px(2560.0), px(1440.0)));
+        for kind in [CaptureKind::Screenshot, CaptureKind::Recording] {
+            let mut state = SelectionState::new(
+                tx.clone(),
+                Some(screen),
+                None,
+                vec![screen],
+                Vec::new(),
+                kind,
+            );
+            assert!(state.shows_overlays(), "{kind:?} before the drag");
+            state.drag_start = Some(point(px(100.0), px(100.0)));
+            assert!(!state.shows_overlays(), "{kind:?} during the drag");
+            state.drag_start = None;
+            assert!(state.shows_overlays(), "{kind:?} after the drag");
+        }
     }
 
     #[test]
