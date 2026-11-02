@@ -52,6 +52,8 @@ const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const DROP_NOTICE = 'Prompt dropped by a hook: '
 const DROPS_KEPT = 20
+const BAND_ROWS = 3
+const FORK_COLORS: readonly string[] = ['#f47067', '#f69d50', '#daaa3f', '#57ab5a', '#39c5cf', '#539bf5', '#b083f0', '#e275ad']
 const RESUMED_SUMMARY =/^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const LAUNCHER = 'Launcher: '
@@ -723,23 +725,33 @@ export const resumedFork = (text: string, isFork: (agentId: string) => boolean):
   return RESUMED_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
 }
 
-const quietReport = async ($: EngineInterface, text: string, origin: string | undefined): Promise<string | undefined> => {
+type Quiet = { fork: string; said: string }
+
+const quietReport = async ($: EngineInterface, text: string, origin: string | undefined): Promise<Quiet | undefined> => {
   if (origin !== 'task-notification' && origin !== 'peer') return undefined
   if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return undefined
   try {
     const list = await read($, board)
     const resumed = origin === 'task-notification' ? resumedFork(text, agentId => list.some(entry => entry.agentId === agentId)) : undefined
-    if (resumed !== undefined) return `${keyName(resumed)} resumed`
+    if (resumed !== undefined) return { fork: keyName(resumed), said: 'resumed' }
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
-    return filed === undefined ? undefined : `${keyName(filed.entry.name)}: ${filed.entry.headline}`
+    if (filed === undefined) return undefined
+    return { fork: keyName(filed.entry.name), said: filed.entry.headline }
   } catch {
     return undefined
   }
 }
 
+export const forkColor = (fork: string): string => {
+  let hash = 0
+  for (const char of fork) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0
+  return FORK_COLORS[hash % FORK_COLORS.length] ?? 'text'
+}
+
 export const register: Register = on => {
   let isAutoOpenPending = false
   const dropped: string[] = []
+  const heard: Quiet[] = []
   const dropAs = (reason: string): { drop: string } => {
     dropped.push(reason)
     if (dropped.length > DROPS_KEPT) dropped.shift()
@@ -820,13 +832,28 @@ export const register: Register = on => {
     return started
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const docks = e.viewport?.isFullscreen
     if (isAutoOpenPending && docks !== undefined) {
       isAutoOpenPending = false
       if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
     }
-    return next(e)
+    const below = await next(e)
+    if (heard.length === 0 || e.props.hasSurvey || e.props.view?.agentId !== undefined) return below
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        {heard.map((one, index) => (
+          <Box key={`heard-${index}`} flexDirection="row" gap={1}>
+            <Text color={forkColor(one.fork)} bold>
+              {one.fork}
+            </Text>
+            <Text wrap="truncate">{one.said}</Text>
+          </Box>
+        ))}
+        {below}
+      </Box>
+    )
   })
 
   on('command.run', { command: PANE }, async $ => {
@@ -836,7 +863,16 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
-    if (quiet !== undefined) return dropAs(quiet)
+    if (quiet !== undefined) {
+      heard.push(quiet)
+      if (heard.length > BAND_ROWS) heard.shift()
+      $.ui.invalidate('ui.render')
+      return dropAs(quiet.fork)
+    }
+    if (e.origin.kind === 'composer' && e.isMeta !== true && heard.length > 0) {
+      heard.length = 0
+      $.ui.invalidate('ui.render')
+    }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
     clearTypedToggle($)
