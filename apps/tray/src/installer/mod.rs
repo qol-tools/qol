@@ -17,6 +17,7 @@ pub mod mode;
 pub(crate) mod platform;
 mod source;
 pub mod stand_in;
+pub mod trial;
 
 pub use boot_environment::BootEnvironment;
 pub use cli::{run, uninstall};

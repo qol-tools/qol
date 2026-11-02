@@ -13,6 +13,7 @@ use super::super::helpers::validate_plugin_id;
 use super::super::plugin_services;
 use super::super::types::{AppState, MAX_CONFIG_SIZE};
 use super::http_json;
+use crate::installer::trial::Trial;
 use crate::updates::jobs::{self, JobState, Operation, UpdateJob};
 use crate::version::is_newer_version;
 
@@ -43,6 +44,7 @@ enum RowState {
     Failed,
     DevBuild,
     DevLinked,
+    Trial,
 }
 
 struct UpdatesView {
@@ -53,6 +55,7 @@ struct UpdatesView {
     check_error: Option<String>,
     connection: ConnectionHealth,
     tray_start: SystemTime,
+    trial: Option<Trial>,
     host: HostView,
     plugins: Vec<PluginView>,
 }
@@ -63,6 +66,7 @@ struct HostView {
     update_available: bool,
     checked: bool,
     dev_build: bool,
+    tried: bool,
     job: Option<UpdateJob>,
     updated_from: Option<String>,
 }
@@ -74,6 +78,7 @@ struct PluginView {
     latest: Option<String>,
     checked: bool,
     dev_linked: bool,
+    tried: bool,
     job: Option<UpdateJob>,
 }
 
@@ -120,8 +125,16 @@ struct UpdatesPayload {
     check_error: Option<String>,
     connection: ConnectionHealth,
     running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trial: Option<TrialPayload>,
     host: HostPayload,
     plugins: Vec<PluginPayload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct TrialPayload {
+    pull_request: u64,
+    head: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -227,7 +240,22 @@ fn action_request(body: &[u8]) -> Result<CoreActionRequest, (StatusCode, &'stati
     serde_json::from_slice(body).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON"))
 }
 
+fn trial_refusal() -> Option<Response> {
+    crate::installer::trial::current()
+        .map(|trial| action_error(StatusCode::CONFLICT, paused_message(&trial)))
+}
+
+fn paused_message(trial: &Trial) -> String {
+    format!(
+        "Updates are paused while you try pull request #{}. qol pr try --off ends the try.",
+        trial.pull_request
+    )
+}
+
 fn check_updates_action(state: &AppState) -> Response {
+    if let Some(refused) = trial_refusal() {
+        return refused;
+    }
     let Some(check) = super::super::update_check::claim(state) else {
         return action_ok("Already checking for updates");
     };
@@ -236,6 +264,9 @@ fn check_updates_action(state: &AppState) -> Response {
 }
 
 fn start_update_action(state: &AppState, id: Option<&str>) -> Response {
+    if let Some(refused) = trial_refusal() {
+        return refused;
+    }
     let target = match update_target(id) {
         Ok(target) => target,
         Err((status, message)) => return action_error(status, message),
@@ -284,6 +315,9 @@ fn start_plugin_update(state: &AppState, id: String) -> Response {
 }
 
 fn start_update_all_action(state: &AppState) -> Response {
+    if let Some(refused) = trial_refusal() {
+        return refused;
+    }
     let plugins = match plugin_views(state) {
         Ok(plugins) => plugins,
         Err(_) => {
@@ -325,7 +359,9 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
     let health = crate::updates::check_health();
     let catalog = CatalogHealth::read(state);
     let checks_enabled = crate::updates::checks_enabled();
-    let plugins = plugin_views(state).map_err(|status| Box::new(status.into_response()))?;
+    let trial = crate::installer::trial::current();
+    let plugins = plugin_views_during(state, trial.as_ref())
+        .map_err(|status| Box::new(status.into_response()))?;
     let host_checked = health.latest_succeeded();
     Ok(UpdatesView {
         checking: health.checking || catalog.checking || super::super::update_check::running(state),
@@ -341,9 +377,11 @@ fn collect_view(state: &AppState) -> HttpResult<UpdatesView> {
             update_available: crate::updates::host_update_available(),
             checked: host_checked,
             dev_build: !checks_enabled,
+            tried: trial.as_ref().is_some_and(|trial| trial.tray),
             job: jobs::get(jobs::HOST_ID),
             updated_from: crate::updates::updated_from(),
         },
+        trial,
         plugins,
     })
 }
@@ -361,6 +399,13 @@ fn check_error(host: Option<String>, catalog_failed: bool) -> Option<String> {
 }
 
 fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
+    plugin_views_during(state, None)
+}
+
+fn plugin_views_during(
+    state: &AppState,
+    trial: Option<&Trial>,
+) -> Result<Vec<PluginView>, StatusCode> {
     let installed = plugin_services::list_installed(state)?;
     let checked = CatalogHealth::read(state).checked();
     let jobs = jobs::snapshot();
@@ -374,6 +419,8 @@ fn plugin_views(state: &AppState) -> Result<Vec<PluginView>, StatusCode> {
             latest: plugin.available_version,
             checked,
             dev_linked: plugin.source == Some("dev_linked"),
+            tried: trial
+                .is_some_and(|trial| trial.plugins.iter().any(|id| id == plugin.id.as_str())),
             job: update_job(jobs.get(plugin.id.as_str())),
         })
         .collect())
@@ -409,6 +456,10 @@ fn build_updates_payload(view: &UpdatesView, now: SystemTime) -> UpdatesPayload 
                     RowState::Queued | RowState::Updating
                 )
             }),
+        trial: view.trial.as_ref().map(|trial| TrialPayload {
+            pull_request: trial.pull_request,
+            head: trial.head.clone(),
+        }),
         host: host_payload(view),
         plugins: plugins.into_iter().map(plugin_payload).collect(),
     }
@@ -453,6 +504,9 @@ fn plugin_payload(plugin: &PluginView) -> PluginPayload {
 }
 
 fn host_row_state(view: &UpdatesView) -> RowState {
+    if view.host.tried {
+        return RowState::Trial;
+    }
     if view.host.dev_build {
         return RowState::DevBuild;
     }
@@ -472,6 +526,9 @@ fn plugin_row_state(plugin: &PluginView) -> RowState {
     if let Some(job) = &plugin.job {
         return job_row_state(job);
     }
+    if plugin.tried {
+        return RowState::Trial;
+    }
     if plugin.dev_linked {
         return RowState::DevLinked;
     }
@@ -488,7 +545,9 @@ fn plugin_update_refusal(state: RowState) -> Option<&'static str> {
     match state {
         RowState::Available | RowState::Failed | RowState::Queued | RowState::Updating => None,
         RowState::DevLinked => Some(DEV_LINKED_PLUGIN),
-        RowState::UpToDate | RowState::Unchecked | RowState::DevBuild => Some(NO_UPDATE),
+        RowState::UpToDate | RowState::Unchecked | RowState::DevBuild | RowState::Trial => {
+            Some(NO_UPDATE)
+        }
     }
 }
 
@@ -501,6 +560,9 @@ fn job_row_state(job: &UpdateJob) -> RowState {
 }
 
 fn updates_attention(payload: &UpdatesPayload, tray_started_secs: u64) -> bool {
+    if payload.trial.is_some() {
+        return false;
+    }
     let needs_attention = |state: RowState| matches!(state, RowState::Available | RowState::Failed);
     if needs_attention(payload.host.state) {
         return true;
@@ -639,6 +701,7 @@ mod tests {
             latest: latest.map(str::to_string),
             checked: true,
             dev_linked: false,
+            tried: false,
             job: None,
         }
     }
@@ -660,6 +723,7 @@ mod tests {
             update_available: is_available(current, latest),
             checked: true,
             dev_build: false,
+            tried: false,
             job: None,
             updated_from: None,
         }
@@ -674,8 +738,18 @@ mod tests {
             check_error: None,
             connection: ConnectionHealth::default(),
             tray_start: SystemTime::UNIX_EPOCH,
+            trial: None,
             host,
             plugins,
+        }
+    }
+
+    fn trial(tray: bool, plugins: &[&str]) -> Trial {
+        Trial {
+            pull_request: 435,
+            head: "eb1f5793b".to_string(),
+            tray,
+            plugins: plugins.iter().map(|id| (*id).to_string()).collect(),
         }
     }
 
@@ -786,6 +860,38 @@ mod tests {
 
         state.host.dev_build = true;
         assert_eq!(host_row_state(&state), RowState::DevBuild);
+
+        state.host.tried = true;
+        assert_eq!(host_row_state(&state), RowState::Trial);
+    }
+
+    #[test]
+    fn a_try_marks_what_it_replaced_and_silences_the_attention_dot() {
+        let mut tried = plugin("qol-launcher", "Launcher", "1.63.1", Some("1.64.0"));
+        tried.tried = true;
+        let waiting = plugin("qol-shot", "Shot", "1.0.0", Some("1.1.0"));
+        let mut state = view(host("3.66.1", Some("3.67.0")), vec![tried, waiting]);
+        state.host.tried = true;
+        state.trial = Some(trial(true, &["qol-launcher"]));
+        let payload = build_updates_payload(&state, SystemTime::UNIX_EPOCH);
+        let wire = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            wire["trial"],
+            serde_json::json!({ "pull_request": 435, "head": "eb1f5793b" })
+        );
+        assert_eq!(wire["host"]["state"], "trial");
+        assert_eq!(wire["plugins"][0]["state"], "trial");
+        assert_eq!(wire["plugins"][1]["state"], "available");
+        assert!(!updates_attention(&payload, 0));
+        assert_eq!(plugin_update_refusal(RowState::Trial), Some(NO_UPDATE));
+    }
+
+    #[test]
+    fn the_paused_message_names_the_pull_request_and_the_way_out() {
+        assert_eq!(
+            paused_message(&trial(false, &["qol-launcher"])),
+            "Updates are paused while you try pull request #435. qol pr try --off ends the try."
+        );
     }
 
     #[test]
@@ -900,6 +1006,7 @@ mod tests {
             (RowState::UpToDate, Some("No update is available")),
             (RowState::Unchecked, Some("No update is available")),
             (RowState::DevBuild, Some("No update is available")),
+            (RowState::Trial, Some("No update is available")),
             (
                 RowState::DevLinked,
                 Some("A dev-linked plugin can't be updated here"),

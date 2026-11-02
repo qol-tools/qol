@@ -5,6 +5,7 @@ mod manifest;
 mod tray;
 
 use anyhow::{bail, Context, Result};
+use install::RecordFile;
 use qol_platform::Os;
 use std::ffi::OsString;
 use std::path::Path;
@@ -157,7 +158,7 @@ fn installed_tray() -> Result<std::path::PathBuf> {
 }
 
 fn short(sha: &str) -> &str {
-    sha.get(..9).unwrap_or(sha)
+    qol_conventions::pr_try::short_sha(sha)
 }
 
 fn plain_name(value: &str) -> bool {

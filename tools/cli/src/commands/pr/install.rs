@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use qol_conventions::artifact::BuildIntent;
-use serde::{Deserialize, Serialize};
+use qol_conventions::pr_try::{record_path, ROOT_DIR};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const ROOT: &str = "pr-try";
+pub(super) use qol_conventions::pr_try::{SwappedPlugin as Swapped, TryRecord as State};
 
 pub(super) struct Places {
     pub(super) plugins: PathBuf,
@@ -26,9 +26,9 @@ impl Places {
         Self {
             plugins: config.join("plugins"),
             pids: data.join("runtime").join("pids"),
-            state: data.join(ROOT).join("state.json"),
-            backups: data.join(ROOT).join("backups"),
-            downloads: cache.join(ROOT),
+            state: record_path(data),
+            backups: data.join(ROOT_DIR).join("backups"),
+            downloads: cache.join(ROOT_DIR),
         }
     }
 
@@ -42,24 +42,14 @@ impl Places {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct State {
-    pub(super) pull_request: Option<u64>,
-    pub(super) head_sha: Option<String>,
-    pub(super) plugins: Vec<Swapped>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) tray: Option<PathBuf>,
+pub(super) trait RecordFile: Sized {
+    fn load(path: &Path) -> Result<Self>;
+    fn save(&self, path: &Path) -> Result<()>;
+    fn clear(path: &Path) -> Result<()>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct Swapped {
-    pub(super) id: String,
-    pub(super) target: PathBuf,
-    pub(super) backup: PathBuf,
-}
-
-impl State {
-    pub(super) fn load(path: &Path) -> Result<Self> {
+impl RecordFile for State {
+    fn load(path: &Path) -> Result<Self> {
         match fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text)
                 .with_context(|| format!("{} is not a qol pr try record", path.display())),
@@ -68,7 +58,7 @@ impl State {
         }
     }
 
-    pub(super) fn save(&self, path: &Path) -> Result<()> {
+    fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
@@ -76,7 +66,7 @@ impl State {
             .with_context(|| format!("writing {}", path.display()))
     }
 
-    pub(super) fn clear(path: &Path) -> Result<()> {
+    fn clear(path: &Path) -> Result<()> {
         match fs::remove_file(path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 Err(error).with_context(|| format!("removing {}", path.display()))
