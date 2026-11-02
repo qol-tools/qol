@@ -6960,6 +6960,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-headless",
  "qol-hotkeys",
  "qol-log",
@@ -6970,6 +6971,7 @@ dependencies = [
  "qol-runtime",
  "serde",
  "serde_json",
+ "sha2",
  "windows-sys 0.59.0",
  "workspace-hack",
 ]

@@ -49,9 +49,15 @@ impl PlatformAdapter for Adapter {
     }
 
     fn karabiner_rules(&self) -> Result<CommandResult> {
-        Ok(CommandResult::runtime_error(
-            "keyremap: Karabiner-Elements only exists on macOS; Windows remaps in low-level hooks",
-        ))
+        Ok(karabiner_is_macos_only())
+    }
+
+    fn karabiner_sync(&self) -> Result<CommandResult> {
+        Ok(karabiner_is_macos_only())
+    }
+
+    fn karabiner_remove(&self) -> Result<CommandResult> {
+        Ok(karabiner_is_macos_only())
     }
 
     fn inspect_config(&self) -> Result<ConfigInspection> {
@@ -77,4 +83,10 @@ impl PlatformAdapter for Adapter {
     fn layout_characters(&self) -> DoctorCheckResult {
         doctor::layout(&engine::remap::character_targets(&service::load()))
     }
+}
+
+fn karabiner_is_macos_only() -> CommandResult {
+    CommandResult::runtime_error(
+        "keyremap: Karabiner-Elements only exists on macOS; Windows remaps in low-level hooks",
+    )
 }

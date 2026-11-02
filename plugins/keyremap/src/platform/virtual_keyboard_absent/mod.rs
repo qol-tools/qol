@@ -31,6 +31,14 @@ impl PlatformAdapter for Adapter {
         Ok(unsupported())
     }
 
+    fn karabiner_sync(&self) -> Result<CommandResult> {
+        Ok(unsupported())
+    }
+
+    fn karabiner_remove(&self) -> Result<CommandResult> {
+        Ok(unsupported())
+    }
+
     fn uninstall_hid_helper(&self) -> Result<CommandResult> {
         Ok(unsupported())
     }
