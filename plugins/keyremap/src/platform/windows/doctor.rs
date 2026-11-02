@@ -27,6 +27,20 @@ pub(super) fn helper() -> DoctorCheckResult {
     )
 }
 
+pub(super) fn key_backend() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "key_backend",
+        "Windows has one key backend: Key Remap's own low-level hooks.",
+    )
+}
+
+pub(super) fn karabiner_rules() -> DoctorCheckResult {
+    DoctorCheckResult::ok(
+        "karabiner_rules",
+        "Karabiner-Elements only exists on macOS, so Windows keeps no rules there.",
+    )
+}
+
 pub(super) fn secure_input() -> DoctorCheckResult {
     elevation_result(process_elevated(std::process::id()))
 }

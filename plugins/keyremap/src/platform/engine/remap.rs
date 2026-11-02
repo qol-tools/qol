@@ -835,6 +835,7 @@ mod tests {
     fn semantic_validation_reports_values_the_runtime_would_skip() {
         let raw = RemapConfig {
             modifier_keys: ModifierKeys::default(),
+            key_backend: Default::default(),
             enabled: true,
             excluded_apps: vec![String::new()],
             char_swaps: vec![(String::new(), "$".into())],
@@ -867,6 +868,7 @@ mod tests {
     fn bare_key_rule_only_matches_without_modifiers() {
         let raw = RemapConfig {
             modifier_keys: ModifierKeys::default(),
+            key_backend: Default::default(),
             enabled: true,
             excluded_apps: vec![],
             char_swaps: vec![],
@@ -918,6 +920,7 @@ mod tests {
     fn symbol_key_rule_can_emit_literal_char() {
         let raw = RemapConfig {
             modifier_keys: ModifierKeys::default(),
+            key_backend: Default::default(),
             enabled: true,
             excluded_apps: vec![],
             char_swaps: vec![],
@@ -983,6 +986,7 @@ mod tests {
     fn char_swaps_are_bidirectional() {
         let raw = RemapConfig {
             modifier_keys: ModifierKeys::default(),
+            key_backend: Default::default(),
             enabled: true,
             excluded_apps: vec!["com.excluded.app".into()],
             char_swaps: vec![("<".into(), "$".into())],
@@ -1081,6 +1085,7 @@ mod tests {
         ) {
             let empty = RemapConfig {
                 modifier_keys: ModifierKeys::default(),
+                key_backend: Default::default(),
                 enabled: true,
                 excluded_apps: vec![],
                 char_swaps: vec![],
@@ -1126,6 +1131,7 @@ mod tests {
         ) {
             let raw = RemapConfig {
                 modifier_keys: ModifierKeys::default(),
+                key_backend: Default::default(),
                 enabled: true,
                 excluded_apps: vec![],
                 char_swaps: vec![],

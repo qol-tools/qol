@@ -1,12 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
 
 use super::input::backends::hid_helper;
-use super::input::InputState;
+use super::input::{selection, InputState};
+use super::karabiner::backend::{Backend, Installed};
+use super::karabiner::store::Store;
 use super::layout::{LayoutSnapshot, LayoutStore};
 use super::tap::TapState;
+use crate::platform::engine::config::KeyBackendChoice;
 use crate::platform::engine::{self, config, remap};
 
 const LAYOUT_POLL: Duration = Duration::from_secs(1);
@@ -14,18 +17,50 @@ const LAYOUT_POLL: Duration = Duration::from_secs(1);
 struct Services {
     state: Arc<TapState>,
     layouts: Arc<LayoutStore>,
+    karabiner: Option<Mutex<Backend<Installed>>>,
+}
+
+impl Services {
+    fn choose(&self, choice: KeyBackendChoice) {
+        self.state
+            .input()
+            .allow_helper(selection::helper_allowed(choice));
+        let Some(karabiner) = &self.karabiner else {
+            return;
+        };
+        let config = self.state.config();
+        let layout = self.layouts.get();
+        if let Ok(mut backend) = karabiner.lock() {
+            backend.apply(choice, &config, &layout, self.state.input());
+        }
+    }
 }
 
 impl engine::Remapper for Services {
     fn swap_config(&self, config: remap::ResolvedConfig) {
         self.state.swap_config(config);
+        self.choose(config::load_config().key_backend);
     }
 
     fn idle(&self) {
         self.layouts.refresh();
+        let Some(karabiner) = &self.karabiner else {
+            return;
+        };
+        let config = self.state.config();
+        let layout = self.layouts.get();
+        if let Ok(mut backend) = karabiner.lock() {
+            backend.idle(&config, &layout, self.state.input());
+        }
     }
 
-    fn stop(self) {}
+    fn stop(self) {
+        if let Some(karabiner) = &self.karabiner {
+            if let Ok(mut backend) = karabiner.lock() {
+                backend.stop();
+            }
+        }
+    }
 }
 
 pub(crate) fn run() -> Result<()> {
@@ -40,16 +75,28 @@ pub(crate) fn run() -> Result<()> {
         LAYOUT_POLL,
         || remap::resolve(&config::load_config()),
         |resolved| {
+            let choice = config::load_config().key_backend;
+            let input = Arc::new(InputState::default());
+            input.allow_helper(selection::helper_allowed(choice));
             let app_tracker = super::app_tracker::AppTracker::start();
-            let state = Arc::new(TapState::new(
-                resolved,
-                app_tracker,
-                Arc::new(InputState::default()),
-            ));
+            let state = Arc::new(TapState::new(resolved, app_tracker, Arc::clone(&input)));
+            let karabiner = match Store::locate() {
+                Ok(store) => Some(Mutex::new(Backend::new(Installed(store)))),
+                Err(error) => {
+                    log::warn!("Karabiner-Elements backend unavailable: {error:#}");
+                    None
+                }
+            };
+            let services = Services {
+                state: Arc::clone(&state),
+                layouts: Arc::clone(&layouts),
+                karabiner,
+            };
+            services.choose(choice);
             super::tap::start_tap(Arc::clone(&state));
             hid_helper::start(Arc::clone(&state), Arc::clone(&layouts));
             super::secure_input::watch(Arc::clone(state.input()));
-            Ok(Services { state, layouts })
+            Ok(services)
         },
     )
 }

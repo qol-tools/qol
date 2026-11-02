@@ -48,6 +48,11 @@ impl Store {
         Ok(synced)
     }
 
+    pub(crate) fn plan(&self, compiled: &Compiled) -> Result<Synced> {
+        let (_, current) = self.read_config()?;
+        document::sync(&current, compiled, &self.read_sidecar()?)
+    }
+
     pub(crate) fn remove(&self) -> Result<Removed> {
         let (target, current) = self.read_config()?;
         let sidecar = self.read_sidecar()?;
@@ -59,6 +64,10 @@ impl Store {
             self.write_sidecar(&Sidecar::default())?;
         }
         Ok(removed)
+    }
+
+    pub(crate) fn read_document(&self) -> Result<Value> {
+        Ok(self.read_config()?.1)
     }
 
     fn read_config(&self) -> Result<(PathBuf, Value)> {

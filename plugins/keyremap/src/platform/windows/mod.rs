@@ -76,6 +76,14 @@ impl PlatformAdapter for Adapter {
         doctor::helper()
     }
 
+    fn key_backend(&self) -> DoctorCheckResult {
+        doctor::key_backend()
+    }
+
+    fn karabiner_block(&self) -> DoctorCheckResult {
+        doctor::karabiner_rules()
+    }
+
     fn secure_input(&self) -> DoctorCheckResult {
         doctor::secure_input()
     }
