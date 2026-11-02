@@ -4,6 +4,13 @@ use serde_json::Value;
 
 const APP_STREAM_CLASS: &str = "Stream/Output/Audio";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Stream<'a> {
+    pub(super) name: Option<&'a str>,
+    pub(super) pid: Option<u32>,
+    pub(super) binary: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Node {
     id: u32,
@@ -11,12 +18,21 @@ struct Node {
     name: Option<String>,
     app: Option<String>,
     pid: Option<u32>,
+    binary: Option<String>,
     class: Option<String>,
 }
 
 impl Node {
     fn app_name(&self) -> Option<&str> {
         self.app.as_deref().or(self.name.as_deref())
+    }
+
+    fn stream(&self) -> Stream<'_> {
+        Stream {
+            name: self.app_name(),
+            pid: self.pid,
+            binary: self.binary.as_deref(),
+        }
     }
 
     fn is_app_stream(&self) -> bool {
@@ -67,6 +83,7 @@ impl Graph {
                     name: text(props, "node.name"),
                     app: text(props, "application.name"),
                     pid: number(props, "application.process.id"),
+                    binary: text(props, "application.process.binary"),
                     class: text(props, "media.class"),
                 }),
                 Some("PipeWire:Interface:Port") => {
@@ -141,7 +158,7 @@ impl Graph {
     pub(super) fn missing_links(
         &self,
         sink: u32,
-        chosen: impl Fn(Option<&str>, Option<u32>) -> bool,
+        chosen: impl Fn(Stream<'_>) -> bool,
     ) -> Vec<(u32, u32)> {
         let inputs = self
             .ports
@@ -152,7 +169,7 @@ impl Graph {
             .nodes
             .iter()
             .filter(|node| node.is_app_stream())
-            .filter(|node| chosen(node.app_name(), node.pid))
+            .filter(|node| chosen(node.stream()))
             .map(|node| node.id)
             .collect::<HashSet<_>>();
         let mut missing = Vec::new();
@@ -221,7 +238,8 @@ mod tests {
             "node.name": name,
             "media.class": class,
             "object.serial": id + 1000,
-            "application.process.id": (id + 5000).to_string()
+            "application.process.id": (id + 5000).to_string(),
+            "application.process.binary": format!("{name}-bin")
         });
         if let Some(app) = app {
             props["application.name"] = json!(app);
@@ -296,11 +314,14 @@ mod tests {
             (&["Firefox"], vec![]),
         ];
         for (apps, expected) in cases {
-            let links =
-                graph.missing_links(50, |name, _| name.is_some_and(|name| apps.contains(&name)));
+            let links = graph.missing_links(50, |stream| {
+                stream.name.is_some_and(|name| apps.contains(&name))
+            });
             assert_eq!(links, expected, "{apps:?}");
         }
-        let by_process = graph.missing_links(50, |_, pid| pid == Some(5030));
+        let by_process = graph.missing_links(50, |stream| {
+            stream.pid == Some(5030) && stream.binary == Some("WEBRTC VoiceEngine-bin")
+        });
         assert_eq!(by_process, [(31, 51)]);
     }
 

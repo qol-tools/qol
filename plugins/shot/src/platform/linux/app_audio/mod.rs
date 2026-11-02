@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::platform::{CaptureProcess, CaptureSession};
 use crate::{Config, Rect};
-use graph::Graph;
+use graph::{Graph, Stream};
 
 const SINK: &str = "qol_shot_apps";
 const SINK_DESCRIPTION: &str = "QoL Shot app audio";
@@ -17,22 +17,60 @@ const KEEPER_ENV: &str = "QOL_SHOT_APP_AUDIO_REQUEST";
 const SINK_READY_TIMEOUT: Duration = Duration::from_secs(2);
 const SINK_POLL_INTERVAL: Duration = Duration::from_millis(40);
 const KEEP_INTERVAL: Duration = Duration::from_millis(500);
-const MAX_PROCESS_DEPTH: usize = 64;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct OnScreen {
+    process: CaptureProcess,
+    binaries: Vec<String>,
+}
+
+impl OnScreen {
+    fn pin(pid: u32) -> Option<Self> {
+        if pid <= 1 {
+            return None;
+        }
+        let process = CaptureProcess::spawned(pid);
+        if process.identity.is_none() {
+            return None;
+        }
+        let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        let mut binaries = vec![executable.file_name()?.to_str()?.to_string()];
+        let command_line = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let invoked = command_line
+            .split(|byte| *byte == 0)
+            .next()
+            .unwrap_or_default();
+        if let Some(name) = std::path::Path::new(&*String::from_utf8_lossy(invoked))
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !binaries.iter().any(|known| known == name))
+        {
+            binaries.push(name.to_string());
+        }
+        Some(Self { process, binaries })
+    }
+
+    fn owns(&self, stream: Stream<'_>) -> bool {
+        stream.pid == Some(self.process.pid)
+            && stream
+                .binary
+                .is_some_and(|binary| self.binaries.iter().any(|known| known == binary))
+            && self.process.alive()
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 struct Choice {
     apps: Vec<String>,
-    windows: Vec<u32>,
+    windows: Vec<OnScreen>,
 }
 
 impl Choice {
-    fn takes(&self, name: Option<&str>, pid: Option<u32>) -> bool {
-        name.is_some_and(|name| self.apps.iter().any(|app| app == name))
-            || pid.is_some_and(|pid| {
-                self.windows
-                    .iter()
-                    .any(|window| descends_from(pid, *window, parent_process))
-            })
+    fn takes(&self, stream: Stream<'_>) -> bool {
+        stream
+            .name
+            .is_some_and(|name| self.apps.iter().any(|app| app == name))
+            || self.windows.iter().any(|window| window.owns(stream))
     }
 }
 
@@ -76,8 +114,8 @@ impl Tap {
         }
         let windows = if config.audio.on_screen_app {
             super::window_process_at(rect.x + rect.w / 2, rect.y + rect.h / 2)
+                .and_then(OnScreen::pin)
                 .into_iter()
-                .filter(|pid| *pid > 1)
                 .collect()
         } else {
             Vec::new()
@@ -99,9 +137,13 @@ impl Tap {
             Ok(linked) => {
                 qol_runtime::probe!(
                     "SHOT_RECORD_APP_AUDIO",
-                    "step=open apps={} on_screen_pids={:?} linked={linked}",
+                    "step=open apps={} on_screen={:?} linked={linked}",
                     tap.choice.apps.len(),
-                    tap.choice.windows
+                    tap.choice
+                        .windows
+                        .iter()
+                        .map(|window| (window.process.pid, window.binaries.as_slice()))
+                        .collect::<Vec<_>>()
                 );
                 Ok(Some(tap))
             }
@@ -199,30 +241,6 @@ fn keep_linked(request: &str) -> Result<()> {
     remove_sink(request.sink)
 }
 
-fn descends_from(pid: u32, ancestor: u32, parent: impl Fn(u32) -> Option<u32>) -> bool {
-    let mut current = pid;
-    for _ in 0..MAX_PROCESS_DEPTH {
-        if current == ancestor {
-            return true;
-        }
-        match parent(current) {
-            Some(next) if next > 1 && next != current => current = next,
-            _ => return false,
-        }
-    }
-    false
-}
-
-fn parent_process(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    parent_from_stat(&stat)
-}
-
-fn parent_from_stat(stat: &str) -> Option<u32> {
-    let (_, fields) = stat.rsplit_once(')')?;
-    fields.split_whitespace().nth(1)?.parse().ok()
-}
-
 fn recording(process: &CaptureProcess) -> bool {
     process.alive() && !qol_process::is_pid_zombie(process.pid)
 }
@@ -257,7 +275,7 @@ fn link_missing(choice: &Choice, sink: u32) -> Result<usize> {
 
 fn link_graph(graph: &Graph, choice: &Choice, sink: u32) -> usize {
     graph
-        .missing_links(sink, |name, pid| choice.takes(name, pid))
+        .missing_links(sink, |stream| choice.takes(stream))
         .into_iter()
         .filter(|(output, input)| {
             match run("pw-link", &[&output.to_string(), &input.to_string()]) {
@@ -307,7 +325,7 @@ fn run(program: &str, args: &[&str]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{descends_from, parent_from_stat, records_apps, sink_props, Choice};
+    use super::{records_apps, sink_props, Choice, OnScreen, Stream};
     use crate::Config;
 
     #[test]
@@ -337,54 +355,47 @@ mod tests {
     }
 
     #[test]
-    fn choice_takes_listed_names_and_the_on_screen_process() {
+    fn choice_takes_listed_names_and_only_the_pinned_on_screen_process() {
+        let own = std::process::id();
+        let window = OnScreen::pin(own).unwrap();
+        let binary = window.binaries[0].clone();
         let choice = Choice {
             apps: vec!["KCD2".to_string()],
-            windows: vec![std::process::id()],
+            windows: vec![window],
         };
-        assert!(choice.takes(Some("KCD2"), None));
-        assert!(choice.takes(None, Some(std::process::id())));
-        assert!(!choice.takes(Some("Discord"), None));
-        assert!(!choice.takes(None, None));
-    }
-
-    #[test]
-    fn descends_from_walks_parents_and_stops_at_init_or_a_loop() {
-        let parents = |pid: u32| match pid {
-            30 => Some(20),
-            20 => Some(10),
-            10 => Some(1),
-            40 => Some(40),
-            _ => None,
-        };
+        let stream = |name, pid, binary| Stream { name, pid, binary };
         let cases = [
-            (30, 10, true),
-            (30, 20, true),
-            (20, 20, true),
-            (10, 30, false),
-            (30, 1, false),
-            (40, 10, false),
-            (99, 10, false),
+            (stream(Some("KCD2"), None, None), true),
+            (stream(None, Some(own), Some(binary.as_str())), true),
+            (stream(None, Some(own), Some("other-program")), false),
+            (stream(None, Some(own), None), false),
+            (stream(None, Some(own + 1), Some(binary.as_str())), false),
+            (stream(Some("Discord"), None, None), false),
+            (stream(None, None, None), false),
         ];
-        for (pid, ancestor, expected) in cases {
-            assert_eq!(
-                descends_from(pid, ancestor, parents),
-                expected,
-                "{pid} {ancestor}"
-            );
+        for (stream, expected) in cases {
+            assert_eq!(choice.takes(stream), expected, "{stream:?}");
         }
     }
 
     #[test]
-    fn parent_from_stat_reads_past_names_with_spaces_and_parens() {
-        let cases = [
-            ("1234 (KCD2.exe) S 987 1234 1234 0", Some(987)),
-            ("55 (Web Content (x)) R 12 55 55 0", Some(12)),
-            ("broken", None),
-        ];
-        for (stat, expected) in cases {
-            assert_eq!(parent_from_stat(stat), expected, "{stat}");
-        }
+    fn on_screen_refuses_init_and_missing_processes() {
+        assert!(OnScreen::pin(0).is_none());
+        assert!(OnScreen::pin(1).is_none());
+        assert!(OnScreen::pin(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn a_reused_pid_no_longer_matches() {
+        let own = std::process::id();
+        let mut window = OnScreen::pin(own).unwrap();
+        window.process.identity = Some("linux:stale:0:0:0".to_string());
+        let stream = Stream {
+            name: None,
+            pid: Some(own),
+            binary: Some(window.binaries[0].as_str()),
+        };
+        assert!(!window.owns(stream));
     }
 
     #[test]

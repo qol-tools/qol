@@ -445,12 +445,11 @@ fn x11_window_pid(window: u32) -> Option<u32> {
         .reply()
         .ok()?
         .atom;
-    conn.get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
-        .ok()?
-        .reply()
-        .ok()?
-        .value32()?
-        .next()
+    let reply = conn
+        .get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())?;
+    reply.value32().and_then(|mut values| values.next())
 }
 
 fn x11_stacked_windows(include_frame: bool) -> Option<Vec<(u32, Rect)>> {
