@@ -16,6 +16,7 @@ mod finder;
 mod group_header;
 mod hint_bar;
 mod key_combination;
+mod launch;
 mod modifier_chip;
 mod number_field;
 mod placement_preview;
@@ -43,6 +44,7 @@ pub use finder::{
 pub use group_header::SettingsGroupHeader;
 pub use hint_bar::{hint_tone_color, HintTone, SettingsHint, SettingsHintBar};
 pub use key_combination::SettingsKeyCombination;
+pub use launch::Launch;
 pub use modifier_chip::SettingsModifierChip;
 pub(super) use number_field::{number_field, NumberCue, NumberText, SliderStyle};
 pub use placement_preview::{

@@ -15,7 +15,7 @@ use qol_gpui::pictures::PictureContext;
 use qol_gpui::scroll_list::{wheel_steps, ListHeight, ScrollList};
 use qol_gpui::scrollbar::ScrollSource;
 use qol_gpui::settings_panel::components::{
-    settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt,
+    settings_label, settings_label_group, settings_page, settings_value_group, ChoiceArt, Launch,
     RowGround, SettingsChoiceValue, SettingsHint, SettingsTextField, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
@@ -700,6 +700,7 @@ impl ProfilesView {
         SettingsRow::setting((row_id(level), index), kit)
             .selected(selected, focused)
             .opens(row.opens)
+            .launches(row.launch.clone())
             .on_click(cx.listener(move |view, _, window, cx| {
                 if view.naming && action != Some(Action::NewProfile) {
                     return;
@@ -817,8 +818,14 @@ impl CustomSettingsBreadcrumbs for ProfilesView {
             });
         }
         let mut left = Vec::new();
-        if let Some(verb) = self.rows().get(self.selected).and_then(|row| row.verb) {
-            left.push(SettingsHint::new(Key::ENTER, verb));
+        let rows = self.rows();
+        if let Some(row) = rows.get(self.selected) {
+            if let Some(verb) = row.verb {
+                left.push(SettingsHint::new(
+                    Key::ENTER,
+                    enter_label(verb, row.launch.as_ref()),
+                ));
+            }
         }
         left.push(SettingsHint::new(Key::UP_DOWN, "move"));
         Some(CustomHints {
@@ -902,5 +909,38 @@ fn row_height(row: &Row) -> f32 {
     match row.header {
         true => SettingsGroupHeader::height_with_detail(),
         false => qol_theme::HEIGHT_SETTING_ROW,
+    }
+}
+
+fn enter_label(verb: &'static str, launch: Option<&Launch>) -> String {
+    match launch
+        .filter(|launch| launch.tag().is_some())
+        .and_then(Launch::app)
+    {
+        Some(app) => format!("{verb} in {app}"),
+        None => verb.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enter_label, Launch};
+
+    #[test]
+    fn a_file_names_the_app_it_opens_in() {
+        let file = Launch::file("a-conflict.json", Some("Visual Studio Code".to_string()));
+        assert_eq!(
+            enter_label("open", Some(&file)),
+            "open in Visual Studio Code"
+        );
+        assert_eq!(
+            enter_label("open", Some(&Launch::file("a-conflict.json", None))),
+            "open"
+        );
+        assert_eq!(
+            enter_label("open github", Some(&Launch::link("github.com"))),
+            "open github"
+        );
+        assert_eq!(enter_label("turn on", None), "turn on");
     }
 }

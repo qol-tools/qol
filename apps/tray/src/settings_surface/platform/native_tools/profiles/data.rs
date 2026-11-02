@@ -72,6 +72,8 @@ pub(super) enum GitHubConnect {
 pub(super) struct Backup {
     pub(super) file_name: String,
     pub(super) size_bytes: u64,
+    #[serde(default)]
+    pub(super) opens_with: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]

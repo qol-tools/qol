@@ -8,6 +8,10 @@ pub(super) use super::unsupported::{
     file_type, open_handlers, open_with_handler, open_with_supported,
 };
 
+pub(super) fn default_app_name(_path: &Path) -> Option<String> {
+    None
+}
+
 pub(super) fn terminal_commands(_folder: &Path) -> Vec<Command> {
     Vec::new()
 }

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use qol_gpui::settings_panel::components::Launch;
 use qol_gpui::settings_panel::SettingsValueTone;
 use serde_json::Value as Json;
 
@@ -83,6 +84,7 @@ pub(super) struct Row {
     pub(super) value: Value,
     pub(super) verb: Option<&'static str>,
     pub(super) opens: bool,
+    pub(super) launch: Option<Launch>,
     pub(super) chip_when_selected: bool,
     pub(super) action: Option<Action>,
 }
@@ -99,6 +101,7 @@ impl Row {
             value: Value::None,
             verb: None,
             opens,
+            launch: None,
             chip_when_selected: false,
             action,
         }
@@ -124,6 +127,11 @@ impl Row {
     fn opens(mut self) -> Self {
         self.verb = Some("open");
         self.opens = true;
+        self
+    }
+
+    fn launches(mut self, launch: Launch) -> Self {
+        self.launch = Some(launch);
         self
     }
 
@@ -309,7 +317,7 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
     rows.extend(backups.iter().map(|backup| {
         Row::new(
             backup_when(&backup.file_name).unwrap_or_else(|| backup.file_name.clone()),
-            backup_kind(&backup.file_name),
+            format!("{} · {}", backup.file_name, backup_kind(&backup.file_name)),
             Some(Action::LaunchBackup(backup.file_name.clone())),
         )
         .value(Value::Text(
@@ -317,6 +325,7 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
             SettingsValueTone::Muted,
         ))
         .verb("open")
+        .launches(Launch::file(&backup.file_name, backup.opens_with.clone()))
     }));
     rows
 }
@@ -339,7 +348,8 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
                 Some(Action::VisitGitHub),
             )
             .dot(Dot::Warning)
-            .chip("open github")
+            .verb("open github")
+            .launches(Launch::link(url_host(verification_uri)))
         }
         GitHubConnect::Connecting => {
             return Row::new(
@@ -678,6 +688,11 @@ fn backup_when(file_name: &str) -> Option<String> {
     Some(format!("{day} {} {year}, {hour}:{minute}", MONTHS[month]))
 }
 
+fn url_host(url: &str) -> String {
+    let rest = strip_scheme(url);
+    rest.split('/').next().unwrap_or(rest).to_string()
+}
+
 fn backup_kind(file_name: &str) -> &'static str {
     if file_name.ends_with("-conflict.json") {
         "Saved when both sides had changes"
@@ -840,6 +855,8 @@ mod tests {
             "Enter WDJB-MJHT at github.com/login/device. The code is copied."
         );
         assert_eq!(rows[3].action, Some(Action::VisitGitHub));
+        assert_eq!(rows[3].launch, Some(Launch::link("github.com")));
+        assert!(!rows[3].opens);
         snapshot.sync.github_connect = GitHubConnect::Connecting;
         let rows = main_rows(&page(&snapshot));
         assert_eq!(rows[3].label, "Connecting to GitHub");
@@ -1038,18 +1055,34 @@ mod tests {
             Backup {
                 file_name: "20260811-103430-conflict.json".to_string(),
                 size_bytes: 97_280,
+                opens_with: Some("Visual Studio Code".to_string()),
             },
             Backup {
                 file_name: "20260426-075742-pushed.json".to_string(),
                 size_bytes: 7_900,
+                opens_with: None,
             },
         ]));
         assert_eq!(
             labels(&rows),
             ["backups", "11 Aug 2026, 10:34", "26 Apr 2026, 07:57"]
         );
-        assert_eq!(rows[1].detail, "Saved when both sides had changes");
-        assert_eq!(rows[2].detail, "Saved before sync replaced it");
+        assert_eq!(
+            rows[1].detail,
+            "20260811-103430-conflict.json · Saved when both sides had changes"
+        );
+        assert_eq!(
+            rows[2].detail,
+            "20260426-075742-pushed.json · Saved before sync replaced it"
+        );
+        assert_eq!(
+            rows[1].launch,
+            Some(Launch::file(
+                "20260811-103430-conflict.json",
+                Some("Visual Studio Code".to_string())
+            ))
+        );
+        assert!(!rows[1].opens);
         assert_eq!(
             rows[1].action,
             Some(Action::LaunchBackup(

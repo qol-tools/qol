@@ -5,7 +5,7 @@ use super::RevealPlan;
 
 pub(super) use super::commands::{open, open_checked};
 pub(super) use super::handlers::{
-    file_type, open_handlers, open_with_handler, open_with_supported,
+    default_app_name, file_type, open_handlers, open_with_handler, open_with_supported,
 };
 
 const TERMINALS: &[&str] = &[

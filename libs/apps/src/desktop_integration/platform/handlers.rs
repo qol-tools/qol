@@ -48,6 +48,14 @@ pub(in super::super) fn open_handlers(path: &Path) -> io::Result<Vec<OpenHandler
     Ok(handlers_for(&candidates(), &mime, default.as_deref()))
 }
 
+pub(in super::super) fn default_app_name(path: &Path) -> Option<String> {
+    open_handlers(path)
+        .ok()?
+        .into_iter()
+        .find(|handler| handler.is_default)
+        .map(|handler| handler.name)
+}
+
 pub(in super::super) fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {
     let candidate = candidates()
         .into_iter()

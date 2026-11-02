@@ -68,6 +68,10 @@ pub(super) fn open_handlers(path: &Path) -> io::Result<Vec<super::OpenHandler>> 
     imp::open_handlers(path)
 }
 
+pub(super) fn default_app_name(path: &Path) -> Option<String> {
+    imp::default_app_name(path)
+}
+
 pub(super) fn open_with_handler(handler: &str, paths: &[PathBuf]) -> io::Result<()> {
     imp::open_with_handler(handler, paths)
 }

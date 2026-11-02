@@ -17,11 +17,20 @@ use crate::features::connection_health::SendObserved;
 use crate::features::profile::registry::{
     clear_sync_target, load_sync_target, save_sync_target, SyncTarget,
 };
+use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 
 const AUTO_PUSH_INTERVAL_SECS: u64 = 10;
 const DEFAULT_REPO_NAME: &str = "qol-tray-profiles";
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BackupFile {
+    #[serde(flatten)]
+    pub entry: SyncBackupEntry,
+    pub opens_with: Option<String>,
+}
 
 fn sync_paths() -> Result<SyncPaths> {
     Ok(SyncPaths::new(crate::paths::profile_dir()?))
@@ -242,9 +251,21 @@ impl SyncService {
         super::open_path(&path)
     }
 
-    pub fn list_backups(&self) -> Result<Vec<SyncBackupEntry>> {
+    pub fn list_backups(&self) -> Result<Vec<BackupFile>> {
         let dir = sync_paths().ok().map(|paths| paths.backups_dir());
-        Ok(list_backup_entries(dir.as_deref()))
+        let mut apps: HashMap<Option<OsString>, Option<String>> = HashMap::new();
+        Ok(list_backup_entries(dir.as_deref())
+            .into_iter()
+            .map(|entry| {
+                let opens_with = dir.as_deref().and_then(|dir| {
+                    let path = dir.join(&entry.file_name);
+                    apps.entry(path.extension().map(OsString::from))
+                        .or_insert_with(|| qol_apps::desktop_integration::default_app_name(&path))
+                        .clone()
+                });
+                BackupFile { entry, opens_with }
+            })
+            .collect())
     }
 
     pub fn preview_backup(&self, file_name: &str) -> Result<SyncBackupPreview> {

@@ -5,6 +5,7 @@ use crate::kit::kit;
 use crate::kit::Kit;
 
 use super::choice_value::SettingsChevron;
+use super::launch::{Launch, SettingsLaunch};
 use super::{
     attention_dot, paint_settings_attention, paint_settings_selection, RowGround, DIMMED_OPACITY,
     SETTINGS_ROW_GROUP,
@@ -31,6 +32,7 @@ pub struct SettingsRow {
     attention: bool,
     lift: f32,
     opens: bool,
+    launch: Option<Launch>,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
 }
@@ -63,6 +65,7 @@ impl SettingsRow {
             attention: false,
             lift: 0.0,
             opens: false,
+            launch: None,
             children: Vec::new(),
             on_click: None,
         }
@@ -94,6 +97,11 @@ impl SettingsRow {
     /// part, so every row that opens something shows it the same way.
     pub fn opens(mut self, opens: bool) -> Self {
         self.opens = opens;
+        self
+    }
+
+    pub fn launches(mut self, launch: Option<Launch>) -> Self {
+        self.launch = launch;
         self
     }
 
@@ -154,6 +162,13 @@ impl RenderOnce for SettingsRow {
             .children(self.children)
             .when(self.opens, |row| {
                 row.child(SettingsChevron::new(
+                    RowGround::of(self.selected, self.focused),
+                    self.kit,
+                ))
+            })
+            .when_some(self.launch, |row, launch| {
+                row.child(SettingsLaunch::new(
+                    launch,
                     RowGround::of(self.selected, self.focused),
                     self.kit,
                 ))
