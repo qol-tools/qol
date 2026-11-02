@@ -196,6 +196,7 @@ impl Capture {
         let mut setup = ffi::ToSysSetupParams::new(buffer);
         // SAFETY: the buffer slot is boxed, so NvFBC can keep writing the frame pointer into it for the session's life.
         capture.check(unsafe { (capture.api.to_sys_set_up)(capture.handle, &mut setup) })?;
+        capture.grab()?;
         Ok(capture)
     }
 

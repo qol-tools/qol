@@ -176,7 +176,10 @@ impl CreateCaptureSessionParams {
             tracking_type,
             output_id,
             capture_box,
-            frame_size: Size::default(),
+            frame_size: Size {
+                w: capture_box.w,
+                h: capture_box.h,
+            },
             with_cursor: TRUE,
             disable_auto_modeset_recovery: 0,
             round_frame_size: 0,
@@ -301,6 +304,30 @@ mod tests {
         {
             assert_eq!(size, expected_size);
             assert_eq!(version, expected_version);
+        }
+    }
+
+    #[test]
+    fn frames_are_the_size_of_the_capture_box() {
+        let cases = [
+            (NvBox::default(), (0, 0)),
+            (
+                NvBox {
+                    x: 100,
+                    y: 60,
+                    w: 1126,
+                    h: 724,
+                },
+                (1126, 724),
+            ),
+        ];
+        for (capture_box, expected) in cases {
+            let params = CreateCaptureSessionParams::new(TRACKING_OUTPUT, 0, capture_box, 16);
+            assert_eq!(
+                (params.frame_size.w, params.frame_size.h),
+                expected,
+                "{capture_box:?}"
+            );
         }
     }
 }
