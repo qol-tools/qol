@@ -126,8 +126,10 @@ impl PlatformAdapter for Adapter {
 fn compiled_rules() -> Result<karabiner::compile::Compiled> {
     let snapshot = layout::LayoutSnapshot::read_current()?;
     let resolved = remap::resolve(&config::load_config());
+    let physical = snapshot.physical;
     Ok(karabiner::compile::compile(&resolved, &snapshot)
-        .with_system_modifier_keys(karabiner::system_modifier_keys::read()))
+        .with_system_modifier_keys(karabiner::system_modifier_keys::read())
+        .with_hotkeys(&karabiner::hotkeys::from_tray(), physical))
 }
 
 fn selected_backend(helper: &Probe<doctor::HelperState>) -> Selection {

@@ -152,6 +152,7 @@ fn spawn_reader(mut subscription: Subscription) -> mpsc::Receiver<InputEvent> {
                 RuntimeEvent::ActiveMonitorChanged { .. }
                 | RuntimeEvent::ConnectionHealthChanged { .. }
                 | RuntimeEvent::FocusChanged { .. }
+                | RuntimeEvent::HotkeysChanged { .. }
                 | RuntimeEvent::LauncherAppsSynced { .. }
                 | RuntimeEvent::MonitorsChanged { .. } => continue,
             };

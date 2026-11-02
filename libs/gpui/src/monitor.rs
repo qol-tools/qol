@@ -126,6 +126,7 @@ impl ActiveMonitor {
             | RuntimeEvent::FocusChanged { monitor, .. } => (*monitor).map(Self::from_bounds),
             RuntimeEvent::ConnectionHealthChanged { .. }
             | RuntimeEvent::CursorMoved { .. }
+            | RuntimeEvent::HotkeysChanged { .. }
             | RuntimeEvent::LauncherAppsSynced { .. }
             | RuntimeEvent::MonitorsChanged { .. }
             | RuntimeEvent::WindowListChanged => None,

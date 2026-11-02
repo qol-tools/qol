@@ -23,6 +23,7 @@ use std::time::Duration;
 
 mod layout;
 mod recorder;
+mod relay;
 
 pub(crate) const KEEP_REGISTERED_ONE_SHOTS: bool = false;
 
@@ -49,8 +50,18 @@ pub(crate) fn install(
     reload_rx: Receiver<()>,
     rebuild: RebuildBindings,
 ) -> Result<()> {
-    let matcher = Arc::new(RwLock::new(KeyMatcher::new(bindings, parse_mac_combo)));
+    let matcher = Arc::new(RwLock::new(KeyMatcher::new(
+        bindings.clone(),
+        parse_mac_combo,
+    )));
     let fire_tx = key_matcher::spawn_fire_thread(on_fire)?;
+    relay::start(matcher.clone(), fire_tx.clone());
+    relay::announce(&bindings);
+    let rebuild: RebuildBindings = Box::new(move || {
+        let bindings = rebuild()?;
+        relay::announce(&bindings);
+        Ok(bindings)
+    });
     key_matcher::spawn_reload_thread(matcher.clone(), reload_rx, rebuild, fire_tx.clone());
 
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();

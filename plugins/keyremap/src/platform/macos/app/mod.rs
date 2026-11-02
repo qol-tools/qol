@@ -6,6 +6,7 @@ use anyhow::Result;
 use super::input::backends::hid_helper;
 use super::input::{selection, InputState};
 use super::karabiner::backend::{Backend, Installed};
+use super::karabiner::hotkeys;
 use super::karabiner::store::Store;
 use super::layout::{LayoutSnapshot, LayoutStore};
 use super::tap::TapState;
@@ -17,7 +18,7 @@ const LAYOUT_POLL: Duration = Duration::from_secs(1);
 struct Services {
     state: Arc<TapState>,
     layouts: Arc<LayoutStore>,
-    karabiner: Option<Mutex<Backend<Installed>>>,
+    karabiner: Option<Arc<Mutex<Backend<Installed>>>>,
 }
 
 impl Services {
@@ -63,6 +64,20 @@ impl engine::Remapper for Services {
     }
 }
 
+fn follow_hotkeys(
+    karabiner: Arc<Mutex<Backend<Installed>>>,
+    state: Arc<TapState>,
+    layouts: Arc<LayoutStore>,
+) {
+    hotkeys::follow(move |hotkeys| {
+        let config = state.config();
+        let layout = layouts.get();
+        if let Ok(mut backend) = karabiner.lock() {
+            backend.follow_hotkeys(hotkeys, &config, &layout);
+        }
+    });
+}
+
 pub(crate) fn run() -> Result<()> {
     let layouts = Arc::new(LayoutStore::new(
         LayoutSnapshot::read_current().unwrap_or_else(|error| {
@@ -81,7 +96,7 @@ pub(crate) fn run() -> Result<()> {
             let app_tracker = super::app_tracker::AppTracker::start();
             let state = Arc::new(TapState::new(resolved, app_tracker, Arc::clone(&input)));
             let karabiner = match Store::locate() {
-                Ok(store) => Some(Mutex::new(Backend::new(Installed(store)))),
+                Ok(store) => Some(Arc::new(Mutex::new(Backend::new(Installed(store))))),
                 Err(error) => {
                     log::warn!("Karabiner-Elements backend unavailable: {error:#}");
                     None
@@ -93,6 +108,13 @@ pub(crate) fn run() -> Result<()> {
                 karabiner,
             };
             services.choose(choice);
+            if let Some(karabiner) = &services.karabiner {
+                follow_hotkeys(
+                    Arc::clone(karabiner),
+                    Arc::clone(&state),
+                    Arc::clone(&layouts),
+                );
+            }
             super::tap::start_tap(Arc::clone(&state));
             hid_helper::start(Arc::clone(&state), Arc::clone(&layouts));
             super::secure_input::watch(Arc::clone(state.input()));

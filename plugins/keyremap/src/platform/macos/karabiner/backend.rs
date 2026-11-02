@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use super::compile::{self, Compiled};
 use super::document::Synced;
+use super::hotkeys::Hotkeys;
 use super::service::{self, Probe};
 use super::store::Store;
 use super::system_modifier_keys::{self, DeviceModifiers};
@@ -77,6 +78,7 @@ pub(crate) struct Backend<K> {
     karabiner: K,
     state: State,
     said: HashSet<String>,
+    hotkeys: Hotkeys,
 }
 
 impl<K: Karabiner> Backend<K> {
@@ -85,6 +87,7 @@ impl<K: Karabiner> Backend<K> {
             karabiner,
             state: State::Unknown,
             said: HashSet::new(),
+            hotkeys: Hotkeys::default(),
         }
     }
 
@@ -149,6 +152,22 @@ impl<K: Karabiner> Backend<K> {
         }
     }
 
+    pub(crate) fn follow_hotkeys(
+        &mut self,
+        hotkeys: Hotkeys,
+        config: &ResolvedConfig,
+        layout: &LayoutSnapshot,
+    ) {
+        if self.hotkeys == hotkeys {
+            return;
+        }
+        self.hotkeys = hotkeys;
+        if matches!(self.state, State::Active { .. }) {
+            log::info!("qol hotkeys changed; updating Karabiner-Elements");
+            self.refresh(config, layout);
+        }
+    }
+
     fn follow_system_keys(&mut self, config: &ResolvedConfig, layout: &LayoutSnapshot) {
         let State::Active { system_keys, .. } = &self.state else {
             return;
@@ -162,6 +181,7 @@ impl<K: Karabiner> Backend<K> {
     fn compile(&self, config: &ResolvedConfig, layout: &LayoutSnapshot) -> Compiled {
         compile::compile(config, layout)
             .with_system_modifier_keys(self.karabiner.system_modifier_keys())
+            .with_hotkeys(&self.hotkeys, layout.physical)
     }
 
     pub(crate) fn stop(&mut self) {
@@ -613,6 +633,36 @@ mod tests {
         );
         assert_eq!(input.backend.get(), BackendId::EventTap);
         assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn qol_hotkeys_are_written_while_active_and_kept_for_the_next_activation() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let hotkeys = Hotkeys {
+            relay: Some(std::path::PathBuf::from("/run/qol/relay.sock")),
+            combos: vec![qol_runtime::hotkey_relay::HotkeyCombo {
+                mods: vec![qol_runtime::hotkey_relay::HotkeyModifier::Alt],
+                mac_keycode: qol_hotkeys::macos_keycode::TAB,
+            }],
+        };
+
+        backend.follow_hotkeys(hotkeys.clone(), &config(true), &layout("us"));
+        assert!(
+            fake.take().is_empty(),
+            "nothing is written before Karabiner-Elements is chosen"
+        );
+
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        assert_eq!(fake.take(), vec!["sync 2", "active true"]);
+
+        backend.follow_hotkeys(hotkeys, &config(true), &layout("us"));
+        assert!(fake.take().is_empty(), "unchanged hotkeys rewrite nothing");
+
+        backend.follow_hotkeys(Hotkeys::default(), &config(true), &layout("us"));
+        assert_eq!(fake.take(), vec!["sync 1", "active true"]);
     }
 
     #[test]

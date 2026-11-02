@@ -1,6 +1,7 @@
 pub mod display;
 pub mod event_tap_trace;
 pub mod hook_liveness;
+pub mod hotkey_relay;
 pub mod keyremap_marker;
 pub mod local_http;
 pub mod pane_field;

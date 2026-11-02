@@ -1,6 +1,7 @@
 pub(crate) mod backend;
 pub(crate) mod compile;
 pub(crate) mod document;
+pub(crate) mod hotkeys;
 mod key_codes;
 pub(crate) mod service;
 pub(crate) mod store;
