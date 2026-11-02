@@ -29,7 +29,7 @@ pub(super) enum Action {
     NewProfile,
     Sync,
     Connect,
-    OpenGitHub,
+    VisitGitHub,
     Auto {
         pull_on_launch: bool,
         push_on_change: bool,
@@ -39,7 +39,7 @@ pub(super) enum Action {
     Pick(usize),
     Resolve,
     OpenBackups,
-    OpenBackup(String),
+    LaunchBackup(String),
     Export,
     Import,
 }
@@ -50,7 +50,7 @@ impl Action {
     pub(super) fn opens_a_level(&self) -> bool {
         matches!(
             self,
-            Action::OpenProfiles | Action::OpenReview | Action::OpenBackups | Action::OpenBackup(_)
+            Action::OpenProfiles | Action::OpenReview | Action::OpenBackups
         )
     }
 }
@@ -310,13 +310,13 @@ pub(super) fn backup_rows(backups: Option<&[Backup]>) -> Vec<Row> {
         Row::new(
             backup_when(&backup.file_name).unwrap_or_else(|| backup.file_name.clone()),
             backup_kind(&backup.file_name),
-            Some(Action::OpenBackup(backup.file_name.clone())),
+            Some(Action::LaunchBackup(backup.file_name.clone())),
         )
         .value(Value::Text(
             qol_gpui::format::format_bytes(backup.size_bytes),
             SettingsValueTone::Muted,
         ))
-        .opens()
+        .verb("open")
     }));
     rows
 }
@@ -336,7 +336,7 @@ fn status_row(sync: &SyncStatus, syncing: bool, now: i64) -> Row {
                     "Enter {user_code} at {}. The code is copied.",
                     strip_scheme(verification_uri)
                 ),
-                Some(Action::OpenGitHub),
+                Some(Action::VisitGitHub),
             )
             .dot(Dot::Warning)
             .chip("open github")
@@ -839,7 +839,7 @@ mod tests {
             rows[3].detail,
             "Enter WDJB-MJHT at github.com/login/device. The code is copied."
         );
-        assert_eq!(rows[3].action, Some(Action::OpenGitHub));
+        assert_eq!(rows[3].action, Some(Action::VisitGitHub));
         snapshot.sync.github_connect = GitHubConnect::Connecting;
         let rows = main_rows(&page(&snapshot));
         assert_eq!(rows[3].label, "Connecting to GitHub");
@@ -1052,7 +1052,7 @@ mod tests {
         assert_eq!(rows[2].detail, "Saved before sync replaced it");
         assert_eq!(
             rows[1].action,
-            Some(Action::OpenBackup(
+            Some(Action::LaunchBackup(
                 "20260811-103430-conflict.json".to_string()
             ))
         );

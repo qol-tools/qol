@@ -294,7 +294,7 @@ impl ProfilesView {
                 },
                 cx,
             ),
-            Action::OpenGitHub => {
+            Action::VisitGitHub => {
                 if let Some(GitHubConnect::Waiting {
                     user_code,
                     verification_uri,
@@ -360,7 +360,7 @@ impl ProfilesView {
                     cx,
                 );
             }
-            Action::OpenBackup(file_name) => {
+            Action::LaunchBackup(file_name) => {
                 self.run(move || data::open_backup(&file_name), |_, (), _| {}, cx)
             }
             Action::Export => self.export(window, cx),
