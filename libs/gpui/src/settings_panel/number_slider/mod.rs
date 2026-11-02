@@ -62,6 +62,7 @@ pub struct SliderField<'a, K> {
     pub edit: Option<&'a NumberEdit>,
     pub dragging: bool,
     pub unit: Option<SharedString>,
+    pub zero: Option<SharedString>,
 }
 
 pub(in crate::settings_panel) struct FieldLook {
@@ -239,6 +240,7 @@ impl<K: Clone + Eq + Hash + 'static> NumberSlider<K> {
             edit,
             dragging,
             unit,
+            zero,
         } = field;
         let FieldLook {
             style,
@@ -268,10 +270,7 @@ impl<K: Clone + Eq + Hash + 'static> NumberSlider<K> {
             cue.bloom = self.bloom(key.clone(), cue.glowing);
             cue.settle = self.settle(key, fraction, pointer.is_some());
         }
-        let shown = match (style, text) {
-            (Some(_), Some(text)) => text.to_string(),
-            _ => display,
-        };
+        let (shown, unit) = shown_value(style, text, display, zero, number.value, unit);
         number_field(
             NumberText {
                 widest: widest_number(&number, &shown),
@@ -320,5 +319,22 @@ impl<K: Clone + Eq + Hash + 'static> NumberSlider<K> {
             .blooms
             .get(&key)
             .and_then(|bloom| bloom.in_flight(now))
+    }
+}
+
+pub(in crate::settings_panel) fn shown_value(
+    style: Option<SliderStyle>,
+    text: Option<&str>,
+    display: String,
+    zero: Option<SharedString>,
+    value: f64,
+    unit: Option<SharedString>,
+) -> (String, Option<SharedString>) {
+    if let (Some(_), Some(text)) = (style, text) {
+        return (text.to_string(), unit);
+    }
+    match zero.filter(|_| text.is_none() && value == 0.0) {
+        Some(word) => (word.to_string(), None),
+        None => (display, unit),
     }
 }

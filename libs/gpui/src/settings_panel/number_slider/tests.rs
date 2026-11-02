@@ -1,6 +1,8 @@
 use super::super::components::SliderStyle;
 use super::numbers::SCRUB_SLOP;
-use super::{number_key, NumberEdit, NumberKey, NumberRelease, NumberSlider, NumberSpec, Scrub};
+use super::{
+    number_key, shown_value, NumberEdit, NumberKey, NumberRelease, NumberSlider, NumberSpec, Scrub,
+};
 
 const HOLD: NumberSpec = NumberSpec {
     value: 1000.0,
@@ -327,4 +329,31 @@ fn a_host_drag_scrubs_from_the_pressed_value_and_follows_it() {
     let mut unbounded = NumberSlider::<usize>::default();
     unbounded.press(0.5);
     assert_eq!(unbounded.drag(4, 1.0, false, &open), None);
+}
+
+#[test]
+fn a_zero_word_replaces_zero_and_its_unit_until_typing() {
+    let compact = Some(SliderStyle::Compact);
+    let cases = [
+        (compact, None, 0.0, Some("Off"), ("Off", None)),
+        (compact, Some("0"), 0.0, Some("Off"), ("0", Some("ms"))),
+        (compact, None, 50.0, Some("Off"), ("50", Some("ms"))),
+        (compact, None, 0.0, None, ("0", Some("ms"))),
+        (None, None, 0.0, Some("Off"), ("Off", None)),
+    ];
+    for (style, text, value, zero, (shown, unit)) in cases {
+        let display = if value == 0.0 { "0" } else { "50" };
+        assert_eq!(
+            shown_value(
+                style,
+                text,
+                display.to_string(),
+                zero.map(Into::into),
+                value,
+                Some("ms".into()),
+            ),
+            (shown.to_string(), unit.map(Into::into)),
+            "text {text:?} value {value} zero {zero:?}"
+        );
+    }
 }
