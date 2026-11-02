@@ -147,6 +147,7 @@ mod tests {
                 json!({ "from": { "key_code": "caps_lock" }, "to": [{ "key_code": "escape" }] }),
             ],
             gaps: Vec::new(),
+            device_modifications: Vec::new(),
         }
     }
 

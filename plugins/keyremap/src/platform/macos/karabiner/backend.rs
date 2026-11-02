@@ -7,6 +7,7 @@ use super::compile::{self, Compiled};
 use super::document::Synced;
 use super::service::{self, Probe};
 use super::store::Store;
+use super::system_modifier_keys::{self, DeviceModifiers};
 use crate::platform::engine::config::KeyBackendChoice;
 use crate::platform::engine::remap::ResolvedConfig;
 use crate::platform::macos::input::selection::Availability;
@@ -20,6 +21,7 @@ pub(crate) trait Karabiner {
     fn sync(&self, compiled: &Compiled) -> Result<Synced>;
     fn remove(&self) -> Result<()>;
     fn set_active(&self, active: bool) -> Result<()>;
+    fn system_modifier_keys(&self) -> Vec<DeviceModifiers>;
 }
 
 pub(crate) struct Installed(pub(crate) Store);
@@ -40,6 +42,10 @@ impl Karabiner for Installed {
     fn set_active(&self, active: bool) -> Result<()> {
         service::set_active(active)
     }
+
+    fn system_modifier_keys(&self) -> Vec<DeviceModifiers> {
+        system_modifier_keys::read()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,6 +59,7 @@ enum State {
         core_pid: Option<u32>,
         layout: String,
         enabled: bool,
+        system_keys: Vec<DeviceModifiers>,
         next_probe: Instant,
     },
 }
@@ -129,7 +136,23 @@ impl<K: Karabiner> Backend<K> {
         }
         if due {
             self.check_service(config, input, now);
+            self.follow_system_keys(config, layout);
         }
+    }
+
+    fn follow_system_keys(&mut self, config: &ResolvedConfig, layout: &LayoutSnapshot) {
+        let State::Active { system_keys, .. } = &self.state else {
+            return;
+        };
+        if self.karabiner.system_modifier_keys() != *system_keys {
+            log::info!("System Settings modifier keys changed; updating Karabiner-Elements");
+            self.refresh(config, layout);
+        }
+    }
+
+    fn compile(&self, config: &ResolvedConfig, layout: &LayoutSnapshot) -> Compiled {
+        compile::compile(config, layout)
+            .with_system_modifier_keys(self.karabiner.system_modifier_keys())
     }
 
     pub(crate) fn stop(&mut self) {
@@ -167,7 +190,7 @@ impl<K: Karabiner> Backend<K> {
             };
             return;
         }
-        let compiled = compile::compile(config, layout);
+        let compiled = self.compile(config, layout);
         if !self.write(&compiled) {
             self.state = State::Waiting {
                 next_probe: now + PROBE_INTERVAL,
@@ -191,12 +214,13 @@ impl<K: Karabiner> Backend<K> {
             core_pid: probe.core_pid,
             layout: layout.id.clone(),
             enabled: config.enabled,
+            system_keys: compiled.device_modifications,
             next_probe: now + PROBE_INTERVAL,
         };
     }
 
     fn refresh(&mut self, config: &ResolvedConfig, layout: &LayoutSnapshot) {
-        let compiled = compile::compile(config, layout);
+        let compiled = self.compile(config, layout);
         let written = self.write(&compiled);
         let result = self.karabiner.set_active(config.enabled);
         let set = result.is_ok();
@@ -204,11 +228,13 @@ impl<K: Karabiner> Backend<K> {
         if let State::Active {
             layout: compiled_for,
             enabled,
+            system_keys,
             ..
         } = &mut self.state
         {
             if written {
                 *compiled_for = layout.id.clone();
+                *system_keys = compiled.device_modifications;
             }
             if set {
                 *enabled = config.enabled;
@@ -330,6 +356,7 @@ mod tests {
         calls: Rc<RefCell<Vec<String>>>,
         probe: Rc<RefCell<Option<Probe>>>,
         cli_fails: Rc<std::cell::Cell<bool>>,
+        system_keys: Rc<RefCell<Vec<DeviceModifiers>>>,
     }
 
     impl Fake {
@@ -388,6 +415,10 @@ mod tests {
                 anyhow::bail!("karabiner_cli failed");
             }
             Ok(())
+        }
+
+        fn system_modifier_keys(&self) -> Vec<DeviceModifiers> {
+            self.system_keys.borrow().clone()
         }
     }
 
@@ -651,6 +682,47 @@ mod tests {
         backend.idle_at(&config(false), &layout("us"), &input, start);
         assert_eq!(fake.take(), vec!["sync 1", "active false"]);
         backend.idle_at(&config(false), &layout("us"), &input, start);
+        assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn changed_system_settings_modifier_keys_are_written_again() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        fake.take();
+
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start + PROBE_INTERVAL * 2,
+        );
+        assert!(fake.take().is_empty());
+
+        *fake.system_keys.borrow_mut() = vec![DeviceModifiers {
+            identifiers: json!({ "is_keyboard": true }),
+            simple_modifications: vec![json!({
+                "from": { "key_code": "left_command" },
+                "to": [{ "key_code": "left_option" }]
+            })],
+        }];
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start + PROBE_INTERVAL * 4,
+        );
+        assert_eq!(fake.take(), vec!["sync 1", "active true"]);
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start + PROBE_INTERVAL * 6,
+        );
         assert!(fake.take().is_empty());
     }
 }
