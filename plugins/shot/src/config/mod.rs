@@ -75,6 +75,10 @@ pub struct AudioConfig {
     pub mic_device: String,
     #[serde(default = "default_string_default")]
     pub system_device: String,
+    #[serde(default)]
+    pub apps: Vec<String>,
+    #[serde(default)]
+    pub on_screen_app: bool,
 }
 
 impl Default for AudioConfig {
@@ -84,6 +88,8 @@ impl Default for AudioConfig {
             inputs: default_audio_inputs(),
             mic_device: default_string_default(),
             system_device: default_string_default(),
+            apps: Vec::new(),
+            on_screen_app: false,
         }
     }
 }
@@ -165,6 +171,8 @@ mod tests {
         assert_eq!(defaults.audio.enabled, default_true());
         assert_eq!(defaults.audio.mic_device, default_string_default());
         assert_eq!(defaults.audio.system_device, default_string_default());
+        assert!(defaults.audio.apps.is_empty());
+        assert!(!defaults.audio.on_screen_app);
         assert_eq!(defaults.video.crf, default_crf());
         assert_eq!(defaults.video.preset, default_preset());
         assert_eq!(defaults.video.framerate, default_framerate());

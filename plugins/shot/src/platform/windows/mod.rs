@@ -15,8 +15,8 @@ pub use recording::{
 };
 pub use selector::{monitor_capture_rect, select_region, select_region_in_app};
 pub use system::{
-    external_services_check, list_audio_sinks, list_audio_sources, platform_supported_check,
-    process_alive, required_binaries_check,
+    external_services_check, list_audio_apps, list_audio_sinks, list_audio_sources,
+    platform_supported_check, process_alive, required_binaries_check,
 };
 
 pub fn directory_is_read_only(_metadata: &std::fs::Metadata) -> bool {

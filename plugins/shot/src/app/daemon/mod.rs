@@ -63,6 +63,7 @@ fn parse_command(cmd: &str) -> ReadResult<Command> {
         "reload" => ReadResult::Command(Command::Reload),
         "audio_sources" => audio_device_payload(crate::platform::list_audio_sources()),
         "audio_sinks" => audio_device_payload(crate::platform::list_audio_sinks()),
+        "audio_apps" => audio_device_payload(crate::platform::list_audio_apps()),
         theme if theme == "theme" || theme.starts_with("theme ") => {
             ReadResult::Command(Command::Theme)
         }

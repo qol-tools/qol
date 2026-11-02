@@ -13,6 +13,7 @@ use crate::capture::space::CaptureKind;
 use crate::ui::region_selector::{DetectedTarget, SnapshotTargets};
 use crate::{Monitor, Rect};
 
+mod app_audio;
 mod clipboard;
 mod display;
 mod nvfbc;
@@ -36,8 +37,8 @@ pub use recording::{
 };
 use system::resolve_command;
 pub use system::{
-    external_services_check, list_audio_sinks, list_audio_sources, platform_supported_check,
-    required_binaries_check,
+    external_services_check, list_audio_apps, list_audio_sinks, list_audio_sources,
+    platform_supported_check, required_binaries_check,
 };
 pub use window::{
     configure_pin_window, pin_focus, pin_release_focus, pin_resize_session, prepare_pin_window,
@@ -124,7 +125,7 @@ pub fn after_pin_open(title: &str) {
 }
 
 pub fn run_internal_mode() -> Option<std::process::ExitCode> {
-    recording::run_internal_capture_helper()
+    recording::run_internal_capture_helper().or_else(app_audio::run_internal_helper)
 }
 
 pub fn select_region(kind: CaptureKind, frozen_frame: Option<FrozenFrame>) -> Result<Option<Rect>> {
@@ -420,10 +421,38 @@ fn runtime_monitor_rects() -> Vec<Rect> {
 }
 
 fn x11_stacked_window_rects(include_frame: bool) -> Vec<Rect> {
-    x11_stacked_window_rects_impl(include_frame).unwrap_or_default()
+    x11_stacked_windows(include_frame)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect()
 }
 
-fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
+fn window_process_at(x: i32, y: i32) -> Option<u32> {
+    let (window, _) = x11_stacked_windows(false)?.into_iter().find(|(_, rect)| {
+        x >= rect.x && y >= rect.y && x < rect.x + rect.w && y < rect.y + rect.h
+    })?;
+    x11_window_pid(window)
+}
+
+fn x11_window_pid(window: u32) -> Option<u32> {
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+
+    let (conn, _) = x11rb::connect(None).ok()?;
+    let pid_atom = conn
+        .intern_atom(false, b"_NET_WM_PID")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    let reply = conn
+        .get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())?;
+    reply.value32().and_then(|mut values| values.next())
+}
+
+fn x11_stacked_windows(include_frame: bool) -> Option<Vec<(u32, Rect)>> {
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
@@ -527,7 +556,7 @@ fn x11_stacked_window_rects_impl(include_frame: bool) -> Option<Vec<Rect>> {
         if include_frame {
             rect = framed_rect(rect, extents(id, net_frame), extents(id, gtk_frame));
         }
-        rects.push(rect);
+        rects.push((id, rect));
     }
     qol_runtime::probe!(
         "SHOT_SELECT_DISCOVERY",
