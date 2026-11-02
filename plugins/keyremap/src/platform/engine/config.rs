@@ -96,15 +96,6 @@ pub enum CharRule {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum KeyRule {
-    Batch {
-        #[serde(default)]
-        from_mods: Vec<String>,
-        #[serde(default)]
-        to_mods: Vec<String>,
-        keys: Vec<String>,
-        #[serde(default)]
-        global: bool,
-    },
     Single {
         #[serde(default)]
         from_mods: Vec<String>,
@@ -112,6 +103,15 @@ pub enum KeyRule {
         #[serde(default)]
         to_mods: Vec<String>,
         to_key: String,
+        #[serde(default)]
+        global: bool,
+    },
+    Batch {
+        #[serde(default)]
+        from_mods: Vec<String>,
+        #[serde(default)]
+        to_mods: Vec<String>,
+        keys: Vec<String>,
         #[serde(default)]
         global: bool,
     },
@@ -236,6 +236,13 @@ mod tests {
             }
             _ => panic!("expected Single variant"),
         }
+    }
+
+    #[test]
+    fn a_single_rule_saved_with_an_empty_key_list_stays_single() {
+        let json = r#"{ "from_key": "$", "from_mods": [], "to_key": "<", "to_mods": [], "keys": [], "global": true }"#;
+        let rule: KeyRule = serde_json::from_str(json).expect("single rule should parse");
+        assert!(matches!(rule, KeyRule::Single { ref from_key, .. } if from_key == "$"));
     }
 
     #[test]
