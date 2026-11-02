@@ -71,6 +71,28 @@ default = "System default"
 [field.audio_system_device.option_pictures]
 default = "speaker-default"
 
+[field.audio_on_screen_app]
+type = "boolean"
+config_key = "audio.on_screen_app"
+label = "Record the app on screen"
+description = "With system audio off, recordings take the sound of the program whose window is in the middle of what you record, such as a game, and leave out Discord or a video. Only that one program counts, not programs it started. You still hear everything as usual. Browsers play sound from a helper program, so add them under Apps to record instead. Needs PipeWire."
+section = "audio"
+platforms = ["linux"]
+default = false
+
+[field.audio_apps]
+type = "string_array"
+config_key = "audio.apps"
+label = "Apps to record"
+description = "With system audio off, recordings also take the sound of these apps, wherever their windows are. You still hear everything as usual. Start the app first so it shows up here. Needs PipeWire."
+section = "audio"
+platforms = ["linux"]
+placeholder = "No apps"
+default = []
+query = "audio_apps"
+lookup_label = "apps"
+card_description = "Apps recordings always capture."
+
 [section.video]
 label = "Video"
 description = "Encoding defaults for the recording output."

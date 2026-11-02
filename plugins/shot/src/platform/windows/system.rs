@@ -71,6 +71,10 @@ pub fn list_audio_sinks() -> Vec<AudioDevice> {
     audio_devices("output", devices::list_outputs())
 }
 
+pub fn list_audio_apps() -> Vec<AudioDevice> {
+    Vec::new()
+}
+
 fn audio_devices(
     direction: &str,
     listed: Result<Vec<devices::AudioDevice>, qol_audio::AudioError>,

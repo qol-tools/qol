@@ -407,3 +407,7 @@ pub fn list_audio_sources() -> Vec<crate::platform::AudioDevice> {
 pub fn list_audio_sinks() -> Vec<crate::platform::AudioDevice> {
     Vec::new()
 }
+
+pub fn list_audio_apps() -> Vec<crate::platform::AudioDevice> {
+    Vec::new()
+}

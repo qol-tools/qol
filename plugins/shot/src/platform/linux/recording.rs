@@ -150,6 +150,18 @@ pub(super) fn run_internal_capture_helper() -> Option<ExitCode> {
 }
 
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
+    let tap =
+        super::app_audio::Tap::open(config, rect).context("failed to record the chosen apps")?;
+    let started = start_backend(rect, config, output_file);
+    match (tap, &started) {
+        (Some(tap), Ok(session)) => tap.keep(session),
+        (Some(tap), Err(_)) => tap.close(),
+        (None, _) => {}
+    }
+    started
+}
+
+fn start_backend(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let rect = &even_dimensions(*rect);
     if nvenc_accepts(rect) && ffmpeg_nvenc_available(config) {
         match start_nvfbc_capture(rect, config, output_file) {
@@ -953,6 +965,8 @@ fn audio_inputs(config: &Config) -> Vec<String> {
     }
     if config.audio.inputs.iter().any(|input| input == "system") {
         inputs.push(format!("{}.monitor", config.audio.system_device));
+    } else if super::app_audio::records_apps(config) {
+        inputs.push(super::app_audio::monitor_source());
     }
     inputs
 }
@@ -1198,11 +1212,36 @@ pub fn stop_capture(session: &CaptureSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote, nvenc_accepts,
-        nvfbc_ffmpeg_args, x11_display_from, x11grab_args, CinnamonCaptureRequest, CinnamonEncoder,
-        X11grabEncoder,
+        audio_inputs, cinnamon_capture_file, cinnamon_pipeline, cinnamon_start_script, gst_quote,
+        nvenc_accepts, nvfbc_ffmpeg_args, x11_display_from, x11grab_args, CinnamonCaptureRequest,
+        CinnamonEncoder, X11grabEncoder,
     };
     use crate::{Config, Rect};
+
+    #[test]
+    fn audio_inputs_record_the_chosen_devices_and_apps() {
+        type Case<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let cases: [Case; 6] = [
+            (&["mic"], &[], &["mic-in"]),
+            (&["system"], &[], &["speakers.monitor"]),
+            (&[], &["KCD2"], &["qol_shot_apps.monitor"]),
+            (&["mic"], &["KCD2"], &["mic-in", "qol_shot_apps.monitor"]),
+            (&["system"], &["KCD2"], &["speakers.monitor"]),
+            (&[], &[], &[]),
+        ];
+        for (inputs, apps, expected) in cases {
+            let mut config = Config::default();
+            config.audio.enabled = true;
+            config.audio.mic_device = "mic-in".to_string();
+            config.audio.system_device = "speakers".to_string();
+            config.audio.inputs = inputs.iter().map(|input| (*input).to_string()).collect();
+            config.audio.apps = apps.iter().map(|app| (*app).to_string()).collect();
+            assert_eq!(audio_inputs(&config), expected, "{inputs:?} {apps:?}");
+            config.audio.apps.clear();
+            config.audio.on_screen_app = !apps.is_empty();
+            assert_eq!(audio_inputs(&config), expected, "on screen {inputs:?}");
+        }
+    }
 
     #[test]
     fn cinnamon_pipeline_fits_every_encoder_and_audio_shape() {

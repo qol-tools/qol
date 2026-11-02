@@ -108,6 +108,17 @@ pub fn list_audio_sinks() -> Vec<AudioDevice> {
     audio_devices(AudioDirection::Output)
 }
 
+pub fn list_audio_apps() -> Vec<AudioDevice> {
+    super::app_audio::playing_apps()
+        .into_iter()
+        .map(|app| AudioDevice {
+            label: app.clone(),
+            value: app,
+            picture: None,
+        })
+        .collect()
+}
+
 fn audio_devices(direction: AudioDirection) -> Vec<AudioDevice> {
     match devices::list(native_direction(direction)) {
         Ok(devices) => devices
