@@ -45,9 +45,10 @@ const CHOOSE_DEPTH: usize = EDITOR_DEPTH + 1;
 const OS_ONLY_LABEL: &str = "Only on this kind of computer";
 const HOLD_LABEL: (&str, &str) = (
     "Hold to run",
-    "Runs once the keys are held this long. 0 runs on press.",
+    "Runs once the keys are held this long. Off runs on press.",
 );
 const HOLD_UNIT: &str = "ms";
+const HOLD_OFF: &str = "Off";
 const SHORTCUT_ENABLED: (&str, &str) = ("Enabled", "The shortcut does nothing while this is off.");
 const SHOW_IN_LAUNCHER: (&str, &str) = (
     "Show in launcher",
@@ -1629,6 +1630,7 @@ impl NativeToolsView {
                 edit: draft.hold_edit.as_ref().filter(|_| selected),
                 dragging: self.hold_drag == Some(HOLD_FIELD),
                 unit: Some(HOLD_UNIT.into()),
+                zero: Some(HOLD_OFF.into()),
             },
             interact,
             row,

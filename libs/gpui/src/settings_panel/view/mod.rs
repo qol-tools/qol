@@ -3683,6 +3683,7 @@ impl SettingsPanelView {
                 edit,
                 dragging,
                 unit: number_unit(&self.level().rows[index]),
+                zero: None,
             },
             FieldLook {
                 style,
