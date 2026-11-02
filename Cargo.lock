@@ -6947,7 +6947,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.80.0"
+version = "1.81.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
