@@ -12,7 +12,8 @@ const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const RESUME = 'resume_session'
 const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
 const RESUME_TIMEOUT_MS = 60_000
-const CARRY_ON = 'Carry on from where this conversation stopped.'
+const WAIT_FOR_USER =
+  'The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const CLOSED_KEY = 'pane-closed'
@@ -552,7 +553,7 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   const cwd = typeof parsed.cwd === 'string' && parsed.cwd !== '' ? parsed.cwd : session.cwd
   const target = await placed($, parsed.agent_id, name, cwd)
   if (caller !== undefined) await markWorking($, parsed.agent_id, undefined, undefined, caller)
-  const sent = await sendTo($, target, session.message ?? CARRY_ON)
+  const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER)
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
@@ -771,7 +772,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: RESUME,
         description:
-          "Brings a closed terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, and sends it a message, so it continues with its history. Pass the transcript, cwd and title from its sessions_closed row, a `<key-name>: <friendly description>` description and the user's words as message; with no message it carries on from where it stopped. Fails when the transcript holds no answered prompt or is not a Claude Code conversation.",
+          "Brings a closed terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. Pass the transcript, cwd and title from its sessions_closed row and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. Fails when the transcript holds no answered prompt or is not a Claude Code conversation.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -779,7 +780,7 @@ export const register: Register = on => {
             cwd: { type: 'string', description: 'The absolute project folder the session ran in, from its sessions_closed row.' },
             description: { type: 'string', description: '`<key-name>: <friendly description>`, as for a new fork.' },
             title: { type: 'string', description: "The session's title, from its sessions_closed row." },
-            message: { type: 'string', description: "The user's own words for the fork." },
+            message: { type: 'string', description: "The user's own words for that session, only when they gave some beyond asking to bring it back; leave it out to have the fork wait for the user." },
           },
           required: ['transcript', 'cwd', 'description'],
         },

@@ -557,7 +557,7 @@ test('a closed terminal session comes back as a fork with its own conversation, 
 
   await $.tool.call({ tool, ...session } as any)
   expect(runs.at(-1)).toEqual(resumeArgv('/p/closed.jsonl'))
-  expect(sent.at(-1).text).toBe('Carry on from where this conversation stopped.')
+  expect(sent.at(-1).text).toBe('The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.')
 
   const empty = await $.tool.call({ tool, ...session, transcript: '/p/empty.jsonl' } as any)
   expect(String(empty.deny)).toContain('holds no conversation to resume')

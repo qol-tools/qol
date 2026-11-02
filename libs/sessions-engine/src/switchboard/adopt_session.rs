@@ -37,6 +37,10 @@ fn is_conversation(row: &Row) -> bool {
     matches!(text_of(row, "type"), Some("user" | "assistant"))
 }
 
+fn is_reply(row: &Row) -> bool {
+    text_of(row, "type") == Some("assistant")
+}
+
 fn is_boundary(row: &Row) -> bool {
     text_of(row, "type") == Some("system") && text_of(row, "subtype") == Some(COMPACT_BOUNDARY)
 }
@@ -106,7 +110,7 @@ pub(super) fn chain(text: &str) -> Vec<Row> {
         .map(|at| rows[at].clone())
         .collect();
     drop_unanswered_tool_calls(&mut kept);
-    if kept.iter().any(is_conversation) {
+    if kept.iter().any(is_reply) {
         kept
     } else {
         Vec::new()
@@ -465,6 +469,16 @@ mod tests {
         .concat();
         assert!(chain(&empty).is_empty());
         assert!(chain("").is_empty());
+        let unanswered = [
+            user("c1", None, json!("<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>")),
+            user("c2", Some("c1"), json!("<command-name>/recap</command-name>")),
+            row(json!({"type": "system", "subtype": "local_command", "uuid": "c3", "parentUuid": "c2", "content": "<local-command-stdout>recap</local-command-stdout>"})),
+        ]
+        .concat();
+        assert!(
+            chain(&unanswered).is_empty(),
+            "a session where only a local command ran answered no prompt"
+        );
     }
 
     #[test]
