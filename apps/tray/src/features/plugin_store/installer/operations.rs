@@ -185,6 +185,7 @@ async fn update_plugin(plan: &UpdatePlan<'_>) -> Result<()> {
     )
     .await?;
     validate_staged_contract(&plan.extracted_dir, &load_installed_registry()?)?;
+    carry_config(&plan.plugin_dir, &plan.extracted_dir).await?;
     swap_plugin_dirs(&plan.plugin_dir, &plan.extracted_dir, &plan.backup_dir).await?;
     log::info!("Plugin {} updated successfully", plan.plugin_id);
     Ok(())
@@ -390,6 +391,17 @@ async fn adopt_config_only_dir(staging_dir: &Path, target_dir: &Path) -> Result<
         .with_context(|| format!("Failed to clear plugin directory {:?}", target_dir))
 }
 
+async fn carry_config(live_dir: &Path, staging_dir: &Path) -> Result<()> {
+    let config = crate::plugins::paths::config_path(live_dir);
+    if !config.is_file() {
+        return Ok(());
+    }
+    tokio::fs::copy(&config, crate::plugins::paths::config_path(staging_dir))
+        .await
+        .with_context(|| format!("Failed to keep plugin config {:?}", config))?;
+    Ok(())
+}
+
 fn ensure_not_installed(plugin_dir: &Path, plugin_id: &str) -> Result<()> {
     if !crate::plugins::paths::has_manifest(plugin_dir) {
         return Ok(());
@@ -451,6 +463,45 @@ mod tests {
                 .unwrap(),
             r#"{"synced":true}"#
         );
+    }
+
+    #[tokio::test]
+    async fn an_update_keeps_the_live_config_so_the_daemon_never_starts_on_defaults() {
+        let temp = TempDir::new().unwrap();
+        let live = temp.path().join("qol-keyremap");
+        let staging = temp.path().join(".staging");
+        tokio::fs::create_dir_all(&live).await.unwrap();
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+        let config = r#"{"key_backend":"karabiner_elements"}"#;
+        tokio::fs::write(live.join("config.json"), config)
+            .await
+            .unwrap();
+        tokio::fs::write(staging.join("config.json"), "{}")
+            .await
+            .unwrap();
+
+        carry_config(&live, &staging).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(staging.join("config.json"))
+                .await
+                .unwrap(),
+            config
+        );
+        assert!(live.join("config.json").exists());
+    }
+
+    #[tokio::test]
+    async fn an_update_of_a_plugin_without_config_adds_none() {
+        let temp = TempDir::new().unwrap();
+        let live = temp.path().join("qol-keyremap");
+        let staging = temp.path().join(".staging");
+        tokio::fs::create_dir_all(&live).await.unwrap();
+        tokio::fs::create_dir_all(&staging).await.unwrap();
+
+        carry_config(&live, &staging).await.unwrap();
+
+        assert!(!staging.join("config.json").exists());
     }
 
     #[tokio::test]
