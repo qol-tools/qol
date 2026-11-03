@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use qol_window_state::{Reopen, WindowStateStore};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_READY_POLL: Duration = Duration::from_millis(250);
 const SETTINGS_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const SETTINGS_FALLBACK_PAGE: &str = "__core-plugins";
+const SURVIVOR_GRACE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct ReopenList {
@@ -29,7 +30,7 @@ pub(crate) fn capture_before_restart() {
     ) else {
         return;
     };
-    let windows = open_windows(&store, qol_process::is_pid_alive);
+    let windows = open_windows(&store, owner_runs);
     match write_list(&dir, &windows, now_ms()) {
         Ok(()) => log::info!(
             "[window-state] {} windows to reopen after restart",
@@ -62,10 +63,56 @@ pub fn reopen_after_restart(plugin_manager: Arc<Mutex<PluginManager>>) {
         return;
     }
     std::thread::spawn(move || {
-        for window in windows {
-            reopen(&plugin_manager, window);
-        }
+        let store = WindowStateStore::shared();
+        let still_open = |window: &Reopen| {
+            store
+                .as_ref()
+                .is_some_and(|store| open_by_running_owner(store, window, owner_runs))
+        };
+        reopen_once_closed(windows, SURVIVOR_GRACE, still_open, |window| {
+            reopen(&plugin_manager, window)
+        });
     });
+}
+
+fn owner_runs(pid: u32) -> bool {
+    !qol_process::is_pid_gone(pid)
+}
+
+fn reopen_once_closed(
+    windows: Vec<Reopen>,
+    grace: Duration,
+    still_open: impl Fn(&Reopen) -> bool,
+    mut reopen: impl FnMut(Reopen),
+) {
+    let deadline = Instant::now() + grace;
+    let mut waiting = windows;
+    loop {
+        let (open, closed): (Vec<Reopen>, Vec<Reopen>) =
+            waiting.into_iter().partition(|window| still_open(window));
+        closed.into_iter().for_each(&mut reopen);
+        if open.is_empty() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            for window in &open {
+                log::info!("[window-state] {window:?} outlived the restart, so it is not reopened");
+            }
+            return;
+        }
+        waiting = open;
+        std::thread::sleep(DAEMON_READY_POLL);
+    }
+}
+
+fn open_by_running_owner(
+    store: &WindowStateStore,
+    window: &Reopen,
+    owner_runs: impl Fn(u32) -> bool,
+) -> bool {
+    store.list().iter().any(|state| {
+        state.open && state.reopen.as_ref() == Some(window) && owner_runs(state.owner_pid)
+    })
 }
 
 fn reopen(plugin_manager: &Arc<Mutex<PluginManager>>, window: Reopen) {
