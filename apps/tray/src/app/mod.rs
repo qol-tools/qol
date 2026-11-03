@@ -52,6 +52,7 @@ pub(crate) fn run() -> Result<()> {
     qol_tray::logging::init_logger();
 
     qol_tray::logging::log_build_identity();
+    qol_tray::inherited_children::reap_in_background();
     let headless = qol_tray::headless_mode::select(headless_requested);
 
     qol_tray::lifeline_handoff::adopt_handed_off_fds();

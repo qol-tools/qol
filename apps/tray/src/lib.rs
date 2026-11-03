@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod features;
 pub mod headless_mode;
 pub mod hotkeys;
+pub mod inherited_children;
 pub mod installer;
 pub mod logging;
 pub mod menu;
