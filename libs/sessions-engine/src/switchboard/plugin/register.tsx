@@ -65,7 +65,9 @@ const RESTARTED_REPLY = 'Back on the fork board.'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
 const BACK = `The switchboard restarted, which ended your hold, and put you back in the agent list so the user can select you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const REOPEN_DELAY_MS = 1_500
-const BAND_WAIT_MS = 10_000
+const BAND_WAIT_MS = 3_000
+const BAND_FRESH_MS = 90_000
+const SEND_WAIT_MS = 5_000
 const REOPENED = `The user opened your view from the fork board to talk to you, and the agent list no longer held you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
@@ -564,40 +566,48 @@ const direct =
 type Outgoing = { agentId: string; text: string; settle: (sent: Delivered) => void }
 
 const outbox: Outgoing[] = []
-let isBandDrawn = false
+let bandDrawnAt: number | undefined
+
+const bounded = ($: EngineInterface, sending: Promise<Delivered>): Promise<Delivered> =>
+  new Promise(resolve => {
+    void sending.then(resolve, (error: unknown) => resolve({ isDelivered: false, reason: String(error) }))
+    $.clock.after(SEND_WAIT_MS, () => resolve({ isDelivered: false, reason: 'the send did not settle in time' }))
+  })
 
 export const viaBand =
   ($: EngineInterface): Sender =>
-  (agentId, text) =>
-    isBandDrawn
-      ? new Promise<Delivered>(resolve => {
-          let isSettled = false
-          const one: Outgoing = {
-            agentId,
-            text,
-            settle: sent => {
-              if (isSettled) return
-              isSettled = true
-              resolve(sent)
-            },
-          }
-          outbox.push(one)
-          $.ui.invalidate('ui.render')
-          $.clock.after(BAND_WAIT_MS, () => {
-            const at = outbox.indexOf(one)
-            if (at === -1) return
-            outbox.splice(at, 1)
-            void direct($)(agentId, text).then(one.settle, error => one.settle({ isDelivered: false, reason: String(error) }))
-          })
-        })
-      : direct($)(agentId, text)
+  async (agentId, text) => {
+    const now = await $.clock.now()
+    if (bandDrawnAt === undefined || now - bandDrawnAt > BAND_FRESH_MS) return direct($)(agentId, text)
+    return new Promise<Delivered>(resolve => {
+      let isSettled = false
+      const one: Outgoing = {
+        agentId,
+        text,
+        settle: sent => {
+          if (isSettled) return
+          isSettled = true
+          resolve(sent)
+        },
+      }
+      outbox.push(one)
+      $.ui.invalidate('ui.render')
+      $.clock.after(BAND_WAIT_MS, () => {
+        const at = outbox.indexOf(one)
+        if (at === -1) return
+        outbox.splice(at, 1)
+        void bounded($, direct($)(agentId, text)).then(one.settle)
+      })
+    })
+  }
 
 export const drainOutbox = async ($: EngineInterface): Promise<void> => {
-  isBandDrawn = true
-  for (const one of outbox.splice(0)) {
-    const sent = await $.session.send({ to: { agentId: one.agentId }, text: one.text }).catch((error: unknown) => ({ isDelivered: false, reason: String(error) }))
-    one.settle(sent)
-  }
+  bandDrawnAt = await $.clock.now()
+  await Promise.all(
+    outbox.splice(0).map(async one => {
+      one.settle(await bounded($, $.session.send({ to: { agentId: one.agentId }, text: one.text })))
+    }),
+  )
 }
 
 export const sendTo = async ($: EngineInterface, target: Entry, text: string, send: Sender = direct($)): Promise<Sent> => {
