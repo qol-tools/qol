@@ -574,7 +574,7 @@ test('a fork of an earlier board or conversation is brought back by agent id or 
     return answer(_, e)
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  expect([...store.keys()]).toEqual(['board:switchboard-session'])
+  expect([...store.keys()].filter(key => key.startsWith('board:'))).toEqual(['board:switchboard-session'])
   const rows = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(rows).toContain('older-fork: stopped (stopped by a restart, agent id o1)')
   expect(rows).not.toContain('stale')
@@ -827,6 +827,25 @@ test('an open whose message does not reach a fork leaves its row as it was', asy
   expect(board).toContain('a1-fork: Which colour should it be? (needs the user, agent id a1)')
   expect(board).toContain('(stopped by a restart, agent id m1)')
   expect(board).not.toContain('could not reach')
+})
+
+test('a fresh copy of the module keeps the saved board and finishes the reopen the lost copy began', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, kind: string) => ({ agentId, name: `${agentId}-fork: a fork`, kind, headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false })
+  store.set('board:switchboard-session', [row('a1', 'ask'), row('b1', 'ask'), row('d1', 'merged')])
+  store.set('reopen:switchboard-session', ['b1'])
+  engine(on, sent, [], [], store)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await spawn($, 'n1', 'n1-fork: a new fork')
+  await settle()
+  const saved = store.get('board:switchboard-session') as Array<{ agentId: string }>
+  expect(saved.map(one => one.agentId)).toEqual(['a1', 'b1', 'd1', 'n1'])
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  expect(sent.map(one => one.to)).toEqual(['b1'])
+  expect(store.has('reopen:switchboard-session')).toBe(false)
 })
 
 test('a fork the agent list no longer holds is brought back by opening it, and its restart reply keeps its last report', async ($, on) => {

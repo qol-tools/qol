@@ -191,8 +191,9 @@ mod tests {
             "const sent = await sendTo($, entry, CONTINUE)",
             "const sent = await sendTo($, entry, REOPENED)",
             "await sendTo($, entry, isCut(entry) ? CONTINUE : BACK)",
-            "if (entry === undefined || !isUnfinished(entry)) continue",
-            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($, carried))",
+            "if (entry !== undefined && !held.has(agentId) && isUnfinished(entry))",
+            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
+            "loading ??= loadSaved($).catch(() => undefined)",
             "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
             "await $.ui.place({ id })",
         ] {

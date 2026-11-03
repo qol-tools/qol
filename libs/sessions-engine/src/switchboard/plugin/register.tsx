@@ -17,6 +17,7 @@ const WAIT_FOR_USER =
   'The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
+const REOPEN_PREFIX = 'reopen:'
 const CLOSED_KEY = 'pane-closed'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
 const CLEAR_TYPED_MS = 100
@@ -193,13 +194,31 @@ const clearTypedToggle = ($: EngineInterface): void => {
   })
 }
 
+let loading: Promise<void> | undefined
+
+const loadSaved = async ($: EngineInterface): Promise<void> => {
+  if ((await read($, board)).length > 0) return
+  const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
+  const rows = Array.isArray(saved) ? saved.filter(isEntry) : []
+  if (rows.length > 0) await update($, board, list => ((list ?? []).length > 0 ? (list ?? []) : rows))
+  const pending = await $.store.get(REOPEN_PREFIX + (await $.session.id()))
+  if (Array.isArray(pending) && pending.length > 0) $.clock.after(REOPEN_DELAY_MS, () => void reopenForks($).catch(() => undefined))
+}
+
+export const ensureLoaded = ($: EngineInterface): Promise<void> => {
+  loading ??= loadSaved($).catch(() => undefined)
+  return loading
+}
+
 const persist = async ($: EngineInterface): Promise<void> => {
   try {
+    await ensureLoaded($)
     await $.store.set(STORE_PREFIX + (await $.session.id()), await read($, board))
   } catch {}
 }
 
 const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promise<void> => {
+  await ensureLoaded($)
   await update($, board, list => fn(list ?? []).slice(-KEEP))
   await persist($)
   await refreshStatus($)
@@ -546,13 +565,25 @@ export const sendTo = async ($: EngineInterface, target: Entry, text: string): P
   return { ...again, agentId: revived.agentId }
 }
 
-export const reopenForks = async ($: EngineInterface, carried: ReadonlySet<string>): Promise<void> => {
-  const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
-  const ids = (await read($, board)).filter(one => carried.has(one.agentId) && !held.has(one.agentId)).map(one => one.agentId)
-  for (const agentId of ids) {
-    const entry = (await read($, board)).find(one => one.agentId === agentId)
-    if (entry === undefined || !isUnfinished(entry)) continue
-    await sendTo($, entry, isCut(entry) ? CONTINUE : BACK).catch(() => undefined)
+let isReopening = false
+
+export const reopenForks = async ($: EngineInterface): Promise<void> => {
+  if (isReopening) return
+  isReopening = true
+  try {
+    const key = REOPEN_PREFIX + (await $.session.id())
+    const saved = await $.store.get(key)
+    const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
+    for (const [index, agentId] of pending.entries()) {
+      const entry = (await read($, board)).find(one => one.agentId === agentId)
+      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, isCut(entry) ? CONTINUE : BACK).catch(() => undefined)
+      const rest = pending.slice(index + 1)
+      if (rest.length === 0) await $.store.delete(key)
+      else await $.store.set(key, rest)
+    }
+  } finally {
+    isReopening = false
   }
 }
 
@@ -874,8 +905,17 @@ export const register: Register = on => {
       const merged = mergeBoards(earlier, Array.isArray(saved) ? saved : [])
       const carried = new Set(earlier.filter(isEntry).map(row => row.agentId))
       if (merged.length > 0) await update($, board, () => merged)
-      if (others.length > 0) await persist($)
-      for (const key of others) await $.store.delete(key)
+      loading = Promise.resolve()
+      if (others.length > 0) {
+        await $.store.set(STORE_PREFIX + id, merged)
+        const kept = await $.store.get(STORE_PREFIX + id)
+        if (Array.isArray(kept) && kept.length === merged.length) {
+          for (const key of others) await $.store.delete(key)
+        }
+      }
+      for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
+      const pending = e.isInteractive ? merged.filter(one => carried.has(one.agentId) && isUnfinished(one)).map(one => one.agentId) : []
+      if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
         name: TOOL,
@@ -908,8 +948,8 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
-      if (e.isInteractive && carried.size > 0) {
-        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($, carried)).catch(() => undefined))
+      if (pending.length > 0) {
+        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($)).catch(() => undefined))
       }
     } catch {}
     return started
@@ -972,6 +1012,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
+    await ensureLoaded($)
     return { result: readText(await withLaunchers($, await read($, board)), fork, await read($, pulls)) }
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
@@ -1040,6 +1081,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    await ensureLoaded($)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
