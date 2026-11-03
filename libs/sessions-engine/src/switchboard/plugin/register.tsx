@@ -400,9 +400,10 @@ const isUndelivered = (answer: { deny?: string; isError?: true; result?: unknown
 
 const rested = async ($: EngineInterface, agentId: string): Promise<Entry | undefined> => {
   let kept: Entry | undefined
+  const wasCut = resting.get(agentId) === true
+  resting.delete(agentId)
   await change($, list =>
     list.map(one => {
-      const wasCut = resting.get(agentId) === true
       if (one.agentId !== agentId || (one.kind === undefined && !wasCut)) return one
       kept = { ...one, isWorking: false, ...(wasCut ? { isInterrupted: true } : {}) }
       return kept
@@ -604,14 +605,16 @@ export const viaBand =
     })
   }
 
-const holding = new Map<string, string>()
+type Hold = { reply: string; text: string; turnId?: string }
+
+const holding = new Map<string, Hold>()
 const resting = new Map<string, boolean>()
 
 const quiet = new WeakSet<Sender>()
 
 export const holdingVia = (send: Sender, reply: string, wasCut = false): Sender => {
   const holds: Sender = async (agentId, text) => {
-    holding.set(agentId, reply)
+    holding.set(agentId, { reply, text })
     resting.set(agentId, wasCut)
     const sent = await send(agentId, text)
     if (!sent.isDelivered) {
@@ -624,7 +627,28 @@ export const holdingVia = (send: Sender, reply: string, wasCut = false): Sender 
   return holds
 }
 
-export const heldReply = (agentId: string | undefined): string | undefined => (agentId === undefined ? undefined : holding.get(agentId))
+const heldReply = (agentId: string | undefined, turnId: string): string | undefined => {
+  const hold = agentId === undefined ? undefined : holding.get(agentId)
+  return hold !== undefined && hold.turnId === turnId ? hold.reply : undefined
+}
+
+const release = (agentId: string): void => {
+  holding.delete(agentId)
+  resting.delete(agentId)
+}
+
+const claimHold = (agentId: string | undefined, turnId: string, text: string): boolean => {
+  if (agentId === undefined) return false
+  const hold = holding.get(agentId)
+  if (hold === undefined) return false
+  if (hold.turnId === undefined && text.includes(hold.text)) {
+    holding.set(agentId, { ...hold, turnId })
+    return true
+  }
+  if (hold.turnId === turnId) return true
+  release(agentId)
+  return false
+}
 
 let isReopening = false
 
@@ -993,6 +1017,8 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    holding.clear()
+    resting.clear()
     isAutoOpenPending = false
     try {
       const id = await $.session.id()
@@ -1166,7 +1192,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId !== undefined && heldReply(e.agentId) === undefined) {
+    if (e.agentId !== undefined && !claimHold(e.agentId, e.turnId, e.text)) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
     }
@@ -1174,8 +1200,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
-    const reply = heldReply(e.agentId)
-    if (reply === undefined) return yield* next(e)
+    const reply = heldReply(e.agentId, e.turnId)
+    if (reply === undefined || e.index > 1) {
+      if (reply !== undefined && e.agentId !== undefined) holding.delete(e.agentId)
+      return yield* next(e)
+    }
     const base = { turnId: e.turnId, index: e.index, usage: null }
     if (e.index === 0) {
       yield { kind: 'tool', index: 0, id: `toolu_hold_${e.turnId.replace(/[^A-Za-z0-9_-]/g, '')}`, name: 'Bash' }
@@ -1188,6 +1217,11 @@ export const register: Register = on => {
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
     return { ...base, answer: reply, toolUses: [], stopReason: 'end_turn' }
   })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined && holding.get(e.agentId)?.turnId === e.turnId) holding.delete(e.agentId)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('session.append', async ($, e, next) => {
     const origin = e.origin.kind
