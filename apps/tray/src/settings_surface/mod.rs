@@ -80,7 +80,7 @@ pub fn native_available() -> bool {
     platform::native_available()
 }
 
-const HEADLESS_REFUSAL: &str = "settings windows are off while qol-tray runs headless";
+const HEADLESS_REFUSAL: &str = "settings windows stay off while qol-tray runs headless";
 
 pub fn request(plugin_id: &str) -> anyhow::Result<bool> {
     if crate::headless_mode::active() {

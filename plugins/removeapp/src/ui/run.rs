@@ -20,7 +20,7 @@ pub fn run() -> anyhow::Result<()> {
     }
 
     let failure = Rc::new(RefCell::new(None));
-    let reported_failure = failure.clone();
+    let failure_report = failure.clone();
     Application::new().run(move |cx: &mut App| {
         qol_gpui::fonts::install(cx);
         qol_gpui::keepalive::open_keepalive(cx, Some(PLUGIN_ID));
@@ -30,7 +30,7 @@ pub fn run() -> anyhow::Result<()> {
         let panel = match open_window(&tracker, cx) {
             Ok(panel) => Rc::new(RefCell::new(panel)),
             Err(error) => {
-                reported_failure.borrow_mut().replace(error);
+                failure_report.borrow_mut().replace(error);
                 cx.quit();
                 return;
             }
