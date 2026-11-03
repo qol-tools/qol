@@ -65,6 +65,7 @@ const RESTARTED_REPLY = 'Back on the fork board.'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
 const BACK = `The switchboard restarted, which ended your hold, and put you back in the agent list so the user can select you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const REOPEN_DELAY_MS = 1_500
+const BAND_WAIT_MS = 10_000
 const REOPENED = `The user opened your view from the fork board to talk to you, and the agent list no longer held you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
@@ -551,16 +552,64 @@ const placed = async ($: EngineInterface, agentId: string, name: string, project
   return target
 }
 
-export const sendTo = async ($: EngineInterface, target: Entry, text: string): Promise<Sent> => {
+type Delivered = { isDelivered: boolean; reason?: unknown }
+
+type Sender = (agentId: string, text: string) => Promise<Delivered>
+
+const direct =
+  ($: EngineInterface): Sender =>
+  (agentId, text) =>
+    $.session.send({ to: { agentId }, text })
+
+type Outgoing = { agentId: string; text: string; settle: (sent: Delivered) => void }
+
+const outbox: Outgoing[] = []
+let isBandDrawn = false
+
+export const viaBand =
+  ($: EngineInterface): Sender =>
+  (agentId, text) =>
+    isBandDrawn
+      ? new Promise<Delivered>(resolve => {
+          let isSettled = false
+          const one: Outgoing = {
+            agentId,
+            text,
+            settle: sent => {
+              if (isSettled) return
+              isSettled = true
+              resolve(sent)
+            },
+          }
+          outbox.push(one)
+          $.ui.invalidate('ui.render')
+          $.clock.after(BAND_WAIT_MS, () => {
+            const at = outbox.indexOf(one)
+            if (at === -1) return
+            outbox.splice(at, 1)
+            void direct($)(agentId, text).then(one.settle, error => one.settle({ isDelivered: false, reason: String(error) }))
+          })
+        })
+      : direct($)(agentId, text)
+
+export const drainOutbox = async ($: EngineInterface): Promise<void> => {
+  isBandDrawn = true
+  for (const one of outbox.splice(0)) {
+    const sent = await $.session.send({ to: { agentId: one.agentId }, text: one.text }).catch((error: unknown) => ({ isDelivered: false, reason: String(error) }))
+    one.settle(sent)
+  }
+}
+
+export const sendTo = async ($: EngineInterface, target: Entry, text: string, send: Sender = direct($)): Promise<Sent> => {
   await bringBack($, target.agentId)
-  const sent = await $.session.send({ to: { agentId: target.agentId }, text })
+  const sent = await send(target.agentId, text)
   if (sent.isDelivered) {
     await markWorking($, target.agentId, undefined)
     return { ...sent, agentId: target.agentId }
   }
   const revived = isStopped(sent.reason) ? await revive($, target) : undefined
   if (revived === undefined) return { ...sent, agentId: target.agentId }
-  const again = await $.session.send({ to: { agentId: revived.agentId }, text })
+  const again = await send(revived.agentId, text)
   if (again.isDelivered) await markWorking($, revived.agentId, undefined)
   return { ...again, agentId: revived.agentId }
 }
@@ -577,7 +626,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
-      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, isCut(entry) ? CONTINUE : BACK).catch(() => undefined)
+      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, isCut(entry) ? CONTINUE : BACK, viaBand($)).catch(() => undefined)
       const rest = pending.slice(index + 1)
       if (rest.length === 0) await $.store.delete(key)
       else await $.store.set(key, rest)
@@ -588,7 +637,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
 }
 
 const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
-  const sent = await sendTo($, await placed($, agentId, name, project), message)
+  const sent = await sendTo($, await placed($, agentId, name, project), message, viaBand($))
   if (!sent.isDelivered) await undelivered($, sent.agentId, name, String(sent.reason ?? 'not delivered'), message)
 }
 
@@ -956,6 +1005,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    await drainOutbox($).catch(() => undefined)
     const docks = e.viewport?.isFullscreen
     if (isAutoOpenPending && docks !== undefined) {
       isAutoOpenPending = false
@@ -1025,7 +1075,7 @@ export const register: Register = on => {
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
-    if (e.agentId !== undefined || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
+    if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
     let target = addressed(await read($, board), e.to)
     if (target === undefined) {
       const adopted = await adoptFork($, e.to, false).catch(() => undefined)

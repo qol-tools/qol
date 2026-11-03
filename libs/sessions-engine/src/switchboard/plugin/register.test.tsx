@@ -697,6 +697,14 @@ const settle = async () => {
   for (let turn = 0; turn < 20; turn += 1) await new Promise(resolve => setTimeout(resolve, 0))
 }
 
+const renderBand = async ($: any) => {
+  for (let round = 0; round < 4; round += 1) {
+    const band = await $.ui.mount(promptBand(false))
+    await settle()
+    await band.unmount()
+  }
+}
+
 test("a fork's background pull request watcher runs under CLI Sessions, and no other command is rewritten", async ($, on) => {
   const ran: string[] = []
   engine(on)
@@ -795,16 +803,19 @@ test('opening the switchboard brings every unfinished fork back with one message
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await settle()
+  await renderBand($)
   expect(sent).toHaveLength(0)
   for (const fire of timers.splice(0)) fire()
   await settle()
+  expect(sent).toHaveLength(0)
+  await renderBand($)
   const back = 'The switchboard restarted, which ended your hold, and put you back in the agent list so the user can select you.'
   expect(sent.map(one => [one.to, one.text.startsWith(back) ? 'back' : one.text]).sort()).toEqual([
     ['a1', 'back'],
     ['m1', 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'],
     ['p1', 'back'],
   ])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(working, agent id p1)')
   const reply = await typed($, notification('a1', 'a1-fork: a fork', 'Back on the fork board.'), 'task-notification')
   expect(reply.drop).toBe('a1-fork')
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
@@ -820,9 +831,11 @@ test('an open whose message does not reach a fork leaves its row as it was', asy
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await settle()
+  await renderBand($)
   for (const fire of timers.splice(0)) fire()
   await settle()
+  await renderBand($)
+  expect(sent.length).toBeGreaterThan(0)
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('a1-fork: Which colour should it be? (needs the user, agent id a1)')
   expect(board).toContain('(stopped by a restart, agent id m1)')
@@ -842,8 +855,11 @@ test('a fresh copy of the module keeps the saved board and finishes the reopen t
   await settle()
   const saved = store.get('board:switchboard-session') as Array<{ agentId: string }>
   expect(saved.map(one => one.agentId)).toEqual(['a1', 'b1', 'd1', 'n1'])
+  await renderBand($)
   for (const fire of timers.splice(0)) fire()
   await settle()
+  expect(sent).toHaveLength(0)
+  await renderBand($)
   expect(sent.map(one => one.to)).toEqual(['b1'])
   expect(store.has('reopen:switchboard-session')).toBe(false)
 })
