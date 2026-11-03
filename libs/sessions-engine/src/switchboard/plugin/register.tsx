@@ -1008,13 +1008,14 @@ export const register: Register = on => {
 
   on('session.append', async ($, e, next) => {
     const origin = e.origin.kind
-    if (e.agentId !== undefined || !INTAKE_DOORS.includes(e.door) || (origin !== 'peer' && origin !== 'task-notification')) return next(e)
+    if (!INTAKE_DOORS.includes(e.door) || (origin !== 'peer' && origin !== 'task-notification')) return next(e)
+    if (e.agentId !== undefined && origin !== 'task-notification') return next(e)
     const content = e.message.content
     const text = textOf(content)
     if (!text.includes('<task-notification>') && !text.includes('[Subagent hand-back]')) return next(e)
     const list = await read($, board)
-    const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
-    if (filed === undefined) return next(e)
+    const filed = await intake($, text, origin, agentId => agentId !== e.agentId && list.some(entry => entry.agentId === agentId))
+    if (filed === undefined || e.agentId !== undefined) return next(e)
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 

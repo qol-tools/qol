@@ -818,6 +818,25 @@ test('a working fork whose view is denied gets no message, only a toast', async 
   expect(panes.filter(one => one.startsWith('toast ')).join('\n')).toContain('could not be opened: a survey is up')
 })
 
+test("a fork's own fork is filed on the board when it reports to that fork, which still reads the whole report", async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: a fork')
+  await spawn($, 'c1', 'child-fork: its fork', 'p1')
+  const text = notification('c1', 'child-fork: its fork', 'Which colour should it be? I recommend amber.')
+  const stored = await $.session.append({
+    message: { type: 'user', role: 'user', isMeta: true, content: [{ type: 'text', text }] },
+    door: 'prompt',
+    origin: { kind: 'task-notification' },
+    uuid: 'row-nested',
+    agentId: 'p1',
+  })
+  expect(stored.message.content.map((block: { text?: string }) => block.text ?? '').join('')).toBe(text)
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('child-fork: Which colour should it be? I recommend amber. (needs the user, agent id c1')
+  expect(board).toContain('parent-fork (working, agent id p1)')
+})
+
 const watchEngine = (on: any, forks: Record<string, { cwd?: string; description: string; conversation?: string }>, earlier: string[] = []) => {
   on('env.get', (_: unknown, e: { name: string }) => ({
     value:
