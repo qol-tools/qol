@@ -11,7 +11,7 @@ const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
   "version": "1.12.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, and lists the forks a restart cut off mid-turn for the user to continue.",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, and brings each unfinished fork back into the agent list when the switchboard opens.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_no_fork_on_open() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_reopens_unfinished_forks_on_open() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -190,6 +190,9 @@ mod tests {
             ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
             "const sent = await sendTo($, entry, CONTINUE)",
             "const sent = await sendTo($, entry, REOPENED)",
+            "const text = isCut(entry) ? CONTINUE : BACK",
+            "carried.has(one.agentId) && !held.has(one.agentId) && isUnfinished(one)",
+            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($, carried))",
             "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
             "await $.ui.place({ id })",
         ] {
