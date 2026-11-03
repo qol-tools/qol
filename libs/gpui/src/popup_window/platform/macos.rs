@@ -709,6 +709,9 @@ pub fn hide_window_by_title(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
     };
+    if window.isKeyWindow() {
+        schedule_focus_return();
+    }
     window.setLevel(NSPopUpMenuWindowLevel);
     #[cfg(debug_assertions)]
     {
