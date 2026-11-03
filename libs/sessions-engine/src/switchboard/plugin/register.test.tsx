@@ -842,6 +842,30 @@ test('an open whose message does not reach a fork leaves its row as it was', asy
   expect(board).not.toContain('could not reach')
 })
 
+test('an open tries a fork again when its message does not reach it, and says so once it gives up', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const panes: string[] = []
+  const row = (agentId: string) => ({ agentId, name: `${agentId}-fork: a fork`, headline: '', report: '', at: 1, isWorking: true, isDismissed: false })
+  store.set('board:earlier-session', [row('r1'), row('q1')])
+  let misses = 0
+  engine(on, sent, panes, [], store, (e: any) => (e.to === 'q1' || misses++ === 0 ? { isDelivered: false, reason: 'the agent is busy' } : { isDelivered: true }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 8; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  await renderBand($)
+  expect(sent.filter(one => one.to === 'r1')).toHaveLength(2)
+  expect(sent.filter(one => one.to === 'q1')).toHaveLength(3)
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(working, agent id r1)')
+  expect(panes.filter(one => one.includes('did not come back'))).toEqual([`toast ${JSON.stringify({ text: 'q1-fork did not come back: the agent is busy' })}`])
+  expect(store.has('reopen:switchboard-session')).toBe(false)
+})
+
 test('a fresh copy of the module keeps the saved board and finishes the reopen the lost copy began', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []

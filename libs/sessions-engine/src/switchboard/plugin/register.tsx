@@ -65,6 +65,8 @@ const RESTARTED_REPLY = 'Back on the fork board.'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
 const BACK = `The switchboard restarted, which ended your hold, and put you back in the agent list so the user can select you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const REOPEN_DELAY_MS = 1_500
+const REOPEN_RETRY_MS = 10_000
+const REOPEN_TRIES = 3
 const BAND_WAIT_MS = 3_000
 const BAND_FRESH_MS = 90_000
 const SEND_WAIT_MS = 5_000
@@ -625,10 +627,12 @@ export const sendTo = async ($: EngineInterface, target: Entry, text: string, se
 }
 
 let isReopening = false
+const reopenTries = new Map<string, number>()
 
 export const reopenForks = async ($: EngineInterface): Promise<void> => {
   if (isReopening) return
   isReopening = true
+  const failed: string[] = []
   try {
     const key = REOPEN_PREFIX + (await $.session.id())
     const saved = await $.store.get(key)
@@ -636,14 +640,22 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
-      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, isCut(entry) ? CONTINUE : BACK, viaBand($)).catch(() => undefined)
-      const rest = pending.slice(index + 1)
+      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) {
+        const sent = await sendTo($, entry, isCut(entry) ? CONTINUE : BACK, viaBand($)).catch((error: unknown) => ({ isDelivered: false, reason: String(error) }))
+        const tries = (reopenTries.get(agentId) ?? 0) + 1
+        if (sent.isDelivered) reopenTries.delete(agentId)
+        else reopenTries.set(agentId, tries)
+        if (!sent.isDelivered && tries < REOPEN_TRIES) failed.push(agentId)
+        else if (!sent.isDelivered) $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
+      }
+      const rest = [...failed, ...pending.slice(index + 1)]
       if (rest.length === 0) await $.store.delete(key)
       else await $.store.set(key, rest)
     }
   } finally {
     isReopening = false
   }
+  if (failed.length > 0) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
 }
 
 const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
