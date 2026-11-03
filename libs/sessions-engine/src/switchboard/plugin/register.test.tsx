@@ -811,6 +811,24 @@ test('opening the switchboard brings every unfinished fork back with one message
   expect(board).toContain('a1-fork: Which colour? (needs the user, agent id a1)')
 })
 
+test('an open whose message does not reach a fork leaves its row as it was', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, kind: string | undefined, isWorking: boolean) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'Which colour should it be?', report: 'Which colour should it be? I recommend amber.', recommend: 'amber', at: 1, isWorking, isDismissed: false })
+  store.set('board:earlier-session', [row('m1', undefined, true), row('a1', 'ask', false)])
+  engine(on, sent, [], [], store, () => ({ isDelivered: false, reason: 'no agent holds the id' }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('a1-fork: Which colour should it be? (needs the user, agent id a1)')
+  expect(board).toContain('(stopped by a restart, agent id m1)')
+  expect(board).not.toContain('could not reach')
+})
+
 test('a fork the agent list no longer holds is brought back by opening it, and its restart reply keeps its last report', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []

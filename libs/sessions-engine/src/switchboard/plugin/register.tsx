@@ -548,11 +548,11 @@ export const sendTo = async ($: EngineInterface, target: Entry, text: string): P
 
 export const reopenForks = async ($: EngineInterface, carried: ReadonlySet<string>): Promise<void> => {
   const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
-  const list = await read($, board)
-  for (const entry of list.filter(one => carried.has(one.agentId) && !held.has(one.agentId) && isUnfinished(one))) {
-    const text = isCut(entry) ? CONTINUE : BACK
-    const sent = await sendTo($, entry, text).catch(() => undefined)
-    if (sent !== undefined && !sent.isDelivered) await undelivered($, sent.agentId, entry.name, String(sent.reason ?? 'not delivered'), text).catch(() => undefined)
+  const ids = (await read($, board)).filter(one => carried.has(one.agentId) && !held.has(one.agentId)).map(one => one.agentId)
+  for (const agentId of ids) {
+    const entry = (await read($, board)).find(one => one.agentId === agentId)
+    if (entry === undefined || !isUnfinished(entry)) continue
+    await sendTo($, entry, isCut(entry) ? CONTINUE : BACK).catch(() => undefined)
   }
 }
 
