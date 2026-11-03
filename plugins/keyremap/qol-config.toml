@@ -29,6 +29,12 @@ event_tap = "Event tap"
 hid_helper = "Keyboard helper"
 karabiner_elements = "Karabiner-Elements"
 
+[field.key_backend.option_pictures]
+auto = "letters:A"
+event_tap = "letters:ET"
+hid_helper = "letters:HID"
+karabiner_elements = "letters:KE"
+
 [field.excluded_apps]
 type = "string_array"
 label = "Excluded apps"
