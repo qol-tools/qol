@@ -96,6 +96,17 @@ const ENV_GHOST_COLOR: &str = "QOL_TRAY_GHOST_COLOR";
 
 static PRESENTATION_LOCK: Mutex<()> = Mutex::new(());
 
+static FRAMED_WINDOWS_JOIN_DOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn keep_framed_windows_in_dock() {
+    FRAMED_WINDOWS_JOIN_DOCK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn framed_windows_join_dock() -> bool {
+    FRAMED_WINDOWS_JOIN_DOCK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn presentation_guard() -> MutexGuard<'static, ()> {
     PRESENTATION_LOCK
         .lock()

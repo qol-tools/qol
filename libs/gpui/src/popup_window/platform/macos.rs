@@ -12,10 +12,10 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::AnyThread;
 use objc2_app_kit::{
-    NSApplication, NSApplicationDidResignActiveNotification, NSColor, NSEvent, NSEventMask,
-    NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen,
-    NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDidResignActiveNotification,
+    NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel,
+    NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow, NSWindowAnimationBehavior,
+    NSWindowCollectionBehavior, NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize,
@@ -737,6 +737,7 @@ pub fn hide_window_by_title(title: &str) -> bool {
     }
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
+    leave_dock_when_no_framed_window_shows();
     qol_runtime::probe!(
         "HIDE_WIN",
         "title={title} path=hidden reason={}",
@@ -760,6 +761,7 @@ pub fn hide_invisible(title: &str) -> bool {
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     window.orderOut(None);
+    leave_dock_when_no_framed_window_shows();
     if held_key {
         schedule_focus_return();
     }
@@ -981,6 +983,44 @@ enum WindowPresentation {
     Normal,
 }
 
+fn joins_dock(mask: NSWindowStyleMask) -> bool {
+    crate::popup_window::framed_windows_join_dock() && mask.contains(NSWindowStyleMask::Titled)
+}
+
+fn join_dock_for(window: &NSWindow, mtm: MainThreadMarker) {
+    if !joins_dock(window.styleMask()) {
+        return;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        qol_runtime::probe!("DOCK", "joined title={}", window.title());
+    }
+}
+
+fn leave_dock_when_no_framed_window_shows() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    if !crate::popup_window::framed_windows_join_dock() {
+        return;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+        return;
+    }
+    let framed_showing = app.windows().iter().any(|window| {
+        joins_dock(window.styleMask())
+            && window.isVisible()
+            && window.alphaValue() > 0.0
+            && window.level() == NSNormalWindowLevel
+    });
+    if !framed_showing {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        qol_runtime::probe!("DOCK", "left");
+    }
+}
+
 fn shows_system_title_bar(mask: NSWindowStyleMask) -> bool {
     mask.contains(NSWindowStyleMask::Titled)
         && !mask.contains(NSWindowStyleMask::FullSizeContentView)
@@ -1018,12 +1058,18 @@ fn show_window_by_title_with_focus(
         apply_input_regions();
         watch_pointer_for_regions();
     }
+    if matches!(presentation, WindowPresentation::Normal) {
+        join_dock_for(&window, mtm);
+    }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
         #[allow(deprecated)]
         app.activateIgnoringOtherApps(true);
         window.makeKeyAndOrderFront(None);
         force_app_frontmost();
+        if !app.isActive() {
+            window.orderFrontRegardless();
+        }
     }
     if !focus {
         window.orderFrontRegardless();
@@ -1552,8 +1598,8 @@ fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_in_region, pointer_inside,
-        primary_anchored_from_screen_relative, reassert_delay, should_return_focus,
+        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, joins_dock, pointer_in_region,
+        pointer_inside, primary_anchored_from_screen_relative, reassert_delay, should_return_focus,
         shows_system_title_bar, HOLD_REASSERT_SPACING,
     };
     use objc2_app_kit::NSWindowStyleMask;
@@ -1561,6 +1607,26 @@ mod tests {
     use std::time::Duration;
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    #[test]
+    fn once_opted_in_only_a_titled_window_joins_the_dock() {
+        crate::popup_window::keep_framed_windows_in_dock();
+        let cases = [
+            (
+                NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+                true,
+            ),
+            (
+                NSWindowStyleMask::Titled | NSWindowStyleMask::FullSizeContentView,
+                true,
+            ),
+            (NSWindowStyleMask::Borderless, false),
+            (NSWindowStyleMask::NonactivatingPanel, false),
+        ];
+        for (mask, expected) in cases {
+            assert_eq!(joins_dock(mask), expected, "{mask:?}");
+        }
+    }
 
     #[test]
     fn only_a_visible_system_title_bar_gets_an_opaque_background() {
