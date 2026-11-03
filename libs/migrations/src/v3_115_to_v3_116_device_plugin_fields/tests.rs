@@ -1,6 +1,10 @@
 use super::*;
+use crate::device_fields::slice_path;
+use crate::fs_util::current_os_subdir;
 use qol_platform::Os;
 use serde_json::json;
+use serde_json::Value;
+use std::path::PathBuf;
 
 const BLUETOOTH_UID: &str = "uid-bluetooth";
 const SHOT_UID: &str = "uid-shot";
