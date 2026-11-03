@@ -676,14 +676,14 @@ test('a terminal session comes back as a fork with its own conversation once, an
 
   await $.tool.call({ tool, ...session, transcript: '/p/open.jsonl' } as any)
   expect(runs.at(-1)).toEqual(resumeArgv('/p/open.jsonl'))
-  expect(sent.at(-1)).toMatchObject({ to: 'a6', text: 'The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.' })
+  expect(sent.at(-1)).toMatchObject({ to: 'a6', text: 'Brought back for the user.' })
 
   const empty = await $.tool.call({ tool, ...session, transcript: '/p/empty.jsonl' } as any)
   expect(String(empty.deny)).toContain('holds no conversation to resume')
   const count = runs.length
   for (const wrong of [{ transcript: 'closed.jsonl' }, { transcript: '/p/closed.txt' }, { cwd: 'p' }, { description: ' ' }]) {
     const refused = await $.tool.call({ tool, ...session, ...wrong } as any)
-    expect(String(refused.deny)).toContain('resume_session needs an absolute .jsonl transcript')
+    expect(String(refused.deny)).toContain('resume_session needs fork alone, or an absolute .jsonl transcript')
   }
   expect(runs).toHaveLength(count)
   expect(sent).toHaveLength(3)
@@ -785,13 +785,89 @@ test('until the open reaches it, a fork cut off mid-turn waits under its own hea
   expect(sent).toHaveLength(1)
 })
 
-test('opening the switchboard sends no fork a message, so no fork spends a turn, and its board keeps every row', async ($, on) => {
+const answered = async ($: any, agentId: string, index: number) => {
+  const chunks: any[] = []
+  const stream = $.turn.step({ turnId: `turn-${agentId}`, index, model: 'opus', messageCount: 2, agentId })
+  for await (const chunk of stream) chunks.push(chunk)
+  return chunks
+}
+
+test('opening the switchboard puts each unfinished fork back in the agent list, and the plugin answers its turn so no model runs', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
+  const steps: string[] = []
   const row = (agentId: string, kind: string | undefined, isWorking: boolean) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking, isDismissed: false })
   store.set('board:earlier-session', [row('m1', undefined, true), row('a1', 'ask', false), row('p1', 'waiting', false), row('d1', 'merged', false)])
   store.set('reopen:earlier-session', ['a1'])
   engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number }) {
+    steps.push(e.agentId ?? 'main')
+    yield { kind: 'text', index: 0, text: 'model' }
+    return { turnId: e.turnId, index: e.index, answer: 'model', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => one.to).sort()).toEqual(['a1', 'm1', 'p1'])
+  expect(sent.every(one => one.text === 'Back in the agent list.')).toBe(true)
+  expect(store.has('reopen:earlier-session')).toBe(false)
+  expect(store.has('reopen:switchboard-session')).toBe(false)
+  const hold = await answered($, 'a1', 0)
+  expect(hold.map(one => one.kind)).toEqual(['tool', 'input', 'stop'])
+  expect(hold[0].name).toBe('Bash')
+  expect(JSON.parse(hold[1].json)).toEqual({ command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true })
+  const reply = await answered($, 'a1', 1)
+  expect(reply.filter(one => one.kind === 'text').map(one => one.text).join('')).toBe('Back on the fork board.')
+  expect(steps).toEqual([])
+  await answered($, 'a1', 0)
+  expect(steps).toEqual(['a1'])
+  await typed($, notification('m1', 'm1-fork: a fork', 'Back on the fork board.'), 'task-notification')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(stopped by a restart, agent id m1)')
+  expect(board).toContain('a1-fork: Which colour? (needs the user, agent id a1)')
+  expect(board).toContain('(done, agent id d1)')
+})
+
+test('resuming a fork with no words puts it back in the agent list without a model turn, and one the list holds gets nothing', async ($, on) => {
+  const sent: any[] = []
+  const steps: string[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [{ id: 'b1' }] }))
+  on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number }) {
+    steps.push(e.agentId ?? 'main')
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  await typed($, notification('a1', 'a1-fork: a fork', 'Which colour should it be? I recommend amber.'), 'task-notification')
+  await spawn($, 'b1', 'b1-fork: a fork')
+  const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork' })
+  expect(String(resumed.result)).toContain('back in the agent list')
+  expect(sent).toEqual([expect.objectContaining({ to: 'a1', text: 'Brought back for the user.' })])
+  expect((await answered($, 'a1', 0))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+  expect((await answered($, 'a1', 1)).find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
+  expect(steps).toEqual([])
+  await typed($, notification('a1', 'a1-fork: a fork', 'Back on the fork board.'), 'task-notification')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'a1-fork' })).result)
+  expect(board).toContain('Which colour should it be? I recommend amber.')
+  const held = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'b1-fork' })
+  expect(String(held.result)).toContain('already in the agent list')
+  expect(sent).toHaveLength(1)
+})
+
+test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, kind: string) => ({ agentId, name: `${agentId}-fork: a fork`, kind, headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false })
+  store.set('board:earlier-session', [row('a1', 'ask'), row('b1', 'ask')])
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [{ id: 'a1' }] }))
   const timers: Array<() => void> = []
   on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -800,32 +876,14 @@ test('opening the switchboard sends no fork a message, so no fork spends a turn,
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent).toHaveLength(0)
-  expect(store.has('reopen:earlier-session')).toBe(false)
-  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(stopped by a restart, agent id m1)')
-  expect(board).toContain('a1-fork: Which colour? (needs the user, agent id a1)')
-  expect(board).toContain('(done, agent id d1)')
-})
-
-test('a fresh copy of the module keeps the saved board and sends no fork a message', async ($, on) => {
-  const store = new Map<string, unknown>()
-  const sent: any[] = []
-  const row = (agentId: string, kind: string) => ({ agentId, name: `${agentId}-fork: a fork`, kind, headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false })
-  store.set('board:switchboard-session', [row('a1', 'ask'), row('b1', 'ask'), row('d1', 'merged')])
-  store.set('reopen:switchboard-session', ['b1'])
-  engine(on, sent, [], [], store)
-  const timers: Array<() => void> = []
-  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
-  await spawn($, 'n1', 'n1-fork: a new fork')
-  await settle()
-  const saved = store.get('board:switchboard-session') as Array<{ agentId: string }>
-  expect(saved.map(one => one.agentId)).toEqual(['a1', 'b1', 'd1', 'n1'])
-  await renderBand($)
-  for (const fire of timers.splice(0)) fire()
-  await settle()
-  await renderBand($)
-  expect(sent).toHaveLength(0)
+  expect(sent.map(one => one.to)).toEqual(['b1'])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 3; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => one.to)).toEqual(['b1'])
 })
 
 test('a fork the agent list no longer holds is brought back by opening it, and its restart reply keeps its last report', async ($, on) => {
@@ -844,8 +902,11 @@ test('a fork the agent list no longer holds is brought back by opening it, and i
   await ui.unmount()
   expect(viewed).toEqual(['h1', 'h1'])
   expect(sent).toHaveLength(1)
-  expect(sent[0].text).toContain('The user opened your view from the fork board')
-  expect(sent[0].text).toContain('`Back on the fork board.`')
+  expect(sent[0].text).toBe('Opened from the fork board.')
+  const hold = await answered($, 'h1', 0)
+  expect(hold[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+  const reply = await answered($, 'h1', 1)
+  expect(reply.find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
   const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back on the fork board.'), 'task-notification')
   expect(back.drop).toBe('h1-fork')
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'h1-fork' })).result)

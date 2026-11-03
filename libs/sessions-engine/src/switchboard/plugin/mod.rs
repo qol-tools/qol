@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_sends_no_fork_anything_on_open() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_answers_a_reopened_forks_turn_itself() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -189,7 +189,11 @@ mod tests {
             "'open · CLI Sessions watching' : 'open · no watcher'",
             ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
             "const sent = await sendTo($, entry, CONTINUE)",
-            "const sent = await sendTo($, entry, REOPENED)",
+            "const sent = await sendTo($, entry, REOPENED, holdingVia(direct($), RESTARTED_REPLY, isCut(entry)))",
+            "sendTo($, entry, BACK, holdingVia(viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
+            "const reply = heldReply(e.agentId)",
+            "if (e.index === 0) {",
+            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
@@ -202,8 +206,6 @@ mod tests {
         for retired in [
             "QOL_SWITCHBOARD_WAKE",
             "wakeForks",
-            "reopenForks",
-            "REOPEN_DELAY_MS",
             "clock.after(WAKE",
             "heard",
         ] {
@@ -211,6 +213,7 @@ mod tests {
         }
         assert!(STATE_TYPES.contains("pulls: Pull[]"));
         assert!(MODULE_TESTS.contains("runs under CLI Sessions, and no other command is rewritten"));
+        assert!(MODULE_TESTS.contains("the plugin answers its turn so no model runs"));
     }
 
     #[test]

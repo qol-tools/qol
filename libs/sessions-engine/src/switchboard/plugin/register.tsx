@@ -13,8 +13,8 @@ const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const RESUME = 'resume_session'
 const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
 const RESUME_TIMEOUT_MS = 60_000
-const WAIT_FOR_USER =
-  'The switchboard brought this conversation back for the user, who types to you in your view. Do nothing else until then: start your hold and reply only Ready.'
+const WAIT_FOR_USER = 'Brought back for the user.'
+const READY = 'Ready'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
@@ -66,7 +66,10 @@ const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue y
 const BAND_WAIT_MS = 3_000
 const BAND_FRESH_MS = 90_000
 const SEND_WAIT_MS = 5_000
-const REOPENED = `The user opened your view from the fork board to talk to you, and the agent list no longer held you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
+const BACK = 'Back in the agent list.'
+const REOPEN_DELAY_MS = 1_500
+const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
+const REOPENED = 'Opened from the fork board.'
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const COLOR: Record<Kind, string> = {
@@ -202,6 +205,8 @@ const loadSaved = async ($: EngineInterface): Promise<void> => {
   const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
   const rows = Array.isArray(saved) ? saved.filter(isEntry) : []
   if (rows.length > 0) await update($, board, list => ((list ?? []).length > 0 ? (list ?? []) : rows))
+  const pending = await $.store.get(REOPEN_PREFIX + (await $.session.id()))
+  if (Array.isArray(pending) && pending.length > 0) $.clock.after(REOPEN_DELAY_MS, () => void reopenForks($).catch(() => undefined))
 }
 
 export const ensureLoaded = ($: EngineInterface): Promise<void> => {
@@ -230,6 +235,12 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
 }
 
 const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking
+
+export const isUnfinished = (entry: Entry): boolean =>
+  !entry.isDismissed &&
+  entry.isStoppedByUser !== true &&
+  entry.successor === undefined &&
+  (isCut(entry) || (!entry.isWorking && entry.kind !== undefined && !DONE.includes(entry.kind)))
 
 const needsYou = (entry: Entry): boolean =>
   !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
@@ -391,8 +402,9 @@ const rested = async ($: EngineInterface, agentId: string): Promise<Entry | unde
   let kept: Entry | undefined
   await change($, list =>
     list.map(one => {
-      if (one.agentId !== agentId || one.kind === undefined) return one
-      kept = { ...one, isWorking: false }
+      const wasCut = resting.get(agentId) === true
+      if (one.agentId !== agentId || (one.kind === undefined && !wasCut)) return one
+      kept = { ...one, isWorking: false, ...(wasCut ? { isInterrupted: true } : {}) }
       return kept
     }),
   )
@@ -565,10 +577,10 @@ const bounded = ($: EngineInterface, sending: Promise<Delivered>): Promise<Deliv
   })
 
 export const viaBand =
-  ($: EngineInterface): Sender =>
+  ($: EngineInterface, isBandOnly = false): Sender =>
   async (agentId, text) => {
     const now = await $.clock.now()
-    if (bandDrawnAt === undefined || now - bandDrawnAt > BAND_FRESH_MS) return direct($)(agentId, text)
+    if (!isBandOnly && (bandDrawnAt === undefined || now - bandDrawnAt > BAND_FRESH_MS)) return direct($)(agentId, text)
     return new Promise<Delivered>(resolve => {
       let isSettled = false
       const one: Outgoing = {
@@ -582,14 +594,60 @@ export const viaBand =
       }
       outbox.push(one)
       $.ui.invalidate('ui.render')
-      $.clock.after(BAND_WAIT_MS, () => {
+      $.clock.after(isBandOnly ? SEND_WAIT_MS : BAND_WAIT_MS, () => {
         const at = outbox.indexOf(one)
         if (at === -1) return
         outbox.splice(at, 1)
-        void bounded($, direct($)(agentId, text)).then(one.settle)
+        if (isBandOnly) one.settle({ isDelivered: false, reason: 'the band did not draw in time' })
+        else void bounded($, direct($)(agentId, text)).then(one.settle)
       })
     })
   }
+
+const holding = new Map<string, string>()
+const resting = new Map<string, boolean>()
+
+const quiet = new WeakSet<Sender>()
+
+export const holdingVia = (send: Sender, reply: string, wasCut = false): Sender => {
+  const holds: Sender = async (agentId, text) => {
+    holding.set(agentId, reply)
+    resting.set(agentId, wasCut)
+    const sent = await send(agentId, text)
+    if (!sent.isDelivered) {
+      holding.delete(agentId)
+      resting.delete(agentId)
+    }
+    return sent
+  }
+  quiet.add(holds)
+  return holds
+}
+
+export const heldReply = (agentId: string | undefined): string | undefined => (agentId === undefined ? undefined : holding.get(agentId))
+
+let isReopening = false
+
+export const reopenForks = async ($: EngineInterface): Promise<void> => {
+  if (isReopening) return
+  isReopening = true
+  try {
+    const key = REOPEN_PREFIX + (await $.session.id())
+    const saved = await $.store.get(key)
+    const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    const agents: unknown = await $.agent.list().catch(() => [])
+    const held = new Set(Array.isArray(agents) ? agents.map(agent => (agent as { id?: unknown }).id) : [])
+    for (const [index, agentId] of pending.entries()) {
+      const entry = (await read($, board)).find(one => one.agentId === agentId)
+      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, BACK, holdingVia(viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch(() => undefined)
+      const rest = pending.slice(index + 1)
+      if (rest.length === 0) await $.store.delete(key)
+      else await $.store.set(key, rest)
+    }
+  } finally {
+    isReopening = false
+  }
+}
 
 export const drainOutbox = async ($: EngineInterface): Promise<void> => {
   bandDrawnAt = await $.clock.now()
@@ -603,14 +661,15 @@ export const drainOutbox = async ($: EngineInterface): Promise<void> => {
 export const sendTo = async ($: EngineInterface, target: Entry, text: string, send: Sender = direct($)): Promise<Sent> => {
   await bringBack($, target.agentId)
   const sent = await send(target.agentId, text)
+  const isQuiet = quiet.has(send)
   if (sent.isDelivered) {
-    await markWorking($, target.agentId, undefined)
+    if (!isQuiet) await markWorking($, target.agentId, undefined)
     return { ...sent, agentId: target.agentId }
   }
   const revived = isStopped(sent.reason) ? await revive($, target) : undefined
   if (revived === undefined) return { ...sent, agentId: target.agentId }
   const again = await send(revived.agentId, text)
-  if (again.isDelivered) await markWorking($, revived.agentId, undefined)
+  if (again.isDelivered && !isQuiet) await markWorking($, revived.agentId, undefined)
   return { ...again, agentId: revived.agentId }
 }
 
@@ -642,9 +701,24 @@ const again = async ($: EngineInterface, fork: Entry, message: string | undefine
   const isHere = (await subagentFile($, fork.agentId, '.jsonl').catch(() => undefined)) !== undefined
   const text = message ?? (isHere ? undefined : WAIT_FOR_USER)
   if (text === undefined) return { isResumed: true, text: `Already resumed as ${keyName(fork.name)}, agent id ${fork.agentId}: nothing was sent, and its view shows the conversation.` }
-  const sent = await sendTo($, fork, text)
+  const sent = await sendTo($, fork, text, message === undefined ? holdingVia(direct($), READY) : direct($))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} that holds the conversation did not take the message: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Already resumed as ${keyName(fork.name)}, agent id ${sent.agentId}: it has the message.` }
+}
+
+export const resumeFork = async ($: EngineInterface, fork: string): Promise<Resumed> => {
+  let target = addressed(await read($, board), fork)
+  if (target === undefined) {
+    const adopted = await adoptFork($, fork, false).catch(() => undefined)
+    if (adopted === undefined) return { isResumed: false, reason: `No fork is named ${fork}: call sessions_closed for it.` }
+    target = await placed($, adopted.agentId, adopted.name ?? adopted.agentId, adopted.cwd)
+  }
+  const agents: unknown = await $.agent.list().catch(() => [])
+  const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId)
+  if (isHeld) return { isResumed: true, text: `${keyName(target.name)} is already in the agent list, agent id ${target.agentId}: nothing was sent.` }
+  const sent = await sendTo($, target, WAIT_FOR_USER, holdingVia(direct($), RESTARTED_REPLY, isCut(target)))
+  if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}` }
+  return { isResumed: true, text: `Resumed as ${keyName(target.name)}, agent id ${sent.agentId}: it is back in the agent list, and the plugin answered its turn, so no model ran.` }
 }
 
 export const resumeSession = async ($: EngineInterface, session: ClosedSession, caller?: string): Promise<Resumed> => {
@@ -670,7 +744,7 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   const target = { ...(await placed($, parsed.agent_id, name, cwd)), resumedFrom: session.transcript }
   await change($, list => list.map(one => (one.agentId === target.agentId ? { ...one, resumedFrom: session.transcript } : one)))
   if (caller !== undefined) await markWorking($, parsed.agent_id, undefined, undefined, caller)
-  const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER)
+  const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER, session.message === undefined ? holdingVia(direct($), READY) : direct($))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
@@ -940,7 +1014,9 @@ export const register: Register = on => {
           for (const key of others) await $.store.delete(key)
         }
       }
-      for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX))) await $.store.delete(key)
+      for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
+      const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
+      if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
         name: TOOL,
@@ -955,7 +1031,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: RESUME,
         description:
-          "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation.",
+          "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation. To bring back a fork the user only asks to resume, with no words for it, pass fork alone: it comes back to the agent list and no turn of its own runs.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -964,8 +1040,8 @@ export const register: Register = on => {
             description: { type: 'string', description: '`<key-name>: <friendly description>`, as for a new fork.' },
             title: { type: 'string', description: "The session's title, from its row." },
             message: { type: 'string', description: "The user's own words for that session, only when they gave some beyond asking to bring it back; leave it out to have the fork wait for the user." },
+            fork: { type: 'string', description: "A fork's key-name or agent id, alone, when the user only asks to resume, reopen or continue that fork: it comes back to the agent list and no turn of its own runs." },
           },
-          required: ['transcript', 'cwd', 'description'],
         },
         isDeferred: false,
       })
@@ -973,6 +1049,9 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
+      if (pending.length > 0) {
+        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($)).catch(() => undefined))
+      }
     } catch {}
     return started
   })
@@ -1040,8 +1119,13 @@ export const register: Register = on => {
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
+    const fork = textField((e as unknown as Record<string, unknown>).fork)
+    if (fork !== undefined && textField((e as unknown as Record<string, unknown>).transcript) === undefined) {
+      const resumed = await resumeFork($, fork.trim())
+      return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
+    }
     const session = closedSession(e as unknown as Record<string, unknown>)
-    if (session === undefined) return { deny: 'resume_session needs an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
+    if (session === undefined) return { deny: 'resume_session needs fork alone, or an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
     if (e.agentId !== undefined && !ID.test(e.agentId)) return { deny: 'resume_session was called from a loop with no agent id it can name.' }
     const resumed = await resumeSession($, session, e.agentId)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
@@ -1082,12 +1166,28 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId !== undefined) {
+    if (e.agentId !== undefined && heldReply(e.agentId) === undefined) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
     }
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  on('turn.step', async function* ($, e, next) {
+    const reply = heldReply(e.agentId)
+    if (reply === undefined) return yield* next(e)
+    const base = { turnId: e.turnId, index: e.index, usage: null }
+    if (e.index === 0) {
+      yield { kind: 'tool', index: 0, id: `toolu_hold_${e.turnId.replace(/[^A-Za-z0-9_-]/g, '')}`, name: 'Bash' }
+      yield { kind: 'input', index: 0, json: JSON.stringify(HOLD) }
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null }
+      return { ...base, answer: '', toolUses: [{ name: 'Bash', input: HOLD }], stopReason: 'tool_use' }
+    }
+    if (e.agentId !== undefined) holding.delete(e.agentId)
+    yield { kind: 'text', index: 0, text: reply }
+    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+    return { ...base, answer: reply, toolUses: [], stopReason: 'end_turn' }
+  })
 
   on('session.append', async ($, e, next) => {
     const origin = e.origin.kind
@@ -1131,7 +1231,7 @@ export const register: Register = on => {
           $.ui.toast(`${keyName(entry.name)} could not be opened: ${printable(String(viewed.deny))}`)
           return
         }
-        const sent = await sendTo($, entry, REOPENED)
+        const sent = await sendTo($, entry, REOPENED, holdingVia(direct($), RESTARTED_REPLY, isCut(entry)))
         if (!sent.isDelivered) {
           $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
           return
