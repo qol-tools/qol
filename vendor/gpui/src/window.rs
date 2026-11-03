@@ -948,6 +948,24 @@ fn bounds_changed_or_defer(
     .detach();
 }
 
+fn app_is_borrowed(cx: &crate::AsyncApp) -> bool {
+    cx.app
+        .upgrade()
+        .is_some_and(|app| app.try_borrow_mut().is_err())
+}
+
+fn defer_frame(handle: AnyWindowHandle, deferred: &Rc<Cell<bool>>, cx: &mut crate::AsyncApp) {
+    if deferred.replace(true) {
+        return;
+    }
+    let deferred = deferred.clone();
+    cx.spawn(async move |cx| {
+        deferred.set(false);
+        handle.update(cx, |_, window, _| window.refresh()).ok();
+    })
+    .detach();
+}
+
 pub(crate) struct ElementStateBox {
     pub(crate) inner: Box<dyn Any>,
     #[cfg(debug_assertions)]
@@ -1068,6 +1086,7 @@ impl Window {
                 });
             }
         }));
+        let frame_deferred = Rc::new(Cell::new(false));
         platform_window.on_request_frame(Box::new({
             let mut cx = cx.to_async();
             let invalidator = invalidator.clone();
@@ -1076,6 +1095,10 @@ impl Window {
             let next_frame_callbacks = next_frame_callbacks.clone();
             let last_input_timestamp = last_input_timestamp.clone();
             move |request_frame_options| {
+                if app_is_borrowed(&cx) {
+                    defer_frame(handle, &frame_deferred, &mut cx);
+                    return;
+                }
                 let next_frame_callbacks = next_frame_callbacks.take();
                 if !next_frame_callbacks.is_empty() {
                     handle

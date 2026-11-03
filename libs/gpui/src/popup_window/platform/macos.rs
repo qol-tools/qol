@@ -709,6 +709,13 @@ pub fn hide_window_by_title(title: &str) -> bool {
     let Some(window) = resolve_window(title) else {
         return false;
     };
+    if window.isKeyWindow()
+        && window
+            .styleMask()
+            .contains(NSWindowStyleMask::NonactivatingPanel)
+    {
+        schedule_focus_return();
+    }
     window.setLevel(NSPopUpMenuWindowLevel);
     #[cfg(debug_assertions)]
     {
@@ -1300,6 +1307,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     };
     window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     window.setLevel(NSPopUpMenuWindowLevel);
+    window.setHidesOnDeactivate(false);
     install_process_square_corner_mask();
     true
 }

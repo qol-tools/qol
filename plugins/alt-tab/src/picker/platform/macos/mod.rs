@@ -5,7 +5,7 @@ pub fn picker_window_title(_target: qol_gpui::window::MonitorKey) -> String {
 }
 
 pub fn picker_window_kind() -> gpui::WindowKind {
-    qol_gpui::platform::ghost_window_kind()
+    qol_gpui::platform::key_panel_window_kind()
 }
 
 pub fn configure_picker_window(title: &str) {

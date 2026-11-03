@@ -45,6 +45,10 @@ pub fn ghost_window_kind() -> gpui::WindowKind {
     imp::ghost_window_kind()
 }
 
+pub fn key_panel_window_kind() -> gpui::WindowKind {
+    gpui::WindowKind::PopUp
+}
+
 pub fn ghost_window_decorations(transparent: bool) -> gpui::WindowDecorations {
     imp::ghost_window_decorations(transparent)
 }

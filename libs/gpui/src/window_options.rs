@@ -113,6 +113,7 @@ mod tests {
     use super::PopupWindowOptions;
     use crate::platform::{ghost_window_decorations, ghost_window_kind};
     use crate::window::{MonitorKey, WindowPlacement};
+    use gpui::AppContext as _;
 
     #[test]
     fn new_matches_the_ghost_popup_recipe() {
@@ -182,5 +183,42 @@ mod tests {
         let options = PopupWindowOptions::from_placement(&placement).build();
         assert_eq!(options.window_bounds, Some(WindowBounds::Windowed(bounds)));
         assert!(options.display_id.is_none());
+    }
+
+    struct Blank;
+
+    impl gpui::Render for Blank {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn a_frame_requested_inside_a_window_update_still_reveals_the_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let window = cx.update(|cx| {
+            cx.open_window(PopupWindowOptions::new().build(), |_, cx| cx.new(|_| Blank))
+                .unwrap()
+        });
+        let mut platform = cx.test_window(window.into());
+        let revealed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut becoming_key = platform.clone();
+        window
+            .update(cx, |_, window, _| {
+                let revealed = revealed.clone();
+                window.on_next_frame(move |_, _| revealed.set(true));
+                becoming_key.simulate_request_frame();
+            })
+            .unwrap();
+        assert!(!revealed.get());
+
+        cx.run_until_parked();
+        platform.simulate_request_frame();
+        assert!(revealed.get());
     }
 }

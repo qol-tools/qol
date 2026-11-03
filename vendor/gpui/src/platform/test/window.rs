@@ -27,6 +27,7 @@ pub(crate) struct TestWindowState {
     hover_status_change_callback: Option<Box<dyn FnMut(bool)>>,
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     moved_callback: Option<Box<dyn FnMut()>>,
+    request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     input_handler: Option<PlatformInputHandler>,
     is_fullscreen: bool,
 }
@@ -74,6 +75,7 @@ impl TestWindow {
             hover_status_change_callback: None,
             resize_callback: None,
             moved_callback: None,
+            request_frame_callback: None,
             input_handler: None,
             is_fullscreen: false,
         })))
@@ -89,6 +91,14 @@ impl TestWindow {
         drop(lock);
         callback(size, scale_factor);
         self.0.lock().resize_callback = Some(callback);
+    }
+
+    pub fn simulate_request_frame(&mut self) {
+        let Some(mut callback) = self.0.lock().request_frame_callback.take() else {
+            return;
+        };
+        callback(RequestFrameOptions::default());
+        self.0.lock().request_frame_callback = Some(callback);
     }
 
     pub fn simulate_move(&mut self, origin: Point<Pixels>) {
@@ -245,7 +255,9 @@ impl PlatformWindow for TestWindow {
         self.0.lock().is_fullscreen
     }
 
-    fn on_request_frame(&self, _callback: Box<dyn FnMut(RequestFrameOptions)>) {}
+    fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
+        self.0.lock().request_frame_callback = Some(callback);
+    }
 
     fn on_input(&self, callback: Box<dyn FnMut(crate::PlatformInput) -> DispatchEventResult>) {
         self.0.lock().input_callback = Some(callback)
