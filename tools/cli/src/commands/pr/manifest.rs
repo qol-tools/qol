@@ -4,7 +4,6 @@ use std::path::Path;
 
 pub(super) const FILE: &str = "manifest.json";
 const SCHEMA: u32 = 1;
-const TARGET: &str = "x86_64-unknown-linux-gnu";
 
 #[derive(Debug, Deserialize)]
 pub(super) struct Manifest {
@@ -33,7 +32,7 @@ pub(super) fn read(path: &Path) -> Result<Manifest> {
 }
 
 impl Manifest {
-    pub(super) fn check(&self, number: u64, head: &str) -> Result<()> {
+    pub(super) fn check(&self, number: u64, head: &str, target: &str) -> Result<()> {
         if self.schema != SCHEMA {
             bail!(
                 "build manifest schema {} is not {SCHEMA}; update qol",
@@ -52,8 +51,8 @@ impl Manifest {
                 self.head_sha
             );
         }
-        if self.target != TARGET {
-            bail!("the build targets {}, not {TARGET}", self.target);
+        if self.target != target {
+            bail!("the build targets {}, not {target}", self.target);
         }
         for plugin in &self.plugins {
             for value in [&plugin.id, &plugin.tag, &plugin.file, &plugin.bin_name] {
@@ -71,6 +70,8 @@ mod tests {
     use super::*;
 
     const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+    const LINUX: &str = "x86_64-unknown-linux-gnu";
+    const MACOS: &str = "aarch64-apple-darwin";
 
     fn manifest(edit: impl FnOnce(&mut serde_json::Value)) -> Manifest {
         let mut value = serde_json::json!({
@@ -95,26 +96,30 @@ mod tests {
     #[test]
     fn a_build_of_the_pull_request_head_passes() {
         let build = manifest(|_| {});
-        build.check(412, HEAD).unwrap();
+        build.check(412, HEAD, LINUX).unwrap();
         assert_eq!(build.plugins[0].bin_name, "qol-cli-sessions");
+        let mac = manifest(|value| value["target"] = MACOS.into());
+        mac.check(412, HEAD, MACOS).unwrap();
     }
 
     #[test]
     fn a_build_of_another_pull_request_or_commit_is_refused() {
         let build = manifest(|_| {});
-        assert!(build.check(413, HEAD).is_err());
-        assert!(build.check(412, "feed").is_err());
-        let other_target = manifest(|value| value["target"] = "aarch64-apple-darwin".into());
-        assert!(other_target.check(412, HEAD).is_err());
+        assert!(build.check(413, HEAD, LINUX).is_err());
+        assert!(build.check(412, "feed", LINUX).is_err());
+        let error = build.check(412, HEAD, MACOS).unwrap_err().to_string();
+        assert!(error.contains("not aarch64-apple-darwin"), "{error}");
+        let other_target = manifest(|value| value["target"] = MACOS.into());
+        assert!(other_target.check(412, HEAD, LINUX).is_err());
         let other_schema = manifest(|value| value["schema"] = 2.into());
-        assert!(other_schema.check(412, HEAD).is_err());
+        assert!(other_schema.check(412, HEAD, LINUX).is_err());
     }
 
     #[test]
     fn a_manifest_naming_a_path_is_refused() {
         for field in ["id", "tag", "file", "bin_name"] {
             let build = manifest(|value| value["plugins"][0][field] = "../escape".into());
-            assert!(build.check(412, HEAD).is_err(), "{field}");
+            assert!(build.check(412, HEAD, LINUX).is_err(), "{field}");
         }
     }
 

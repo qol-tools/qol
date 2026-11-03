@@ -12,6 +12,10 @@ pub(crate) fn install_dir(_profile: InstallProfile) -> io::Result<PathBuf> {
     ))
 }
 
+pub(crate) fn system_install_dirs() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 pub(crate) fn install_dir_for_home(_profile: InstallProfile, _home: &Path) -> io::Result<PathBuf> {
     install_dir(InstallProfile::Production)
 }

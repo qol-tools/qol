@@ -40,21 +40,34 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/live_test.py
 
-  # A change a person must see working gets a Linux build of what it changes,
-  # made the way a release makes it, so the test downloads it instead of
-  # compiling on the tester's machine. A change the checks prove gets none.
+  # A change a person must see working gets a Linux x86_64 and a macOS arm64
+  # build of what it changes, made the way a release makes it, so the test
+  # downloads it instead of compiling on the tester's machine. A change the
+  # checks prove gets none.
   build:
-    name: Build for the live test
+    name: Build for the live test (${{ matrix.platform }})
     needs: classify
     if: needs.classify.outputs.needed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:
       contents: read
       pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            artifact: live-test-build-linux-x86_64
+          - platform: macos
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: live-test-build-macos-aarch64
     env:
-      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
-      TARGET: x86_64-unknown-linux-gnu
+      RUSTFLAGS: -D warnings ${{ matrix.platform == 'linux' && '-C link-arg=-fuse-ld=lld' || '' }}
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,8 +79,8 @@ jobs:
 
       - uses: ./.github/actions/rust-setup
         with:
-          cache-key: plugin-release-x86_64-unknown-linux-gnu
-          targets: x86_64-unknown-linux-gnu
+          cache-key: plugin-release-${{ matrix.target }}
+          targets: ${{ matrix.target }}
           save-cache: "false"
 
       - name: Plan what the live test needs built
@@ -77,8 +90,10 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PLATFORM: ${{ matrix.platform }}
         run: >
           python .github/scripts/live_test_build.py plan
+          --platform "${PLATFORM}"
           --manifest "${RUNNER_TEMP}/live-test-build/manifest.json"
 
       - name: Export production artifact identity
@@ -103,13 +118,13 @@ jobs:
           fi
 
       - name: Install cargo-deb
-        if: steps.plan.outputs.tray_tag != ''
+        if: matrix.platform == 'linux' && steps.plan.outputs.tray_tag != ''
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2
         with:
           tool: cargo-deb
 
       - name: Build the tray
-        if: steps.plan.outputs.tray_tag != ''
+        if: matrix.platform == 'linux' && steps.plan.outputs.tray_tag != ''
         run: |
           python .github/scripts/release_candidate.py build \
             --kind qol-tray-linux \
@@ -117,11 +132,27 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/live-test-build/tray"
           cp target/release/qol-tray target/debian/*.deb "${RUNNER_TEMP}/live-test-build/tray/"
 
+      - name: Build the tray app
+        if: matrix.platform == 'macos' && steps.plan.outputs.tray_tag != ''
+        env:
+          TRAY_TAG: ${{ steps.plan.outputs.tray_tag }}
+        run: |
+          cargo build --release --locked --target "${TARGET}" --bin qol-tray
+          cargo run --quiet --locked -p qol-build-identity --bin qol-build-identity -- verify production
+          python .github/scripts/macos_app_bundle.py \
+            --binary "target/${TARGET}/release/qol-tray" \
+            --version "${TRAY_TAG#qol-tray-v}" \
+            --app "${RUNNER_TEMP}/QoL Tray.app"
+          codesign --force --deep --sign - "${RUNNER_TEMP}/QoL Tray.app"
+          codesign --verify --deep --strict "${RUNNER_TEMP}/QoL Tray.app"
+          mkdir -p "${RUNNER_TEMP}/live-test-build/tray"
+          tar -C "${RUNNER_TEMP}" -czf "${RUNNER_TEMP}/live-test-build/tray/qol-tray-macos-aarch64.tar.gz" "QoL Tray.app"
+
       - name: Upload the build
         if: steps.plan.outputs.build == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: live-test-build-linux-x86_64
+          name: ${{ matrix.artifact }}
           path: ${{ runner.temp }}/live-test-build
           retention-days: 3
           if-no-files-found: error

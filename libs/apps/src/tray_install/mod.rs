@@ -32,6 +32,14 @@ pub fn binary_filename() -> &'static str {
     platform::BINARY_FILENAME
 }
 
+pub fn production_binaries() -> Vec<PathBuf> {
+    let user = InstallProfile::Production.install_dir().ok();
+    user.into_iter()
+        .chain(platform::system_install_dirs())
+        .map(|dir| dir.join(platform::BINARY_FILENAME))
+        .collect()
+}
+
 #[cfg(all(
     test,
     any(target_os = "linux", target_os = "macos", target_os = "windows")
@@ -51,6 +59,18 @@ mod tests {
         assert_ne!(production, development);
         assert!(!development.starts_with(&production));
         assert!(!production.starts_with(&development));
+    }
+
+    #[test]
+    fn the_user_install_is_the_first_production_binary() {
+        let binaries = production_binaries();
+        assert_eq!(
+            binaries.first(),
+            Some(&InstallProfile::Production.installed_binary().unwrap())
+        );
+        assert!(binaries
+            .iter()
+            .all(|binary| binary.ends_with(binary_filename())));
     }
 
     #[test]

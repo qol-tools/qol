@@ -1234,6 +1234,13 @@ pub(crate) fn processes() -> io::Result<Vec<ProcessEntry>> {
     }
 }
 
+pub(crate) fn process_arguments(_pid: u32) -> io::Result<Vec<String>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process arguments are unsupported on Windows",
+    ))
+}
+
 pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     let process = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
     image_path(&process, PROCESS_NAME_WIN32)

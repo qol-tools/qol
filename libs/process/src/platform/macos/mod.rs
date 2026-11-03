@@ -143,10 +143,92 @@ pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_vec(buffer)))
 }
 
+pub(crate) fn process_arguments(pid: u32) -> io::Result<Vec<String>> {
+    let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid_t(pid)?];
+    let mut size: libc::size_t = 0;
+    let sized = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as libc::c_uint,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if sized != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut buffer = vec![0u8; size];
+    let read = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            name.len() as libc::c_uint,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    buffer.truncate(size);
+    procargs_arguments(&buffer)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unreadable process arguments"))
+}
+
+fn procargs_arguments(buffer: &[u8]) -> Option<Vec<String>> {
+    const COUNT_BYTES: usize = std::mem::size_of::<libc::c_int>();
+    let count = libc::c_int::from_ne_bytes(buffer.get(..COUNT_BYTES)?.try_into().ok()?);
+    let count = usize::try_from(count).ok()?;
+    let rest = buffer.get(COUNT_BYTES..)?;
+    let executable_end = rest.iter().position(|byte| *byte == 0)?;
+    let mut parts = rest[executable_end..]
+        .split(|byte| *byte == 0)
+        .skip_while(|part| part.is_empty());
+    let arguments = parts
+        .by_ref()
+        .take(count)
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect::<Vec<_>>();
+    (arguments.len() == count).then_some(arguments)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use qol_platform::Os;
+
+    #[test]
+    fn procargs_skip_the_executable_path_and_its_padding() {
+        let mut buffer = 2i32.to_ne_bytes().to_vec();
+        buffer.extend_from_slice(b"/Applications/QoL Tray.app/Contents/MacOS/qol-tray\0\0\0\0");
+        buffer.extend_from_slice(b"qol-tray\0--headless\0HOME=/Users/u\0");
+        assert_eq!(
+            procargs_arguments(&buffer),
+            Some(vec!["qol-tray".to_string(), "--headless".to_string()])
+        );
+        assert_eq!(procargs_arguments(&buffer[..2]), None);
+        buffer[..4].copy_from_slice(&9i32.to_ne_bytes());
+        assert_eq!(procargs_arguments(&buffer), None);
+    }
+
+    #[test]
+    fn process_arguments_reads_a_running_command_line() {
+        let mut child = Command::new("sleep").arg("5").spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let arguments = loop {
+            let arguments = process_arguments(child.id()).unwrap_or_default();
+            if arguments.len() == 2 || std::time::Instant::now() >= deadline {
+                break arguments;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(arguments, ["sleep", "5"]);
+    }
 
     #[test]
     fn verified_containment_fails_closed() {
