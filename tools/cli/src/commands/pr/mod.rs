@@ -52,7 +52,7 @@ fn try_build(number: u64, platform: &platform::Build, places: &install::Places) 
     }
     let pull = download::pull_request(REPO, number)?;
     let head = pull.head_ref_oid.clone();
-    let run = download::live_test_run(REPO, &pull)?;
+    let run = download::live_test_run(REPO, &pull, platform)?;
     let dir = places.download_dir(number, &head);
     download::fetch(REPO, &run, platform, &dir)?;
     let build = manifest::read(&dir.join(manifest::FILE))?;
