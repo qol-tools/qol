@@ -1307,6 +1307,7 @@ pub fn configure_popup_window(title: &str) -> bool {
     };
     window.setAnimationBehavior(NSWindowAnimationBehavior::None);
     window.setLevel(NSPopUpMenuWindowLevel);
+    window.setHidesOnDeactivate(false);
     install_process_square_corner_mask();
     true
 }
