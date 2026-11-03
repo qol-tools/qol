@@ -228,3 +228,7 @@ pub(crate) fn processes() -> io::Result<Vec<crate::ProcessEntry>> {
 pub(crate) fn process_image_path(_pid: u32) -> io::Result<std::path::PathBuf> {
     Err(unsupported())
 }
+
+pub(crate) fn process_arguments(_pid: u32) -> io::Result<Vec<String>> {
+    Err(unsupported())
+}

@@ -2,17 +2,16 @@ mod daemon;
 mod download;
 mod install;
 mod manifest;
+mod platform;
 mod tray;
 
 use anyhow::{bail, Context, Result};
 use install::RecordFile;
-use qol_platform::Os;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) const USAGE: &str = "qol pr try <number> | qol pr try --off";
 const REPO: &str = "qol-tools/qol";
-const BUILD_ARCH: &str = "x86_64";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Request {
@@ -22,12 +21,10 @@ enum Request {
 
 pub(crate) fn run(args: &[OsString]) -> Result<()> {
     let request = parse(args)?;
-    if Os::current() != Some(Os::Linux) || std::env::consts::ARCH != BUILD_ARCH {
-        bail!("pull request builds are made for Linux {BUILD_ARCH} only");
-    }
+    let build = platform::host_build()?;
     let places = install::Places::current()?;
     match request {
-        Request::Try(number) => try_build(number, &places),
+        Request::Try(number) => try_build(number, build, &places),
         Request::Off => turn_off(&places),
     }
 }
@@ -48,7 +45,7 @@ fn parse(args: &[OsString]) -> Result<Request> {
     }
 }
 
-fn try_build(number: u64, places: &install::Places) -> Result<()> {
+fn try_build(number: u64, platform: &platform::Build, places: &install::Places) -> Result<()> {
     let mut state = install::State::load(&places.state)?;
     if let Some(other) = state.pull_request.filter(|other| *other != number) {
         bail!("pull request #{other} is still installed; run `qol pr try --off` first");
@@ -57,19 +54,25 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
     let head = pull.head_ref_oid.clone();
     let run = download::live_test_run(REPO, &pull)?;
     let dir = places.download_dir(number, &head);
-    download::fetch(REPO, &run, &dir)?;
+    download::fetch(REPO, &run, platform, &dir)?;
     let build = manifest::read(&dir.join(manifest::FILE))?;
-    build.check(number, &head)?;
-    let tray_build = (!build.tray.is_empty()).then(|| dir.join("tray").join(tray::BINARY));
+    build.check(number, &head, platform.target)?;
+    let tray_build = if build.tray.is_empty() {
+        None
+    } else {
+        Some(platform::tray_binary(&dir.join("tray"))?)
+    };
     if let Some(source) = &tray_build {
         install::verify_binary(source, tray::BINARY)?;
+        platform::prepare_tray(source)?;
     }
 
     println!("pull request #{number} at {}", short(&head));
     if tray_build.is_none() {
         if let Some(previous) = state.tray.clone() {
-            let put_back = tray::put_back(&previous, &installed_tray()?)?;
+            let put_back = tray::put_back(&previous, &installed_tray(&state)?)?;
             state.tray = None;
+            state.installed_tray = None;
             state.save(&places.state)?;
             println!(
                 "  {}: no longer changed; {}",
@@ -81,6 +84,7 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
     for plugin in &build.plugins {
         let source = dir.join("plugins").join(&plugin.tag).join(&plugin.file);
         install::verify_binary(&source, &plugin.bin_name)?;
+        platform::prepare_plugin(&source, &plugin.bin_name)?;
         let target = places.plugins.join(&plugin.id).join(&plugin.bin_name);
         if !target.is_file() {
             println!("  {}: not installed here, skipped", plugin.id);
@@ -110,6 +114,10 @@ fn try_build(number: u64, places: &install::Places) -> Result<()> {
         state.pull_request = Some(number);
         state.head_sha = Some(head.clone());
         state.tray = Some(source.clone());
+        if state.installed_tray.is_none() {
+            state.installed_tray = tray::running_install(places.downloads())?
+                .or_else(|| first_installed(&qol_apps::tray_install::production_binaries()));
+        }
         state.save(&places.state)?;
         let started = tray::run_in_place(&source)?;
         println!("  {}: {}", build.tray, started.describe());
@@ -144,17 +152,27 @@ fn turn_off(places: &install::Places) -> Result<()> {
         }
     }
     if let Some(try_binary) = tray_build {
-        let put_back = tray::put_back(&try_binary, &installed_tray()?)?;
+        let put_back = tray::put_back(&try_binary, &installed_tray(&state)?)?;
         println!("  {}: {}", tray::BINARY, put_back.describe());
     }
     install::State::clear(&places.state)?;
     Ok(())
 }
 
-fn installed_tray() -> Result<std::path::PathBuf> {
-    qol_apps::tray_install::InstallProfile::Production
-        .installed_binary()
+fn installed_tray(state: &install::State) -> Result<PathBuf> {
+    state
+        .installed_tray
+        .clone()
+        .or_else(|| first_installed(&qol_apps::tray_install::production_binaries()))
         .context("could not find where the installed tray lives")
+}
+
+fn first_installed(binaries: &[PathBuf]) -> Option<PathBuf> {
+    binaries
+        .iter()
+        .find(|binary| binary.is_file())
+        .or_else(|| binaries.first())
+        .cloned()
 }
 
 fn short(sha: &str) -> &str {
@@ -192,6 +210,36 @@ mod tests {
         for bad in refused {
             assert!(parse(&words(bad)).is_err(), "{bad:?} must be refused");
         }
+    }
+
+    #[test]
+    fn the_installed_tray_is_the_first_one_on_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let user = root
+            .path()
+            .join("home/Applications/QoL Tray.app/Contents/MacOS/qol-tray");
+        let system = root
+            .path()
+            .join("Applications/QoL Tray.app/Contents/MacOS/qol-tray");
+        let binaries = [user.clone(), system.clone()];
+        assert_eq!(first_installed(&binaries), Some(user.clone()));
+        std::fs::create_dir_all(system.parent().unwrap()).unwrap();
+        std::fs::write(&system, b"tray").unwrap();
+        assert_eq!(first_installed(&binaries), Some(system.clone()));
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, b"tray").unwrap();
+        assert_eq!(first_installed(&binaries), Some(user));
+        assert_eq!(first_installed(&[]), None);
+    }
+
+    #[test]
+    fn a_recorded_install_wins_over_the_default_places() {
+        let recorded = PathBuf::from("/Applications/QoL Tray.app/Contents/MacOS/qol-tray");
+        let state = install::State {
+            installed_tray: Some(recorded.clone()),
+            ..install::State::default()
+        };
+        assert_eq!(installed_tray(&state).unwrap(), recorded);
     }
 
     #[test]

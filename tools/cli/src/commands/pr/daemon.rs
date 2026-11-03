@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 const RESPAWN_WAIT: Duration = Duration::from_secs(20);
@@ -63,7 +63,7 @@ pub(super) fn runs_binary(pid: u32, binary: &Path) -> bool {
     let wanted = binary
         .canonicalize()
         .unwrap_or_else(|_| binary.to_path_buf());
-    let Ok(exe) = std::fs::read_link(PathBuf::from(format!("/proc/{pid}/exe"))) else {
+    let Ok(exe) = qol_process::process_image_path(pid) else {
         return false;
     };
     same_binary(&exe.to_string_lossy(), &wanted.to_string_lossy())

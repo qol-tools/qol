@@ -3,8 +3,9 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
+use super::platform::Build;
+
 const WORKFLOW: &str = "live-test.yml";
-const ARTIFACT: &str = "live-test-build-linux-x86_64";
 const BUILD_JOB: &str = "Build for the live test";
 const RUN_LIMIT: &str = "20";
 
@@ -105,7 +106,7 @@ fn latest_run(listing: &str, head: &str, branch: &str) -> Result<Run> {
     )
 }
 
-pub(super) fn fetch(repo: &str, run: &Run, dir: &Path) -> Result<()> {
+pub(super) fn fetch(repo: &str, run: &Run, build: &Build, dir: &Path) -> Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
     }
@@ -113,11 +114,22 @@ pub(super) fn fetch(repo: &str, run: &Run, dir: &Path) -> Result<()> {
     let id = run.database_id.to_string();
     let dir_arg = dir.to_string_lossy();
     gh(&[
-        "run", "download", &id, "--repo", repo, "--name", ARTIFACT, "--dir", &dir_arg,
+        "run",
+        "download",
+        &id,
+        "--repo",
+        repo,
+        "--name",
+        build.artifact,
+        "--dir",
+        &dir_arg,
     ])
     .with_context(|| {
         format!(
-            "the live test run uploaded no {ARTIFACT}: nothing it changes runs on Linux, or `{BUILD_JOB}` did not run; see {}",
+            "the live test run uploaded no {}: nothing it changes runs on {}, or `{}` did not run; see {}",
+            build.artifact,
+            build.label(),
+            build.job,
             run.url
         )
     })?;

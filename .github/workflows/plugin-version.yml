@@ -671,54 +671,14 @@ jobs:
       - name: Assemble universal app bundle
         shell: bash
         run: |
-          VERSION="${RELEASE_TAG#qol-tray-v}"
-          APP_DIR="${RUNNER_TEMP}/QoL Tray.app"
-          CONTENTS_DIR="${APP_DIR}/Contents"
-          MACOS_DIR="${CONTENTS_DIR}/MacOS"
-          RESOURCES_DIR="${CONTENTS_DIR}/Resources"
-
-          rm -rf "${APP_DIR}"
-          mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
-
           lipo -create \
             target/aarch64-apple-darwin/release/qol-tray \
             target/x86_64-apple-darwin/release/qol-tray \
-            -output "${MACOS_DIR}/qol-tray"
-
-          chmod +x "${MACOS_DIR}/qol-tray"
-          cp apps/tray/assets/qol-tray.icns "${RESOURCES_DIR}/qol-tray.icns"
-          cp libs/gpui/assets/fonts/OFL.txt "${RESOURCES_DIR}/IBM-Plex-OFL.txt"
-
-          cat > "${CONTENTS_DIR}/Info.plist" <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-          <key>CFBundleIdentifier</key>
-          <string>com.qol-tools.qol-tray</string>
-          <key>CFBundleName</key>
-          <string>QoL Tray</string>
-          <key>CFBundleExecutable</key>
-          <string>qol-tray</string>
-          <key>CFBundleIconFile</key>
-          <string>qol-tray</string>
-          <key>CFBundleVersion</key>
-          <string>${VERSION}</string>
-          <key>CFBundleShortVersionString</key>
-          <string>${VERSION}</string>
-          <key>LSUIElement</key>
-          <true/>
-          <key>LSMinimumSystemVersion</key>
-          <string>11.0</string>
-          <key>NSBluetoothAlwaysUsageDescription</key>
-          <string>QoL Tray reconnects the Bluetooth devices you choose and lists nearby devices to pair.</string>
-          <key>NSMicrophoneUsageDescription</key>
-          <string>QoL Tray shows how loud your microphone is in the Sound settings.</string>
-          <key>NSAudioCaptureUsageDescription</key>
-          <string>QoL Tray shows how loud the sound playing on your Mac is in the Sound settings.</string>
-          </dict>
-          </plist>
-          EOF
+            -output "${RUNNER_TEMP}/qol-tray-universal"
+          python .github/scripts/macos_app_bundle.py \
+            --binary "${RUNNER_TEMP}/qol-tray-universal" \
+            --version "${RELEASE_TAG#qol-tray-v}" \
+            --app "${RUNNER_TEMP}/QoL Tray.app"
 
       - name: Ad-hoc codesign bundle
         shell: bash

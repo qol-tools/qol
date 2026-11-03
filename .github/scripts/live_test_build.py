@@ -3,8 +3,9 @@
 
 Only the files on `.github/live-test-paths` count: a change that needs no
 person is proved by the checks and gets no build. Their crates and every crate
-that depends on them decide what builds: each Linux plugin among them by its
-release tag, and the tray when it is among them. Release tags carry the
+that depends on them decide what builds for each platform: every plugin among
+them that runs on that platform by its release tag, and the tray when it is
+among them. Release tags carry the
 versions in the tree, so release_candidate.py builds them exactly as a release
 would. A vendored crate the root manifest patches in belongs to no workspace
 crate, so its change counts for every crate that depends on it by name.
@@ -24,7 +25,10 @@ ROOT = Path(__file__).resolve().parents[2]
 HOST_PACKAGE = "qol-tray"
 HOST_ID = "qol-tray"
 LINUX = "linux"
-TARGET = "x86_64-unknown-linux-gnu"
+PLATFORMS = {
+    "linux": {"target": "x86_64-unknown-linux-gnu", "name": "Linux"},
+    "macos": {"target": "aarch64-apple-darwin", "name": "macOS"},
+}
 DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
 
@@ -84,7 +88,7 @@ def plugin_units(root: Path) -> dict[str, dict]:
         units[cargo["package"]["name"]] = {
             "id": meta["id"],
             "version": cargo["package"]["version"],
-            "linux": LINUX in meta.get("platforms", [LINUX]),
+            "platforms": meta.get("platforms", [LINUX]),
         }
     return units
 
@@ -102,29 +106,31 @@ def plan(
     tray_version: str,
     patches: dict[str, str] | None = None,
     users: dict[str, set[str]] | None = None,
+    platform: str = LINUX,
 ) -> dict:
     found = live_test.needing(files, listed)
     seeds, orphans = seeds_for(found, pkgs, patches or {}, users or {})
     affected = affected_crates.dependents_closure(seeds, pkgs) if seeds else set()
-    linux = sorted(name for name in affected if name in units and units[name]["linux"])
-    plugins = [f"{units[name]['id']}-v{units[name]['version']}" for name in linux]
+    runs = sorted(name for name in affected if name in units and platform in units[name]["platforms"])
+    plugins = [f"{units[name]['id']}-v{units[name]['version']}" for name in runs]
     tray = f"{HOST_ID}-v{tray_version}" if HOST_PACKAGE in affected else ""
     return {
         "found": found,
         "orphans": orphans,
         "plugins": sorted(plugins),
-        "units": [units[name] for name in linux],
+        "units": [units[name] for name in runs],
         "tray": tray,
     }
 
 
-def verdict(result: dict) -> tuple[int, str]:
+def verdict(result: dict, platform: str = LINUX) -> tuple[int, str]:
     if result["orphans"]:
         listed = ", ".join(result["orphans"])
         return 1, f"::error::no workspace crate builds {listed}, so the live test has nothing to download"
     if result["plugins"] or result["tray"]:
         return 0, f"plugins: {' '.join(result['plugins']) or 'none'}; tray: {result['tray'] or 'no'}"
-    return 0, "::warning::nothing these changes reach runs on Linux, so no build is uploaded; test it on its own platform"
+    name = PLATFORMS[platform]["name"]
+    return 0, f"::warning::nothing these changes reach runs on {name}, so no {name} build is uploaded; test it on its own platform"
 
 
 def emit(path: str | None, result: dict) -> None:
@@ -136,9 +142,10 @@ def emit(path: str | None, result: dict) -> None:
         handle.write(f"build={'true' if result['plugins'] or result['tray'] else 'false'}\n")
 
 
-def installed_files(root: Path, unit: dict) -> dict:
+def installed_files(root: Path, unit: dict, platform: str = LINUX) -> dict:
+    target = PLATFORMS[platform]["target"]
     outputs = plugin_matrix.release_outputs(root, unit["id"], unit["version"])
-    entry = next(row for row in json.loads(outputs["matrix"])["include"] if row["target"] == TARGET)
+    entry = next(row for row in json.loads(outputs["matrix"])["include"] if row["target"] == target)
     return {
         "id": unit["id"],
         "version": unit["version"],
@@ -148,13 +155,13 @@ def installed_files(root: Path, unit: dict) -> dict:
     }
 
 
-def manifest(result: dict, pr: str, sha: str, run_id: str, files: list[dict]) -> dict:
+def manifest(result: dict, pr: str, sha: str, run_id: str, files: list[dict], platform: str = LINUX) -> dict:
     return {
         "schema": 1,
         "pull_request": int(pr),
         "head_sha": sha,
         "run_id": int(run_id),
-        "target": TARGET,
+        "target": PLATFORMS[platform]["target"],
         "plugins": files,
         "tray": result["tray"],
     }
@@ -175,8 +182,9 @@ def plan_command(args: argparse.Namespace) -> int:
         host_version(ROOT),
         patched_paths(ROOT),
         dependents_by_name(ROOT, pkgs),
+        args.platform,
     )
-    code, message = verdict(result)
+    code, message = verdict(result, args.platform)
     print(message)
     if code:
         return code
@@ -184,8 +192,10 @@ def plan_command(args: argparse.Namespace) -> int:
     if args.manifest and (result["plugins"] or result["tray"]):
         out = Path(args.manifest)
         out.parent.mkdir(parents=True, exist_ok=True)
-        entries = [installed_files(ROOT, unit) for unit in result["units"]]
-        body = manifest(result, os.environ["PR_NUMBER"], os.environ["HEAD_SHA"], os.environ["GITHUB_RUN_ID"], entries)
+        entries = [installed_files(ROOT, unit, args.platform) for unit in result["units"]]
+        body = manifest(
+            result, os.environ["PR_NUMBER"], os.environ["HEAD_SHA"], os.environ["GITHUB_RUN_ID"], entries, args.platform
+        )
         out.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
     return 0
 
@@ -196,6 +206,7 @@ def parser() -> argparse.ArgumentParser:
     planned = commands.add_parser("plan")
     planned.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     planned.add_argument("--manifest")
+    planned.add_argument("--platform", choices=sorted(PLATFORMS), default=LINUX)
     planned.set_defaults(handler=plan_command)
     return root
 

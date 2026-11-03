@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -93,15 +93,25 @@ fn main_trays() -> Result<Vec<u32>> {
         .collect())
 }
 
+pub(super) fn running_install(downloads: &Path) -> Result<Option<PathBuf>> {
+    let running = main_trays()?
+        .into_iter()
+        .filter_map(|pid| qol_process::process_image_path(pid).ok())
+        .map(qol_conventions::artifact::normalized_executable);
+    Ok(installed_among(running, downloads))
+}
+
+fn installed_among(
+    running: impl IntoIterator<Item = PathBuf>,
+    downloads: &Path,
+) -> Option<PathBuf> {
+    running
+        .into_iter()
+        .find(|binary| !binary.starts_with(downloads))
+}
+
 fn arguments(pid: u32) -> Vec<String> {
-    std::fs::read(format!("/proc/{pid}/cmdline"))
-        .map(|raw| {
-            raw.split(|byte| *byte == 0)
-                .filter(|part| !part.is_empty())
-                .map(|part| String::from_utf8_lossy(part).into_owned())
-                .collect()
-        })
-        .unwrap_or_default()
+    qol_process::process_arguments(pid).unwrap_or_default()
 }
 
 fn is_tray_run(arguments: &[String]) -> bool {
@@ -209,6 +219,19 @@ mod tests {
         for helper in helpers {
             assert!(!is_tray_run(&words(helper)), "{helper:?}");
         }
+    }
+
+    #[test]
+    fn a_running_try_build_is_never_taken_for_the_install() {
+        let downloads = Path::new("/Users/u/Library/Caches/qol-tray/pr-try");
+        let installed = PathBuf::from("/Applications/QoL Tray.app/Contents/MacOS/qol-tray");
+        let trying = downloads.join("412-abc/tray/QoL Tray.app/Contents/MacOS/qol-tray");
+        assert_eq!(
+            installed_among([trying.clone(), installed.clone()], downloads),
+            Some(installed)
+        );
+        assert_eq!(installed_among([trying], downloads), None);
+        assert_eq!(installed_among([], downloads), None);
     }
 
     #[test]

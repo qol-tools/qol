@@ -37,6 +37,10 @@ impl Places {
             .join(format!("{number}-{}", super::short(head)))
     }
 
+    pub(super) fn downloads(&self) -> &Path {
+        &self.downloads
+    }
+
     pub(super) fn backup_for(&self, id: &str, binary: &str) -> PathBuf {
         self.backups.join(id).join(binary)
     }
@@ -315,6 +319,7 @@ mod tests {
             head_sha: Some("abc".into()),
             plugins: vec![swapped(&fixture)],
             tray: Some(fixture.source.clone()),
+            installed_tray: Some(fixture.target.clone()),
         };
         state.save(&fixture.places.state).unwrap();
         assert_eq!(State::load(&fixture.places.state).unwrap(), state);

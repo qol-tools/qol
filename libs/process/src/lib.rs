@@ -40,6 +40,10 @@ pub fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     platform::process_image_path(pid)
 }
 
+pub fn process_arguments(pid: u32) -> io::Result<Vec<String>> {
+    platform::process_arguments(pid)
+}
+
 pub fn hide_console_window(command: &mut Command) -> &mut Command {
     platform::hide_console_window(command)
 }

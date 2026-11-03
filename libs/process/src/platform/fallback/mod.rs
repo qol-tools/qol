@@ -74,3 +74,10 @@ pub(crate) fn process_image_path(_pid: u32) -> io::Result<std::path::PathBuf> {
         "process image paths are unsupported on this platform",
     ))
 }
+
+pub(crate) fn process_arguments(_pid: u32) -> io::Result<Vec<String>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process arguments are unsupported on this platform",
+    ))
+}
