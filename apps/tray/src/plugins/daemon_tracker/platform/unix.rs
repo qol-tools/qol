@@ -113,9 +113,12 @@ fn socket_file(candidate: SocketCandidate) -> Option<SocketCandidate> {
 }
 
 fn has_live_listener(candidate: &SocketCandidate) -> bool {
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::net::{UnixDatagram, UnixStream};
 
-    if UnixStream::connect(&candidate.path).is_err() {
+    let stream = UnixStream::connect(&candidate.path).is_ok();
+    let datagram =
+        || UnixDatagram::unbound().is_ok_and(|socket| socket.connect(&candidate.path).is_ok());
+    if !stream && !datagram() {
         return false;
     }
     log::info!(
@@ -368,6 +371,31 @@ mod tests {
             socket_path.exists(),
             "live socket should not be removed by orphan scan"
         );
+    }
+
+    #[test]
+    fn a_bound_datagram_socket_is_live_and_kept() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let socket_path = tmp.path().join("qol-hotkey-relay.sock");
+        let _relay = std::os::unix::net::UnixDatagram::bind(&socket_path).unwrap();
+
+        clean_orphan_sockets_in(tmp.path(), allow_macos_temp_roots());
+
+        assert!(
+            socket_path.exists(),
+            "the tray's hotkey relay is a datagram socket, which a stream connect never reaches"
+        );
+    }
+
+    #[test]
+    fn a_datagram_socket_nobody_holds_is_removed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let socket_path = tmp.path().join("qol-hotkey-relay.sock");
+        drop(std::os::unix::net::UnixDatagram::bind(&socket_path).unwrap());
+
+        clean_orphan_sockets_in(tmp.path(), allow_macos_temp_roots());
+
+        assert!(!socket_path.exists());
     }
 
     #[test]

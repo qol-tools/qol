@@ -10,8 +10,10 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 const DATAGRAM_BYTES: usize = 1024;
+const SOCKET_CHECK: Duration = Duration::from_secs(1);
 
 struct Announced {
     hotkeys: Vec<HotkeyCombo>,
@@ -51,9 +53,10 @@ pub(super) fn start(matcher: Arc<RwLock<KeyMatcher>>, fire_tx: Sender<CaptureEve
             return;
         }
     };
+    let relay_path = path.clone();
     let spawned = std::thread::Builder::new()
         .name("hotkey-relay".into())
-        .spawn(move || run(&socket, &matcher, &fire_tx));
+        .spawn(move || serve(socket, &relay_path, &matcher, &fire_tx));
     match spawned {
         Ok(_) => announced().relay = Some(path),
         Err(error) => log::warn!("hotkey relay thread did not start: {error}"),
@@ -100,10 +103,52 @@ fn bind(path: &Path) -> std::io::Result<UnixDatagram> {
     Ok(socket)
 }
 
-fn run(socket: &UnixDatagram, matcher: &RwLock<KeyMatcher>, fire_tx: &Sender<CaptureEvent>) {
+fn serve(
+    mut socket: UnixDatagram,
+    path: &Path,
+    matcher: &RwLock<KeyMatcher>,
+    fire_tx: &Sender<CaptureEvent>,
+) {
+    while run(&socket, path, matcher, fire_tx) == Stopped::SocketGone {
+        log::error!(
+            "hotkey relay socket {} was removed; binding it again",
+            path.display()
+        );
+        match bind(path) {
+            Ok(rebound) => socket = rebound,
+            Err(error) => {
+                log::error!(
+                    "hotkey relay stopped: could not bind {}: {error}",
+                    path.display()
+                );
+                return;
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Stopped {
+    SocketGone,
+    Failed,
+}
+
+fn run(
+    socket: &UnixDatagram,
+    path: &Path,
+    matcher: &RwLock<KeyMatcher>,
+    fire_tx: &Sender<CaptureEvent>,
+) -> Stopped {
     let mut held: Vec<KeyCombo> = Vec::new();
     let mut datagram = [0u8; DATAGRAM_BYTES];
+    let mut last_check = Instant::now();
     loop {
+        if last_check.elapsed() >= SOCKET_CHECK {
+            last_check = Instant::now();
+            if !path.exists() {
+                return Stopped::SocketGone;
+            }
+        }
         match socket.recv(&mut datagram) {
             Ok(len) => match serde_json::from_slice::<HotkeyPress>(&datagram[..len]) {
                 Ok(press) => handle(matcher, fire_tx, &mut held, &press),
@@ -112,7 +157,7 @@ fn run(socket: &UnixDatagram, matcher: &RwLock<KeyMatcher>, fire_tx: &Sender<Cap
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(error) => {
                 log::error!("hotkey relay stopped: {error}");
-                return;
+                return Stopped::Failed;
             }
         }
         for combo in &held {
@@ -185,7 +230,6 @@ mod tests {
     use crate::hotkeys::capture::parse_combo;
     use qol_hotkeys::macos_keycode::{LEFT_ARROW, SPACE, TAB};
     use std::sync::mpsc;
-    use std::time::Duration;
 
     const WAIT: Duration = Duration::from_secs(5);
 
@@ -247,7 +291,8 @@ mod tests {
             parse_mac_combo,
         ));
         let (fire_tx, fire_rx) = mpsc::channel();
-        std::thread::spawn(move || run(&socket, &matcher, &fire_tx));
+        let relay_path = path.clone();
+        std::thread::spawn(move || serve(socket, &relay_path, &matcher, &fire_tx));
         let sender = UnixDatagram::unbound().unwrap();
         let send = |press: HotkeyPress| {
             sender
@@ -272,5 +317,35 @@ mod tests {
             .find(|event| event.phase != Phase::HEARTBEAT)
             .unwrap();
         assert_eq!(fired(&stop), ("Super+Left", Phase::STOP));
+    }
+
+    #[test]
+    fn a_relay_socket_someone_deletes_is_bound_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("relay.sock");
+        let socket = bind(&path).unwrap();
+        let matcher = RwLock::new(KeyMatcher::new(
+            vec![binding("Alt+Tab", false)],
+            parse_mac_combo,
+        ));
+        let (fire_tx, fire_rx) = mpsc::channel();
+        let relay_path = path.clone();
+        std::thread::spawn(move || serve(socket, &relay_path, &matcher, &fire_tx));
+
+        std::fs::remove_file(&path).unwrap();
+        let sender = UnixDatagram::unbound().unwrap();
+        let wire = serde_json::to_vec(&press(HotkeyModifier::Alt, TAB, true)).unwrap();
+        let started = Instant::now();
+        while sender.send_to(&wire, &path).is_err() {
+            assert!(
+                started.elapsed() < WAIT,
+                "the relay never bound its socket again"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            fired(&fire_rx.recv_timeout(WAIT).unwrap()),
+            ("Alt+Tab", Phase::START)
+        );
     }
 }
