@@ -16,6 +16,7 @@ key_rules = "core"
 mouse_rules = "core"
 scroll_rules = "core"
 modifier_keys = "core"
+key_backend = "device"
 
 [runtime]
 command = "qol-keyremap"
