@@ -86,7 +86,10 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     return { value: undefined }
   })
   on('ui.status', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_: unknown, e: unknown) => {
+    panes.push(`toast ${JSON.stringify(e)}`)
+    return { value: undefined }
+  })
   on('ui.place', (_: unknown, e: { id: string }) => {
     panes.push(`place ${e.id}`)
     return { value: { isPlaced: true, requestId: `placed-${e.id}` } }
@@ -790,15 +793,29 @@ test('a fork the agent list no longer holds is brought back by opening it, and i
   await ui.unmount()
   expect(viewed).toEqual(['h1', 'h1'])
   expect(sent).toHaveLength(1)
-  expect(sent[0].text).toContain('the user opened your view from the fork board')
-  expect(sent[0].text).toContain('`Back after the switchboard restart.`')
-  const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back after the switchboard restart.'), 'task-notification')
+  expect(sent[0].text).toContain('The user opened your view from the fork board')
+  expect(sent[0].text).toContain('`Back on the fork board.`')
+  const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back on the fork board.'), 'task-notification')
   expect(back.drop).toBe('h1-fork')
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'h1-fork' })).result)
   expect(board).toContain('Which colour should it be? I recommend amber.')
-  expect(board).not.toContain('Back after the switchboard restart.')
+  expect(board).not.toContain('Back on the fork board.')
   const listed = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(listed).not.toContain('working')
+})
+
+test('a working fork whose view is denied gets no message, only a toast', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('ui.view', () => ({ value: { deny: 'a survey is up' } }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'k1', 'k1-fork: a fork')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'open-k1' })
+  await ui.unmount()
+  expect(sent).toHaveLength(0)
+  expect(panes.filter(one => one.startsWith('toast ')).join('\n')).toContain('could not be opened: a survey is up')
 })
 
 const watchEngine = (on: any, forks: Record<string, { cwd?: string; description: string; conversation?: string }>, earlier: string[] = []) => {

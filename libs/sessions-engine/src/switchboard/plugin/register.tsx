@@ -60,9 +60,9 @@ const RESUMED_SUMMARY =/^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const USER_STOP = 'killed'
 const LAUNCHER = 'Launcher: '
-const RESTARTED_REPLY = 'Back after the switchboard restart.'
+const RESTARTED_REPLY = 'Back on the fork board.'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
-const REOPENED = `The switchboard restarted, and the user opened your view from the fork board to talk to you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
+const REOPENED = `The user opened your view from the fork board to talk to you, and the agent list no longer held you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const COLOR: Record<Kind, string> = {
@@ -1039,13 +1039,22 @@ export const register: Register = on => {
       return n <= 9 ? { hotkey: String(n) } : {}
     }
     const open = (entry: Entry) => async () => {
-      if ((await $.ui.view({ agentId: entry.agentId })).deny === undefined) return
-      const sent = await sendTo($, entry, REOPENED)
-      if (!sent.isDelivered) {
-        $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
-        return
+      try {
+        const viewed = await $.ui.view({ agentId: entry.agentId })
+        if (viewed.deny === undefined) return
+        if (entry.isWorking) {
+          $.ui.toast(`${keyName(entry.name)} could not be opened: ${printable(String(viewed.deny))}`)
+          return
+        }
+        const sent = await sendTo($, entry, REOPENED)
+        if (!sent.isDelivered) {
+          $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
+          return
+        }
+        if ((await $.ui.view({ agentId: sent.agentId })).deny !== undefined) $.ui.toast(`${keyName(entry.name)} is back: select it in the agent list.`)
+      } catch {
+        $.ui.toast(`${keyName(entry.name)} could not be opened.`)
       }
-      if ((await $.ui.view({ agentId: sent.agentId })).deny !== undefined) $.ui.toast(`${keyName(entry.name)} is back: select it in the agent list.`)
     }
     const carryOn = (entry: Entry) => async () => {
       const sent = await sendTo($, entry, CONTINUE)
