@@ -196,7 +196,7 @@ mod tests {
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
-            "if (entry !== undefined && !held.has(agentId) && isUnfinished(entry))",
+            "if (entry !== undefined && !held.has(agentId) && (retry === undefined ? isUnfinished(entry) : isRetryDue(entry)))",
             "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
             "loading ??= loadSaved($).catch(() => undefined)",
             "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
