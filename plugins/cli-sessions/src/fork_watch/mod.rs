@@ -271,6 +271,7 @@ struct Delivery {
     name: Option<String>,
     cwd: String,
     pull_request: Option<String>,
+    exit_code: u8,
     message: String,
 }
 
@@ -295,6 +296,7 @@ fn deliver(store: &WatchStore) -> Deliveries {
             let (code, output) = outcome(store, &watch);
             Delivery {
                 message: delivery_message(&watch, code, &output, &store.log_path(&watch.id)),
+                exit_code: code,
                 id: watch.id,
                 agent_id: watch.agent_id,
                 conversation: watch.conversation,
@@ -511,6 +513,7 @@ mod tests {
         assert!(!claim_result(&store, "watch-3-3").unwrap());
         assert!(!claim_result(&store, "watch-9-9").unwrap());
         let message = &first.results[0].message;
+        assert_eq!(first.results[0].exit_code, 6);
         assert!(message.contains("exited with code 6"), "{message}");
         assert!(message.contains("checks green on a draft"), "{message}");
         assert!(message.contains(PR), "{message}");

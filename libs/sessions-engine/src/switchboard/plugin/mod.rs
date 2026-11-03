@@ -10,8 +10,8 @@ pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.11.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
+  "version": "1.12.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, and lists the forks a restart cut off mid-turn for the user to continue.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_forks_without_a_turn() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_no_fork_on_open() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -185,19 +185,24 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
-            "$.env.get('QOL_SWITCHBOARD_WAKE')",
-            "JSON.stringify({ ...wake, claimed: true })",
+            "if (result.exit_code === MERGED_EXIT) {",
             "'open · CLI Sessions watching' : 'open · no watcher'",
+            ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
+            "const sent = await sendTo($, entry, CONTINUE)",
+            "const sent = await sendTo($, entry, REOPENED)",
+            "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
+            "await $.ui.place({ id })",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
-        assert!(
-            MODULE.contains(&format!(
-                "const RESTARTED_REPLY = '{}'",
-                super::super::resume::RESTARTED_REPLY
-            )),
-            "the plugin keeps a woken fork's last report only for the reply the wake asks for"
-        );
+        for retired in [
+            "QOL_SWITCHBOARD_WAKE",
+            "wakeForks",
+            "clock.after(WAKE",
+            "heard",
+        ] {
+            assert!(!MODULE.contains(retired), "{retired}");
+        }
         assert!(STATE_TYPES.contains("pulls: Pull[]"));
         assert!(MODULE_TESTS.contains("runs under CLI Sessions, and no other command is rewritten"));
     }
