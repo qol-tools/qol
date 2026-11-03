@@ -60,6 +60,7 @@ mod tests {
                 })
                 .collect(),
             tray: tray.then(|| "/cache/tray/qol-tray".into()),
+            installed_tray: None,
         }
     }
 

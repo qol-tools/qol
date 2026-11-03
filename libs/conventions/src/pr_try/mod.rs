@@ -19,6 +19,8 @@ pub struct TryRecord {
     pub plugins: Vec<SwappedPlugin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tray: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_tray: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,5 +105,20 @@ mod tests {
             serde_json::from_str(r#"{"pull_request":412,"head_sha":"abc","plugins":[]}"#).unwrap();
         assert_eq!(record.pull_request, Some(412));
         assert_eq!(record.tray, None);
+        assert_eq!(record.installed_tray, None);
+    }
+
+    #[test]
+    fn the_installed_tray_round_trips_and_stays_out_when_unknown() {
+        let record = TryRecord {
+            pull_request: Some(1),
+            tray: Some("/t/qol-tray".into()),
+            installed_tray: Some("/Applications/QoL Tray.app/Contents/MacOS/qol-tray".into()),
+            ..TryRecord::default()
+        };
+        let text = serde_json::to_string(&record).unwrap();
+        assert_eq!(serde_json::from_str::<TryRecord>(&text).unwrap(), record);
+        let unknown = serde_json::to_string(&TryRecord::default()).unwrap();
+        assert!(!unknown.contains("installed_tray"), "{unknown}");
     }
 }

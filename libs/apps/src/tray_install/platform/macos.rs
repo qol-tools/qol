@@ -18,11 +18,7 @@ pub(crate) fn install_dir(profile: InstallProfile) -> io::Result<PathBuf> {
 
 pub(crate) fn install_dir_for_home(profile: InstallProfile, home: &Path) -> io::Result<PathBuf> {
     match profile {
-        InstallProfile::Production => Ok(home
-            .join("Applications")
-            .join(format!("{}.app", qol_conventions::TRAY_DISPLAY_NAME))
-            .join("Contents")
-            .join("MacOS")),
+        InstallProfile::Production => Ok(bundle_executables(&home.join("Applications"))),
         InstallProfile::Development => Ok(development_dir_at(
             &home
                 .join("Library")
@@ -30,6 +26,17 @@ pub(crate) fn install_dir_for_home(profile: InstallProfile, home: &Path) -> io::
                 .join(qol_config::NAMESPACE),
         )),
     }
+}
+
+pub(crate) fn system_install_dirs() -> Vec<PathBuf> {
+    vec![bundle_executables(Path::new("/Applications"))]
+}
+
+fn bundle_executables(applications: &Path) -> PathBuf {
+    applications
+        .join(format!("{}.app", qol_conventions::TRAY_DISPLAY_NAME))
+        .join("Contents")
+        .join("MacOS")
 }
 
 fn development_dir() -> io::Result<PathBuf> {
@@ -56,6 +63,14 @@ mod tests {
         assert_eq!(
             install_dir_for_home(InstallProfile::Development, home).unwrap(),
             PathBuf::from("/Users/v/Library/Application Support/qol-tray/dev/bin")
+        );
+    }
+
+    #[test]
+    fn the_system_applications_folder_is_the_other_production_install() {
+        assert_eq!(
+            system_install_dirs(),
+            [PathBuf::from("/Applications/QoL Tray.app/Contents/MacOS")]
         );
     }
 }

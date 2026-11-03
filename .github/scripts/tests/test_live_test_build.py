@@ -38,9 +38,9 @@ GRAPH = graph(
     }
 )
 UNITS = {
-    "qol-cli-sessions": {"id": "qol-cli-sessions", "version": "0.127.1", "linux": True},
-    "qol-shot": {"id": "qol-shot", "version": "1.4.0", "linux": True},
-    "qol-bluetooth": {"id": "qol-bluetooth", "version": "2.0.0", "linux": False},
+    "qol-cli-sessions": {"id": "qol-cli-sessions", "version": "0.127.1", "platforms": ["linux", "macos"]},
+    "qol-shot": {"id": "qol-shot", "version": "1.4.0", "platforms": ["linux"]},
+    "qol-bluetooth": {"id": "qol-bluetooth", "version": "2.0.0", "platforms": ["macos"]},
 }
 
 
@@ -72,6 +72,25 @@ class PlanTests(unittest.TestCase):
         code, message = build.verdict(result)
         self.assertEqual(code, 0)
         self.assertTrue(message.startswith("::warning::"), message)
+
+    def test_each_platform_builds_only_the_plugins_that_run_on_it(self):
+        changed = ["libs/gpui/src/kit.rs", "plugins/bluetooth/src/ui/panel.rs"]
+        cases = {
+            "linux": ["qol-cli-sessions-v0.127.1", "qol-shot-v1.4.0"],
+            "macos": ["qol-bluetooth-v2.0.0", "qol-cli-sessions-v0.127.1"],
+        }
+        for platform, plugins in cases.items():
+            with self.subTest(platform=platform):
+                result = build.plan(changed, LISTED, GRAPH, UNITS, "3.0.0", platform=platform)
+                self.assertEqual(result["plugins"], plugins)
+                self.assertEqual(result["tray"], "qol-tray-v3.0.0")
+
+    def test_a_plugin_only_on_linux_leaves_the_macos_build_empty_and_says_so(self):
+        result = build.plan(["plugins/shot/src/ui/panel.rs"], LISTED, GRAPH, UNITS, "3.0.0", platform="macos")
+        self.assertEqual(result["plugins"], [])
+        code, message = build.verdict(result, "macos")
+        self.assertEqual(code, 0)
+        self.assertIn("runs on macOS", message)
 
     def test_a_patched_vendor_crate_builds_every_crate_that_uses_it(self):
         patches = {"vendor/gpui": "gpui"}
@@ -127,6 +146,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(entry["bin_name"], "qol-cli-sessions")
         self.assertEqual(entry["tag"], f"qol-cli-sessions-v{units['qol-cli-sessions']['version']}")
         self.assertTrue(entry["file"].startswith("qol-cli-sessions"), entry)
+
+    def test_each_platform_names_its_own_release_file_and_target(self):
+        units = build.plugin_units(build.ROOT)
+        files = {
+            platform: build.installed_files(build.ROOT, units["qol-cli-sessions"], platform)["file"]
+            for platform in build.PLATFORMS
+        }
+        self.assertEqual(files["linux"], "qol-cli-sessions-linux-x86_64")
+        self.assertEqual(files["macos"], "qol-cli-sessions-macos-aarch64")
+        body = build.manifest({"plugins": [], "tray": ""}, "412", "abc", "77", [], "macos")
+        self.assertEqual(body["target"], "aarch64-apple-darwin")
+        self.assertEqual(build.manifest({"plugins": [], "tray": ""}, "412", "abc", "77", [])["target"], "x86_64-unknown-linux-gnu")
 
     def test_every_repository_plugin_maps_to_an_id_and_its_version(self):
         units = build.plugin_units(build.ROOT)

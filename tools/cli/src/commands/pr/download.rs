@@ -3,8 +3,9 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
+use super::platform::Build;
+
 const WORKFLOW: &str = "live-test.yml";
-const ARTIFACT: &str = "live-test-build-linux-x86_64";
 const BUILD_JOB: &str = "Build for the live test";
 const RUN_LIMIT: &str = "20";
 
@@ -16,6 +17,17 @@ pub(super) struct Run {
     conclusion: String,
     head_branch: String,
     url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Job {
+    name: String,
+    conclusion: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Jobs {
+    jobs: Vec<Job>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,7 +66,7 @@ fn trusted(view: &str, repo: &str, number: &str) -> Result<PullRequest> {
     Ok(pull)
 }
 
-pub(super) fn live_test_run(repo: &str, pull: &PullRequest) -> Result<Run> {
+pub(super) fn live_test_run(repo: &str, pull: &PullRequest, build: &Build) -> Result<Run> {
     let head = pull.head_ref_oid.as_str();
     let listing = gh(&[
         "run",
@@ -74,23 +86,39 @@ pub(super) fn live_test_run(repo: &str, pull: &PullRequest) -> Result<Run> {
         "--json",
         "databaseId,status,conclusion,headBranch,url",
     ])?;
-    latest_run(&listing, head, &pull.head_ref_name)
+    latest_run(&listing, head, &pull.head_ref_name, |run| {
+        let id = run.database_id.to_string();
+        let view = gh(&["run", "view", &id, "--repo", repo, "--json", "jobs"])?;
+        job_succeeded(&view, build.job)
+    })
 }
 
-fn latest_run(listing: &str, head: &str, branch: &str) -> Result<Run> {
+fn latest_run(
+    listing: &str,
+    head: &str,
+    branch: &str,
+    host_built: impl Fn(&Run) -> Result<bool>,
+) -> Result<Run> {
     let runs: Vec<Run> =
         serde_json::from_str(listing).context("gh run list printed something other than JSON")?;
-    let mut runs = runs.into_iter().filter(|run| run.head_branch == branch);
-    let Some(newest) = runs.next() else {
+    let mut runs: Vec<Run> = runs
+        .into_iter()
+        .filter(|run| run.head_branch == branch)
+        .collect();
+    if runs.is_empty() {
         bail!("no live test run of {branch} exists for {head} yet");
-    };
-    if newest.status == "completed" && newest.conclusion == "success" {
-        return Ok(newest);
     }
-    if let Some(earlier) = runs.find(|run| run.status == "completed" && run.conclusion == "success")
-    {
-        return Ok(earlier);
+    let mut usable = None;
+    for (index, run) in runs.iter().enumerate() {
+        if usable_run(run, &host_built)? {
+            usable = Some(index);
+            break;
+        }
     }
+    if let Some(index) = usable {
+        return Ok(runs.swap_remove(index));
+    }
+    let newest = runs.swap_remove(0);
     if newest.status != "completed" {
         bail!(
             "the live test run for {head} is still {}; try again when `{BUILD_JOB}` finishes: {}",
@@ -99,13 +127,33 @@ fn latest_run(listing: &str, head: &str, branch: &str) -> Result<Run> {
         );
     }
     bail!(
-        "the live test run for {head} ended {}: {}",
+        "the live test run for {head} ended {} before this machine's build finished: {}",
         newest.conclusion,
         newest.url
     )
 }
 
-pub(super) fn fetch(repo: &str, run: &Run, dir: &Path) -> Result<()> {
+fn usable_run(run: &Run, host_built: &impl Fn(&Run) -> Result<bool>) -> Result<bool> {
+    if run.status != "completed" {
+        return Ok(false);
+    }
+    match run.conclusion.as_str() {
+        "success" => Ok(true),
+        "failure" => host_built(run),
+        _ => Ok(false),
+    }
+}
+
+fn job_succeeded(view: &str, job: &str) -> Result<bool> {
+    let view: Jobs =
+        serde_json::from_str(view).context("gh run view printed something other than JSON")?;
+    Ok(view
+        .jobs
+        .iter()
+        .any(|entry| entry.name == job && entry.conclusion == "success"))
+}
+
+pub(super) fn fetch(repo: &str, run: &Run, build: &Build, dir: &Path) -> Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
     }
@@ -113,11 +161,22 @@ pub(super) fn fetch(repo: &str, run: &Run, dir: &Path) -> Result<()> {
     let id = run.database_id.to_string();
     let dir_arg = dir.to_string_lossy();
     gh(&[
-        "run", "download", &id, "--repo", repo, "--name", ARTIFACT, "--dir", &dir_arg,
+        "run",
+        "download",
+        &id,
+        "--repo",
+        repo,
+        "--name",
+        build.artifact,
+        "--dir",
+        &dir_arg,
     ])
     .with_context(|| {
         format!(
-            "the live test run uploaded no {ARTIFACT}: nothing it changes runs on Linux, or `{BUILD_JOB}` did not run; see {}",
+            "the live test run uploaded no {}: nothing it changes runs on {}, or `{}` did not run; see {}",
+            build.artifact,
+            build.label(),
+            build.job,
             run.url
         )
     })?;
@@ -155,6 +214,10 @@ mod tests {
         format!("[{}]", entry(41, status, conclusion, BRANCH))
     }
 
+    fn never_built(_: &Run) -> Result<bool> {
+        Ok(false)
+    }
+
     fn view(cross: bool) -> String {
         format!(r#"{{"headRefOid":"abc","headRefName":"{BRANCH}","isCrossRepository":{cross}}}"#)
     }
@@ -176,15 +239,20 @@ mod tests {
 
     #[test]
     fn a_finished_run_is_used() {
-        let run = latest_run(&listing("completed", "success"), "abc", BRANCH).unwrap();
+        let run = latest_run(&listing("completed", "success"), "abc", BRANCH, never_built).unwrap();
         assert_eq!(run.database_id, 41);
     }
 
     #[test]
     fn a_run_of_another_branch_is_never_used() {
-        let error = latest_run(&listing("completed", "success"), "abc", "feat/other")
-            .unwrap_err()
-            .to_string();
+        let error = latest_run(
+            &listing("completed", "success"),
+            "abc",
+            "feat/other",
+            never_built,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("no live test run of feat/other"), "{error}");
     }
 
@@ -196,21 +264,68 @@ mod tests {
             entry(42, "completed", "success", "feat/other"),
             entry(41, "completed", "success", BRANCH)
         );
-        assert_eq!(latest_run(&runs, "abc", BRANCH).unwrap().database_id, 41);
+        assert_eq!(
+            latest_run(&runs, "abc", BRANCH, never_built)
+                .unwrap()
+                .database_id,
+            41
+        );
     }
 
     #[test]
     fn a_missing_running_or_failed_run_says_why() {
-        let none = latest_run("[]", "abc", BRANCH).unwrap_err().to_string();
+        let none = latest_run("[]", "abc", BRANCH, never_built)
+            .unwrap_err()
+            .to_string();
         assert!(none.contains("no live test run"), "{none}");
-        let running = latest_run(&listing("in_progress", ""), "abc", BRANCH)
+        let running = latest_run(&listing("in_progress", ""), "abc", BRANCH, never_built)
             .unwrap_err()
             .to_string();
         assert!(running.contains("still in_progress"), "{running}");
         assert!(running.contains(BUILD_JOB), "{running}");
-        let failed = latest_run(&listing("completed", "failure"), "abc", BRANCH)
+        let failed = latest_run(&listing("completed", "failure"), "abc", BRANCH, never_built)
             .unwrap_err()
             .to_string();
         assert!(failed.contains("ended failure"), "{failed}");
+    }
+
+    #[test]
+    fn a_failed_run_is_used_when_this_machines_build_succeeded() {
+        let runs = format!(
+            "[{},{}]",
+            entry(43, "completed", "failure", BRANCH),
+            entry(41, "completed", "success", BRANCH)
+        );
+        let built = |run: &Run| Ok(run.database_id == 43);
+        assert_eq!(
+            latest_run(&runs, "abc", BRANCH, built).unwrap().database_id,
+            43
+        );
+        assert_eq!(
+            latest_run(&runs, "abc", BRANCH, never_built)
+                .unwrap()
+                .database_id,
+            41
+        );
+    }
+
+    #[test]
+    fn a_cancelled_run_is_never_asked_about_its_jobs() {
+        let asked = |_: &Run| -> Result<bool> { panic!("asked about a cancelled run") };
+        let error = latest_run(&listing("completed", "cancelled"), "abc", BRANCH, asked)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ended cancelled"), "{error}");
+    }
+
+    #[test]
+    fn only_this_machines_successful_build_job_counts() {
+        let view = r#"{"jobs":[
+            {"name":"Build for the live test (linux)","conclusion":"failure"},
+            {"name":"Build for the live test (macos)","conclusion":"success"}
+        ]}"#;
+        assert!(job_succeeded(view, "Build for the live test (macos)").unwrap());
+        assert!(!job_succeeded(view, "Build for the live test (linux)").unwrap());
+        assert!(!job_succeeded(r#"{"jobs":[]}"#, "Build for the live test (macos)").unwrap());
     }
 }

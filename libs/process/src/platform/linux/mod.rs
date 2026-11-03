@@ -48,6 +48,19 @@ pub(crate) fn process_image_path(pid: u32) -> io::Result<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/exe"))
 }
 
+pub(crate) fn process_arguments(pid: u32) -> io::Result<Vec<String>> {
+    Ok(split_arguments(&std::fs::read(format!(
+        "/proc/{pid}/cmdline"
+    ))?))
+}
+
+fn split_arguments(raw: &[u8]) -> Vec<String> {
+    raw.split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect()
+}
+
 pub(crate) fn spawn_owned(mut command: Command) -> io::Result<(Child, Option<ProcessTreeGuard>)> {
     isolate_owned_command(&mut command)?;
     Ok((command.spawn()?, None))
@@ -62,8 +75,17 @@ pub(crate) fn spawn_owned_session(
 
 #[cfg(test)]
 mod tests {
-    use super::process_from_stat;
+    use super::{process_from_stat, split_arguments};
     use crate::ProcessEntry;
+
+    #[test]
+    fn a_command_line_splits_at_each_nul() {
+        assert_eq!(
+            split_arguments(b"qol-tray\0--headless\0"),
+            ["qol-tray", "--headless"]
+        );
+        assert!(split_arguments(b"").is_empty());
+    }
 
     #[test]
     fn process_from_stat_reads_the_name_and_parent() {

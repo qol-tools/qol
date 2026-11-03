@@ -13,7 +13,7 @@ NEEDED_TITLE = "Live test needed"
 NOT_NEEDED_TITLE = "No live test needed"
 LISTED_FILES = 50
 BUILD_JOB = "Build for the live test"
-BUILD_ARTIFACT = "live-test-build-linux-x86_64"
+BUILD_ARTIFACTS = {"Linux": "live-test-build-linux-x86_64", "macOS": "live-test-build-macos-aarch64"}
 
 
 def patterns(text: str) -> list[str]:
@@ -54,10 +54,11 @@ def summary(found: list[str]) -> tuple[str, str]:
     if len(found) > LISTED_FILES:
         shown.append(f"- and {len(found) - LISTED_FILES} more")
     lead = "These changed files are on `.github/live-test-paths`, so a person must see the change working before it merges:"
+    uploads = " and ".join(f"for {name} as `{artifact}`" for name, artifact in BUILD_ARTIFACTS.items())
     build = (
-        f"The `{BUILD_JOB}` job of this run builds what they change for Linux and uploads it as "
-        f"`{BUILD_ARTIFACT}`, so the test needs no local build. When nothing they change runs on "
-        "Linux, that job says so and uploads nothing."
+        f"The `{BUILD_JOB}` jobs of this run build what they change and upload it {uploads}, "
+        "so the test needs no local build. When nothing they change runs on a platform, its job "
+        "says so and uploads nothing."
     )
     return NEEDED_TITLE, "\n".join([lead, "", *shown, "", build])
 
