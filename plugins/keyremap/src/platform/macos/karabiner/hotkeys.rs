@@ -100,9 +100,10 @@ fn held_tracker(key_code: &str) -> Value {
         "type": "basic",
         "from": { "key_code": key_code, "modifiers": { "optional": ["any"] } },
         "to": [
-            { "set_variable": { "name": held_variable(key_code), "value": 1, "key_up_value": 0 } },
+            { "set_variable": { "name": held_variable(key_code), "value": 1 } },
             { "key_code": key_code },
         ],
+        "to_after_key_up": [{ "set_variable": { "name": held_variable(key_code), "value": 0 } }],
         "conditions": [active()],
     })
 }
@@ -219,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn every_modifier_key_passes_through_and_records_that_it_is_held() {
+    fn every_modifier_key_passes_through_and_stays_recorded_as_held_until_its_key_up() {
         let manipulators = relayed(vec![alt_tab()]);
         assert_eq!(
             manipulators[4],
@@ -227,8 +228,11 @@ mod tests {
                 "type": "basic",
                 "from": { "key_code": "left_option", "modifiers": { "optional": ["any"] } },
                 "to": [
-                    { "set_variable": { "name": "qol_hotkey_held_left_option", "value": 1, "key_up_value": 0 } },
+                    { "set_variable": { "name": "qol_hotkey_held_left_option", "value": 1 } },
                     { "key_code": "left_option" },
+                ],
+                "to_after_key_up": [
+                    { "set_variable": { "name": "qol_hotkey_held_left_option", "value": 0 } },
                 ],
                 "conditions": [{ "type": "variable_if", "name": ACTIVE_VARIABLE, "value": 1 }],
             })
