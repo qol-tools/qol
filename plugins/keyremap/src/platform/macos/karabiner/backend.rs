@@ -656,7 +656,7 @@ mod tests {
         );
 
         backend.apply(CHOSEN, &config(true), &layout("us"), &input);
-        assert_eq!(fake.take(), vec!["sync 2", "active true"]);
+        assert_eq!(fake.take(), vec!["sync 11", "active true"]);
 
         backend.follow_hotkeys(hotkeys, &config(true), &layout("us"));
         assert!(fake.take().is_empty(), "unchanged hotkeys rewrite nothing");
