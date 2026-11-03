@@ -627,7 +627,9 @@ export const sendTo = async ($: EngineInterface, target: Entry, text: string, se
 }
 
 let isReopening = false
-const reopenTries = new Map<string, number>()
+const reopenRetries = new Map<string, { tries: number; text: string }>()
+
+const isRetryDue = (entry: Entry): boolean => !entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && !entry.isWorking
 
 export const reopenForks = async ($: EngineInterface): Promise<void> => {
   if (isReopening) return
@@ -640,13 +642,16 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
-      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) {
-        const sent = await sendTo($, entry, isCut(entry) ? CONTINUE : BACK, viaBand($)).catch((error: unknown) => ({ isDelivered: false, reason: String(error) }))
-        const tries = (reopenTries.get(agentId) ?? 0) + 1
-        if (sent.isDelivered) reopenTries.delete(agentId)
-        else reopenTries.set(agentId, tries)
-        if (!sent.isDelivered && tries < REOPEN_TRIES) failed.push(agentId)
-        else if (!sent.isDelivered) $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
+      const retry = reopenRetries.get(agentId)
+      reopenRetries.delete(agentId)
+      if (entry !== undefined && !held.has(agentId) && (retry === undefined ? isUnfinished(entry) : isRetryDue(entry))) {
+        const text = retry?.text ?? (isCut(entry) ? CONTINUE : BACK)
+        const sent = await sendTo($, entry, text, viaBand($)).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
+        const tries = (retry?.tries ?? 0) + 1
+        if (!sent.isDelivered && tries < REOPEN_TRIES) {
+          reopenRetries.set(sent.agentId, { tries, text })
+          failed.push(sent.agentId)
+        } else if (!sent.isDelivered) $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
       }
       const rest = [...failed, ...pending.slice(index + 1)]
       if (rest.length === 0) await $.store.delete(key)

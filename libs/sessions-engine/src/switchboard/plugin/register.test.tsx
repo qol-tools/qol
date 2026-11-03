@@ -866,6 +866,32 @@ test('an open tries a fork again when its message does not reach it, and says so
   expect(store.has('reopen:switchboard-session')).toBe(false)
 })
 
+test('a stopped fork whose copy misses the reopen message is tried again under the copy with the same message', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  store.set('board:earlier-session', [{ agentId: 'v1', name: 'v1-fork: a fork', kind: 'ask', headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false }])
+  let copyMisses = 0
+  engine(on, sent, [], [], store, (e: any) =>
+    e.to === 'v1' ? { isDelivered: false, reason: "Agent v1 was stopped by the user and won't be resumed." } : copyMisses++ === 0 ? { isDelivered: false, reason: 'the agent is busy' } : { isDelivered: true },
+  )
+  adoptEngine(on, { v1: { name: 'v1-fork: a fork' } }, [])
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 8; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  const back = 'The switchboard restarted, which ended your hold'
+  expect(sent.map(one => [one.to, one.text.startsWith(back)])).toEqual([
+    ['v1', true],
+    ['v1-copy', true],
+    ['v1-copy', true],
+  ])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(working, agent id v1-copy)')
+})
+
 test('a fresh copy of the module keeps the saved board and finishes the reopen the lost copy began', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
