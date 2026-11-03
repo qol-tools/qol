@@ -185,7 +185,7 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
-            "if (result.exit_code === MERGED_EXIT) {",
+            "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
             ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
             "const sent = await sendTo($, entry, CONTINUE)",
