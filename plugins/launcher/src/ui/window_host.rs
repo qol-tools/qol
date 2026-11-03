@@ -331,6 +331,7 @@ fn ghost_window_options(
         size: native,
     };
     PopupWindowOptions::new()
+        .kind(qol_gpui::platform::key_panel_window_kind())
         .bounds(bounds)
         .display_id(placement.display_id)
         .focus(focus)

@@ -38,7 +38,7 @@ pub fn reduce_motion() -> bool {
 }
 
 pub fn ghost_window_kind() -> gpui::WindowKind {
-    gpui::WindowKind::PopUp
+    gpui::WindowKind::Normal
 }
 
 pub fn ghost_window_decorations(transparent: bool) -> gpui::WindowDecorations {
