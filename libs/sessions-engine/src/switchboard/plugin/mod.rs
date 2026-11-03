@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_reopens_unfinished_forks_on_open() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_sends_no_fork_anything_on_open() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -190,14 +190,9 @@ mod tests {
             ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
             "const sent = await sendTo($, entry, CONTINUE)",
             "const sent = await sendTo($, entry, REOPENED)",
-            "const text = retry?.text ?? (isCut(entry) ? CONTINUE : BACK)",
-            "await sendTo($, entry, text, viaBand($))",
-            "reopenRetries.set(sent.agentId, { tries, text })",
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
-            "if (entry !== undefined && !held.has(agentId) && (retry === undefined ? isUnfinished(entry) : isRetryDue(entry)))",
-            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
             "loading ??= loadSaved($).catch(() => undefined)",
             "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
             "await $.ui.place({ id })",
@@ -207,6 +202,8 @@ mod tests {
         for retired in [
             "QOL_SWITCHBOARD_WAKE",
             "wakeForks",
+            "reopenForks",
+            "REOPEN_DELAY_MS",
             "clock.after(WAKE",
             "heard",
         ] {

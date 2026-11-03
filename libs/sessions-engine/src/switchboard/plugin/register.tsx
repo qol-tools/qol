@@ -63,10 +63,6 @@ const USER_STOP = 'killed'
 const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back on the fork board.'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
-const BACK = `The switchboard restarted, which ended your hold, and put you back in the agent list so the user can select you. Start your hold, then end your turn with exactly \`${RESTARTED_REPLY}\` and nothing else, so the fork board keeps your last report. The user types to you next.`
-const REOPEN_DELAY_MS = 1_500
-const REOPEN_RETRY_MS = 10_000
-const REOPEN_TRIES = 3
 const BAND_WAIT_MS = 3_000
 const BAND_FRESH_MS = 90_000
 const SEND_WAIT_MS = 5_000
@@ -206,8 +202,6 @@ const loadSaved = async ($: EngineInterface): Promise<void> => {
   const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
   const rows = Array.isArray(saved) ? saved.filter(isEntry) : []
   if (rows.length > 0) await update($, board, list => ((list ?? []).length > 0 ? (list ?? []) : rows))
-  const pending = await $.store.get(REOPEN_PREFIX + (await $.session.id()))
-  if (Array.isArray(pending) && pending.length > 0) $.clock.after(REOPEN_DELAY_MS, () => void reopenForks($).catch(() => undefined))
 }
 
 export const ensureLoaded = ($: EngineInterface): Promise<void> => {
@@ -236,12 +230,6 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
 }
 
 const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking
-
-export const isUnfinished = (entry: Entry): boolean =>
-  !entry.isDismissed &&
-  entry.isStoppedByUser !== true &&
-  entry.successor === undefined &&
-  (isCut(entry) || (!entry.isWorking && entry.kind !== undefined && !DONE.includes(entry.kind)))
 
 const needsYou = (entry: Entry): boolean =>
   !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
@@ -626,42 +614,6 @@ export const sendTo = async ($: EngineInterface, target: Entry, text: string, se
   return { ...again, agentId: revived.agentId }
 }
 
-let isReopening = false
-const reopenRetries = new Map<string, { tries: number; text: string }>()
-
-const isRetryDue = (entry: Entry): boolean => !entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && !entry.isWorking
-
-export const reopenForks = async ($: EngineInterface): Promise<void> => {
-  if (isReopening) return
-  isReopening = true
-  const failed: string[] = []
-  try {
-    const key = REOPEN_PREFIX + (await $.session.id())
-    const saved = await $.store.get(key)
-    const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
-    const held = new Set((await $.agent.list().catch(() => [])).map(agent => agent.id))
-    for (const [index, agentId] of pending.entries()) {
-      const entry = (await read($, board)).find(one => one.agentId === agentId)
-      const retry = reopenRetries.get(agentId)
-      reopenRetries.delete(agentId)
-      if (entry !== undefined && !held.has(agentId) && (retry === undefined ? isUnfinished(entry) : isRetryDue(entry))) {
-        const text = retry?.text ?? (isCut(entry) ? CONTINUE : BACK)
-        const sent = await sendTo($, entry, text, viaBand($)).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
-        const tries = (retry?.tries ?? 0) + 1
-        if (!sent.isDelivered && tries < REOPEN_TRIES) {
-          reopenRetries.set(sent.agentId, { tries, text })
-          failed.push(sent.agentId)
-        } else if (!sent.isDelivered) $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
-      }
-      const rest = [...failed, ...pending.slice(index + 1)]
-      if (rest.length === 0) await $.store.delete(key)
-      else await $.store.set(key, rest)
-    }
-  } finally {
-    isReopening = false
-  }
-  if (failed.length > 0) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
-}
 
 const reach = async ($: EngineInterface, agentId: string, name: string, project: string | undefined, message: string): Promise<void> => {
   const sent = await sendTo($, await placed($, agentId, name, project), message, viaBand($))
@@ -979,7 +931,6 @@ export const register: Register = on => {
         if (Array.isArray(rows)) earlier.push(...rows)
       }
       const merged = mergeBoards(earlier, Array.isArray(saved) ? saved : [])
-      const carried = new Set(earlier.filter(isEntry).map(row => row.agentId))
       if (merged.length > 0) await update($, board, () => merged)
       loading = Promise.resolve()
       if (others.length > 0) {
@@ -989,9 +940,7 @@ export const register: Register = on => {
           for (const key of others) await $.store.delete(key)
         }
       }
-      for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
-      const pending = e.isInteractive ? merged.filter(one => carried.has(one.agentId) && isUnfinished(one)).map(one => one.agentId) : []
-      if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
+      for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX))) await $.store.delete(key)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
         name: TOOL,
@@ -1024,9 +973,6 @@ export const register: Register = on => {
       isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
-      if (pending.length > 0) {
-        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($)).catch(() => undefined))
-      }
     } catch {}
     return started
   })
