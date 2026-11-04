@@ -4,13 +4,14 @@ mod install;
 mod manifest;
 mod platform;
 mod tray;
+mod updates;
 
 use anyhow::{bail, Context, Result};
 use install::RecordFile;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub(crate) const USAGE: &str = "qol pr try <number> | qol pr try --off";
+pub(crate) const USAGE: &str = "qol pr try <number> | qol pr off";
 const REPO: &str = "qol-tools/qol";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,7 +26,12 @@ pub(crate) fn run(args: &[OsString]) -> Result<()> {
     let places = install::Places::current()?;
     match request {
         Request::Try(number) => try_build(number, build, &places),
-        Request::Off => turn_off(&places),
+        Request::Off => turn_off(&places).map(|mut put_back| {
+            if !put_back.is_empty() && !put_back.iter().any(|id| id == tray::BINARY) {
+                put_back.push(tray::BINARY.to_string());
+            }
+            updates::catch_up(&put_back);
+        }),
     }
 }
 
@@ -35,7 +41,7 @@ fn parse(args: &[OsString]) -> Result<Request> {
         .map(|arg| arg.to_str().context("non-UTF-8 argument for qol pr"))
         .collect::<Result<Vec<_>>>()?;
     match words.as_slice() {
-        ["try", "--off"] => Ok(Request::Off),
+        ["off"] | ["try", "--off"] => Ok(Request::Off),
         ["try", number] => number
             .trim_start_matches('#')
             .parse()
@@ -46,10 +52,6 @@ fn parse(args: &[OsString]) -> Result<Request> {
 }
 
 fn try_build(number: u64, platform: &platform::Build, places: &install::Places) -> Result<()> {
-    let mut state = install::State::load(&places.state)?;
-    if let Some(other) = state.pull_request.filter(|other| *other != number) {
-        bail!("pull request #{other} is still installed; run `qol pr try --off` first");
-    }
     let pull = download::pull_request(REPO, number)?;
     let head = pull.head_ref_oid.clone();
     let run = download::live_test_run(REPO, &pull, platform)?;
@@ -65,6 +67,15 @@ fn try_build(number: u64, platform: &platform::Build, places: &install::Places) 
     if let Some(source) = &tray_build {
         install::verify_binary(source, tray::BINARY)?;
         platform::prepare_tray(source)?;
+    }
+    let mut state = install::State::load(&places.state)?;
+    if state.pull_request.is_some_and(|other| other != number) {
+        let kept = turn_off(places)?
+            .into_iter()
+            .filter(|id| id != tray::BINARY && !build.replaces(id))
+            .collect::<Vec<_>>();
+        updates::catch_up(&kept);
+        state = install::State::load(&places.state)?;
     }
 
     println!("pull request #{number} at {}", short(&head));
@@ -125,22 +136,38 @@ fn try_build(number: u64, platform: &platform::Build, places: &install::Places) 
     if state.plugins.is_empty() && state.tray.is_none() {
         println!("nothing was installed");
     } else {
-        println!("`qol pr try --off` puts the replaced builds and the installed tray back");
+        println!("`qol pr off` puts the replaced builds and the installed tray back");
     }
     Ok(())
 }
 
-fn turn_off(places: &install::Places) -> Result<()> {
+fn turn_off(places: &install::Places) -> Result<Vec<String>> {
     let mut state = install::State::load(&places.state)?;
     let Some(number) = state.pull_request else {
         println!("no pull request build is installed");
-        return Ok(());
+        return Ok(Vec::new());
     };
     println!("putting back the builds pull request #{number} replaced");
+    let mut put_back = Vec::new();
+    match put_everything_back(places, &mut state, &mut put_back) {
+        Ok(()) => Ok(put_back),
+        Err(error) => {
+            updates::catch_up(&put_back);
+            Err(error)
+        }
+    }
+}
+
+fn put_everything_back(
+    places: &install::Places,
+    state: &mut install::State,
+    put_back: &mut Vec<String>,
+) -> Result<()> {
     let tray_build = state.tray.clone();
     while let Some(swapped) = state.plugins.last().cloned() {
         let restored = install::restore(&swapped)?;
         state.plugins.pop();
+        put_back.push(swapped.id.clone());
         state.save(&places.state)?;
         if restored != install::Restored::PutBack {
             println!("  {}: {}", swapped.id, restored.describe());
@@ -152,11 +179,11 @@ fn turn_off(places: &install::Places) -> Result<()> {
         }
     }
     if let Some(try_binary) = tray_build {
-        let put_back = tray::put_back(&try_binary, &installed_tray(&state)?)?;
-        println!("  {}: {}", tray::BINARY, put_back.describe());
+        put_back.push(tray::BINARY.to_string());
+        let restarted = tray::put_back(&try_binary, &installed_tray(state)?)?;
+        println!("  {}: {}", tray::BINARY, restarted.describe());
     }
-    install::State::clear(&places.state)?;
-    Ok(())
+    install::State::clear(&places.state)
 }
 
 fn installed_tray(state: &install::State) -> Result<PathBuf> {
@@ -199,9 +226,11 @@ mod tests {
     fn parse_reads_a_number_or_off() {
         assert_eq!(parse(&words(&["try", "412"])).unwrap(), Request::Try(412));
         assert_eq!(parse(&words(&["try", "#412"])).unwrap(), Request::Try(412));
+        assert_eq!(parse(&words(&["off"])).unwrap(), Request::Off);
         assert_eq!(parse(&words(&["try", "--off"])).unwrap(), Request::Off);
-        let refused: [&[&str]; 5] = [
+        let refused: [&[&str]; 6] = [
             &["try"],
+            &["off", "412"],
             &["try", "abc"],
             &["try", "412", "413"],
             &["get", "412"],

@@ -247,7 +247,7 @@ fn trial_refusal() -> Option<Response> {
 
 fn paused_message(trial: &Trial) -> String {
     format!(
-        "Updates are paused while you try pull request #{}. qol pr try --off ends the try.",
+        "Updates are paused while you try pull request #{}. qol pr off ends the try.",
         trial.pull_request
     )
 }
@@ -890,7 +890,7 @@ mod tests {
     fn the_paused_message_names_the_pull_request_and_the_way_out() {
         assert_eq!(
             paused_message(&trial(false, &["qol-launcher"])),
-            "Updates are paused while you try pull request #435. qol pr try --off ends the try."
+            "Updates are paused while you try pull request #435. qol pr off ends the try."
         );
     }
 

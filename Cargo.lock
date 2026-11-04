@@ -6310,6 +6310,7 @@ dependencies = [
  "qol-log",
  "qol-peers",
  "qol-platform",
+ "qol-plugin-api",
  "qol-plugin-daemon",
  "qol-process",
  "qol-profile-sync",
