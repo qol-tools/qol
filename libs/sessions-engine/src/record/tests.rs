@@ -498,7 +498,7 @@ mod search {
         assert_eq!(keys(None, None, 2), ["gamma", "beta"]);
         assert_eq!(keys(Some("billing"), None, 20), ["alpha"]);
         assert_eq!(
-            keys(Some(&abs("/project")), None, 20),
+            keys(Some(&abs("/project").to_lowercase()), None, 20),
             ["gamma", "beta", "alpha"]
         );
         assert_eq!(keys(Some("nomatch"), None, 20), Vec::<String>::new());
