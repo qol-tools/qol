@@ -933,6 +933,28 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
 })
 
+test('a turn queued ahead of a hold leaves the hold pending, so the hold turn still runs no model', async ($, on) => {
+  const sent: any[] = []
+  const steps: string[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [] }))
+  on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number }) {
+    steps.push(`${e.turnId}:${e.index}`)
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  await typed($, notification('a1', 'a1-fork: a fork', 'Which colour should it be?'), 'task-notification')
+  await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork' })
+  await $.turn.start({ text: 'An earlier queued message.', turnId: 'queued-1', agentId: 'a1' })
+  await answered($, 'a1', 0, 'queued-1')
+  expect(steps).toEqual(['queued-1:0'])
+  steps.length = 0
+  await $.turn.start({ text: 'Brought back for the user.', turnId: 'hold-1', agentId: 'a1' })
+  expect((await answered($, 'a1', 0, 'hold-1'))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+  expect(steps).toEqual([])
+})
+
 test('a fork whose reopen was refused is tried again a few times, then left alone', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
@@ -1136,8 +1158,12 @@ test('a merged result is filed on the board without waking its fork, and any oth
   const panes: string[] = []
   engine(on, sent, panes)
   watchEngine(on, { q1: { cwd: '/work', description: 'q1-fork: merged one' }, q2: { cwd: '/work', description: 'q2-fork: failed one' } })
+  const recorded: string[][] = []
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: recordReply(e.argv, []) }
+    if (isRecord(e.argv)) {
+      recorded.push(e.argv)
+      return { value: recordReply(e.argv, []) }
+    }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
     return {
@@ -1161,6 +1187,9 @@ test('a merged result is filed on the board without waking its fork, and any oth
   expect(sent.map(one => [one.to, one.text])).toEqual([['q2', 'a check failed']])
   const rows = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(rows).toContain('[fork board] q1-fork: Pull request #41 merged. (done, agent id q1)')
+  const done = recorded.filter(argv => argv.includes('done'))
+  expect(done).toHaveLength(1)
+  expect(done[0]?.slice(-2)).toEqual(['--reason', 'Pull request #41 merged.'])
   const full = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'q1-fork' })).result)
   expect(full).toContain('without waking the fork')
   expect(full).toContain('````\nmerged\n```\nRecommend: obey\n````')
@@ -1445,7 +1474,7 @@ test('the restart rule ignores kind: a note row comes back, a done or stopped or
   expect(sent.map(one => one.to).sort()).toEqual(['n1', 'n2', 'w1'])
 })
 
-test('opening the switchboard lets the record win on done and stopped, and gives a keyless row a record', async ($, on) => {
+test('opening the switchboard takes done and stopped from the record, keeps a local mark the record missed, and gives a keyless row a record', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const calls: string[][] = []
@@ -1482,11 +1511,11 @@ test('opening the switchboard lets the record win on done and stopped, and gives
     ['part', '--key', 'gen4', '--agent-id', 'k1', '--transcript', TRANSCRIPT('k1')],
     ['part', '--key', 'gen5', '--agent-id', 'k2', '--transcript', TRANSCRIPT('k2')],
   ])
-  expect(sent.map(one => one.to).sort()).toEqual(['c1', 'k1', 'k2'])
+  expect(sent.map(one => one.to).sort()).toEqual(['k1', 'k2'])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('(done, agent id d1)')
   expect(board).toContain('(needs the user, agent id s1)')
-  expect(board).toContain('(needs the user, agent id c1)')
+  expect(board).toContain('(done, agent id c1)')
   expect(board).toContain('[fork board] gen4: h (needs the user, agent id k1)')
 })
 
