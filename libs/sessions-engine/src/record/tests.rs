@@ -7,6 +7,13 @@ use serde_json::{json, Value};
 use super::cli::{execute, EXIT_UNKNOWN, EXIT_USAGE};
 use super::store::RecordStore;
 
+fn abs(path: &str) -> String {
+    std::env::temp_dir()
+        .join(path.trim_start_matches('/'))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn store(root: &Path) -> RecordStore {
     RecordStore::with_dir(root.join("records"))
 }
@@ -23,7 +30,13 @@ fn claim(store: &RecordStore, now_ms: u64, description: &str) -> Value {
     let (value, code) = run(
         store,
         now_ms,
-        &["claim", "--description", description, "--cwd", "/project"],
+        &[
+            "claim",
+            "--description",
+            description,
+            "--cwd",
+            &abs("/project"),
+        ],
     );
     assert_eq!(code, 0, "{value}");
     value
@@ -95,7 +108,7 @@ fn claim_stores_the_record_and_never_reuses_a_key() {
         json!({
             "key": "dup-2",
             "friendly": "same",
-            "cwd": "/project",
+            "cwd": abs("/project"),
             "created_ms": 7,
             "parts": [],
         }),
@@ -109,11 +122,11 @@ fn part_appends_the_next_number_and_an_agent_id_already_held_changes_nothing() {
     let store = store(root.path());
     claim(&store, 1, "work: thing");
     let steps = [
-        ("a1", "/t/a1.jsonl", 10, 1),
-        ("a2", "/t/a2.jsonl", 20, 2),
-        ("a1", "/t/other.jsonl", 30, 1),
-        ("a2", "/t/a2.jsonl", 40, 2),
-        ("a3", "/t/a3.jsonl", 50, 3),
+        ("a1", abs("/t/a1.jsonl"), 10, 1),
+        ("a2", abs("/t/a2.jsonl"), 20, 2),
+        ("a1", abs("/t/other.jsonl"), 30, 1),
+        ("a2", abs("/t/a2.jsonl"), 40, 2),
+        ("a3", abs("/t/a3.jsonl"), 50, 3),
     ];
     for (agent, transcript, now, part) in steps {
         let (value, code) = run(
@@ -126,7 +139,7 @@ fn part_appends_the_next_number_and_an_agent_id_already_held_changes_nothing() {
                 "--agent-id",
                 agent,
                 "--transcript",
-                transcript,
+                &transcript,
             ],
         );
         assert_eq!(
@@ -139,9 +152,9 @@ fn part_appends_the_next_number_and_an_agent_id_already_held_changes_nothing() {
     assert_eq!(
         record["parts"],
         json!([
-            { "n": 1, "agent_id": "a1", "transcript": "/t/a1.jsonl", "started_ms": 10 },
-            { "n": 2, "agent_id": "a2", "transcript": "/t/a2.jsonl", "started_ms": 20 },
-            { "n": 3, "agent_id": "a3", "transcript": "/t/a3.jsonl", "started_ms": 50 },
+            { "n": 1, "agent_id": "a1", "transcript": abs("/t/a1.jsonl"), "started_ms": 10 },
+            { "n": 2, "agent_id": "a2", "transcript": abs("/t/a2.jsonl"), "started_ms": 20 },
+            { "n": 3, "agent_id": "a3", "transcript": abs("/t/a3.jsonl"), "started_ms": 50 },
         ])
     );
 }
@@ -240,7 +253,7 @@ fn resume_clears_done_and_stopped_and_is_a_no_op_when_neither_is_set() {
             "--agent-id",
             "a1",
             "--transcript",
-            "/t.jsonl",
+            &abs("/t.jsonl"),
         ],
     );
     let (untouched, code) = run(&store, 5, &["resume", "--key", "work"]);
@@ -297,7 +310,7 @@ fn show_finds_a_record_by_key_or_by_an_agent_id_among_its_parts() {
                 "--agent-id",
                 agent,
                 "--transcript",
-                "/t.jsonl",
+                &abs("/t.jsonl"),
             ],
         );
     }
@@ -341,7 +354,7 @@ fn an_unknown_key_or_agent_id_exits_3_with_an_error_object() {
             "--agent-id",
             "a",
             "--transcript",
-            "/t",
+            &abs("/t"),
         ],
         &["archive", "--key", "nope"],
         &["done", "--key", "nope", "--reason", "x"],
@@ -484,7 +497,10 @@ mod search {
         assert_eq!(keys(None, None, 20), ["gamma", "beta", "alpha"]);
         assert_eq!(keys(None, None, 2), ["gamma", "beta"]);
         assert_eq!(keys(Some("billing"), None, 20), ["alpha"]);
-        assert_eq!(keys(Some("/project"), None, 20), ["gamma", "beta", "alpha"]);
+        assert_eq!(
+            keys(Some(&abs("/project")), None, 20),
+            ["gamma", "beta", "alpha"]
+        );
         assert_eq!(keys(Some("nomatch"), None, 20), Vec::<String>::new());
         assert_eq!(keys(None, words("invoice refund"), 20), ["alpha"]);
         assert_eq!(keys(None, words("bikes"), 20), ["beta"]);
