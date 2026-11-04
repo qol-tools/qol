@@ -5,6 +5,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use super::compile::ACTIVE_VARIABLE;
+use super::hotkeys::held_variables;
 use super::store::Store;
 use super::CLI_PATH;
 use crate::platform::macos::input::selection::Availability;
@@ -95,7 +96,20 @@ pub(crate) fn core_service_pid() -> Option<u32> {
 }
 
 pub(crate) fn set_active(active: bool) -> Result<()> {
-    let variables = json!({ ACTIVE_VARIABLE: i32::from(active) }).to_string();
+    set_variables(&json!({ ACTIVE_VARIABLE: i32::from(active) }))
+}
+
+pub(crate) fn reset_variables(active: bool) -> Result<()> {
+    let mut variables = serde_json::Map::new();
+    for name in held_variables() {
+        variables.insert(name, json!(0));
+    }
+    variables.insert(ACTIVE_VARIABLE.to_string(), json!(i32::from(active)));
+    set_variables(&Value::Object(variables))
+}
+
+fn set_variables(variables: &Value) -> Result<()> {
+    let variables = variables.to_string();
     let output = Command::new(CLI_PATH)
         .arg("--set-variables")
         .arg(&variables)
