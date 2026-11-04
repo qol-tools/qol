@@ -28,7 +28,7 @@
     "entry_points": [
       "configure_popup_window", "configure_overlay_window", "disable_window_shadow",
       "make_override_redirect", "set_override_redirect_by_title", "square_window_corners",
-      "apply_tool_window_style", "join_all_spaces"
+      "apply_tool_window_style", "join_all_spaces", "configure_framed_key_panel"
     ],
     "allow": [
       {

@@ -779,6 +779,9 @@ impl Surface {
         }
         if native_reveal_gate {
             let _reason = crate::popup_window::reason_scope("surface-open");
+            if applies_settings_identity {
+                crate::popup_window::configure_framed_key_panel(&title);
+            }
             let hidden = crate::popup_window::prepare_window_reveal_by_title(&title);
             let fresh_frame = hidden
                 .then(|| {

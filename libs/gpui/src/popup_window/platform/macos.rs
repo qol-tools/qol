@@ -1110,12 +1110,16 @@ fn front_retry_current(start: u64, current: u64, held_key: bool, key_now: bool) 
     start == current && (!held_key || key_now)
 }
 
-fn settle_framed_panel(window: &NSWindow) {
+pub fn configure_framed_key_panel(title: &str) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
     if !is_framed_key_panel(window.styleMask()) {
-        return;
+        return false;
     }
     window.setHidesOnDeactivate(false);
     window.setCollectionBehavior(NSWindowCollectionBehavior::Managed);
+    true
 }
 
 fn keep_front_while_inactive(title: &str, held_key: bool) {
@@ -1233,9 +1237,6 @@ fn show_window_by_title_with_focus(
         watch_pointer_for_regions();
     }
     trace_settings_window("SETTINGS_SHOW", title, "start", Some(&window));
-    if matches!(presentation, WindowPresentation::Normal) {
-        settle_framed_panel(&window);
-    }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
         let framed = is_framed_key_panel(window.styleMask());

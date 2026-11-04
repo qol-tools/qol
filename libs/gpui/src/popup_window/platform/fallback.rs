@@ -215,6 +215,10 @@ pub fn window_refuses_activation_by_title(_title: &str) -> bool {
     false
 }
 
+pub fn configure_framed_key_panel(_title: &str) -> bool {
+    false
+}
+
 pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }
