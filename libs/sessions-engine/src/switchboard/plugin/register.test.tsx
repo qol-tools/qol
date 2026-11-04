@@ -934,6 +934,24 @@ test('a fork whose reopen was refused is tried again a few times, then left alon
   expect(log.filter(one => one.agentId === 'a1').map(one => one.isDelivered)).toEqual([false, true])
 })
 
+test('a resumed switchboard conversation continues its own forks a restart cut off mid-work', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, isWorking: boolean, kind?: string) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'h', report: 'r', at: 1, isWorking, isDismissed: false })
+  store.set('board:switchboard-session', [row('w1', true, 'note'), row('a1', false, 'ask'), row('n1', false, 'note')])
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => [one.to, one.text.startsWith('The switchboard restarted') ? 'continue' : one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['w1', 'continue']])
+})
+
 test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []

@@ -255,6 +255,8 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
 const isEntry = (entry: unknown): entry is Entry =>
   typeof entry === 'object' && entry !== null && typeof (entry as { agentId?: unknown }).agentId === 'string' && typeof (entry as { name?: unknown }).name === 'string'
 
+const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })
+
 export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]): Entry[] => {
   const kept = own.filter(isEntry)
   const owned = new Set(kept.map(entry => entry.agentId))
@@ -267,7 +269,7 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
       seen.add(entry.agentId)
       return true
     })
-    .map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))
+    .map(cutIfWorking)
     .reverse()
   return [...carried, ...kept].slice(-KEEP)
 }
@@ -1060,7 +1062,8 @@ export const register: Register = on => {
         const rows = await $.store.get(key)
         if (Array.isArray(rows)) earlier.push(...rows)
       }
-      const merged = mergeBoards(earlier, Array.isArray(saved) ? saved : [])
+      const own = (Array.isArray(saved) ? saved : []).filter(isEntry)
+      const merged = mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)
       if (merged.length > 0) await update($, board, () => merged)
       loading = Promise.resolve()
       if (others.length > 0) {
