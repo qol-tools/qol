@@ -352,7 +352,7 @@ pub(super) fn summary(snapshot: &UpdatesSnapshot) -> Summary {
             busy: false,
             label: "Updates paused".to_string(),
             description: format!(
-                "Trying pull request #{} until qol pr try --off.",
+                "Trying pull request #{} until qol pr off.",
                 trial.pull_request
             ),
             action: None,
@@ -449,7 +449,7 @@ fn check_row(snapshot: &UpdatesSnapshot) -> TargetRow {
             name: "Checks".to_string(),
             value: "Paused".to_string(),
             tone: ValueTone::Muted,
-            description: Some("Back after qol pr try --off".to_string()),
+            description: Some("Back after qol pr off".to_string()),
             action: None,
             action_label: Some("Check now"),
             attention: false,
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(status.label, "Updates paused");
         assert_eq!(
             status.description,
-            "Trying pull request #435 until qol pr try --off."
+            "Trying pull request #435 until qol pr off."
         );
         assert_eq!(status.action, None);
         assert_eq!(status.dot, None);

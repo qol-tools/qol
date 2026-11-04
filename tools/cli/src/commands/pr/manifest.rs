@@ -63,6 +63,10 @@ impl Manifest {
         }
         Ok(())
     }
+
+    pub(super) fn replaces(&self, id: &str) -> bool {
+        self.plugins.iter().any(|plugin| plugin.id == id)
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +117,13 @@ mod tests {
         assert!(other_target.check(412, HEAD, LINUX).is_err());
         let other_schema = manifest(|value| value["schema"] = 2.into());
         assert!(other_schema.check(412, HEAD, LINUX).is_err());
+    }
+
+    #[test]
+    fn a_build_replaces_only_the_plugins_it_carries() {
+        let build = manifest(|_| {});
+        assert!(build.replaces("qol-cli-sessions"));
+        assert!(!build.replaces("qol-alt-tab"));
     }
 
     #[test]
