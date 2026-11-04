@@ -1102,7 +1102,7 @@ fn reorder_front_if_inactive(title: &str) {
     let Some(window) = find_window_by_title(mtm, title) else {
         return;
     };
-    if NSApplication::sharedApplication(mtm).isActive() {
+    if NSApplication::sharedApplication(mtm).isActive() && !qol_platform::secure_input_enabled() {
         trace_settings_window("SETTINGS_REFRONT", title, "skip_active", Some(&window));
         return;
     }
@@ -1184,7 +1184,12 @@ fn show_window_by_title_with_focus(
         let app = NSApplication::sharedApplication(mtm);
         let activation_refused = matches!(presentation, WindowPresentation::Normal)
             && qol_platform::secure_input_enabled();
-        if !activation_refused {
+        if activation_refused {
+            if app.isActive() {
+                trace_settings_window("SETTINGS_SHOW", title, "deactivate_stale", Some(&window));
+                app.deactivate();
+            }
+        } else {
             #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);
         }
@@ -1192,7 +1197,7 @@ fn show_window_by_title_with_focus(
         if !activation_refused {
             force_app_frontmost();
         }
-        if !app.isActive() {
+        if activation_refused || !app.isActive() {
             window.orderFrontRegardless();
             keep_front_while_inactive(title);
         }
