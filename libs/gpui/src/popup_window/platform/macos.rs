@@ -1071,8 +1071,15 @@ const INACTIVE_FRONT_RETRIES: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(700),
 ];
 
-fn activation_is_refused(mask: NSWindowStyleMask) -> bool {
-    !mask.contains(NSWindowStyleMask::NonactivatingPanel) && qol_platform::secure_input_enabled()
+fn settle_framed_panel(window: &NSWindow) {
+    let mask = window.styleMask();
+    if !mask.contains(NSWindowStyleMask::NonactivatingPanel)
+        || !mask.contains(NSWindowStyleMask::Titled)
+    {
+        return;
+    }
+    window.setHidesOnDeactivate(false);
+    window.setCollectionBehavior(NSWindowCollectionBehavior::Managed);
 }
 
 fn keep_front_while_inactive(title: &str) {
@@ -1170,11 +1177,13 @@ fn show_window_by_title_with_focus(
     }
     trace_settings_window("SETTINGS_SHOW", title, "start", Some(&window));
     if matches!(presentation, WindowPresentation::Normal) {
+        settle_framed_panel(&window);
         join_dock_for(&window, mtm);
     }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
-        let activation_refused = activation_is_refused(window.styleMask());
+        let activation_refused = matches!(presentation, WindowPresentation::Normal)
+            && qol_platform::secure_input_enabled();
         if !activation_refused {
             #[allow(deprecated)]
             app.activateIgnoringOtherApps(true);

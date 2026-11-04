@@ -624,7 +624,11 @@ impl Surface {
             } else {
                 WindowDecorations::Client
             }),
-            kind: self.window_kind(),
+            kind: if applies_settings_identity && matches!(self.kind, SurfaceKind::Panel) {
+                crate::platform::framed_key_panel_window_kind()
+            } else {
+                self.window_kind()
+            },
             focus: self.takes_focus(),
             show: !native_reveal_gate && !passive_reveal_gate,
             is_movable: true,

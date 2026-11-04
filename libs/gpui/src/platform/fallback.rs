@@ -20,6 +20,10 @@ pub fn ghost_window_kind() -> gpui::WindowKind {
     gpui::WindowKind::PopUp
 }
 
+pub fn framed_key_panel_window_kind() -> gpui::WindowKind {
+    gpui::WindowKind::Normal
+}
+
 pub fn ghost_window_decorations(_transparent: bool) -> gpui::WindowDecorations {
     gpui::WindowDecorations::Client
 }
