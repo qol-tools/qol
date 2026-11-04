@@ -186,6 +186,9 @@ fn run_tap(
                 log::error!("macOS hotkey tap received its first key event");
             }
             let observed = observed_combo(event);
+            if relay::leased(&observed) {
+                return CallbackResult::Keep;
+            }
             let outcome = key_matcher::match_under_lock(&matcher, transition, &observed);
             if let Some((binding, phase)) = outcome.fired {
                 let _ = fire_tx.send(CaptureEvent { binding, phase });

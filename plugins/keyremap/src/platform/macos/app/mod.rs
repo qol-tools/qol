@@ -50,8 +50,12 @@ impl engine::Remapper for Services {
         };
         let config = self.state.config();
         let layout = self.layouts.get();
-        if let Ok(mut backend) = karabiner.lock() {
+        let lease = karabiner.lock().ok().and_then(|mut backend| {
             backend.idle(&config, &layout, self.state.input());
+            backend.lease(layout.physical)
+        });
+        if let Some((relay, lease)) = lease {
+            hotkeys::send_lease(&relay, &lease);
         }
     }
 
@@ -59,6 +63,9 @@ impl engine::Remapper for Services {
         if let Some(karabiner) = &self.karabiner {
             if let Ok(mut backend) = karabiner.lock() {
                 backend.stop();
+                if let Some((relay, lease)) = backend.lease(self.layouts.get().physical) {
+                    hotkeys::send_lease(&relay, &lease);
+                }
             }
         }
     }

@@ -3,7 +3,9 @@ use super::super::key_matcher::{self, KeyCombo, KeyMatcher, KeyTransition};
 use super::{parse_mac_combo, recorder};
 use core_graphics::event::CGEventType;
 use qol_hotkeys::grammar::Modifier as Mod;
-use qol_runtime::hotkey_relay::{self, HotkeyCombo, HotkeyModifier, HotkeyPress};
+use qol_runtime::hotkey_relay::{
+    self, HotkeyCombo, HotkeyLease, HotkeyModifier, HotkeyPress, RelayMessage,
+};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use std::io::ErrorKind;
 use std::os::unix::net::UnixDatagram;
@@ -24,6 +26,38 @@ static ANNOUNCED: Mutex<Announced> = Mutex::new(Announced {
     hotkeys: Vec::new(),
     relay: None,
 });
+
+struct Lease {
+    combos: Vec<KeyCombo>,
+    renewed: Option<Instant>,
+}
+
+static LEASE: Mutex<Lease> = Mutex::new(Lease {
+    combos: Vec::new(),
+    renewed: None,
+});
+
+fn lease() -> MutexGuard<'static, Lease> {
+    LEASE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn renew(lease: &HotkeyLease, now: Instant) {
+    let mut held = self::lease();
+    held.combos = lease.lease.iter().map(key_combo).collect();
+    held.renewed = Some(now);
+}
+
+pub(super) fn leased(observed: &KeyCombo) -> bool {
+    leased_at(observed, Instant::now())
+}
+
+fn leased_at(observed: &KeyCombo, now: Instant) -> bool {
+    let lease = lease();
+    lease
+        .renewed
+        .is_some_and(|renewed| now.saturating_duration_since(renewed) < hotkey_relay::LEASE_TTL)
+        && lease.combos.contains(observed)
+}
 
 fn announced() -> MutexGuard<'static, Announced> {
     ANNOUNCED.lock().unwrap_or_else(PoisonError::into_inner)
@@ -150,9 +184,10 @@ fn run(
             }
         }
         match socket.recv(&mut datagram) {
-            Ok(len) => match serde_json::from_slice::<HotkeyPress>(&datagram[..len]) {
-                Ok(press) => handle(matcher, fire_tx, &mut held, &press),
-                Err(error) => log::warn!("hotkey relay sent an unreadable press: {error}"),
+            Ok(len) => match serde_json::from_slice::<RelayMessage>(&datagram[..len]) {
+                Ok(RelayMessage::Press(press)) => handle(matcher, fire_tx, &mut held, &press),
+                Ok(RelayMessage::Lease(lease)) => renew(&lease, Instant::now()),
+                Err(error) => log::warn!("hotkey relay sent an unreadable message: {error}"),
             },
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(error) => {
@@ -347,5 +382,30 @@ mod tests {
             fired(&fire_rx.recv_timeout(WAIT).unwrap()),
             ("Alt+Tab", Phase::START)
         );
+    }
+
+    #[test]
+    fn a_leased_combo_belongs_to_the_relay_until_the_lease_lapses() {
+        let shift_super_r = HotkeyCombo {
+            mods: vec![HotkeyModifier::Shift, HotkeyModifier::Super],
+            mac_keycode: 15,
+        };
+        let observed = key_combo(&shift_super_r);
+        let ctrl_shift_r = key_combo(&HotkeyCombo {
+            mods: vec![HotkeyModifier::Ctrl, HotkeyModifier::Shift],
+            mac_keycode: 15,
+        });
+        let start = Instant::now();
+        renew(
+            &HotkeyLease {
+                lease: vec![shift_super_r],
+            },
+            start,
+        );
+        assert!(leased_at(&observed, start + Duration::from_secs(2)));
+        assert!(!leased_at(&ctrl_shift_r, start));
+        assert!(!leased_at(&observed, start + hotkey_relay::LEASE_TTL));
+        renew(&HotkeyLease { lease: Vec::new() }, start);
+        assert!(!leased_at(&observed, start));
     }
 }

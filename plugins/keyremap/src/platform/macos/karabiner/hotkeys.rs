@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::os::unix::net::UnixDatagram;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use qol_hotkeys::macos_keycode::PhysicalLayout;
-use qol_runtime::hotkey_relay::{HotkeyCombo, HotkeyModifier, HotkeyPress};
+use qol_runtime::hotkey_relay::{HotkeyCombo, HotkeyLease, HotkeyModifier, HotkeyPress};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::PlatformStateClient;
 use serde_json::{json, Value};
@@ -72,6 +73,37 @@ impl Hotkeys {
             }
         }
         (manipulators, gaps)
+    }
+
+    pub(crate) fn lease(
+        &self,
+        physical: PhysicalLayout,
+        armed: bool,
+    ) -> Option<(PathBuf, HotkeyLease)> {
+        let relay = self.relay.clone()?;
+        let lease = if armed {
+            self.combos
+                .iter()
+                .filter(|combo| key_codes::for_keycode(combo.mac_keycode, physical).is_some())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some((relay, HotkeyLease { lease }))
+    }
+}
+
+pub(crate) fn send_lease(relay: &Path, lease: &HotkeyLease) {
+    let Ok(payload) = serde_json::to_vec(lease) else {
+        return;
+    };
+    let sent = UnixDatagram::unbound().and_then(|socket| socket.send_to(&payload, relay));
+    if let Err(error) = sent {
+        log::debug!(
+            "could not lease qol hotkeys to the relay at {}: {error}",
+            relay.display()
+        );
     }
 }
 
