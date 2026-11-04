@@ -6948,7 +6948,7 @@ dependencies = [
 
 [[package]]
 name = "qol-keyremap"
-version = "1.86.1"
+version = "1.86.2"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.0",
@@ -7607,7 +7607,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.138.2"
+version = "3.138.3"
 dependencies = [
  "anyhow",
  "axum",
