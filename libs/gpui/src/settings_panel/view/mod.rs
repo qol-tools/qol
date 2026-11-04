@@ -298,6 +298,8 @@ pub(super) struct SettingsPanelView {
     render_level: std::cell::Cell<usize>,
     height_cap: f32,
     screen_aspect: f32,
+    min_size: Size<Pixels>,
+    width_room: f32,
     height_revision: u64,
     height_cache: HeightCache,
     save_error: Option<String>,
@@ -352,6 +354,8 @@ pub(super) struct SettingsPanelState {
     pub(super) opening_answers: Vec<(String, QueryResult)>,
     pub(super) height_cap: f32,
     pub(super) screen_aspect: f32,
+    pub(super) min_size: Size<Pixels>,
+    pub(super) width_room: f32,
 }
 
 enum ActiveControl {
@@ -517,6 +521,8 @@ impl SettingsPanelView {
             deck_motion: None,
             height_cap: state.height_cap,
             screen_aspect: state.screen_aspect,
+            min_size: state.min_size,
+            width_room: state.width_room,
             height_revision: 0,
             height_cache: HeightCache::default(),
             save_error: None,
@@ -5055,6 +5061,7 @@ impl SettingsPanelView {
     fn resize_canvas(&mut self) -> impl IntoElement {
         let dismisser = self.dismisser.clone();
         let target = self.window_height();
+        let page_min = page_min_size(self.min_size, self.device_list_shows(), self.width_room);
         #[cfg(debug_assertions)]
         let built = std::time::Instant::now();
         #[cfg(debug_assertions)]
@@ -5078,11 +5085,26 @@ impl SettingsPanelView {
                     page_scroll.as_ref().map(ScrollHandle::bounds)
                 );
                 let maximized = window.is_maximized() || window.is_fullscreen();
-                let current = window.viewport_size().height.to_f64() as f32;
+                let viewport = window.viewport_size();
+                let width = dismisser.window_size().width.max(page_min.width);
+                if dismisser.min_size().is_some_and(|min| min != page_min) {
+                    dismisser.set_min_size(page_min);
+                    if !maximized && viewport.width < page_min.width {
+                        let next = size(page_min.width, viewport.height);
+                        let handle = window.window_handle();
+                        let dismisser = dismisser.clone();
+                        cx.defer(move |cx| {
+                            let _ = handle.update(cx, |_, window, _| {
+                                dismisser.resize_window(next, window);
+                            });
+                        });
+                    }
+                }
+                let current = viewport.height.to_f64() as f32;
                 if !refits_to_page(dismisser.user_sized(), maximized, target, current) {
                     return;
                 }
-                let next = size(dismisser.window_size().width, px(target));
+                let next = size(width, px(target));
                 let handle = window.window_handle();
                 cx.defer(move |cx| {
                     let _ = handle.update(cx, |_, window, _| {
@@ -5538,6 +5560,14 @@ fn list_fit_updates(
         }
     }
     updates
+}
+
+fn page_min_size(base: Size<Pixels>, device_list_shows: bool, width_room: f32) -> Size<Pixels> {
+    if !device_list_shows {
+        return base;
+    }
+    let widened = (base.width + px(super::components::DEVICE_LIST_WIDTH)).min(px(width_room));
+    size(widened.max(base.width), base.height)
 }
 
 fn refits_to_page(user_sized: bool, maximized: bool, target: f32, current: f32) -> bool {
@@ -6002,15 +6032,15 @@ mod tests {
         due_query_indices, escape_step, field_id_unit, focus_level, format_number,
         header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
         live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_drag_effect,
-        number_finish_plan, number_unit, parsed_color, parsed_number, pending_edit_on_scrub,
-        pointer_keys, pop_level, push_level, query_is_due, rail_child_index, rail_group_breaks,
-        refits_to_page, release_slider_dispatch, row_body_height, row_description,
-        schedule_slider_generation, slider_fraction, slider_generation_current, slider_protected,
-        source_window_height_for, text_or_placeholder, transition_in_flight, transition_policy,
-        AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level, LevelHeader,
-        LiveNumberDispatch, NumberDragEffect, NumberFinishPlan, NumberRelease, NumberSpec,
-        ObjectArrayState, PendingEdit, Row, RowControl, RowSection, SettingsDestination,
-        SliderStyle, TransitionAction, TransitionTracker,
+        number_finish_plan, number_unit, page_min_size, parsed_color, parsed_number,
+        pending_edit_on_scrub, pointer_keys, pop_level, push_level, query_is_due, rail_child_index,
+        rail_group_breaks, refits_to_page, release_slider_dispatch, row_body_height,
+        row_description, schedule_slider_generation, slider_fraction, slider_generation_current,
+        slider_protected, source_window_height_for, text_or_placeholder, transition_in_flight,
+        transition_policy, AppliedQueryPayloads, EscapeStep, HeightCache, Intent, Level,
+        LevelHeader, LiveNumberDispatch, NumberDragEffect, NumberFinishPlan, NumberRelease,
+        NumberSpec, ObjectArrayState, PendingEdit, Row, RowControl, RowSection,
+        SettingsDestination, SliderStyle, TransitionAction, TransitionTracker,
     };
     use crate::gamepad::GamepadMonitor;
     use crate::phantom_nav::{NavAxis, PhantomNavGuard};
@@ -8896,6 +8926,22 @@ active_value_from = "active"
             Vec::new(),
             "applying the updates settles the list"
         );
+    }
+
+    #[test]
+    fn the_device_column_widens_the_minimum_only_while_it_shows() {
+        let base = gpui::size(gpui::px(616.0), gpui::px(300.0));
+        assert_eq!(page_min_size(base, false, 1400.0), base);
+        assert_eq!(
+            page_min_size(base, true, 1400.0),
+            gpui::size(
+                gpui::px(616.0 + crate::settings_panel::components::DEVICE_LIST_WIDTH),
+                gpui::px(300.0)
+            )
+        );
+        assert!(page_min_size(base, false, 1400.0).width < gpui::px(1512.0 / 2.0));
+        assert_eq!(page_min_size(base, true, 700.0).width, gpui::px(700.0));
+        assert_eq!(page_min_size(base, true, 500.0).width, base.width);
     }
 
     #[test]
