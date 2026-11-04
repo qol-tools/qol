@@ -428,7 +428,7 @@ test('the board opens on its own only where the terminal docks it beside the cha
   expect(panes).toEqual(['open board'])
 })
 
-test('/board toggles the board, and a board it closed stays closed at the next start', async ($, on) => {
+test('/board toggles the board, and the board opens again at the next start', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -438,7 +438,7 @@ test('/board toggles the board, and a board it closed stays closed at the next s
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const band = await $.ui.mount(promptBand(true))
   await band.unmount()
-  expect(panes).toEqual(['open board', 'close board'])
+  expect(panes).toEqual(['open board', 'close board', 'open board'])
 })
 
 test('typing qols board toggles the board like /board and never reaches the model', async ($, on) => {
@@ -504,7 +504,7 @@ test('/board shows the whole board in an agent view too', async ($, on) => {
   await inline.unmount()
 })
 
-test('a board the user closed stays closed at the next start until /board opens it', async ($, on) => {
+test('a board the user closed opens again at the next start', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -514,14 +514,9 @@ test('a board the user closed stays closed at the next start until /board opens 
   await ui.press({ key: 'close' })
   await ui.unmount()
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const closed = await $.ui.mount(promptBand(true))
-  await closed.unmount()
-  expect(panes).toEqual(['open board', 'close board'])
-  await runBoard($)
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   const reopened = await $.ui.mount(promptBand(true))
   await reopened.unmount()
-  expect(panes).toEqual(['open board', 'close board', 'open board', 'open board'])
+  expect(panes).toEqual(['open board', 'close board', 'open board'])
 })
 
 const isRecord = (argv: string[]) => argv[2] === 'record'
@@ -741,8 +736,8 @@ test('a terminal session comes back as a fork with its own conversation once, an
   expect(sent).toHaveLength(3)
 
   const fromFork = await $.tool.call({ tool, ...session, transcript: '/p/third.jsonl', agentId: 'a9' } as any)
-  expect(String(fromFork.result)).toContain('Resumed as kcd2-hips, agent id a7')
-  expect(runs.at(-1)).toEqual(resumeArgv('/p/third.jsonl', '--launcher', 'a9'))
+  expect(String(fromFork.deny)).toContain('Only the switchboard resumes or continues a fork or a session')
+  expect(runs.at(-1)).not.toEqual(expect.arrayContaining(['/p/third.jsonl']))
 })
 
 const settle = async () => {
@@ -933,7 +928,9 @@ test('continuing a fork prompts it to carry on its work', async ($, on) => {
   expect(sent[0].text).toContain('approves nothing you were waiting on the user for')
   await spawn($, 'b1', 'b1-fork: a fork')
   const refused = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true, agentId: 'b1' })
-  expect(String(refused.deny)).toContain('Only the switchboard continues a fork')
+  expect(String(refused.deny)).toContain('Only the switchboard resumes or continues a fork')
+  const plain = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', agentId: 'b1' })
+  expect(String(plain.deny)).toContain('Only the switchboard resumes or continues a fork')
   expect(sent).toHaveLength(1)
 })
 
@@ -1310,10 +1307,10 @@ test('a fork messages any other fork by agent id, and never the switchboard or a
     [undefined, 'other-fork', true],
     ['p1', 'child-fork', false],
     ['k1', 'main', false],
-    ['p2', 'k1', true],
-    ['p2', { agentId: 'k1' }, true],
-    ['k2', 'k1', true],
-    ['p1', 'p2', true],
+    ['p2', 'k1', false],
+    ['p2', { agentId: 'k1' }, false],
+    ['k2', 'k1', false],
+    ['p1', 'p2', false],
     ['k1', 'k1', false],
     ['k1', 'other-fork', false],
     ['x1', 'p2', false],
@@ -1324,7 +1321,7 @@ test('a fork messages any other fork by agent id, and never the switchboard or a
     const answer = await send(from, to)
     expect(`${from}->${JSON.stringify(to)}:${answer.isDelivered}`).toBe(`${from}->${JSON.stringify(to)}:${isDelivered}`)
     if (isDelivered) delivered += 1
-    else expect(answer.reason).toContain('a fork messages other forks by agent id, which the fork_board tool lists')
+    else expect(answer.reason).toContain('a fork messages only the forks it started and the fork that started it')
   }
   expect(sent).toHaveLength(delivered)
 })

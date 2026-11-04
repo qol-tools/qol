@@ -22,7 +22,6 @@ const READY = 'Ready'
 const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
-const CLOSED_KEY = 'pane-closed'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
 const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
@@ -76,8 +75,9 @@ const REOPEN_DELAY_MS = 1_500
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
+const FORK_RESUME = 'Only the switchboard resumes or continues a fork or a session. Tell the user in one line to select that fork in the agent list, or that the switchboard brings it back.'
 const FORK_TO_FORK =
-  'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
+  'Not sent: a fork messages only the forks it started and the fork that started it. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
   ask: 'warning',
   test: 'suggestion',
@@ -183,20 +183,12 @@ const stateOf = (entry: Entry): string =>
           ? 'waiting on its pull request'
           : 'done'
 
-const rememberClosed = async ($: EngineInterface): Promise<void> => {
-  try {
-    await $.store.set(CLOSED_KEY, true)
-  } catch {}
-}
-
 const toggleBoard = async ($: EngineInterface): Promise<string> => {
   const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
   if (isShown) {
-    await rememberClosed($)
     await $.ui.close({ id: PANE })
     return 'Fork board closed. qols board or /board opens it again.'
   }
-  await $.store.delete(CLOSED_KEY).catch(() => {})
   const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
@@ -315,7 +307,9 @@ const recipientId = (to: unknown): string | undefined =>
 export const mayMessage = (list: Entry[], from: string, to: unknown): boolean => {
   const id = recipientId(to)
   if (id === undefined || id === from) return false
-  return list.some(one => one.agentId === from) && list.some(one => one.agentId === id)
+  const sender = list.find(one => one.agentId === from)
+  const recipient = list.find(one => one.agentId === id)
+  return sender !== undefined && recipient !== undefined && (recipient.launcher === from || sender.launcher === id)
 }
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
@@ -1236,7 +1230,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
-      isAutoOpenPending = e.isInteractive && (await $.store.get(CLOSED_KEY)) !== true
+      isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
       if (pending.length > 0) {
@@ -1303,12 +1297,6 @@ export const register: Register = on => {
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reason ?? text }] } })
   }).catch(($, e, next) => next(e))
 
-  on('ui.close', async ($, e, next) => {
-    const closed = await next(e)
-    if (e.id === PANE && e.origin?.kind === 'person') await rememberClosed($)
-    return closed
-  })
-
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
     await ensureLoaded($)
@@ -1316,17 +1304,16 @@ export const register: Register = on => {
   }).catch(() => ({ deny: 'The fork board could not be read.' }))
 
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
+    if (e.agentId !== undefined) return { deny: FORK_RESUME }
     const fork = textField((e as unknown as Record<string, unknown>).fork)
     if (fork !== undefined && textField((e as unknown as Record<string, unknown>).transcript) === undefined) {
       const isContinued = (e as unknown as Record<string, unknown>).continue === true
-      if (isContinued && e.agentId !== undefined) return { deny: 'Only the switchboard continues a fork; send it your own words with SendMessage.' }
       const resumed = await resumeFork($, fork.trim(), isContinued)
       return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
     }
     const session = closedSession(e as unknown as Record<string, unknown>)
     if (session === undefined) return { deny: 'resume_session needs fork alone, or an absolute .jsonl transcript, an absolute cwd and a `<key-name>: <friendly description>` description.' }
-    if (e.agentId !== undefined && !ID.test(e.agentId)) return { deny: 'resume_session was called from a loop with no agent id it can name.' }
-    const resumed = await resumeSession($, session, e.agentId)
+    const resumed = await resumeSession($, session)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
 
@@ -1510,7 +1497,6 @@ export const register: Register = on => {
     const summary = asks === 0 ? 'Nothing needs you.' : `${asks} need${asks === 1 ? 's' : ''} you.`
     const close = (
       <Button key="close" plain dimColor {...(isFocused ? { hotkey: 'x' } : {})} onPress={async () => {
-          await rememberClosed($)
           await $.ui.close({ id: PANE })
         }}>
         close
