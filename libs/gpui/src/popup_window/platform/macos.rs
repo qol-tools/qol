@@ -389,6 +389,66 @@ fn should_return_focus(app_active: bool, shown_key: bool, process_frontmost: boo
     app_active && process_frontmost && !shown_key
 }
 
+#[cfg(debug_assertions)]
+fn top_normal_window_number() -> Option<i32> {
+    unsafe {
+        let list = CGWindowListCopyWindowInfo(
+            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+            0,
+        );
+        if list.is_null() {
+            return None;
+        }
+        let top = (0..CFArrayGetCount(list))
+            .map(|index| CFArrayGetValueAtIndex(list, index))
+            .filter(|dict| !dict.is_null())
+            .filter(|&dict| cf_int_value(dict, &kCGWindowLayer) == Some(0))
+            .find_map(|dict| cf_int_value(dict, &kCGWindowNumber));
+        CFRelease(list);
+        top
+    }
+}
+
+fn trace_settings_window(tag: &str, title: &str, outcome: &str, window: Option<&NSWindow>) {
+    #[cfg(debug_assertions)]
+    {
+        if !crate::popup_window::framed_windows_join_dock() {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        let policy = if app.activationPolicy() == NSApplicationActivationPolicy::Regular {
+            "regular"
+        } else if app.activationPolicy() == NSApplicationActivationPolicy::Accessory {
+            "accessory"
+        } else {
+            "prohibited"
+        };
+        let window_state = window
+            .map(|window| {
+                format!(
+                    " key={} visible={} alpha={:.2} level={} on_top={}",
+                    window.isKeyWindow(),
+                    window.isVisible(),
+                    window.alphaValue(),
+                    window.level(),
+                    top_normal_window_number() == Some(window.windowNumber() as i32)
+                )
+            })
+            .unwrap_or_default();
+        qol_runtime::probe!(
+            tag,
+            "title={title:?} outcome={outcome} app_active={} policy={policy}{window_state} reason={}",
+            app.isActive(),
+            crate::popup_window::change_reason()
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (tag, title, outcome, window);
+}
+
 fn frontmost_foreign_pid() -> Option<i32> {
     let own = std::process::id() as i32;
     unsafe {
@@ -737,6 +797,7 @@ pub fn hide_window_by_title(title: &str) -> bool {
     }
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
+    trace_settings_window("SETTINGS_HIDE", title, "alpha_zero", Some(&window));
     leave_dock_when_no_framed_window_shows();
     qol_runtime::probe!(
         "HIDE_WIN",
@@ -761,6 +822,7 @@ pub fn hide_invisible(title: &str) -> bool {
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     window.orderOut(None);
+    trace_settings_window("SETTINGS_HIDE", title, "ordered_out", Some(&window));
     leave_dock_when_no_framed_window_shows();
     if held_key {
         schedule_focus_return();
@@ -994,7 +1056,12 @@ fn join_dock_for(window: &NSWindow, mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
         app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-        qol_runtime::probe!("DOCK", "joined title={}", window.title());
+        trace_settings_window(
+            "SETTINGS_DOCK",
+            &window.title().to_string(),
+            "joined",
+            Some(window),
+        );
     }
 }
 
@@ -1021,15 +1088,19 @@ fn reorder_front_if_inactive(title: &str) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
-    if NSApplication::sharedApplication(mtm).isActive() {
-        return;
-    }
     let Some(window) = find_window_by_title(mtm, title) else {
         return;
     };
+    if NSApplication::sharedApplication(mtm).isActive() {
+        trace_settings_window("SETTINGS_REFRONT", title, "skip_active", Some(&window));
+        return;
+    }
     if window.isVisible() && window.alphaValue() > 0.0 && window.level() == NSNormalWindowLevel {
+        trace_settings_window("SETTINGS_REFRONT", title, "before", Some(&window));
         window.orderFrontRegardless();
-        qol_runtime::probe!("SHOW_WIN", "title={title} reordered_front_while_inactive");
+        trace_settings_window("SETTINGS_REFRONT", title, "after", Some(&window));
+    } else {
+        trace_settings_window("SETTINGS_REFRONT", title, "skip_hidden", Some(&window));
     }
 }
 
@@ -1052,7 +1123,7 @@ fn leave_dock_when_no_framed_window_shows() {
     });
     if !framed_showing {
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-        qol_runtime::probe!("DOCK", "left");
+        trace_settings_window("SETTINGS_DOCK", "", "left", None);
     }
 }
 
@@ -1093,6 +1164,7 @@ fn show_window_by_title_with_focus(
         apply_input_regions();
         watch_pointer_for_regions();
     }
+    trace_settings_window("SETTINGS_SHOW", title, "start", Some(&window));
     if matches!(presentation, WindowPresentation::Normal) {
         join_dock_for(&window, mtm);
     }
@@ -1106,6 +1178,7 @@ fn show_window_by_title_with_focus(
             window.orderFrontRegardless();
             keep_front_while_inactive(title);
         }
+        trace_settings_window("SETTINGS_SHOW", title, "focused", Some(&window));
     }
     if !focus {
         window.orderFrontRegardless();
@@ -1144,6 +1217,7 @@ fn reassert_focus_on_main(title: &str) {
     app.activateIgnoringOtherApps(true);
     window.makeKeyAndOrderFront(None);
     force_app_frontmost();
+    trace_settings_window("SETTINGS_REASSERT", title, "focus", Some(&window));
     qol_runtime::probe!(
         "FOCUS_REASSERT",
         "title={title} step=reassert-on-main key_window={}",

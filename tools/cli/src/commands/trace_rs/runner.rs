@@ -388,6 +388,12 @@ impl TraceRunner {
                 let reset = if color.is_empty() { "" } else { COLOR_RESET };
                 format!("{color}{}: {}{reset}", raw.tag, raw.msg)
             }
+            tag if tag.starts_with("SETTINGS_") => {
+                let behind = raw.msg.contains("on_top=false") && !raw.msg.contains("alpha=0.00");
+                let color = if behind { COLOR_FAIL } else { "" };
+                let reset = if color.is_empty() { "" } else { COLOR_RESET };
+                format!("{color}{}: {}{reset}", raw.tag, raw.msg)
+            }
             tag if tag.starts_with("WORLD_") => {
                 let is_bad = raw.msg.contains("outcome=reject")
                     || raw.msg.contains("outcome=skip")
@@ -1448,6 +1454,7 @@ impl TraceRunner {
             tag if tag.starts_with("PROFILE_") => "profile".to_string(),
             tag if tag.starts_with("WORLD_") => "world".to_string(),
             tag if tag.starts_with("WINACT_") => "window-actions".to_string(),
+            tag if tag.starts_with("SETTINGS_") => "settings".to_string(),
             tag if tag.starts_with("GPU_DRIVER_SYNC_") => "gpu-driver-sync".to_string(),
             _ => self.process_name(&raw.pid),
         }
@@ -1608,6 +1615,32 @@ mod tests {
         assert!(input.contains("Launcher input"));
         assert!(input.contains("-> query"));
         assert!(input.contains("q=\"doc\""));
+    }
+
+    #[test]
+    fn settings_events_group_under_settings_and_flag_a_shown_window_behind() {
+        let args = Args::parse(&[OsString::from("settings")]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let behind = runner
+            .format_event(RawLine {
+                ts_ms: 1,
+                pid: "42".to_string(),
+                tag: "SETTINGS_REFRONT".to_string(),
+                msg: "title=\"QoL Settings\" outcome=before app_active=false policy=regular key=false visible=true alpha=1.00 level=0 on_top=false reason=?".to_string(),
+            })
+            .unwrap();
+        let hidden = runner
+            .format_event(RawLine {
+                ts_ms: 2,
+                pid: "42".to_string(),
+                tag: "SETTINGS_HIDE".to_string(),
+                msg: "title=\"QoL Settings\" outcome=alpha_zero app_active=false policy=regular key=false visible=true alpha=0.00 level=101 on_top=false reason=?".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(behind.source, "settings");
+        assert!(behind.text.contains(COLOR_FAIL));
+        assert!(!hidden.text.contains(COLOR_FAIL));
     }
 
     #[test]
