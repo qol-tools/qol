@@ -876,7 +876,12 @@ test('continuing a fork prompts it to carry on its work', async ($, on) => {
   await spawn($, 'a1', 'a1-fork: a fork')
   const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true })
   expect(String(resumed.result)).toContain('carries on its work')
-  expect(sent).toEqual([expect.objectContaining({ to: 'a1', text: 'The user asks you to continue. Carry on your work from where you stopped.' })])
+  expect(sent).toEqual([expect.objectContaining({ to: 'a1', text: expect.stringContaining('Carry on your work from where you stopped.') })])
+  expect(sent[0].text).toContain('approves nothing you were waiting on the user for')
+  await spawn($, 'b1', 'b1-fork: a fork')
+  const refused = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true, agentId: 'b1' })
+  expect(String(refused.deny)).toContain('Only the switchboard continues a fork')
+  expect(sent).toHaveLength(1)
 })
 
 test('a hold whose turn never ran or ended early never answers a later real turn', async ($, on) => {

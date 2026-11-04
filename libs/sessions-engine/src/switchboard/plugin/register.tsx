@@ -70,7 +70,7 @@ const BACK = 'Back in the agent list.'
 const REOPEN_DELAY_MS = 1_500
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
-const RESUMED = 'The user asks you to continue. Carry on your work from where you stopped.'
+const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const COLOR: Record<Kind, string> = {
@@ -1179,7 +1179,9 @@ export const register: Register = on => {
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
     const fork = textField((e as unknown as Record<string, unknown>).fork)
     if (fork !== undefined && textField((e as unknown as Record<string, unknown>).transcript) === undefined) {
-      const resumed = await resumeFork($, fork.trim(), (e as unknown as Record<string, unknown>).continue === true)
+      const isContinued = (e as unknown as Record<string, unknown>).continue === true
+      if (isContinued && e.agentId !== undefined) return { deny: 'Only the switchboard continues a fork; send it your own words with SendMessage.' }
+      const resumed = await resumeFork($, fork.trim(), isContinued)
       return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
     }
     const session = closedSession(e as unknown as Record<string, unknown>)
