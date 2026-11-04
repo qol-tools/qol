@@ -2,6 +2,8 @@ mod doctor;
 mod glide;
 
 use std::path::PathBuf;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
 use qol_windowing::{WindowId, WindowRect};
 
@@ -14,6 +16,9 @@ use qol_windowing::platform::windows::{self as win32, Win32Windows, Window};
 
 pub(crate) use doctor::{platform_supported_check, required_binaries_check};
 pub(crate) use glide::GlideController;
+
+const GRANTED_WAIT: Duration = Duration::from_millis(300);
+const GRANTED_POLL: Duration = Duration::from_millis(15);
 
 pub(crate) const DIAGNOSTIC_ACTIONS: &[crate::cli::ActionSpec] = &[];
 
@@ -83,11 +88,31 @@ fn place_foreground(target: impl FnOnce(WindowRect) -> WindowRect) -> Result<(),
 
 fn place(window: Window, placement: Placement) -> Result<(), String> {
     window.set_frame(placement.frame)?;
-    let granted = window.frame().ok_or("Cannot read window geometry")?;
+    let Some(granted) = granted_frame(window, placement.frame) else {
+        return Ok(());
+    };
     let Some(settled) = layout::settled_frame(placement.work, placement.frame, granted) else {
         return Ok(());
     };
     window.set_frame(settled)
+}
+
+fn granted_frame(window: Window, requested: WindowRect) -> Option<WindowRect> {
+    let deadline = Instant::now() + GRANTED_WAIT;
+    let mut previous = None;
+    while Instant::now() < deadline {
+        let now = window.frame()?;
+        if read_settled(previous, now, requested) {
+            return Some(now);
+        }
+        previous = Some(now);
+        sleep(GRANTED_POLL);
+    }
+    None
+}
+
+fn read_settled(previous: Option<WindowRect>, now: WindowRect, requested: WindowRect) -> bool {
+    now == requested || previous == Some(now)
 }
 
 fn move_monitor(delta: i32) -> Result<(), String> {
@@ -138,6 +163,33 @@ impl WindowSystem for Win32Windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_granted_frame_counts_once_it_matches_or_holds_still() {
+        let requested = WindowRect {
+            x: 756.0,
+            y: 0.0,
+            width: 756.0,
+            height: 982.0,
+        };
+        let refused = WindowRect {
+            width: 856.0,
+            ..requested
+        };
+        let stale = WindowRect {
+            x: 100.0,
+            ..refused
+        };
+        let cases = [
+            ("first read matches", None, requested, true),
+            ("first read differs", None, refused, false),
+            ("still moving", Some(stale), refused, false),
+            ("held still", Some(refused), refused, true),
+        ];
+        for (name, previous, now, settled) in cases {
+            assert_eq!(read_settled(previous, now, requested), settled, "{name}");
+        }
+    }
 
     #[test]
     fn a_hung_window_is_refused_by_name() {

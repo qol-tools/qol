@@ -24,7 +24,10 @@ fn place(pid: i32, placement: Placement) -> Result<(), String> {
     else {
         return Ok(());
     };
-    ax_set(pid, rect(settled)).map(drop)
+    if let Err(error) = ax_set(pid, rect(settled)) {
+        log::warn!("Could not move the size-refused window back inside its screen: {error}");
+    }
+    Ok(())
 }
 
 fn frame(rect: Rect) -> WindowRect {
