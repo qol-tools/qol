@@ -57,6 +57,7 @@ const RESULT = /(<result>)([\s\S]*?)(<\/result>)/
 const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const DROP_NOTICE = 'Prompt dropped by a hook: '
+const ENDED_STATUSES: readonly string[] = ['completed', 'failed', 'killed']
 const DROPS_KEPT = 20
 const LOG_PREFIX = 'log-'
 const LOG_KEPT = 500
@@ -861,7 +862,7 @@ export const resumeFork = async ($: EngineInterface, fork: string, isContinued =
     return { isResumed: true, text: `Resumed as ${keyName(target.name)}, agent id ${sent.agentId}: it carries on its work from where it stopped.` }
   }
   const agents: unknown = await $.agent.list().catch(() => [])
-  const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId)
+  const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId && !ENDED_STATUSES.includes(String((agent as { status?: unknown }).status)))
   if (isHeld) return { isResumed: true, text: `${keyName(target.name)} is already in the agent list, agent id ${target.agentId}: nothing was sent.` }
   const sent = await sendTo($, target, WAIT_FOR_USER, holdingVia($, direct($), RESTARTED_REPLY, isCut(target)))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}` }

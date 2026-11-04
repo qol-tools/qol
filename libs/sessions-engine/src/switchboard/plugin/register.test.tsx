@@ -891,7 +891,7 @@ test('resuming a fork with no words puts it back in the agent list without a mod
   const sent: any[] = []
   const steps: string[] = []
   engine(on, sent)
-  on('agent.list', () => ({ value: [{ id: 'b1' }] }))
+  on('agent.list', () => ({ value: [{ id: 'b1', status: 'running' }, { id: 'c1', status: 'completed' }] }))
   on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number }) {
     steps.push(e.agentId ?? 'main')
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
@@ -913,6 +913,10 @@ test('resuming a fork with no words puts it back in the agent list without a mod
   const held = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'b1-fork' })
   expect(String(held.result)).toContain('already in the agent list')
   expect(sent).toHaveLength(1)
+  await spawn($, 'c1', 'c1-fork: an ended fork')
+  const ended = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'c1-fork' })
+  expect(String(ended.result)).toContain('back in the agent list')
+  expect(sent[1]).toMatchObject({ to: 'c1', text: 'Brought back for the user.' })
 })
 
 test('continuing a fork prompts it to carry on its work', async ($, on) => {
