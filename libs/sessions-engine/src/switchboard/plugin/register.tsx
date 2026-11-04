@@ -884,9 +884,11 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   if (typeof parsed.agent_id !== 'string' || !ID.test(parsed.agent_id)) return { isResumed: false, reason: 'adopt named no agent id.' }
   const name = typeof parsed.name === 'string' && printable(parsed.name).trim() !== '' ? printable(parsed.name).replace(/\s+/g, ' ').trim() : (claimed?.description ?? session.description)
   const cwd = typeof parsed.cwd === 'string' && parsed.cwd !== '' ? parsed.cwd : session.cwd
+  const listed = (await read($, board)).find(one => one.agentId === parsed.agent_id)
+  const key = listed?.key ?? claimed?.key
   const target = { ...(await placed($, parsed.agent_id, name, cwd)), resumedFrom: session.transcript }
-  await change($, list => list.map(one => (one.agentId === target.agentId ? { ...one, resumedFrom: session.transcript, ...(claimed === undefined ? {} : { key: claimed.key }) } : one)))
-  if (claimed !== undefined) await recordPart($, claimed.key, parsed.agent_id)
+  await change($, list => list.map(one => (one.agentId === target.agentId ? { ...one, resumedFrom: session.transcript, ...(key === undefined ? {} : { key }) } : one)))
+  if (key !== undefined) await recordPart($, key, parsed.agent_id)
   if (caller !== undefined) await markWorking($, parsed.agent_id, undefined, undefined, caller)
   const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER, session.message === undefined ? holdingVia($, direct($), READY) : direct($))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }

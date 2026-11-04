@@ -1541,6 +1541,11 @@ test('a terminal session brought back as a fork is claimed with the description 
     ['part', '--key', 'gen1', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')],
   ])
   expect(adopts[0]?.[adopts[0].indexOf('--description') + 1]).toBe('gen1: plain words')
+  const again = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'and again' } as any)
+  expect(String(again.result)).toContain('Already resumed as gen1, agent id a5')
+  expect(verbs(calls, 'claim')).toHaveLength(1)
+  expect(verbs(calls, 'part')).toHaveLength(1)
+  expect(adopts).toHaveLength(1)
   await deliver($, stopNotification('a5', 'gen1: plain words'))
   await settle()
   expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'gen1']])
@@ -1556,4 +1561,27 @@ test('a row marked done lists in the done group even without a kind', async ($, 
   await ui.press({ key: 'done-toggle' })
   expect(await ui.find({ type: 'Text', text: /All finished\./ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a resumed session whose fork the board already keys keeps that key', async ($, on) => {
+  const calls: string[][] = []
+  const store = new Map<string, unknown>()
+  store.set('board:switchboard-session', [{ agentId: 'a5', name: 'old: kept', key: 'old', headline: 'h', report: '', at: 1, isWorking: false, isDismissed: false }])
+  engine(on, [], [], [], store)
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined,
+  }))
+  on('fs.exists', () => ({ value: true }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) {
+      calls.push(e.argv.slice(3))
+      return { value: recordReply(e.argv, []) }
+    }
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ agent_id: 'a5', name: 'old: kept', cwd: '/p', brought: 'session' }) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'old: kept', message: 'go' } as any)
+  expect(verbs(calls, 'part')).toEqual([['part', '--key', 'old', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')]])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] old')
 })
