@@ -13,6 +13,10 @@ const TOOL_NAME = 'mcp__qol-switchboard__fork_board'
 const RESUME = 'resume_session'
 const RESUME_NAME = 'mcp__qol-switchboard__resume_session'
 const RESUME_TIMEOUT_MS = 60_000
+const FORK_DONE = 'fork_done'
+const FORK_DONE_NAME = 'mcp__qol-switchboard__fork_done'
+const RECORD_TIMEOUT_MS = 20_000
+const BACKFILL_MAX = 25
 const WAIT_FOR_USER = 'Brought back for the user.'
 const READY = 'Ready'
 const SEND = 'SendMessage'
@@ -168,11 +172,13 @@ const stateOf = (entry: Entry): string =>
     ? 'stopped by a restart'
     : entry.isWorking
     ? 'working'
-    : entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
-      ? 'needs the user'
-      : entry.kind === 'waiting'
-        ? 'waiting on its pull request'
-        : 'done'
+    : entry.isDone === true
+      ? 'done'
+      : entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
+        ? 'needs the user'
+        : entry.kind === 'waiting'
+          ? 'waiting on its pull request'
+          : 'done'
 
 const rememberClosed = async ($: EngineInterface): Promise<void> => {
   try {
@@ -236,16 +242,13 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   $.ui.status(count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`)
 }
 
-const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking
+const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking && entry.isDone !== true
 
 export const isUnfinished = (entry: Entry): boolean =>
-  !entry.isDismissed &&
-  entry.isStoppedByUser !== true &&
-  entry.successor === undefined &&
-  (isCut(entry) || (!entry.isWorking && entry.kind !== undefined && !DONE.includes(entry.kind)))
+  !entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true
 
 const needsYou = (entry: Entry): boolean =>
-  !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
+  !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
 
 const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) => Entry): Entry[] => {
   const index = list.findIndex(entry => entry.agentId === agentId)
@@ -277,9 +280,9 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
 
 const unstopped = ({ isStoppedByUser: _, isInterrupted: __, ...entry }: Entry): Entry => entry
 
-const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string): Promise<void> => {
+const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   const now = await $.clock.now()
-  const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }) }
+  const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }), ...(key === undefined ? {} : { key }) }
   await change($, list =>
     upsert(list, agentId, entry =>
       entry === undefined
@@ -323,6 +326,79 @@ export const addressed = (list: Entry[], to: string): Entry | undefined => {
     entry = next
   }
   return entry
+}
+
+type SessionRecord = { key: string; friendly?: string; cwd?: string; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
+
+const recordProgram = async ($: EngineInterface): Promise<string | undefined> => {
+  try {
+    const program = await $.env.get('QOL_CLI_SESSIONS')
+    return program === undefined || program === '' ? undefined : program
+  } catch {
+    return undefined
+  }
+}
+
+const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
+  try {
+    const program = await recordProgram($)
+    if (program === undefined) return undefined
+    const ran = await $.process.run([program, 'sessions', 'record', verb, ...args], { timeoutMs: RECORD_TIMEOUT_MS })
+    if (ran.exitCode !== 0) return undefined
+    const parsed: unknown = JSON.parse(ran.stdout)
+    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const subagentPath = async ($: EngineInterface, agentId: string): Promise<string | undefined> => {
+  const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
+  if (conversations === undefined || conversations === '') return undefined
+  return `${conversations}/${await $.session.id()}/subagents/agent-${agentId}.jsonl`
+}
+
+const recordPart = async ($: EngineInterface, key: string, agentId: string): Promise<void> => {
+  const transcript = await subagentPath($, agentId).catch(() => undefined)
+  if (transcript === undefined) return
+  await recordRun($, 'part', ['--key', key, '--agent-id', agentId, '--transcript', transcript])
+}
+
+type Claimed = { key: string; description: string }
+
+const recordClaim = async ($: EngineInterface, description: string, cwd: string): Promise<Claimed | undefined> => {
+  const claimed = await recordRun($, 'claim', ['--description', description, '--cwd', cwd])
+  return typeof claimed?.key === 'string' && claimed.key !== '' && typeof claimed.description === 'string' && claimed.description !== ''
+    ? { key: claimed.key, description: claimed.description }
+    : undefined
+}
+
+const claims = new Map<string, string>()
+
+const backfill = async ($: EngineInterface, row: Entry): Promise<Entry> => {
+  const claimed = await recordClaim($, row.name, row.project ?? '/')
+  if (claimed === undefined) return row
+  await recordPart($, claimed.key, row.agentId)
+  return { ...row, name: claimed.description, key: claimed.key }
+}
+
+const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> => {
+  const listed = await recordRun($, 'list', [])
+  if (!Array.isArray(listed?.records)) return rows
+  const records = new Map<string, SessionRecord>()
+  for (const one of listed.records as unknown[]) {
+    if (typeof one === 'object' && one !== null && typeof (one as { key?: unknown }).key === 'string') records.set((one as SessionRecord).key, one as SessionRecord)
+  }
+  const keyless = rows.filter(row => row.key === undefined).slice(-BACKFILL_MAX)
+  const filled = new Map<Entry, Entry>()
+  for (const row of keyless) filled.set(row, await backfill($, row))
+  return rows.map(one => {
+    const row = filled.get(one) ?? one
+    const record = row.key === undefined ? undefined : records.get(row.key)
+    if (record === undefined) return row
+    const { isDone: _, isStoppedByUser: __, ...rest } = row
+    return { ...rest, ...(record.done === undefined ? {} : { isDone: true }), ...(typeof record.stopped_ms === 'number' ? { isStoppedByUser: true } : {}) }
+  })
 }
 
 const subagentFile = async ($: EngineInterface, agentId: string, suffix: string): Promise<string | undefined> => {
@@ -389,9 +465,10 @@ const revive = async ($: EngineInterface, stopped: Entry): Promise<Entry | undef
   const known = (await read($, board)).find(one => one.agentId === copy.agentId)
   if (known !== undefined) return known
   const project = stopped.project ?? copy.cwd
-  const revived: Entry = { ...stand(copy.agentId, stopped.name, project), isDismissed: false, at: await $.clock.now() }
+  const revived: Entry = { ...stand(copy.agentId, stopped.name, project), isDismissed: false, at: await $.clock.now(), ...(stopped.key === undefined ? {} : { key: stopped.key }) }
   await change($, list => upsert(list, copy.agentId, () => revived))
   await succeed($, stopped.agentId, copy.agentId)
+  if (stopped.key !== undefined) await recordPart($, stopped.key, copy.agentId)
   return revived
 }
 
@@ -422,7 +499,9 @@ const isSent = (answer: { deny?: string; isError?: true; result?: unknown }): bo
   answer.isError !== true &&
   !(typeof answer.result === 'object' && answer.result !== null && (answer.result as { success?: unknown }).success === false)
 
-const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom'> => ({
+const placementOf = (entry: Entry | undefined): Pick<Entry, 'project' | 'successor' | 'launcher' | 'resumedFrom' | 'key' | 'isDone'> => ({
+  ...(entry?.key === undefined ? {} : { key: entry.key }),
+  ...(entry?.isDone === true ? { isDone: true } : {}),
   ...(entry?.project === undefined ? {} : { project: entry.project }),
   ...(entry?.successor === undefined ? {} : { successor: entry.successor }),
   ...(entry?.launcher === undefined ? {} : { launcher: entry.launcher }),
@@ -457,6 +536,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
     }),
   )
   const entry = filed as Entry
+  if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
   if (isNew && needsYou(entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
@@ -687,7 +767,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const again: string[] = []
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
-      const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : !isUnfinished(entry) ? 'finished' : undefined
+      const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
       const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
       await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
       if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
@@ -916,7 +996,11 @@ export const intake = async (
   const agentId = field(block, 'task-id')
   if (agentId === undefined || !isFork(agentId)) return undefined
   const status = field(block, 'status') ?? ''
-  if (status === USER_STOP) await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isStoppedByUser: true } : one)))
+  if (status === USER_STOP) {
+    await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isStoppedByUser: true } : one)))
+    const key = (await read($, board)).find(one => one.agentId === agentId)?.key
+    if (key !== undefined) void recordRun($, 'stopped', ['--key', key])
+  }
   const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
   const result = RESULT.exec(block)
   if (result !== null && (!once(block, '<result>') || !once(block, '</result>'))) return undefined
@@ -1030,13 +1114,22 @@ export const register: Register = on => {
     return { drop: reason }
   }
 
-  on('agent.spawn', { subagentType: FORK }, ($, e, next) => {
+  on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {
     if (e.resume !== undefined) return next(e)
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
     }
-    return next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })
+    const cwd = project[1] as string
+    const prompt = withLauncher(e.prompt, e.parentAgentId)
+    const claimed = await recordClaim($, e.description, cwd)
+    if (claimed === undefined) {
+      if ((await recordProgram($)) !== undefined) await logEvent($, { fork: keyName(e.description), said: 'The session record could not be claimed for this fork.' }).catch(() => undefined)
+      return next({ ...e, cwd, prompt })
+    }
+    claims.set(e.description, claimed.key)
+    claims.set(claimed.description, claimed.key)
+    return next({ ...e, cwd, prompt, description: claimed.description })
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: 'The qol-switchboard plugin could not start this fork in its project folder.' },
   )
@@ -1046,7 +1139,10 @@ export const register: Register = on => {
     const agentId = started.agentId ?? e.resume?.agentId
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
-    await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined)
+    const key = isNew ? claims.get(e.description) : undefined
+    if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
+    await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
+    if (key !== undefined) await recordPart($, key, agentId)
     return started
   }).catch(($, e, next) => next(e))
 
@@ -1064,7 +1160,7 @@ export const register: Register = on => {
         if (Array.isArray(rows)) earlier.push(...rows)
       }
       const own = (Array.isArray(saved) ? saved : []).filter(isEntry)
-      const merged = mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)
+      const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))
       if (merged.length > 0) await update($, board, () => merged)
       loading = Promise.resolve()
       if (others.length > 0) {
@@ -1104,6 +1200,17 @@ export const register: Register = on => {
             fork: { type: 'string', description: "A fork's key-name or agent id in place of transcript. Alone, when the user only asks to open, show or bring back that fork: it comes back to the agent list and no turn of its own runs." },
             continue: { type: 'boolean', description: 'With fork, true when the user asks to resume or continue that fork: it is prompted to carry on its work from where it stopped.' },
           },
+        },
+        isDeferred: false,
+      })
+      await $.tool.register({
+        name: FORK_DONE,
+        description:
+          "Marks the calling fork done in its session record. Call it only when nothing is left for anyone to do, such as when your pull request has merged, with a one-line reason; a fork is done only when it says so here. Only a fork can call it, and it marks only itself.",
+        inputSchema: {
+          type: 'object',
+          properties: { reason: { type: 'string', description: 'One line: why nothing is left for anyone to do.' } },
+          required: ['reason'],
         },
         isDeferred: false,
       })
@@ -1194,6 +1301,21 @@ export const register: Register = on => {
     const resumed = await resumeSession($, session, e.agentId)
     return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
   }).catch(() => ({ deny: 'The session could not be brought back as a fork.' }))
+
+  on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {
+    if (e.agentId === undefined) return { deny: 'Only a fork marks itself done.' }
+    const reason = textField((e as unknown as Record<string, unknown>).reason)
+    if (reason === undefined) return { deny: 'fork_done needs a one-line reason.' }
+    await ensureLoaded($)
+    const own = (await read($, board)).find(one => one.agentId === e.agentId)
+    if (own === undefined) return { deny: 'This fork has no row on the fork board, so it cannot be marked done.' }
+    const row = own.key === undefined ? await backfill($, own) : own
+    if (row.key === undefined) return { deny: 'The session record could not be reached, so the fork is not marked done.' }
+    const done = await recordRun($, 'done', ['--key', row.key, '--reason', reason.replace(/\s+/g, ' ').trim()])
+    if (done === undefined) return { deny: 'The session record did not take the done mark, so the fork is not marked done.' }
+    await change($, list => list.map(one => (one.agentId === e.agentId ? { ...one, key: row.key as string, name: row.name, isDone: true } : one)))
+    return { result: `Marked ${keyName(row.name)} done: ${reason}` }
+  }).catch(() => ({ deny: 'The fork could not be marked done.' }))
 
   on('tool.call', { tool: SEND }, async ($, e, next) => {
     if (e.agentId !== undefined || next.origin.plugin === NAME || typeof e.to !== 'string' || typeof e.message !== 'string') return next(e)
@@ -1291,8 +1413,8 @@ export const register: Register = on => {
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
     const working = list.filter(entry => entry.isWorking).sort((a, b) => a.at - b.at)
-    const waiting = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.kind === 'waiting')
-    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.kind !== undefined && DONE.includes(entry.kind)).reverse()
+    const waiting = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind === 'waiting')
+    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.kind !== undefined && (entry.isDone === true || DONE.includes(entry.kind))).reverse()
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
     let n = 0
     const hotkey = () => {

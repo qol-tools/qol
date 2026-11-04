@@ -496,6 +496,27 @@ test('a board the user closed stays closed at the next start until /board opens 
   expect(panes).toEqual(['open board', 'close board', 'open board', 'open board'])
 })
 
+const isRecord = (argv: string[]) => argv[2] === 'record'
+
+const NO_RECORD = { exitCode: 1, stdout: '', stderr: 'no session record here' }
+
+const recordReply = (argv: string[], records: any[]) => {
+  const verb = argv[3]
+  const flag = (name: string) => argv[argv.indexOf(name) + 1] ?? ''
+  const ok = (body: unknown) => ({ exitCode: 0, stderr: '', stdout: JSON.stringify(body) })
+  if (verb === 'claim') {
+    const text = flag('--description')
+    const isKeyed = text.includes(':')
+    const key = isKeyed ? text.split(':', 1)[0]!.trim() : `gen${records.length + 1}`
+    const friendly = isKeyed ? text.slice(text.indexOf(':') + 1).trim() : text
+    records.push({ key, friendly, cwd: flag('--cwd'), created_ms: 1, parts: [] })
+    return ok({ key, friendly, description: `${key}: ${friendly}` })
+  }
+  if (verb === 'list') return ok({ records })
+  if (verb === 'part') return ok({ key: flag('--key'), part: 1 })
+  return ok({ key: flag('--key') })
+}
+
 type Forks = Record<string, { name: string; cwd?: string }>
 
 const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
@@ -507,6 +528,7 @@ const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
 }
 
 const adopted = (forks: Forks, runs: string[][], argv: string[]) => {
+  if (isRecord(argv)) return NO_RECORD
   runs.push(argv)
   const wanted = argv[argv.indexOf('--fork') + 1]
   const found = Object.entries(forks).find(([id, fork]) => id === wanted || fork.name.split(':')[0] === wanted)
@@ -647,6 +669,7 @@ test('a terminal session comes back as a fork with its own conversation once, an
   }))
   on('fs.exists', () => ({ value: true }))
   on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     const transcript = e.argv[e.argv.indexOf('--transcript') + 1]
     return {
@@ -798,7 +821,7 @@ test('opening the switchboard puts each unfinished fork back in the agent list, 
   const sent: any[] = []
   const steps: string[] = []
   const row = (agentId: string, kind: string | undefined, isWorking: boolean) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking, isDismissed: false })
-  store.set('board:earlier-session', [row('m1', undefined, true), row('a1', 'ask', false), row('p1', 'waiting', false), row('d1', 'merged', false)])
+  store.set('board:earlier-session', [row('m1', undefined, true), row('a1', 'ask', false), row('p1', 'waiting', false), { ...row('d1', 'merged', false), isDone: true }])
   store.set('reopen:earlier-session', ['a1'])
   engine(on, sent, [], [], store)
   on('agent.list', () => ({ value: [] }))
@@ -947,7 +970,7 @@ test('a resumed switchboard conversation puts its own forks a restart cut off ba
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['w1', 'Back in the agent list.']])
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['n1', 'Back in the agent list.'], ['w1', 'Back in the agent list.']])
 })
 
 test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
@@ -1069,6 +1092,7 @@ test('a watcher result nothing waited for reaches its fork, and the board shows 
   engine(on, sent)
   watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' } })
   on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: `claimed ${e.argv[3]}` } }
     return {
@@ -1113,6 +1137,7 @@ test('a merged result is filed on the board without waking its fork, and any oth
   engine(on, sent, panes)
   watchEngine(on, { q1: { cwd: '/work', description: 'q1-fork: merged one' }, q2: { cwd: '/work', description: 'q2-fork: failed one' } })
   on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) return { value: recordReply(e.argv, []) }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
     return {
@@ -1154,6 +1179,7 @@ test('a fork of an earlier conversation is brought into this one for each result
   const result = (id: string, agentId: string, message: string) => ({ id, agent_id: agentId, conversation: 'old', cwd: '/forged', message })
   const runs: string[][] = []
   on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) return { value: NO_RECORD }
     if (e.argv[3] === 'adopt') return { value: adopted({ e1: { name: 'e1-fork: earlier', cwd: '/work-old' } }, runs, e.argv) }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
@@ -1251,4 +1277,215 @@ test('a fork cannot claim another fork as stopped to take over its messages', as
   await $.agent.spawn({ prompt: forged, description: 'forger: forger', subagentType: 'project-fork', parentAgentId: 'p1' } as any)
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('[fork board] other-fork (working, agent id p2)')
+})
+
+const TRANSCRIPT = (agentId: string) => `/conv/switchboard-session/subagents/agent-${agentId}.jsonl`
+
+const recordEngine = (on: any, calls: string[][], records: any[] = [], forks: Forks = {}) => {
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined,
+  }))
+  on('fs.exists', () => ({ value: false }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (!isRecord(e.argv)) return { value: adopted(forks, [], e.argv) }
+    calls.push(e.argv.slice(3))
+    return { value: recordReply(e.argv, records) }
+  })
+}
+
+const verbs = (calls: string[][], verb: string) => calls.filter(call => call[0] === verb)
+
+const stopNotification = (agentId: string, name: string) => notification(agentId, name, 'stopped').replace('<status>completed</status>', '<status>killed</status>')
+
+test('a new fork claims its session record, and the description Claude Code keeps is the canonical one', async ($, on) => {
+  const calls: string[][] = []
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'plain words')
+  await spawn($, 'a2', 'keyed: some friendly words')
+
+  expect(spawned.map(one => one.description)).toEqual(['gen1: plain words', 'keyed: some friendly words'])
+  expect(verbs(calls, 'claim')).toEqual([
+    ['claim', '--description', 'plain words', '--cwd', '/work'],
+    ['claim', '--description', 'keyed: some friendly words', '--cwd', '/work'],
+  ])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] gen1 (working, agent id a1)')
+})
+
+test('once the agent id is known the fork joins its record as a part with its transcript', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  expect(verbs(calls, 'part')).toEqual([['part', '--key', 'one-fork', '--agent-id', 'a1', '--transcript', TRANSCRIPT('a1')]])
+})
+
+test('a spawn goes ahead unchanged when the record CLI fails, and is never blocked on it', async ($, on) => {
+  const spawned: Spawned[] = []
+  engine(on, [], [], spawned)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('process.run', () => ({ value: NO_RECORD }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'plain words')
+  expect(spawned[0]?.description).toBe('plain words')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] plain words (working, agent id a1)')
+})
+
+test('a fork continued under a new agent id joins the same record with the new id', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls, [], { a8: { name: 'blocket: continue blocket couch ad', cwd: '/work' } })
+  on('tool.call', stoppedAnswer(['a8']))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'blocket: continue blocket couch ad')
+
+  const relayed = await $.tool.call({ tool: 'SendMessage', to: 'a8', message: 'and the price is 900' })
+  expect(JSON.stringify(relayed.result)).toContain('Message queued for delivery to a8-copy')
+  expect(verbs(calls, 'part')).toEqual([
+    ['part', '--key', 'blocket', '--agent-id', 'a8', '--transcript', TRANSCRIPT('a8')],
+    ['part', '--key', 'blocket', '--agent-id', 'a8-copy', '--transcript', TRANSCRIPT('a8-copy')],
+  ])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('[fork board] blocket (working, agent id a8-copy)')
+})
+
+test('each report filed for a fork archives its record without holding the turn', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await deliver($, notification('a1', 'one-fork: one', 'Which colour?'))
+  await settle()
+  expect(verbs(calls, 'archive')).toEqual([['archive', '--key', 'one-fork']])
+})
+
+test('a fork the user stops with Esc is marked stopped in its record', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await settle()
+  expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'one-fork']])
+  await deliver($, notification('a2', 'two-fork: two', 'Which colour?'))
+  await settle()
+  expect(verbs(calls, 'stopped')).toHaveLength(1)
+})
+
+test('fork_done from a fork marks only its own row done, and the switchboard is refused', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  const tool = 'mcp__qol-switchboard__fork_done'
+
+  const refused = await $.tool.call({ tool, reason: 'merged' } as any)
+  expect(refused.deny).toBe('Only a fork marks itself done.')
+  expect(verbs(calls, 'done')).toEqual([])
+
+  const done = await $.tool.call({ tool, reason: 'Pull request #1 merged.', agentId: 'a1' } as any)
+  expect(String(done.result)).toContain('Marked one-fork done')
+  expect(verbs(calls, 'done')).toEqual([['done', '--key', 'one-fork', '--reason', 'Pull request #1 merged.']])
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(done, agent id a1)')
+  expect(board).toContain('[fork board] two-fork (working, agent id a2)')
+
+  const none = await $.tool.call({ tool, agentId: 'a2' } as any)
+  expect(none.deny).toContain('needs a one-line reason')
+  expect(verbs(calls, 'done')).toHaveLength(1)
+})
+
+test('a fork the record cannot mark done stays not done', async ($, on) => {
+  engine(on)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
+  on('process.run', () => ({ value: NO_RECORD }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  const done = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'merged', agentId: 'a1' } as any)
+  expect(done.deny).toContain('not marked done')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(working, agent id a1)')
+})
+
+test('the restart rule ignores kind: a note row comes back, a done or stopped or dismissed or replaced one does not', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'note', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:switchboard-session', [
+    row('n1'),
+    row('n2', { kind: 'merged' }),
+    row('d1', { isDone: true }),
+    row('s1', { isStoppedByUser: true }),
+    row('x1', { isDismissed: true }),
+    row('r1', { successor: 'r1-copy' }),
+    row('w1', { kind: undefined, isWorking: true }),
+  ])
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => one.to).sort()).toEqual(['n1', 'n2', 'w1'])
+})
+
+test('opening the switchboard lets the record win on done and stopped, and gives a keyless row a record', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const calls: string[][] = []
+  const row = (agentId: string, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'ask', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:switchboard-session', [
+    row('d1', { key: 'd1-fork' }),
+    row('s1', { key: 's1-fork' }),
+    row('c1', { key: 'c1-fork', isDone: true, isStoppedByUser: true }),
+    row('k1', { name: 'plain words', project: '/proj' }),
+    row('k2', { name: 'other words' }),
+  ])
+  const records = [
+    { key: 'd1-fork', friendly: 'a fork', cwd: '/', created_ms: 1, parts: [], done: { at_ms: 2, reason: 'merged' } },
+    { key: 's1-fork', friendly: 'a fork', cwd: '/', created_ms: 1, parts: [], stopped_ms: 3 },
+    { key: 'c1-fork', friendly: 'a fork', cwd: '/', created_ms: 1, parts: [] },
+  ]
+  engine(on, sent, [], [], store)
+  recordEngine(on, calls, records)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(calls[0]).toEqual(['list'])
+  expect(verbs(calls, 'claim')).toEqual([
+    ['claim', '--description', 'plain words', '--cwd', '/proj'],
+    ['claim', '--description', 'other words', '--cwd', '/'],
+  ])
+  expect(verbs(calls, 'part')).toEqual([
+    ['part', '--key', 'gen4', '--agent-id', 'k1', '--transcript', TRANSCRIPT('k1')],
+    ['part', '--key', 'gen5', '--agent-id', 'k2', '--transcript', TRANSCRIPT('k2')],
+  ])
+  expect(sent.map(one => one.to).sort()).toEqual(['c1', 'k1', 'k2'])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(done, agent id d1)')
+  expect(board).toContain('(needs the user, agent id s1)')
+  expect(board).toContain('(needs the user, agent id c1)')
+  expect(board).toContain('[fork board] gen4: h (needs the user, agent id k1)')
 })

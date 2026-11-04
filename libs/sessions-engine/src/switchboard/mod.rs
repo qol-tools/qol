@@ -334,7 +334,7 @@ fn allowed_tools() -> String {
     SWITCHBOARD_TOOLS
         .iter()
         .map(|tool| format!("mcp__{MCP_SERVER}__{tool}"))
-        .chain([plugin::BOARD_TOOL, plugin::RESUME_TOOL].map(str::to_owned))
+        .chain([plugin::BOARD_TOOL, plugin::RESUME_TOOL, plugin::DONE_TOOL].map(str::to_owned))
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -912,7 +912,7 @@ mod tests {
         assert!(servers["sessions"].get("env").is_none(), "{config}");
         assert_eq!(
             args.last().unwrap(),
-            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session"
+            "--allowedTools=mcp__sessions__sessions_list,mcp__sessions__sessions_closed,mcp__sessions__session_records,mcp__sessions__session_fork,mcp__sessions__session_reopen,mcp__sessions__session_close,mcp__sessions__session_remote_control,mcp__sessions__session_send,mcp__sessions__session_inbox,mcp__sessions__session_board,mcp__qol-switchboard__fork_board,mcp__qol-switchboard__resume_session,mcp__qol-switchboard__fork_done"
         );
     }
 

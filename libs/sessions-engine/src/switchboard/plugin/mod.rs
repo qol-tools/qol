@@ -6,12 +6,13 @@ use anyhow::{Context, Result};
 pub(super) const NAME: &str = "qol-switchboard";
 pub(super) const BOARD_TOOL: &str = "mcp__qol-switchboard__fork_board";
 pub(super) const RESUME_TOOL: &str = "mcp__qol-switchboard__resume_session";
+pub(super) const DONE_TOOL: &str = "mcp__qol-switchboard__fork_done";
 pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.12.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, and brings each unfinished fork back into the agent list when the switchboard opens.",
+  "version": "1.13.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, and brings each unfinished fork back into the agent list when the switchboard opens.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -87,9 +88,12 @@ mod tests {
     fn the_module_places_new_project_forks_and_leaves_resumes_alone() {
         for needle in [
             "const FORK = 'project-fork'",
-            "on('agent.spawn', { subagentType: FORK }, ($, e, next) => {",
+            "on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {",
             "if (e.resume !== undefined) return next(e)",
-            "next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })",
+            "const prompt = withLauncher(e.prompt, e.parentAgentId)",
+            "const claimed = await recordClaim($, e.description, cwd)",
+            "return next({ ...e, cwd, prompt, description: claimed.description })",
+            "if (key !== undefined) await recordPart($, key, agentId)",
             "on('session.send', async ($, e, next) => {",
             "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
             "next.called ? next(e) : { deny:",
@@ -109,7 +113,7 @@ mod tests {
             "...(isFresh ? ['--fresh'] : [])",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "const adopted = await adoptFork($, e.to, false)",
-            "const merged = mergeBoards(earlier,",
+            "const merged = await withRecords($, mergeBoards(earlier,",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
@@ -171,6 +175,10 @@ mod tests {
         assert!(MODULE.contains(&format!("const RESUME = '{resume}'")));
         assert!(MODULE.contains("'adopt', '--conversations', conversations"));
         assert!(MODULE_TESTS.contains(RESUME_TOOL));
+        assert!(MODULE.contains(&format!("const FORK_DONE_NAME = '{DONE_TOOL}'")));
+        let done = DONE_TOOL.strip_prefix(&format!("mcp__{NAME}__")).unwrap();
+        assert!(MODULE.contains(&format!("const FORK_DONE = '{done}'")));
+        assert!(MODULE_TESTS.contains(DONE_TOOL));
         for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
             assert!(!MODULE.contains(retired), "{retired}");
         }
@@ -190,6 +198,13 @@ mod tests {
             "const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })",
             "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
+            "!entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true",
+            "[program, 'sessions', 'record', verb, ...args]",
+            "on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {",
+            "{ deny: 'Only a fork marks itself done.' }",
+            "void recordRun($, 'archive', ['--key', entry.key])",
+            "void recordRun($, 'stopped', ['--key', key])",
+            "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
             "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
             "const reply = await heldReply($, e.agentId, e.turnId)",
