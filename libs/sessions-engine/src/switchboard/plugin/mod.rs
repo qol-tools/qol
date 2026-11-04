@@ -200,6 +200,8 @@ mod tests {
             "const sent = await sendTo($, entry, CONTINUE)",
             "!entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true",
             "[program, 'sessions', 'record', verb, ...args]",
+            "await recordRun($, 'resume', ['--key', marked])",
+            "'--description', claimed?.description ?? session.description",
             "on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {",
             "{ deny: 'Only a fork marks itself done.' }",
             "void recordRun($, 'archive', ['--key', entry.key])",

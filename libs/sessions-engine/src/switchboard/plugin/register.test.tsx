@@ -1489,3 +1489,71 @@ test('opening the switchboard lets the record win on done and stopped, and gives
   expect(board).toContain('(needs the user, agent id c1)')
   expect(board).toContain('[fork board] gen4: h (needs the user, agent id k1)')
 })
+
+test("a done or stopped mark ends with the fork's next real turn, in the row and in the record", async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await spawn($, 'a3', 'three-fork: three')
+  await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'merged', agentId: 'a1' } as any)
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await deliver($, stopNotification('a2', 'two-fork: two'))
+  await deliver($, notification('a3', 'three-fork: three', 'Which colour?'))
+  await settle()
+  expect(verbs(calls, 'resume')).toEqual([])
+  let board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(done, agent id a1)')
+
+  for (const agentId of ['a1', 'a2', 'a3']) await $.turn.start({ text: 'carry on', turnId: `turn-${agentId}`, agentId })
+  await settle()
+  expect(verbs(calls, 'resume')).toEqual([['resume', '--key', 'one-fork'], ['resume', '--key', 'two-fork']])
+
+  await deliver($, notification('a1', 'one-fork: one', 'Which colour?'))
+  board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('(needs the user, agent id a1)')
+})
+
+test('a terminal session brought back as a fork is claimed with the description it is listed with, and joins its record', async ($, on) => {
+  const calls: string[][] = []
+  const adopts: string[][] = []
+  engine(on, [])
+  on('env.get', (_: unknown, e: { name: string }) => ({
+    value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined,
+  }))
+  on('fs.exists', () => ({ value: true }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (isRecord(e.argv)) {
+      calls.push(e.argv.slice(3))
+      return { value: recordReply(e.argv, []) }
+    }
+    adopts.push(e.argv)
+    const description = e.argv[e.argv.indexOf('--description') + 1]
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ agent_id: 'a5', name: description, cwd: '/p', brought: 'session' }) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', transcript: '/p/closed.jsonl', cwd: '/p', description: 'plain words', message: 'go' } as any)
+  expect(String(resumed.result)).toContain('Resumed as gen1, agent id a5')
+  expect(calls.filter(call => call[0] !== 'list')).toEqual([
+    ['claim', '--description', 'plain words', '--cwd', '/p'],
+    ['part', '--key', 'gen1', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')],
+  ])
+  expect(adopts[0]?.[adopts[0].indexOf('--description') + 1]).toBe('gen1: plain words')
+  await deliver($, stopNotification('a5', 'gen1: plain words'))
+  await settle()
+  expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'gen1']])
+})
+
+test('a row marked done lists in the done group even without a kind', async ($, on) => {
+  const store = new Map<string, unknown>()
+  store.set('board:switchboard-session', [{ agentId: 'd1', name: 'd1-fork: a fork', headline: 'All finished.', report: '', at: 1, isWorking: false, isDismissed: false, isDone: true }])
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: false })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
+  await ui.press({ key: 'done-toggle' })
+  expect(await ui.find({ type: 'Text', text: /All finished\./ })).toBeDefined()
+  await ui.unmount()
+})
