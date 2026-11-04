@@ -191,7 +191,7 @@ mod tests {
             "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
-            "isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))",
+            "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
             "const reply = await heldReply($, e.agentId, e.turnId)",
             "if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {",
             "if (e.index === 0) {",

@@ -687,7 +687,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
       const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : !isUnfinished(entry) ? 'finished' : undefined
-      const sent = entry === undefined || skip !== undefined ? undefined : await (isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
+      const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
       await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
       if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
       const rest = [...again, ...pending.slice(index + 1)]

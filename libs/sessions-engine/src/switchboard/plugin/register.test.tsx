@@ -794,7 +794,7 @@ const answered = async ($: any, agentId: string, index: number, turnId = `turn-$
   return chunks
 }
 
-test('opening the switchboard puts each unfinished fork back in the agent list, and the plugin answers its turn so no model runs', async ($, on) => {
+test('opening the switchboard puts each unfinished fork back in the agent list, a cut one too, and the plugin answers its turn so no model runs', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const steps: string[] = []
@@ -817,8 +817,7 @@ test('opening the switchboard puts each unfinished fork back in the agent list, 
     await settle()
   }
   expect(sent.map(one => one.to).sort()).toEqual(['a1', 'm1', 'p1'])
-  expect(sent.find(one => one.to === 'm1').text).toBe('The switchboard restarted, which stopped your turn. Continue your work from where you left off.')
-  expect(sent.filter(one => one.to !== 'm1').every(one => one.text === 'Back in the agent list.')).toBe(true)
+  expect(sent.every(one => one.text === 'Back in the agent list.')).toBe(true)
   expect(store.has('reopen:earlier-session')).toBe(false)
   expect(store.has('reopen:switchboard-session')).toBe(false)
   expect(await answered($, 'a1', 0)).toEqual([expect.objectContaining({ kind: 'text', text: 'model' })])
@@ -835,7 +834,7 @@ test('opening the switchboard puts each unfinished fork back in the agent list, 
   await answered($, 'a1', 0)
   expect(steps).toEqual(['a1'])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(working, agent id m1)')
+  expect(board).toContain('(stopped by a restart, agent id m1)')
   expect(board).toContain('a1-fork: Which colour? (needs the user, agent id a1)')
   expect(board).toContain('(done, agent id d1)')
 })
@@ -934,7 +933,7 @@ test('a fork whose reopen was refused is tried again a few times, then left alon
   expect(log.filter(one => one.agentId === 'a1').map(one => one.isDelivered)).toEqual([false, true])
 })
 
-test('a resumed switchboard conversation continues its own forks a restart cut off mid-work', async ($, on) => {
+test('a resumed switchboard conversation puts its own forks a restart cut off back without continuing them', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const row = (agentId: string, isWorking: boolean, kind?: string) => ({ agentId, name: `${agentId}-fork: a fork`, ...(kind === undefined ? {} : { kind }), headline: 'h', report: 'r', at: 1, isWorking, isDismissed: false })
@@ -949,7 +948,7 @@ test('a resumed switchboard conversation continues its own forks a restart cut o
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => [one.to, one.text.startsWith('The switchboard restarted') ? 'continue' : one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['w1', 'continue']])
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['w1', 'Back in the agent list.']])
 })
 
 test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
