@@ -162,6 +162,7 @@ pub(super) fn settings_json(program: &Path) -> String {
         .collect();
     json!({
         "subagentPromptCacheTtl": PROMPT_CACHE_TTL,
+        "tui": "fullscreen",
         "subagentStatusLine": {"type": "command", "command": command(AGENT_ROWS)},
         "hooks": {
             "PreToolUse": [entry("Agent", command(PRE_AGENT))],
