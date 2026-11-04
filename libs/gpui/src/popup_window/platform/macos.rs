@@ -1071,6 +1071,10 @@ const INACTIVE_FRONT_RETRIES: [std::time::Duration; 3] = [
     std::time::Duration::from_millis(700),
 ];
 
+fn activation_is_refused(mask: NSWindowStyleMask) -> bool {
+    !mask.contains(NSWindowStyleMask::NonactivatingPanel) && qol_platform::secure_input_enabled()
+}
+
 fn keep_front_while_inactive(title: &str) {
     let title = title.to_string();
     std::thread::spawn(move || {
@@ -1170,15 +1174,25 @@ fn show_window_by_title_with_focus(
     }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
-        #[allow(deprecated)]
-        app.activateIgnoringOtherApps(true);
+        let activation_refused = activation_is_refused(window.styleMask());
+        if !activation_refused {
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+        }
         window.makeKeyAndOrderFront(None);
-        force_app_frontmost();
+        if !activation_refused {
+            force_app_frontmost();
+        }
         if !app.isActive() {
             window.orderFrontRegardless();
             keep_front_while_inactive(title);
         }
-        trace_settings_window("SETTINGS_SHOW", title, "focused", Some(&window));
+        let outcome = if activation_refused {
+            "front_only_secure_input"
+        } else {
+            "focused"
+        };
+        trace_settings_window("SETTINGS_SHOW", title, outcome, Some(&window));
     }
     if !focus {
         window.orderFrontRegardless();

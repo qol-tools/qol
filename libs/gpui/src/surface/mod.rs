@@ -1140,6 +1140,14 @@ fn reassert_revealed_focus(title: Arc<Mutex<String>>, commit_gen: u64, kind: Sur
             crate::popup_window::show_window_by_title,
         ),
         SurfaceKind::Toast | SurfaceKind::Panel => {
+            if qol_platform::secure_input_enabled() {
+                qol_runtime::probe!(
+                    "FOCUS_REASSERT",
+                    "title={} step=skipped reason=secure_input",
+                    crate::popup_window::read_title(&title)
+                );
+                return;
+            }
             crate::popup_window::reassert_focus_until_held_with(
                 title,
                 &PANEL_FOCUS_GENERATION,
