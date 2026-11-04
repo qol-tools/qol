@@ -135,7 +135,7 @@ fn latest_run(
 
 fn usable_run(run: &Run, host_built: &impl Fn(&Run) -> Result<bool>) -> Result<bool> {
     if run.status != "completed" {
-        return Ok(false);
+        return host_built(run);
     }
     match run.conclusion.as_str() {
         "success" => Ok(true),
@@ -287,6 +287,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(failed.contains("ended failure"), "{failed}");
+    }
+
+    #[test]
+    fn a_running_run_is_used_once_this_machines_build_succeeded() {
+        let runs = format!(
+            "[{},{}]",
+            entry(43, "in_progress", "", BRANCH),
+            entry(41, "completed", "success", BRANCH)
+        );
+        let built = |run: &Run| Ok(run.database_id == 43);
+        assert_eq!(
+            latest_run(&runs, "abc", BRANCH, built).unwrap().database_id,
+            43
+        );
     }
 
     #[test]
