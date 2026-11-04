@@ -84,11 +84,17 @@ impl fmt::Display for MonitorMoveError {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Placement {
+    pub(super) work: WindowRect,
+    pub(super) frame: WindowRect,
+}
+
 pub(super) fn moved_to_monitor(
     window: WindowRect,
     screens_left_to_right: &[WindowRect],
     delta: i32,
-) -> Result<WindowRect, MonitorMoveError> {
+) -> Result<Placement, MonitorMoveError> {
     let screens = screens_left_to_right;
     if screens.len() < 2 {
         return Err(MonitorMoveError::NoOtherMonitor(screens.len()));
@@ -102,12 +108,92 @@ pub(super) fn moved_to_monitor(
     let to_index = ((from_index as i32 + delta).rem_euclid(screens.len() as i32)) as usize;
     let from = screens[from_index];
     let to = screens[to_index];
-    Ok(WindowRect {
-        x: (to.x + (window.x - from.x) / from.width * to.width).round(),
-        y: (to.y + (window.y - from.y) / from.height * to.height).round(),
-        width: (window.width / from.width * to.width).round(),
-        height: (window.height / from.height * to.height).round(),
+    Ok(Placement {
+        work: to,
+        frame: WindowRect {
+            x: (to.x + (window.x - from.x) / from.width * to.width).round(),
+            y: (to.y + (window.y - from.y) / from.height * to.height).round(),
+            width: (window.width / from.width * to.width).round(),
+            height: (window.height / from.height * to.height).round(),
+        },
     })
+}
+
+const FRAME_TOLERANCE: f64 = 1.0;
+
+pub(super) fn settled_frame(
+    work: WindowRect,
+    requested: WindowRect,
+    granted: WindowRect,
+) -> Option<WindowRect> {
+    let settled = WindowRect {
+        x: settled_start(
+            Span::new(work.x, work.width),
+            Span::new(requested.x, requested.width),
+            Span::new(granted.x, granted.width),
+        ),
+        y: settled_start(
+            Span::new(work.y, work.height),
+            Span::new(requested.y, requested.height),
+            Span::new(granted.y, granted.height),
+        ),
+        ..granted
+    };
+    let moved = !near(settled.x, granted.x) || !near(settled.y, granted.y);
+    moved.then_some(settled)
+}
+
+#[derive(Clone, Copy)]
+struct Span {
+    start: f64,
+    length: f64,
+}
+
+impl Span {
+    fn new(start: f64, length: f64) -> Self {
+        Self { start, length }
+    }
+
+    fn end(self) -> f64 {
+        self.start + self.length
+    }
+}
+
+enum Anchor {
+    Start,
+    End,
+    Center,
+}
+
+impl Anchor {
+    fn of(work: Span, requested: Span) -> Self {
+        if near(requested.start, work.start) {
+            return Self::Start;
+        }
+        if near(requested.end(), work.end()) {
+            return Self::End;
+        }
+        Self::Center
+    }
+}
+
+fn settled_start(work: Span, requested: Span, granted: Span) -> f64 {
+    if near(granted.length, requested.length) {
+        return granted.start;
+    }
+    if granted.length >= work.length {
+        return work.start;
+    }
+    let anchored = match Anchor::of(work, requested) {
+        Anchor::Start => requested.start,
+        Anchor::End => requested.end() - granted.length,
+        Anchor::Center => requested.start + (requested.length - granted.length) / 2.0,
+    };
+    anchored.clamp(work.start, work.end() - granted.length)
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() <= FRAME_TOLERANCE
 }
 
 fn screen_index_at(screens: &[WindowRect], cx: f64, cy: f64) -> Option<usize> {
@@ -187,22 +273,23 @@ mod tests {
             rect(1000.0, 0.0, 2000.0, 1600.0),
         ];
         let window = rect(100.0, 80.0, 500.0, 400.0);
+        let on_second = Placement {
+            work: screens[1],
+            frame: rect(1200.0, 160.0, 1000.0, 800.0),
+        };
         let cases = [
+            ("next", &screens[..], window, 1, Ok(on_second)),
+            ("previous wraps", &screens[..], window, -1, Ok(on_second)),
             (
-                "next",
+                "full turn",
                 &screens[..],
                 window,
-                1,
-                Ok(rect(1200.0, 160.0, 1000.0, 800.0)),
+                2,
+                Ok(Placement {
+                    work: screens[0],
+                    frame: window,
+                }),
             ),
-            (
-                "previous wraps",
-                &screens[..],
-                window,
-                -1,
-                Ok(rect(1200.0, 160.0, 1000.0, 800.0)),
-            ),
-            ("full turn", &screens[..], window, 2, Ok(window)),
             (
                 "one monitor",
                 &screens[..1],
@@ -227,6 +314,112 @@ mod tests {
         ];
         for (name, screens, window, delta, expected) in cases {
             assert_eq!(moved_to_monitor(window, screens, delta), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_refused_size_keeps_the_window_inside_the_work_area_on_the_targeted_edge() {
+        let work = rect(0.0, 33.0, 1512.0, 949.0);
+        let left = rect(0.0, 33.0, 756.0, 949.0);
+        let right = rect(756.0, 33.0, 756.0, 949.0);
+        let bottom = rect(0.0, 508.0, 1512.0, 474.0);
+        let center = rect(356.0, 233.0, 800.0, 549.0);
+        let cases = [
+            ("right half granted", work, right, right, None),
+            (
+                "right half too narrow",
+                work,
+                right,
+                rect(756.0, 33.0, 856.0, 949.0),
+                Some(rect(656.0, 33.0, 856.0, 949.0)),
+            ),
+            (
+                "right half capped below the request",
+                work,
+                right,
+                rect(756.0, 33.0, 600.0, 949.0),
+                Some(rect(912.0, 33.0, 600.0, 949.0)),
+            ),
+            (
+                "right half wider than the work area",
+                work,
+                right,
+                rect(756.0, 33.0, 1800.0, 949.0),
+                Some(rect(0.0, 33.0, 1800.0, 949.0)),
+            ),
+            (
+                "left half too narrow stays flush left",
+                work,
+                left,
+                rect(0.0, 33.0, 856.0, 949.0),
+                None,
+            ),
+            (
+                "left half too narrow drifted right",
+                work,
+                left,
+                rect(10.0, 33.0, 856.0, 949.0),
+                Some(rect(0.0, 33.0, 856.0, 949.0)),
+            ),
+            (
+                "bottom half too short",
+                work,
+                bottom,
+                rect(0.0, 508.0, 1512.0, 600.0),
+                Some(rect(0.0, 382.0, 1512.0, 600.0)),
+            ),
+            (
+                "bottom half taller than the work area",
+                work,
+                bottom,
+                rect(0.0, 508.0, 1512.0, 1200.0),
+                Some(rect(0.0, 33.0, 1512.0, 1200.0)),
+            ),
+            (
+                "maximize wider and taller than the work area",
+                work,
+                work,
+                rect(40.0, 60.0, 1600.0, 1000.0),
+                Some(rect(0.0, 33.0, 1600.0, 1000.0)),
+            ),
+            (
+                "centered window grows around its center",
+                work,
+                center,
+                rect(356.0, 233.0, 900.0, 549.0),
+                Some(rect(306.0, 233.0, 900.0, 549.0)),
+            ),
+            (
+                "centered growth clamps at the right edge",
+                work,
+                rect(1100.0, 100.0, 400.0, 300.0),
+                rect(1100.0, 100.0, 600.0, 300.0),
+                Some(rect(912.0, 100.0, 600.0, 300.0)),
+            ),
+            (
+                "secondary monitor right half too narrow",
+                rect(1512.0, 0.0, 1920.0, 1080.0),
+                rect(2472.0, 0.0, 960.0, 1080.0),
+                rect(2472.0, 0.0, 1000.0, 1080.0),
+                Some(rect(2432.0, 0.0, 1000.0, 1080.0)),
+            ),
+            (
+                "rounding stays within tolerance",
+                work,
+                right,
+                rect(756.0, 33.0, 756.5, 949.0),
+                None,
+            ),
+            (
+                "accepted axis keeps the platform position",
+                work,
+                right,
+                rect(756.0, 40.0, 856.0, 949.0),
+                Some(rect(656.0, 40.0, 856.0, 949.0)),
+            ),
+        ];
+        for (name, work, requested, granted, expected) in cases {
+            assert_eq!(settled_frame(work, requested, granted), expected, "{name}");
         }
     }
 
@@ -256,6 +449,29 @@ mod tests {
 
             prop_assert_eq!(width, monitor_width * width_percent);
             prop_assert_eq!(height, monitor_height * height_percent);
+        }
+
+        #[test]
+        fn prop_a_refused_size_that_fits_lands_inside_the_work_area(
+            fraction in 0.1f64..0.9,
+            granted_width in 1.0f64..1512.0,
+            right in any::<bool>(),
+        ) {
+            let work = rect(0.0, 33.0, 1512.0, 949.0);
+            let requested = if right {
+                snap_right(work, fraction)
+            } else {
+                snap_left(work, fraction)
+            };
+            let granted = WindowRect { width: granted_width, ..requested };
+            let settled = settled_frame(work, requested, granted).unwrap_or(granted);
+            prop_assert!(settled.x >= work.x - FRAME_TOLERANCE);
+            prop_assert!(settled.x + settled.width <= work.x + work.width + FRAME_TOLERANCE);
+            if right {
+                prop_assert!(near(settled.x + settled.width, work.x + work.width));
+            } else {
+                prop_assert!(near(settled.x, work.x));
+            }
         }
     }
 }

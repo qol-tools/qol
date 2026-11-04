@@ -429,7 +429,7 @@ pub(super) fn front_window_rect(pid: i32) -> Option<super::screen::Rect> {
 pub(super) fn set_position_and_size(
     pid: i32,
     rect: super::screen::Rect,
-) -> Result<(), GeometryError> {
+) -> Result<super::screen::Rect, GeometryError> {
     timed_result("set_pos_size", pid, || {
         let ft = front_target(pid).ok_or(GeometryError::NoWindow)?;
         let before = read_window_rect(ft.win);
@@ -466,7 +466,8 @@ pub(super) fn set_position_and_size(
         let actual = read_window_rect(ft.win);
         let outcome = geometry_outcome(before, actual, rect);
         trace_geometry(pid, rect, actual, outcome.as_str());
-        outcome.verified()
+        outcome.verified()?;
+        actual.ok_or(GeometryError::Unreadable)
     })
 }
 
