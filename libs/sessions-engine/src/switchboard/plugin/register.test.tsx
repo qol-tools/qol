@@ -192,13 +192,13 @@ test('a fork notification or hand-back is filed on the board and never starts a 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
   const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged, so it is quiet.\n\nLong body.'), 'task-notification')
-  expect(dropped.drop).toBe('quiet-fork')
+  expect(dropped.drop).toBe('')
   const handedBack = await typed($, handback('a7', 'Second report, still quiet.'), 'peer')
-  expect(handedBack.drop).toBe('quiet-fork')
+  expect(handedBack.drop).toBe('')
   const board = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })
   expect(String(board.result)).toContain('Second report, still quiet.')
   const angled = await typed($, notification('a7', 'quiet-fork: quiet', '<T> in Vec<T> now parses.'), 'task-notification')
-  expect(angled.drop).toBe('quiet-fork')
+  expect(angled.drop).toBe('')
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })).result)).toContain('<T> in Vec<T> now parses.')
   const shell = '<task-notification>\n<task-id>b9</task-id>\n<status>completed</status>\n<summary>Background command "sleep" completed</summary>\n</task-notification>'
   const passed = await typed($, shell, 'task-notification')
@@ -214,7 +214,7 @@ test('a resumed fork never reaches the switchboard model, a stranger resumed sti
   await spawn($, 'a7', 'quiet-fork: quiet')
   const resumed = (agentId: string, name: string) =>
     `<task-notification>\n<task-id>${agentId}</task-id>\n<summary>Agent "${name}" was resumed by the user</summary>\n<note>The user resumed this agent from its transcript view; it is running again.</note>\n</task-notification>`
-  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'task-notification')).drop).toBe('quiet-fork')
+  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'task-notification')).drop).toBe('')
   const stranger = resumed('z9', 'stranger: not a fork')
   expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
   expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'composer')).drop).toBeUndefined()
@@ -230,15 +230,14 @@ const notice = async ($: any, text: string) => {
   return stored.message.content.map((block: { text?: string }) => block.text ?? '').join('')
 }
 
-test("the switchboard's own dropped prompts show without the hook prefix, other notices pass unchanged", async ($, on) => {
+test("a fork report drops with no reason so no notice shows, and the board toggle's shows without the hook prefix", async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
   const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged.'), 'task-notification')
-  expect(dropped.drop).toBe('quiet-fork')
+  expect(dropped.drop).toBe('')
   const foreign = 'Prompt dropped by a hook: some other plugin said no'
   expect(await notice($, foreign)).toBe(foreign)
-  expect(await notice($, 'Prompt dropped by a hook: quiet-fork')).toBe('quiet-fork')
   expect(await notice($, 'Prompt dropped by a hook: quiet-fork')).toBe('Prompt dropped by a hook: quiet-fork')
   const toggled = await typed($, 'qols board')
   expect(await notice($, `Prompt dropped by a hook: ${toggled.drop}`)).toBe(toggled.drop)
@@ -999,7 +998,7 @@ test('a fork the agent list no longer holds is brought back by opening it, and i
   const reply = await answered($, 'h1', 1)
   expect(reply.find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
   const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back on the fork board.'), 'task-notification')
-  expect(back.drop).toBe('h1-fork')
+  expect(back.drop).toBe('')
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'h1-fork' })).result)
   expect(board).toContain('Which colour should it be? I recommend amber.')
   expect(board).not.toContain('Back on the fork board.')
