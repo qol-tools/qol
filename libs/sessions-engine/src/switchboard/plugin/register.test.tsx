@@ -1345,8 +1345,9 @@ const recordEngine = (on: any, calls: string[][], records: any[] = [], forks: Fo
     value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined,
   }))
   on('fs.exists', () => ({ value: false }))
-  on('process.run', (_: unknown, e: { argv: string[] }) => {
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { cwd?: string } }) => {
     if (!isRecord(e.argv)) return { value: adopted(forks, [], e.argv) }
+    if (e.init?.cwd !== '/bin') return { value: { exitCode: 1, stdout: '', stderr: 'cwd gone' } }
     calls.push(e.argv.slice(3))
     return { value: recordReply(e.argv, records) }
   })

@@ -342,11 +342,13 @@ const recordProgram = async ($: EngineInterface): Promise<string | undefined> =>
   }
 }
 
+const folderOf = (path: string): string => path.replace(/[\\/][^\\/]*$/, '') || path
+
 const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
   try {
     const program = await recordProgram($)
     if (program === undefined) return undefined
-    const ran = await $.process.run([program, 'sessions', 'record', verb, ...args], { timeoutMs: RECORD_TIMEOUT_MS })
+    const ran = await $.process.run([program, 'sessions', 'record', verb, ...args], { cwd: folderOf(program), timeoutMs: RECORD_TIMEOUT_MS })
     if (ran.exitCode !== 0) return undefined
     const parsed: unknown = JSON.parse(ran.stdout)
     return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : undefined
