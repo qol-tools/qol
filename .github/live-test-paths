@@ -14,3 +14,4 @@ plugins/shot/src/app/**
 plugins/shot/src/capture/**
 plugins/shot/src/platform/**
 plugins/keyremap/src/platform/macos/karabiner/**
+plugins/window-actions/src/platform/**
