@@ -192,13 +192,13 @@ test('a fork notification or hand-back is filed on the board and never starts a 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
   const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged, so it is quiet.\n\nLong body.'), 'task-notification')
-  expect(dropped.drop).toBe('')
+  expect(dropped.drop).toBe('quiet-fork: Pull request #9 merged, so it is quiet.')
   const handedBack = await typed($, handback('a7', 'Second report, still quiet.'), 'peer')
-  expect(handedBack.drop).toBe('')
+  expect(handedBack.drop).toBe('quiet-fork: Second report, still quiet.')
   const board = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })
   expect(String(board.result)).toContain('Second report, still quiet.')
   const angled = await typed($, notification('a7', 'quiet-fork: quiet', '<T> in Vec<T> now parses.'), 'task-notification')
-  expect(angled.drop).toBe('')
+  expect(angled.drop).toBe('quiet-fork: <T> in Vec<T> now parses.')
   expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'quiet-fork' })).result)).toContain('<T> in Vec<T> now parses.')
   const shell = '<task-notification>\n<task-id>b9</task-id>\n<status>completed</status>\n<summary>Background command "sleep" completed</summary>\n</task-notification>'
   const passed = await typed($, shell, 'task-notification')
@@ -214,7 +214,7 @@ test('a resumed fork never reaches the switchboard model, a stranger resumed sti
   await spawn($, 'a7', 'quiet-fork: quiet')
   const resumed = (agentId: string, name: string) =>
     `<task-notification>\n<task-id>${agentId}</task-id>\n<summary>Agent "${name}" was resumed by the user</summary>\n<note>The user resumed this agent from its transcript view; it is running again.</note>\n</task-notification>`
-  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'task-notification')).drop).toBe('')
+  expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'task-notification')).drop).toMatch(/^quiet-fork: /)
   const stranger = resumed('z9', 'stranger: not a fork')
   expect((await typed($, stranger, 'task-notification')).text).toBe(stranger)
   expect((await typed($, resumed('a7', 'quiet-fork: quiet'), 'composer')).drop).toBeUndefined()
@@ -230,12 +230,13 @@ const notice = async ($: any, text: string) => {
   return stored.message.content.map((block: { text?: string }) => block.text ?? '').join('')
 }
 
-test("a fork report drops with no reason so no notice shows, and the board toggle's shows without the hook prefix", async ($, on) => {
+test("a fork report's drop notice reads as the report itself, and the board toggle's shows without the hook prefix", async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a7', 'quiet-fork: quiet')
   const dropped = await typed($, notification('a7', 'quiet-fork: quiet', 'Pull request #9 merged.'), 'task-notification')
-  expect(dropped.drop).toBe('')
+  expect(dropped.drop).toBe('quiet-fork: Pull request #9 merged.')
+  expect(await notice($, `Prompt dropped by a hook: ${dropped.drop}`)).toBe('quiet-fork: Pull request #9 merged.')
   const foreign = 'Prompt dropped by a hook: some other plugin said no'
   expect(await notice($, foreign)).toBe(foreign)
   expect(await notice($, 'Prompt dropped by a hook: quiet-fork')).toBe('Prompt dropped by a hook: quiet-fork')
@@ -248,20 +249,21 @@ const placedRow = (id: string, surface: 'terminal' | 'desktop' = 'terminal', plu
 
 const logIds = (panes: string[]) => panes.filter(one => one.startsWith('place ')).map(one => one.slice('place '.length))
 
-test('each fork report a turn never reads is logged as a row in the chat, each fork in its own colour', async ($, on) => {
+test('a logged event is a row in the chat, each fork in its own colour, and a fork report places none', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'no record' } }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: false })
   await spawn($, 'b1', 'alpha: one')
   await spawn($, 'b2', 'beta: two')
-  for (const [agentId, name, said] of [['b1', 'alpha: one', 'First.'], ['b2', 'beta: two', 'Second.']]) {
-    await typed($, notification(agentId, name, said), 'task-notification')
-  }
   const ids = logIds(panes)
+  await typed($, notification('b1', 'alpha: one', 'Dropped as a notice.'), 'task-notification')
+  expect(logIds(panes)).toHaveLength(2)
   expect(ids).toHaveLength(2)
   for (const surface of SURFACES) {
     const first = await $.ui.mount(placedRow(ids[0] as string, surface))
-    expect(await first.find({ type: 'Text', text: 'First.' })).toBeDefined()
+    expect(await first.find({ type: 'Text', text: 'The session record could not be claimed for this fork.' })).toBeDefined()
     expect((await first.find({ type: 'Text', text: 'alpha' }))?.props.color).toBe(forkColor('alpha'))
     await first.unmount()
     const second = await $.ui.mount(placedRow(ids[1] as string, surface))
@@ -269,7 +271,7 @@ test('each fork report a turn never reads is logged as a row in the chat, each f
     await second.unmount()
   }
   const foreign = await $.ui.mount(placedRow(ids[0] as string, 'terminal', 'another-plugin'))
-  expect(await foreign.find({ type: 'Text', text: 'First.' })).toBeUndefined()
+  expect(await foreign.find({ type: 'Text', text: 'The session record could not be claimed for this fork.' })).toBeUndefined()
   await foreign.unmount()
   await typed($, 'hello')
   expect(logIds(panes)).toHaveLength(2)
@@ -1043,7 +1045,7 @@ test('a fork the agent list no longer holds is brought back by opening it, and i
   const reply = await answered($, 'h1', 1)
   expect(reply.find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
   const back = await typed($, notification('h1', 'h1-fork: a fork', 'Back on the fork board.'), 'task-notification')
-  expect(back.drop).toBe('')
+  expect(back.drop).toBe('h1-fork: Which colour should it be? I recommend amber.')
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'h1-fork' })).result)
   expect(board).toContain('Which colour should it be? I recommend amber.')
   expect(board).not.toContain('Back on the fork board.')

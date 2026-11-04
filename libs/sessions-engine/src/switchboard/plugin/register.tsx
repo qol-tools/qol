@@ -58,7 +58,6 @@ const HANDED_BACK = /delivered to you as a message from/
 const AGENT_SUMMARY = /^Agent "([\s\S]*)" /
 const DROP_NOTICE = 'Prompt dropped by a hook: '
 const DROPS_KEPT = 20
-const SILENT = ''
 const LOG_PREFIX = 'log-'
 const LOG_KEPT = 500
 const FORK_COLORS: readonly string[] = ['#f47067', '#f69d50', '#daaa3f', '#57ab5a', '#39c5cf', '#539bf5', '#b083f0', '#e275ad']
@@ -1269,8 +1268,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
-      await logEvent($, quiet)
-      return { drop: SILENT }
+      return dropAs(`${quiet.fork}: ${quiet.said}`)
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false

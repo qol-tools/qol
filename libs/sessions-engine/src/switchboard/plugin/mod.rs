@@ -157,7 +157,7 @@ mod tests {
             "const sent = await sendTo($, entry, text)",
             "on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {",
             "<Text color={forkColor(one.fork)} bold>",
-            "return { drop: SILENT }",
+            "return dropAs(`${quiet.fork}: ${quiet.said}`)",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
             "on('turn.start', async ($, e, next) => {",
