@@ -16,10 +16,10 @@ use std::sync::Arc;
 use crate::SessionFacts;
 
 pub use builtins::{
-    claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, session_file_containing_marker,
-    session_file_for_external_id, CLAUDE_TOOL_ACCENT, CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT,
-    CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID, KIMI_TOOL_ACCENT, KIMI_TOOL_ID,
-    PI_TOOL_ACCENT, PI_TOOL_ID,
+    claude_tool, codex_tool, generic_tool, kimi_tool, pi_tool, search_transcripts,
+    session_file_containing_marker, session_file_for_external_id, CLAUDE_TOOL_ACCENT,
+    CLAUDE_TOOL_ID, CODEX_TOOL_ACCENT, CODEX_TOOL_ID, GENERIC_TOOL_ACCENT, GENERIC_TOOL_ID,
+    KIMI_TOOL_ACCENT, KIMI_TOOL_ID, PI_TOOL_ACCENT, PI_TOOL_ID,
 };
 pub use chat::{ChatRole, ChatTurn, COMPACTED_SUMMARY_HEADER};
 pub use composer::is_rule;

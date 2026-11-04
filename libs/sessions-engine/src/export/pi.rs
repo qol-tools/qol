@@ -433,6 +433,7 @@ fn render_tool_block(spec: &ToolSpec) -> Result<String> {
         | "session_inbox"
         | "session_board"
         | "sessions_closed"
+        | "session_records"
         | "session_reopen"
         | "session_remote_control" => {
             let timeout_ms = match spec.name {
@@ -530,6 +531,7 @@ mod tests {
             "session_inbox",
             "session_board",
             "sessions_closed",
+            "session_records",
             "session_reopen",
         ] {
             assert!(source.contains(&format!("params: {{ name: {name:?}, arguments: params }}")));

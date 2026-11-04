@@ -28,10 +28,7 @@ struct Best {
     offset: usize,
 }
 
-pub(super) fn search_transcripts(
-    paths: Vec<PathBuf>,
-    terms: &[String],
-) -> Vec<CliConversationMatch> {
+pub fn search_transcripts(paths: Vec<PathBuf>, terms: &[String]) -> Vec<CliConversationMatch> {
     if paths.is_empty() || terms.is_empty() {
         return Vec::new();
     }

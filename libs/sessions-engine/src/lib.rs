@@ -35,6 +35,7 @@ use qol_terminal_sessions::cli::launch_flags;
 mod mcp;
 mod park;
 mod prs;
+mod record;
 mod remote_control;
 pub mod resume;
 mod spawn;
@@ -46,6 +47,7 @@ mod watch_owner;
 
 pub use contract::tool_names;
 pub use fork::FORK_HEADER;
+pub use record::execute as run_record;
 pub use switchboard::SWITCHBOARD_KEY;
 
 /// Unread messages and unanswered asks in the mailbox of `key`, zero when it cannot be read.
@@ -75,7 +77,7 @@ pub struct SessionSubcommand {
     run: fn(&[OsString], OutputFormat) -> Result<()>,
 }
 
-pub const SUBCOMMANDS: [SessionSubcommand; 26] = [
+pub const SUBCOMMANDS: [SessionSubcommand; 27] = [
     SessionSubcommand {
         name: "list",
         run: |_rest, format| list(format),
@@ -169,6 +171,10 @@ pub const SUBCOMMANDS: [SessionSubcommand; 26] = [
         run: |rest, _format| watch::run(rest),
     },
     SessionSubcommand {
+        name: "record",
+        run: |rest, _format| record::run(rest),
+    },
+    SessionSubcommand {
         name: "mcp",
         run: |rest, _format| mcp::run(rest),
     },
@@ -242,6 +248,7 @@ Diagnostics:
   qol sessions wait <session> [--timeout-ms N] [--expect TEXT]
   qol sessions focus <session>
   qol sessions watch [TOKEN...]
+  qol sessions record <claim|part|archive|done|stopped|resume|show|list> [flags]
   qol sessions mcp
   qol sessions export [pi]
   qol sessions help
@@ -389,6 +396,15 @@ Details:
   and brings
   one back as a fork that shows its conversation, or in a new tab with
   session_reopen when it has none or a terminal is asked for.
+  record keeps one JSON record per session key in the sessions data folder,
+  records/<key>.json, with the parts (one per fork agent id) of that key and
+  each part's chat archived in records/<key>/part-<n>.jsonl, so a fork's
+  identity has one home and its chat can be resumed or searched later by
+  key. The switchboard plugin calls it as qol-cli-sessions sessions record;
+  every verb prints one JSON object, and the exit code is 2 for a usage
+  error and 3 for an unknown key or agent id. qol sessions record help
+  lists the verbs. The session_records tool searches the records by key,
+  friendly description or folder and the archived chats by words.
   sessions_closed returns the newest 20 by default (`limit` takes 1 to 100),
   filters them with `query` (title, cwd, key, tool, id or a linked pull
   request URL) and `text` (up to 8 words the conversation's own prompts,
@@ -1614,7 +1630,7 @@ mod tests {
         assert!(help.contains(
             "qol sessions spawn --tool TOOL --cwd PATH [--key KEY] [--surface tab|os-window] [--model MODEL]"
         ));
-        assert!(help.contains("sessions_list, sessions_closed, session_spawn"));
+        assert!(help.contains("sessions_list, sessions_closed, session_records, session_spawn"));
         assert!(help.contains("~/.config/qol-tray/sessions.toml"));
         assert!(help.contains("qol sessions loop-close <session> --completion-marker MARKER"));
     }

@@ -2,6 +2,7 @@ mod environment;
 mod history;
 mod metadata;
 mod search;
+pub use search::search_transcripts;
 mod trust;
 
 #[cfg(test)]

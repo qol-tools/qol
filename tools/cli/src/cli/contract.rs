@@ -382,6 +382,14 @@ fn app() -> HeadlessApp {
                 "The lane's own output; diagnostics on stderr.",
                 "Exits non-zero when the secret or login file cannot be read or PROGRAM cannot start.",
             ))
+            .subcommand(command(
+                "record",
+                "Keep one record per session key and archive its chat.",
+                "qol sessions record <claim|part|archive|done|stopped|resume|show|list> [flags]",
+                "Keeps records/<key>.json in the sessions data folder, one per session key, so a fork's identity lives in one place and its chat is saved under that key to resume or search later. claim --description TEXT --cwd DIR creates a record from a `<key>: <friendly>` description (or a slug of any other text, with -2, -3 for a taken key); part --key KEY --agent-id ID --transcript FILE adds the next numbered part, and an agent id already held changes nothing; archive --key KEY copies each part's transcript that exists to records/<key>/part-<n>.jsonl; done --key KEY --reason TEXT marks it done, the latest done winning; stopped --key KEY sets the stop time; resume --key KEY clears both marks for a session that works again; show takes --key KEY or --agent-id ID; list prints every record, newest created first. The session_records tool searches the records and their archived chats. qol sessions record help prints the whole contract.",
+                "One JSON object on stdout; errors print {\"error\": text}.",
+                "Exits 2 on a usage error, 3 when the key or agent id has no record, and 1 when the records folder cannot be read or written.",
+            ))
             .subcommand(
                 command(
                     "mcp",
