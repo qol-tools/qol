@@ -95,6 +95,10 @@ fn held_variable(key_code: &str) -> String {
     format!("qol_hotkey_held_{key_code}")
 }
 
+pub(crate) fn held_variables() -> impl Iterator<Item = String> {
+    MODIFIERS.into_iter().flat_map(sides).map(held_variable)
+}
+
 fn held_tracker(key_code: &str) -> Value {
     json!({
         "type": "basic",

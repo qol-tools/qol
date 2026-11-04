@@ -17,12 +17,15 @@ use crate::platform::macos::layout::LayoutSnapshot;
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 const RELOAD_SETTLE: Duration = Duration::from_secs(1);
+const WAKE_GAP: Duration = Duration::from_secs(10);
+const WAKE_RESETS: u8 = 3;
 
 pub(crate) trait Karabiner {
     fn probe(&self) -> Probe;
     fn sync(&self, compiled: &Compiled) -> Result<Synced>;
     fn remove(&self) -> Result<()>;
     fn set_active(&self, active: bool) -> Result<()>;
+    fn reset_variables(&self, active: bool) -> Result<()>;
     fn system_modifier_keys(&self) -> Vec<DeviceModifiers>;
     fn config_modified(&self) -> Option<SystemTime>;
 }
@@ -44,6 +47,10 @@ impl Karabiner for Installed {
 
     fn set_active(&self, active: bool) -> Result<()> {
         service::set_active(active)
+    }
+
+    fn reset_variables(&self, active: bool) -> Result<()> {
+        service::reset_variables(active)
     }
 
     fn system_modifier_keys(&self) -> Vec<DeviceModifiers> {
@@ -79,6 +86,8 @@ pub(crate) struct Backend<K> {
     state: State,
     said: HashSet<String>,
     hotkeys: Hotkeys,
+    checked: Option<(Instant, SystemTime)>,
+    wake_resets: u8,
 }
 
 impl<K: Karabiner> Backend<K> {
@@ -88,6 +97,8 @@ impl<K: Karabiner> Backend<K> {
             state: State::Unknown,
             said: HashSet::new(),
             hotkeys: Hotkeys::default(),
+            checked: None,
+            wake_resets: 0,
         }
     }
 
@@ -114,7 +125,7 @@ impl<K: Karabiner> Backend<K> {
         layout: &LayoutSnapshot,
         input: &InputState,
     ) {
-        self.idle_at(config, layout, input, Instant::now());
+        self.idle_at(config, layout, input, Instant::now(), SystemTime::now());
     }
 
     fn idle_at(
@@ -123,9 +134,11 @@ impl<K: Karabiner> Backend<K> {
         layout: &LayoutSnapshot,
         input: &InputState,
         now: Instant,
+        wall: SystemTime,
     ) {
+        let woke = self.notice_wake(now, wall);
         let (stale, due) = match &self.state {
-            State::Waiting { next_probe } => (false, now >= *next_probe),
+            State::Waiting { next_probe } => (false, woke || now >= *next_probe),
             State::Active {
                 layout: compiled_for,
                 next_probe,
@@ -133,7 +146,7 @@ impl<K: Karabiner> Backend<K> {
                 ..
             } => (
                 *compiled_for != layout.id || *enabled != config.enabled,
-                now >= *next_probe,
+                woke || now >= *next_probe,
             ),
             State::Unknown | State::Off => return,
         };
@@ -150,6 +163,18 @@ impl<K: Karabiner> Backend<K> {
             self.check_service(config, input, now);
             self.follow_system_keys(config, layout);
         }
+    }
+
+    fn notice_wake(&mut self, now: Instant, wall: SystemTime) -> bool {
+        let Some((then, then_wall)) = self.checked.replace((now, wall)) else {
+            return false;
+        };
+        if !slept(then, then_wall, now, wall) {
+            return false;
+        }
+        log::info!("the Mac woke from sleep; resetting the Key Remap variables");
+        self.wake_resets = WAKE_RESETS;
+        true
     }
 
     pub(crate) fn follow_hotkeys(
@@ -284,6 +309,8 @@ impl<K: Karabiner> Backend<K> {
             return;
         }
         let modified = self.karabiner.config_modified();
+        let waking = self.wake_resets > 0;
+        self.wake_resets = self.wake_resets.saturating_sub(1);
         let State::Active {
             core_pid,
             enabled,
@@ -296,14 +323,19 @@ impl<K: Karabiner> Backend<K> {
         };
         *next_probe = now + PROBE_INTERVAL;
         let restarted = probe.core_pid != *core_pid;
-        if !restarted && modified == *set_after {
+        if !restarted && !waking && modified == *set_after {
             return;
         }
         if restarted {
             log::info!("Karabiner-Elements restarted; setting the Key Remap variable again");
         }
         *core_pid = probe.core_pid;
-        match self.karabiner.set_active(config.enabled) {
+        let set = if waking {
+            self.karabiner.reset_variables(config.enabled)
+        } else {
+            self.karabiner.set_active(config.enabled)
+        };
+        match set {
             Ok(()) => {
                 *enabled = config.enabled;
                 if modified.is_none_or(settled) {
@@ -385,6 +417,12 @@ fn settled(modified: SystemTime) -> bool {
         .is_ok_and(|age| age >= RELOAD_SETTLE)
 }
 
+fn slept(then: Instant, then_wall: SystemTime, now: Instant, wall: SystemTime) -> bool {
+    let awake = now.saturating_duration_since(then);
+    let passed = wall.duration_since(then_wall).unwrap_or_default();
+    passed > awake + WAKE_GAP
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -462,6 +500,11 @@ mod tests {
             if self.cli_fails.get() {
                 anyhow::bail!("karabiner_cli failed");
             }
+            Ok(())
+        }
+
+        fn reset_variables(&self, active: bool) -> Result<()> {
+            self.calls.borrow_mut().push(format!("reset {active}"));
             Ok(())
         }
 
@@ -575,13 +618,20 @@ mod tests {
         assert_eq!(input.backend.get(), BackendId::EventTap);
 
         fake.ready(10);
-        backend.idle_at(&config(true), &layout("us"), &input, start);
+        backend.idle_at(
+            &config(true),
+            &layout("us"),
+            &input,
+            start,
+            SystemTime::now(),
+        );
         assert!(fake.take().is_empty(), "waits for the retry interval");
         backend.idle_at(
             &config(true),
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert_eq!(fake.take(), vec!["sync 1", "active true"]);
         assert_eq!(input.backend.get(), BackendId::KarabinerElements);
@@ -603,6 +653,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert_eq!(fake.take(), vec!["active true"]);
         backend.idle_at(
@@ -610,6 +661,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 4,
+            SystemTime::now(),
         );
         assert!(fake.take().is_empty());
     }
@@ -630,6 +682,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert_eq!(input.backend.get(), BackendId::EventTap);
         assert!(fake.take().is_empty());
@@ -675,9 +728,21 @@ mod tests {
         backend.apply(CHOSEN, &config(true), &layout("us"), &input);
         fake.take();
 
-        backend.idle_at(&config(true), &layout("danish"), &input, start);
+        backend.idle_at(
+            &config(true),
+            &layout("danish"),
+            &input,
+            start,
+            SystemTime::now(),
+        );
         assert_eq!(fake.take(), vec!["sync 1", "active true"]);
-        backend.idle_at(&config(true), &layout("danish"), &input, start);
+        backend.idle_at(
+            &config(true),
+            &layout("danish"),
+            &input,
+            start,
+            SystemTime::now(),
+        );
         assert!(fake.take().is_empty());
     }
 
@@ -710,6 +775,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert_eq!(fake.take(), vec!["active false"]);
         assert_eq!(input.backend.get(), BackendId::EventTap);
@@ -742,6 +808,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert_eq!(fake.take(), vec!["sync 1", "active true"]);
         assert_eq!(input.backend.get(), BackendId::KarabinerElements);
@@ -761,9 +828,21 @@ mod tests {
         backend.apply(CHOSEN, &config(false), &layout("us"), &input);
         fake.take();
         fake.cli_fails.set(false);
-        backend.idle_at(&config(false), &layout("us"), &input, start);
+        backend.idle_at(
+            &config(false),
+            &layout("us"),
+            &input,
+            start,
+            SystemTime::now(),
+        );
         assert_eq!(fake.take(), vec!["sync 1", "active false"]);
-        backend.idle_at(&config(false), &layout("us"), &input, start);
+        backend.idle_at(
+            &config(false),
+            &layout("us"),
+            &input,
+            start,
+            SystemTime::now(),
+        );
         assert!(fake.take().is_empty());
     }
 
@@ -782,6 +861,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 2,
+            SystemTime::now(),
         );
         assert!(fake.take().is_empty());
 
@@ -797,6 +877,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 4,
+            SystemTime::now(),
         );
         assert_eq!(fake.take(), vec!["sync 1", "active true"]);
         backend.idle_at(
@@ -804,6 +885,7 @@ mod tests {
             &layout("us"),
             &input,
             start + PROBE_INTERVAL * 6,
+            SystemTime::now(),
         );
         assert!(fake.take().is_empty());
     }
@@ -821,6 +903,7 @@ mod tests {
                 &layout("us"),
                 &input,
                 start + PROBE_INTERVAL * n,
+                SystemTime::now(),
             );
         };
         backend.apply(CHOSEN, &config(true), &layout("us"), &input);
@@ -842,5 +925,52 @@ mod tests {
         assert_eq!(fake.take(), vec!["active true"]);
         tick(&mut backend, 8);
         assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn waking_from_sleep_resets_the_variables_for_a_few_probes() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let start = Instant::now();
+        let wall = SystemTime::now();
+        let tick = |backend: &mut Backend<Fake>, n: u32, slept: Duration| {
+            backend.idle_at(
+                &config(true),
+                &layout("us"),
+                &input,
+                start + PROBE_INTERVAL * n,
+                wall + PROBE_INTERVAL * n + slept,
+            );
+        };
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        fake.take();
+
+        tick(&mut backend, 1, Duration::ZERO);
+        tick(&mut backend, 2, Duration::ZERO);
+        assert!(fake.take().is_empty());
+
+        let night = Duration::from_secs(8 * 3600);
+        tick(&mut backend, 2, night);
+        assert_eq!(fake.take(), vec!["reset true"], "reset right at wake");
+        tick(&mut backend, 3, night);
+        tick(&mut backend, 4, night);
+        assert_eq!(fake.take(), vec!["reset true", "reset true"]);
+        tick(&mut backend, 5, night);
+        tick(&mut backend, 6, night);
+        assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn only_a_wall_clock_far_ahead_of_uptime_counts_as_sleep() {
+        let then = Instant::now();
+        let wall = SystemTime::now();
+        let later = then + Duration::from_secs(60);
+        assert!(!slept(then, wall, later, wall + Duration::from_secs(60)));
+        assert!(!slept(then, wall, later, wall + Duration::from_secs(65)));
+        assert!(!slept(then, wall, later, wall - Duration::from_secs(3600)));
+        assert!(slept(then, wall, later, wall + Duration::from_secs(600)));
+        assert!(slept(then, wall, then, wall + Duration::from_secs(11)));
     }
 }
