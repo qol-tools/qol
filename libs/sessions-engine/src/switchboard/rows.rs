@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -16,6 +16,13 @@ const WORKING_COLOR: &str = "\x1b[32m";
 const PARKED_COLOR: &str = "\x1b[34m";
 const YOUR_TURN_COLOR: &str = "\x1b[1;33m";
 const BOLD_OFF: &str = "\x1b[22m";
+const DIM: &str = "\x1b[2m";
+const DIM_OFF: &str = "\x1b[22m";
+const HOME_LABEL: &str = "~";
+const ROOT_LABEL: &str = "/";
+const FOLDER_SEPARATOR: char = '/';
+const FOLDER_DEPTH: usize = 2;
+const CWD_KEY: &str = "cwd";
 const WORKING_LABEL: &str = "working";
 const PARKED_LABEL: &str = "parked";
 const YOUR_TURN_LABEL: &str = "your turn";
@@ -74,6 +81,7 @@ struct Task {
 struct Fork {
     started_ms: Option<u64>,
     color: Option<String>,
+    folder: Option<String>,
 }
 
 struct Clock<'a> {
@@ -223,25 +231,29 @@ fn key_and_friendly(description: &str) -> (Option<&str>, Option<&str>) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HeadFit {
     Full,
-    ModelOnly,
-    NameOnly,
+    NoEffort,
+    NameFolder,
+    NameShortFolder,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TailFit {
     Full,
+    NoStarted,
     NoElapsed,
     ShortTokens,
     NoTokens,
 }
 
-const LADDER: [(HeadFit, TailFit); 6] = [
+const LADDER: [(HeadFit, TailFit); 8] = [
     (HeadFit::Full, TailFit::Full),
+    (HeadFit::Full, TailFit::NoStarted),
     (HeadFit::Full, TailFit::NoElapsed),
-    (HeadFit::ModelOnly, TailFit::NoElapsed),
-    (HeadFit::NameOnly, TailFit::NoElapsed),
-    (HeadFit::NameOnly, TailFit::ShortTokens),
-    (HeadFit::NameOnly, TailFit::NoTokens),
+    (HeadFit::NoEffort, TailFit::NoElapsed),
+    (HeadFit::NameFolder, TailFit::NoElapsed),
+    (HeadFit::NameShortFolder, TailFit::NoElapsed),
+    (HeadFit::NameShortFolder, TailFit::ShortTokens),
+    (HeadFit::NameShortFolder, TailFit::NoTokens),
 ];
 
 struct Drawn {
@@ -249,24 +261,39 @@ struct Drawn {
     width: usize,
 }
 
-fn head(name: &str, color: &str, task: &Task, fit: HeadFit) -> Drawn {
+fn short_folder(label: &str) -> &str {
+    match label.rsplit_once(FOLDER_SEPARATOR) {
+        Some((_, last)) if !last.is_empty() => last,
+        _ => label,
+    }
+}
+
+fn head(name: &str, color: &str, task: &Task, folder: Option<&str>, fit: HeadFit) -> Drawn {
     let mut text = painted(name, color);
     let mut width = width(name);
-    if fit == HeadFit::NameOnly {
-        return Drawn { text, width };
-    }
-    if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
-        let label = plain(&model_label(model));
-        width += GAP.len() + label.chars().count();
-        text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
-        if fit == HeadFit::Full {
-            if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
-                let effort = plain(&effort);
-                width += 1 + effort.chars().count();
-                text.push(' ');
-                text.push_str(&effort);
+    if matches!(fit, HeadFit::Full | HeadFit::NoEffort) {
+        if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
+            let label = plain(&model_label(model));
+            width += GAP.len() + label.chars().count();
+            text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
+            if fit == HeadFit::Full {
+                if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
+                    let effort = plain(&effort);
+                    width += 1 + effort.chars().count();
+                    text.push(' ');
+                    text.push_str(&effort);
+                }
             }
         }
+    }
+    if let Some(folder) = folder.filter(|folder| !folder.is_empty()) {
+        let shown = match fit {
+            HeadFit::NameShortFolder => short_folder(folder),
+            _ => folder,
+        };
+        let shown = plain(shown);
+        width += GAP.len() + shown.chars().count();
+        text.push_str(&format!("{GAP}{DIM}{shown}{DIM_OFF}"));
     }
     Drawn { text, width }
 }
@@ -321,12 +348,16 @@ impl Tail {
                 None => state.word.clone(),
             });
         }
-        parts.extend(self.started.clone());
         if fit == TailFit::Full {
+            parts.extend(self.started.clone());
+        }
+        if matches!(fit, TailFit::Full | TailFit::NoStarted) {
             parts.extend(self.elapsed.clone());
         }
         match fit {
-            TailFit::Full | TailFit::NoElapsed => parts.push(tokens_label(self.tokens)),
+            TailFit::Full | TailFit::NoStarted | TailFit::NoElapsed => {
+                parts.push(tokens_label(self.tokens));
+            }
             TailFit::ShortTokens => parts.push(count_label(self.tokens)),
             TailFit::NoTokens => {}
         }
@@ -339,6 +370,7 @@ fn fitted(
     color: &str,
     summary: &str,
     task: &Task,
+    folder: Option<&str>,
     tail: &Tail,
     columns: usize,
 ) -> String {
@@ -348,7 +380,7 @@ fn fitted(
             text: tail,
             width: tail_width,
         } = tail.drawn(tail_fit);
-        let fixed = head("", color, task, head_fit).width + GAP.len() + tail_width;
+        let fixed = head("", color, task, folder, head_fit).width + GAP.len() + tail_width;
         if name_floor + fixed > columns {
             continue;
         }
@@ -360,6 +392,7 @@ fn fitted(
                 ),
                 color,
                 task,
+                folder,
                 head_fit,
             );
             let room = columns.saturating_sub(capped.width + GAP.len() * 2 + tail_width);
@@ -369,7 +402,13 @@ fn fitted(
                 return format!("{}{GAP}{summary}{}{tail}", capped.text, " ".repeat(pad));
             }
         }
-        let shown = head(&truncate(name, columns - fixed), color, task, head_fit);
+        let shown = head(
+            &truncate(name, columns - fixed),
+            color,
+            task,
+            folder,
+            head_fit,
+        );
         let pad = columns - shown.width - tail_width;
         return format!("{}{}{tail}", shown.text, " ".repeat(pad));
     }
@@ -422,9 +461,17 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
     };
     match columns {
         Some(0) => None,
-        Some(columns) => Some(fitted(&name, color, summary, task, &tail, columns)),
+        Some(columns) => Some(fitted(
+            &name,
+            color,
+            summary,
+            task,
+            fork.folder.as_deref(),
+            &tail,
+            columns,
+        )),
         None => {
-            let shown = head(&name, color, task, HeadFit::Full);
+            let shown = head(&name, color, task, fork.folder.as_deref(), HeadFit::Full);
             let line = [
                 shown.text.as_str(),
                 summary,
@@ -463,14 +510,50 @@ fn continued_from(prompt: &str) -> Option<PathBuf> {
     (!path.is_empty() && !path.contains('\n')).then(|| PathBuf::from(path))
 }
 
-fn resumed_from(transcript: &Path) -> Option<PathBuf> {
-    let meta: Value =
-        serde_json::from_slice(&std::fs::read(transcript.with_extension("meta.json")).ok()?)
-            .ok()?;
-    meta.get(RESUMED_FROM)
+fn meta_of(transcript: &Path) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(transcript.with_extension("meta.json")).ok()?).ok()
+}
+
+fn meta_path(meta: &Value, key: &str) -> Option<PathBuf> {
+    meta.get(key)
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
+}
+
+fn folder_names(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|part| match part {
+            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn last_names(names: &[String]) -> String {
+    names[names.len().saturating_sub(FOLDER_DEPTH)..].join(&FOLDER_SEPARATOR.to_string())
+}
+
+fn folder_label(path: &Path, home: Option<&Path>) -> Option<String> {
+    if let Some(home) = home.filter(|home| !folder_names(home).is_empty()) {
+        if let Ok(below) = path.strip_prefix(home) {
+            let names = folder_names(below);
+            return Some(match names.as_slice() {
+                [] => HOME_LABEL.to_owned(),
+                [only] => format!("{HOME_LABEL}{FOLDER_SEPARATOR}{only}"),
+                _ => last_names(&names),
+            });
+        }
+    }
+    let names = folder_names(path);
+    if names.is_empty() {
+        return (!path.as_os_str().is_empty()).then(|| ROOT_LABEL.to_owned());
+    }
+    Some(last_names(&names))
+}
+
+fn resumed_from(meta: &Value) -> Option<PathBuf> {
+    meta_path(meta, RESUMED_FROM)
 }
 
 fn first_row(transcript: &Path) -> Option<FirstRow> {
@@ -514,12 +597,20 @@ fn fork_facts(transcript: &Path) -> Fork {
     let Some(first) = first_row(transcript) else {
         return Fork::default();
     };
+    let meta = meta_of(transcript);
+    let home = qol_platform::launch_working_dir();
     Fork {
         started_ms: first.started_ms,
-        color: resumed_from(transcript)
+        color: meta
+            .as_ref()
+            .and_then(resumed_from)
             .or(first.source)
             .as_deref()
             .and_then(last_color),
+        folder: meta
+            .as_ref()
+            .and_then(|meta| meta_path(meta, CWD_KEY))
+            .and_then(|cwd| folder_label(&cwd, home.as_deref())),
     }
 }
 
@@ -595,6 +686,7 @@ mod tests {
         Fork {
             started_ms: None,
             color: Some("cyan".to_owned()),
+            folder: None,
         }
     }
 
@@ -608,6 +700,28 @@ mod tests {
 
     fn content(raw: Value) -> Vec<String> {
         content_with(raw, &status_state)
+    }
+
+    fn content_in(raw: Value, folder: &str) -> Vec<String> {
+        let fork = |_id: &str| Fork {
+            started_ms: None,
+            color: Some("cyan".to_owned()),
+            folder: Some(folder.to_owned()),
+        };
+        let clock = Clock {
+            now_ms: NOW,
+            fork: &fork,
+            state: &status_state,
+            started_label: &fixed_label,
+        };
+        render(&raw.to_string(), &clock)
+            .unwrap()
+            .into_iter()
+            .map(|line| {
+                let line: Value = serde_json::from_str(&line).unwrap();
+                line["content"].as_str().unwrap().to_owned()
+            })
+            .collect()
     }
 
     fn content_with(
@@ -755,6 +869,7 @@ mod tests {
         let fork = |id: &str| Fork {
             started_ms: (id == "a1").then_some(NOW - 3_600_000),
             color: None,
+            folder: None,
         };
         let label = |ms: u64| Some(format!("at {ms}"));
         let clock = Clock {
@@ -802,7 +917,21 @@ mod tests {
             );
             if columns >= 40 {
                 assert_eq!(shown.chars().count(), columns, "{columns}: {shown:?}");
-                assert!(shown.contains(STARTED), "{columns}: {shown:?}");
+                assert!(shown.contains(IDLE_LABEL), "{columns}: {shown:?}");
+            }
+            let rows = content_in(
+                json!({"columns": columns, "tasks": [task.clone()]}),
+                "Git/qol-monorepo",
+            );
+            let shown = visible(&rows[0]);
+            assert!(
+                shown.chars().count() <= columns,
+                "{columns}: {shown:?} is {} wide",
+                shown.chars().count()
+            );
+            if columns >= 40 {
+                assert_eq!(shown.chars().count(), columns, "{columns}: {shown:?}");
+                assert!(shown.contains("qol-monorepo"), "{columns}: {shown:?}");
                 assert!(shown.contains(IDLE_LABEL), "{columns}: {shown:?}");
             }
         }
@@ -832,19 +961,191 @@ mod tests {
             at(64),
             format!("kcd2-modding Opus 5.5 high {STARTED} · 25s · 53.9k tokens")
         );
-        assert_eq!(
-            at(56),
-            format!("kcd2-modding Opus 5.5 high {STARTED} · 53.9k tokens")
-        );
-        assert_eq!(
-            at(52),
-            format!("kcd2-modding Opus 5.5 {STARTED} · 53.9k tokens")
-        );
-        assert_eq!(at(45), format!("kcd2-modding {STARTED} · 53.9k tokens"));
-        assert_eq!(at(36), format!("kcd2-modding {STARTED} · 53.9k"));
-        assert_eq!(at(28), format!("kcd2-modding {STARTED}"));
-        assert_eq!(at(18), format!("kcd2-… {STARTED}"));
+        assert_eq!(at(52), "kcd2-modding Opus 5.5 high 25s · 53.9k tokens");
+        assert_eq!(at(41), "kcd2-modding Opus 5.5 high 53.9k tokens");
+        assert_eq!(at(40), "kcd2-modding Opus 5.5 53.9k tokens");
+        assert_eq!(at(36), "kcd2-modding Opus 5.5 53.9k tokens");
+        assert_eq!(at(30), "kcd2-modding 53.9k tokens");
+        assert_eq!(at(22), "kcd2-modding 53.9k");
+        assert_eq!(at(14), "kcd2-modding");
         assert_eq!(at(8), "kcd2-mo…");
+    }
+
+    #[test]
+    fn a_shrinking_row_drops_date_elapsed_effort_model_and_shortens_the_folder_in_turn() {
+        let task = json!({
+            "id": "a1",
+            "description": "kcd2-modding: continue KCD2 modding",
+            "startTime": NOW - 25_000,
+            "model": "claude-opus-5-5",
+            "effort": "high",
+            "tokenCount": 53_900,
+        });
+        let at = |columns: usize| {
+            let rows = content_in(
+                json!({"columns": columns, "tasks": [task.clone()]}),
+                "Git/qol-monorepo",
+            );
+            assert!(visible(&rows[0]).chars().count() <= columns, "{rows:?}");
+            squeezed(&[visible(&rows[0])])[0].clone()
+        };
+        let head = "kcd2-modding Opus 5.5 high Git/qol-monorepo";
+        for (columns, shown) in [
+            (
+                110,
+                format!("{head} continue KCD2 modding {STARTED} · 25s · 53.9k tokens"),
+            ),
+            (85, format!("{head} con… {STARTED} · 25s · 53.9k tokens")),
+            (84, format!("{head} {STARTED} · 25s · 53.9k tokens")),
+            (79, format!("{head} {STARTED} · 25s · 53.9k tokens")),
+            (78, format!("{head} 25s · 53.9k tokens")),
+            (65, format!("{head} 25s · 53.9k tokens")),
+            (64, format!("{head} 53.9k tokens")),
+            (59, format!("{head} 53.9k tokens")),
+            (
+                58,
+                "kcd2-modding Opus 5.5 Git/qol-monorepo 53.9k tokens".to_owned(),
+            ),
+            (
+                54,
+                "kcd2-modding Opus 5.5 Git/qol-monorepo 53.9k tokens".to_owned(),
+            ),
+            (53, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
+            (44, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
+            (43, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
+            (40, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
+            (39, "kcd2-modding qol-monorepo 53.9k".to_owned()),
+            (33, "kcd2-modding qol-monorepo 53.9k".to_owned()),
+            (32, "kcd2-modding qol-monorepo".to_owned()),
+            (28, "kcd2-modding qol-monorepo".to_owned()),
+        ] {
+            assert_eq!(at(columns), shown, "{columns} columns");
+        }
+        assert_eq!(
+            at(20),
+            "kcd2-modding",
+            "below the name and folder the folder goes"
+        );
+    }
+
+    #[test]
+    fn a_row_shows_the_folder_dimmed_after_the_model_and_effort() {
+        let rows = content_in(
+            json!({
+                "columns": 160,
+                "tasks": [{
+                    "id": "a1",
+                    "name": "switchboard-flow-improvements",
+                    "description": "orchestration revisions",
+                    "label": "Committing changes",
+                    "status": "running",
+                    "startTime": NOW - 125_000,
+                    "model": "claude-opus-5-5",
+                    "effort": "high",
+                    "tokenCount": 108_200,
+                }],
+            }),
+            "Git/qol-monorepo",
+        );
+        let row = &rows[0];
+        assert!(
+            row.starts_with(&format!(
+                "{CYAN}switchboard-flow-improvements{COLOR_OFF}  \x1b[33mOpus 5.5\x1b[39m high  \x1b[2mGit/qol-monorepo\x1b[22m  orchestration revisions · Committing changes"
+            )),
+            "{row:?}"
+        );
+        assert!(
+            visible(row).ends_with(&format!("  working · {STARTED} · 2m 5s · 108.2k tokens")),
+            "{row:?}"
+        );
+        assert_eq!(visible(row).chars().count(), 160, "{row:?}");
+        let unbounded = content_in(
+            json!({"tasks": [{"id": "a1", "name": "fork-a", "description": "work"}]}),
+            "~/qol",
+        );
+        assert_eq!(
+            unbounded,
+            [format!(
+                "{CYAN}fork-a{COLOR_OFF}  \x1b[2m~/qol\x1b[22m  work  0 tokens"
+            )]
+        );
+        let sneaky = content_in(
+            json!({"tasks": [{"id": "a1", "name": "fork-a", "description": "work"}]}),
+            "a\x1b[2Jb",
+        );
+        assert!(!visible(&sneaky[0]).contains('\x1b'), "{sneaky:?}");
+        assert!(sneaky[0].contains("a [2Jb"), "{sneaky:?}");
+    }
+
+    #[test]
+    fn a_folder_label_is_the_last_two_names_with_home_written_as_a_tilde() {
+        let home = Path::new("/home/me");
+        for (path, label) in [
+            ("/home/me", Some("~")),
+            ("/home/me/", Some("~")),
+            ("/home/me/Git", Some("~/Git")),
+            ("/home/me/Git/qol-monorepo", Some("Git/qol-monorepo")),
+            (
+                "/home/me/Git/worktrees/loop-gate",
+                Some("worktrees/loop-gate"),
+            ),
+            (
+                "/home/me/Git/worktrees/loop-gate/qol",
+                Some("loop-gate/qol"),
+            ),
+            ("/home/meow", Some("home/meow")),
+            ("/home/meow/Git", Some("meow/Git")),
+            ("/home", Some("home")),
+            ("/", Some("/")),
+            ("/tmp", Some("tmp")),
+            ("/media/kmrh47/WD/Git", Some("WD/Git")),
+            ("/media//kmrh47/./WD", Some("kmrh47/WD")),
+            ("relative/path/here", Some("path/here")),
+            ("", None),
+        ] {
+            assert_eq!(
+                folder_label(Path::new(path), Some(home)).as_deref(),
+                label,
+                "{path:?}"
+            );
+        }
+        for (path, label) in [
+            ("/home/me", Some("home/me")),
+            ("/home/me/Git", Some("me/Git")),
+            ("/", Some("/")),
+            ("", None),
+        ] {
+            assert_eq!(
+                folder_label(Path::new(path), None).as_deref(),
+                label,
+                "{path:?} without a home"
+            );
+        }
+        for (path, label) in [
+            ("/", Some("/")),
+            ("/usr", Some("usr")),
+            ("/usr/lib", Some("usr/lib")),
+        ] {
+            assert_eq!(
+                folder_label(Path::new(path), Some(Path::new("/"))).as_deref(),
+                label,
+                "{path:?} under a root home"
+            );
+        }
+    }
+
+    #[test]
+    fn the_short_folder_is_the_last_name_and_a_lone_mark_stays() {
+        for (label, short) in [
+            ("Git/qol-monorepo", "qol-monorepo"),
+            ("worktrees/loop-gate", "loop-gate"),
+            ("~/Git", "Git"),
+            ("~", "~"),
+            ("/", "/"),
+            ("tmp", "tmp"),
+        ] {
+            assert_eq!(short_folder(label), short, "{label}");
+        }
     }
 
     #[test]
@@ -1157,6 +1458,41 @@ mod tests {
             Some("orange"),
             "the meta file names the source, never the prompt"
         );
+        assert_eq!(facts.folder, None, "no cwd in the meta file, no folder");
+    }
+
+    #[test]
+    fn the_folder_comes_from_the_cwd_in_the_meta_file_of_the_rows_own_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = "{\"type\":\"user\",\"message\":{\"content\":\"Project: /w\"}}\n";
+        let source = dir.path().join("agent-a1.jsonl");
+        std::fs::write(&source, first).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a1.meta.json"),
+            json!({"cwd": "/qol-no-home/Git/old-project"}).to_string(),
+        )
+        .unwrap();
+        let resumed = dir.path().join("agent-a2.jsonl");
+        std::fs::write(&resumed, first).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a2.meta.json"),
+            json!({"cwd": "/qol-no-home/Git/qol-monorepo", RESUMED_FROM: source.to_string_lossy()})
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            fork_facts(&source).folder.as_deref(),
+            Some("Git/old-project")
+        );
+        assert_eq!(
+            fork_facts(&resumed).folder.as_deref(),
+            Some("Git/qol-monorepo"),
+            "a resumed fork shows its own cwd, not its source's"
+        );
+        let bare = dir.path().join("agent-a3.jsonl");
+        std::fs::write(&bare, first).unwrap();
+        std::fs::write(dir.path().join("agent-a3.meta.json"), "{\"cwd\":\"\"}").unwrap();
+        assert_eq!(fork_facts(&bare).folder, None);
     }
 
     #[test]
@@ -1164,6 +1500,7 @@ mod tests {
         let orange = |_id: &str| Fork {
             started_ms: None,
             color: Some("orange".to_owned()),
+            folder: None,
         };
         let plain_fork = |_id: &str| Fork::default();
         let raw = json!({"columns": 40, "tasks": [{"id": "a1", "name": "kcd2-modding", "description": "x"}]}).to_string();
@@ -1193,6 +1530,7 @@ mod tests {
         let unknown = |_id: &str| Fork {
             started_ms: None,
             color: Some("default".to_owned()),
+            folder: None,
         };
         assert!(
             row_with(&unknown).starts_with(own),
