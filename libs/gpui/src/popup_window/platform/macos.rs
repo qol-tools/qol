@@ -998,6 +998,41 @@ fn join_dock_for(window: &NSWindow, mtm: MainThreadMarker) {
     }
 }
 
+const INACTIVE_FRONT_RETRIES: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(100),
+    std::time::Duration::from_millis(300),
+    std::time::Duration::from_millis(700),
+];
+
+fn keep_front_while_inactive(title: &str) {
+    let title = title.to_string();
+    std::thread::spawn(move || {
+        let mut waited = std::time::Duration::ZERO;
+        for at in INACTIVE_FRONT_RETRIES {
+            std::thread::sleep(at - waited);
+            waited = at;
+            let title = title.clone();
+            run_on_main(Box::new(move || reorder_front_if_inactive(&title)));
+        }
+    });
+}
+
+fn reorder_front_if_inactive(title: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    if NSApplication::sharedApplication(mtm).isActive() {
+        return;
+    }
+    let Some(window) = find_window_by_title(mtm, title) else {
+        return;
+    };
+    if window.isVisible() && window.alphaValue() > 0.0 && window.level() == NSNormalWindowLevel {
+        window.orderFrontRegardless();
+        qol_runtime::probe!("SHOW_WIN", "title={title} reordered_front_while_inactive");
+    }
+}
+
 fn leave_dock_when_no_framed_window_shows() {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -1069,6 +1104,7 @@ fn show_window_by_title_with_focus(
         force_app_frontmost();
         if !app.isActive() {
             window.orderFrontRegardless();
+            keep_front_while_inactive(title);
         }
     }
     if !focus {
