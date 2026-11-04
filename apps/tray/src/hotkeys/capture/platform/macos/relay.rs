@@ -28,12 +28,14 @@ static ANNOUNCED: Mutex<Announced> = Mutex::new(Announced {
 });
 
 struct Lease {
-    combos: Vec<KeyCombo>,
+    armed: bool,
+    unrelayed: Vec<KeyCombo>,
     renewed: Option<Instant>,
 }
 
 static LEASE: Mutex<Lease> = Mutex::new(Lease {
-    combos: Vec::new(),
+    armed: false,
+    unrelayed: Vec::new(),
     renewed: None,
 });
 
@@ -43,20 +45,26 @@ fn lease() -> MutexGuard<'static, Lease> {
 
 fn renew(lease: &HotkeyLease, now: Instant) {
     let mut held = self::lease();
-    held.combos = lease.lease.iter().map(key_combo).collect();
+    held.armed = lease.lease;
+    held.unrelayed = lease.unrelayed.iter().map(key_combo).collect();
     held.renewed = Some(now);
 }
 
 pub(super) fn leased(observed: &KeyCombo) -> bool {
-    leased_at(observed, Instant::now())
+    let relayed = announced()
+        .hotkeys
+        .iter()
+        .any(|combo| key_combo(combo) == *observed);
+    relayed && leased_at(observed, Instant::now())
 }
 
 fn leased_at(observed: &KeyCombo, now: Instant) -> bool {
     let lease = lease();
-    lease
-        .renewed
-        .is_some_and(|renewed| now.saturating_duration_since(renewed) < hotkey_relay::LEASE_TTL)
-        && lease.combos.contains(observed)
+    lease.armed
+        && lease
+            .renewed
+            .is_some_and(|renewed| now.saturating_duration_since(renewed) < hotkey_relay::LEASE_TTL)
+        && !lease.unrelayed.contains(observed)
 }
 
 fn announced() -> MutexGuard<'static, Announced> {
@@ -386,26 +394,32 @@ mod tests {
 
     #[test]
     fn a_leased_combo_belongs_to_the_relay_until_the_lease_lapses() {
-        let shift_super_r = HotkeyCombo {
+        let observed = key_combo(&HotkeyCombo {
             mods: vec![HotkeyModifier::Shift, HotkeyModifier::Super],
             mac_keycode: 15,
-        };
-        let observed = key_combo(&shift_super_r);
-        let ctrl_shift_r = key_combo(&HotkeyCombo {
-            mods: vec![HotkeyModifier::Ctrl, HotkeyModifier::Shift],
-            mac_keycode: 15,
         });
+        let unnamed = HotkeyCombo {
+            mods: vec![HotkeyModifier::Super],
+            mac_keycode: 0x3f,
+        };
         let start = Instant::now();
         renew(
             &HotkeyLease {
-                lease: vec![shift_super_r],
+                lease: true,
+                unrelayed: vec![unnamed.clone()],
             },
             start,
         );
         assert!(leased_at(&observed, start + Duration::from_secs(2)));
-        assert!(!leased_at(&ctrl_shift_r, start));
+        assert!(!leased_at(&key_combo(&unnamed), start));
         assert!(!leased_at(&observed, start + hotkey_relay::LEASE_TTL));
-        renew(&HotkeyLease { lease: Vec::new() }, start);
+        renew(
+            &HotkeyLease {
+                lease: false,
+                unrelayed: Vec::new(),
+            },
+            start,
+        );
         assert!(!leased_at(&observed, start));
     }
 }

@@ -30,7 +30,9 @@ pub struct HotkeyPress {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HotkeyLease {
-    pub lease: Vec<HotkeyCombo>,
+    pub lease: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unrelayed: Vec<HotkeyCombo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,23 +74,27 @@ mod tests {
     #[test]
     fn a_lease_reads_back_as_a_lease_and_never_as_a_press() {
         let lease = HotkeyLease {
-            lease: vec![HotkeyCombo {
-                mods: vec![HotkeyModifier::Shift, HotkeyModifier::Super],
-                mac_keycode: 15,
+            lease: true,
+            unrelayed: vec![HotkeyCombo {
+                mods: vec![HotkeyModifier::Super],
+                mac_keycode: 0x3f,
             }],
         };
         let wire = serde_json::to_string(&lease).unwrap();
         assert_eq!(
             wire,
-            r#"{"lease":[{"mods":["shift","super"],"mac_keycode":15}]}"#
+            r#"{"lease":true,"unrelayed":[{"mods":["super"],"mac_keycode":63}]}"#
         );
         assert_eq!(
             serde_json::from_str::<RelayMessage>(&wire).unwrap(),
             RelayMessage::Lease(lease)
         );
         assert_eq!(
-            serde_json::from_str::<RelayMessage>(r#"{"lease":[]}"#).unwrap(),
-            RelayMessage::Lease(HotkeyLease { lease: Vec::new() })
+            serde_json::from_str::<RelayMessage>(r#"{"lease":false}"#).unwrap(),
+            RelayMessage::Lease(HotkeyLease {
+                lease: false,
+                unrelayed: Vec::new(),
+            })
         );
     }
 }

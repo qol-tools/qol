@@ -81,16 +81,22 @@ impl Hotkeys {
         armed: bool,
     ) -> Option<(PathBuf, HotkeyLease)> {
         let relay = self.relay.clone()?;
-        let lease = if armed {
+        let unrelayed = if armed {
             self.combos
                 .iter()
-                .filter(|combo| key_codes::for_keycode(combo.mac_keycode, physical).is_some())
+                .filter(|combo| key_codes::for_keycode(combo.mac_keycode, physical).is_none())
                 .cloned()
                 .collect()
         } else {
             Vec::new()
         };
-        Some((relay, HotkeyLease { lease }))
+        Some((
+            relay,
+            HotkeyLease {
+                lease: armed,
+                unrelayed,
+            },
+        ))
     }
 }
 
@@ -337,6 +343,24 @@ mod tests {
         let manipulators = relayed(vec![shift_super_r, space]);
         assert_eq!(manipulators.len(), 8 + 4 + 1);
         assert_eq!(manipulators[12]["from"]["key_code"], "spacebar");
+    }
+
+    #[test]
+    fn an_armed_lease_hands_back_only_the_combos_karabiner_cannot_name() {
+        let unnamed = HotkeyCombo {
+            mods: vec![HotkeyModifier::Super],
+            mac_keycode: 0x3f,
+        };
+        let hotkeys = Hotkeys {
+            relay: Some(PathBuf::from("/run/qol/relay.sock")),
+            combos: vec![alt_tab(), unnamed.clone()],
+        };
+        let (_, armed) = hotkeys.lease(PhysicalLayout::Ansi, true).unwrap();
+        assert!(armed.lease);
+        assert_eq!(armed.unrelayed, vec![unnamed]);
+        let (_, off) = hotkeys.lease(PhysicalLayout::Ansi, false).unwrap();
+        assert!(!off.lease);
+        assert!(off.unrelayed.is_empty());
     }
 
     #[test]

@@ -687,7 +687,7 @@ mod tests {
         backend.follow_hotkeys(
             Hotkeys {
                 relay: Some(relay.clone()),
-                combos: vec![alt_tab.clone()],
+                combos: vec![alt_tab],
             },
             &config(true),
             &layout("us"),
@@ -695,19 +695,19 @@ mod tests {
         let leased = |backend: &Backend<Fake>| {
             backend
                 .lease(PhysicalLayout::Ansi)
-                .map(|(path, lease)| (path, lease.lease))
+                .map(|(path, lease)| (path, lease.lease, lease.unrelayed))
         };
 
-        assert_eq!(leased(&backend), Some((relay.clone(), Vec::new())));
+        assert_eq!(leased(&backend), Some((relay.clone(), false, Vec::new())));
 
         backend.apply(CHOSEN, &config(true), &layout("us"), &input);
-        assert_eq!(leased(&backend), Some((relay.clone(), vec![alt_tab])));
+        assert_eq!(leased(&backend), Some((relay.clone(), true, Vec::new())));
 
         backend.apply(CHOSEN, &config(false), &layout("us"), &input);
-        assert_eq!(leased(&backend), Some((relay.clone(), Vec::new())));
+        assert_eq!(leased(&backend), Some((relay.clone(), false, Vec::new())));
 
         backend.stop();
-        assert_eq!(leased(&backend), Some((relay, Vec::new())));
+        assert_eq!(leased(&backend), Some((relay, false, Vec::new())));
 
         backend.follow_hotkeys(Hotkeys::default(), &config(true), &layout("us"));
         assert_eq!(leased(&backend), None);
