@@ -75,7 +75,8 @@ const REOPEN_DELAY_MS = 1_500
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
-const FORK_RESUME = 'Only the switchboard resumes or continues a fork or a session. Tell the user in one line to select that fork in the agent list, or that the switchboard brings it back.'
+const FORK_RESUME = 'Only the switchboard resumes, continues, opens or messages another fork or session. Tell the user in one line which fork or session it is for and that they can select it in the agent list.'
+const CROSS_SESSION = /__session_(send|reopen|fork|spawn|submit|bridge|close|remote_control|loop_close)$/
 const FORK_TO_FORK =
   'Not sent: a fork messages only the forks it started and the fork that started it. Something the user typed for another fork is for that fork: tell the user in one line to select it in the agent list.'
 const COLOR: Record<Kind, string> = {
@@ -308,9 +309,19 @@ export const mayMessage = (list: Entry[], from: string, to: unknown): boolean =>
   const id = recipientId(to)
   if (id === undefined || id === from) return false
   const sender = list.find(one => one.agentId === from)
-  const recipient = list.find(one => one.agentId === id)
-  return sender !== undefined && recipient !== undefined && (recipient.launcher === from || sender.launcher === id)
+  const recipient = list.some(one => one.agentId === id) ? addressed(list, id) : undefined
+  if (sender === undefined || recipient === undefined || recipient.agentId === from) return false
+  const current = (launcher: string | undefined) => (launcher === undefined ? undefined : addressed(list, launcher)?.agentId)
+  return current(recipient.launcher) === from || current(sender.launcher) === recipient.agentId
 }
+
+export const listedAgents = (agents: unknown): Set<string> =>
+  new Set(
+    (Array.isArray(agents) ? agents : [])
+      .filter(agent => !ENDED_STATUSES.includes(String((agent as { status?: unknown }).status)))
+      .map(agent => (agent as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === 'string'),
+  )
 
 const projectOf = (prompt: string): string | undefined => PROJECT.exec(prompt.split('\n', 1)[0] ?? '')?.[1]
 
@@ -771,7 +782,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const saved = await $.store.get(key)
     const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
     const agents: unknown = await $.agent.list().catch(() => [])
-    const held = new Set(Array.isArray(agents) ? agents.map(agent => (agent as { id?: unknown }).id) : [])
+    const held = listedAgents(agents)
     const again: string[] = []
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
@@ -861,7 +872,7 @@ export const resumeFork = async ($: EngineInterface, fork: string, isContinued =
     return { isResumed: true, text: `Resumed as ${keyName(target.name)}, agent id ${sent.agentId}: it carries on its work from where it stopped.` }
   }
   const agents: unknown = await $.agent.list().catch(() => [])
-  const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId && !ENDED_STATUSES.includes(String((agent as { status?: unknown }).status)))
+  const isHeld = listedAgents(agents).has(target.agentId)
   if (isHeld) return { isResumed: true, text: `${keyName(target.name)} is already in the agent list, agent id ${target.agentId}: nothing was sent.` }
   const sent = await sendTo($, target, WAIT_FOR_USER, holdingVia($, direct($), RESTARTED_REPLY, isCut(target)))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}` }
@@ -1129,7 +1140,10 @@ export const register: Register = on => {
   }
 
   on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {
-    if (e.resume !== undefined) return next(e)
+    if (e.resume !== undefined) {
+      if (e.parentAgentId !== undefined && !mayMessage(await read($, board), e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
+      return next(e)
+    }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
       return { deny: "A project-fork's prompt must start with the line `Project: <absolute path of an existing project folder>`." }
@@ -1364,7 +1378,12 @@ export const register: Register = on => {
   on('session.send', async ($, e, next) => {
     if (e.agentId === undefined) return next(e)
     return mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }))
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
+    return next(e)
+  }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
   on('turn.start', async ($, e, next) => {
     const isHeld = await claimHold($, e.agentId, e.turnId, e.text)

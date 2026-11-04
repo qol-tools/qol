@@ -89,7 +89,8 @@ mod tests {
         for needle in [
             "const FORK = 'project-fork'",
             "on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {",
-            "if (e.resume !== undefined) return next(e)",
+            "if (e.parentAgentId !== undefined && !mayMessage(await read($, board), e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }",
+            "if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }",
             "const prompt = withLauncher(e.prompt, e.parentAgentId)",
             "const claimed = await recordClaim($, e.description, cwd)",
             "return next({ ...e, cwd, prompt, description: claimed.description })",

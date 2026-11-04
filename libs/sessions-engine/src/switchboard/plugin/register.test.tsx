@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forkColor, reportLine } from '../hooks/register'
+import { forkColor, listedAgents, mayMessage, reportLine } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -736,7 +736,7 @@ test('a terminal session comes back as a fork with its own conversation once, an
   expect(sent).toHaveLength(3)
 
   const fromFork = await $.tool.call({ tool, ...session, transcript: '/p/third.jsonl', agentId: 'a9' } as any)
-  expect(String(fromFork.deny)).toContain('Only the switchboard resumes or continues a fork or a session')
+  expect(String(fromFork.deny)).toContain('Only the switchboard resumes, continues, opens or messages another fork or session')
   expect(runs.at(-1)).not.toEqual(expect.arrayContaining(['/p/third.jsonl']))
 })
 
@@ -928,9 +928,9 @@ test('continuing a fork prompts it to carry on its work', async ($, on) => {
   expect(sent[0].text).toContain('approves nothing you were waiting on the user for')
   await spawn($, 'b1', 'b1-fork: a fork')
   const refused = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true, agentId: 'b1' })
-  expect(String(refused.deny)).toContain('Only the switchboard resumes or continues a fork')
+  expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or messages')
   const plain = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', agentId: 'b1' })
-  expect(String(plain.deny)).toContain('Only the switchboard resumes or continues a fork')
+  expect(String(plain.deny)).toContain('Only the switchboard resumes, continues, opens or messages')
   expect(sent).toHaveLength(1)
 })
 
@@ -1289,7 +1289,31 @@ test('every fork is told its launcher on the line under Project, and a launcher 
   expect(spawned[2]?.prompt).toBe('Project: /work\nLauncher: the fork with agent id p1, whose messages reach you as an agent-message from "p1".\nfork k2')
 })
 
-test('a fork messages any other fork by agent id, and never the switchboard or a name', async ($, on) => {
+test('a fork and its launcher still reach each other after either is continued under a new agent id', () => {
+  const row = (agentId: string, launcher?: string, successor?: string) => ({ agentId, name: `${agentId}-fork: x`, headline: '', at: 0, isWorking: false, isDismissed: successor !== undefined, ...(launcher === undefined ? {} : { launcher }), ...(successor === undefined ? {} : { successor }) }) as any
+  const list = [row('p1', undefined, 'p3'), row('k1', 'p1', 'k3'), row('p3'), row('k3', 'p1'), row('s1')]
+  expect(mayMessage(list, 'k3', 'p3')).toBe(true)
+  expect(mayMessage(list, 'p3', 'k3')).toBe(true)
+  expect(mayMessage(list, 'p3', 'k1')).toBe(true)
+  expect(mayMessage(list, 's1', 'k3')).toBe(false)
+  expect(mayMessage(list, 'k3', 's1')).toBe(false)
+})
+
+test('a fork cannot send to, open, reopen or close another session with the sessions tools', async ($, on) => {
+  engine(on)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  for (const tool of ['mcp__sessions__session_send', 'mcp__sessions__session_reopen', 'mcp__plugin_qol-sessions_qol-sessions__session_fork', 'mcp__sessions__session_close']) {
+    const refused = await $.tool.call({ tool, agentId: 'a1' } as any)
+    expect(String(refused.deny)).toContain('Only the switchboard resumes, continues, opens or messages another fork or session')
+  }
+})
+
+test('a fork whose agent entry has ended counts as out of the agent list', () => {
+  expect([...listedAgents([{ id: 'a1', status: 'running' }, { id: 'a2', status: 'completed' }, { id: 'a3', status: 'killed' }, { id: 'a4', status: 'idle' }, { id: 'a5' }])]).toEqual(['a1', 'a4', 'a5'])
+})
+
+test('a fork messages only the forks it started and the fork that started it, and never the switchboard or a name', async ($, on) => {
   const sent: unknown[] = []
   engine(on, sent)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -1301,7 +1325,7 @@ test('a fork messages any other fork by agent id, and never the switchboard or a
 
   const cases: [string | undefined, unknown, boolean][] = [
     ['p1', 'k1', true],
-    ['p1', { agentId: 'k1' }, true],
+    ['p1', { agentId: 'k1' }, false],
     ['k1', 'p1', true],
     [undefined, 'k1', true],
     [undefined, 'other-fork', true],
