@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use qol_windowing::{WindowId, WindowRect};
 
 use crate::config::WindowActionsConfig;
-use crate::platform::layout;
+use crate::platform::layout::{self, Placement};
 use crate::restore::state_store::{FileMinimizedStateStore, LAST_MINIMIZED_WINDOW_FILE_NAME};
 use crate::restore::{self, WindowSystem};
 
@@ -72,7 +72,22 @@ fn place_foreground(target: impl FnOnce(WindowRect) -> WindowRect) -> Result<(),
     let work = window
         .work_area()
         .ok_or("Cannot read the monitor work area")?;
-    window.set_frame(target(work))
+    place(
+        window,
+        Placement {
+            work,
+            frame: target(work),
+        },
+    )
+}
+
+fn place(window: Window, placement: Placement) -> Result<(), String> {
+    window.set_frame(placement.frame)?;
+    let granted = window.frame().ok_or("Cannot read window geometry")?;
+    let Some(settled) = layout::settled_frame(placement.work, placement.frame, granted) else {
+        return Ok(());
+    };
+    window.set_frame(settled)
 }
 
 fn move_monitor(delta: i32) -> Result<(), String> {
@@ -82,7 +97,7 @@ fn move_monitor(delta: i32) -> Result<(), String> {
     let screens = win32::work_areas_left_to_right();
     let target =
         layout::moved_to_monitor(frame, &screens, delta).map_err(|error| error.to_string())?;
-    window.set_frame(target)?;
+    place(window, target)?;
     if maximized {
         window.maximize();
     }

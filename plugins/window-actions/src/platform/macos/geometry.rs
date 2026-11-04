@@ -3,7 +3,7 @@ use qol_windowing::WindowRect;
 use super::screen::Rect;
 use super::{ax, screen};
 use crate::config::WindowActionsConfig;
-use crate::platform::layout;
+use crate::platform::layout::{self, Placement};
 
 fn frontmost_screen() -> Result<(i32, Rect), String> {
     let pid = ax::frontmost_pid().ok_or("No frontmost application")?;
@@ -13,9 +13,18 @@ fn frontmost_screen() -> Result<(i32, Rect), String> {
     Ok((pid, scr))
 }
 
-pub(super) fn ax_set(pid: i32, rect: Rect) -> Result<(), String> {
+pub(super) fn ax_set(pid: i32, rect: Rect) -> Result<Rect, String> {
     ax::set_position_and_size(pid, rect)
         .map_err(|error| format!("Failed to set window geometry: {error}"))
+}
+
+fn place(pid: i32, placement: Placement) -> Result<(), String> {
+    let granted = ax_set(pid, rect(placement.frame))?;
+    let Some(settled) = layout::settled_frame(placement.work, placement.frame, frame(granted))
+    else {
+        return Ok(());
+    };
+    ax_set(pid, rect(settled)).map(drop)
 }
 
 fn frame(rect: Rect) -> WindowRect {
@@ -38,7 +47,14 @@ fn rect(frame: WindowRect) -> Rect {
 
 fn place_on_frontmost_screen(target: impl FnOnce(WindowRect) -> WindowRect) -> Result<(), String> {
     let (pid, screen) = frontmost_screen()?;
-    ax_set(pid, rect(target(frame(screen))))
+    let work = frame(screen);
+    place(
+        pid,
+        Placement {
+            work,
+            frame: target(work),
+        },
+    )
 }
 
 pub fn snap_left(config: &WindowActionsConfig) -> Result<(), String> {
@@ -79,5 +95,5 @@ fn move_monitor(delta: i32) -> Result<(), String> {
         .collect();
     let target =
         layout::moved_to_monitor(frame(win), &screens, delta).map_err(|error| error.to_string())?;
-    ax_set(pid, rect(target))
+    place(pid, target)
 }

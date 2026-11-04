@@ -118,7 +118,7 @@ impl WindowOps for MacWindowSystem {
             w: rect.width,
             h: rect.height,
         };
-        ax_set(pid, rect)
+        ax_set(pid, rect).map(drop)
     }
 
     fn focus_window(&self, window_id: &WindowId) -> Result<bool, String> {
