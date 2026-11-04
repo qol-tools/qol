@@ -1065,8 +1065,11 @@ fn join_dock_for(window: &NSWindow, mtm: MainThreadMarker) {
     }
 }
 
-const INACTIVE_FRONT_RETRIES: [std::time::Duration; 3] = [
+const INACTIVE_FRONT_RETRIES: [std::time::Duration; 6] = [
+    std::time::Duration::from_millis(16),
+    std::time::Duration::from_millis(50),
     std::time::Duration::from_millis(100),
+    std::time::Duration::from_millis(200),
     std::time::Duration::from_millis(300),
     std::time::Duration::from_millis(700),
 ];
@@ -1178,7 +1181,6 @@ fn show_window_by_title_with_focus(
     trace_settings_window("SETTINGS_SHOW", title, "start", Some(&window));
     if matches!(presentation, WindowPresentation::Normal) {
         settle_framed_panel(&window);
-        join_dock_for(&window, mtm);
     }
     if focus {
         let app = NSApplication::sharedApplication(mtm);
@@ -1207,6 +1209,9 @@ fn show_window_by_title_with_focus(
             "focused"
         };
         trace_settings_window("SETTINGS_SHOW", title, outcome, Some(&window));
+    }
+    if matches!(presentation, WindowPresentation::Normal) {
+        join_dock_for(&window, mtm);
     }
     if !focus {
         window.orderFrontRegardless();

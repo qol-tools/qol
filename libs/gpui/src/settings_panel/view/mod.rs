@@ -398,6 +398,15 @@ struct WheelControl {
     popup: WindowHandle<ColorWheelPopup>,
 }
 
+fn closes_window(keystroke: &gpui::Keystroke) -> bool {
+    let modifiers = &keystroke.modifiers;
+    keystroke.key == "w"
+        && modifiers.platform
+        && !modifiers.control
+        && !modifiers.alt
+        && !modifiers.shift
+}
+
 impl SettingsPanelView {
     pub(super) fn new(
         panel: SettingsPanel,
@@ -1919,6 +1928,12 @@ impl SettingsPanelView {
         if self.closing {
             self.closing = false;
             self.finish_pop(cx);
+        }
+        if closes_window(&event.keystroke) {
+            self.drop_slider_press();
+            self.pause_runtime_poll();
+            self.dismisser.dismiss(cx);
+            return;
         }
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
@@ -5977,7 +5992,7 @@ mod tests {
     use super::{
         absent_when_null, action_dispatch_plan, action_refresh_payload, action_shows_spinner,
         action_value_label, adjacent_visible_row, apply_runtime_query, binary_state_label,
-        clamp_selected, color_display, complete_action, crumb_labels, crumb_level,
+        clamp_selected, closes_window, color_display, complete_action, crumb_labels, crumb_level,
         due_query_indices, escape_step, field_id_unit, focus_level, format_number,
         header_is_redundant, horizontal_step_direction, intent, list_fit_updates, live_card_level,
         live_card_sync, live_card_sync_back, live_number_dispatch_plan, number_drag_effect,
@@ -6008,6 +6023,22 @@ mod tests {
     use crate::settings_panel::PanelSourceGroup;
     use crate::text_edit::{Span, TextField};
     use qol_config::contract::NumberConstraints;
+
+    #[test]
+    fn only_a_bare_cmd_w_closes_the_window() {
+        let cases = [
+            ("cmd-w", true),
+            ("w", false),
+            ("cmd-shift-w", false),
+            ("cmd-alt-w", false),
+            ("ctrl-w", false),
+            ("cmd-q", false),
+        ];
+        for (source, closes) in cases {
+            let keystroke = gpui::Keystroke::parse(source).unwrap();
+            assert_eq!(closes_window(&keystroke), closes, "{source}");
+        }
+    }
 
     #[test]
     fn rail_separator_only_marks_the_core_to_plugin_boundary() {
