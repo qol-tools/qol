@@ -254,9 +254,11 @@ test("a fork's resume notice that reaches a busy switchboard draws as nothing, a
   await spawn($, 'a7', 'quiet-fork: quiet')
   const row = (text: string, isExpanded = false) =>
     ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'UserMessage', props: { text, origin: { kind: 'task-notification' }, isExpanded } }) as const
-  const hidden = await $.ui.mount(row('Agent "quiet-fork: quiet" was resumed by the user'))
-  expect(await hidden.find({ type: 'Text' })).toBeUndefined()
-  await hidden.unmount()
+  for (const shown of ['quiet-fork: quiet', 'quiet-fork', 'quiet']) {
+    const hidden = await $.ui.mount(row(`Agent "${shown}" was resumed by the user`))
+    expect(await hidden.find({ type: 'Text' })).toBeUndefined()
+    await hidden.unmount()
+  }
   for (const [text, isExpanded] of [['Agent "quiet-fork: quiet" was resumed by the user', true], ['Agent "stranger" was resumed by the user', false], ['Background command "sleep" completed', false]] as const) {
     const kept = await $.ui.mount(row(text, isExpanded))
     expect(await kept.find({ type: 'Text' })).toBeDefined()

@@ -116,6 +116,9 @@ const textOf = (content: unknown): string =>
       : ''
 
 const keyName = (name: string): string => name.split(':', 1)[0]?.trim() || name
+const friendlyName = (name: string): string => (name.includes(': ') ? name.slice(name.indexOf(': ') + 2).trim() : name)
+const namesFork = (forkName: string, shown: string): boolean =>
+  [forkName, keyName(forkName), friendlyName(forkName)].includes(shown.trim()) || keyName(forkName) === keyName(shown)
 
 const dedent = (text: string): string => text.split('\n').map(line => line.replace(/^ {2}/, '')).join('\n')
 
@@ -1270,7 +1273,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin.kind !== 'task-notification' || e.props.isExpanded) return next(e)
     const name = RESUMED_SUMMARY.exec(e.props.text.trim())?.[1]
-    if (name === undefined || !(await read($, board)).some(entry => entry.name === name || keyName(entry.name) === keyName(name))) return next(e)
+    if (name === undefined || !(await read($, board)).some(entry => namesFork(entry.name, name))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   }).catch(($, e, next) => next(e))
