@@ -388,9 +388,12 @@ impl TraceRunner {
                 let reset = if color.is_empty() { "" } else { COLOR_RESET };
                 format!("{color}{}: {}{reset}", raw.tag, raw.msg)
             }
-            tag if tag.starts_with("SETTINGS_") => {
-                let behind = raw.msg.contains("on_top=false") && !raw.msg.contains("alpha=0.00");
-                let color = if behind { COLOR_FAIL } else { "" };
+            tag if SETTINGS_WINDOW_TAGS.contains(&tag) => {
+                let color = if settings_window_behind(&raw.msg) {
+                    COLOR_FAIL
+                } else {
+                    ""
+                };
                 let reset = if color.is_empty() { "" } else { COLOR_RESET };
                 format!("{color}{}: {}{reset}", raw.tag, raw.msg)
             }
@@ -1454,7 +1457,7 @@ impl TraceRunner {
             tag if tag.starts_with("PROFILE_") => "profile".to_string(),
             tag if tag.starts_with("WORLD_") => "world".to_string(),
             tag if tag.starts_with("WINACT_") => "window-actions".to_string(),
-            tag if tag.starts_with("SETTINGS_") => "settings".to_string(),
+            tag if SETTINGS_WINDOW_TAGS.contains(&tag) => "settings".to_string(),
             tag if tag.starts_with("GPU_DRIVER_SYNC_") => "gpu-driver-sync".to_string(),
             _ => self.process_name(&raw.pid),
         }
@@ -1561,6 +1564,21 @@ impl TraceRunner {
     }
 }
 
+const SETTINGS_WINDOW_TAGS: [&str; 5] = [
+    "SETTINGS_SHOW",
+    "SETTINGS_HIDE",
+    "SETTINGS_DOCK",
+    "SETTINGS_REFRONT",
+    "SETTINGS_REASSERT",
+];
+
+fn settings_window_behind(msg: &str) -> bool {
+    msg.contains("on_top=false")
+        && msg.contains("visible=true")
+        && !msg.contains("alpha=0.00")
+        && !msg.contains("outcome=start")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1641,6 +1659,54 @@ mod tests {
         assert_eq!(behind.source, "settings");
         assert!(behind.text.contains(COLOR_FAIL));
         assert!(!hidden.text.contains(COLOR_FAIL));
+    }
+
+    #[test]
+    fn only_a_shown_settings_window_past_its_start_counts_as_behind() {
+        let cases = [
+            ("outcome=focused visible=true alpha=1.00 on_top=false", true),
+            ("outcome=after visible=true alpha=1.00 on_top=true", false),
+            ("outcome=start visible=true alpha=1.00 on_top=false", false),
+            ("outcome=start visible=false alpha=1.00 on_top=false", false),
+            (
+                "outcome=focused visible=false alpha=1.00 on_top=false",
+                false,
+            ),
+            (
+                "outcome=alpha_zero visible=true alpha=0.00 on_top=false",
+                false,
+            ),
+        ];
+        for (msg, expected) in cases {
+            assert_eq!(settings_window_behind(msg), expected, "{msg}");
+        }
+    }
+
+    #[test]
+    fn only_settings_window_tags_leave_their_process_source() {
+        let args = Args::parse(&[OsString::from("settings")]).unwrap();
+        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        runner
+            .pid_names
+            .insert("42".to_string(), "qol-launcher".to_string());
+        let cases = [
+            ("SETTINGS_SHOW", "settings"),
+            ("SETTINGS_HIDE", "settings"),
+            ("SETTINGS_DOCK", "settings"),
+            ("SETTINGS_REFRONT", "settings"),
+            ("SETTINGS_REASSERT", "settings"),
+            ("SETTINGS_NAV", "qol-launcher"),
+            ("SETTINGS_PERSIST", "qol-launcher"),
+        ];
+        for (tag, expected) in cases {
+            let raw = RawLine {
+                ts_ms: 1,
+                pid: "42".to_string(),
+                tag: tag.to_string(),
+                msg: String::new(),
+            };
+            assert_eq!(runner.source_for(&raw), expected, "{tag}");
+        }
     }
 
     #[test]

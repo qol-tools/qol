@@ -1923,17 +1923,22 @@ impl SettingsPanelView {
         }
     }
 
+    fn on_capture_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if !closes_window(&event.keystroke) {
+            return;
+        }
+        cx.stop_propagation();
+        self.drop_edit();
+        self.drop_slider_press();
+        self.pause_runtime_poll();
+        self.dismisser.dismiss(cx);
+    }
+
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let walking = self.back_target.take();
         if self.closing {
             self.closing = false;
             self.finish_pop(cx);
-        }
-        if closes_window(&event.keystroke) {
-            self.drop_slider_press();
-            self.pause_runtime_poll();
-            self.dismisser.dismiss(cx);
-            return;
         }
         let key = event.keystroke.key.as_str();
         let key_char = event.keystroke.key_char.as_deref();
@@ -4254,6 +4259,7 @@ impl Render for SettingsPanelView {
             .window()
             .id("settings-panel")
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(Self::on_capture_key))
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_carry_modifiers))
             .on_mouse_down(

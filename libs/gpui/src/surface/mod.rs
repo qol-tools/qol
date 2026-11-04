@@ -624,11 +624,7 @@ impl Surface {
             } else {
                 WindowDecorations::Client
             }),
-            kind: if applies_settings_identity && matches!(self.kind, SurfaceKind::Panel) {
-                crate::platform::framed_key_panel_window_kind()
-            } else {
-                self.window_kind()
-            },
+            kind: self.opened_window_kind(applies_settings_identity),
             focus: self.takes_focus(),
             show: !native_reveal_gate && !passive_reveal_gate,
             is_movable: true,
@@ -832,6 +828,14 @@ impl Surface {
 
     fn resolved_bounds(&self, monitor: &crate::monitor::ActiveMonitor) -> Bounds<Pixels> {
         placed_bounds(self.kind, self.placement, monitor, self.size)
+    }
+
+    fn opened_window_kind(&self, settings_identity: bool) -> WindowKind {
+        if settings_identity && matches!(self.kind, SurfaceKind::Panel) {
+            crate::platform::framed_key_panel_window_kind()
+        } else {
+            self.window_kind()
+        }
     }
 
     fn window_kind(&self) -> WindowKind {
@@ -1144,7 +1148,9 @@ fn reassert_revealed_focus(title: Arc<Mutex<String>>, commit_gen: u64, kind: Sur
             crate::popup_window::show_window_by_title,
         ),
         SurfaceKind::Toast | SurfaceKind::Panel => {
-            if qol_platform::secure_input_enabled() {
+            if crate::popup_window::window_refuses_activation_by_title(
+                &crate::popup_window::read_title(&title),
+            ) {
                 qol_runtime::probe!(
                     "FOCUS_REASSERT",
                     "title={} step=skipped reason=secure_input",
@@ -1516,6 +1522,10 @@ impl<V: Render + Focusable + 'static> OpenedSurface<V> {
                 cx,
             );
             return true;
+        }
+        let title = self.dismisser.current_title();
+        if crate::popup_window::window_refuses_activation_by_title(&title) {
+            crate::popup_window::show_normal_window_by_title(&title);
         }
         self.handle
             .update(cx, |root, window, cx| {
@@ -1933,6 +1943,24 @@ mod tests {
         assert_eq!(surface.placement, MonitorPlacement::center());
         assert!(surface.takes_focus());
         assert!(surface.resizable());
+    }
+
+    #[test]
+    fn only_the_settings_panel_opens_as_the_framed_key_panel_kind() {
+        let framed = crate::platform::framed_key_panel_window_kind();
+        let cases = [
+            (SurfaceKind::Panel, true, framed),
+            (SurfaceKind::Panel, false, WindowKind::Normal),
+            (SurfaceKind::OverlayPanel, true, WindowKind::Normal),
+            (SurfaceKind::Toast, true, WindowKind::PopUp),
+        ];
+        for (kind, settings_identity, expected) in cases {
+            assert_eq!(
+                Surface::new(kind).opened_window_kind(settings_identity),
+                expected,
+                "{kind:?} settings_identity={settings_identity}"
+            );
+        }
     }
 
     #[test]

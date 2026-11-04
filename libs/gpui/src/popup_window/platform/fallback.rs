@@ -211,6 +211,10 @@ pub fn window_presentation_is_normal_by_title(_title: &str) -> bool {
     true
 }
 
+pub fn window_refuses_activation_by_title(_title: &str) -> bool {
+    false
+}
+
 pub fn disable_window_shadow(_title: &str) -> bool {
     false
 }
