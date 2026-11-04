@@ -289,7 +289,7 @@ const markWorking = async ($: EngineInterface, agentId: string, name: string | u
       if (entry !== undefined && entry.key !== undefined && (entry.isDone === true || entry.isStoppedByUser === true)) marked = entry.key
       return entry === undefined
         ? { agentId, name: name ?? agentId, headline: '', report: '', at: now, isWorking: true, isDismissed: false, ...placed }
-        : { ...unstopped(entry), name: name || entry.name, at: now, isWorking: true, isDismissed: false, ...placed }
+        : { ...unstopped(entry), name: entry.key !== undefined ? entry.name : name || entry.name, at: now, isWorking: true, isDismissed: false, ...placed }
     }),
   )
   if (marked !== undefined) await recordRun($, 'resume', ['--key', marked])
@@ -385,6 +385,8 @@ const backfill = async ($: EngineInterface, row: Entry): Promise<Entry> => {
   return { ...row, name: claimed.description, key: claimed.key }
 }
 
+const recordName = (record: SessionRecord): string => (record.friendly ? `${record.key}: ${record.friendly}` : record.key)
+
 const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> => {
   const listed = await recordRun($, 'list', [])
   if (!Array.isArray(listed?.records)) return rows
@@ -399,7 +401,7 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
     const row = filled.get(one) ?? one
     const record = row.key === undefined ? undefined : records.get(row.key)
     if (record === undefined) return row
-    return { ...row, ...(record.done === undefined ? {} : { isDone: true }), ...(typeof record.stopped_ms === 'number' ? { isStoppedByUser: true } : {}) }
+    return { ...row, name: recordName(record), ...(record.done === undefined ? {} : { isDone: true }), ...(typeof record.stopped_ms === 'number' ? { isStoppedByUser: true } : {}) }
   })
 }
 
@@ -526,7 +528,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
       filed = {
         ...placementOf(entry),
         agentId: report.agentId,
-        name: report.name || entry?.name || report.agentId,
+        name: entry?.key !== undefined ? entry.name : report.name || entry?.name || report.agentId,
         ...filing,
         report: clip(report.report, REPORT_CHARS),
         at: isSame ? entry.at : now,

@@ -1519,6 +1519,21 @@ test('opening the switchboard takes done and stopped from the record, keeps a lo
   expect(board).toContain('[fork board] gen4: h (needs the user, agent id k1)')
 })
 
+test("a keyed row takes its name from its record and keeps it when the fork's own description differs", async ($, on) => {
+  const store = new Map<string, unknown>()
+  const calls: string[][] = []
+  store.set('board:switchboard-session', [{ agentId: 'z1', key: 'zed-key', name: 'Old plain words', kind: 'ask', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false }])
+  engine(on, [], [], [], store)
+  recordEngine(on, calls, [{ key: 'zed-key', friendly: 'new words', cwd: '/', created_ms: 1, parts: [] }])
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  await typed($, notification('z1', 'Old plain words', 'Which colour?'), 'task-notification')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('zed-key')
+  expect(board).not.toContain('Old plain words')
+})
+
 test("a done or stopped mark ends with the fork's next real turn, in the row and in the record", async ($, on) => {
   const calls: string[][] = []
   engine(on)
