@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Plan the build a person downloads to live test a pull request.
 
-Only the files on `.github/live-test-paths` count: a change that needs no
-person is proved by the checks and gets no build. Their crates and every crate
-that depends on them decide what builds for each platform: every plugin among
+Only the files on `.github/live-test-paths` decide whether a person must test:
+a change that needs no person is proved by the checks and gets no build. Once
+one does, every changed crate counts, so the build carries the whole pull
+request: those crates and every crate that depends on them decide what builds
+for each platform: every plugin among
 them that runs on that platform by its release tag, and the tray when it is
 among them. Release tags carry the
 versions in the tree, so release_candidate.py builds them exactly as a release
@@ -110,6 +112,8 @@ def plan(
 ) -> dict:
     found = live_test.needing(files, listed)
     seeds, orphans = seeds_for(found, pkgs, patches or {}, users or {})
+    if found:
+        seeds |= seeds_for(files, pkgs, patches or {}, users or {})[0]
     affected = affected_crates.dependents_closure(seeds, pkgs) if seeds else set()
     runs = sorted(name for name in affected if name in units and platform in units[name]["platforms"])
     plugins = [f"{units[name]['id']}-v{units[name]['version']}" for name in runs]

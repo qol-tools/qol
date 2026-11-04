@@ -28,7 +28,7 @@ impl Compiled {
     pub(crate) fn with_hotkeys(mut self, hotkeys: &Hotkeys, physical: PhysicalLayout) -> Self {
         let (manipulators, gaps) = hotkeys.manipulators(physical);
         if let Some(all) = self.rule["manipulators"].as_array_mut() {
-            all.extend(manipulators);
+            all.splice(0..0, manipulators);
         }
         self.gaps.extend(gaps);
         self
@@ -393,6 +393,34 @@ mod tests {
         );
         assert_eq!(manipulators(&compiled)[1]["from"]["key_code"], "v");
         assert!(compiled.gaps.is_empty());
+    }
+
+    #[test]
+    fn qol_hotkeys_match_the_pressed_keys_before_any_remap_rewrites_them() {
+        use qol_runtime::hotkey_relay::{HotkeyCombo, HotkeyModifier};
+
+        let hotkeys = Hotkeys {
+            relay: Some(std::path::PathBuf::from("/run/qol/relay.sock")),
+            combos: vec![HotkeyCombo {
+                mods: vec![HotkeyModifier::Shift, HotkeyModifier::Super],
+                mac_keycode: keycode::ANSI_R,
+            }],
+        };
+        let compiled = compiled(json!({
+            "key_rules": [{ "from_mods": ["ctrl", "shift"], "to_mods": ["cmd", "shift"], "keys": ["r"] }],
+        }))
+        .with_hotkeys(&hotkeys, PhysicalLayout::Iso);
+        let all = manipulators(&compiled);
+        let remap = all
+            .iter()
+            .position(|manipulator| manipulator["to"][0]["key_code"] == "r")
+            .unwrap();
+        let relay = all
+            .iter()
+            .position(|manipulator| manipulator["to"][0]["send_user_command"].is_object())
+            .unwrap();
+        assert_eq!(remap, all.len() - 1);
+        assert!(relay < remap);
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
+use qol_hotkeys::macos_keycode::PhysicalLayout;
+use qol_runtime::hotkey_relay::HotkeyLease;
 
 use super::compile::{self, Compiled};
 use super::document::Synced;
@@ -166,6 +169,11 @@ impl<K: Karabiner> Backend<K> {
             log::info!("qol hotkeys changed; updating Karabiner-Elements");
             self.refresh(config, layout);
         }
+    }
+
+    pub(crate) fn lease(&self, physical: PhysicalLayout) -> Option<(PathBuf, HotkeyLease)> {
+        let armed = matches!(self.state, State::Active { enabled: true, .. });
+        self.hotkeys.lease(physical, armed)
     }
 
     fn follow_system_keys(&mut self, config: &ResolvedConfig, layout: &LayoutSnapshot) {
@@ -663,6 +671,46 @@ mod tests {
 
         backend.follow_hotkeys(Hotkeys::default(), &config(true), &layout("us"));
         assert_eq!(fake.take(), vec!["sync 1", "active true"]);
+    }
+
+    #[test]
+    fn the_relay_holds_the_hotkey_lease_only_while_karabiner_remaps_with_the_variable_on() {
+        let fake = Fake::default();
+        fake.ready(10);
+        let input = InputState::default();
+        let mut backend = Backend::new(fake.clone());
+        let relay = std::path::PathBuf::from("/run/qol/relay.sock");
+        let alt_tab = qol_runtime::hotkey_relay::HotkeyCombo {
+            mods: vec![qol_runtime::hotkey_relay::HotkeyModifier::Alt],
+            mac_keycode: qol_hotkeys::macos_keycode::TAB,
+        };
+        backend.follow_hotkeys(
+            Hotkeys {
+                relay: Some(relay.clone()),
+                combos: vec![alt_tab],
+            },
+            &config(true),
+            &layout("us"),
+        );
+        let leased = |backend: &Backend<Fake>| {
+            backend
+                .lease(PhysicalLayout::Ansi)
+                .map(|(path, lease)| (path, lease.lease, lease.unrelayed))
+        };
+
+        assert_eq!(leased(&backend), Some((relay.clone(), false, Vec::new())));
+
+        backend.apply(CHOSEN, &config(true), &layout("us"), &input);
+        assert_eq!(leased(&backend), Some((relay.clone(), true, Vec::new())));
+
+        backend.apply(CHOSEN, &config(false), &layout("us"), &input);
+        assert_eq!(leased(&backend), Some((relay.clone(), false, Vec::new())));
+
+        backend.stop();
+        assert_eq!(leased(&backend), Some((relay, false, Vec::new())));
+
+        backend.follow_hotkeys(Hotkeys::default(), &config(true), &layout("us"));
+        assert_eq!(leased(&backend), None);
     }
 
     #[test]

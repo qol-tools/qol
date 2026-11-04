@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::os::unix::net::UnixDatagram;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
 use qol_hotkeys::macos_keycode::PhysicalLayout;
-use qol_runtime::hotkey_relay::{HotkeyCombo, HotkeyModifier, HotkeyPress};
+use qol_runtime::hotkey_relay::{HotkeyCombo, HotkeyLease, HotkeyModifier, HotkeyPress};
 use qol_runtime::protocol::{RuntimeEvent, RuntimeEventKind};
 use qol_runtime::PlatformStateClient;
 use serde_json::{json, Value};
@@ -72,6 +73,43 @@ impl Hotkeys {
             }
         }
         (manipulators, gaps)
+    }
+
+    pub(crate) fn lease(
+        &self,
+        physical: PhysicalLayout,
+        armed: bool,
+    ) -> Option<(PathBuf, HotkeyLease)> {
+        let relay = self.relay.clone()?;
+        let unrelayed = if armed {
+            self.combos
+                .iter()
+                .filter(|combo| key_codes::for_keycode(combo.mac_keycode, physical).is_none())
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Some((
+            relay,
+            HotkeyLease {
+                lease: armed,
+                unrelayed,
+            },
+        ))
+    }
+}
+
+pub(crate) fn send_lease(relay: &Path, lease: &HotkeyLease) {
+    let Ok(payload) = serde_json::to_vec(lease) else {
+        return;
+    };
+    let sent = UnixDatagram::unbound().and_then(|socket| socket.send_to(&payload, relay));
+    if let Err(error) = sent {
+        log::debug!(
+            "could not lease qol hotkeys to the relay at {}: {error}",
+            relay.display()
+        );
     }
 }
 
@@ -305,6 +343,24 @@ mod tests {
         let manipulators = relayed(vec![shift_super_r, space]);
         assert_eq!(manipulators.len(), 8 + 4 + 1);
         assert_eq!(manipulators[12]["from"]["key_code"], "spacebar");
+    }
+
+    #[test]
+    fn an_armed_lease_hands_back_only_the_combos_karabiner_cannot_name() {
+        let unnamed = HotkeyCombo {
+            mods: vec![HotkeyModifier::Super],
+            mac_keycode: 0x3f,
+        };
+        let hotkeys = Hotkeys {
+            relay: Some(PathBuf::from("/run/qol/relay.sock")),
+            combos: vec![alt_tab(), unnamed.clone()],
+        };
+        let (_, armed) = hotkeys.lease(PhysicalLayout::Ansi, true).unwrap();
+        assert!(armed.lease);
+        assert_eq!(armed.unrelayed, vec![unnamed]);
+        let (_, off) = hotkeys.lease(PhysicalLayout::Ansi, false).unwrap();
+        assert!(!off.lease);
+        assert!(off.unrelayed.is_empty());
     }
 
     #[test]

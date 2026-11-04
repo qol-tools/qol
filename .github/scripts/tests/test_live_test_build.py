@@ -60,6 +60,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(result["plugins"], ["qol-cli-sessions-v0.127.1"])
         self.assertEqual(result["tray"], "")
 
+    def test_a_needed_test_builds_every_crate_the_pull_request_changes(self):
+        result = build.plan(
+            ["plugins/shot/src/ui/panel.rs", "apps/tray/src/hotkeys/capture/platform/macos/relay.rs", "README.md"],
+            LISTED,
+            GRAPH,
+            UNITS,
+            "3.0.0",
+        )
+        self.assertEqual(result["plugins"], ["qol-shot-v1.4.0"])
+        self.assertEqual(result["tray"], "qol-tray-v3.0.0")
+        self.assertEqual(result["orphans"], [])
+
     def test_a_shared_ui_lib_builds_its_linux_plugins_and_the_tray(self):
         result = build.plan(["libs/gpui/src/kit.rs"], LISTED, GRAPH, UNITS, "3.0.0")
         self.assertEqual(result["plugins"], ["qol-cli-sessions-v0.127.1", "qol-shot-v1.4.0"])
