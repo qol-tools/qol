@@ -70,6 +70,7 @@ const BACK = 'Back in the agent list.'
 const REOPEN_DELAY_MS = 1_500
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
+const RESUMED = 'The user asks you to continue. Carry on your work from where you stopped.'
 const FORK_TO_FORK =
   'Not sent: a fork messages other forks by agent id, which the fork_board tool lists, and never the switchboard or other sessions; put what the user needs in your final message.'
 const COLOR: Record<Kind, string> = {
@@ -756,12 +757,17 @@ const again = async ($: EngineInterface, fork: Entry, message: string | undefine
   return { isResumed: true, text: `Already resumed as ${keyName(fork.name)}, agent id ${sent.agentId}: it has the message.` }
 }
 
-export const resumeFork = async ($: EngineInterface, fork: string): Promise<Resumed> => {
+export const resumeFork = async ($: EngineInterface, fork: string, isContinued = false): Promise<Resumed> => {
   let target = addressed(await read($, board), fork)
   if (target === undefined) {
     const adopted = await adoptFork($, fork, false).catch(() => undefined)
     if (adopted === undefined) return { isResumed: false, reason: `No fork is named ${fork}: call sessions_closed for it.` }
     target = await placed($, adopted.agentId, adopted.name ?? adopted.agentId, adopted.cwd)
+  }
+  if (isContinued) {
+    const sent = await sendTo($, target, RESUMED)
+    if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} did not take the message: ${printable(String(sent.reason ?? 'not delivered'))}` }
+    return { isResumed: true, text: `Resumed as ${keyName(target.name)}, agent id ${sent.agentId}: it carries on its work from where it stopped.` }
   }
   const agents: unknown = await $.agent.list().catch(() => [])
   const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId)
@@ -1082,7 +1088,7 @@ export const register: Register = on => {
       await $.tool.register({
         name: RESUME,
         description:
-          "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation. To bring back a fork the user only asks to resume, with no words for it, pass fork alone: it comes back to the agent list and no turn of its own runs.",
+          "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation. To bring back a fork, pass fork: alone when the user only asks to open, show or bring it back, so it comes back to the agent list and no turn of its own runs; with continue true when the user asks to resume or continue it, so it carries on its work.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -1091,7 +1097,8 @@ export const register: Register = on => {
             description: { type: 'string', description: '`<key-name>: <friendly description>`, as for a new fork.' },
             title: { type: 'string', description: "The session's title, from its row." },
             message: { type: 'string', description: "The user's own words for that session, only when they gave some beyond asking to bring it back; leave it out to have the fork wait for the user." },
-            fork: { type: 'string', description: "A fork's key-name or agent id, alone, when the user only asks to resume, reopen or continue that fork: it comes back to the agent list and no turn of its own runs." },
+            fork: { type: 'string', description: "A fork's key-name or agent id in place of transcript. Alone, when the user only asks to open, show or bring back that fork: it comes back to the agent list and no turn of its own runs." },
+            continue: { type: 'boolean', description: 'With fork, true when the user asks to resume or continue that fork: it is prompted to carry on its work from where it stopped.' },
           },
         },
         isDeferred: false,
@@ -1172,7 +1179,7 @@ export const register: Register = on => {
   on('tool.call', { tool: RESUME_NAME }, async ($, e) => {
     const fork = textField((e as unknown as Record<string, unknown>).fork)
     if (fork !== undefined && textField((e as unknown as Record<string, unknown>).transcript) === undefined) {
-      const resumed = await resumeFork($, fork.trim())
+      const resumed = await resumeFork($, fork.trim(), (e as unknown as Record<string, unknown>).continue === true)
       return resumed.isResumed ? { result: resumed.text } : { deny: resumed.reason }
     }
     const session = closedSession(e as unknown as Record<string, unknown>)

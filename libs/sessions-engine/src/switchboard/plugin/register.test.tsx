@@ -868,6 +868,17 @@ test('resuming a fork with no words puts it back in the agent list without a mod
   expect(sent).toHaveLength(1)
 })
 
+test('continuing a fork prompts it to carry on its work', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [{ id: 'a1' }] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  const resumed = await $.tool.call({ tool: 'mcp__qol-switchboard__resume_session', fork: 'a1-fork', continue: true })
+  expect(String(resumed.result)).toContain('carries on its work')
+  expect(sent).toEqual([expect.objectContaining({ to: 'a1', text: 'The user asks you to continue. Carry on your work from where you stopped.' })])
+})
+
 test('a hold whose turn never ran or ended early never answers a later real turn', async ($, on) => {
   const sent: any[] = []
   const steps: string[] = []
