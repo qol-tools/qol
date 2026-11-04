@@ -966,6 +966,14 @@ fn restore_normal_presentation(
     }
 }
 
+pub fn window_refuses_activation_by_title(_title: &str) -> bool {
+    false
+}
+
+pub fn configure_framed_key_panel(_title: &str) -> bool {
+    false
+}
+
 pub fn window_presentation_is_normal_by_title(title: &str) -> bool {
     let Some((conn, _screen_num, root, list_atom, name_atom, utf8_atom)) = connect_with_atoms()
     else {

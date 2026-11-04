@@ -12,10 +12,10 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::AnyThread;
 use objc2_app_kit::{
-    NSApplication, NSApplicationDidResignActiveNotification, NSColor, NSEvent, NSEventMask,
-    NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen,
-    NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowDidResignKeyNotification, NSWindowStyleMask,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDidResignActiveNotification,
+    NSColor, NSEvent, NSEventMask, NSEventType, NSFloatingWindowLevel, NSNormalWindowLevel,
+    NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow, NSWindowAnimationBehavior,
+    NSWindowCollectionBehavior, NSWindowDidResignKeyNotification, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSNotification, NSNotificationCenter, NSPoint, NSRect, NSSize,
@@ -389,6 +389,69 @@ fn should_return_focus(app_active: bool, shown_key: bool, process_frontmost: boo
     app_active && process_frontmost && !shown_key
 }
 
+#[cfg(debug_assertions)]
+fn top_normal_window_number() -> Option<i32> {
+    unsafe {
+        let list = CGWindowListCopyWindowInfo(
+            K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY | K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+            0,
+        );
+        if list.is_null() {
+            return None;
+        }
+        let top = (0..CFArrayGetCount(list))
+            .map(|index| CFArrayGetValueAtIndex(list, index))
+            .filter(|dict| !dict.is_null())
+            .filter(|&dict| cf_int_value(dict, &kCGWindowLayer) == Some(0))
+            .find_map(|dict| cf_int_value(dict, &kCGWindowNumber));
+        CFRelease(list);
+        top
+    }
+}
+
+fn trace_settings_window(tag: &str, title: &str, outcome: &str, window: Option<&NSWindow>) {
+    #[cfg(debug_assertions)]
+    {
+        if !crate::popup_window::framed_windows_join_dock() {
+            return;
+        }
+        if window.is_some_and(|window| !is_framed_key_panel(window.styleMask())) {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        let policy = if app.activationPolicy() == NSApplicationActivationPolicy::Regular {
+            "regular"
+        } else if app.activationPolicy() == NSApplicationActivationPolicy::Accessory {
+            "accessory"
+        } else {
+            "prohibited"
+        };
+        let window_state = window
+            .map(|window| {
+                format!(
+                    " key={} visible={} alpha={:.2} level={} on_top={}",
+                    window.isKeyWindow(),
+                    window.isVisible(),
+                    window.alphaValue(),
+                    window.level(),
+                    top_normal_window_number() == Some(window.windowNumber() as i32)
+                )
+            })
+            .unwrap_or_default();
+        qol_runtime::probe!(
+            tag,
+            "title={title:?} outcome={outcome} app_active={} policy={policy}{window_state} reason={}",
+            app.isActive(),
+            crate::popup_window::change_reason()
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = (tag, title, outcome, window);
+}
+
 fn frontmost_foreign_pid() -> Option<i32> {
     let own = std::process::id() as i32;
     unsafe {
@@ -737,6 +800,11 @@ pub fn hide_window_by_title(title: &str) -> bool {
     }
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
+    if is_framed_key_panel(window.styleMask()) {
+        cancel_front_retries();
+    }
+    trace_settings_window("SETTINGS_HIDE", title, "alpha_zero", Some(&window));
+    leave_dock_when_no_framed_window_shows();
     qol_runtime::probe!(
         "HIDE_WIN",
         "title={title} path=hidden reason={}",
@@ -760,6 +828,11 @@ pub fn hide_invisible(title: &str) -> bool {
     window.setAlphaValue(0.0);
     window.setIgnoresMouseEvents(true);
     window.orderOut(None);
+    if is_framed_key_panel(window.styleMask()) {
+        cancel_front_retries();
+    }
+    trace_settings_window("SETTINGS_HIDE", title, "ordered_out", Some(&window));
+    leave_dock_when_no_framed_window_shows();
     if held_key {
         schedule_focus_return();
     }
@@ -981,6 +1054,155 @@ enum WindowPresentation {
     Normal,
 }
 
+fn is_framed_key_panel(mask: NSWindowStyleMask) -> bool {
+    mask.contains(NSWindowStyleMask::NonactivatingPanel) && shows_system_title_bar(mask)
+}
+
+fn joins_dock(opted_in: bool, mask: NSWindowStyleMask) -> bool {
+    opted_in && is_framed_key_panel(mask)
+}
+
+fn refuses_activation(mask: NSWindowStyleMask, secure_input: bool) -> bool {
+    secure_input && is_framed_key_panel(mask)
+}
+
+fn needs_front_retries(framed: bool, activation_refused: bool, app_active: bool) -> bool {
+    framed && (activation_refused || !app_active)
+}
+
+fn shows_at_normal_level(visible: bool, alpha: f64, normal_level: bool) -> bool {
+    visible && alpha > 0.0 && normal_level
+}
+
+pub fn window_refuses_activation_by_title(title: &str) -> bool {
+    resolve_window(title).is_some_and(|window| {
+        refuses_activation(window.styleMask(), qol_platform::secure_input_enabled())
+    })
+}
+
+fn join_dock_for(window: &NSWindow, mtm: MainThreadMarker) {
+    if !joins_dock(
+        crate::popup_window::framed_windows_join_dock(),
+        window.styleMask(),
+    ) {
+        return;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+        trace_settings_window(
+            "SETTINGS_DOCK",
+            &window.title().to_string(),
+            "joined",
+            Some(window),
+        );
+    }
+}
+
+const INACTIVE_FRONT_RETRIES: [std::time::Duration; 6] = [
+    std::time::Duration::from_millis(16),
+    std::time::Duration::from_millis(50),
+    std::time::Duration::from_millis(100),
+    std::time::Duration::from_millis(200),
+    std::time::Duration::from_millis(300),
+    std::time::Duration::from_millis(700),
+];
+
+static FRONT_RETRY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn front_retry_current(start: u64, current: u64, held_key: bool, key_now: bool) -> bool {
+    start == current && (!held_key || key_now)
+}
+
+pub fn configure_framed_key_panel(title: &str) -> bool {
+    let Some(window) = resolve_window(title) else {
+        return false;
+    };
+    if !is_framed_key_panel(window.styleMask()) {
+        return false;
+    }
+    window.setHidesOnDeactivate(false);
+    window.setCollectionBehavior(NSWindowCollectionBehavior::Managed);
+    true
+}
+
+fn keep_front_while_inactive(title: &str, held_key: bool) {
+    let title = title.to_string();
+    let start = FRONT_RETRY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        let mut waited = std::time::Duration::ZERO;
+        for at in INACTIVE_FRONT_RETRIES {
+            std::thread::sleep(at - waited);
+            waited = at;
+            if FRONT_RETRY_GENERATION.load(Ordering::SeqCst) != start {
+                return;
+            }
+            let title = title.clone();
+            run_on_main(Box::new(move || {
+                reorder_front_if_inactive(&title, start, held_key)
+            }));
+        }
+    });
+}
+
+fn cancel_front_retries() {
+    FRONT_RETRY_GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+fn reorder_front_if_inactive(title: &str, start: u64, held_key: bool) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = find_window_by_title(mtm, title) else {
+        return;
+    };
+    let current = FRONT_RETRY_GENERATION.load(Ordering::SeqCst);
+    if !front_retry_current(start, current, held_key, window.isKeyWindow()) {
+        trace_settings_window("SETTINGS_REFRONT", title, "skip_moved_on", Some(&window));
+        return;
+    }
+    if NSApplication::sharedApplication(mtm).isActive() && !qol_platform::secure_input_enabled() {
+        trace_settings_window("SETTINGS_REFRONT", title, "skip_active", Some(&window));
+        return;
+    }
+    if shows_at_normal_level(
+        window.isVisible(),
+        window.alphaValue(),
+        window.level() == NSNormalWindowLevel,
+    ) {
+        trace_settings_window("SETTINGS_REFRONT", title, "before", Some(&window));
+        window.orderFrontRegardless();
+        trace_settings_window("SETTINGS_REFRONT", title, "after", Some(&window));
+    } else {
+        trace_settings_window("SETTINGS_REFRONT", title, "skip_hidden", Some(&window));
+    }
+}
+
+fn leave_dock_when_no_framed_window_shows() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    if !crate::popup_window::framed_windows_join_dock() {
+        return;
+    }
+    let app = NSApplication::sharedApplication(mtm);
+    if app.activationPolicy() != NSApplicationActivationPolicy::Regular {
+        return;
+    }
+    let framed_showing = app.windows().iter().any(|window| {
+        is_framed_key_panel(window.styleMask())
+            && shows_at_normal_level(
+                window.isVisible(),
+                window.alphaValue(),
+                window.level() == NSNormalWindowLevel,
+            )
+    });
+    if !framed_showing {
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        trace_settings_window("SETTINGS_DOCK", "", "left", None);
+    }
+}
+
 fn shows_system_title_bar(mask: NSWindowStyleMask) -> bool {
     mask.contains(NSWindowStyleMask::Titled)
         && !mask.contains(NSWindowStyleMask::FullSizeContentView)
@@ -1018,12 +1240,38 @@ fn show_window_by_title_with_focus(
         apply_input_regions();
         watch_pointer_for_regions();
     }
+    trace_settings_window("SETTINGS_SHOW", title, "start", Some(&window));
     if focus {
         let app = NSApplication::sharedApplication(mtm);
-        #[allow(deprecated)]
-        app.activateIgnoringOtherApps(true);
+        let framed = is_framed_key_panel(window.styleMask());
+        let activation_refused = matches!(presentation, WindowPresentation::Normal)
+            && refuses_activation(window.styleMask(), qol_platform::secure_input_enabled());
+        if activation_refused {
+            if app.isActive() {
+                trace_settings_window("SETTINGS_SHOW", title, "deactivate_stale", Some(&window));
+                app.deactivate();
+            }
+        } else {
+            #[allow(deprecated)]
+            app.activateIgnoringOtherApps(true);
+        }
         window.makeKeyAndOrderFront(None);
-        force_app_frontmost();
+        if !activation_refused {
+            force_app_frontmost();
+        }
+        if needs_front_retries(framed, activation_refused, app.isActive()) {
+            window.orderFrontRegardless();
+            keep_front_while_inactive(title, window.isKeyWindow());
+        }
+        let outcome = if activation_refused {
+            "front_only_secure_input"
+        } else {
+            "focused"
+        };
+        trace_settings_window("SETTINGS_SHOW", title, outcome, Some(&window));
+    }
+    if matches!(presentation, WindowPresentation::Normal) {
+        join_dock_for(&window, mtm);
     }
     if !focus {
         window.orderFrontRegardless();
@@ -1062,6 +1310,7 @@ fn reassert_focus_on_main(title: &str) {
     app.activateIgnoringOtherApps(true);
     window.makeKeyAndOrderFront(None);
     force_app_frontmost();
+    trace_settings_window("SETTINGS_REASSERT", title, "focus", Some(&window));
     qol_runtime::probe!(
         "FOCUS_REASSERT",
         "title={title} step=reassert-on-main key_window={}",
@@ -1552,15 +1801,119 @@ fn run_on_main(task: Box<dyn FnOnce() + Send + 'static>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, pointer_in_region, pointer_inside,
-        primary_anchored_from_screen_relative, reassert_delay, should_return_focus,
-        shows_system_title_bar, HOLD_REASSERT_SPACING,
+        cocoa_bottom_edge, cocoa_origin_from_primary_anchored, front_retry_current, joins_dock,
+        needs_front_retries, pointer_in_region, pointer_inside,
+        primary_anchored_from_screen_relative, reassert_delay, refuses_activation,
+        should_return_focus, shows_at_normal_level, shows_system_title_bar, HOLD_REASSERT_SPACING,
     };
     use objc2_app_kit::NSWindowStyleMask;
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use std::time::Duration;
 
     const PRIMARY_HEIGHT: f64 = 1080.0;
+
+    const SETTINGS_PANEL: NSWindowStyleMask = NSWindowStyleMask(
+        NSWindowStyleMask::Titled.0
+            | NSWindowStyleMask::Closable.0
+            | NSWindowStyleMask::NonactivatingPanel.0,
+    );
+    const TOAST_PANEL: NSWindowStyleMask = NSWindowStyleMask(
+        NSWindowStyleMask::Titled.0
+            | NSWindowStyleMask::FullSizeContentView.0
+            | NSWindowStyleMask::NonactivatingPanel.0,
+    );
+    const FRAMELESS_WINDOW: NSWindowStyleMask =
+        NSWindowStyleMask(NSWindowStyleMask::Titled.0 | NSWindowStyleMask::FullSizeContentView.0);
+    const FRAMED_WINDOW: NSWindowStyleMask =
+        NSWindowStyleMask(NSWindowStyleMask::Titled.0 | NSWindowStyleMask::Closable.0);
+
+    #[test]
+    fn only_an_opted_in_framed_key_panel_joins_the_dock() {
+        let cases = [
+            (true, SETTINGS_PANEL, true),
+            (false, SETTINGS_PANEL, false),
+            (true, TOAST_PANEL, false),
+            (true, FRAMELESS_WINDOW, false),
+            (true, FRAMED_WINDOW, false),
+            (true, NSWindowStyleMask::Borderless, false),
+        ];
+        for (opted_in, mask, expected) in cases {
+            assert_eq!(joins_dock(opted_in, mask), expected, "{opted_in} {mask:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_framed_key_panel_under_secure_input_skips_activation() {
+        let cases = [
+            (SETTINGS_PANEL, true, true),
+            (SETTINGS_PANEL, false, false),
+            (TOAST_PANEL, true, false),
+            (FRAMELESS_WINDOW, true, false),
+            (FRAMED_WINDOW, true, false),
+        ];
+        for (mask, secure_input, expected) in cases {
+            assert_eq!(
+                refuses_activation(mask, secure_input),
+                expected,
+                "{mask:?} secure_input={secure_input}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_framed_key_panel_left_inactive_keeps_reordering_front() {
+        let cases = [
+            (true, true, false, true),
+            (true, true, true, true),
+            (true, false, false, true),
+            (true, false, true, false),
+            (false, false, false, false),
+            (false, true, false, false),
+        ];
+        for (framed, refused, active, expected) in cases {
+            assert_eq!(
+                needs_front_retries(framed, refused, active),
+                expected,
+                "framed={framed} refused={refused} active={active}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_front_retry_stops_once_superseded_or_the_user_moved_on() {
+        let cases = [
+            (3, 3, true, true, true),
+            (3, 3, false, false, true),
+            (3, 3, false, true, true),
+            (3, 3, true, false, false),
+            (3, 4, true, true, false),
+            (3, 4, false, false, false),
+        ];
+        for (start, current, held_key, key_now, expected) in cases {
+            assert_eq!(
+                front_retry_current(start, current, held_key, key_now),
+                expected,
+                "start={start} current={current} held_key={held_key} key_now={key_now}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_visible_opaque_normal_level_window_counts_as_showing() {
+        let cases = [
+            (true, 1.0, true, true),
+            (false, 1.0, true, false),
+            (true, 0.0, true, false),
+            (true, 1.0, false, false),
+        ];
+        for (visible, alpha, normal_level, expected) in cases {
+            assert_eq!(
+                shows_at_normal_level(visible, alpha, normal_level),
+                expected,
+                "visible={visible} alpha={alpha} normal_level={normal_level}"
+            );
+        }
+    }
 
     #[test]
     fn only_a_visible_system_title_bar_gets_an_opaque_background() {

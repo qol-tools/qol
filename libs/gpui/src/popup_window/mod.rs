@@ -74,27 +74,40 @@ pub async fn wait_for_hidden_windows(
 }
 
 pub use platform::{
-    capture_focus_return, compositor_active, configure_keepalive_window, configure_overlay_window,
-    configure_pinned_window, configure_popup_window, disable_window_shadow, dump_ghost_windows,
-    focus_window_by_title, grab_escape, grab_keyboard, hide_for_capture, hide_invisible,
-    hide_unmapped, hide_window_by_title, hide_windows_by_title_prefix, hold_input, input_held,
-    join_all_spaces, make_override_redirect, park_window_by_title, pinned_window_kind,
-    pointer_on_window_by_title, pointer_over_window_by_title, prepare_window_reveal_by_title,
-    present_topmost, register_native_display, release_focus_by_title, release_input,
-    release_keyboard, reposition_window_by_title, restore_composite, set_input_region_by_title,
+    capture_focus_return, compositor_active, configure_framed_key_panel,
+    configure_keepalive_window, configure_overlay_window, configure_pinned_window,
+    configure_popup_window, disable_window_shadow, dump_ghost_windows, focus_window_by_title,
+    grab_escape, grab_keyboard, hide_for_capture, hide_invisible, hide_unmapped,
+    hide_window_by_title, hide_windows_by_title_prefix, hold_input, input_held, join_all_spaces,
+    make_override_redirect, park_window_by_title, pinned_window_kind, pointer_on_window_by_title,
+    pointer_over_window_by_title, prepare_window_reveal_by_title, present_topmost,
+    register_native_display, release_focus_by_title, release_input, release_keyboard,
+    reposition_window_by_title, restore_composite, set_input_region_by_title,
     set_override_redirect_by_title, set_unmap_hide, set_window_type_dock_by_title,
     show_toast_window_by_title, show_window_by_title, show_window_interactive_by_title,
     show_window_passive_by_title, sync_window_layout, sync_window_layout_by_title,
     visible_windows_by_title_prefix, watch_input, window_backing_scale,
     window_bounds_primary_anchored, window_geometry_session, window_holds_input_focus,
-    window_position_by_title, window_presentation_is_normal_by_title, work_area_within, EscapeGrab,
-    InputWatch, WindowGeometrySession,
+    window_position_by_title, window_presentation_is_normal_by_title,
+    window_refuses_activation_by_title, work_area_within, EscapeGrab, InputWatch,
+    WindowGeometrySession,
 };
 
 const ENV_GHOST_OPACITY: &str = "QOL_TRAY_GHOST_OPACITY";
 const ENV_GHOST_COLOR: &str = "QOL_TRAY_GHOST_COLOR";
 
 static PRESENTATION_LOCK: Mutex<()> = Mutex::new(());
+
+static FRAMED_WINDOWS_JOIN_DOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn keep_framed_windows_in_dock() {
+    FRAMED_WINDOWS_JOIN_DOCK.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn framed_windows_join_dock() -> bool {
+    FRAMED_WINDOWS_JOIN_DOCK.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 pub(crate) fn presentation_guard() -> MutexGuard<'static, ()> {
     PRESENTATION_LOCK
