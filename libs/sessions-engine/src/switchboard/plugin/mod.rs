@@ -190,7 +190,7 @@ mod tests {
             ".map(entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) }))",
             "const sent = await sendTo($, entry, CONTINUE)",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
-            "sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
+            "isCut(entry) ? sendTo($, entry, CONTINUE, viaBand($, true)) : sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY))",
             "const reply = await heldReply($, e.agentId, e.turnId)",
             "if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {",
             "if (e.index === 0) {",
