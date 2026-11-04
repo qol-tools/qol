@@ -1066,17 +1066,8 @@ fn refuses_activation(mask: NSWindowStyleMask, secure_input: bool) -> bool {
     secure_input && is_framed_key_panel(mask)
 }
 
-fn holds_focus(app_active: bool, window_key: bool) -> bool {
-    app_active && window_key
-}
-
-fn needs_front_retries(
-    framed: bool,
-    activation_refused: bool,
-    app_active: bool,
-    window_key: bool,
-) -> bool {
-    framed && !holds_focus(app_active, window_key) && (activation_refused || !app_active)
+fn needs_front_retries(framed: bool, activation_refused: bool, app_active: bool) -> bool {
+    framed && (activation_refused || !app_active)
 }
 
 fn shows_at_normal_level(visible: bool, alpha: f64, normal_level: bool) -> bool {
@@ -1256,7 +1247,7 @@ fn show_window_by_title_with_focus(
         let activation_refused = matches!(presentation, WindowPresentation::Normal)
             && refuses_activation(window.styleMask(), qol_platform::secure_input_enabled());
         if activation_refused {
-            if app.isActive() && !window.isKeyWindow() {
+            if app.isActive() {
                 trace_settings_window("SETTINGS_SHOW", title, "deactivate_stale", Some(&window));
                 app.deactivate();
             }
@@ -1268,12 +1259,7 @@ fn show_window_by_title_with_focus(
         if !activation_refused {
             force_app_frontmost();
         }
-        if needs_front_retries(
-            framed,
-            activation_refused,
-            app.isActive(),
-            window.isKeyWindow(),
-        ) {
+        if needs_front_retries(framed, activation_refused, app.isActive()) {
             window.orderFrontRegardless();
             keep_front_while_inactive(title, window.isKeyWindow());
         }
@@ -1877,20 +1863,18 @@ mod tests {
     #[test]
     fn only_a_framed_key_panel_left_inactive_keeps_reordering_front() {
         let cases = [
-            (true, true, false, false, true),
-            (true, true, false, true, true),
-            (true, true, true, false, true),
-            (true, true, true, true, false),
-            (true, false, false, false, true),
-            (true, false, true, false, false),
-            (false, false, false, false, false),
-            (false, true, false, false, false),
+            (true, true, false, true),
+            (true, true, true, true),
+            (true, false, false, true),
+            (true, false, true, false),
+            (false, false, false, false),
+            (false, true, false, false),
         ];
-        for (framed, refused, active, key, expected) in cases {
+        for (framed, refused, active, expected) in cases {
             assert_eq!(
-                needs_front_retries(framed, refused, active, key),
+                needs_front_retries(framed, refused, active),
                 expected,
-                "framed={framed} refused={refused} active={active} key={key}"
+                "framed={framed} refused={refused} active={active}"
             );
         }
     }
