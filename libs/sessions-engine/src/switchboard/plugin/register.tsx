@@ -400,8 +400,9 @@ const isUndelivered = (answer: { deny?: string; isError?: true; result?: unknown
 
 const rested = async ($: EngineInterface, agentId: string): Promise<Entry | undefined> => {
   let kept: Entry | undefined
-  const wasCut = resting.get(agentId) === true
-  resting.delete(agentId)
+  const hold = await holdOf($, agentId)
+  const wasCut = hold?.wasCut === true
+  if (hold?.isDone === true) await dropHold($, agentId)
   await change($, list =>
     list.map(one => {
       if (one.agentId !== agentId || (one.kind === undefined && !wasCut)) return one
@@ -605,52 +606,70 @@ export const viaBand =
     })
   }
 
-type Hold = { reply: string; text: string; turnId?: string }
+type Hold = { reply: string; text: string; wasCut: boolean; at: number; turnId?: string; isDone?: true }
 
-const holding = new Map<string, Hold>()
-const resting = new Map<string, boolean>()
+const HOLD_PREFIX = 'hold:'
+const HOLD_CLAIM_MS = 120_000
+
+const holdOf = async ($: EngineInterface, agentId: string): Promise<Hold | undefined> => {
+  const saved = (await $.store.get(HOLD_PREFIX + agentId).catch(() => undefined)) as Hold | undefined
+  return typeof saved === 'object' && saved !== null && typeof saved.reply === 'string' && typeof saved.text === 'string' ? saved : undefined
+}
+
+const putHold = ($: EngineInterface, agentId: string, hold: Hold): Promise<void> => $.store.set(HOLD_PREFIX + agentId, hold).catch(() => undefined)
+
+const dropHold = ($: EngineInterface, agentId: string): Promise<void> => $.store.delete(HOLD_PREFIX + agentId).catch(() => undefined)
 
 const quiet = new WeakSet<Sender>()
 
-export const holdingVia = (send: Sender, reply: string, wasCut = false): Sender => {
+export const holdingVia = ($: EngineInterface, send: Sender, reply: string, wasCut = false): Sender => {
   const holds: Sender = async (agentId, text) => {
-    holding.set(agentId, { reply, text })
-    resting.set(agentId, wasCut)
+    await putHold($, agentId, { reply, text, wasCut, at: await $.clock.now() })
     const sent = await send(agentId, text)
-    if (!sent.isDelivered) {
-      holding.delete(agentId)
-      resting.delete(agentId)
-    }
+    if (!sent.isDelivered) await dropHold($, agentId)
     return sent
   }
   quiet.add(holds)
   return holds
 }
 
-const heldReply = (agentId: string | undefined, turnId: string): string | undefined => {
-  const hold = agentId === undefined ? undefined : holding.get(agentId)
-  return hold !== undefined && hold.turnId === turnId ? hold.reply : undefined
+const heldReply = async ($: EngineInterface, agentId: string | undefined, turnId: string): Promise<string | undefined> => {
+  const hold = agentId === undefined ? undefined : await holdOf($, agentId)
+  return hold !== undefined && hold.turnId === turnId && hold.isDone !== true ? hold.reply : undefined
 }
 
-const release = (agentId: string): void => {
-  holding.delete(agentId)
-  resting.delete(agentId)
+const finishHold = async ($: EngineInterface, agentId: string): Promise<void> => {
+  const hold = await holdOf($, agentId)
+  if (hold !== undefined) await putHold($, agentId, { ...hold, isDone: true })
 }
 
-const claimHold = (agentId: string | undefined, turnId: string, text: string): boolean => {
+const claimHold = async ($: EngineInterface, agentId: string | undefined, turnId: string, text: string): Promise<boolean> => {
   if (agentId === undefined) return false
-  const hold = holding.get(agentId)
+  const hold = await holdOf($, agentId)
   if (hold === undefined) return false
-  if (hold.turnId === undefined && text.includes(hold.text)) {
-    holding.set(agentId, { ...hold, turnId })
+  if (hold.turnId === turnId) return hold.isDone !== true
+  const isFresh = (await $.clock.now()) - hold.at < HOLD_CLAIM_MS
+  if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {
+    await putHold($, agentId, { ...hold, turnId })
     return true
   }
-  if (hold.turnId === turnId) return true
-  release(agentId)
+  await dropHold($, agentId)
   return false
 }
 
+const REOPEN_LOG = 'reopen-log'
+const REOPEN_LOG_KEPT = 40
+
+const noteReopen = async ($: EngineInterface, row: Record<string, unknown>): Promise<void> => {
+  const saved = await $.store.get(REOPEN_LOG).catch(() => undefined)
+  const rows = Array.isArray(saved) ? saved : []
+  await $.store.set(REOPEN_LOG, [...rows, row].slice(-REOPEN_LOG_KEPT)).catch(() => undefined)
+}
+
 let isReopening = false
+let reopenTries = 0
+const REOPEN_TRIES = 4
+const REOPEN_RETRY_MS = 4_000
 
 export const reopenForks = async ($: EngineInterface): Promise<void> => {
   if (isReopening) return
@@ -661,13 +680,20 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
     const agents: unknown = await $.agent.list().catch(() => [])
     const held = new Set(Array.isArray(agents) ? agents.map(agent => (agent as { id?: unknown }).id) : [])
+    const again: string[] = []
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
-      if (entry !== undefined && !held.has(agentId) && isUnfinished(entry)) await sendTo($, entry, BACK, holdingVia(viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch(() => undefined)
-      const rest = pending.slice(index + 1)
+      const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : !isUnfinished(entry) ? 'finished' : undefined
+      const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
+      await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
+      if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
+      const rest = [...again, ...pending.slice(index + 1)]
       if (rest.length === 0) await $.store.delete(key)
       else await $.store.set(key, rest)
     }
+    reopenTries += 1
+    if (again.length > 0 && reopenTries < REOPEN_TRIES) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
+    else if (again.length > 0) await $.store.delete(key)
   } finally {
     isReopening = false
   }
@@ -725,7 +751,7 @@ const again = async ($: EngineInterface, fork: Entry, message: string | undefine
   const isHere = (await subagentFile($, fork.agentId, '.jsonl').catch(() => undefined)) !== undefined
   const text = message ?? (isHere ? undefined : WAIT_FOR_USER)
   if (text === undefined) return { isResumed: true, text: `Already resumed as ${keyName(fork.name)}, agent id ${fork.agentId}: nothing was sent, and its view shows the conversation.` }
-  const sent = await sendTo($, fork, text, message === undefined ? holdingVia(direct($), READY) : direct($))
+  const sent = await sendTo($, fork, text, message === undefined ? holdingVia($, direct($), READY) : direct($))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} that holds the conversation did not take the message: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Already resumed as ${keyName(fork.name)}, agent id ${sent.agentId}: it has the message.` }
 }
@@ -740,7 +766,7 @@ export const resumeFork = async ($: EngineInterface, fork: string): Promise<Resu
   const agents: unknown = await $.agent.list().catch(() => [])
   const isHeld = Array.isArray(agents) && agents.some(agent => (agent as { id?: unknown }).id === target.agentId)
   if (isHeld) return { isResumed: true, text: `${keyName(target.name)} is already in the agent list, agent id ${target.agentId}: nothing was sent.` }
-  const sent = await sendTo($, target, WAIT_FOR_USER, holdingVia(direct($), RESTARTED_REPLY, isCut(target)))
+  const sent = await sendTo($, target, WAIT_FOR_USER, holdingVia($, direct($), RESTARTED_REPLY, isCut(target)))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Resumed as ${keyName(target.name)}, agent id ${sent.agentId}: it is back in the agent list, and the plugin answered its turn, so no model ran.` }
 }
@@ -768,7 +794,7 @@ export const resumeSession = async ($: EngineInterface, session: ClosedSession, 
   const target = { ...(await placed($, parsed.agent_id, name, cwd)), resumedFrom: session.transcript }
   await change($, list => list.map(one => (one.agentId === target.agentId ? { ...one, resumedFrom: session.transcript } : one)))
   if (caller !== undefined) await markWorking($, parsed.agent_id, undefined, undefined, caller)
-  const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER, session.message === undefined ? holdingVia(direct($), READY) : direct($))
+  const sent = await sendTo($, target, session.message ?? WAIT_FOR_USER, session.message === undefined ? holdingVia($, direct($), READY) : direct($))
   if (!sent.isDelivered) return { isResumed: false, reason: `The fork ${sent.agentId} holds the conversation but did not start: ${printable(String(sent.reason ?? 'not delivered'))}` }
   return { isResumed: true, text: `Resumed as ${keyName(name)}, agent id ${sent.agentId}: its view shows the conversation and it has the message.` }
 }
@@ -1017,8 +1043,6 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    holding.clear()
-    resting.clear()
     isAutoOpenPending = false
     try {
       const id = await $.session.id()
@@ -1041,6 +1065,7 @@ export const register: Register = on => {
         }
       }
       for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
+      if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
@@ -1192,7 +1217,11 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId !== undefined && !claimHold(e.agentId, e.turnId, e.text)) {
+    const isHeld = await claimHold($, e.agentId, e.turnId, e.text)
+    if (e.agentId !== undefined && (isHeld || [BACK, WAIT_FOR_USER, REOPENED].some(one => e.text.includes(one)))) {
+      await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
+    }
+    if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
     }
@@ -1200,9 +1229,9 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
-    const reply = heldReply(e.agentId, e.turnId)
+    const reply = await heldReply($, e.agentId, e.turnId)
     if (reply === undefined || e.index > 1) {
-      if (reply !== undefined && e.agentId !== undefined) holding.delete(e.agentId)
+      if (reply !== undefined && e.agentId !== undefined) await finishHold($, e.agentId)
       return yield* next(e)
     }
     const base = { turnId: e.turnId, index: e.index, usage: null }
@@ -1212,14 +1241,14 @@ export const register: Register = on => {
       yield { kind: 'stop', stopReason: 'tool_use', usage: null }
       return { ...base, answer: '', toolUses: [{ name: 'Bash', input: HOLD }], stopReason: 'tool_use' }
     }
-    if (e.agentId !== undefined) holding.delete(e.agentId)
+    if (e.agentId !== undefined) await finishHold($, e.agentId)
     yield { kind: 'text', index: 0, text: reply }
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
     return { ...base, answer: reply, toolUses: [], stopReason: 'end_turn' }
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId !== undefined && holding.get(e.agentId)?.turnId === e.turnId) holding.delete(e.agentId)
+    if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1265,7 +1294,7 @@ export const register: Register = on => {
           $.ui.toast(`${keyName(entry.name)} could not be opened: ${printable(String(viewed.deny))}`)
           return
         }
-        const sent = await sendTo($, entry, REOPENED, holdingVia(direct($), RESTARTED_REPLY, isCut(entry)))
+        const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))
         if (!sent.isDelivered) {
           $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
           return

@@ -896,6 +896,28 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
 })
 
+test('a fork whose reopen was refused is tried again a few times, then left alone', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'ask', headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false })
+  store.set('board:earlier-session', [row('a1'), row('b1')])
+  let refusals = 1
+  engine(on, sent, [], [], store, (e: any) => (e.to === 'a1' && refusals-- > 0 ? { isDelivered: false, reason: "The user doesn't want to take this action right now." } : { isDelivered: true }))
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 8; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => one.to).sort()).toEqual(['a1', 'a1', 'b1'])
+  expect(store.has('reopen:switchboard-session')).toBe(false)
+  const log = store.get('reopen-log') as Array<{ agentId: string; isDelivered?: boolean }>
+  expect(log.filter(one => one.agentId === 'a1').map(one => one.isDelivered)).toEqual([false, true])
+})
+
 test('opening the switchboard skips a fork the agent list still holds, and a reload sends nothing', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
