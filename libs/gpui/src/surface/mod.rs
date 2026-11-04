@@ -329,6 +329,10 @@ impl SurfaceDismisser {
         self.state.size.get()
     }
 
+    pub fn min_size(&self) -> Option<Size<Pixels>> {
+        self.state.resize_frame.as_ref().map(ResizeFrame::min_size)
+    }
+
     pub fn user_sized(&self) -> bool {
         self.state.user_sized.get()
     }

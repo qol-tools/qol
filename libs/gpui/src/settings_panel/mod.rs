@@ -1106,7 +1106,7 @@ fn size_prepared_panel(
             0.0
         })
         .min(available);
-    let min_size = panel_min_size(device_list + rail, size(px(width), px(height)));
+    let min_size = panel_min_size(rail, size(px(width), px(height)));
     let mut rows = prepared.rows;
     let mut sections = prepared.sections;
     push_page_rows(&prepared.panel, &mut rows, &mut sections);
@@ -1120,6 +1120,8 @@ fn size_prepared_panel(
             opening_answers: prepared.opening_answers,
             height_cap: available,
             screen_aspect: screen_width / screen_height.max(1.0),
+            min_size,
+            width_room: room_on(work_area.width.to_f64() as f32),
         },
         size: size(px(width), px(height)),
         min_size,
