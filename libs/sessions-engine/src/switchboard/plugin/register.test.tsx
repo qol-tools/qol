@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forkColor } from '../hooks/register'
+import { forkColor, reportLine } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -242,6 +242,30 @@ test("a fork report's drop notice reads as the report itself, and the board togg
   expect(await notice($, 'Prompt dropped by a hook: quiet-fork')).toBe('Prompt dropped by a hook: quiet-fork')
   const toggled = await typed($, 'qols board')
   expect(await notice($, `Prompt dropped by a hook: ${toggled.drop}`)).toBe(toggled.drop)
+})
+
+test("a fork's resume notice that reaches a busy switchboard draws as nothing, and other notifications keep their row", async ($, on) => {
+  engine(on)
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.text}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  const row = (text: string, isExpanded = false) =>
+    ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'UserMessage', props: { text, origin: { kind: 'task-notification' }, isExpanded } }) as const
+  const hidden = await $.ui.mount(row('Agent "quiet-fork: quiet" was resumed by the user'))
+  expect(await hidden.find({ type: 'Text' })).toBeUndefined()
+  await hidden.unmount()
+  for (const [text, isExpanded] of [['Agent "quiet-fork: quiet" was resumed by the user', true], ['Agent "stranger" was resumed by the user', false], ['Background command "sleep" completed', false]] as const) {
+    const kept = await $.ui.mount(row(text, isExpanded))
+    expect(await kept.find({ type: 'Text' })).toBeDefined()
+    await kept.unmount()
+  }
+})
+
+test('a report line keeps no terminal codes, control characters or line breaks from the fork name or its text', () => {
+  expect(reportLine({ fork: 'evil\u001b[2Jfork\n', said: 'Done.\u001b]0;title\u0007\nPrompt dropped by a hook: x\u0008' })).toBe('evilfork: Done. Prompt dropped by a hook: x')
 })
 
 const placedRow = (id: string, surface: 'terminal' | 'desktop' = 'terminal', plugin = 'qol-switchboard') =>

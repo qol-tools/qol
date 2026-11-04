@@ -45,7 +45,7 @@ const PULL_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{
 const WATCHER_FLAGS: readonly string[] = ['--pretty', '--until-ready']
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 const WATCH_ID = /^watch-[0-9]{1,20}-[0-9]{1,10}$/
-const TERMINAL_CODE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[\s\S])?/g
+const TERMINAL_CODE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[\]P^_X][^\u0007\u001b]*(?:\u0007|\u001b\\)?|[\s\S])?|\u009b[0-?]*[ -/]*[@-~]|[\u009d\u0090\u009e\u009f\u0098][^\u0007\u001b\u009c]*(?:\u0007|\u009c|\u001b\\)?/g
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
@@ -589,6 +589,10 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
   }))
 
 export const printable = (text: string): string => text.replace(TERMINAL_CODE, '').replace(CONTROL, '')
+
+const oneLine = (text: string): string => printable(text).replace(/\s+/g, ' ').trim()
+
+export const reportLine = (quiet: Quiet): string => `${oneLine(quiet.fork)}: ${oneLine(quiet.said)}`
 
 export const fenced = (text: string): string => {
   const clean = printable(text).trimEnd()
@@ -1260,6 +1264,14 @@ export const register: Register = on => {
     )
   })
 
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (e.props.origin.kind !== 'task-notification' || e.props.isExpanded) return next(e)
+    const name = RESUMED_SUMMARY.exec(e.props.text.trim())?.[1]
+    if (name === undefined || !(await read($, board)).some(entry => entry.name === name || keyName(entry.name) === keyName(name))) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: PANE }, async $ => {
     isAutoOpenPending = false
     return { text: await toggleBoard($) }
@@ -1268,7 +1280,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
-      return dropAs(`${quiet.fork}: ${quiet.said}`)
+      return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
