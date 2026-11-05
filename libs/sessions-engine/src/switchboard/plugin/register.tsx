@@ -271,11 +271,14 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
 const sameSaid = (a: Said[], b: Said[]): boolean =>
   a.length === b.length && a.every((one, at) => one.isUser === b[at]?.isUser && one.text === b[at]?.text)
 
+let writingFetch = 0
+
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
   const target = await read($, writingTo)
   if (agentId !== undefined && agentId !== target) return
+  const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
-  if (found === undefined || (await read($, writingTo)) !== target) return
+  if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
   const said = recentWords(found)
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
 }
