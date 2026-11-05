@@ -91,6 +91,7 @@ const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer 
 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
+const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const, '')
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -202,6 +203,11 @@ const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): voi
 }
 
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
+
+const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+  const agentId = entry?.agentId ?? ''
+  if ((await read($, writingTo)) !== agentId) await update($, writingTo, () => agentId)
+}
 
 let loading: Promise<void> | undefined
 let viewedFork: string | undefined
@@ -422,7 +428,23 @@ export const recordOwners = (records: readonly SessionRecord[]): Map<string, str
   return owners
 }
 
-const recordProgram = async ($: EngineInterface): Promise<string | undefined> => {
+const lastFork = (record: SessionRecord): string | undefined => {
+  const agentIds = (record.parts ?? []).map(part => (typeof part === 'object' && part !== null ? (part as { agent_id?: unknown }).agent_id : undefined))
+  return agentIds.filter((one): one is string => typeof one === 'string' && ID.test(one)).at(-1)
+}
+
+export const missingForks = (rows: readonly Entry[], records: readonly SessionRecord[], now: number): Entry[] => {
+  const listed = new Set(rows.map(row => row.agentId))
+  return records.flatMap(record => {
+    const agentId = record.done === undefined && typeof record.stopped_ms !== 'number' ? lastFork(record) : undefined
+    if (agentId === undefined || listed.has(agentId)) return []
+    listed.add(agentId)
+    const at = Number(record.created_ms) || now
+    return [{ agentId, name: recordName(record), key: record.key, headline: '', report: '', at, isWorking: false, isInterrupted: true, isDismissed: false, ...(record.cwd === undefined ? {} : { project: record.cwd }) }]
+  })
+}
+
+const recordProgram =async ($: EngineInterface): Promise<string | undefined> => {
   try {
     const program = await $.env.get('QOL_CLI_SESSIONS')
     return program === undefined || program === '' ? undefined : program
@@ -486,7 +508,7 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
     if (typeof one === 'object' && one !== null && typeof (one as { key?: unknown }).key === 'string') records.set((one as SessionRecord).key, one as SessionRecord)
   }
   const owners = recordOwners([...records.values()])
-  const owned = rows.map(row => {
+  const owned = [...missingForks(rows, [...records.values()], await $.clock.now()), ...rows].map(row => {
     const key = owners.get(row.agentId)
     return key === undefined || key === row.key ? row : { ...row, key }
   })
@@ -1275,7 +1297,7 @@ export const register: Register = on => {
       }
       const own = (Array.isArray(saved) ? saved : []).filter(isEntry)
       const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))
-      if (merged.length > 0) await update($, board, () => merged)
+      if (merged.length > 0) await update($, board, list => [...merged, ...(list ?? []).filter(one => !merged.some(row => row.agentId === one.agentId))])
       loading = Promise.resolve()
       if (others.length > 0) {
         await $.store.set(STORE_PREFIX + id, merged)
@@ -1288,6 +1310,7 @@ export const register: Register = on => {
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
       reopenTries = 0
+      await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
@@ -1398,6 +1421,7 @@ export const register: Register = on => {
     if (to !== undefined) {
       void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
       await $.ui.view({ agentId: to.entry.agentId }).catch(() => undefined)
+      await writeTo($, undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
     }
@@ -1426,17 +1450,23 @@ export const register: Register = on => {
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
       const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
-      if (key !== undefined) return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
+      if (key !== undefined) {
+        await writeTo($, reachable(list).find(entry => keyOf(entry) === key))
+        return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
+      }
     }
     const after = await next(e)
     try {
       if (viewedFork !== undefined) return after
       if (after.text === '') {
+        await writeTo($, undefined)
         suggestFork($, await read($, board))
         return after
       }
       const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(after.text)?.[1]
-      if (word === undefined || !reachable(await read($, board)).some(entry => keyOf(entry) === word)) return after
+      const target = word === undefined ? undefined : reachable(await read($, board)).find(entry => keyOf(entry) === word)
+      await writeTo($, target)
+      if (word === undefined || target === undefined) return after
       return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true }] }
     } catch {
       return after
@@ -1589,10 +1619,12 @@ export const register: Register = on => {
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
+    const writing = await read($, writingTo)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     viewedFork = viewed
+    const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
@@ -1641,7 +1673,7 @@ export const register: Register = on => {
     }
     const title = (entry: Entry, label: string) => (
       <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
-        <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold={entry.agentId === viewed}>{keyName(entry.name)}</Text>{' '}
+        <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>{' '}
         <Text dimColor>
           {label} · {age(now - entry.at)}
         </Text>
@@ -1692,6 +1724,21 @@ export const register: Register = on => {
           </Text>
           {close}
         </Box>
+        {target !== undefined && heading('WRITING TO')}
+        {target !== undefined && (
+          <Box key={`to-${target.agentId}`} flexDirection="column">
+            <Text>
+              <Text color={target.isWorking ? 'claude' : isCut(target) ? 'warning' : COLOR[target.kind ?? 'note']}>●</Text> <Text bold>{keyName(target.name)}</Text>{' '}
+              <Text dimColor>
+                {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
+              </Text>
+            </Text>
+            <Box paddingLeft={2} flexDirection="column">
+              {target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
+              {prs(target)}
+            </Box>
+          </Box>
+        )}
         {needs.length > 0 && heading('NEEDS YOU')}
         {needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">

@@ -166,6 +166,8 @@ mod tests {
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
             "await $.ui.view({ agentId: to.entry.agentId })",
+            "...missingForks(rows, [...records.values()], await $.clock.now())",
+            "WRITING TO",
             "const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)",
             "const owners = recordOwners([...records.values()])",
         ] {

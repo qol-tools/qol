@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, listedAgents, mayMessage, missingForks, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1786,6 +1786,62 @@ test("a row keyed by a newer duplicate record goes back to the oldest record's k
   expect(board).not.toContain('zed-key-2')
   expect(board).not.toContain('Plain words')
   expect(calls.some(call => call[0] === 'claim')).toBe(false)
+})
+
+test('a fork whose record is unfinished comes back after a restart even when the board lost its row', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const calls: string[][] = []
+  store.set('board:earlier-session', [{ agentId: 'a1', key: 'kept-fork', name: 'kept-fork: words', kind: 'ask', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false }])
+  engine(on, sent, [], [], store)
+  recordEngine(on, calls, [
+    { key: 'kept-fork', friendly: 'words', cwd: '/', created_ms: 1, parts: [{ n: 1, agent_id: 'a1' }] },
+    { key: 'lost-fork', friendly: 'lost words', cwd: '/', created_ms: 2, parts: [{ n: 1, agent_id: 'b0' }, { n: 2, agent_id: 'b1' }] },
+    { key: 'done-fork', friendly: 'done words', cwd: '/', created_ms: 3, parts: [{ n: 1, agent_id: 'c1' }], done: { at_ms: 4, reason: 'merged' } },
+    { key: 'stopped-fork', friendly: 'stopped words', cwd: '/', created_ms: 5, parts: [{ n: 1, agent_id: 'd1' }], stopped_ms: 6 },
+  ])
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (let round = 0; round < 4; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(sent.map(one => [JSON.stringify(one.to), one.text]).sort()).toEqual([[JSON.stringify('a1'), 'Back in the agent list.'], [JSON.stringify('b1'), 'Back in the agent list.']])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('lost-fork')
+  expect(board).not.toContain('done-fork')
+})
+
+test('missingForks adds an unfinished record whose last fork has no board row, once', () => {
+  const row = { agentId: 'a1', name: 'kept', headline: '', report: '', at: 1, isWorking: false, isDismissed: true }
+  const records = [
+    { key: 'kept', parts: [{ agent_id: 'a1' }] },
+    { key: 'lost', friendly: 'words', cwd: '/w', created_ms: 7, parts: [{ agent_id: 'b0' }, { agent_id: 'b1' }, { n: 3 }] },
+    { key: 'twin', parts: [{ agent_id: 'b1' }] },
+    { key: 'done', parts: [{ agent_id: 'c1' }], done: {} },
+  ]
+  expect(missingForks([row], records, 9)).toEqual([{ agentId: 'b1', name: 'lost: words', key: 'lost', headline: '', report: '', at: 7, isWorking: false, isInterrupted: true, isDismissed: false, project: '/w' }])
+})
+
+test('the board shows the fork whose key starts the prompt under WRITING TO, and drops it when the key goes', async ($, on) => {
+  engine(on)
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: 'asking-fork hi', cursor: 14, start: 0, end: 14, inputText: '' })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('typing a fork key and a message sends the message to that fork, shows its view, and never reaches the model', async ($, on) => {
