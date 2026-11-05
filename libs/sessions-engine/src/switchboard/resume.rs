@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -69,6 +70,62 @@ pub(super) fn unpin_forks(config_home: &Path, switchboard: &Path) -> Vec<String>
     failures
 }
 
+fn agent_id(meta_path: &Path) -> Option<&str> {
+    meta_path
+        .file_name()?
+        .to_str()?
+        .strip_prefix(AGENT_PREFIX)?
+        .strip_suffix(META_SUFFIX)
+}
+
+fn key(meta_path: &Path, described: &HashMap<String, String>) -> Result<()> {
+    let Some(description) = agent_id(meta_path).and_then(|id| described.get(id)) else {
+        return Ok(());
+    };
+    let Ok(text) = fs::read_to_string(meta_path) else {
+        return Ok(());
+    };
+    let Ok(Value::Object(mut meta)) = serde_json::from_str::<Value>(&text) else {
+        return Ok(());
+    };
+    if meta.get("agentType").and_then(Value::as_str) != Some(FORK_AGENT) {
+        return Ok(());
+    }
+    let key = description.split(':').next().unwrap_or(description);
+    let shown = meta
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if shown == key || shown.starts_with(&format!("{key}:")) {
+        return Ok(());
+    }
+    meta.insert("description".to_owned(), Value::String(description.clone()));
+    qol_fs::atomic_write(meta_path, Value::Object(meta).to_string().as_bytes())?;
+    Ok(())
+}
+
+/// Gives every fork whose session record names its agent id that record's
+/// `<key>: <friendly>` description, so its agent list row shows a key-name,
+/// including a fork started before records gave forks keys.
+pub(super) fn key_forks(
+    config_home: &Path,
+    switchboard: &Path,
+    described: &HashMap<String, String>,
+) -> Vec<String> {
+    let Ok(conversations) = fs::read_dir(conversations_dir(config_home, switchboard)) else {
+        return Vec::new();
+    };
+    let mut failures = Vec::new();
+    for conversation in conversations.flatten() {
+        for meta_path in meta_files(&conversation.path().join("subagents")) {
+            if let Err(error) = key(&meta_path, described) {
+                failures.push(format!("{}: {error:#}", meta_path.display()));
+            }
+        }
+    }
+    failures
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +189,52 @@ mod tests {
             "not json"
         );
         assert!(unpin_forks(&root.path().join("none"), board).is_empty());
+    }
+
+    #[test]
+    fn a_fork_without_a_key_name_gets_its_record_description() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, board) = (root.path().join("h"), Path::new("/data/switchboard"));
+        let subagents = conversations_dir(&home, board).join("c").join("subagents");
+        let bare = r#"{"agentType":"project-fork","description":"Azeroth survivors broken builds","cwd":"/g"}"#;
+        fork(&subagents, "a1", bare, "");
+        let keyed = r#"{"agentType":"project-fork","description":"kcd2-next-tasks: KCD2 next"}"#;
+        fork(&subagents, "a2", keyed, "");
+        let other = r#"{"agentType":"Explore","description":"look"}"#;
+        fork(&subagents, "a3", other, "");
+        fork(&subagents, "a4", bare, "");
+        let described = HashMap::from([
+            (
+                "a1".to_owned(),
+                "azeroth-survivors-broken-builds: Azeroth survivors broken builds".to_owned(),
+            ),
+            (
+                "a2".to_owned(),
+                "kcd2-next-tasks: KCD2 next task list".to_owned(),
+            ),
+            ("a3".to_owned(), "look-key: look".to_owned()),
+        ]);
+        assert!(key_forks(&home, board, &described).is_empty());
+        assert_eq!(
+            meta_of(&subagents, "a1"),
+            serde_json::json!({
+                "agentType": "project-fork",
+                "description": "azeroth-survivors-broken-builds: Azeroth survivors broken builds",
+                "cwd": "/g",
+            })
+        );
+        assert_eq!(
+            fs::read_to_string(subagents.join("agent-a2.meta.json")).unwrap(),
+            keyed
+        );
+        assert_eq!(
+            fs::read_to_string(subagents.join("agent-a3.meta.json")).unwrap(),
+            other
+        );
+        assert_eq!(
+            fs::read_to_string(subagents.join("agent-a4.meta.json")).unwrap(),
+            bare
+        );
+        assert!(key_forks(&root.path().join("none"), board, &described).is_empty());
     }
 }
