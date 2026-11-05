@@ -60,7 +60,6 @@ const ENDED_STATUSES: readonly string[] = ['completed', 'failed', 'killed']
 const DROPS_KEPT = 20
 const LOG_PREFIX = 'log-'
 const LOG_KEPT = 500
-const FORK_COLORS: readonly string[] = ['#f47067', '#f69d50', '#daaa3f', '#57ab5a', '#39c5cf', '#539bf5', '#b083f0', '#e275ad']
 const RESUMED_SUMMARY =/^Agent "([\s\S]*)" was resumed by the user$/
 const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const USER_STOP = 'killed'
@@ -1212,12 +1211,6 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
   }
 }
 
-export const forkColor = (fork: string): string => {
-  let hash = 0
-  for (const char of fork) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0
-  return FORK_COLORS[hash % FORK_COLORS.length] ?? 'text'
-}
-
 export const register: Register = on => {
   let isAutoOpenPending = false
   const dropped: string[] = []
@@ -1360,7 +1353,7 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="row" gap={1}>
-        <Text color={forkColor(one.fork)} bold>
+        <Text bold>
           {one.fork}
         </Text>
         <Text wrap="wrap">{one.said}</Text>
@@ -1423,7 +1416,7 @@ export const register: Register = on => {
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
       const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
-      if (key !== undefined) return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true, color: forkColor(key) }] }
+      if (key !== undefined) return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
     }
     const after = await next(e)
     try {
@@ -1434,7 +1427,7 @@ export const register: Register = on => {
       }
       const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(after.text)?.[1]
       if (word === undefined || !reachable(await read($, board)).some(entry => keyOf(entry) === word)) return after
-      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true, color: forkColor(word) }] }
+      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true }] }
     } catch {
       return after
     }

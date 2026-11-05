@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forkColor, fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -290,10 +290,10 @@ test('a logged event is a row in the chat, each fork in its own colour, and a fo
   for (const surface of SURFACES) {
     const first = await $.ui.mount(placedRow(ids[0] as string, surface))
     expect(await first.find({ type: 'Text', text: 'The session record could not be claimed for this fork.' })).toBeDefined()
-    expect((await first.find({ type: 'Text', text: 'alpha' }))?.props.color).toBe(forkColor('alpha'))
+    expect((await first.find({ type: 'Text', text: 'alpha' }))?.props.bold).toBe(true)
     await first.unmount()
     const second = await $.ui.mount(placedRow(ids[1] as string, surface))
-    expect((await second.find({ type: 'Text', text: 'beta' }))?.props.color).toBe(forkColor('beta'))
+    expect((await second.find({ type: 'Text', text: 'beta' }))?.props.bold).toBe(true)
     await second.unmount()
   }
   const foreign = await $.ui.mount(placedRow(ids[0] as string, 'terminal', 'another-plugin'))

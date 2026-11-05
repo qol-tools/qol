@@ -157,7 +157,7 @@ mod tests {
             "const text = entry.recommend ?? ''",
             "const sent = await sendTo($, entry, text)",
             "on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {",
-            "<Text color={forkColor(one.fork)} bold>",
+            "<Text bold>",
             "return dropAs(reportLine(quiet))",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
