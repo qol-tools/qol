@@ -1370,9 +1370,12 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
-    const to = await ensureLoaded($)
-      .then(async () => toFork(await read($, board), e.text))
-      .catch(() => undefined)
+    const to =
+      viewedFork === undefined
+        ? await ensureLoaded($)
+            .then(async () => toFork(await read($, board), e.text))
+            .catch(() => undefined)
+        : undefined
     if (to !== undefined) {
       void reach($, to.entry.agentId, to.entry.name, to.entry.project, fromUser(to.message)).catch(() => undefined)
       clearBox($, text => text === e.text)

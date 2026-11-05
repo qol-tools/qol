@@ -1769,3 +1769,19 @@ test('the prompt box offers fork keys for its first word only', async ($, on) =>
   expect((await ask('as')).suggestions.map((one: { text: string }) => one.text)).toEqual(['asking-fork '])
   expect((await ask('tell as')).suggestions).toEqual([])
 })
+
+test('a fork key typed in a fork view goes to the viewed fork, never to the named one', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'other-fork: other')
+  sent.length = 0
+  const band = promptBand(false)
+  const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'a9' } } })
+  expect((await typed($, 'asking-fork yes')).text).toBe('asking-fork yes')
+  await inFork.unmount()
+  const inMain = await $.ui.mount(band)
+  expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork: yes')
+  await inMain.unmount()
+})
