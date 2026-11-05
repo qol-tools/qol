@@ -30,6 +30,14 @@ export type Pull = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'qol-switchboard': { board: Shaped<Entry[]>; isDoneOpen: boolean; confirming: string; pulls: Pull[] }
+    'qol-switchboard': {
+      board: Shaped<Entry[]>
+      isDoneOpen: boolean
+      confirming: string
+      pulls: Pull[]
+      writingTo: string
+      writingSaid: { isUser: boolean; text: string }[]
+      starting: string
+    }
   }
 }

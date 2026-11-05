@@ -94,6 +94,11 @@ const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer 
 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
+const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const, '')
+const starting = atom({ plugin: 'qol-switchboard', key: 'starting' } as const, '')
+export const STARTING = 'Starting the switchboard…'
+export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
+const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -206,6 +211,63 @@ const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): voi
 
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
 
+const SAID_KEPT = 8
+const SAID_CHARS = 4000
+
+const plainText = (text: string): string =>
+  printable(text)
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/^#{1,6} +/gm, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+export type Said = { isUser: boolean; text: string }
+
+const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
+
+const userWords = (text: string): string => {
+  const relayed = text.replace(COORDINATOR_NOTE, '').replace(ADDRESS_NOTE, '')
+  return typedByUser(relayed) ?? relayed
+}
+
+export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
+  if (!Array.isArray(messages)) return []
+  const said = messages.flatMap((one): Said[] => {
+    if (typeof one !== 'object' || one === null) return []
+    const { role, text } = one as { role?: unknown; text?: unknown }
+    if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
+    const words = role === 'user' ? userWords(text) : text
+    const shown = plainText(words)
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
+    return [{ isUser: role === 'user', text: shown.length > SAID_CHARS ? `${shown.slice(0, SAID_CHARS - 1)}…` : shown }]
+  })
+  return said.slice(-kept)
+}
+
+const typedTarget = (list: Entry[], text: string): Entry | undefined => {
+  const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(text)?.[1]
+  return word === undefined ? undefined : reachable(list).find(entry => keyOf(entry) === word)
+}
+
+const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
+
+const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+
+const isPluginNote = (text: string): boolean => {
+  const said = text.replace(COORDINATOR_NOTE, '').trim()
+  return [BACK, REOPENED, WAIT_FOR_USER, CONTINUE, ...HARNESS_NOTES].some(note => said.startsWith(note))
+}
+
+const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
+  const agentId = entry?.agentId ?? ''
+  if ((await read($, writingTo)) === agentId) return
+  await update($, writingTo, () => agentId)
+  const found = agentId === '' ? [] : await $.session.messages({ agentId }).catch(() => [])
+  if ((await read($, writingTo)) === agentId) await update($, writingSaid, () => recentWords(found))
+}
+
 let loading: Promise<void> | undefined
 let viewedFork: string | undefined
 let tree: SbTree = { commands: [] }
@@ -238,10 +300,16 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
   await refreshStatus($)
 }
 
+const ready = async ($: EngineInterface): Promise<void> => {
+  await update($, starting, () => '')
+  await refreshStatus($).catch(() => undefined)
+}
+
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
-  const parts = [tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  const loading = await read($, starting)
+  const parts = [loading === '' ? undefined : loading, tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
 }
@@ -522,7 +590,23 @@ export const recordOwners = (records: readonly SessionRecord[]): Map<string, str
   return owners
 }
 
-const recordProgram = async ($: EngineInterface): Promise<string | undefined> => {
+const lastFork = (record: SessionRecord): string | undefined => {
+  const agentIds = (record.parts ?? []).map(part => (typeof part === 'object' && part !== null ? (part as { agent_id?: unknown }).agent_id : undefined))
+  return agentIds.filter((one): one is string => typeof one === 'string' && ID.test(one)).at(-1)
+}
+
+export const missingForks = (rows: readonly Entry[], records: readonly SessionRecord[], now: number): Entry[] => {
+  const listed = new Set(rows.map(row => row.agentId))
+  return records.flatMap(record => {
+    const agentId = record.done === undefined && typeof record.stopped_ms !== 'number' ? lastFork(record) : undefined
+    if (agentId === undefined || listed.has(agentId)) return []
+    listed.add(agentId)
+    const at = Number(record.created_ms) || now
+    return [{ agentId, name: recordName(record), key: record.key, headline: '', report: '', at, isWorking: false, isInterrupted: true, isDismissed: false, ...(record.cwd === undefined ? {} : { project: record.cwd }) }]
+  })
+}
+
+const recordProgram =async ($: EngineInterface): Promise<string | undefined> => {
   try {
     const program = await $.env.get('QOL_CLI_SESSIONS')
     return program === undefined || program === '' ? undefined : program
@@ -617,7 +701,7 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
     if (typeof one === 'object' && one !== null && typeof (one as { key?: unknown }).key === 'string') records.set((one as SessionRecord).key, one as SessionRecord)
   }
   const owners = recordOwners([...records.values()])
-  const owned = rows.map(row => {
+  const owned = [...missingForks(rows, [...records.values()], await $.clock.now()), ...rows].map(row => {
     const key = owners.get(row.agentId)
     return key === undefined || key === row.key ? row : { ...row, key }
   })
@@ -1392,8 +1476,10 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
+    await update($, starting, () => STARTING).catch(() => undefined)
     const started = await next(e)
     isAutoOpenPending = false
+    let isReady = true
     try {
       const id = await $.session.id()
       const others = (await $.store.keys()).filter(key => key.startsWith(STORE_PREFIX) && key !== STORE_PREFIX + id)
@@ -1406,7 +1492,7 @@ export const register: Register = on => {
       }
       const own = (Array.isArray(saved) ? saved : []).filter(isEntry)
       const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))
-      if (merged.length > 0) await update($, board, () => merged)
+      if (merged.length > 0) await update($, board, list => [...merged, ...(list ?? []).filter(one => !merged.some(row => row.agentId === one.agentId))])
       loading = Promise.resolve()
       if (others.length > 0) {
         await $.store.set(STORE_PREFIX + id, merged)
@@ -1419,6 +1505,7 @@ export const register: Register = on => {
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
       reopenTries = 0
+      await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
       await $.tool.register({
@@ -1466,9 +1553,18 @@ export const register: Register = on => {
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
       if (pending.length > 0) {
-        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($)).catch(() => undefined))
+        isReady = false
+        await update($, starting, () => bringingBack(pending.length))
+        await refreshStatus($)
+        $.clock.after(REOPEN_DELAY_MS, () =>
+          void deliver($)
+            .then(() => reopenForks($))
+            .catch(() => undefined)
+            .finally(() => void ready($)),
+        )
       }
     } catch {}
+    if (isReady) await ready($)
     return started
   })
 
@@ -1480,7 +1576,15 @@ export const register: Register = on => {
       isAutoOpenPending = false
       if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
     }
-    return next(e)
+    const loading = await read($, starting)
+    if (loading === '' || e.props.hasSurvey) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box>
+        <Text color="claude">◐ </Text>
+        <Text>{loading}</Text>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
@@ -1536,7 +1640,9 @@ export const register: Register = on => {
             .catch(() => undefined)
         : undefined
     if (to !== undefined) {
-      void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
+      const sent = await sendTo($, to.entry, fromUser(to.message), direct($)).catch(() => undefined)
+      if (sent?.isDelivered !== true) void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
+      await writeTo($, undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
     }
@@ -1573,7 +1679,10 @@ export const register: Register = on => {
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
       const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
-      if (key !== undefined) return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
+      if (key !== undefined) {
+        await writeTo($, reachable(list).find(entry => keyOf(entry) === key))
+        return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
+      }
     }
     const after = await next(e)
     try {
@@ -1581,16 +1690,26 @@ export const register: Register = on => {
       const hint = sbHint(tree.commands, after.text, after.cursor)
       if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
       if (after.text === '') {
+        await writeTo($, undefined)
         suggestFork($, await read($, board))
         return after
       }
-      const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(after.text)?.[1]
-      if (word === undefined || !reachable(await read($, board)).some(entry => keyOf(entry) === word)) return after
-      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true }] }
+      const target = typedTarget(await read($, board), after.text)
+      await writeTo($, target)
+      if (target === undefined) return after
+      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: keyOf(target).length, bold: true }] }
     } catch {
       return after
     }
   }).catch(($, e, next) => (next.called ? { text: e.text, cursor: e.cursor } : next(e)))
+
+  on('prompt.change', async ($, e, next) => {
+    const after = await next(e)
+    try {
+      if (viewedFork === undefined) await writeTo($, typedTarget(await read($, board), e.text))
+    } catch {}
+    return after
+  }).catch(($, e, next) => next(e))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
     if (e.agentId !== undefined || dropped.length === 0) return next(e)
@@ -1738,10 +1857,14 @@ export const register: Register = on => {
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
+    const writing = await read($, writingTo)
+    const said = await read($, writingSaid)
+    const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     viewedFork = viewed
+    const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
@@ -1790,7 +1913,7 @@ export const register: Register = on => {
     }
     const title = (entry: Entry, label: string) => (
       <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
-        <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold={entry.agentId === viewed}>{keyName(entry.name)}</Text>{' '}
+        <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>{' '}
         <Text dimColor>
           {label} · {age(now - entry.at)}
         </Text>
@@ -1834,6 +1957,7 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
+        {loading !== '' && <Text color="claude">◐ {loading}</Text>}
         <Text>{summary}</Text>
         <Box flexDirection="row" gap={2}>
           <Text dimColor wrap="wrap">
@@ -1841,6 +1965,29 @@ export const register: Register = on => {
           </Text>
           {close}
         </Box>
+        {target !== undefined && heading('WRITING TO')}
+        {target !== undefined && (
+          <Box key={`to-${target.agentId}`} flexDirection="column">
+            <Text>
+              <Text color={target.isWorking ? 'claude' : isCut(target) ? 'warning' : COLOR[target.kind ?? 'note']}>●</Text> <Text bold>{keyName(target.name)}</Text>{' '}
+              <Text dimColor>
+                {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
+              </Text>
+            </Text>
+            <Box paddingLeft={2} flexDirection="column">
+              {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
+              {[...said].reverse().map((one, index) => (
+                <Box key={`said-${index}`} flexDirection="column" marginTop={1}>
+                  <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                    {one.isUser ? 'you' : keyOf(target)}
+                  </Text>
+                  <Text wrap="wrap">{one.text}</Text>
+                </Box>
+              ))}
+              {prs(target)}
+            </Box>
+          </Box>
+        )}
         {needs.length > 0 && heading('NEEDS YOU')}
         {needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">

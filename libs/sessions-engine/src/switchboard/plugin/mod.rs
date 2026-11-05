@@ -81,7 +81,7 @@ mod tests {
         assert_eq!(hooks["modules"], serde_json::json!(["./register.tsx"]));
         assert_eq!(manifest["types"], "./types/index.d.ts");
         assert!(MODULE.contains("from '../types'"));
-        assert!(STATE_TYPES.contains("'qol-switchboard': { board: Shaped<Entry[]>"));
+        assert!(STATE_TYPES.contains("board: Shaped<Entry[]>"));
     }
 
     #[test]
@@ -165,6 +165,11 @@ mod tests {
             "on('prompt.autocomplete', async ($, e, next) => {",
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
+            "const sent = await sendTo($, to.entry, fromUser(to.message), direct($))",
+            "await $.session.messages({ agentId })",
+            "...missingForks(rows, [...records.values()], await $.clock.now())",
+            "WRITING TO",
+            "on('prompt.change', async ($, e, next) => {",
             "const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)",
             "const owners = recordOwners([...records.values()])",
         ] {
@@ -218,7 +223,8 @@ mod tests {
             "const reply = await heldReply($, e.agentId, e.turnId)",
             "if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {",
             "if (e.index === 0) {",
-            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
+            ".then(() => reopenForks($))",
+            "if (isReady) await ready($)",
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
