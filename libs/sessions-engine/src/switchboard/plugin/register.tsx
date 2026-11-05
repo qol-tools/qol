@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptAutocompleteSuggestion, Register } from 'claude-code'
+import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register } from 'claude-code'
 
 import type { Entry, Kind, Pull } from '../types'
 
@@ -23,6 +23,9 @@ const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const SB = 'sb'
+const TYPED_SB = /^\s*sb(?:\s|$)/
+const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
@@ -234,6 +237,7 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
 
 let loading: Promise<void> | undefined
 let viewedFork: string | undefined
+let tree: SbTree = { commands: [] }
 
 const loadSaved = async ($: EngineInterface): Promise<void> => {
   if ((await read($, board)).length > 0) return
@@ -266,7 +270,8 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
-  $.ui.status(count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`)
+  const parts = [tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
 }
 
@@ -431,6 +436,101 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
+export type SbCommand = { name: string; about: string; current?: boolean; children?: SbCommand[] }
+
+export type SbTree = { status?: string; commands: SbCommand[] }
+
+const filled = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
+
+const asCommand = (value: unknown): SbCommand[] => {
+  const one = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+  const name = filled(one.name)
+  if (name === undefined || /\s/.test(name)) return []
+  const children = Array.isArray(one.children) ? one.children.flatMap(asCommand) : []
+  return [{ name, about: filled(one.about) ?? '', ...(one.current === true ? { current: true } : {}), ...(children.length > 0 ? { children } : {}) }]
+}
+
+export const sbTree = (stdout: string): SbTree => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    const raw = typeof parsed === 'object' && parsed !== null ? (parsed as { status?: unknown; commands?: unknown }) : {}
+    const status = filled(raw.status)
+    return { ...(status === undefined ? {} : { status }), commands: Array.isArray(raw.commands) ? raw.commands.flatMap(asCommand) : [] }
+  } catch {
+    return { commands: [] }
+  }
+}
+
+export type SbAt = { path: SbCommand[]; level: SbCommand[]; word: string; isSpaced: boolean; missing?: string }
+
+export const sbAt = (commands: readonly SbCommand[], text: string): SbAt | undefined => {
+  const rest = /^\s*sb(\s[\s\S]*)?$/.exec(text)
+  if (rest === null) return undefined
+  if (rest[1] === undefined) return { path: [], level: [...commands], word: '', isSpaced: false }
+  const words = rest[1].trimStart().split(/\s+/)
+  const word = words.pop() ?? ''
+  const path: SbCommand[] = []
+  let level: readonly SbCommand[] = commands
+  for (const one of words) {
+    const found = level.find(command => command.name === one)
+    if (found === undefined) return { path, level: [], word, isSpaced: true, missing: one }
+    path.push(found)
+    level = found.children ?? []
+  }
+  return { path, level: [...level], word, isSpaced: true }
+}
+
+const listed = (level: readonly SbCommand[]): string => level.map(command => (command.current ? `${command.name} (current)` : command.name)).join(' · ')
+
+const childrenOf = (at: SbAt): SbCommand[] | undefined => {
+  const exact = at.level.find(command => command.name === at.word)
+  const isOnly = at.level.filter(command => command.name.startsWith(at.word)).length === 1
+  return exact !== undefined && isOnly && (exact.children ?? []).length > 0 ? exact.children : undefined
+}
+
+export const sbHint = (commands: readonly SbCommand[], text: string, cursor: number): PromptDecoration | undefined => {
+  const at = cursor === text.length ? sbAt(commands, text) : undefined
+  if (at === undefined || at.missing !== undefined) return undefined
+  const hint = (virtualText: string): PromptDecoration | undefined => (virtualText === '' ? undefined : { start: text.length, end: text.length, virtualText, dimColor: true })
+  if (!at.isSpaced) return hint(at.level.length === 0 ? '' : ` ${listed(at.level)}`)
+  const children = at.word === '' ? undefined : childrenOf(at)
+  if (children !== undefined) return hint(` ${listed(children)}`)
+  const matches = at.level.filter(command => command.name.startsWith(at.word))
+  const [first, ...others] = matches
+  if (first === undefined || (others.length === 0 && first.name === at.word)) return undefined
+  return hint(at.word === '' ? listed(matches) : [first.name.slice(at.word.length), ...others.map(command => command.name)].join(' · '))
+}
+
+export const sbTab = (commands: readonly SbCommand[], text: string, step: 1 | -1 = 1): string | undefined => {
+  const at = sbAt(commands, text)
+  if (at === undefined || at.missing !== undefined || at.level.length === 0) return undefined
+  const end = (list: readonly SbCommand[]): SbCommand | undefined => list[step === 1 ? 0 : list.length - 1]
+  if (!at.isSpaced) return `${text} ${end(at.level)?.name ?? ''}`
+  const head = text.slice(0, text.length - at.word.length)
+  const index = at.level.findIndex(command => command.name === at.word)
+  if (index !== -1) return `${head}${at.level[(index + step + at.level.length) % at.level.length]?.name ?? at.word}`
+  const pick = end(at.level.filter(command => command.name.startsWith(at.word)))
+  return pick === undefined ? undefined : `${head}${pick.name}`
+}
+
+export const sbCompletions = (commands: readonly SbCommand[], text: string, start: number, token: string): PromptAutocompleteSuggestion[] => {
+  const before = text.slice(0, start)
+  if (before.trim() === '' && token === SB) return commands.map(command => ({ text: `${SB} ${command.name}`, label: `${SB} ${command.name}`, description: command.about }))
+  const at = sbAt(commands, before + token)
+  if (at === undefined || at.missing !== undefined || !at.isSpaced) return []
+  const row = (command: SbCommand, prefix: string): PromptAutocompleteSuggestion => ({
+    text: `${prefix}${command.name}`,
+    label: command.name,
+    description: `${command.current ? 'current · ' : ''}${command.about}`,
+  })
+  const children = childrenOf(at)
+  if (children !== undefined) return children.map(command => row(command, `${at.word} `))
+  return at.level.filter(command => command.name.startsWith(at.word)).map(command => row(command, ''))
+}
+
+export const sbLine = (path: readonly SbCommand[], level: readonly SbCommand[]): string =>
+  `${[SB, ...path.map(command => command.name)].join(' ')} · ${level.map(command => `${command.current ? '▸ ' : ''}${command.name}${command.about === '' ? '' : ` (${command.about})`}`).join(' · ')}`
+
 const FROM_USER = 'The user typed this to you in the switchboard chat:\n\n'
 
 export const fromUser = (message: string): string => `${FROM_USER}${message}`
@@ -477,6 +577,37 @@ const recordProgram =async ($: EngineInterface): Promise<string | undefined> => 
 }
 
 const folderOf = (path: string): string => path.replace(/[\\/][^\\/]*$/, '') || path
+
+const loadTree = async ($: EngineInterface): Promise<void> => {
+  const program = await recordProgram($)
+  if (program === undefined) return
+  const ran = await $.process.run([program, 'sessions', 'switchboard', 'commands'], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
+  if (ran === undefined || ran.exitCode !== 0) return
+  tree = sbTree(ran.stdout)
+  await refreshStatus($)
+}
+
+const runSb = async ($: EngineInterface, text: string): Promise<string> => {
+  const typed = text.trim()
+  let at = sbAt(tree.commands, `${typed} `)
+  if (at === undefined || at.missing !== undefined || at.level.length > 0) {
+    await loadTree($)
+    at = sbAt(tree.commands, `${typed} `)
+  }
+  if (at === undefined) return sbLine([], tree.commands)
+  if (at.missing !== undefined) return `${[SB, ...at.path.map(command => command.name)].join(' ')} has no ${at.missing}. ${sbLine(at.path, at.path.length === 0 ? tree.commands : (at.path[at.path.length - 1]?.children ?? []))}`
+  if (at.level.length > 0) return sbLine(at.path, at.level)
+  const program = await recordProgram($)
+  if (program === undefined) return `${typed}: qol is not reachable.`
+  const ran = await $.process.run([program, 'sessions', 'switchboard', ...at.path.map(command => command.name)], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
+  if (ran === undefined) return `${typed}: qol is not reachable.`
+  if (ran.exitCode !== 0) return `${typed} failed: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
+  try {
+    const message: unknown = (JSON.parse(ran.stdout) as { message?: unknown }).message
+    if (typeof message === 'string' && message !== '') return message
+  } catch {}
+  return ran.stdout.trim() === '' ? `${typed}: done.` : oneLine(ran.stdout)
+}
 
 const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
   try {
@@ -1376,6 +1507,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
+      void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
@@ -1435,6 +1567,14 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    if (viewedFork === undefined && TYPED_SB.test(e.text)) {
+      if (tree.commands.length === 0) await loadTree($)
+      const at = sbAt(tree.commands, `${e.text.trim()} `)
+      if (at !== undefined && (at.missing === undefined || at.path.length > 0)) {
+        clearBox($, text => text === e.text)
+        return dropAs(await runSb($, e.text))
+      }
+    }
     const to =
       viewedFork === undefined
         ? await ensureLoaded($)
@@ -1457,7 +1597,10 @@ export const register: Register = on => {
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
-    if (viewedFork !== undefined || e.text.slice(0, e.start).trim() !== '') return own
+    if (viewedFork !== undefined) return own
+    const sb = sbCompletions(tree.commands, e.text, e.start, e.token)
+    if (sb.length > 0) return { suggestions: [...own.suggestions, ...sb] }
+    if (e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
       const mine = keyCompletions(await read($, board), e.token)
@@ -1470,6 +1613,11 @@ export const register: Register = on => {
   on('prompt.edit', async ($, e, next) => {
     const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
     if (isTab && viewedFork === undefined) {
+      const sb = sbTab(tree.commands, e.text, e.key?.shift === true ? -1 : 1)
+      if (sb !== undefined) {
+        const hint = sbHint(tree.commands, sb, sb.length)
+        return { text: sb, cursor: sb.length, decorations: hint === undefined ? [] : [hint] }
+      }
       const list = await read($, board)
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
@@ -1482,6 +1630,8 @@ export const register: Register = on => {
     const after = await next(e)
     try {
       if (viewedFork !== undefined) return after
+      const hint = sbHint(tree.commands, after.text, after.cursor)
+      if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
       if (after.text === '') {
         await writeTo($, undefined)
         suggestFork($, await read($, board))
