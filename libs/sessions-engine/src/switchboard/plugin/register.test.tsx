@@ -1051,6 +1051,12 @@ test('the board and the band say the switchboard is starting until the forks a r
   await ui.unmount()
 })
 
+test('recentWords shows the words of a message relayed mid-turn without the relay around them', () => {
+  const relayed = `The coordinator sent a message while you were working:\n${fromUser('newest on top please')}\n\nAddress this before completing your current task.`
+  expect(recentWords([{ role: 'user', text: relayed }])).toEqual([{ isUser: true, text: 'newest on top please' }])
+  expect(recentWords([{ role: 'user', text: 'The coordinator sent a message while you were working:\nBack in the agent list.\n\nAddress this before completing your current task.' }])).toEqual([])
+})
+
 test('recentWords drops markdown marks and extra blank lines', () => {
   expect(recentWords([{ role: 'assistant', text: '1. **Restart:** run `qols board`\n\n\n\nDone.' }])).toEqual([{ isUser: false, text: '1. Restart: run qols board\n\nDone.' }])
 })

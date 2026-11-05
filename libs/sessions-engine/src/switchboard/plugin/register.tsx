@@ -212,7 +212,7 @@ const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): voi
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
 
 const SAID_KEPT = 8
-const SAID_CHARS = 400
+const SAID_CHARS = 4000
 
 const plainText = (text: string): string =>
   printable(text)
@@ -225,13 +225,20 @@ const plainText = (text: string): string =>
 
 export type Said = { isUser: boolean; text: string }
 
+const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
+
+const userWords = (text: string): string => {
+  const relayed = text.replace(COORDINATOR_NOTE, '').replace(ADDRESS_NOTE, '')
+  return typedByUser(relayed) ?? relayed
+}
+
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
   if (!Array.isArray(messages)) return []
   const said = messages.flatMap((one): Said[] => {
     if (typeof one !== 'object' || one === null) return []
     const { role, text } = one as { role?: unknown; text?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
-    const words = role === 'user' ? (typedByUser(text) ?? text) : text
+    const words = role === 'user' ? userWords(text) : text
     const shown = plainText(words)
     if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
     return [{ isUser: role === 'user', text: shown.length > SAID_CHARS ? `${shown.slice(0, SAID_CHARS - 1)}…` : shown }]
@@ -1969,7 +1976,7 @@ export const register: Register = on => {
             </Text>
             <Box paddingLeft={2} flexDirection="column">
               {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
-              {said.map((one, index) => (
+              {[...said].reverse().map((one, index) => (
                 <Box key={`said-${index}`} flexDirection="column" marginTop={1}>
                   <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
                     {one.isUser ? 'you' : keyOf(target)}
