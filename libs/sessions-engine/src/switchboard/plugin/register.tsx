@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptAutocompleteSuggestion, Register } from 'claude-code'
+import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register } from 'claude-code'
 
 import type { Entry, Kind, Pull } from '../types'
 
@@ -454,6 +454,11 @@ export const authCompletions = (profiles: readonly AuthProfile[], text: string, 
   if (/^\s*sb\s+auth\s+$/.test(before)) return profiles.filter(profile => profile.name.startsWith(typed)).map(profile => row(profile, ''))
   return []
 }
+
+export const authHint = (profiles: readonly AuthProfile[], text: string, cursor: number): PromptDecoration | undefined =>
+  profiles.length > 0 && cursor === text.length && /^\s*sb\s+auth\s+$/.test(text)
+    ? { start: text.length, end: text.length, virtualText: profiles.map(profile => (profile.current ? `${profile.name} (current)` : profile.name)).join(' · '), dimColor: true }
+    : undefined
 
 const who = (profile: AuthProfile): string => (profile.loggedIn ? [profile.email, profile.org, profile.plan].filter(one => one !== undefined).join(' · ') || 'logged in' : 'not logged in')
 
@@ -1533,6 +1538,8 @@ export const register: Register = on => {
     const after = await next(e)
     try {
       if (viewedFork !== undefined) return after
+      const hint = authHint(profiles, after.text, after.cursor)
+      if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
       if (after.text === '') {
         suggestFork($, await read($, board))
         return after

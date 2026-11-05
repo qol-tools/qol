@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { authCompletions, authLine, authProfiles, authStatus, fromUser, keyCompletions, listedAgents, mayMessage, nextAuth, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { authCompletions, authHint, authLine, authProfiles, authStatus, fromUser, keyCompletions, listedAgents, mayMessage, nextAuth, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1909,4 +1909,13 @@ test('typing sb offers sb auth, Tab on it leaves auth as the token so the profil
   expect(authCompletions(profiles, 'sbx', 0, 'sbx')).toEqual([])
   expect(authCompletions(profiles, 'hello sb', 6, 'sb')).toEqual([])
   expect(authLine(authProfiles(JSON.stringify({ profiles: [{ name: 'tok', current: false, logged_in: true }] })))).toContain('tok (logged in)')
+})
+
+test('after sb auth and a space the profiles show as dim text where the typeahead cannot reach', () => {
+  const profiles = authProfiles(LISTING)
+  expect(authHint(profiles, 'sb auth ', 8)).toEqual({ start: 8, end: 8, virtualText: 'default (current) · clauded · claudedwb', dimColor: true })
+  expect(authHint(profiles, 'sb auth', 7)).toBeUndefined()
+  expect(authHint(profiles, 'sb auth c', 9)).toBeUndefined()
+  expect(authHint(profiles, 'sb auth ', 3)).toBeUndefined()
+  expect(authHint([], 'sb auth ', 8)).toBeUndefined()
 })
