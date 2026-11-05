@@ -1788,9 +1788,14 @@ test("a row keyed by a newer duplicate record goes back to the oldest record's k
   expect(calls.some(call => call[0] === 'claim')).toBe(false)
 })
 
-test('typing a fork key and a message sends the message to that fork and never reaches the model', async ($, on) => {
+test('typing a fork key and a message sends the message to that fork, shows its view, and never reaches the model', async ($, on) => {
   const sent: any[] = []
+  const viewed: string[] = []
   engine(on, sent)
+  on('ui.view', (_: unknown, e: { agentId?: string }) => {
+    viewed.push(e.agentId ?? 'main')
+    return { value: {} }
+  })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   sent.length = 0
@@ -1801,6 +1806,7 @@ test('typing a fork key and a message sends the message to that fork and never r
   expect(sent.length).toBe(1)
   expect(JSON.stringify(sent[0].to)).toContain('a8')
   expect(sent[0].text).toBe(fromUser('yes, amber'))
+  expect(viewed).toEqual(['a8'])
   expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
   expect((await typed($, 'asking yes')).text).toBe('asking yes')
   expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')

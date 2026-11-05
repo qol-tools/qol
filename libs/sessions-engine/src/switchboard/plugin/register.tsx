@@ -1397,6 +1397,7 @@ export const register: Register = on => {
         : undefined
     if (to !== undefined) {
       void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
+      await $.ui.view({ agentId: to.entry.agentId }).catch(() => undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
     }
