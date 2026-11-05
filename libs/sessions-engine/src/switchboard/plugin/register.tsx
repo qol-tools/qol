@@ -92,6 +92,7 @@ const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
 const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const, '')
+const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -204,9 +205,31 @@ const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): voi
 
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
 
+const SAID_KEPT = 8
+const SAID_CHARS = 400
+
+export type Said = { isUser: boolean; text: string }
+
+export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
+  if (!Array.isArray(messages)) return []
+  const said = messages.flatMap((one): Said[] => {
+    if (typeof one !== 'object' || one === null) return []
+    const { role, text } = one as { role?: unknown; text?: unknown }
+    if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
+    const words = role === 'user' ? (typedByUser(text) ?? text) : text
+    const shown = printable(words).trim()
+    if (shown === '' || (role === 'user' && /^<[a-z-]+>/.test(shown))) return []
+    return [{ isUser: role === 'user', text: shown.length > SAID_CHARS ? `${shown.slice(0, SAID_CHARS - 1)}…` : shown }]
+  })
+  return said.slice(-kept)
+}
+
 const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
   const agentId = entry?.agentId ?? ''
-  if ((await read($, writingTo)) !== agentId) await update($, writingTo, () => agentId)
+  if ((await read($, writingTo)) === agentId) return
+  await update($, writingTo, () => agentId)
+  const found = agentId === '' ? [] : await $.session.messages({ agentId }).catch(() => [])
+  if ((await read($, writingTo)) === agentId) await update($, writingSaid, () => recentWords(found))
 }
 
 let loading: Promise<void> | undefined
@@ -1419,8 +1442,9 @@ export const register: Register = on => {
             .catch(() => undefined)
         : undefined
     if (to !== undefined) {
-      void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
-      await $.ui.view({ agentId: to.entry.agentId }).catch(() => undefined)
+      const sent = await sendTo($, to.entry, fromUser(to.message), direct($)).catch(() => undefined)
+      if (sent?.isDelivered === true) await $.ui.view({ agentId: sent.agentId }).catch(() => undefined)
+      else void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
       await writeTo($, undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
@@ -1620,6 +1644,7 @@ export const register: Register = on => {
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
+    const said = await read($, writingSaid)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
@@ -1734,7 +1759,12 @@ export const register: Register = on => {
               </Text>
             </Text>
             <Box paddingLeft={2} flexDirection="column">
-              {target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
+              {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
+              {said.map((one, index) => (
+                <Text key={`said-${index}`} wrap="wrap" dimColor={!one.isUser}>
+                  <Text bold>{one.isUser ? 'you' : keyOf(target)}</Text> {one.text}
+                </Text>
+              ))}
               {prs(target)}
             </Box>
           </Box>

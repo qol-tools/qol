@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, listedAgents, mayMessage, missingForks, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1832,6 +1832,7 @@ test('the board shows the fork whose key starts the prompt under WRITING TO, and
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
   }))
+  on('session.messages', () => ({ value: [{ role: 'user', text: fromUser('pick one') }, { role: 'assistant', text: 'Amber or teal?' }] }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
@@ -1839,6 +1840,8 @@ test('the board shows the fork whose key starts the prompt under WRITING TO, and
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
   await $.prompt.edit({ origin: { kind: 'composer' }, text: 'asking-fork hi', cursor: 14, start: 0, end: 14, inputText: '' })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await ui.unmount()
@@ -1856,9 +1859,6 @@ test('typing a fork key and a message sends the message to that fork, shows its 
   await spawn($, 'a8', 'asking-fork: asks')
   sent.length = 0
   expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
-  await settle()
-  expect(sent).toEqual([])
-  await renderBand($)
   expect(sent.length).toBe(1)
   expect(JSON.stringify(sent[0].to)).toContain('a8')
   expect(sent[0].text).toBe(fromUser('yes, amber'))
@@ -1866,6 +1866,40 @@ test('typing a fork key and a message sends the message to that fork, shows its 
   expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
   expect((await typed($, 'asking yes')).text).toBe('asking yes')
   expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')
+})
+
+test('a typed message the prompt hook could not send goes out from the band, and the view stays', async ($, on) => {
+  const sent: any[] = []
+  const viewed: string[] = []
+  let refusals = 1
+  engine(on, sent, [], [], new Map(), () => (refusals-- > 0 ? { isDelivered: false, reason: "The user doesn't want to take this action right now." } : { isDelivered: true }))
+  on('ui.view', (_: unknown, e: { agentId?: string }) => {
+    viewed.push(e.agentId ?? 'main')
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  sent.length = 0
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  await settle()
+  await renderBand($)
+  expect(sent.map(one => one.text)).toEqual([fromUser('yes, amber'), fromUser('yes, amber')])
+  expect(viewed).toEqual([])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).not.toContain('could not reach')
+})
+
+test('recentWords keeps the last spoken lines, the user\'s own words without the prefix, and no notifications', () => {
+  const messages = [
+    { role: 'user', text: '<task-notification>x</task-notification>' },
+    { role: 'user', text: fromUser('which colour?') },
+    { role: 'assistant', text: '' },
+    { role: 'assistant', text: 'Amber.' },
+    { role: 'system', text: 'ignored' },
+  ]
+  expect(recentWords(messages)).toEqual([{ isUser: true, text: 'which colour?' }, { isUser: false, text: 'Amber.' }])
+  expect(recentWords(messages, 1)).toEqual([{ isUser: false, text: 'Amber.' }])
+  expect(recentWords({ deny: 'no' })).toEqual([])
 })
 
 test('the prompt box offers fork keys for its first word only', async ($, on) => {

@@ -92,10 +92,11 @@ fn watch_args(
 
 #[cfg(not(test))]
 fn start_watcher(args: &[String]) -> Result<()> {
-    let program = match std::env::current_exe() {
-        Ok(current) if is_plugin_binary(&current) => current,
-        _ => plugin_binary()?,
-    };
+    let program =
+        match std::env::current_exe().map(qol_conventions::artifact::normalized_executable) {
+            Ok(current) if is_plugin_binary(&current) => current,
+            _ => plugin_binary()?,
+        };
     qol_process::spawn_detached(Command::new(program).args(args))
         .context("failed to start the CLI Sessions fork watcher")
 }

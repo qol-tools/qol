@@ -984,6 +984,7 @@ fn run_with(
 
 fn spawn_silent_wake_watcher(session: &str) -> Result<()> {
     let executable = std::env::current_exe()
+        .map(qol_conventions::artifact::normalized_executable)
         .context("cannot resolve the current executable for the silent-wake watcher")?;
     process::Command::new(executable)
         .args(["sessions", "watch", session])

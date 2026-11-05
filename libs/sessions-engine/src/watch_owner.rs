@@ -17,7 +17,9 @@ pub(super) struct ClientWatcher {
 const WATCH_PROGRAM_FALLBACK: &str = "qol";
 
 fn watch_program() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from(WATCH_PROGRAM_FALLBACK))
+    std::env::current_exe()
+        .map(qol_conventions::artifact::normalized_executable)
+        .unwrap_or_else(|_| PathBuf::from(WATCH_PROGRAM_FALLBACK))
 }
 
 #[cfg(test)]
