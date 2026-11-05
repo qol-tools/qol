@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, PromptAutocompleteSuggestion, Register } from 'claude-code'
 
 import type { Entry, Kind, Pull } from '../types'
 
@@ -194,15 +194,18 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
-const clearTypedToggle = ($: EngineInterface): void => {
+const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): void => {
   $.clock.after(CLEAR_TYPED_MS, () => {
     void (async () => {
-      if (TYPED_TOGGLE.test((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      if (isDropped((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
     })().catch(() => {})
   })
 }
 
+const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
+
 let loading: Promise<void> | undefined
+let viewedFork: string | undefined
 
 const loadSaved = async ($: EngineInterface): Promise<void> => {
   if ((await read($, board)).length > 0) return
@@ -236,6 +239,12 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
   $.ui.status(count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`)
+  suggestFork($, list)
+}
+
+const suggestFork = ($: EngineInterface, list: Entry[]): void => {
+  const first = reachable(list)[0]
+  if (first !== undefined) void $.prompt.suggest({ text: `${keyOf(first)} ` }).catch(() => {})
 }
 
 const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking && entry.isDone !== true
@@ -338,6 +347,66 @@ export const addressed = (list: Entry[], to: string): Entry | undefined => {
   }
   return entry
 }
+
+const KEY_SHAPE = /^[a-z0-9][a-z0-9-]*$/
+const TO_FORK = /^\s*([a-z0-9][a-z0-9-]*)(:?)[ \t]+(\S[\s\S]*)$/
+
+export const keyOf = (entry: Entry): string => entry.key ?? keyName(entry.name)
+
+export const keyed = (description: string, key: string | undefined): string =>
+  key === undefined || !KEY_SHAPE.test(key) || keyName(description) === key ? description : `${key}: ${friendlyName(description)}`
+
+export const reachable = (list: Entry[]): Entry[] => {
+  const shown = list.filter(entry => !entry.isDismissed && entry.successor === undefined)
+  const by = (keep: (entry: Entry) => boolean) => shown.filter(keep).sort((a, b) => a.at - b.at)
+  const ended = (entry: Entry) => entry.isDone === true || (entry.kind !== undefined && DONE.includes(entry.kind))
+  const ordered = [
+    ...by(needsYou),
+    ...by(isCut),
+    ...by(entry => entry.isWorking),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !ended(entry)),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && ended(entry)).reverse(),
+  ]
+  const seen = new Set<string>()
+  return ordered.filter(entry => {
+    const key = keyOf(entry)
+    if (!KEY_SHAPE.test(key) || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const isTypedOf = (key: string, typed: string): boolean => key.startsWith(typed) || key.split('-').some(part => part.startsWith(typed))
+
+export const keyCompletions = (list: Entry[], token: string): PromptAutocompleteSuggestion[] => {
+  const typed = token.toLowerCase()
+  if (!KEY_SHAPE.test(typed)) return []
+  return reachable(list)
+    .filter(entry => isTypedOf(keyOf(entry), typed))
+    .map(entry => ({ text: `${keyOf(entry)} `, label: keyOf(entry), description: `${friendlyName(entry.name)}${entry.project === undefined ? '' : ` · ${entry.project}`}` }))
+}
+
+export const nextKey = (list: Entry[], current: string, step: 1 | -1 = 1): string | undefined => {
+  const keys = reachable(list).map(keyOf)
+  if (keys.length === 0) return undefined
+  const at = keys.indexOf(current)
+  const from = at === -1 ? (step === 1 ? -1 : 0) : at
+  return keys[(from + step + keys.length) % keys.length]
+}
+
+export const toFork = (list: Entry[], text: string): { entry: Entry; message: string } | undefined => {
+  const match = TO_FORK.exec(text)
+  if (match === null) return undefined
+  const [, word = '', colon, message = ''] = match
+  const rows = reachable(list)
+  const exact = rows.find(entry => keyOf(entry) === word)
+  if (exact !== undefined) return { entry: exact, message: message.trim() }
+  if (colon !== ':') return undefined
+  const typed = rows.filter(entry => isTypedOf(keyOf(entry), word))
+  return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
+}
+
+export const fromUser = (message: string): string => `The user typed this to you in the switchboard chat:\n\n${message}`
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -1141,8 +1210,11 @@ export const register: Register = on => {
 
   on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {
     if (e.resume !== undefined) {
-      if (e.parentAgentId !== undefined && !mayMessage(await read($, board), e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
-      return next(e)
+      const list = await read($, board)
+      if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
+      const resumed = e.resume.agentId
+      const known = list.find(one => one.agentId === resumed && one.key !== undefined) ?? list.find(one => one.successor === resumed && one.key !== undefined)
+      return next({ ...e, description: keyed(e.description, known?.key) })
     }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {
@@ -1255,6 +1327,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    viewedFork = e.props.view?.agentId
     await drainOutbox($).catch(() => undefined)
     const docks = e.viewport?.isFullscreen
     if (isAutoOpenPending && docks !== undefined) {
@@ -1296,11 +1369,56 @@ export const register: Register = on => {
     if (quiet !== undefined) {
       return dropAs(reportLine(quiet))
     }
-    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer' || !TYPED_TOGGLE.test(e.text)) return next(e)
+    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    const to = await ensureLoaded($)
+      .then(async () => toFork(await read($, board), e.text))
+      .catch(() => undefined)
+    if (to !== undefined) {
+      void reach($, to.entry.agentId, to.entry.name, to.entry.project, fromUser(to.message)).catch(() => undefined)
+      clearBox($, text => text === e.text)
+      return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
+    }
+    if (!TYPED_TOGGLE.test(e.text)) return next(e)
     isAutoOpenPending = false
     clearTypedToggle($)
     return dropAs(await toggleBoard($))
   }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
+
+  on('prompt.autocomplete', async ($, e, next) => {
+    const own = await next(e)
+    if (viewedFork !== undefined || e.text.slice(0, e.start).trim() !== '') return own
+    try {
+      await ensureLoaded($)
+      const mine = keyCompletions(await read($, board), e.token)
+      return mine.length === 0 ? own : { suggestions: [...own.suggestions, ...mine] }
+    } catch {
+      return own
+    }
+  }).catch(($, e, next) => (next.called ? { suggestions: [] } : next(e)))
+
+  on('prompt.edit', async ($, e, next) => {
+    const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
+    if (isTab && viewedFork === undefined) {
+      const list = await read($, board)
+      const current = e.text.trim()
+      const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
+      const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
+      if (key !== undefined) return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true, color: forkColor(key) }] }
+    }
+    const after = await next(e)
+    try {
+      if (viewedFork !== undefined) return after
+      if (after.text === '') {
+        suggestFork($, await read($, board))
+        return after
+      }
+      const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(after.text)?.[1]
+      if (word === undefined || !reachable(await read($, board)).some(entry => keyOf(entry) === word)) return after
+      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true, color: forkColor(word) }] }
+    } catch {
+      return after
+    }
+  }).catch(($, e, next) => (next.called ? { text: e.text, cursor: e.cursor } : next(e)))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
     if (e.agentId !== undefined || dropped.length === 0) return next(e)
@@ -1418,8 +1536,16 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
-    return next(e)
-  }).catch(($, e, next) => next(e))
+    const done = await next(e)
+    if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
+    return done
+  }).catch(($, e, next) => (next.called ? undefined : next(e)))
+
+  on('prompt.suggest', { origin: { kind: 'suggestion' } }, async ($, e, next) => {
+    if (viewedFork !== undefined) return next(e)
+    const first = reachable(await read($, board))[0]
+    return first === undefined ? next(e) : next({ ...e, text: `${keyOf(first)} ` })
+  }).catch(($, e, next) => (next.called ? { isShown: false } : next(e)))
 
   on('session.append', async ($, e, next) => {
     const origin = e.origin.kind
@@ -1443,6 +1569,7 @@ export const register: Register = on => {
     const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
+    viewedFork = viewed
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)

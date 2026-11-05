@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forkColor, listedAgents, mayMessage, reportLine } from '../hooks/register'
+import { forkColor, fromUser, keyCompletions, keyed, listedAgents, mayMessage, nextKey, reachable, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1682,4 +1682,90 @@ test('a resumed session whose fork the board already keys keeps that key', async
   expect(verbs(calls, 'part')).toEqual([['part', '--key', 'old', '--agent-id', 'a5', '--transcript', TRANSCRIPT('a5')]])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('[fork board] old')
+})
+
+const row = (agentId: string, name: string, extra: Record<string, unknown> = {}) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra })
+
+const ROWS = [
+  row('a1', 'kcd2-next-tasks: KCD2 next task list', { kind: 'ask', at: 2, project: '/git/kcd2' }),
+  row('a2', 'switchboard-flow-improvements: orchestration', { isWorking: true }),
+  row('a3', 'Azeroth survivors broken builds', { key: 'azeroth-survivors-broken-builds', kind: 'ask', at: 1 }),
+  row('a4', 'old-one: dismissed', { isDismissed: true }),
+  row('a5', 'kcd2-next-tasks: KCD2 next task list', { successor: 'a1' }),
+  row('a6', 'Free text with no key'),
+] as any[]
+
+test('fork keys complete from the first letters of the key or of any word in it', () => {
+  expect(keyCompletions(ROWS, 'kc')).toEqual([{ text: 'kcd2-next-tasks ', label: 'kcd2-next-tasks', description: 'KCD2 next task list · /git/kcd2' }])
+  expect(keyCompletions(ROWS, 'NEXT').map(one => one.label)).toEqual(['kcd2-next-tasks'])
+  expect(keyCompletions(ROWS, 's').map(one => one.label)).toEqual(['azeroth-survivors-broken-builds', 'switchboard-flow-improvements'])
+  for (const token of ['old', 'free', '/b', '@kc', 'zz']) expect(keyCompletions(ROWS, token)).toEqual([])
+})
+
+test('Tab walks the forks in board order and Shift+Tab walks back, wrapping at both ends', () => {
+  expect(reachable(ROWS).map(one => one.agentId)).toEqual(['a3', 'a1', 'a2'])
+  const cases: [string, 1 | -1, string][] = [
+    ['', 1, 'azeroth-survivors-broken-builds'],
+    ['azeroth-survivors-broken-builds', 1, 'kcd2-next-tasks'],
+    ['switchboard-flow-improvements', 1, 'azeroth-survivors-broken-builds'],
+    ['', -1, 'switchboard-flow-improvements'],
+    ['kcd2-next-tasks', -1, 'azeroth-survivors-broken-builds'],
+    ['azeroth-survivors-broken-builds', -1, 'switchboard-flow-improvements'],
+  ]
+  for (const [current, step, expected] of cases) expect(nextKey(ROWS, current, step)).toBe(expected)
+  expect(nextKey([], '')).toBeUndefined()
+})
+
+test('a full key, or a unique start of one with a colon, addresses a fork; anything else is a prompt', () => {
+  const cases: [string, string | undefined, string | undefined][] = [
+    ['kcd2-next-tasks yes, restart it', 'a1', 'yes, restart it'],
+    ['  kcd2-next-tasks:   yes\nand more', 'a1', 'yes\nand more'],
+    ['kcd2: yes', 'a1', 'yes'],
+    ['azeroth: rebuild', 'a3', 'rebuild'],
+    ['azeroth-survivors-broken-builds rebuild', 'a3', 'rebuild'],
+    ['kcd2 yes', undefined, undefined],
+    ['s: hi', undefined, undefined],
+    ['what is running?', undefined, undefined],
+    ['kcd2-next-tasks', undefined, undefined],
+    ['kcd2-next-tasks   ', undefined, undefined],
+    ['old-one hi', undefined, undefined],
+    ['Kcd2-next-tasks hi', undefined, undefined],
+  ]
+  for (const [text, agentId, message] of cases) {
+    const to = toFork(ROWS, text)
+    expect([text, to?.entry.agentId, to?.message]).toEqual([text, agentId, message])
+  }
+})
+
+test('a resumed fork without a key in its description shows its record key in the agent list', () => {
+  expect(keyed('Azeroth survivors broken builds', 'azeroth-survivors-broken-builds')).toBe('azeroth-survivors-broken-builds: Azeroth survivors broken builds')
+  expect(keyed('kcd2-next-tasks: KCD2 next task list', 'kcd2-next-tasks')).toBe('kcd2-next-tasks: KCD2 next task list')
+  expect(keyed('Free text', undefined)).toBe('Free text')
+  expect(keyed('Free text', 'Not A Key')).toBe('Free text')
+})
+
+test('typing a fork key and a message sends the message to that fork and never reaches the model', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  sent.length = 0
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  for (let tries = 0; tries < 50 && sent.length === 0; tries += 1) await new Promise(resolve => setTimeout(resolve, 10))
+  expect(sent.length).toBe(1)
+  expect(JSON.stringify(sent[0].to)).toContain('a8')
+  expect(sent[0].text).toBe(fromUser('yes, amber'))
+  expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
+  expect((await typed($, 'asking yes')).text).toBe('asking yes')
+  expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')
+})
+
+test('the prompt box offers fork keys for its first word only', async ($, on) => {
+  engine(on)
+  on('prompt.autocomplete', () => ({ suggestions: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const ask = (text: string) => $.prompt.autocomplete({ text, cursor: text.length, token: text.trim().split(/\s+/).at(-1) ?? '', start: text.length - (text.trim().split(/\s+/).at(-1) ?? '').length })
+  expect((await ask('as')).suggestions.map((one: { text: string }) => one.text)).toEqual(['asking-fork '])
+  expect((await ask('tell as')).suggestions).toEqual([])
 })

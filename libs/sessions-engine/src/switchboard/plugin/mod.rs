@@ -89,7 +89,7 @@ mod tests {
         for needle in [
             "const FORK = 'project-fork'",
             "on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {",
-            "if (e.parentAgentId !== undefined && !mayMessage(await read($, board), e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }",
+            "if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }",
             "if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }",
             "const prompt = withLauncher(e.prompt, e.parentAgentId)",
             "const claimed = await recordClaim($, e.description, cwd)",
@@ -162,6 +162,10 @@ mod tests {
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
             "on('turn.start', async ($, e, next) => {",
+            "on('prompt.autocomplete', async ($, e, next) => {",
+            "on('prompt.edit', async ($, e, next) => {",
+            "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
+            "return next({ ...e, description: keyed(e.description, known?.key) })",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
