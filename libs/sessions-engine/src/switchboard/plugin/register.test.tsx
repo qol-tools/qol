@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { authCompletions, authLine, authProfiles, authStatus, fromUser, keyCompletions, listedAgents, mayMessage, nextAuth, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -543,6 +543,8 @@ test('a board the user closed opens again at the next start', async ($, on) => {
 
 const isRecord = (argv: string[]) => argv[2] === 'record'
 
+const isAuth = (argv: string[]) => argv[2] === 'switchboard' && argv[3] === 'auth'
+
 const NO_RECORD = { exitCode: 1, stdout: '', stderr: 'no session record here' }
 
 const recordReply = (argv: string[], records: any[]) => {
@@ -573,7 +575,7 @@ const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
 }
 
 const adopted = (forks: Forks, runs: string[][], argv: string[]) => {
-  if (isRecord(argv)) return NO_RECORD
+  if (isRecord(argv) || isAuth(argv)) return NO_RECORD
   runs.push(argv)
   const wanted = argv[argv.indexOf('--fork') + 1]
   const found = Object.entries(forks).find(([id, fork]) => id === wanted || fork.name.split(':')[0] === wanted)
@@ -714,7 +716,7 @@ test('a terminal session comes back as a fork with its own conversation once, an
   }))
   on('fs.exists', () => ({ value: true }))
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     const transcript = e.argv[e.argv.indexOf('--transcript') + 1]
     return {
@@ -1165,7 +1167,7 @@ test('a watcher result nothing waited for reaches its fork, and the board shows 
   engine(on, sent)
   watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' } })
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: `claimed ${e.argv[3]}` } }
     return {
@@ -1215,6 +1217,7 @@ test('a merged result is filed on the board without waking its fork, and any oth
       recorded.push(e.argv)
       return { value: recordReply(e.argv, []) }
     }
+    if (isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
     return {
@@ -1259,7 +1262,7 @@ test('a fork of an earlier conversation is brought into this one for each result
   const result = (id: string, agentId: string, message: string) => ({ id, agent_id: agentId, conversation: 'old', cwd: '/forged', message })
   const runs: string[][] = []
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     if (e.argv[3] === 'adopt') return { value: adopted({ e1: { name: 'e1-fork: earlier', cwd: '/work-old' } }, runs, e.argv) }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
@@ -1649,6 +1652,7 @@ test('a terminal session brought back as a fork is claimed with the description 
       calls.push(e.argv.slice(3))
       return { value: recordReply(e.argv, []) }
     }
+    if (isAuth(e.argv)) return { value: NO_RECORD }
     adopts.push(e.argv)
     const description = e.argv[e.argv.indexOf('--description') + 1]
     return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ agent_id: 'a5', name: description, cwd: '/p', brought: 'session' }) } }
@@ -1830,4 +1834,77 @@ test('a fork key typed in a fork view goes to the viewed fork, never to the name
   const inMain = await $.ui.mount(band)
   expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork: yes')
   await inMain.unmount()
+})
+
+const LISTING = JSON.stringify({
+  current: 'default',
+  profiles: [
+    { name: 'default', folder: '/h/.claude', config_dir: null, current: true, logged_in: true, email: 'me@work.com', org: 'Work', plan: 'max' },
+    { name: 'clauded', folder: '/h/.claude-clauded', config_dir: '/h/.claude-clauded', current: false, logged_in: true, email: 'me@home.com', org: null, plan: 'pro' },
+    { name: 'claudedwb', folder: '/h/.claude-claudedwb', config_dir: '/h/.claude-claudedwb', current: false, logged_in: false },
+  ],
+})
+
+test('Tab completes sb to sb auth, then steps through the profiles, Shift+Tab steps back', () => {
+  const profiles = authProfiles(LISTING)
+  expect(profiles.map(one => one.name)).toEqual(['default', 'clauded', 'claudedwb'])
+  expect(nextAuth(profiles, 'sb')).toBe('sb auth ')
+  expect(nextAuth([], 'sb ')).toBe('sb auth ')
+  expect(nextAuth(profiles, 'sb auth ')).toBe('sb auth default ')
+  expect(nextAuth(profiles, 'sb auth default ')).toBe('sb auth clauded ')
+  expect(nextAuth(profiles, 'sb auth claudedwb ')).toBe('sb auth default ')
+  expect(nextAuth(profiles, 'sb auth ', -1)).toBe('sb auth claudedwb ')
+  expect(nextAuth(profiles, 'sb auth clauded ', -1)).toBe('sb auth default ')
+  expect(nextAuth(profiles, 'sb auth cla')).toBeUndefined()
+  expect(nextAuth(profiles, 'sb auth nobody ')).toBeUndefined()
+  expect(nextAuth(profiles, 'sbx')).toBeUndefined()
+  expect(nextAuth([], 'sb auth ')).toBeUndefined()
+})
+
+test('the profile list reads as one row with the current login marked, and the status line names it', () => {
+  const profiles = authProfiles(LISTING)
+  expect(authLine(profiles)).toBe(
+    'claude profiles · ▸ default (me@work.com · Work · max) · clauded (me@home.com · pro) · claudedwb (not logged in) · sb auth <profile> switches',
+  )
+  expect(authStatus(profiles)).toBe('claude · default · me@work.com')
+  expect(authProfiles('not json')).toEqual([])
+  expect(authLine([])).toBe('No claude profiles found.')
+})
+
+test('typing sb auth lists the profiles and sb auth <profile> switches, and neither reaches the model', async ($, on) => {
+  const runs: string[][] = []
+  engine(on)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv.slice(1))
+    if (e.argv[4] === '--list') return { value: { exitCode: 0, stdout: LISTING, stderr: '' } }
+    if (e.argv[4] === 'clauded') return { value: { exitCode: 0, stdout: '{"switching":"clauded"}', stderr: '' } }
+    if (e.argv[2] === 'switchboard') return { value: { exitCode: 1, stdout: '', stderr: 'the switchboard already runs on `default`' } }
+    return { value: { exitCode: 1, stdout: '', stderr: 'no record' } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect((await typed($, 'sb auth')).drop).toContain('▸ default (me@work.com')
+  expect((await typed($, 'sb')).drop).toContain('▸ default (me@work.com')
+  expect((await typed($, 'sb auth clauded')).drop).toBe('Switching the switchboard to clauded: it closes and opens again on that login.')
+  expect((await typed($, 'sb auth default')).drop).toContain('already runs on `default`')
+  expect((await typed($, 'sb auth nobody')).drop).toContain('No claude profile nobody.')
+  expect((await typed($, 'sb auth --reopen')).drop).toContain('No claude profile --reopen.')
+  expect(runs.filter(run => run[1] === 'switchboard' && run[3] !== '--list')).toEqual([
+    ['sessions', 'switchboard', 'auth', 'clauded'],
+    ['sessions', 'switchboard', 'auth', 'default'],
+  ])
+  expect((await typed($, 'sb is a word')).text).toBe('sb is a word')
+})
+
+test('typing sb offers sb auth with each profile in the typeahead, and the profile word completes after sb auth', () => {
+  const profiles = authProfiles(LISTING)
+  const sb = authCompletions(profiles, 'sb', 0, 'sb')
+  expect(sb.map(one => one.text)).toEqual(['sb auth default ', 'sb auth clauded ', 'sb auth claudedwb '])
+  expect(sb[0]?.description).toBe('current · me@work.com · Work · max')
+  expect(sb[2]?.description).toBe('not logged in')
+  expect(authCompletions([], 'sb', 0, 'sb').map(one => one.text)).toEqual(['sb auth '])
+  expect(authCompletions(profiles, 'sb au', 3, 'au').map(one => one.text)).toEqual(['auth default ', 'auth clauded ', 'auth claudedwb '])
+  expect(authCompletions(profiles, 'sb auth claudedw', 8, 'claudedw').map(one => one.text)).toEqual(['claudedwb '])
+  expect(authCompletions(profiles, 'sbx', 0, 'sbx')).toEqual([])
+  expect(authCompletions(profiles, 'hello sb', 6, 'sb')).toEqual([])
 })

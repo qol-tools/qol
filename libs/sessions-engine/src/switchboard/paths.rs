@@ -39,6 +39,20 @@ pub(super) fn config_dir(switchboard: &Path, caller: Option<PathBuf>) -> Option<
     }
 }
 
+pub(super) fn set_recorded_config_dir(switchboard: &Path, config_dir: Option<&Path>) -> Result<()> {
+    let record = switchboard.join(CONFIG_DIR_RECORD);
+    match config_dir {
+        Some(dir) => remember_config_dir(&record, dir),
+        None => match std::fs::remove_file(&record) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("failed to remove {}", record.display()))
+            }
+        },
+    }
+}
+
 fn remember_config_dir(record: &Path, config_dir: &Path) -> Result<()> {
     let text = config_dir
         .to_str()
@@ -112,6 +126,20 @@ mod tests {
             Some(other.path().to_path_buf()),
             "the newest terminal launch replaces the record"
         );
+    }
+
+    #[test]
+    fn switching_to_the_default_profile_forgets_the_recorded_account() {
+        let switchboard = tempfile::tempdir().unwrap();
+        let account = tempfile::tempdir().unwrap();
+        set_recorded_config_dir(switchboard.path(), Some(account.path())).unwrap();
+        assert_eq!(
+            config_dir(switchboard.path(), None),
+            Some(account.path().to_path_buf())
+        );
+        set_recorded_config_dir(switchboard.path(), None).unwrap();
+        assert_eq!(config_dir(switchboard.path(), None), None);
+        set_recorded_config_dir(switchboard.path(), None).unwrap();
     }
 
     #[test]

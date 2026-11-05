@@ -23,6 +23,11 @@ const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const SB = 'sb'
+const AUTH = 'auth'
+const TYPED_AUTH = /^\s*sb(?:\s+auth(?:\s+(\S+))?)?\s*$/
+const AUTH_TIMEOUT_MS = 60_000
+const HARNESS = 'claude'
 const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
@@ -205,6 +210,7 @@ const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED
 
 let loading: Promise<void> | undefined
 let viewedFork: string | undefined
+let profiles: AuthProfile[] = []
 
 const loadSaved = async ($: EngineInterface): Promise<void> => {
   if ((await read($, board)).length > 0) return
@@ -237,7 +243,8 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
-  $.ui.status(count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`)
+  const parts = [authStatus(profiles), count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
 }
 
@@ -402,6 +409,66 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
+export type AuthProfile = { name: string; current: boolean; loggedIn: boolean; email?: string; org?: string; plan?: string }
+
+const filled = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
+
+export const authProfiles = (stdout: string): AuthProfile[] => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    const rows = typeof parsed === 'object' && parsed !== null ? (parsed as { profiles?: unknown }).profiles : undefined
+    if (!Array.isArray(rows)) return []
+    return rows.flatMap(row => {
+      const one = typeof row === 'object' && row !== null ? (row as Record<string, unknown>) : {}
+      const name = filled(one.name)
+      if (name === undefined) return []
+      return [{ name, current: one.current === true, loggedIn: one.logged_in === true, email: filled(one.email), org: filled(one.org), plan: filled(one.plan) }]
+    })
+  } catch {
+    return []
+  }
+}
+
+export const nextAuth = (profiles: readonly AuthProfile[], typed: string, step: 1 | -1 = 1): string | undefined => {
+  if (typed === SB || typed === `${SB} `) return `${SB} ${AUTH} `
+  const names = profiles.map(profile => profile.name)
+  if (names.length === 0) return undefined
+  const prefix = `${SB} ${AUTH} `
+  if (!typed.startsWith(prefix)) return undefined
+  const word = typed.slice(prefix.length)
+  const at = word === '' ? (step === 1 ? -1 : 0) : word.endsWith(' ') ? names.indexOf(word.slice(0, -1)) : -1
+  if (word !== '' && at === -1) return undefined
+  return `${prefix}${names[(at + step + names.length) % names.length]} `
+}
+
+export const authCompletions = (profiles: readonly AuthProfile[], text: string, start: number, token: string): PromptAutocompleteSuggestion[] => {
+  const before = text.slice(0, start)
+  const typed = token.toLowerCase()
+  const row = (profile: AuthProfile, prefix: string): PromptAutocompleteSuggestion => ({
+    text: `${prefix}${profile.name} `,
+    label: `${SB} ${AUTH} ${profile.name}`,
+    description: `${profile.current ? 'current · ' : ''}${who(profile)}`,
+  })
+  if (before.trim() === '' && typed === SB) {
+    return profiles.length === 0 ? [{ text: `${SB} ${AUTH} `, label: `${SB} ${AUTH}`, description: `switch the ${HARNESS} login` }] : profiles.map(profile => row(profile, `${SB} ${AUTH} `))
+  }
+  if (/^\s*sb\s+$/.test(before) && AUTH.startsWith(typed)) return profiles.map(profile => row(profile, `${AUTH} `))
+  if (/^\s*sb\s+auth\s+$/.test(before)) return profiles.filter(profile => profile.name.startsWith(typed)).map(profile => row(profile, ''))
+  return []
+}
+
+const who = (profile: AuthProfile): string => (profile.loggedIn ? [profile.email, profile.org, profile.plan].filter(one => one !== undefined).join(' · ') : 'not logged in')
+
+export const authLine = (profiles: readonly AuthProfile[]): string =>
+  profiles.length === 0
+    ? `No ${HARNESS} profiles found.`
+    : `${HARNESS} profiles · ${profiles.map(profile => `${profile.current ? '▸ ' : ''}${profile.name} (${who(profile)})`).join(' · ')} · sb auth <profile> switches`
+
+export const authStatus = (profiles: readonly AuthProfile[]): string | undefined => {
+  const current = profiles.find(profile => profile.current)
+  return current === undefined ? undefined : [HARNESS, current.name, current.loggedIn ? current.email : 'not logged in'].filter(one => one !== undefined).join(' · ')
+}
+
 const FROM_USER = 'The user typed this to you in the switchboard chat:\n\n'
 
 export const fromUser = (message: string): string => `${FROM_USER}${message}`
@@ -432,6 +499,28 @@ const recordProgram = async ($: EngineInterface): Promise<string | undefined> =>
 }
 
 const folderOf = (path: string): string => path.replace(/[\\/][^\\/]*$/, '') || path
+
+const authRun = async ($: EngineInterface, args: readonly string[]): Promise<{ exitCode: number; stdout: string; stderr: string } | undefined> => {
+  const program = await recordProgram($)
+  if (program === undefined) return undefined
+  return $.process.run([program, 'sessions', 'switchboard', AUTH, ...args], { cwd: folderOf(program), timeoutMs: AUTH_TIMEOUT_MS })
+}
+
+const loadProfiles = async ($: EngineInterface): Promise<void> => {
+  const ran = await authRun($, ['--list']).catch(() => undefined)
+  if (ran === undefined || ran.exitCode !== 0) return
+  profiles = authProfiles(ran.stdout)
+  await refreshStatus($)
+}
+
+const switchAuth = async ($: EngineInterface, name: string): Promise<string> => {
+  if (!profiles.some(profile => profile.name === name)) await loadProfiles($)
+  if (!profiles.some(profile => profile.name === name)) return `No ${HARNESS} profile ${name}. ${authLine(profiles)}`
+  const ran = await authRun($, [name]).catch(() => undefined)
+  if (ran === undefined) return `The switchboard could not switch to ${name}: qol is not reachable.`
+  if (ran.exitCode !== 0) return `The switchboard stays on its profile: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
+  return `Switching the switchboard to ${name}: it closes and opens again on that login.`
+}
 
 const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
   try {
@@ -1330,6 +1419,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
+      void loadProfiles($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
@@ -1389,6 +1479,16 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    const auth = viewedFork === undefined ? TYPED_AUTH.exec(e.text) : null
+    if (auth !== null) {
+      clearBox($, text => text === e.text)
+      const name = auth[1]
+      if (name === undefined) {
+        await loadProfiles($)
+        return dropAs(authLine(profiles))
+      }
+      return dropAs(await switchAuth($, name))
+    }
     const to =
       viewedFork === undefined
         ? await ensureLoaded($)
@@ -1408,7 +1508,10 @@ export const register: Register = on => {
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
-    if (viewedFork !== undefined || e.text.slice(0, e.start).trim() !== '') return own
+    if (viewedFork !== undefined) return own
+    const auth = authCompletions(profiles, e.text, e.start, e.token)
+    if (auth.length > 0) return { suggestions: [...own.suggestions, ...auth] }
+    if (e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
       const mine = keyCompletions(await read($, board), e.token)
@@ -1421,6 +1524,8 @@ export const register: Register = on => {
   on('prompt.edit', async ($, e, next) => {
     const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
     if (isTab && viewedFork === undefined) {
+      const auth = nextAuth(profiles, e.text, e.key?.shift === true ? -1 : 1)
+      if (auth !== undefined) return { text: auth, cursor: auth.length, decorations: [{ start: 0, end: `${SB} ${AUTH}`.length, bold: true }] }
       const list = await read($, board)
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
