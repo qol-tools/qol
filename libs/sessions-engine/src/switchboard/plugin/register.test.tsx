@@ -1030,6 +1030,31 @@ test('a fork whose reopen was refused is tried again a few times, then left alon
   expect(log.filter(one => one.agentId === 'a1').map(one => one.isDelivered)).toEqual([false, true])
 })
 
+test('the board and the band say the switchboard is starting until the forks a restart left are back', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const row = (agentId: string) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'ask', headline: 'Which colour?', report: 'Which colour?', at: 1, isWorking: false, isDismissed: false })
+  store.set('board:earlier-session', [row('a1'), row('b1')])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Bringing back 2 forks…/ })).toBeDefined()
+  for (let round = 0; round < 6; round += 1) {
+    await renderBand($)
+    for (const fire of timers.splice(0)) fire()
+    await settle()
+  }
+  expect(await ui.find({ type: 'Text', text: /Bringing back/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /2 need you\./ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('recentWords drops markdown marks and extra blank lines', () => {
+  expect(recentWords([{ role: 'assistant', text: '1. **Restart:** run `qols board`\n\n\n\nDone.' }])).toEqual([{ isUser: false, text: '1. Restart: run qols board\n\nDone.' }])
+})
+
 test('a resumed switchboard conversation puts its own forks a restart cut off back without continuing them', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []

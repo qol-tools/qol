@@ -95,6 +95,9 @@ const HAIKU_SYSTEM = `You sort a coding agent's final report on a board. Answer 
 const board = atom({ plugin: 'qol-switchboard', key: 'board' } as const, [], { shape: 'board-1' })
 const isDoneOpen = atom({ plugin: 'qol-switchboard', key: 'isDoneOpen' } as const, false)
 const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const, '')
+const starting = atom({ plugin: 'qol-switchboard', key: 'starting' } as const, '')
+export const STARTING = 'Starting the switchboard…'
+export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
@@ -211,6 +214,15 @@ const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED
 const SAID_KEPT = 8
 const SAID_CHARS = 400
 
+const plainText = (text: string): string =>
+  printable(text)
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+    .replace(/^#{1,6} +/gm, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
 export type Said = { isUser: boolean; text: string }
 
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
@@ -220,7 +232,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     const { role, text } = one as { role?: unknown; text?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const words = role === 'user' ? (typedByUser(text) ?? text) : text
-    const shown = printable(words).trim()
+    const shown = plainText(words)
     if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
     return [{ isUser: role === 'user', text: shown.length > SAID_CHARS ? `${shown.slice(0, SAID_CHARS - 1)}…` : shown }]
   })
@@ -281,10 +293,16 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
   await refreshStatus($)
 }
 
+const ready = async ($: EngineInterface): Promise<void> => {
+  await update($, starting, () => '')
+  await refreshStatus($).catch(() => undefined)
+}
+
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
-  const parts = [tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  const loading = await read($, starting)
+  const parts = [loading === '' ? undefined : loading, tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
 }
@@ -1451,8 +1469,10 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.start', async ($, e, next) => {
+    await update($, starting, () => STARTING).catch(() => undefined)
     const started = await next(e)
     isAutoOpenPending = false
+    let isReady = true
     try {
       const id = await $.session.id()
       const others = (await $.store.keys()).filter(key => key.startsWith(STORE_PREFIX) && key !== STORE_PREFIX + id)
@@ -1526,9 +1546,18 @@ export const register: Register = on => {
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
       if (pending.length > 0) {
-        $.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($)).catch(() => undefined))
+        isReady = false
+        await update($, starting, () => bringingBack(pending.length))
+        await refreshStatus($)
+        $.clock.after(REOPEN_DELAY_MS, () =>
+          void deliver($)
+            .then(() => reopenForks($))
+            .catch(() => undefined)
+            .finally(() => void ready($)),
+        )
       }
     } catch {}
+    if (isReady) await ready($)
     return started
   })
 
@@ -1540,7 +1569,15 @@ export const register: Register = on => {
       isAutoOpenPending = false
       if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
     }
-    return next(e)
+    const loading = await read($, starting)
+    if (loading === '' || e.props.hasSurvey) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box>
+        <Text color="claude">◐ </Text>
+        <Text>{loading}</Text>
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
@@ -1815,6 +1852,7 @@ export const register: Register = on => {
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
     const said = await read($, writingSaid)
+    const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
@@ -1912,6 +1950,7 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
+        {loading !== '' && <Text color="claude">◐ {loading}</Text>}
         <Text>{summary}</Text>
         <Box flexDirection="row" gap={2}>
           <Text dimColor wrap="wrap">
@@ -1931,9 +1970,12 @@ export const register: Register = on => {
             <Box paddingLeft={2} flexDirection="column">
               {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
               {said.map((one, index) => (
-                <Text key={`said-${index}`} wrap="wrap" dimColor={!one.isUser}>
-                  <Text bold>{one.isUser ? 'you' : keyOf(target)}</Text> {one.text}
-                </Text>
+                <Box key={`said-${index}`} flexDirection="column" marginTop={1}>
+                  <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                    {one.isUser ? 'you' : keyOf(target)}
+                  </Text>
+                  <Text wrap="wrap">{one.text}</Text>
+                </Box>
               ))}
               {prs(target)}
             </Box>

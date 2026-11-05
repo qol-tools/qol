@@ -81,7 +81,7 @@ mod tests {
         assert_eq!(hooks["modules"], serde_json::json!(["./register.tsx"]));
         assert_eq!(manifest["types"], "./types/index.d.ts");
         assert!(MODULE.contains("from '../types'"));
-        assert!(STATE_TYPES.contains("'qol-switchboard': { board: Shaped<Entry[]>"));
+        assert!(STATE_TYPES.contains("board: Shaped<Entry[]>"));
     }
 
     #[test]
@@ -223,7 +223,8 @@ mod tests {
             "const reply = await heldReply($, e.agentId, e.turnId)",
             "if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {",
             "if (e.index === 0) {",
-            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
+            ".then(() => reopenForks($))",
+            "if (isReady) await ready($)",
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
