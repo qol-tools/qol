@@ -43,6 +43,7 @@ struct Payload {
     tool_input: ToolInput,
     source: Option<String>,
     transcript_path: Option<String>,
+    agent_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -157,6 +158,9 @@ fn role_refresh(
     revision: &str,
     role: &dyn Fn() -> String,
 ) -> Option<String> {
+    if payload.agent_id.is_some() {
+        return None;
+    }
     let source = payload.source.as_deref()?;
     if !ROLE_REFRESH_SOURCES.split('|').any(|one| one == source) {
         return None;
@@ -544,6 +548,17 @@ mod tests {
         let compacted =
             format!("{current}{{\"type\":\"system\",\"subtype\":\"compact_boundary\"}}\n");
         assert!(refreshed(0, "compact", &compacted, role).is_some());
+    }
+
+    #[test]
+    fn a_compacted_fork_never_gets_the_switchboard_role() {
+        let fork = Payload {
+            source: Some("compact".to_owned()),
+            agent_id: Some("a98240eac4ac87bac".to_owned()),
+            ..Payload::default()
+        };
+        let role = || "the role".to_owned();
+        assert!(role_refresh(0, &fork, "", "Switchboard role revision new.", &role).is_none());
     }
 
     #[test]

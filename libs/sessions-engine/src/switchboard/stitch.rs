@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
-use super::resume::{agent_id_of, meta_files, AGENT_PREFIX};
+use super::resume::AGENT_PREFIX;
 
 const TRANSCRIPT_SUFFIX: &str = ".jsonl";
 const SUBAGENTS: &str = "subagents";
@@ -160,24 +160,6 @@ pub(super) fn join_fork(conversations: &Path, transcript: &Path, agent_id: &str)
     Ok(true)
 }
 
-pub(super) fn join_split_forks(conversations: &Path, conversation: &str) -> Vec<String> {
-    let mut failures = Vec::new();
-    for meta_path in meta_files(&conversations.join(conversation).join(SUBAGENTS)) {
-        let Some(agent_id) = agent_id_of(&meta_path) else {
-            continue;
-        };
-        let transcript =
-            meta_path.with_file_name(format!("{AGENT_PREFIX}{agent_id}{TRANSCRIPT_SUFFIX}"));
-        if !is_real_file(&transcript) {
-            continue;
-        }
-        if let Err(error) = join_fork(conversations, &transcript, &agent_id) {
-            failures.push(format!("{}: {error:#}", transcript.display()));
-        }
-    }
-    failures
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,10 +228,7 @@ mod tests {
                 line("u4", Some("u3"), "2026-11-02T09:18:24.000Z", "after"),
             ],
         );
-        assert_eq!(
-            join_split_forks(conversations, "after"),
-            Vec::<String>::new()
-        );
+        assert!(join_fork(conversations, &stub, "afork").unwrap());
         assert_eq!(
             chain(&stub),
             vec![

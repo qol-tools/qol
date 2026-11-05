@@ -6,12 +6,13 @@ use anyhow::{Context, Result};
 pub(super) const NAME: &str = "qol-switchboard";
 pub(super) const BOARD_TOOL: &str = "mcp__qol-switchboard__fork_board";
 pub(super) const RESUME_TOOL: &str = "mcp__qol-switchboard__resume_session";
+pub(super) const DONE_TOOL: &str = "mcp__qol-switchboard__fork_done";
 pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
   "name": "qol-switchboard",
-  "version": "1.11.0",
-  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, gives each fork its watcher's result and brings back the forks a restart stopped.",
+  "version": "1.13.0",
+  "description": "Starts each switchboard fork in its project folder, files each fork's final report on the fork board beside the chat and logs it as a row in the chat without a switchboard turn, keeps the notice that the user resumed a fork out of the switchboard's context, runs each fork's pull request watcher under CLI Sessions, files a merged result without waking its fork, gives each fork any other watcher result, keeps each fork's identity, done mark and stop in one session record, and brings each unfinished fork back into the agent list when the switchboard opens.",
   "types": "./types/index.d.ts"
 }
 "#;
@@ -87,9 +88,13 @@ mod tests {
     fn the_module_places_new_project_forks_and_leaves_resumes_alone() {
         for needle in [
             "const FORK = 'project-fork'",
-            "on('agent.spawn', { subagentType: FORK }, ($, e, next) => {",
-            "if (e.resume !== undefined) return next(e)",
-            "next({ ...e, cwd: project[1], prompt: withLauncher(e.prompt, e.parentAgentId) })",
+            "on('agent.spawn', { subagentType: FORK }, async ($, e, next) => {",
+            "if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }",
+            "if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }",
+            "const prompt = withLauncher(e.prompt, e.parentAgentId)",
+            "const claimed = await recordClaim($, e.description, cwd)",
+            "return next({ ...e, cwd, prompt, description: claimed.description })",
+            "if (key !== undefined) await recordPart($, key, agentId)",
             "on('session.send', async ($, e, next) => {",
             "mayMessage(await read($, board), e.agentId, e.to) ? next(e) : { isDelivered: false, reason: FORK_TO_FORK }",
             "next.called ? next(e) : { deny:",
@@ -109,7 +114,7 @@ mod tests {
             "...(isFresh ? ['--fresh'] : [])",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "const adopted = await adoptFork($, e.to, false)",
-            "const merged = mergeBoards(earlier,",
+            "const merged = await withRecords($, mergeBoards(earlier,",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
@@ -152,11 +157,15 @@ mod tests {
             "const text = entry.recommend ?? ''",
             "const sent = await sendTo($, entry, text)",
             "on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {",
-            "<Text color={forkColor(one.fork)} bold>",
-            "return dropAs(quiet.fork)",
+            "<Text bold>",
+            "return dropAs(reportLine(quiet))",
             "if (docks) void $.ui.open({ id: PANE, title: TITLE })",
             "const TYPED_TOGGLE = /^\\s*qols\\s+board\\s*$/i",
             "on('turn.start', async ($, e, next) => {",
+            "on('prompt.autocomplete', async ($, e, next) => {",
+            "on('prompt.edit', async ($, e, next) => {",
+            "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
+            "const owners = recordOwners([...records.values()])",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
@@ -171,13 +180,17 @@ mod tests {
         assert!(MODULE.contains(&format!("const RESUME = '{resume}'")));
         assert!(MODULE.contains("'adopt', '--conversations', conversations"));
         assert!(MODULE_TESTS.contains(RESUME_TOOL));
+        assert!(MODULE.contains(&format!("const FORK_DONE_NAME = '{DONE_TOOL}'")));
+        let done = DONE_TOOL.strip_prefix(&format!("mcp__{NAME}__")).unwrap();
+        assert!(MODULE.contains(&format!("const FORK_DONE = '{done}'")));
+        assert!(MODULE_TESTS.contains(DONE_TOOL));
         for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
             assert!(!MODULE.contains(retired), "{retired}");
         }
     }
 
     #[test]
-    fn the_module_runs_fork_watchers_under_cli_sessions_and_wakes_forks_without_a_turn() {
+    fn the_module_runs_fork_watchers_under_cli_sessions_and_answers_a_reopened_forks_turn_itself() {
         for needle in [
             "on('tool.call', { tool: 'Bash' }, async ($, e, next) => {",
             "e.run_in_background !== true",
@@ -185,21 +198,46 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
-            "$.env.get('QOL_SWITCHBOARD_WAKE')",
-            "JSON.stringify({ ...wake, claimed: true })",
+            "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
+            "const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })",
+            "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
+            "const sent = await sendTo($, entry, CONTINUE)",
+            "!entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true",
+            "[program, 'sessions', 'record', verb, ...args]",
+            "await recordRun($, 'resume', ['--key', marked])",
+            "'--description', claimed?.description ?? session.description",
+            "on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {",
+            "{ deny: 'Only a fork marks itself done.' }",
+            "void recordRun($, 'archive', ['--key', entry.key])",
+            "void recordRun($, 'stopped', ['--key', key])",
+            "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
+            "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
+            "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
+            "const reply = await heldReply($, e.agentId, e.turnId)",
+            "if (hold.turnId === undefined && isFresh && text.includes(hold.text)) {",
+            "if (e.index === 0) {",
+            "$.clock.after(REOPEN_DELAY_MS, () => void deliver($).then(() => reopenForks($))",
+            "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
+            "await drainOutbox($).catch(() => undefined)",
+            "next.origin.plugin === NAME",
+            "loading ??= loadSaved($).catch(() => undefined)",
+            "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
+            "await $.ui.place({ id })",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
-        assert!(
-            MODULE.contains(&format!(
-                "const RESTARTED_REPLY = '{}'",
-                super::super::resume::RESTARTED_REPLY
-            )),
-            "the plugin keeps a woken fork's last report only for the reply the wake asks for"
-        );
+        for retired in [
+            "QOL_SWITCHBOARD_WAKE",
+            "wakeForks",
+            "clock.after(WAKE",
+            "heard",
+        ] {
+            assert!(!MODULE.contains(retired), "{retired}");
+        }
         assert!(STATE_TYPES.contains("pulls: Pull[]"));
         assert!(MODULE_TESTS.contains("runs under CLI Sessions, and no other command is rewritten"));
+        assert!(MODULE_TESTS.contains("the plugin answers its turn so no model runs"));
     }
 
     #[test]

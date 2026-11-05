@@ -17,6 +17,7 @@ const OPEN: &str = "open";
 const SESSIONS: &str = "sessions";
 const MCP: &str = "mcp";
 const SWITCHBOARD: &str = "switchboard";
+const RECORD: &str = "record";
 const HERE: &str = "--here";
 
 pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
@@ -33,6 +34,9 @@ pub fn exit_code(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
         if command == crate::park::LANE_EXEC {
             return lane_exec(rest).emit();
+        }
+        if command == SESSIONS && rest.first().is_some_and(|verb| verb == RECORD) {
+            return record(&rest[1..]).emit();
         }
         if let Some(engine_args) = engine_args(command, rest) {
             return sessions(&engine_args).emit();
@@ -72,6 +76,12 @@ fn sessions(args: &[OsString]) -> CommandResult {
         Ok(()) => CommandResult::success(""),
         Err(error) => CommandResult::runtime_error(format!("{PLUGIN_ID} {SESSIONS}: {error:#}")),
     }
+}
+
+fn record(args: &[String]) -> CommandResult {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let (stdout, code) = qol_sessions_engine::run_record(&args);
+    CommandResult::new(format!("{stdout}\n"), "", code)
 }
 
 fn switchboard_here() -> CommandResult {

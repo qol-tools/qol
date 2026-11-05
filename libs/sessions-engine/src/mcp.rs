@@ -43,6 +43,7 @@ const PROGRESS_NOTIFY_INTERVAL: Duration = Duration::from_secs(30);
 const REOPEN_CONFIRM_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOSED_LIMIT_DEFAULT: usize = 20;
 const CLOSED_LIMIT_MAX: usize = 100;
+const RECORDS_LIMIT_DEFAULT: usize = 20;
 const CLOSED_TEXT_WORDS_MAX: usize = 8;
 
 pub(crate) struct McpSessionServer {
@@ -63,6 +64,7 @@ pub(crate) struct McpSessionServer {
     lineage: super::lineage::LineageStore,
     knocks: super::knocks::KnockStore,
     board: super::board::BoardStore,
+    records: super::record::RecordStore,
     closed_dir: std::path::PathBuf,
     switchboard_dir: std::path::PathBuf,
     parked_dir: std::path::PathBuf,
@@ -95,6 +97,7 @@ impl McpSessionServer {
             knocks: super::knocks::KnockStore::system()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             board: super::board::BoardStore::system()?,
+            records: super::record::RecordStore::system()?,
             closed_dir: qol_terminal_sessions::closed::closed_dir()
                 .ok_or_else(|| anyhow!("sessions data directory is unavailable"))?,
             switchboard_dir: qol_config::data_subdir("sessions")
@@ -138,6 +141,7 @@ impl McpSessionServer {
             lineage: super::lineage::LineageStore::with_dir(root.path().join("lineage")),
             knocks: super::knocks::KnockStore::with_dir(root.path().join("knocks")),
             board: super::board::BoardStore::with_dir(root.path().join("board")),
+            records: super::record::RecordStore::with_dir(root.path().join("records")),
             closed_dir: root.path().join("closed"),
             switchboard_dir: root.path().join(super::SWITCHBOARD_KEY),
             parked_dir: root.path().join("parked"),
@@ -173,6 +177,7 @@ impl McpSessionServer {
             lineage: super::lineage::LineageStore::with_dir(dir.join("lineage")),
             knocks: super::knocks::KnockStore::with_dir(dir.join("knocks")),
             board: super::board::BoardStore::with_dir(dir.join("board")),
+            records: super::record::RecordStore::with_dir(dir.join("records")),
             closed_dir: dir.join("closed"),
             switchboard_dir: dir.join(super::SWITCHBOARD_KEY),
             parked_dir: dir.join("parked"),
@@ -277,6 +282,7 @@ impl McpSessionServer {
         match name {
             "sessions_list" => Some(self.tool_list_sessions()),
             "sessions_closed" => Some(self.tool_closed(&arguments)),
+            "session_records" => Some(self.tool_records(&arguments)),
             "session_spawn" => Some(self.tool_spawn(arguments, cancel)),
             "session_fork" => Some(self.tool_fork(arguments)),
             "session_reopen" => Some(self.tool_reopen(&arguments)),
@@ -649,6 +655,29 @@ impl McpSessionServer {
             .collect())
     }
 
+    fn tool_records(&self, arguments: &Value) -> Result<String, String> {
+        let limit = arguments
+            .get("limit")
+            .map(|value| {
+                value
+                    .as_i64()
+                    .ok_or_else(|| "session_records `limit` must be an integer".to_owned())
+            })
+            .transpose()?
+            .map_or(RECORDS_LIMIT_DEFAULT, |limit| {
+                limit.clamp(1, CLOSED_LIMIT_MAX as i64) as usize
+            });
+        let query = optional_string(arguments, "query", "session_records")?
+            .map(|query| query.to_lowercase());
+        let terms = optional_string(arguments, "text", "session_records")?
+            .map(|text| text_terms(&text, "session_records"))
+            .transpose()?;
+        let records =
+            super::record::rows(&self.records, query.as_deref(), terms.as_deref(), limit)?;
+        serde_json::to_string(&json!({ "records": records }))
+            .map_err(|error| format!("failed to encode the session records: {error}"))
+    }
+
     fn tool_closed(&self, arguments: &Value) -> Result<String, String> {
         let limit = arguments
             .get("limit")
@@ -664,7 +693,7 @@ impl McpSessionServer {
         let query = optional_string(arguments, "query", "sessions_closed")?
             .map(|query| query.to_lowercase());
         let terms = optional_string(arguments, "text", "sessions_closed")?
-            .map(|text| text_terms(&text))
+            .map(|text| text_terms(&text, "sessions_closed"))
             .transpose()?;
         let include_lanes = arguments
             .get("include_lanes")
@@ -1727,7 +1756,7 @@ fn string_argument<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, Stri
         .ok_or_else(|| format!("missing `{name}` string argument"))
 }
 
-fn text_terms(text: &str) -> Result<Vec<String>, String> {
+fn text_terms(text: &str, tool: &str) -> Result<Vec<String>, String> {
     let mut terms: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
         let word = word.to_lowercase();
@@ -1736,11 +1765,11 @@ fn text_terms(text: &str) -> Result<Vec<String>, String> {
         }
     }
     if terms.is_empty() {
-        return Err("sessions_closed `text` needs at least one word".to_owned());
+        return Err(format!("{tool} `text` needs at least one word"));
     }
     if terms.len() > CLOSED_TEXT_WORDS_MAX {
         return Err(format!(
-            "sessions_closed `text` takes at most {CLOSED_TEXT_WORDS_MAX} words"
+            "{tool} `text` takes at most {CLOSED_TEXT_WORDS_MAX} words"
         ));
     }
     Ok(terms)
@@ -2595,6 +2624,7 @@ mod tests {
             [
                 "sessions_list",
                 "sessions_closed",
+                "session_records",
                 "session_spawn",
                 "session_fork",
                 "session_reopen",
@@ -6688,6 +6718,113 @@ mod tests {
             tool_text(response).contains(expected),
             "{expected}: {response}"
         );
+    }
+
+    #[test]
+    fn session_records_filters_by_query_and_by_words_in_the_archived_chat() {
+        let (server, _) = server(Vec::new(), false, false);
+        let root = server.reports_dir.clone();
+        let claim = |description: &str, now: u64| {
+            server
+                .records
+                .claim(description, "/work/project", now)
+                .unwrap()
+                .key
+        };
+        let chat = |agent: &str, text: &str| {
+            let path = root.join(format!("{agent}.jsonl"));
+            let line = json!({
+                "type": "user",
+                "message": { "role": "user", "content": [{ "type": "text", "text": text }] },
+            });
+            std::fs::write(&path, format!("{line}\n")).unwrap();
+            path
+        };
+        claim("billing-fix: invoice repair", 10);
+        let billing = "billing-fix";
+        claim("bike-shop: wheel orders", 20);
+        let bikes = "bike-shop";
+        claim("bare-fork: nothing saved", 30);
+        let bare = "bare-fork";
+        for (key, agent, text) in [
+            (billing, "a1", "please refund the Invoice today"),
+            (bikes, "b1", "order two wheels for the shop"),
+        ] {
+            let path = chat(agent, text);
+            server
+                .records
+                .add_part(key, agent, path.to_str().unwrap(), 40)
+                .unwrap();
+            server.records.archive(key).unwrap();
+        }
+        server.records.done(billing, "merged", 50).unwrap();
+        let keys = |arguments: Value| {
+            let listed = tool_json(&tool_call(&server, "session_records", arguments));
+            listed["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["key"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(keys(json!({})), [bare, bikes, billing]);
+        assert_eq!(keys(json!({ "limit": 2 })), [bare, bikes]);
+        assert_eq!(keys(json!({ "limit": 0 })), [bare]);
+        assert_eq!(keys(json!({ "query": "BILLING" })), [billing]);
+        assert_eq!(keys(json!({ "query": "wheel" })), [bikes]);
+        assert_eq!(keys(json!({ "query": "/work/project" })).len(), 3);
+        assert_eq!(keys(json!({ "text": "invoice  REFUND" })), [billing]);
+        assert_eq!(keys(json!({ "text": "wheels" })), [bikes]);
+        assert_eq!(
+            keys(json!({ "text": "invoice wheels" })),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            keys(json!({ "query": "bike", "text": "invoice" })),
+            Vec::<String>::new()
+        );
+
+        let listed = tool_json(&tool_call(
+            &server,
+            "session_records",
+            json!({ "text": "invoice" }),
+        ));
+        let row = &listed["records"][0];
+        assert_eq!(row["friendly"], "invoice repair");
+        assert_eq!(row["cwd"], "/work/project");
+        assert_eq!(row["created_ms"], 10);
+        assert_eq!(row["done"], json!({ "at_ms": 50, "reason": "merged" }));
+        assert!(row.get("stopped_ms").is_none(), "{row}");
+        assert!(
+            row["excerpt"].as_str().unwrap().contains("Invoice"),
+            "{row}"
+        );
+        assert_eq!(row["parts"][0]["agent_id"], "a1");
+        assert_eq!(
+            row["parts"][0]["archive"],
+            server
+                .records
+                .archive_path(billing, 1)
+                .display()
+                .to_string()
+        );
+        refused(
+            &tool_call(&server, "session_records", json!({ "text": "  " })),
+            "session_records `text` needs at least one word",
+        );
+        refused(
+            &tool_call(&server, "session_records", json!({ "limit": "ten" })),
+            "session_records `limit` must be an integer",
+        );
+    }
+
+    #[test]
+    fn session_records_is_served_in_the_switchboard_profile() {
+        let (server, _) = server(Vec::new(), false, false);
+        let server = server.with_profile(McpProfile::Switchboard);
+        let listed = tool_json(&tool_call(&server, "session_records", json!({})));
+        assert_eq!(listed, json!({ "records": [] }));
     }
 
     fn keyed_server(keys: &[&str]) -> (McpSessionServer, Arc<FakeBackend>, tempfile::TempDir) {
