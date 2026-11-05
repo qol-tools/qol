@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -543,6 +543,8 @@ test('a board the user closed opens again at the next start', async ($, on) => {
 
 const isRecord = (argv: string[]) => argv[2] === 'record'
 
+const isAuth = (argv: string[]) => argv[2] === 'switchboard' && (argv[3] === 'auth' || argv[3] === 'commands')
+
 const NO_RECORD = { exitCode: 1, stdout: '', stderr: 'no session record here' }
 
 const recordReply = (argv: string[], records: any[]) => {
@@ -573,7 +575,7 @@ const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
 }
 
 const adopted = (forks: Forks, runs: string[][], argv: string[]) => {
-  if (isRecord(argv)) return NO_RECORD
+  if (isRecord(argv) || isAuth(argv)) return NO_RECORD
   runs.push(argv)
   const wanted = argv[argv.indexOf('--fork') + 1]
   const found = Object.entries(forks).find(([id, fork]) => id === wanted || fork.name.split(':')[0] === wanted)
@@ -714,7 +716,7 @@ test('a terminal session comes back as a fork with its own conversation once, an
   }))
   on('fs.exists', () => ({ value: true }))
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     const transcript = e.argv[e.argv.indexOf('--transcript') + 1]
     return {
@@ -1165,7 +1167,7 @@ test('a watcher result nothing waited for reaches its fork, and the board shows 
   engine(on, sent)
   watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' } })
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: `claimed ${e.argv[3]}` } }
     return {
@@ -1215,6 +1217,7 @@ test('a merged result is filed on the board without waking its fork, and any oth
       recorded.push(e.argv)
       return { value: recordReply(e.argv, []) }
     }
+    if (isAuth(e.argv)) return { value: NO_RECORD }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
     return {
@@ -1259,7 +1262,7 @@ test('a fork of an earlier conversation is brought into this one for each result
   const result = (id: string, agentId: string, message: string) => ({ id, agent_id: agentId, conversation: 'old', cwd: '/forged', message })
   const runs: string[][] = []
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    if (isRecord(e.argv)) return { value: NO_RECORD }
+    if (isRecord(e.argv) || isAuth(e.argv)) return { value: NO_RECORD }
     if (e.argv[3] === 'adopt') return { value: adopted({ e1: { name: 'e1-fork: earlier', cwd: '/work-old' } }, runs, e.argv) }
     runs.push(e.argv)
     if (e.argv[2] === '--claim') return { value: { exitCode: 0, stderr: '', stdout: '' } }
@@ -1649,6 +1652,7 @@ test('a terminal session brought back as a fork is claimed with the description 
       calls.push(e.argv.slice(3))
       return { value: recordReply(e.argv, []) }
     }
+    if (isAuth(e.argv)) return { value: NO_RECORD }
     adopts.push(e.argv)
     const description = e.argv[e.argv.indexOf('--description') + 1]
     return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ agent_id: 'a5', name: description, cwd: '/p', brought: 'session' }) } }
@@ -1830,4 +1834,117 @@ test('a fork key typed in a fork view goes to the viewed fork, never to the name
   const inMain = await $.ui.mount(band)
   expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork: yes')
   await inMain.unmount()
+})
+
+
+const TREE = JSON.stringify({
+  status: 'claude · default · me@work.com',
+  commands: [
+    {
+      name: 'auth',
+      about: 'switch the claude login',
+      children: [
+        { name: 'default', about: 'me@work.com · Work · max', current: true },
+        { name: 'clauded', about: 'logged in' },
+        { name: 'claudedwb', about: 'not logged in' },
+      ],
+    },
+    { name: 'board', about: 'toggle the fork board' },
+  ],
+})
+
+test('the command tree comes from the CLI, and a malformed one is empty', () => {
+  const tree = sbTree(TREE)
+  expect(tree.status).toBe('claude · default · me@work.com')
+  expect(tree.commands.map(one => one.name)).toEqual(['auth', 'board'])
+  expect(tree.commands[0]?.children?.[0]).toEqual({ name: 'default', about: 'me@work.com · Work · max', current: true })
+  expect(sbTree('not json')).toEqual({ commands: [] })
+  expect(sbTree(JSON.stringify({ commands: [{ name: 'two words' }, { about: 'no name' }, { name: 'ok' }] })).commands).toEqual([{ name: 'ok', about: '' }])
+})
+
+test('the words after sb walk the tree to the level under the cursor', () => {
+  const { commands } = sbTree(TREE)
+  expect(sbAt(commands, 'sb')).toMatchObject({ path: [], word: '', isSpaced: false })
+  expect(sbAt(commands, 'sb au')).toMatchObject({ path: [], word: 'au', isSpaced: true })
+  expect(sbAt(commands, 'sb auth cl')?.path.map(one => one.name)).toEqual(['auth'])
+  expect(sbAt(commands, 'sb auth cl')?.word).toBe('cl')
+  expect(sbAt(commands, 'sb nope x')?.missing).toBe('nope')
+  expect(sbAt(commands, 'sbx')).toBeUndefined()
+  expect(sbAt(commands, 'hello sb')).toBeUndefined()
+})
+
+test('each level shows what can come next as dim text after the cursor', () => {
+  const { commands } = sbTree(TREE)
+  const ghost = (text: string, cursor = text.length) => sbHint(commands, text, cursor)?.virtualText
+  expect(sbHint(commands, 'sb', 2)).toEqual({ start: 2, end: 2, virtualText: ' auth · board', dimColor: true })
+  expect(ghost('sb ')).toBe('auth · board')
+  expect(ghost('sb au')).toBe('th')
+  expect(ghost('sb auth')).toBe(' default (current) · clauded · claudedwb')
+  expect(ghost('sb auth ')).toBe('default (current) · clauded · claudedwb')
+  expect(ghost('sb auth c')).toBe('lauded · claudedwb')
+  expect(ghost('sb auth clauded')).toBe(' · claudedwb')
+  expect(ghost('sb auth claudedwb')).toBeUndefined()
+  expect(ghost('sb board')).toBeUndefined()
+  expect(ghost('sb auth x')).toBeUndefined()
+  expect(ghost('sb nope ')).toBeUndefined()
+  expect(ghost('sb auth ', 3)).toBeUndefined()
+  expect(sbHint([], 'sb', 2)).toBeUndefined()
+})
+
+test('Tab cycles the choices at the cursor, Shift+Tab backwards, and a partial word takes its first match', () => {
+  const { commands } = sbTree(TREE)
+  expect(sbTab(commands, 'sb')).toBe('sb auth')
+  expect(sbTab(commands, 'sb', -1)).toBe('sb board')
+  expect(sbTab(commands, 'sb auth')).toBe('sb board')
+  expect(sbTab(commands, 'sb board')).toBe('sb auth')
+  expect(sbTab(commands, 'sb ')).toBe('sb auth')
+  expect(sbTab(commands, 'sb b')).toBe('sb board')
+  expect(sbTab(commands, 'sb auth ')).toBe('sb auth default')
+  expect(sbTab(commands, 'sb auth default')).toBe('sb auth clauded')
+  expect(sbTab(commands, 'sb auth claudedwb')).toBe('sb auth default')
+  expect(sbTab(commands, 'sb auth default', -1)).toBe('sb auth claudedwb')
+  expect(sbTab(commands, 'sb auth cl')).toBe('sb auth clauded')
+  expect(sbTab(commands, 'sb auth x')).toBeUndefined()
+  expect(sbTab(commands, 'sb board ')).toBeUndefined()
+  expect(sbTab(commands, 'hello')).toBeUndefined()
+})
+
+test('the typeahead offers each command after sb, then the level under the cursor', () => {
+  const { commands } = sbTree(TREE)
+  expect(sbCompletions(commands, 'sb', 0, 'sb').map(one => one.text)).toEqual(['sb auth', 'sb board'])
+  expect(sbCompletions(commands, 'sb auth', 3, 'auth').map(one => [one.text, one.label])).toEqual([
+    ['auth default', 'default'],
+    ['auth clauded', 'clauded'],
+    ['auth claudedwb', 'claudedwb'],
+  ])
+  expect(sbCompletions(commands, 'sb auth', 3, 'auth')[0]?.description).toBe('current · me@work.com · Work · max')
+  expect(sbCompletions(commands, 'sb b', 3, 'b').map(one => one.text)).toEqual(['board'])
+  expect(sbCompletions(commands, 'sb auth claudedw', 8, 'claudedw').map(one => one.text)).toEqual(['claudedwb'])
+  expect(sbCompletions(commands, 'hello sb', 6, 'sb')).toEqual([])
+  expect(sbLine([], commands)).toBe('sb · auth (switch the claude login) · board (toggle the fork board)')
+})
+
+test('sb runs the command the words name, lists a level that needs more, and leaves other sentences to the model', async ($, on) => {
+  const runs: string[][] = []
+  engine(on)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    runs.push(e.argv.slice(1))
+    if (e.argv[3] === 'commands') return { value: { exitCode: 0, stdout: TREE, stderr: '' } }
+    if (e.argv[4] === 'clauded') return { value: { exitCode: 0, stdout: '{"switching":"clauded","message":"Switching to clauded."}', stderr: '' } }
+    if (e.argv[4] === 'default') return { value: { exitCode: 1, stdout: '', stderr: 'the switchboard already runs on `default`' } }
+    return { value: { exitCode: 1, stdout: '', stderr: 'no record' } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect((await typed($, 'sb')).drop).toBe('sb · auth (switch the claude login) · board (toggle the fork board)')
+  expect((await typed($, 'sb auth')).drop).toContain('▸ default (me@work.com · Work · max)')
+  expect((await typed($, 'sb auth clauded')).drop).toBe('Switching to clauded.')
+  expect((await typed($, 'sb auth default')).drop).toContain('already runs on `default`')
+  expect((await typed($, 'sb auth nobody')).drop).toContain('sb auth has no nobody.')
+  expect((await typed($, 'sb auth --reopen')).drop).toContain('sb auth has no --reopen.')
+  expect((await typed($, 'sb is a word')).text).toBe('sb is a word')
+  expect(runs.filter(run => run[1] === 'switchboard' && run[2] !== 'commands')).toEqual([
+    ['sessions', 'switchboard', 'auth', 'clauded'],
+    ['sessions', 'switchboard', 'auth', 'default'],
+  ])
 })
