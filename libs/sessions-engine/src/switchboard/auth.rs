@@ -9,11 +9,13 @@ use qol_agent_launch::account::LaneExecCommand;
 use qol_terminal_sessions::cli::{CliLaunchProgram, CliSessionInterpreter, CliToolId};
 use serde::{Deserialize, Serialize};
 
+use super::commands::CommandNode;
 use super::{live_switchboard, open_on, paths, Profile, LANE_EXEC_PREFIX, SWITCHBOARD_SURFACE};
 
 pub(super) const AUTH: &str = "auth";
 const REOPEN: &str = "--reopen";
 const DEFAULT_NAME: &str = "default";
+const HARNESS: &str = "claude";
 const CLOSE_SETTLE: Duration = Duration::from_millis(400);
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
 const CLOSE_POLL: Duration = Duration::from_millis(200);
@@ -70,6 +72,67 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
     }
 }
 
+pub(super) struct Offered {
+    pub(super) command: CommandNode,
+    pub(super) status: Option<String>,
+}
+
+pub(super) fn offered() -> Offered {
+    let registry = Registry::load();
+    let current = current(&registry);
+    let rows = shown(candidates(&registry), current.as_deref());
+    let status = rows.iter().find(|row| row.current).map(status_line);
+    Offered {
+        command: CommandNode {
+            name: AUTH.to_owned(),
+            about: format!("switch the {HARNESS} login"),
+            current: false,
+            children: rows
+                .iter()
+                .map(|row| CommandNode {
+                    name: row.name.clone(),
+                    about: who(row),
+                    current: row.current,
+                    children: Vec::new(),
+                })
+                .collect(),
+        },
+        status,
+    }
+}
+
+fn who(row: &Row) -> String {
+    if !row.logged_in {
+        return "not logged in".to_owned();
+    }
+    let known = [
+        row.email.as_deref(),
+        row.org.as_deref(),
+        row.plan.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if known.is_empty() {
+        "logged in".to_owned()
+    } else {
+        known.join(" · ")
+    }
+}
+
+fn status_line(row: &Row) -> String {
+    let login = if row.logged_in {
+        row.email.as_deref()
+    } else {
+        Some("not logged in")
+    };
+    [Some(HARNESS), Some(row.name.as_str()), login]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 fn list() -> Result<()> {
     let registry = Registry::load();
     let current = current(&registry);
@@ -115,7 +178,10 @@ fn switch(name: &str) -> Result<()> {
         paths::set_recorded_config_dir(&switchboard, previous.as_deref())?;
         return Err(error).context("failed to start the switchboard on the new profile");
     }
-    crate::cli::line(serde_json::json!({ "switching": name }));
+    crate::cli::line(serde_json::json!({
+        "switching": name,
+        "message": format!("Switching the switchboard to {name}: it closes and opens again on that login."),
+    }));
     Ok(())
 }
 
@@ -339,6 +405,53 @@ mod tests {
         )
         .unwrap();
         assert!(current.current);
+    }
+
+    fn shown_row(name: &str, current: bool, status: Status) -> Row {
+        row(
+            candidate(name, Some("/h/x"), "/h/x"),
+            status,
+            current.then(|| Path::new("/h/x")),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_profile_reads_as_its_login_and_the_status_line_names_the_current_one() {
+        let full = Status {
+            logged_in: true,
+            email: Some("a@b.c".to_owned()),
+            org_name: Some("Org".to_owned()),
+            subscription_type: Some("max".to_owned()),
+        };
+        assert_eq!(who(&shown_row("work", true, full)), "a@b.c · Org · max");
+        let token = Status {
+            logged_in: true,
+            ..Status::default()
+        };
+        assert_eq!(who(&shown_row("tok", false, token)), "logged in");
+        assert_eq!(
+            who(&shown_row("off", false, Status::default())),
+            "not logged in"
+        );
+        let email = Status {
+            logged_in: true,
+            email: Some("a@b.c".to_owned()),
+            ..Status::default()
+        };
+        assert_eq!(
+            status_line(&shown_row("work", true, email)),
+            "claude · work · a@b.c"
+        );
+        let token = Status {
+            logged_in: true,
+            ..Status::default()
+        };
+        assert_eq!(status_line(&shown_row("tok", true, token)), "claude · tok");
+        assert_eq!(
+            status_line(&shown_row("off", true, Status::default())),
+            "claude · off · not logged in"
+        );
     }
 
     #[test]

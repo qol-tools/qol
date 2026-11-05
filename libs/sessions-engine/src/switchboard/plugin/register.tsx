@@ -24,10 +24,8 @@ const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
 const SB = 'sb'
-const AUTH = 'auth'
-const TYPED_AUTH = /^\s*sb(?:\s+auth(?:\s+(\S+))?)?\s*$/
-const AUTH_TIMEOUT_MS = 60_000
-const HARNESS = 'claude'
+const TYPED_SB = /^\s*sb(?:\s|$)/
+const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = 100
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
@@ -210,7 +208,7 @@ const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED
 
 let loading: Promise<void> | undefined
 let viewedFork: string | undefined
-let profiles: AuthProfile[] = []
+let tree: SbTree = { commands: [] }
 
 const loadSaved = async ($: EngineInterface): Promise<void> => {
   if ((await read($, board)).length > 0) return
@@ -243,7 +241,7 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
   const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
-  const parts = [authStatus(profiles), count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
+  const parts = [tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
 }
@@ -409,68 +407,100 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
-export type AuthProfile = { name: string; current: boolean; loggedIn: boolean; email?: string; org?: string; plan?: string }
+export type SbCommand = { name: string; about: string; current?: boolean; children?: SbCommand[] }
+
+export type SbTree = { status?: string; commands: SbCommand[] }
 
 const filled = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
 
-export const authProfiles = (stdout: string): AuthProfile[] => {
+const asCommand = (value: unknown): SbCommand[] => {
+  const one = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+  const name = filled(one.name)
+  if (name === undefined || /\s/.test(name)) return []
+  const children = Array.isArray(one.children) ? one.children.flatMap(asCommand) : []
+  return [{ name, about: filled(one.about) ?? '', ...(one.current === true ? { current: true } : {}), ...(children.length > 0 ? { children } : {}) }]
+}
+
+export const sbTree = (stdout: string): SbTree => {
   try {
     const parsed: unknown = JSON.parse(stdout)
-    const rows = typeof parsed === 'object' && parsed !== null ? (parsed as { profiles?: unknown }).profiles : undefined
-    if (!Array.isArray(rows)) return []
-    return rows.flatMap(row => {
-      const one = typeof row === 'object' && row !== null ? (row as Record<string, unknown>) : {}
-      const name = filled(one.name)
-      if (name === undefined) return []
-      return [{ name, current: one.current === true, loggedIn: one.logged_in === true, email: filled(one.email), org: filled(one.org), plan: filled(one.plan) }]
-    })
+    const raw = typeof parsed === 'object' && parsed !== null ? (parsed as { status?: unknown; commands?: unknown }) : {}
+    const status = filled(raw.status)
+    return { ...(status === undefined ? {} : { status }), commands: Array.isArray(raw.commands) ? raw.commands.flatMap(asCommand) : [] }
   } catch {
-    return []
+    return { commands: [] }
   }
 }
 
-export const nextAuth = (profiles: readonly AuthProfile[], typed: string, step: 1 | -1 = 1): string | undefined => {
-  if (typed === SB || typed === `${SB} `) return `${SB} ${AUTH} `
-  const names = profiles.map(profile => profile.name)
-  if (names.length === 0) return undefined
-  const prefix = `${SB} ${AUTH} `
-  if (!typed.startsWith(prefix)) return undefined
-  const word = typed.slice(prefix.length)
-  const at = word === '' ? (step === 1 ? -1 : 0) : word.endsWith(' ') ? names.indexOf(word.slice(0, -1)) : -1
-  if (word !== '' && at === -1) return undefined
-  return `${prefix}${names[(at + step + names.length) % names.length]} `
+export type SbAt = { path: SbCommand[]; level: SbCommand[]; word: string; isSpaced: boolean; missing?: string }
+
+export const sbAt = (commands: readonly SbCommand[], text: string): SbAt | undefined => {
+  const rest = /^\s*sb(\s[\s\S]*)?$/.exec(text)
+  if (rest === null) return undefined
+  if (rest[1] === undefined) return { path: [], level: [...commands], word: '', isSpaced: false }
+  const words = rest[1].trimStart().split(/\s+/)
+  const word = words.pop() ?? ''
+  const path: SbCommand[] = []
+  let level: readonly SbCommand[] = commands
+  for (const one of words) {
+    const found = level.find(command => command.name === one)
+    if (found === undefined) return { path, level: [], word, isSpaced: true, missing: one }
+    path.push(found)
+    level = found.children ?? []
+  }
+  return { path, level: [...level], word, isSpaced: true }
 }
 
-export const authCompletions = (profiles: readonly AuthProfile[], text: string, start: number, token: string): PromptAutocompleteSuggestion[] => {
+const listed = (level: readonly SbCommand[]): string => level.map(command => (command.current ? `${command.name} (current)` : command.name)).join(' · ')
+
+const childrenOf = (at: SbAt): SbCommand[] | undefined => {
+  const exact = at.level.find(command => command.name === at.word)
+  const isOnly = at.level.filter(command => command.name.startsWith(at.word)).length === 1
+  return exact !== undefined && isOnly && (exact.children ?? []).length > 0 ? exact.children : undefined
+}
+
+export const sbHint = (commands: readonly SbCommand[], text: string, cursor: number): PromptDecoration | undefined => {
+  const at = cursor === text.length ? sbAt(commands, text) : undefined
+  if (at === undefined || at.missing !== undefined) return undefined
+  const hint = (virtualText: string): PromptDecoration | undefined => (virtualText === '' ? undefined : { start: text.length, end: text.length, virtualText, dimColor: true })
+  if (!at.isSpaced) return hint(at.level.length === 0 ? '' : ` ${listed(at.level)}`)
+  const children = at.word === '' ? undefined : childrenOf(at)
+  if (children !== undefined) return hint(` ${listed(children)}`)
+  const matches = at.level.filter(command => command.name.startsWith(at.word))
+  const [first, ...others] = matches
+  if (first === undefined || (others.length === 0 && first.name === at.word)) return undefined
+  return hint(at.word === '' ? listed(matches) : [first.name.slice(at.word.length), ...others.map(command => command.name)].join(' · '))
+}
+
+export const sbTab = (commands: readonly SbCommand[], text: string, step: 1 | -1 = 1): string | undefined => {
+  const at = sbAt(commands, text)
+  if (at === undefined || at.missing !== undefined || at.level.length === 0) return undefined
+  const end = (list: readonly SbCommand[]): SbCommand | undefined => list[step === 1 ? 0 : list.length - 1]
+  if (!at.isSpaced) return `${text} ${end(at.level)?.name ?? ''}`
+  const head = text.slice(0, text.length - at.word.length)
+  const index = at.level.findIndex(command => command.name === at.word)
+  if (index !== -1) return `${head}${at.level[(index + step + at.level.length) % at.level.length]?.name ?? at.word}`
+  const pick = end(at.level.filter(command => command.name.startsWith(at.word)))
+  return pick === undefined ? undefined : `${head}${pick.name}`
+}
+
+export const sbCompletions = (commands: readonly SbCommand[], text: string, start: number, token: string): PromptAutocompleteSuggestion[] => {
   const before = text.slice(0, start)
-  const typed = token.toLowerCase()
-  const row = (profile: AuthProfile, prefix: string): PromptAutocompleteSuggestion => ({
-    text: `${prefix}${profile.name} `,
-    label: profile.name,
-    description: `${profile.current ? 'current · ' : ''}${who(profile)}`,
+  if (before.trim() === '' && token === SB) return commands.map(command => ({ text: `${SB} ${command.name}`, label: `${SB} ${command.name}`, description: command.about }))
+  const at = sbAt(commands, before + token)
+  if (at === undefined || at.missing !== undefined || !at.isSpaced) return []
+  const row = (command: SbCommand, prefix: string): PromptAutocompleteSuggestion => ({
+    text: `${prefix}${command.name}`,
+    label: command.name,
+    description: `${command.current ? 'current · ' : ''}${command.about}`,
   })
-  if (before.trim() === '' && typed === SB) return [{ text: `${SB} ${AUTH}`, label: `${SB} ${AUTH}`, description: `switch the ${HARNESS} login` }]
-  if (/^\s*sb\s+$/.test(before) && AUTH.startsWith(typed)) return profiles.map(profile => row(profile, `${AUTH} `))
-  if (/^\s*sb\s+auth\s+$/.test(before)) return profiles.filter(profile => profile.name.startsWith(typed)).map(profile => row(profile, ''))
-  return []
+  const children = childrenOf(at)
+  if (children !== undefined) return children.map(command => row(command, `${at.word} `))
+  return at.level.filter(command => command.name.startsWith(at.word)).map(command => row(command, ''))
 }
 
-export const authHint = (profiles: readonly AuthProfile[], text: string, cursor: number): PromptDecoration | undefined =>
-  profiles.length > 0 && cursor === text.length && /^\s*sb\s+auth\s+$/.test(text)
-    ? { start: text.length, end: text.length, virtualText: profiles.map(profile => (profile.current ? `${profile.name} (current)` : profile.name)).join(' · '), dimColor: true }
-    : undefined
-
-const who = (profile: AuthProfile): string => (profile.loggedIn ? [profile.email, profile.org, profile.plan].filter(one => one !== undefined).join(' · ') || 'logged in' : 'not logged in')
-
-export const authLine = (profiles: readonly AuthProfile[]): string =>
-  profiles.length === 0
-    ? `No ${HARNESS} profiles found.`
-    : `${HARNESS} profiles · ${profiles.map(profile => `${profile.current ? '▸ ' : ''}${profile.name} (${who(profile)})`).join(' · ')} · sb auth <profile> switches`
-
-export const authStatus = (profiles: readonly AuthProfile[]): string | undefined => {
-  const current = profiles.find(profile => profile.current)
-  return current === undefined ? undefined : [HARNESS, current.name, current.loggedIn ? current.email : 'not logged in'].filter(one => one !== undefined).join(' · ')
-}
+export const sbLine = (path: readonly SbCommand[], level: readonly SbCommand[]): string =>
+  `${[SB, ...path.map(command => command.name)].join(' ')} · ${level.map(command => `${command.current ? '▸ ' : ''}${command.name}${command.about === '' ? '' : ` (${command.about})`}`).join(' · ')}`
 
 const FROM_USER = 'The user typed this to you in the switchboard chat:\n\n'
 
@@ -503,26 +533,35 @@ const recordProgram = async ($: EngineInterface): Promise<string | undefined> =>
 
 const folderOf = (path: string): string => path.replace(/[\\/][^\\/]*$/, '') || path
 
-const authRun = async ($: EngineInterface, args: readonly string[]): Promise<{ exitCode: number; stdout: string; stderr: string } | undefined> => {
+const loadTree = async ($: EngineInterface): Promise<void> => {
   const program = await recordProgram($)
-  if (program === undefined) return undefined
-  return $.process.run([program, 'sessions', 'switchboard', AUTH, ...args], { cwd: folderOf(program), timeoutMs: AUTH_TIMEOUT_MS })
-}
-
-const loadProfiles = async ($: EngineInterface): Promise<void> => {
-  const ran = await authRun($, ['--list']).catch(() => undefined)
+  if (program === undefined) return
+  const ran = await $.process.run([program, 'sessions', 'switchboard', 'commands'], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
   if (ran === undefined || ran.exitCode !== 0) return
-  profiles = authProfiles(ran.stdout)
+  tree = sbTree(ran.stdout)
   await refreshStatus($)
 }
 
-const switchAuth = async ($: EngineInterface, name: string): Promise<string> => {
-  if (!profiles.some(profile => profile.name === name)) await loadProfiles($)
-  if (!profiles.some(profile => profile.name === name)) return `No ${HARNESS} profile ${name}. ${authLine(profiles)}`
-  const ran = await authRun($, [name]).catch(() => undefined)
-  if (ran === undefined) return `The switchboard could not switch to ${name}: qol is not reachable.`
-  if (ran.exitCode !== 0) return `The switchboard stays on its profile: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
-  return `Switching the switchboard to ${name}: it closes and opens again on that login.`
+const runSb = async ($: EngineInterface, text: string): Promise<string> => {
+  const typed = text.trim()
+  let at = sbAt(tree.commands, `${typed} `)
+  if (at === undefined || at.missing !== undefined || at.level.length > 0) {
+    await loadTree($)
+    at = sbAt(tree.commands, `${typed} `)
+  }
+  if (at === undefined) return sbLine([], tree.commands)
+  if (at.missing !== undefined) return `${[SB, ...at.path.map(command => command.name)].join(' ')} has no ${at.missing}. ${sbLine(at.path, at.path.length === 0 ? tree.commands : (at.path[at.path.length - 1]?.children ?? []))}`
+  if (at.level.length > 0) return sbLine(at.path, at.level)
+  const program = await recordProgram($)
+  if (program === undefined) return `${typed}: qol is not reachable.`
+  const ran = await $.process.run([program, 'sessions', 'switchboard', ...at.path.map(command => command.name)], { cwd: folderOf(program), timeoutMs: SB_TIMEOUT_MS }).catch(() => undefined)
+  if (ran === undefined) return `${typed}: qol is not reachable.`
+  if (ran.exitCode !== 0) return `${typed} failed: ${oneLine(ran.stderr.trim() || ran.stdout.trim() || `exit ${ran.exitCode}`)}`
+  try {
+    const message: unknown = (JSON.parse(ran.stdout) as { message?: unknown }).message
+    if (typeof message === 'string' && message !== '') return message
+  } catch {}
+  return ran.stdout.trim() === '' ? `${typed}: done.` : oneLine(ran.stdout)
 }
 
 const recordRun = async ($: EngineInterface, verb: string, args: readonly string[]): Promise<Record<string, unknown> | undefined> => {
@@ -1422,7 +1461,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
-      void loadProfiles($)
+      void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
       $.clock.every(DELIVER_MS, () => void deliver($))
@@ -1482,15 +1521,13 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
-    const auth = viewedFork === undefined ? TYPED_AUTH.exec(e.text) : null
-    if (auth !== null) {
-      clearBox($, text => text === e.text)
-      const name = auth[1]
-      if (name === undefined) {
-        await loadProfiles($)
-        return dropAs(authLine(profiles))
+    if (viewedFork === undefined && TYPED_SB.test(e.text)) {
+      if (tree.commands.length === 0) await loadTree($)
+      const at = sbAt(tree.commands, `${e.text.trim()} `)
+      if (at !== undefined && (at.missing === undefined || at.path.length > 0)) {
+        clearBox($, text => text === e.text)
+        return dropAs(await runSb($, e.text))
       }
-      return dropAs(await switchAuth($, name))
     }
     const to =
       viewedFork === undefined
@@ -1512,8 +1549,8 @@ export const register: Register = on => {
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
     if (viewedFork !== undefined) return own
-    const auth = authCompletions(profiles, e.text, e.start, e.token)
-    if (auth.length > 0) return { suggestions: [...own.suggestions, ...auth] }
+    const sb = sbCompletions(tree.commands, e.text, e.start, e.token)
+    if (sb.length > 0) return { suggestions: [...own.suggestions, ...sb] }
     if (e.text.slice(0, e.start).trim() !== '') return own
     try {
       await ensureLoaded($)
@@ -1527,8 +1564,11 @@ export const register: Register = on => {
   on('prompt.edit', async ($, e, next) => {
     const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
     if (isTab && viewedFork === undefined) {
-      const auth = nextAuth(profiles, e.text, e.key?.shift === true ? -1 : 1)
-      if (auth !== undefined) return { text: auth, cursor: auth.length, decorations: [{ start: 0, end: `${SB} ${AUTH}`.length, bold: true }] }
+      const sb = sbTab(tree.commands, e.text, e.key?.shift === true ? -1 : 1)
+      if (sb !== undefined) {
+        const hint = sbHint(tree.commands, sb, sb.length)
+        return { text: sb, cursor: sb.length, decorations: hint === undefined ? [] : [hint] }
+      }
       const list = await read($, board)
       const current = e.text.trim()
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
@@ -1538,7 +1578,7 @@ export const register: Register = on => {
     const after = await next(e)
     try {
       if (viewedFork !== undefined) return after
-      const hint = authHint(profiles, after.text, after.cursor)
+      const hint = sbHint(tree.commands, after.text, after.cursor)
       if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
       if (after.text === '') {
         suggestFork($, await read($, board))
