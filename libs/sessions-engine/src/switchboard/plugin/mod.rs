@@ -169,6 +169,7 @@ mod tests {
             "await $.session.messages({ agentId })",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
             "WRITING TO",
+            "on('prompt.change', async ($, e, next) => {",
             "const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)",
             "const owners = recordOwners([...records.values()])",
         ] {

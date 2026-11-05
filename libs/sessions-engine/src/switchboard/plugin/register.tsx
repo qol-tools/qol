@@ -221,10 +221,22 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const words = role === 'user' ? (typedByUser(text) ?? text) : text
     const shown = printable(words).trim()
-    if (shown === '' || (role === 'user' && /^<[a-z-]+>/.test(shown))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
     return [{ isUser: role === 'user', text: shown.length > SAID_CHARS ? `${shown.slice(0, SAID_CHARS - 1)}…` : shown }]
   })
   return said.slice(-kept)
+}
+
+const typedTarget = (list: Entry[], text: string): Entry | undefined => {
+  const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(text)?.[1]
+  return word === undefined ? undefined : reachable(list).find(entry => keyOf(entry) === word)
+}
+
+const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
+
+const isPluginNote = (text: string): boolean => {
+  const said = text.replace(COORDINATOR_NOTE, '').trim()
+  return said.startsWith('[CLI Sessions]') || [BACK, REOPENED, WAIT_FOR_USER, CONTINUE].some(note => said.startsWith(note))
 }
 
 const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
@@ -1583,8 +1595,7 @@ export const register: Register = on => {
         : undefined
     if (to !== undefined) {
       const sent = await sendTo($, to.entry, fromUser(to.message), direct($)).catch(() => undefined)
-      if (sent?.isDelivered === true) await $.ui.view({ agentId: sent.agentId }).catch(() => undefined)
-      else void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
+      if (sent?.isDelivered !== true) void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
       await writeTo($, undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
@@ -1637,15 +1648,22 @@ export const register: Register = on => {
         suggestFork($, await read($, board))
         return after
       }
-      const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(after.text)?.[1]
-      const target = word === undefined ? undefined : reachable(await read($, board)).find(entry => keyOf(entry) === word)
+      const target = typedTarget(await read($, board), after.text)
       await writeTo($, target)
-      if (word === undefined || target === undefined) return after
-      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: word.length, bold: true }] }
+      if (target === undefined) return after
+      return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: keyOf(target).length, bold: true }] }
     } catch {
       return after
     }
   }).catch(($, e, next) => (next.called ? { text: e.text, cursor: e.cursor } : next(e)))
+
+  on('prompt.change', async ($, e, next) => {
+    const after = await next(e)
+    try {
+      if (viewedFork === undefined) await writeTo($, typedTarget(await read($, board), e.text))
+    } catch {}
+    return after
+  }).catch(($, e, next) => next(e))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
     if (e.agentId !== undefined || dropped.length === 0) return next(e)

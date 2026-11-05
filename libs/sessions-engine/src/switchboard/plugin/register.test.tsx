@@ -1851,7 +1851,30 @@ test('the board shows the fork whose key starts the prompt under WRITING TO, and
   await ui.unmount()
 })
 
-test('typing a fork key and a message sends the message to that fork, shows its view, and never reaches the model', async ($, on) => {
+test('a fork key put in the box without typing shows that fork under WRITING TO, without the plugin notes', async ($, on) => {
+  engine(on)
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [
+    { role: 'user', text: fromUser('pick one') },
+    { role: 'user', text: 'Back in the agent list.' },
+    { role: 'user', text: '[CLI Sessions] Your background command ended.' },
+    { role: 'assistant', text: 'Amber or teal?' },
+  ] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Back in the agent list/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /CLI Sessions/ })).toBeUndefined()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('typing a fork key and a message sends the message to that fork, keeps the switchboard in view, and never reaches the model', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []
   engine(on, sent)
@@ -1866,7 +1889,7 @@ test('typing a fork key and a message sends the message to that fork, shows its 
   expect(sent.length).toBe(1)
   expect(JSON.stringify(sent[0].to)).toContain('a8')
   expect(sent[0].text).toBe(fromUser('yes, amber'))
-  expect(viewed).toEqual(['a8'])
+  expect(viewed).toEqual([])
   expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
   expect((await typed($, 'asking yes')).text).toBe('asking yes')
   expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')
