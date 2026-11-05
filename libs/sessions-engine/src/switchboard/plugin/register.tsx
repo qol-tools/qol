@@ -264,8 +264,20 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
   const agentId = entry?.agentId ?? ''
   if ((await read($, writingTo)) === agentId) return
   await update($, writingTo, () => agentId)
-  const found = agentId === '' ? [] : await $.session.messages({ agentId }).catch(() => [])
-  if ((await read($, writingTo)) === agentId) await update($, writingSaid, () => recentWords(found))
+  await update($, writingSaid, () => [])
+  await refreshWriting($, agentId)
+}
+
+const sameSaid = (a: Said[], b: Said[]): boolean =>
+  a.length === b.length && a.every((one, at) => one.isUser === b[at]?.isUser && one.text === b[at]?.text)
+
+const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
+  const target = await read($, writingTo)
+  if (agentId !== undefined && agentId !== target) return
+  const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
+  if (found === undefined || (await read($, writingTo)) !== target) return
+  const said = recentWords(found)
+  if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
 }
 
 let loading: Promise<void> | undefined
@@ -1551,7 +1563,7 @@ export const register: Register = on => {
       void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
-      $.clock.every(DELIVER_MS, () => void deliver($))
+      $.clock.every(DELIVER_MS, () => void deliver($).then(() => refreshWriting($)).catch(() => undefined))
       if (pending.length > 0) {
         isReady = false
         await update($, starting, () => bringingBack(pending.length))
@@ -1828,6 +1840,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
+    if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
     return done
   }).catch(($, e, next) => (next.called ? undefined : next(e)))

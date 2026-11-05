@@ -166,7 +166,7 @@ mod tests {
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
             "const sent = await sendTo($, to.entry, fromUser(to.message), direct($))",
-            "await $.session.messages({ agentId })",
+            "await $.session.messages({ agentId: target })",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
             "WRITING TO",
             "on('prompt.change', async ($, e, next) => {",
