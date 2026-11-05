@@ -1751,7 +1751,9 @@ test('typing a fork key and a message sends the message to that fork and never r
   await spawn($, 'a8', 'asking-fork: asks')
   sent.length = 0
   expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
-  for (let tries = 0; tries < 50 && sent.length === 0; tries += 1) await new Promise(resolve => setTimeout(resolve, 10))
+  await settle()
+  expect(sent).toEqual([])
+  await renderBand($)
   expect(sent.length).toBe(1)
   expect(JSON.stringify(sent[0].to)).toContain('a8')
   expect(sent[0].text).toBe(fromUser('yes, amber'))

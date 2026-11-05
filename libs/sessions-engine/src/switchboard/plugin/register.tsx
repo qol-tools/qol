@@ -901,6 +901,11 @@ const reach = async ($: EngineInterface, agentId: string, name: string, project:
   if (!sent.isDelivered) await undelivered($, sent.agentId, name, String(sent.reason ?? 'not delivered'), message)
 }
 
+const tell = async ($: EngineInterface, target: Entry, message: string): Promise<void> => {
+  const sent = await sendTo($, target, message, viaBand($, true))
+  if (!sent.isDelivered) await undelivered($, sent.agentId, target.name, String(sent.reason ?? 'not delivered'), message)
+}
+
 const textField = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value : undefined)
 
 export const closedSession = (input: Record<string, unknown>): ClosedSession | undefined => {
@@ -1377,7 +1382,7 @@ export const register: Register = on => {
             .catch(() => undefined)
         : undefined
     if (to !== undefined) {
-      void reach($, to.entry.agentId, to.entry.name, to.entry.project, fromUser(to.message)).catch(() => undefined)
+      void tell($, to.entry, fromUser(to.message)).catch(() => undefined)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)
     }
