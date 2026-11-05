@@ -1896,15 +1896,17 @@ test('typing sb auth lists the profiles and sb auth <profile> switches, and neit
   expect((await typed($, 'sb is a word')).text).toBe('sb is a word')
 })
 
-test('typing sb offers sb auth with each profile in the typeahead, and the profile word completes after sb auth', () => {
+test('typing sb offers sb auth, Tab on it leaves auth as the token so the profiles come next, and the profile word completes after sb auth', () => {
   const profiles = authProfiles(LISTING)
-  const sb = authCompletions(profiles, 'sb', 0, 'sb')
-  expect(sb.map(one => one.text)).toEqual(['sb auth default ', 'sb auth clauded ', 'sb auth claudedwb '])
-  expect(sb[0]?.description).toBe('current · me@work.com · Work · max')
-  expect(sb[2]?.description).toBe('not logged in')
-  expect(authCompletions([], 'sb', 0, 'sb').map(one => one.text)).toEqual(['sb auth '])
+  expect(authCompletions(profiles, 'sb', 0, 'sb')).toEqual([{ text: 'sb auth', label: 'sb auth', description: 'switch the claude login' }])
+  const auth = authCompletions(profiles, 'sb auth', 3, 'auth')
+  expect(auth.map(one => one.text)).toEqual(['auth default ', 'auth clauded ', 'auth claudedwb '])
+  expect(auth.map(one => one.label)).toEqual(['default', 'clauded', 'claudedwb'])
+  expect(auth[0]?.description).toBe('current · me@work.com · Work · max')
+  expect(auth[2]?.description).toBe('not logged in')
   expect(authCompletions(profiles, 'sb au', 3, 'au').map(one => one.text)).toEqual(['auth default ', 'auth clauded ', 'auth claudedwb '])
   expect(authCompletions(profiles, 'sb auth claudedw', 8, 'claudedw').map(one => one.text)).toEqual(['claudedwb '])
   expect(authCompletions(profiles, 'sbx', 0, 'sbx')).toEqual([])
   expect(authCompletions(profiles, 'hello sb', 6, 'sb')).toEqual([])
+  expect(authLine(authProfiles(JSON.stringify({ profiles: [{ name: 'tok', current: false, logged_in: true }] })))).toContain('tok (logged in)')
 })

@@ -446,18 +446,16 @@ export const authCompletions = (profiles: readonly AuthProfile[], text: string, 
   const typed = token.toLowerCase()
   const row = (profile: AuthProfile, prefix: string): PromptAutocompleteSuggestion => ({
     text: `${prefix}${profile.name} `,
-    label: `${SB} ${AUTH} ${profile.name}`,
+    label: profile.name,
     description: `${profile.current ? 'current · ' : ''}${who(profile)}`,
   })
-  if (before.trim() === '' && typed === SB) {
-    return profiles.length === 0 ? [{ text: `${SB} ${AUTH} `, label: `${SB} ${AUTH}`, description: `switch the ${HARNESS} login` }] : profiles.map(profile => row(profile, `${SB} ${AUTH} `))
-  }
+  if (before.trim() === '' && typed === SB) return [{ text: `${SB} ${AUTH}`, label: `${SB} ${AUTH}`, description: `switch the ${HARNESS} login` }]
   if (/^\s*sb\s+$/.test(before) && AUTH.startsWith(typed)) return profiles.map(profile => row(profile, `${AUTH} `))
   if (/^\s*sb\s+auth\s+$/.test(before)) return profiles.filter(profile => profile.name.startsWith(typed)).map(profile => row(profile, ''))
   return []
 }
 
-const who = (profile: AuthProfile): string => (profile.loggedIn ? [profile.email, profile.org, profile.plan].filter(one => one !== undefined).join(' · ') : 'not logged in')
+const who = (profile: AuthProfile): string => (profile.loggedIn ? [profile.email, profile.org, profile.plan].filter(one => one !== undefined).join(' · ') || 'logged in' : 'not logged in')
 
 export const authLine = (profiles: readonly AuthProfile[]): string =>
   profiles.length === 0
