@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forkColor, fromUser, keyCompletions, keyed, listedAgents, mayMessage, nextKey, reachable, reportLine, toFork } from '../hooks/register'
+import { forkColor, fromUser, keyCompletions, listedAgents, mayMessage, nextKey, reachable, recordOwners, reportLine, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1737,11 +1737,33 @@ test('a full key, or a unique start of one with a colon, addresses a fork; anyth
   }
 })
 
-test('a resumed fork without a key in its description shows its record key in the agent list', () => {
-  expect(keyed('Azeroth survivors broken builds', 'azeroth-survivors-broken-builds')).toBe('azeroth-survivors-broken-builds: Azeroth survivors broken builds')
-  expect(keyed('kcd2-next-tasks: KCD2 next task list', 'kcd2-next-tasks')).toBe('kcd2-next-tasks: KCD2 next task list')
-  expect(keyed('Free text', undefined)).toBe('Free text')
-  expect(keyed('Free text', 'Not A Key')).toBe('Free text')
+test('an agent id belongs to the oldest record that holds it', () => {
+  const part = (agent_id: string) => ({ n: 1, agent_id })
+  const owners = recordOwners([
+    { key: 'flow-2', created_ms: 20, parts: [part('a1')] },
+    { key: 'flow', created_ms: 10, parts: [part('a1'), part('a2')] },
+    { key: 'other', created_ms: 30, parts: [part('a3')] },
+  ])
+  expect([...owners.entries()].sort()).toEqual([['a1', 'flow'], ['a2', 'flow'], ['a3', 'other']])
+})
+
+test("a row keyed by a newer duplicate record goes back to the oldest record's key, with no new claim", async ($, on) => {
+  const store = new Map<string, unknown>()
+  const calls: string[][] = []
+  store.set('board:switchboard-session', [{ agentId: 'z1', key: 'zed-key-2', name: 'zed-key-2: words', kind: 'ask', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false }, { agentId: 'z2', name: 'Plain words', kind: 'ask', headline: 'h', report: 'r', at: 2, isWorking: false, isDismissed: false }])
+  engine(on, [], [], [], store)
+  recordEngine(on, calls, [
+    { key: 'zed-key-2', friendly: 'words', cwd: '/', created_ms: 2, parts: [{ n: 1, agent_id: 'z1' }] },
+    { key: 'zed-key', friendly: 'words', cwd: '/', created_ms: 1, parts: [{ n: 1, agent_id: 'z1' }, { n: 2, agent_id: 'z2' }] },
+  ])
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('zed-key')
+  expect(board).not.toContain('zed-key-2')
+  expect(board).not.toContain('Plain words')
+  expect(calls.some(call => call[0] === 'claim')).toBe(false)
 })
 
 test('typing a fork key and a message sends the message to that fork and never reaches the model', async ($, on) => {

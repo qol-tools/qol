@@ -497,18 +497,18 @@ fn record_descriptions() -> std::collections::HashMap<String, String> {
     let Ok(store) = crate::record::RecordStore::system() else {
         return std::collections::HashMap::new();
     };
-    store
-        .list()
-        .unwrap_or_default()
-        .into_iter()
-        .flat_map(|record| {
-            let description = record.description();
-            record
-                .parts
-                .into_iter()
-                .map(move |part| (part.agent_id, description.clone()))
-        })
-        .collect()
+    let mut owners = std::collections::HashMap::new();
+    let mut records = store.list().unwrap_or_default();
+    records.sort_by_key(|record| record.created_ms);
+    for record in records {
+        let description = record.description();
+        for part in record.parts {
+            owners
+                .entry(part.agent_id)
+                .or_insert_with(|| description.clone());
+        }
+    }
+    owners
 }
 
 fn prepare(plan: &LaunchPlan) -> Result<()> {

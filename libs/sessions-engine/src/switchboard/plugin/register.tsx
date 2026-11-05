@@ -353,9 +353,6 @@ const TO_FORK = /^\s*([a-z0-9][a-z0-9-]*)(:?)[ \t]+(\S[\s\S]*)$/
 
 export const keyOf = (entry: Entry): string => entry.key ?? keyName(entry.name)
 
-export const keyed = (description: string, key: string | undefined): string =>
-  key === undefined || !KEY_SHAPE.test(key) || keyName(description) === key ? description : `${key}: ${friendlyName(description)}`
-
 export const reachable = (list: Entry[]): Entry[] => {
   const shown = list.filter(entry => !entry.isDismissed && entry.successor === undefined)
   const by = (keep: (entry: Entry) => boolean) => shown.filter(keep).sort((a, b) => a.at - b.at)
@@ -408,7 +405,19 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
 
 export const fromUser = (message: string): string => `The user typed this to you in the switchboard chat:\n\n${message}`
 
-type SessionRecord = { key: string; friendly?: string; cwd?: string; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
+type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
+
+export const recordOwners = (records: readonly SessionRecord[]): Map<string, string> => {
+  const owners = new Map<string, string>()
+  const oldestFirst = [...records].sort((a, b) => (Number(a.created_ms) || 0) - (Number(b.created_ms) || 0))
+  for (const record of oldestFirst) {
+    for (const part of record.parts ?? []) {
+      const agentId = typeof part === 'object' && part !== null ? (part as { agent_id?: unknown }).agent_id : undefined
+      if (typeof agentId === 'string' && !owners.has(agentId)) owners.set(agentId, record.key)
+    }
+  }
+  return owners
+}
 
 const recordProgram = async ($: EngineInterface): Promise<string | undefined> => {
   try {
@@ -473,10 +482,15 @@ const withRecords = async ($: EngineInterface, rows: Entry[]): Promise<Entry[]> 
   for (const one of listed.records as unknown[]) {
     if (typeof one === 'object' && one !== null && typeof (one as { key?: unknown }).key === 'string') records.set((one as SessionRecord).key, one as SessionRecord)
   }
-  const keyless = rows.filter(row => row.key === undefined).slice(-BACKFILL_MAX)
+  const owners = recordOwners([...records.values()])
+  const owned = rows.map(row => {
+    const key = owners.get(row.agentId)
+    return key === undefined || key === row.key ? row : { ...row, key }
+  })
+  const keyless = owned.filter(row => row.key === undefined).slice(-BACKFILL_MAX)
   const filled = new Map<Entry, Entry>()
   for (const row of keyless) filled.set(row, await backfill($, row))
-  return rows.map(one => {
+  return owned.map(one => {
     const row = filled.get(one) ?? one
     const record = row.key === undefined ? undefined : records.get(row.key)
     if (record === undefined) return row
@@ -1217,9 +1231,7 @@ export const register: Register = on => {
     if (e.resume !== undefined) {
       const list = await read($, board)
       if (e.parentAgentId !== undefined && !mayMessage(list, e.parentAgentId, e.resume.agentId)) return { deny: FORK_TO_FORK }
-      const resumed = e.resume.agentId
-      const known = list.find(one => one.agentId === resumed && one.key !== undefined) ?? list.find(one => one.successor === resumed && one.key !== undefined)
-      return next({ ...e, description: keyed(e.description, known?.key) })
+      return next(e)
     }
     const project = PROJECT.exec(e.prompt.split('\n', 1)[0] ?? '')
     if (project === null) {

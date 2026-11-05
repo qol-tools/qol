@@ -165,7 +165,7 @@ mod tests {
             "on('prompt.autocomplete', async ($, e, next) => {",
             "on('prompt.edit', async ($, e, next) => {",
             "return dropAs(`→ ${keyOf(to.entry)}: ${oneLine(to.message)}`)",
-            "return next({ ...e, description: keyed(e.description, known?.key) })",
+            "const owners = recordOwners([...records.values()])",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
