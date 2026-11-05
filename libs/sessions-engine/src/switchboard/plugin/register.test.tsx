@@ -1858,6 +1858,7 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
     { role: 'user', text: fromUser('pick one') },
     { role: 'user', text: 'Back in the agent list.' },
     { role: 'user', text: '[CLI Sessions] Your background command ended.' },
+    { role: 'user', text: 'This session is being continued from a previous conversation that ran out of context.' },
     { role: 'assistant', text: 'Amber or teal?' },
   ] }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -1869,6 +1870,7 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
   expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Back in the agent list/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /CLI Sessions/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /being continued/ })).toBeUndefined()
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await ui.unmount()

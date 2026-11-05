@@ -234,9 +234,11 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
+const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+
 const isPluginNote = (text: string): boolean => {
   const said = text.replace(COORDINATOR_NOTE, '').trim()
-  return said.startsWith('[CLI Sessions]') || [BACK, REOPENED, WAIT_FOR_USER, CONTINUE].some(note => said.startsWith(note))
+  return [BACK, REOPENED, WAIT_FOR_USER, CONTINUE, ...HARNESS_NOTES].some(note => said.startsWith(note))
 }
 
 const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
