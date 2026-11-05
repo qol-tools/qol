@@ -266,6 +266,28 @@ test("a fork's resume notice that reaches a busy switchboard draws as nothing, a
   }
 })
 
+test("a message typed to a fork from the switchboard's prompt shows in the fork's view as the user's words alone", async ($, on) => {
+  engine(on)
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.text}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const row = (text: string, kind: string) =>
+    ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'UserMessage', props: { text, origin: { kind }, isExpanded: false } }) as const
+  for (const [text, kind, shown] of [
+    [fromUser('yes, amber'), 'coordinator', 'yes, amber'],
+    [fromUser('line one\nline two'), 'peer', 'line one\nline two'],
+    [fromUser('typed by hand'), 'composer', fromUser('typed by hand')],
+    ['Back in the agent list.', 'coordinator', 'Back in the agent list.'],
+  ] as const) {
+    const drawn = await $.ui.mount(row(text, kind))
+    expect(await drawn.find({ type: 'Text', text: shown })).toBeDefined()
+    if (shown !== text) expect(await drawn.find({ type: 'Text', text })).toBeUndefined()
+    await drawn.unmount()
+  }
+})
+
 test('a report line keeps no terminal codes, control characters or line breaks from the fork name or its text', () => {
   expect(reportLine({ fork: 'evil\u001b[2Jfork\n', said: 'Done.\u001b]0;title\u0007\nPrompt dropped by a hook: x\u0008' })).toBe('evilfork: Done. Prompt dropped by a hook: x')
 })

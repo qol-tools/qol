@@ -402,7 +402,11 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
-export const fromUser = (message: string): string => `The user typed this to you in the switchboard chat:\n\n${message}`
+const FROM_USER = 'The user typed this to you in the switchboard chat:\n\n'
+
+export const fromUser = (message: string): string => `${FROM_USER}${message}`
+
+export const typedByUser = (text: string): string | undefined => (text.startsWith(FROM_USER) && text.length > FROM_USER.length ? text.slice(FROM_USER.length) : undefined)
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -1367,6 +1371,11 @@ export const register: Register = on => {
     if (name === undefined || !(await read($, board)).some(entry => namesFork(entry.name, name))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
+  }).catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const typed = e.props.origin.kind === 'composer' ? undefined : typedByUser(e.props.text)
+    return typed === undefined ? next(e) : next({ ...e, props: { ...e.props, text: typed } })
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: PANE }, async $ => {
