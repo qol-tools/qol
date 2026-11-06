@@ -74,7 +74,7 @@ const BAND_WAIT_MS = 3_000
 const BAND_FRESH_MS = 90_000
 const SEND_WAIT_MS = 5_000
 const BACK = 'Back in the agent list.'
-const REOPEN_DELAY_MS = 1_500
+const REOPEN_DELAY_MS = 300
 const HOLD = { command: 'sleep infinity', description: 'Hold this fork in the agent list', run_in_background: true }
 const REOPENED = 'Opened from the fork board.'
 const RESUMED = 'Carry on your work from where you stopped. This answers no question you asked and approves nothing you were waiting on the user for: if you were waiting on the user, keep waiting.'
@@ -1166,8 +1166,8 @@ const noteReopen = async ($: EngineInterface, row: Record<string, unknown>): Pro
 
 let isReopening = false
 let reopenTries = 0
-const REOPEN_TRIES = 4
-const REOPEN_RETRY_MS = 4_000
+const REOPEN_TRIES = 12
+const REOPEN_RETRY_MS = 1_000
 
 export const reopenForks = async ($: EngineInterface): Promise<void> => {
   if (isReopening) return
