@@ -317,6 +317,7 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         .await;
     let open = crate::picker::state::begin_open();
     let fresh_target = windows.first().and_then(capture::fresh_frame_target);
+    let fresh_shot = fresh_target.map(|target| start_fresh_frame_capture(&executor, target));
     let fresh_cards: Vec<u32> = match fresh_target {
         Some(_) => windows
             .iter()
@@ -355,8 +356,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         #[cfg(debug_assertions)]
         crate::app::clear_cycle_origin();
     });
-    if let Some(target) = fresh_target {
-        spawn_fresh_frame_capture(cx, state.current.clone(), open, target);
+    if let Some((wid, shot)) = fresh_shot {
+        land_fresh_frame_capture(cx, state.current.clone(), open, wid, shot);
     }
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
@@ -409,17 +410,25 @@ fn await_fresh_frames(
     }
 }
 
-fn spawn_fresh_frame_capture(
+fn start_fresh_frame_capture(
+    executor: &BackgroundExecutor,
+    (wid, dims): (u32, (usize, usize)),
+) -> (u32, Task<Option<capture::SendCVBuf>>) {
+    (
+        wid,
+        executor.spawn(async move { capture::capture_live_frame(wid, dims) }),
+    )
+}
+
+fn land_fresh_frame_capture(
     cx: &AsyncApp,
     current: PickerWindowState,
     open: u64,
-    (wid, dims): (u32, (usize, usize)),
+    wid: u32,
+    shot: Task<Option<capture::SendCVBuf>>,
 ) {
-    let executor = cx.background_executor().clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let frame = executor
-            .spawn(async move { capture::capture_live_frame(wid, dims) })
-            .await;
+        let frame = shot.await;
         qol_runtime::probe!(
             "PREVIEW_FRESH",
             "wid={wid} outcome={}",
