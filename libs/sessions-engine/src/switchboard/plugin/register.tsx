@@ -102,6 +102,8 @@ export const bringingBack = (count: number): string => `Bringing back ${count} f
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
 const mainSaid = atom({ plugin: 'qol-switchboard', key: 'mainSaid' } as const, [] as { isUser: boolean; text: string }[])
+const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
+const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
@@ -320,6 +322,8 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
   if ((await read($, writingTo)) === agentId) return
   await update($, writingTo, () => agentId)
   await update($, writingSaid, () => [])
+  await update($, focusActivity, () => '')
+  await update($, freshReply, () => '')
   if (entry?.hasNewReply === true) await seen($, agentId)
   await refreshWriting($, agentId)
   if (agentId !== '') await placeFocus($)
@@ -426,6 +430,21 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
   if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
   const rows = focusRows.agentId === target ? focusRows.rows : []
   await update($, focusShown, () => ({ id, agentId: target, key: keyOf(entry), rows }))
+}
+
+const TOOL_TEXT = 60
+
+const toolLabel = (tool: string, input: Record<string, unknown>): string => {
+  const name = tool.replace(/^mcp__.+?__/, '')
+  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
+  const path = text(input.file_path) ?? text(input.notebook_path) ?? text(input.path)
+  const detail = text(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? text(input.pattern) ?? text(input.command) ?? text(input.prompt)
+  return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
+}
+
+const noteActivity = async ($: EngineInterface, agentId: string, label: string): Promise<void> => {
+  if ((await read($, writingTo)) !== agentId || (await read($, focusActivity)) === label) return
+  await update($, focusActivity, () => label)
 }
 
 const followFocus = async ($: EngineInterface): Promise<void> => {
@@ -1794,9 +1813,12 @@ export const register: Register = on => {
     const { Box, Text, Markdown } = $.ui.resolve(e)
     const shown = await read($, focusShown)
     if (e.props.id !== shown.id) return <Box />
+    const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
+    const activity = await read($, focusActivity)
+    const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
     return (
       <Box flexDirection="column">
-        <Text dimColor>{`── ${shown.key} ──`}</Text>
+        <Text dimColor>{`── ${shown.key}${state} ──`}</Text>
         {shown.rows.length === 0 && <Text dimColor>No messages yet.</Text>}
         {shown.rows.map((one, index) => (
           <Box key={`focus-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
@@ -1806,6 +1828,12 @@ export const register: Register = on => {
             <Markdown text={one.text} />
           </Box>
         ))}
+        {entry?.isWorking === true && (
+          <Box marginTop={1}>
+            <Text color="claude">● </Text>
+            <Text dimColor wrap="truncate">{activity === '' ? 'working…' : `working · ${activity}`}</Text>
+          </Box>
+        )}
       </Box>
     )
   })
@@ -1880,6 +1908,7 @@ export const register: Register = on => {
       }
       await setCurrent($, at.entry).catch(() => undefined)
       await writeTo($, at.entry)
+      if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
       const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
@@ -2053,6 +2082,13 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
+    if (e.agentId !== undefined) {
+      const agentId = e.agentId
+      try {
+        const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
+        void noteActivity($, agentId, label).catch(() => {})
+      } catch {}
+    }
     return next(e)
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
@@ -2092,6 +2128,10 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
+    if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
+      await update($, focusActivity, () => '')
+      if (typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
+    }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
     if (e.agentId === undefined) await followFocus($).catch(() => {})
     if (e.agentId === undefined) await refreshMain($).catch(() => {})
@@ -2126,6 +2166,7 @@ export const register: Register = on => {
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
     const switchboardSaid = await read($, mainSaid)
+    const fresh = await read($, freshReply)
     if (!isMainRead) $.clock.after(0, () => void refreshMain($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
@@ -2255,6 +2296,12 @@ export const register: Register = on => {
               <Text dimColor>
                 {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
               </Text>
+              {fresh === target.agentId && (
+                <Text bold color="suggestion">
+                  {' '}
+                  · new reply
+                </Text>
+              )}
             </Text>
             <Box paddingLeft={2} flexDirection="column">
               {prs(target)}

@@ -2224,6 +2224,34 @@ const forkChat = async ($: any, panes: string[]): Promise<string[]> => {
   return rows
 }
 
+test('the fork chat names the fork state, says what it works on, and the board marks a reply until the next send', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => new Promise(() => {}))
+  const said = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('tool.call', () => ({ result: 'ok' }))
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  await $.turn.start({ turnId: 'work-1', agentId: 'a8', text: 'teal' })
+  await $.tool.call({ tool: 'Bash', agentId: 'a8', command: 'bun test', description: 'Run the tests' })
+  const id = focusIds(panes).at(-1) as string
+  const block = await $.ui.mount(placedRow(id))
+  expect(await block.find({ type: 'Text', text: /^── asking-fork · working · / })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: 'working · Bash: Run the tests' })).toBeDefined()
+  said.push({ role: 'assistant', text: 'Teal it is.' })
+  await $.turn.complete({ turnId: 'work-1', agentId: 'a8', answer: 'Teal it is.', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(await block.find({ type: 'Text', text: /^working · / })).toBeUndefined()
+  await block.unmount()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  await typed($, 'asking-fork thanks')
+  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('while writing to a fork the board shows the switchboard conversation, not the fork one', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
@@ -2262,7 +2290,7 @@ test('writing to a fork shows its whole conversation in the chat, newest block o
   const [first] = focusIds(panes)
   expect(first).toBeDefined()
   const block = await $.ui.mount(placedRow(first as string))
-  expect(await block.find({ type: 'Text', text: '── asking-fork ──' })).toBeDefined()
+  expect(await block.find({ type: 'Text', text: /^── asking-fork / })).toBeDefined()
   const rows = (await block.findAll({ type: 'Markdown' })).map((one: any) => one.props?.text ?? one.text)
   expect(rows).toEqual(['Amber or teal?', long, 'teal'])
   await block.unmount()
@@ -2272,7 +2300,7 @@ test('writing to a fork shows its whole conversation in the chat, newest block o
   await new Promise(resolve => setTimeout(resolve, 10))
   expect(focusIds(panes).length).toBe(2)
   const old = await $.ui.mount(placedRow(first as string))
-  expect(await old.find({ type: 'Text', text: '── asking-fork ──' })).toBeUndefined()
+  expect(await old.find({ type: 'Text', text: /^── asking-fork / })).toBeUndefined()
   await old.unmount()
 })
 
