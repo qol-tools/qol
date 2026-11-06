@@ -392,9 +392,11 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
 }
 
 let mainFetch = 0
+let isMainRead = false
 
 const refreshMain = async ($: EngineInterface): Promise<void> => {
   const fetch = ++mainFetch
+  isMainRead = true
   const found = await $.session.messages({}).catch(() => undefined)
   if (found === undefined || fetch !== mainFetch) return
   const said = recentWords(found)
@@ -430,7 +432,9 @@ const followFocus = async ($: EngineInterface): Promise<void> => {
   if (isPlacingFocus || (await read($, writingTo)) === '' || viewedFork !== undefined) return
   const wait = ++focusWait
   $.clock.after(FOCUS_SETTLE_MS, () => {
-    if (wait === focusWait) void placeFocus($).catch(() => {})
+    if (wait !== focusWait) return
+    void placeFocus($).catch(() => {})
+    void refreshMain($).catch(() => {})
   })
 }
 
@@ -2122,6 +2126,7 @@ export const register: Register = on => {
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
     const switchboardSaid = await read($, mainSaid)
+    if (!isMainRead) $.clock.after(0, () => void refreshMain($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
@@ -2197,9 +2202,11 @@ export const register: Register = on => {
       ))
     const heading = (text: string) => (
       <Box marginTop={1}>
-        <Text dimColor bold>
+        <Text inverse> </Text>
+        <Text inverse bold>
           {text}
         </Text>
+        <Text inverse> </Text>
       </Box>
     )
 
@@ -2259,7 +2266,7 @@ export const register: Register = on => {
           <Box paddingLeft={2} flexDirection="column">
             {[...switchboardSaid].reverse().map((one, index) => (
               <Box key={`main-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-                <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                <Text bold color={one.isUser ? 'suggestion' : undefined}>
                   {one.isUser ? 'you' : 'switchboard'}
                 </Text>
                 <Text wrap="wrap">{one.text}</Text>
