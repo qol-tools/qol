@@ -38,7 +38,7 @@ declare module 'claude-code' {
       pulls: Pull[]
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
-      mainSaid: { isUser: boolean; text: string }[]
+      switchboardLog: { who: string; text: string }[]
       focusActivity: string
       freshReply: string
       focusShown: { id: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }

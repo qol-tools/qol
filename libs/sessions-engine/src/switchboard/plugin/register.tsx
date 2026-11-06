@@ -101,7 +101,7 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
-const mainSaid = atom({ plugin: 'qol-switchboard', key: 'mainSaid' } as const, [] as { isUser: boolean; text: string }[])
+const switchboardLog = atom({ plugin: 'qol-switchboard', key: 'switchboardLog' } as const, [] as { who: string; text: string }[])
 const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
@@ -395,16 +395,29 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
 }
 
-let mainFetch = 0
-let isMainRead = false
+const SB_LOG_PREFIX = 'sblog:'
+const SB_LOG_KEPT = 12
+export const YOU = 'you'
+export const SWITCHBOARD = 'switchboard'
 
-const refreshMain = async ($: EngineInterface): Promise<void> => {
-  const fetch = ++mainFetch
-  isMainRead = true
-  const found = await $.session.messages({}).catch(() => undefined)
-  if (found === undefined || fetch !== mainFetch) return
-  const said = recentWords(found)
-  if (!sameSaid(said, await read($, mainSaid))) await update($, mainSaid, () => said)
+let isLogLoaded = false
+
+const loadLog = async ($: EngineInterface): Promise<void> => {
+  if (isLogLoaded) return
+  isLogLoaded = true
+  const saved = await $.store.get(SB_LOG_PREFIX + (await $.session.id())).catch(() => undefined)
+  if (!Array.isArray(saved)) return
+  const rows = saved.filter((one): one is { who: string; text: string } => typeof one?.who === 'string' && typeof one?.text === 'string')
+  await update($, switchboardLog, now => [...rows, ...now].slice(-SB_LOG_KEPT))
+}
+
+const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
+  const text = clipSaid(plainText(said))
+  if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
+  await loadLog($)
+  const rows = [...(await read($, switchboardLog)), { who, text }].slice(-SB_LOG_KEPT)
+  await update($, switchboardLog, () => rows)
+  await $.store.set(SB_LOG_PREFIX + (await $.session.id()), rows).catch(() => undefined)
 }
 
 const FOCUS_PREFIX = 'focus-'
@@ -453,7 +466,6 @@ const followFocus = async ($: EngineInterface): Promise<void> => {
   $.clock.after(FOCUS_SETTLE_MS, () => {
     if (wait !== focusWait) return
     void placeFocus($).catch(() => {})
-    void refreshMain($).catch(() => {})
   })
 }
 
@@ -492,7 +504,6 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
 const ready = async ($: EngineInterface): Promise<void> => {
   await update($, starting, () => '')
   await refreshStatus($).catch(() => undefined)
-  await refreshMain($).catch(() => undefined)
 }
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
@@ -1437,6 +1448,7 @@ export const logEvent = async ($: EngineInterface, event: Quiet): Promise<void> 
   logged += 1
   const id = `${LOG_PREFIX}${await $.clock.now()}-${logged}`
   logs.set(id, event)
+  await logSaid($, oneLine(event.fork), event.said).catch(() => {})
   if (logs.size > LOG_KEPT) logs.delete(logs.keys().next().value as string)
   await $.ui.place({ id }).catch(() => undefined)
   await followFocus($)
@@ -1873,6 +1885,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
+      await logSaid($, oneLine(quiet.fork), quiet.said).catch(() => {})
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
@@ -1909,6 +1922,7 @@ export const register: Register = on => {
       await setCurrent($, at.entry).catch(() => undefined)
       await writeTo($, at.entry)
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
+      await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
       const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
       const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
@@ -2097,7 +2111,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (isHeld || [BACK, WAIT_FOR_USER, REOPENED].some(one => e.text.includes(one)))) {
       await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
     }
-    if (e.agentId === undefined) await refreshMain($).catch(() => {})
+    if (e.agentId === undefined && !isHeld) await logSaid($, YOU, userWords(e.text)).catch(() => {})
     if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
@@ -2134,7 +2148,7 @@ export const register: Register = on => {
     }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
     if (e.agentId === undefined) await followFocus($).catch(() => {})
-    if (e.agentId === undefined) await refreshMain($).catch(() => {})
+    if (e.agentId === undefined && typeof e.answer === 'string' && !e.isAborted) await logSaid($, SWITCHBOARD, e.answer).catch(() => {})
     return done
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
@@ -2165,9 +2179,9 @@ export const register: Register = on => {
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
-    const switchboardSaid = await read($, mainSaid)
+    const switchboardSaid = await read($, switchboardLog)
     const fresh = await read($, freshReply)
-    if (!isMainRead) $.clock.after(0, () => void refreshMain($).catch(() => {}))
+    if (!isLogLoaded) $.clock.after(0, () => void loadLog($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
@@ -2313,8 +2327,8 @@ export const register: Register = on => {
           <Box paddingLeft={2} flexDirection="column">
             {[...switchboardSaid].reverse().map((one, index) => (
               <Box key={`main-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-                <Text bold color={one.isUser ? 'suggestion' : undefined}>
-                  {one.isUser ? 'you' : 'switchboard'}
+                <Text bold color={one.who.startsWith(YOU) ? 'suggestion' : one.who === SWITCHBOARD ? undefined : 'claude'}>
+                  {one.who}
                 </Text>
                 <Text wrap="wrap">{one.text}</Text>
               </Box>

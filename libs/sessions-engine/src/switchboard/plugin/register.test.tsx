@@ -1891,7 +1891,8 @@ test('missingForks adds an unfinished record whose last fork has no board row, o
 })
 
 test('the board shows the fork whose key starts the prompt under WRITING TO, and drops it when the key goes', async ($, on) => {
-  engine(on)
+  const panes: string[] = []
+  engine(on, [], panes)
   on('clock.after', () => ({ value: undefined }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
@@ -1905,15 +1906,15 @@ test('the board shows the fork whose key starts the prompt under WRITING TO, and
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
   await $.prompt.edit({ origin: { kind: 'composer' }, text: 'asking-fork hi', cursor: 14, start: 0, end: 14, inputText: '' })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await ui.unmount()
 })
 
 test('a fork key put in the box without typing shows that fork under WRITING TO, without the plugin notes', async ($, on) => {
-  engine(on)
+  const panes: string[] = []
+  engine(on, [], panes)
   on('clock.after', () => ({ value: undefined }))
   on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
   on('session.messages', () => ({ value: [
@@ -1929,13 +1930,8 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
   await spawn($, 'a8', 'asking-fork: asks')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
-  expect(await ui.find({ type: 'Text', text: /Back on the fork board/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Back in the agent list/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /CLI Sessions/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /being continued/ })).toBeUndefined()
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
   await ui.unmount()
@@ -2252,21 +2248,22 @@ test('the fork chat names the fork state, says what it works on, and the board m
   await ui.unmount()
 })
 
-test('while writing to a fork the board shows the switchboard conversation, not the fork one', async ($, on) => {
+test('while writing to a fork the board shows the switchboard log, newest first, not the fork chat', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   on('clock.after', () => new Promise(() => {}))
-  on('session.messages', (_: unknown, e: { agentId?: string }) => ({
-    value: e?.agentId === undefined ? [{ role: 'user', text: 'what is running?' }, { role: 'assistant', text: 'Two forks work.' }] : [{ role: 'assistant', text: 'Amber or teal?' }],
-  }))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await typed($, 'qols board')
+  await $.turn.start({ turnId: 'main-1', text: 'what is running?' })
+  await $.turn.complete({ turnId: 'main-1', answer: 'Two forks work.', durationMs: 1, isAborted: false, reason: 'done' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await typed($, 'asking-fork teal')
   await settle()
   expect(await ui.find({ type: 'Text', text: 'SWITCHBOARD' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Two forks work.' })).toBeDefined()
+  const rows = (await ui.findAll({ type: 'Text', text: /^(you|you → asking-fork|switchboard|teal|Two forks work\.|what is running\?)$/ })).map((one: any) => one.text)
+  expect(rows).toEqual(['you → asking-fork', 'teal', 'switchboard', 'Two forks work.', 'you', 'what is running?'])
   expect(await ui.find({ type: 'Text', text: 'Amber or teal?' })).toBeUndefined()
   expect(await forkChat($, panes)).toEqual(['Amber or teal?', 'teal'])
   await ui.unmount()
