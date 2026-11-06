@@ -1791,10 +1791,13 @@ export const register: Register = on => {
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
     if (TYPED_SWAP.test(e.text)) {
+      clearBox($, text => TYPED_SWAP.test(text))
+      if (isSwap && viewedFork !== undefined) {
+        const back = await $.ui.view({}).catch(() => ({ deny: 'the view did not move' }))
+        if (back.deny !== undefined) return dropAs(`Fork swap stays on: main could not be shown: ${printable(String(back.deny))}`)
+      }
       isSwap = !isSwap
       await $.store.set(SWAP_KEY, isSwap)
-      clearBox($, text => TYPED_SWAP.test(text))
-      if (!isSwap && viewedFork !== undefined) await $.ui.view({}).catch(() => undefined)
       return dropAs(isSwap ? 'Fork swap on: a key-name and Enter shows that fork here, main and Enter comes back.' : 'Fork swap off.')
     }
     if (isSwap && viewedFork !== undefined) {

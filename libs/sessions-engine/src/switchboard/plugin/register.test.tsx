@@ -2319,3 +2319,16 @@ test('with fork swap on, a bare key-name and Enter shows that fork in the main v
   expect(viewed).toEqual(['a8', 'a9', 'main', 'main'])
   await inFork.unmount()
 })
+
+test('with fork swap on, turning it off in a fork view that cannot go back keeps it on and says why', async ($, on) => {
+  engine(on)
+  on('ui.view', (_: unknown, e: { agentId?: string }) => ({ value: e.agentId === undefined ? { deny: 'the view moved meanwhile' } : {} }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'qols swap')).drop).toContain('Fork swap on')
+  const band = promptBand(false)
+  const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'a8' } } })
+  expect((await typed($, 'qols swap')).drop).toBe('Fork swap stays on: main could not be shown: the view moved meanwhile')
+  expect((await typed($, 'main')).drop).toBe('main could not be shown: the view moved meanwhile')
+  await inFork.unmount()
+})
