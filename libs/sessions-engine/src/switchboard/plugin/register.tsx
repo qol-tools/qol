@@ -27,6 +27,7 @@ const SB = 'sb'
 const TYPED_SB = /^\s*sb(?:\s|$)/
 const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = 100
+const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -315,7 +316,19 @@ const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
 
 let sending: Entry | undefined
 
-const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => writeTo($, typed ?? sending ?? (await currentOf($)))
+let typedSeq = 0
+
+const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => {
+  typedSeq += 1
+  if (typed !== undefined) return writeTo($, typed)
+  const fallback = sending ?? (await currentOf($))
+  const shown = await read($, writingTo)
+  if (shown === '' || shown === fallback?.agentId) return writeTo($, fallback)
+  const seq = typedSeq
+  $.clock.after(TYPED_SETTLE_MS, () => {
+    if (seq === typedSeq) void (async () => writeTo($, sending ?? (await currentOf($))))().catch(() => {})
+  })
+}
 
 let escArmed = false
 

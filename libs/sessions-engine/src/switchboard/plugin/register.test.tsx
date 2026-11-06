@@ -1863,6 +1863,7 @@ test('missingForks adds an unfinished record whose last fork has no board row, o
 
 test('the board shows the fork whose key starts the prompt under WRITING TO, and drops it when the key goes', async ($, on) => {
   engine(on)
+  on('clock.after', () => ({ value: undefined }))
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -1884,6 +1885,7 @@ test('the board shows the fork whose key starts the prompt under WRITING TO, and
 
 test('a fork key put in the box without typing shows that fork under WRITING TO, without the plugin notes', async ($, on) => {
   engine(on)
+  on('clock.after', () => ({ value: undefined }))
   on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
   on('session.messages', () => ({ value: [
     { role: 'user', text: fromUser('pick one') },
@@ -1904,6 +1906,21 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
   expect(await ui.find({ type: 'Text', text: /being continued/ })).toBeUndefined()
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a fork key that leaves the box keeps its chat a moment, so a send that empties the box does not flash the board', async ($, on) => {
+  engine(on)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork yes', cursor: 15 })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
   await ui.unmount()
 })
 
