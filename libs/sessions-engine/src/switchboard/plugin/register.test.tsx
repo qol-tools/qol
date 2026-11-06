@@ -1907,6 +1907,23 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
   await ui.unmount()
 })
 
+test('WRITING TO shows the reply a fork gives while its key stays in the prompt', async ($, on) => {
+  engine(on)
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  const said = [{ role: 'user', text: fromUser('pick one') }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeUndefined()
+  said.push({ role: 'assistant', text: 'Amber or teal?' })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('typing a fork key and a message sends the message to that fork, keeps the switchboard in view, and never reaches the model', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []
