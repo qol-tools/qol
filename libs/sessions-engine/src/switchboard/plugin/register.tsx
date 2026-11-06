@@ -273,7 +273,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const words = role === 'user' ? userWords(text) : text
     const shown = plainText(words)
-    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
   })
   return said.slice(-kept)
@@ -287,6 +287,8 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
 const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+
+const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
 const isPluginNote = (text: string): boolean => {
   const said = text.replace(COORDINATOR_NOTE, '').trim()
@@ -317,9 +319,12 @@ const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
 let sending: Entry | undefined
 
 let typedSeq = 0
+let typedFork: Entry | undefined
 
 const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => {
   typedSeq += 1
+  if (typedFork?.agentId !== typed?.agentId) $.ui.invalidate('ui.render')
+  typedFork = typed
   if (typed !== undefined) return writeTo($, typed)
   const fallback = sending ?? (await currentOf($))
   const shown = await read($, writingTo)
@@ -331,6 +336,7 @@ const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promi
 }
 
 let escArmed = false
+const KEPT_OPEN = { deny: 'Esc leaves the current fork and keeps the board open.' }
 
 const openBoard = async ($: EngineInterface, armed: boolean, focus?: true): Promise<UiOpenResult> => {
   const opened = await $.ui.open({ id: PANE, title: TITLE, ...(focus === undefined ? {} : { focus }), ...(armed ? { closeOnEscape: true } : {}) })
@@ -1519,7 +1525,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     if (resumed !== undefined) return { fork: keyName(resumed), said: 'resumed' }
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
-    return { fork: keyName(filed.entry.name), said: filed.entry.headline }
+    return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline }
   } catch {
     return undefined
   }
@@ -1673,7 +1679,7 @@ export const register: Register = on => {
       if (docks) void openBoard($, (await read($, current)) !== '').catch(() => {})
     }
     const loading = await read($, starting)
-    const shown = viewedFork === undefined ? await currentOf($) : undefined
+    const shown = viewedFork === undefined ? (typedFork ?? (await currentOf($))) : undefined
     const key = shown === undefined ? '' : keyOf(shown)
     const viewing = viewedFork
     if (viewing !== undefined && (await read($, board)).some(one => one.agentId === viewing && one.hasNewReply === true)) {
@@ -1783,6 +1789,7 @@ export const register: Register = on => {
       return dropAs(`→ ${keyOf(at.entry)}`)
     } finally {
       sending = undefined
+      typedFork = undefined
     }
   }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
 
@@ -1793,12 +1800,12 @@ export const register: Register = on => {
         await writeTo($, undefined).catch(() => undefined)
       }
       $.clock.after(0, () => void openBoard($, false).catch(() => undefined))
-      return
+      return KEPT_OPEN
     }
     await next(e)
     escArmed = false
     await update($, current, () => '')
-  }).catch(($, e, next) => (next.called || (e.origin.kind === 'person' && escArmed) ? undefined : next(e)))
+  }).catch(($, e, next) => (next.called ? undefined : e.origin.kind === 'person' && escArmed ? KEPT_OPEN : next(e)))
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)

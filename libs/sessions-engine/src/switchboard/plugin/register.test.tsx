@@ -1893,11 +1893,14 @@ test('a fork key put in the box without typing shows that fork under WRITING TO,
     { role: 'user', text: '[CLI Sessions] Your background command ended.' },
     { role: 'user', text: 'This session is being continued from a previous conversation that ran out of context.' },
     { role: 'assistant', text: 'Amber or teal?' },
+    { role: 'user', text: 'Back in the agent list.' },
+    { role: 'assistant', text: 'Back on the fork board.' },
   ] }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  expect(await ui.find({ type: 'Text', text: /Back on the fork board/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /pick one/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Amber or teal\?/ })).toBeDefined()
@@ -1988,6 +1991,10 @@ test('with the board open, a sent message makes that fork current: its chat stay
   expect(sent.map(one => one.text)).toEqual([fromUser('yes, amber'), fromUser('and the hips')])
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
   expect(await ui.find({ type: 'Text', text: /yes, amber/ })).toBeUndefined()
+  const typedBand = await $.ui.mount(promptBand(false))
+  expect(await typedBand.find({ type: 'Text', text: 'other-fork' })).toBeDefined()
+  expect(await typedBand.find({ type: 'Text', text: 'asking-fork' })).toBeUndefined()
+  await typedBand.unmount()
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /FORKS/ })).toBeDefined()
