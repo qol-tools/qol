@@ -2146,6 +2146,32 @@ test('recentWords keeps the last spoken lines, the user\'s own words without the
   expect(recentWords({ deny: 'no' })).toEqual([])
 })
 
+test('recentWords reads a message the fork took in mid-turn as the user\'s own words', () => {
+  const queued = `<system-reminder id="6888">\nThe coordinator sent a message while you were working:\n${fromUser('it jumps?')}\n\nAddress this before completing your current task.\n</system-reminder>`
+  expect(recentWords([{ role: 'assistant', text: 'Look.' }, { role: 'user', text: queued }, { role: 'assistant', text: 'Yes.' }])).toEqual([
+    { isUser: false, text: 'Look.' },
+    { isUser: true, text: 'it jumps?' },
+    { isUser: false, text: 'Yes.' },
+  ])
+})
+
+test('WRITING TO keeps a sent line the fork has not taken in where it was sent, not under newer replies', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  const said: { role: string; text: string }[] = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  said.push({ role: 'assistant', text: 'Still working on it.' })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: 'Still working on it.', durationMs: 1, isAborted: false, reason: 'done' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const lines = (await ui.findAll({ type: 'Text', text: /^(Amber or teal\?|teal|Still working on it\.)$/ })).map((one: any) => one.text)
+  expect(lines).toEqual(['Still working on it.', 'teal', 'Amber or teal?'])
+  await ui.unmount()
+})
+
 test('the prompt box offers fork keys for its first word only', async ($, on) => {
   engine(on)
   on('prompt.autocomplete', () => ({ suggestions: [] }))
