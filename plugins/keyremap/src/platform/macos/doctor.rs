@@ -331,6 +331,15 @@ pub(super) fn secure_input_result(
             id,
             format!("No app holds Secure Input. Key backend: {label}."),
         ),
+        Probe::Known(Some(holder)) if backend.capabilities().relays_qol_hotkeys => {
+            DoctorCheckResult::ok(
+                id,
+                format!(
+                    "{} (pid {}) holds Secure Input; Key Remap and the qol hotkeys Karabiner-Elements relays keep working. Key backend: {label}.",
+                    holder.app, holder.pid
+                ),
+            )
+        }
         Probe::Known(Some(holder)) => {
             let paused = if backend.capabilities().survives_secure_input {
                 "qol hotkeys are paused"
@@ -483,8 +492,13 @@ mod tests {
             .message
             .contains("Key Remap and qol hotkeys are paused"));
 
+        let hid = secure_input_result(&kitty, BackendId::HidHelper);
+        assert_eq!(hid.status, DoctorStatus::Warn);
+        assert!(hid.message.contains("so qol hotkeys are paused"));
+
         let karabiner = secure_input_result(&kitty, BackendId::KarabinerElements);
-        assert!(karabiner.message.contains("so qol hotkeys are paused"));
+        assert_eq!(karabiner.status, DoctorStatus::Ok);
+        assert!(karabiner.message.contains("keep working"));
         assert!(karabiner.message.contains("karabiner_elements"));
 
         let quiet = secure_input_result(&Probe::Known(None), BackendId::EventTap);
