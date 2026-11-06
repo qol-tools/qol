@@ -11,6 +11,10 @@ impl LaneScheduler {
         }
     }
 
+    pub(crate) fn retry(&mut self, wid: u32) {
+        self.attempted.remove(&wid);
+    }
+
     pub(crate) fn plan(
         &mut self,
         live: &[u32],
@@ -19,9 +23,12 @@ impl LaneScheduler {
         background_slots: usize,
     ) -> Vec<u32> {
         let mut targets = Vec::new();
+        let every_card_attempted = visible.iter().all(|wid| self.attempted.contains(wid));
         for &wid in live {
-            if visible.contains(&wid) && !in_flight.contains(&wid) {
-                self.attempted.insert(wid);
+            if !visible.contains(&wid) || in_flight.contains(&wid) {
+                continue;
+            }
+            if self.attempted.insert(wid) || every_card_attempted {
                 targets.push(wid);
             }
         }
@@ -46,12 +53,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_selected_window_is_recaptured_after_one_pass() {
+    fn the_selected_window_is_recaptured_only_after_every_card_has_a_shot() {
         let mut scheduler = LaneScheduler::new();
         let all = [1, 2, 3, 4];
 
         assert_eq!(scheduler.plan(&[1], &all, &[], 2), vec![1, 2, 3]);
-        assert_eq!(scheduler.plan(&[1], &all, &[], 2), vec![1, 4]);
+        assert_eq!(scheduler.plan(&[1], &all, &[], 2), vec![4]);
         assert_eq!(
             scheduler.plan(&[1], &all, &[], 2),
             vec![1],
@@ -121,6 +128,16 @@ mod tests {
             let plan = scheduler.plan(live, visible, in_flight, slots);
             assert_eq!(plan, expected, "{label}");
         }
+    }
+
+    #[test]
+    fn a_failed_card_is_planned_again() {
+        let mut scheduler = LaneScheduler::new();
+        assert_eq!(scheduler.plan(&[], &[1, 2], &[], 2), vec![1, 2]);
+
+        scheduler.retry(2);
+
+        assert_eq!(scheduler.plan(&[], &[1, 2], &[], 2), vec![2]);
     }
 
     #[test]

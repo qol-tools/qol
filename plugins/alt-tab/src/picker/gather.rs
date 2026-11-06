@@ -787,7 +787,7 @@ fn commit_live_frame(
                         return false;
                     };
                     view.delegate.update(cx, |state, _| {
-                        state.insert_live_frames([(wid, frame)].into_iter().collect());
+                        state.insert_background_frames([(wid, frame)].into_iter().collect());
                     });
                     trace_preview_paint(
                         window,
