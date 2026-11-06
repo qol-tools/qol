@@ -447,7 +447,7 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
         .h(px(metrics.preview_height))
         .flex_none()
         .overflow_hidden()
-        .child(if context.fresh.awaiting == Some(win.id) {
+        .child(if context.fresh.awaits(win.id) {
             placeholder_frame(metrics, palette, snap.system.border_subtle).into_any_element()
         } else if render_gpui_preview {
             let tile = preview_tile(
@@ -458,10 +458,9 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
                 palette,
                 snap.system.border_subtle,
             );
-            if context.fresh.landed == Some(win.id) {
-                fade_in(tile, context.fresh.generation, metrics, palette)
-            } else {
-                tile
+            match context.fresh.fade_key(win.id) {
+                Some(key) => fade_in(tile, key, metrics, palette),
+                None => tile,
             }
         } else {
             preview_plane_slot(metrics, snap.system.border_subtle)
@@ -601,7 +600,7 @@ fn preview_tile(
 
 fn fade_in(
     tile: AnyElement,
-    generation: usize,
+    key: usize,
     metrics: &CardMetrics,
     palette: &PickerSurfacePalette,
 ) -> AnyElement {
@@ -616,7 +615,7 @@ fn fade_in(
                 .inset_0()
                 .bg(rgb(palette.placeholder_bg))
                 .with_animation(
-                    ("fresh-frame", generation),
+                    ("fresh-frame", key),
                     qol_gpui::motion::animation(qol_gpui::theme::Motion::SETTLE),
                     |overlay, delta| overlay.opacity(1.0 - delta),
                 ),

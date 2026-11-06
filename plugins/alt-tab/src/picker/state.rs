@@ -6,6 +6,18 @@ use crate::picker::{IconMap, LiveFrameMap, PreviewMap};
 use futures::channel::oneshot;
 use gpui::{App, Window};
 use qol_gpui::image_registry::{extend_with, replace_map, retain_or_release, REGISTRY};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static OPENS: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn begin_open() -> u64 {
+    OPENS.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+pub(crate) fn current_open() -> u64 {
+    OPENS.load(Ordering::Acquire)
+}
 
 pub(crate) struct PickerState {
     pub(crate) windows: Vec<WindowInfo>,
@@ -32,20 +44,42 @@ pub(crate) struct PickerState {
 
 #[derive(Default)]
 pub(crate) struct FreshFrame {
-    pub(crate) awaiting: Option<u32>,
-    pub(crate) landed: Option<u32>,
-    pub(crate) generation: usize,
+    open: u64,
+    target: Option<u32>,
+    awaiting: HashSet<u32>,
+    landed: HashMap<u32, usize>,
+    landings: usize,
     settle: Option<oneshot::Sender<()>>,
     settled: Option<oneshot::Receiver<()>>,
 }
 
 impl FreshFrame {
-    pub(crate) fn covers(&self, wid: u32) -> bool {
-        self.awaiting == Some(wid) || self.landed == Some(wid)
+    pub(crate) fn is_target(&self, wid: u32) -> bool {
+        self.target == Some(wid)
+    }
+
+    pub(crate) fn awaits(&self, wid: u32) -> bool {
+        self.awaiting.contains(&wid)
+    }
+
+    pub(crate) fn fade_key(&self, wid: u32) -> Option<usize> {
+        self.landed.get(&wid).copied()
     }
 
     pub(crate) fn take_settled(&mut self) -> Option<oneshot::Receiver<()>> {
         self.settled.take()
+    }
+
+    fn land(&mut self, wid: u32, open: u64) -> bool {
+        if open != self.open || !self.awaiting.remove(&wid) {
+            return false;
+        }
+        if self.target == Some(wid) {
+            self.settle = None;
+        }
+        self.landings += 1;
+        self.landed.insert(wid, self.landings);
+        true
     }
 }
 
@@ -193,28 +227,56 @@ impl PickerState {
         self.insert_previews(previews, app, window);
     }
 
-    pub(crate) fn insert_live_frames(&mut self, frames: LiveFrameMap) {
-        self.live_frames.extend(frames);
+    pub(crate) fn insert_background_frames(&mut self, frames: LiveFrameMap) {
+        for (wid, frame) in frames {
+            if !self.fresh.landed.contains_key(&wid) {
+                self.live_frames.insert(wid, frame);
+            }
+        }
     }
 
-    pub(crate) fn await_fresh_frame(&mut self, wid: Option<u32>) {
+    pub(crate) fn await_fresh_frames(&mut self, open: u64, target: Option<u32>, windows: Vec<u32>) {
         let (settle, settled) = oneshot::channel();
-        self.fresh.awaiting = wid;
-        self.fresh.landed = None;
-        self.fresh.generation += 1;
-        self.fresh.settle = wid.map(|_| settle);
-        self.fresh.settled = wid.map(|_| settled);
+        self.fresh.open = open;
+        self.fresh.target = target;
+        self.fresh.awaiting = windows.into_iter().chain(target).collect();
+        self.fresh.landed.clear();
+        self.fresh.settle = target.map(|_| settle);
+        self.fresh.settled = target.map(|_| settled);
     }
 
-    pub(crate) fn land_fresh_frame(&mut self, wid: u32, frames: LiveFrameMap) -> bool {
-        if self.fresh.awaiting != Some(wid) {
+    pub(crate) fn land_fresh_frame(&mut self, wid: u32, open: u64, frames: LiveFrameMap) -> bool {
+        if !self.fresh.land(wid, open) {
             return false;
         }
-        self.fresh.awaiting = None;
-        self.fresh.settle = None;
-        self.fresh.landed = Some(wid);
         self.live_frames.extend(frames);
         true
+    }
+
+    pub(crate) fn land_live_frames(&mut self, frames: LiveFrameMap, open: u64) {
+        if open != self.fresh.open {
+            return;
+        }
+        for wid in frames.keys() {
+            self.fresh.land(*wid, open);
+        }
+        self.live_frames.extend(frames);
+    }
+
+    pub(crate) fn land_previews(
+        &mut self,
+        previews: PreviewMap,
+        open: u64,
+        app: &mut App,
+        window: Option<&mut Window>,
+    ) {
+        if open != self.fresh.open {
+            return;
+        }
+        for wid in previews.keys() {
+            self.fresh.land(*wid, open);
+        }
+        self.insert_fresh_previews(previews, app, window);
     }
 
     pub(crate) fn clear_live_frames(&mut self) {
@@ -785,16 +847,45 @@ mod set_windows_tests {
     }
 
     #[test]
-    fn the_awaited_card_fades_in_once_its_shot_replies_even_without_a_frame() {
+    fn every_awaited_card_fades_in_once_when_its_shot_replies() {
         let mut picker = picker_at(3, Some(1));
-        picker.await_fresh_frame(Some(0));
-        assert!(!picker.land_fresh_frame(2, crate::picker::LiveFrameMap::new()));
-        assert_eq!(picker.fresh.awaiting, Some(0));
+        picker.await_fresh_frames(7, Some(0), vec![0, 1, 2]);
+        assert!((0..3).all(|wid| picker.fresh.awaits(wid)));
 
-        assert!(picker.land_fresh_frame(0, crate::picker::LiveFrameMap::new()));
+        assert!(picker.land_fresh_frame(0, 7, crate::picker::LiveFrameMap::new()));
+        picker.land_live_frames(crate::picker::LiveFrameMap::new(), 7);
 
-        assert_eq!(picker.fresh.awaiting, None);
-        assert_eq!(picker.fresh.landed, Some(0));
+        assert!(!picker.fresh.awaits(0));
+        assert!(picker.fresh.awaits(1) && picker.fresh.awaits(2));
+        let first = picker.fresh.fade_key(0);
+        assert!(first.is_some());
+        assert!(!picker.land_fresh_frame(0, 7, crate::picker::LiveFrameMap::new()));
+        assert_eq!(picker.fresh.fade_key(0), first);
+    }
+
+    #[test]
+    fn a_capture_requested_in_an_earlier_open_never_lifts_a_placeholder() {
+        let mut picker = picker_at(2, Some(1));
+        picker.await_fresh_frames(3, Some(0), vec![0, 1]);
+
+        assert!(!picker.land_fresh_frame(0, 2, crate::picker::LiveFrameMap::new()));
+
+        assert!(picker.fresh.awaits(0));
+        assert_eq!(picker.fresh.fade_key(0), None);
+    }
+
+    #[test]
+    fn a_new_open_awaits_every_card_again() {
+        let mut picker = picker_at(2, Some(1));
+        picker.await_fresh_frames(1, Some(0), vec![0, 1]);
+        assert!(picker.land_fresh_frame(1, 1, crate::picker::LiveFrameMap::new()));
+
+        picker.await_fresh_frames(2, Some(1), vec![0]);
+
+        assert!(picker.fresh.awaits(0) && picker.fresh.awaits(1));
+        assert!(picker.fresh.is_target(1));
+        assert_eq!(picker.fresh.fade_key(1), None);
+        assert!(!picker.land_fresh_frame(1, 1, crate::picker::LiveFrameMap::new()));
     }
 
     #[test]
