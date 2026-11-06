@@ -1767,19 +1767,18 @@ export const register: Register = on => {
   }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person' && (await read($, current)) !== '') {
-      await setCurrent($, undefined)
-      await writeTo($, undefined)
-      return
-    }
     if (e.origin.kind === 'person' && escArmed) {
-      await openBoard($, false)
+      if ((await read($, current)) !== '') {
+        await update($, current, () => '')
+        await writeTo($, undefined).catch(() => undefined)
+      }
+      $.clock.after(0, () => void openBoard($, false).catch(() => undefined))
       return
     }
     await next(e)
     escArmed = false
     await update($, current, () => '')
-  }).catch(($, e, next) => (next.called ? undefined : next(e)))
+  }).catch(($, e, next) => (next.called || (e.origin.kind === 'person' && escArmed) ? undefined : next(e)))
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
