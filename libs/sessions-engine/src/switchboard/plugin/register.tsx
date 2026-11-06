@@ -1176,12 +1176,18 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const key = REOPEN_PREFIX + (await $.session.id())
     const saved = await $.store.get(key)
     const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
+    await noteReopen($, { phase: 'reopen', at: await $.clock.now() })
     const agents: unknown = await $.agent.list().catch(() => [])
     const held = listedAgents(agents)
+    await noteReopen($, { phase: 'listed', at: await $.clock.now() })
     const again: string[] = []
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
       const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
+      if (entry !== undefined && skip === undefined) {
+        await bringBack($, agentId).catch(() => undefined)
+        await noteReopen($, { phase: 'brought', agentId, at: await $.clock.now() })
+      }
       const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
       await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
       if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
@@ -1654,6 +1660,7 @@ export const register: Register = on => {
         await refreshStatus($)
         $.clock.after(REOPEN_DELAY_MS, () =>
           void deliver($)
+            .then(async () => noteReopen($, { phase: 'delivered', at: await $.clock.now() }))
             .then(() => reopenForks($))
             .catch(() => undefined)
             .finally(() => void ready($)),
