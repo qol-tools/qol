@@ -315,7 +315,7 @@ const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
 
 const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => writeTo($, typed ?? (await currentOf($)))
 
-let escArmed: boolean | undefined
+let escArmed = false
 
 const openBoard = async ($: EngineInterface, armed: boolean, focus?: true): Promise<UiOpenResult> => {
   const opened = await $.ui.open({ id: PANE, title: TITLE, ...(focus === undefined ? {} : { focus }), ...(armed ? { closeOnEscape: true } : {}) })
@@ -1628,6 +1628,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
+      if ((await $.ui.panes()).some(one => one.id === PANE)) await openBoard($, (await read($, current)) !== '')
       void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
@@ -1771,12 +1772,12 @@ export const register: Register = on => {
       await writeTo($, undefined)
       return
     }
-    if (e.origin.kind === 'person' && escArmed !== false) {
+    if (e.origin.kind === 'person' && escArmed) {
       await openBoard($, false)
       return
     }
     await next(e)
-    escArmed = undefined
+    escArmed = false
     await update($, current, () => '')
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 

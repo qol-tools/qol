@@ -2014,6 +2014,20 @@ test('a send while the board is hidden leaves the current fork and takes back th
   expect(panes).toEqual(['open board esc', 'open board'])
 })
 
+test('a start with the board already open sets its esc anew from the current fork, as after a reload', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork yes')
+  panes.length = 0
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual(['open board esc'])
+})
+
 test('a fork that replies while another chat shows gets a new reply mark until its chat is shown', async ($, on) => {
   engine(on)
   on('session.messages', () => ({ value: [] }))
