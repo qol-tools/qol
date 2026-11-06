@@ -1,6 +1,7 @@
 use crate::discovery::WindowInfo;
 use crate::rendering::preview_image::shot_request_dims;
 use qol_app_icon::RgbaImage;
+use std::time::Duration;
 
 mod platform;
 
@@ -8,6 +9,8 @@ pub(crate) use platform::{
     live_frame_element, live_shots_available, warm_shots_session, LiveFrame, SendCVBuf, ShotReply,
     PIXEL_FORMAT_420F,
 };
+
+pub(crate) const SHOT_HANG_GUARD: Duration = Duration::from_secs(3);
 
 pub(crate) fn fresh_frame_target(window: &WindowInfo) -> Option<(u32, (usize, usize))> {
     if window.is_minimized || !live_shots_available() {
@@ -22,7 +25,7 @@ pub(crate) fn capture_live_frame(wid: u32, (width, height): (usize, usize)) -> O
     if !session.request_capture(wid, width, height, &tx) {
         return None;
     }
-    match rx.recv() {
+    match rx.recv_timeout(SHOT_HANG_GUARD) {
         Ok((reply_wid, Some(buf)))
             if reply_wid == wid && buf.pixel_format() == PIXEL_FORMAT_420F =>
         {

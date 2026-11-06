@@ -10,7 +10,7 @@ use crate::picker::state::{current_open, PickerState};
 use crate::picker::PreviewMap;
 use crate::rendering::preview_image::{fast_pixel_hash, shot_request_dims};
 use gpui::{AsyncApp, Entity, RenderImage, Task, WeakEntity};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -22,7 +22,7 @@ const SELECTION_SETTLE: Duration = Duration::from_millis(50);
 const SHOTS_TICK_MS: u64 = 16;
 const SHOTS_BACKGROUND_LANES: usize = 2;
 const MAX_SHOT_FAILURES: u32 = 5;
-const SHOT_TIMEOUT: Duration = Duration::from_secs(3);
+const SHOT_TIMEOUT: Duration = capture::SHOT_HANG_GUARD;
 
 pub(crate) fn spawn(
     delegate: Entity<PickerState>,
@@ -94,7 +94,8 @@ async fn shots_loop(
             return false;
         }
         let (live, visible, dims) = read_shot_targets(delegate, cx);
-        for wid in failed.into_iter().chain(expired) {
+        let superseded = frames.iter().filter(|(_, _, at)| *at != open).map(|f| f.0);
+        for wid in failed.into_iter().chain(expired).chain(superseded) {
             scheduler.retry(wid);
         }
         push_live_frames(frames, delegate, this, cx);
@@ -271,6 +272,8 @@ async fn preview_loop(
     let mut last_captured = Instant::now() - CAPTURE_INTERVAL;
     let mut last_selection: Option<u32> = None;
     let mut selection_changed_at = Instant::now();
+    let mut filled_open = current_open();
+    let mut fill_tried: HashSet<u32> = HashSet::new();
 
     while PICKER_VISIBLE.load(Ordering::Relaxed) {
         executor.timer(Duration::from_millis(TICK_MS)).await;
@@ -287,6 +290,37 @@ async fn preview_loop(
             break;
         }
         let snap = read_snapshot(&delegate, &cx);
+        if current_open() != filled_open {
+            filled_open = current_open();
+            fill_tried.clear();
+        }
+        if let Some(card) = snap
+            .awaiting
+            .iter()
+            .find(|card| !fill_tried.contains(&card.1))
+        {
+            fill_tried.insert(card.1);
+            let open = current_open();
+            let image = run_capture(&[*card], &executor)
+                .await
+                .into_iter()
+                .next()
+                .and_then(|(_, rgba)| rgba)
+                .and_then(|rgba| {
+                    qol_gpui::image::render_image(rgba.data, rgba.width as u32, rgba.height as u32)
+                });
+            if let Some(image) = image {
+                push_updates(
+                    preview_update(card.1, image),
+                    open,
+                    &preview_cache,
+                    &delegate,
+                    &this,
+                    &cx,
+                );
+            }
+            continue;
+        }
         let Some(selected) = snap.selected_target() else {
             continue;
         };
@@ -373,6 +407,7 @@ async fn preview_loop(
 
 struct Snapshot {
     selected: Option<(usize, u32)>,
+    awaiting: Vec<(usize, u32)>,
 }
 
 impl Snapshot {
@@ -390,9 +425,19 @@ fn read_snapshot(delegate: &Entity<PickerState>, cx: &AsyncApp) -> Snapshot {
             .get(idx)
             .filter(|w| !w.is_minimized)
             .map(|w| (idx, w.id));
-        Snapshot { selected }
+        let awaiting = state
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| state.fresh.awaits(w.id))
+            .map(|(ix, w)| (ix, w.id))
+            .collect();
+        Snapshot { selected, awaiting }
     })
-    .unwrap_or(Snapshot { selected: None })
+    .unwrap_or(Snapshot {
+        selected: None,
+        awaiting: Vec::new(),
+    })
 }
 
 async fn run_capture(

@@ -70,6 +70,12 @@ impl FreshFrame {
         self.settled.take()
     }
 
+    fn release_settle(&mut self, wid: u32, open: u64) {
+        if open == self.open && self.target == Some(wid) {
+            self.settle = None;
+        }
+    }
+
     fn land(&mut self, wid: u32, open: u64) -> bool {
         if open != self.open || !self.awaiting.remove(&wid) {
             return false;
@@ -246,6 +252,10 @@ impl PickerState {
     }
 
     pub(crate) fn land_fresh_frame(&mut self, wid: u32, open: u64, frames: LiveFrameMap) -> bool {
+        if frames.is_empty() {
+            self.fresh.release_settle(wid, open);
+            return false;
+        }
         if !self.fresh.land(wid, open) {
             return false;
         }
@@ -852,15 +862,30 @@ mod set_windows_tests {
         picker.await_fresh_frames(7, Some(0), vec![0, 1, 2]);
         assert!((0..3).all(|wid| picker.fresh.awaits(wid)));
 
-        assert!(picker.land_fresh_frame(0, 7, crate::picker::LiveFrameMap::new()));
-        picker.land_live_frames(crate::picker::LiveFrameMap::new(), 7);
+        assert!(picker.fresh.land(0, 7));
 
         assert!(!picker.fresh.awaits(0));
         assert!(picker.fresh.awaits(1) && picker.fresh.awaits(2));
         let first = picker.fresh.fade_key(0);
         assert!(first.is_some());
-        assert!(!picker.land_fresh_frame(0, 7, crate::picker::LiveFrameMap::new()));
+        assert!(!picker.fresh.land(0, 7));
         assert_eq!(picker.fresh.fade_key(0), first);
+    }
+
+    #[test]
+    fn a_shot_without_a_frame_keeps_the_placeholder_but_lets_the_other_cards_start() {
+        let mut picker = picker_at(2, Some(1));
+        picker.await_fresh_frames(4, Some(0), vec![0, 1]);
+        let mut settled = picker
+            .fresh
+            .take_settled()
+            .expect("target has a settle signal");
+
+        assert!(!picker.land_fresh_frame(0, 4, crate::picker::LiveFrameMap::new()));
+
+        assert!(picker.fresh.awaits(0));
+        assert_eq!(picker.fresh.fade_key(0), None);
+        assert!(settled.try_recv().is_err(), "the settle sender is dropped");
     }
 
     #[test]
@@ -868,7 +893,7 @@ mod set_windows_tests {
         let mut picker = picker_at(2, Some(1));
         picker.await_fresh_frames(3, Some(0), vec![0, 1]);
 
-        assert!(!picker.land_fresh_frame(0, 2, crate::picker::LiveFrameMap::new()));
+        assert!(!picker.fresh.land(0, 2));
 
         assert!(picker.fresh.awaits(0));
         assert_eq!(picker.fresh.fade_key(0), None);
@@ -878,14 +903,14 @@ mod set_windows_tests {
     fn a_new_open_awaits_every_card_again() {
         let mut picker = picker_at(2, Some(1));
         picker.await_fresh_frames(1, Some(0), vec![0, 1]);
-        assert!(picker.land_fresh_frame(1, 1, crate::picker::LiveFrameMap::new()));
+        assert!(picker.fresh.land(1, 1));
 
         picker.await_fresh_frames(2, Some(1), vec![0]);
 
         assert!(picker.fresh.awaits(0) && picker.fresh.awaits(1));
         assert!(picker.fresh.is_target(1));
         assert_eq!(picker.fresh.fade_key(1), None);
-        assert!(!picker.land_fresh_frame(1, 1, crate::picker::LiveFrameMap::new()));
+        assert!(!picker.fresh.land(1, 1));
     }
 
     #[test]
