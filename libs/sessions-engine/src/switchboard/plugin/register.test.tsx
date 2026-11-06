@@ -1026,8 +1026,8 @@ test('a fork whose reopen was refused is tried again a few times, then left alon
   }
   expect(sent.map(one => one.to).sort()).toEqual(['a1', 'a1', 'b1'])
   expect(store.has('reopen:switchboard-session')).toBe(false)
-  const log = store.get('reopen-log') as Array<{ agentId: string; phase?: string; isDelivered?: boolean }>
-  expect(log.filter(one => one.agentId === 'a1' && one.phase === undefined).map(one => one.isDelivered)).toEqual([false, true])
+  const log = store.get('reopen-log') as Array<{ agentId: string; isDelivered?: boolean }>
+  expect(log.filter(one => one.agentId === 'a1').map(one => one.isDelivered)).toEqual([false, true])
 })
 
 test('the board and the band say the switchboard is starting until the forks a restart left are back', async ($, on) => {

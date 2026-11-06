@@ -1176,18 +1176,21 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
     const key = REOPEN_PREFIX + (await $.session.id())
     const saved = await $.store.get(key)
     const pending = Array.isArray(saved) ? saved.filter((one): one is string => typeof one === 'string') : []
-    await noteReopen($, { phase: 'reopen', at: await $.clock.now() })
     const agents: unknown = await $.agent.list().catch(() => [])
     const held = listedAgents(agents)
-    await noteReopen($, { phase: 'listed', at: await $.clock.now() })
+    const rows = await read($, board)
+    await Promise.all(
+      pending
+        .filter(agentId => {
+          const entry = rows.find(one => one.agentId === agentId)
+          return entry !== undefined && !held.has(agentId) && !entry.isWorking && isUnfinished(entry)
+        })
+        .map(agentId => bringBack($, agentId).catch(() => undefined)),
+    )
     const again: string[] = []
     for (const [index, agentId] of pending.entries()) {
       const entry = (await read($, board)).find(one => one.agentId === agentId)
       const skip = entry === undefined ? 'no board row' : held.has(agentId) ? 'in the agent list' : entry.isWorking ? 'working' : !isUnfinished(entry) ? 'finished' : undefined
-      if (entry !== undefined && skip === undefined) {
-        await bringBack($, agentId).catch(() => undefined)
-        await noteReopen($, { phase: 'brought', agentId, at: await $.clock.now() })
-      }
       const sent = entry === undefined || skip !== undefined ? undefined : await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry))).catch((error: unknown) => ({ isDelivered: false, reason: String(error), agentId }))
       await noteReopen($, { agentId, at: await $.clock.now(), ...(skip === undefined ? {} : { skip }), ...(sent === undefined ? {} : { isDelivered: sent.isDelivered, to: sent.agentId, reason: printable(String(sent.reason ?? '')) }) })
       if (sent !== undefined && !sent.isDelivered) again.push(sent.agentId)
@@ -1609,7 +1612,8 @@ export const register: Register = on => {
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
-      await $.tool.register({
+      void Promise.all([
+        $.tool.register({
         name: TOOL,
         description:
           "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
@@ -1618,8 +1622,8 @@ export const register: Register = on => {
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
         },
         isDeferred: false,
-      })
-      await $.tool.register({
+      }),
+        $.tool.register({
         name: RESUME,
         description:
           "Brings a terminal session back as a fork of the switchboard whose view shows that session's own conversation since its last compaction, so it continues with its history. It works on a closed session and on one still open in a terminal, whose tab keeps running on its own. Pass the transcript, cwd and title from its sessions_closed row, or from its sessions_list row when it is open, and a `<key-name>: <friendly description>` description. Pass message only when the user gave words meant for that session beyond asking to bring it back: the fork acts on them. With no message the fork does no work: it starts its hold, replies only Ready and waits for the user in its view. A session this switchboard already brought back goes to that same fork instead of a new one: it gets the message, and with no message nothing is sent. Fails when the transcript holds no answered prompt or is not a Claude Code conversation. To bring back a fork, pass fork: alone when the user only asks to open, show or bring it back, so it comes back to the agent list and no turn of its own runs; with continue true when the user asks to resume or continue it, so it carries on its work.",
@@ -1636,8 +1640,8 @@ export const register: Register = on => {
           },
         },
         isDeferred: false,
-      })
-      await $.tool.register({
+      }),
+        $.tool.register({
         name: FORK_DONE,
         description:
           "Marks the calling fork done in its session record. Call it only when nothing is left for anyone to do, such as when your pull request has merged, with a one-line reason; a fork is done only when it says so here. Only a fork can call it, and it marks only itself.",
@@ -1647,7 +1651,8 @@ export const register: Register = on => {
           required: ['reason'],
         },
         isDeferred: false,
-      })
+      }),
+      ]).catch(() => undefined)
       await refreshStatus($)
       if ((await $.ui.panes()).some(one => one.id === PANE)) await openBoard($, (await read($, current)) !== '')
       void loadTree($)
@@ -1660,7 +1665,6 @@ export const register: Register = on => {
         await refreshStatus($)
         $.clock.after(REOPEN_DELAY_MS, () =>
           void deliver($)
-            .then(async () => noteReopen($, { phase: 'delivered', at: await $.clock.now() }))
             .then(() => reopenForks($))
             .catch(() => undefined)
             .finally(() => void ready($)),
