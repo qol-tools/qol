@@ -18,7 +18,7 @@ pub(crate) use shots::{
     PIXEL_FORMAT_420F,
 };
 
-const ICON_SIZE: usize = 32;
+const ICON_SIZE: usize = 256;
 
 pub fn capture_previews_cg(
     targets: &[(usize, u32)],

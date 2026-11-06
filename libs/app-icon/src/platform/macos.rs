@@ -225,8 +225,11 @@ fn app_icon(pid: i32, size: usize) -> Option<RgbaImage> {
 }
 
 fn nsimage_to_rgba(ns_image: &objc2_app_kit::NSImage, size: usize) -> Option<RgbaImage> {
-    let cg_image =
-        unsafe { ns_image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) }?;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+
+    let side = size as f64;
+    let mut rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side));
+    let cg_image = unsafe { ns_image.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
 
     let img_ptr = &*cg_image as *const objc2_core_graphics::CGImage as CGImageRef;
 
