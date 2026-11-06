@@ -2315,6 +2315,7 @@ test('with fork swap on, a bare key-name and Enter shows that fork in the main v
   expect((await typed($, 'yes please')).text).toBe('yes please')
   expect((await typed($, 'main')).drop).toBe('→ main')
   expect(viewed).toEqual(['a8', 'a9', 'main'])
-  await inFork.unmount()
   expect((await typed($, 'qols swap')).drop).toBe('Fork swap off.')
+  expect(viewed).toEqual(['a8', 'a9', 'main', 'main'])
+  await inFork.unmount()
 })

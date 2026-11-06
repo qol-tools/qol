@@ -1794,6 +1794,7 @@ export const register: Register = on => {
       isSwap = !isSwap
       await $.store.set(SWAP_KEY, isSwap)
       clearBox($, text => TYPED_SWAP.test(text))
+      if (!isSwap && viewedFork !== undefined) await $.ui.view({}).catch(() => undefined)
       return dropAs(isSwap ? 'Fork swap on: a key-name and Enter shows that fork here, main and Enter comes back.' : 'Fork swap off.')
     }
     if (isSwap && viewedFork !== undefined) {
