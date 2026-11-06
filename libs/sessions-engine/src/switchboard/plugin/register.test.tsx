@@ -2172,6 +2172,24 @@ test('WRITING TO keeps a sent line the fork has not taken in where it was sent, 
   await ui.unmount()
 })
 
+test('WRITING TO keeps two sent lines in send order once the fork has taken in only the first', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  const said: { role: string; text: string }[] = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'asking-fork and wide')).drop).toContain('→ asking-fork')
+  said.push({ role: 'user', text: fromUser('teal') })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const lines = (await ui.findAll({ type: 'Text', text: /^(Amber or teal\?|teal|and wide)$/ })).map((one: any) => one.text)
+  expect(lines).toEqual(['and wide', 'teal', 'Amber or teal?'])
+  await ui.unmount()
+})
+
 test('the prompt box offers fork keys for its first word only', async ($, on) => {
   engine(on)
   on('prompt.autocomplete', () => ({ suggestions: [] }))

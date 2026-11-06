@@ -248,7 +248,8 @@ const timesSaid = (all: Said[], text: string): number => all.filter(row => row.i
 const noteSent = (agentId: string, text: string, all: Said[], at: number): Unseen => {
   const waiting = unseenSent.get(agentId) ?? []
   const pending = waiting.filter(other => other.text === text && timesSaid(all, text) <= other.heldBefore).length
-  const one = { text, at, heldBefore: timesSaid(all, text) + pending, after: all.length }
+  const unseen = waiting.filter(other => timesSaid(all, other.text) <= other.heldBefore).length
+  const one = { text, at, heldBefore: timesSaid(all, text) + pending, after: all.length + unseen }
   unseenSent.set(agentId, [...waiting, one])
   return one
 }
@@ -263,8 +264,8 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
   const waiting = (unseenSent.get(agentId) ?? []).filter(one => now - one.at < UNSEEN_MS && timesSaid(all, one.text) <= one.heldBefore)
   if (waiting.length === 0) unseenSent.delete(agentId)
   else unseenSent.set(agentId, waiting)
-  const placed = waiting.reduce((rows, one, index) => {
-    const at = Math.min(one.after + index, rows.length)
+  const placed = waiting.reduce((rows, one) => {
+    const at = Math.min(one.after, rows.length)
     return [...rows.slice(0, at), { isUser: true, text: one.text }, ...rows.slice(at)]
   }, all)
   return placed.slice(-SAID_KEPT)
