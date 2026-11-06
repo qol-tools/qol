@@ -27,6 +27,7 @@ const SB = 'sb'
 const TYPED_SB = /^\s*sb(?:\s|$)/
 const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = 100
+const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
 const REPORT_CHARS = 16_000
@@ -313,7 +314,21 @@ const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
   return key === '' ? undefined : reachable(await read($, board)).find(entry => keyOf(entry) === key)
 }
 
-const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => writeTo($, typed ?? (await currentOf($)))
+let sending: Entry | undefined
+
+let typedSeq = 0
+
+const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => {
+  typedSeq += 1
+  if (typed !== undefined) return writeTo($, typed)
+  const fallback = sending ?? (await currentOf($))
+  const shown = await read($, writingTo)
+  if (shown === '' || shown === fallback?.agentId) return writeTo($, fallback)
+  const seq = typedSeq
+  $.clock.after(TYPED_SETTLE_MS, () => {
+    if (seq === typedSeq) void (async () => writeTo($, sending ?? (await currentOf($))))().catch(() => {})
+  })
+}
 
 let escArmed = false
 
@@ -1742,28 +1757,33 @@ export const register: Register = on => {
     }
     const at = typed ?? (viewedFork === undefined ? await currentOf($).then(entry => (entry === undefined ? undefined : { entry, message: e.text.trim() })) : undefined)
     if (at === undefined) return next(e)
-    if (at.message === '') {
+    sending = at.entry
+    try {
+      if (at.message === '') {
+        await setCurrent($, at.entry).catch(() => undefined)
+        if ((await read($, current)) !== keyOf(at.entry)) return next(e)
+        await writeTo($, at.entry)
+        clearBox($, text => text === e.text)
+        return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
+      }
       await setCurrent($, at.entry).catch(() => undefined)
-      if ((await read($, current)) !== keyOf(at.entry)) return next(e)
       await writeTo($, at.entry)
+      const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
+      const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
+      const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
+      if (sent?.isDelivered !== true) {
+        void tell($, at.entry, fromUser(at.message))
+          .then(isDelivered => {
+            if (!isDelivered) forgetSent(at.entry.agentId, noted)
+          })
+          .catch(() => forgetSent(at.entry.agentId, noted))
+      }
+      await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
-      return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
+      return dropAs(`→ ${keyOf(at.entry)}`)
+    } finally {
+      sending = undefined
     }
-    const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
-    const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
-    const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
-    if (sent?.isDelivered !== true) {
-      void tell($, at.entry, fromUser(at.message))
-        .then(isDelivered => {
-          if (!isDelivered) forgetSent(at.entry.agentId, noted)
-        })
-        .catch(() => forgetSent(at.entry.agentId, noted))
-    }
-    await setCurrent($, at.entry).catch(() => undefined)
-    await writeTo($, at.entry)
-    await refreshWriting($, at.entry.agentId)
-    clearBox($, text => text === e.text)
-    return dropAs(`→ ${keyOf(at.entry)}`)
   }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
