@@ -1,7 +1,6 @@
 use crate::discovery::WindowInfo;
 use crate::rendering::preview_image::shot_request_dims;
 use qol_app_icon::RgbaImage;
-use std::time::Duration;
 
 mod platform;
 
@@ -23,7 +22,7 @@ pub(crate) fn capture_live_frame(wid: u32, (width, height): (usize, usize)) -> O
     if !session.request_capture(wid, width, height, &tx) {
         return None;
     }
-    match rx.recv_timeout(Duration::from_millis(120)) {
+    match rx.recv() {
         Ok((reply_wid, Some(buf)))
             if reply_wid == wid && buf.pixel_format() == PIXEL_FORMAT_420F =>
         {

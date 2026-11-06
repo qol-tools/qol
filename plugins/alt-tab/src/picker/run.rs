@@ -6,14 +6,12 @@ use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::{build_icon_cache, PreviewCaptureScheduler};
 use crate::picker::{LiveFrameMap, PickerWindowState, SharedIconCache};
 use crate::runtime::daemon;
-use futures::FutureExt;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
@@ -375,8 +373,6 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     );
 }
 
-const FRESH_FRAME_BAIL: Duration = Duration::from_millis(200);
-
 fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::app::AltTabApp>> {
     current
         .borrow()
@@ -402,15 +398,9 @@ fn spawn_fresh_frame_capture(
 ) {
     let executor = cx.background_executor().clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let capture = executor
+        let frame = executor
             .spawn(async move { capture::capture_live_frame(wid, dims) })
-            .fuse();
-        let bail = executor.timer(FRESH_FRAME_BAIL).fuse();
-        futures::pin_mut!(capture, bail);
-        let frame = futures::select_biased! {
-            frame = capture => frame,
-            _ = bail => None,
-        };
+            .await;
         qol_runtime::probe!(
             "PREVIEW_FRESH",
             "wid={wid} outcome={}",

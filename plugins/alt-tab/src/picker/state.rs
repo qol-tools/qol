@@ -212,10 +212,8 @@ impl PickerState {
         }
         self.fresh.awaiting = None;
         self.fresh.settle = None;
-        if frames.contains_key(&wid) {
-            self.fresh.landed = Some(wid);
-            self.live_frames.extend(frames);
-        }
+        self.fresh.landed = Some(wid);
+        self.live_frames.extend(frames);
         true
     }
 
@@ -784,6 +782,19 @@ mod set_windows_tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         picker.activate_selected_target();
+    }
+
+    #[test]
+    fn the_awaited_card_fades_in_once_its_shot_replies_even_without_a_frame() {
+        let mut picker = picker_at(3, Some(1));
+        picker.await_fresh_frame(Some(0));
+        assert!(!picker.land_fresh_frame(2, crate::picker::LiveFrameMap::new()));
+        assert_eq!(picker.fresh.awaiting, Some(0));
+
+        assert!(picker.land_fresh_frame(0, crate::picker::LiveFrameMap::new()));
+
+        assert_eq!(picker.fresh.awaiting, None);
+        assert_eq!(picker.fresh.landed, Some(0));
     }
 
     #[test]
