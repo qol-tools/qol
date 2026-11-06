@@ -2014,6 +2014,47 @@ test('a fork that replies while another chat shows gets a new reply mark until i
   await ui.unmount()
 })
 
+test('a new reply mark goes once the fork is opened in its own view', async ($, on) => {
+  engine(on)
+  on('clock.after', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'b9', 'other-fork: other')
+  await deliver($, notification('b9', 'other-fork: other', 'Which colour?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  await ui.unmount()
+  const viewed = promptBand(false)
+  const band = await $.ui.mount({ ...viewed, props: { ...viewed.props, view: { agentId: 'b9' } } })
+  await settle()
+  await band.unmount()
+  const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await after.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  await after.unmount()
+})
+
+test('the same words sent twice show twice until the fork holds both, and the band names only a fork that is still there', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  const held: { role: string; text: string }[] = []
+  on('session.messages', () => ({ value: [...held] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await typed($, 'asking-fork yes')
+  held.push({ role: 'user', text: fromUser('yes') })
+  await typed($, 'yes')
+  await settle()
+  expect((await ui.findAll({ type: 'Text', text: /^yes$/ })).length).toBe(2)
+  held.push({ role: 'user', text: fromUser('yes') })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  expect((await ui.findAll({ type: 'Text', text: /^yes$/ })).length).toBe(2)
+  await ui.unmount()
+})
+
 test('a typed message the prompt hook could not send goes out from the band, and the view stays', async ($, on) => {
   const sent: any[] = []
   const viewed: string[] = []

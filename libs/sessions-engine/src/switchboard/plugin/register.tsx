@@ -237,13 +237,31 @@ const clipSaid = (text: string): string => (text.length > SAID_CHARS ? `${text.s
 
 const UNSEEN_MS = 10 * 60_000
 
-const unseenSent = new Map<string, { text: string; at: number }[]>()
+type Unseen = { text: string; at: number; heldBefore: number }
 
-const withUnseen = (agentId: string, said: Said[], now: number): Said[] => {
-  const waiting = (unseenSent.get(agentId) ?? []).filter(one => now - one.at < UNSEEN_MS && !said.some(row => row.isUser && row.text === one.text))
+const unseenSent = new Map<string, Unseen[]>()
+
+const timesSaid = (all: Said[], text: string): number => all.filter(row => row.isUser && row.text === text).length
+
+const noteSent = (agentId: string, text: string, all: Said[], at: number): Unseen => {
+  const waiting = unseenSent.get(agentId) ?? []
+  const pending = waiting.filter(other => other.text === text && timesSaid(all, text) <= other.heldBefore).length
+  const one = { text, at, heldBefore: timesSaid(all, text) + pending }
+  unseenSent.set(agentId, [...waiting, one])
+  return one
+}
+
+const forgetSent = (agentId: string, one: Unseen): void => {
+  const waiting = (unseenSent.get(agentId) ?? []).filter(other => other !== one)
   if (waiting.length === 0) unseenSent.delete(agentId)
   else unseenSent.set(agentId, waiting)
-  return [...said, ...waiting.map(one => ({ isUser: true, text: one.text }))].slice(-SAID_KEPT)
+}
+
+const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
+  const waiting = (unseenSent.get(agentId) ?? []).filter(one => now - one.at < UNSEEN_MS && timesSaid(all, one.text) <= one.heldBefore)
+  if (waiting.length === 0) unseenSent.delete(agentId)
+  else unseenSent.set(agentId, waiting)
+  return [...all, ...waiting.map(one => ({ isUser: true, text: one.text }))].slice(-SAID_KEPT)
 }
 
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
@@ -286,6 +304,10 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
 const seen = ($: EngineInterface, agentId: string): Promise<void> =>
   change($, list => list.map(one => (one.agentId === agentId && one.hasNewReply === true ? { ...one, hasNewReply: false } : one)))
 
+const seenInView = async ($: EngineInterface, agentId: string): Promise<void> => {
+  if ((await read($, board)).some(one => one.agentId === agentId && one.hasNewReply === true)) await seen($, agentId)
+}
+
 const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
   const key = await read($, current)
   return key === '' ? undefined : reachable(await read($, board)).find(entry => keyOf(entry) === key)
@@ -312,7 +334,7 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
-  const said = withUnseen(target, recentWords(found), await $.clock.now())
+  const said = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
 }
 
@@ -1183,9 +1205,10 @@ const reach = async ($: EngineInterface, agentId: string, name: string, project:
   if (!sent.isDelivered) await undelivered($, sent.agentId, name, String(sent.reason ?? 'not delivered'), message)
 }
 
-const tell = async ($: EngineInterface, target: Entry, message: string): Promise<void> => {
+const tell = async ($: EngineInterface, target: Entry, message: string): Promise<boolean> => {
   const sent = await sendTo($, target, message, viaBand($, true))
   if (!sent.isDelivered) await undelivered($, sent.agentId, target.name, String(sent.reason ?? 'not delivered'), message)
+  return sent.isDelivered
 }
 
 const textField = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value : undefined)
@@ -1627,7 +1650,12 @@ export const register: Register = on => {
       if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
     }
     const loading = await read($, starting)
-    const key = viewedFork === undefined ? await read($, current) : ''
+    const shown = viewedFork === undefined ? await currentOf($) : undefined
+    const key = shown === undefined ? '' : keyOf(shown)
+    const viewing = viewedFork
+    if (viewing !== undefined && (await read($, board)).some(one => one.agentId === viewing && one.hasNewReply === true)) {
+      $.clock.after(0, () => void seenInView($, viewing).catch(() => undefined))
+    }
     if ((loading === '' && key === '') || e.props.hasSurvey) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     if (loading === '') {
@@ -1713,9 +1741,16 @@ export const register: Register = on => {
       clearBox($, text => text === e.text)
       return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
     }
+    const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
+    const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
     const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
-    if (sent?.isDelivered !== true) void tell($, at.entry, fromUser(at.message)).catch(() => undefined)
-    unseenSent.set(at.entry.agentId, [...(unseenSent.get(at.entry.agentId) ?? []), { text: clipSaid(plainText(at.message)), at: await $.clock.now() }])
+    if (sent?.isDelivered !== true) {
+      void tell($, at.entry, fromUser(at.message))
+        .then(isDelivered => {
+          if (!isDelivered) forgetSent(at.entry.agentId, noted)
+        })
+        .catch(() => forgetSent(at.entry.agentId, noted))
+    }
     await setCurrent($, at.entry).catch(() => undefined)
     await writeTo($, at.entry)
     await refreshWriting($, at.entry.agentId)
