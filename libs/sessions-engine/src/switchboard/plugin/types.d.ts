@@ -38,6 +38,7 @@ declare module 'claude-code' {
       pulls: Pull[]
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
+      mainSaid: { isUser: boolean; text: string }[]
       starting: string
       current: string
     }

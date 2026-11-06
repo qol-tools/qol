@@ -23,6 +23,9 @@ const SEND = 'SendMessage'
 const STORE_PREFIX = 'board:'
 const REOPEN_PREFIX = 'reopen:'
 const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
+const TYPED_SWAP = /^\s*qols\s+swap\s*$/i
+const TYPED_MAIN = /^\s*main\s*$/i
+const SWAP_KEY = 'fork-swap'
 const SB = 'sb'
 const TYPED_SB = /^\s*sb(?:\s|$)/
 const SB_TIMEOUT_MS = 60_000
@@ -99,6 +102,7 @@ const writingTo = atom({ plugin: 'qol-switchboard', key: 'writingTo' } as const,
 const starting = atom({ plugin: 'qol-switchboard', key: 'starting' } as const, '')
 export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
+const mainSaid = atom({ plugin: 'qol-switchboard', key: 'mainSaid' } as const, [] as { isUser: boolean; text: string }[])
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
@@ -355,6 +359,27 @@ const sameSaid = (a: Said[], b: Said[]): boolean =>
   a.length === b.length && a.every((one, at) => one.isUser === b[at]?.isUser && one.text === b[at]?.text)
 
 let writingFetch = 0
+let mainFetch = 0
+let isSwap = false
+
+const refreshMain = async ($: EngineInterface): Promise<void> => {
+  const fetch = ++mainFetch
+  const found = await $.session.messages({}).catch(() => undefined)
+  if (found === undefined || fetch !== mainFetch) return
+  const said = recentWords(found)
+  if (!sameSaid(said, await read($, mainSaid))) await update($, mainSaid, () => said)
+}
+
+const viewFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
+  const viewed = await $.ui.view({ agentId: entry.agentId })
+  if (viewed.deny === undefined) return undefined
+  if (entry.isWorking) return `${keyName(entry.name)} could not be opened: ${printable(String(viewed.deny))}`
+  const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))
+  if (!sent.isDelivered) return `${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`
+  if ((await $.ui.view({ agentId: sent.agentId })).deny !== undefined) return `${keyName(entry.name)} is back: select it in the agent list.`
+  return undefined
+}
+
 
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
   const target = await read($, writingTo)
@@ -1659,6 +1684,7 @@ export const register: Register = on => {
         isDeferred: false,
       }),
       ]).catch(() => undefined)
+      isSwap = (await $.store.get(SWAP_KEY).catch(() => undefined)) === true
       await refreshStatus($)
       if ((await $.ui.panes()).some(one => one.id === PANE)) await openBoard($, (await read($, current)) !== '')
       void loadTree($)
@@ -1695,6 +1721,17 @@ export const register: Register = on => {
     const viewing = viewedFork
     if (viewing !== undefined && (await read($, board)).some(one => one.agentId === viewing && one.hasNewReply === true)) {
       $.clock.after(0, () => void seenInView($, viewing).catch(() => undefined))
+    }
+    const viewedEntry = isSwap && viewing !== undefined && loading === '' ? (await read($, board)).find(one => one.agentId === viewing) : undefined
+    if (viewedEntry !== undefined && !e.props.hasSurvey) {
+      const { Box, Text } = $.ui.resolve(e)
+      return (
+        <Box>
+          <Text dimColor>viewing </Text>
+          <Text bold color="claude">{keyOf(viewedEntry)}</Text>
+          <Text dimColor> · main and Enter goes back · esc stops this fork</Text>
+        </Box>
+      )
     }
     if ((loading === '' && key === '') || e.props.hasSurvey) return next(e)
     const { Box, Text } = $.ui.resolve(e)
@@ -1753,6 +1790,23 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    if (TYPED_SWAP.test(e.text)) {
+      isSwap = !isSwap
+      await $.store.set(SWAP_KEY, isSwap)
+      clearBox($, text => TYPED_SWAP.test(text))
+      return dropAs(isSwap ? 'Fork swap on: a key-name and Enter shows that fork here, main and Enter comes back.' : 'Fork swap off.')
+    }
+    if (isSwap && viewedFork !== undefined) {
+      const bare = toFork(await read($, board), e.text)
+      if (TYPED_MAIN.test(e.text) || (bare !== undefined && bare.message === '')) {
+        clearBox($, text => text === e.text)
+        if (bare === undefined) {
+          const back = await $.ui.view({})
+          return dropAs(back.deny === undefined ? '→ main' : `main could not be shown: ${printable(String(back.deny))}`)
+        }
+        return dropAs((await viewFork($, bare.entry)) ?? `→ ${keyOf(bare.entry)}`)
+      }
+    }
     if (viewedFork === undefined && TYPED_SB.test(e.text)) {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
@@ -1776,6 +1830,11 @@ export const register: Register = on => {
     if (at === undefined) return next(e)
     sending = at.entry
     try {
+      if (at.message === '' && isSwap) {
+        clearBox($, text => text === e.text)
+        void refreshMain($).catch(() => undefined)
+        return dropAs((await viewFork($, at.entry)) ?? `→ ${keyOf(at.entry)}`)
+      }
       if (at.message === '') {
         await setCurrent($, at.entry).catch(() => undefined)
         if ((await read($, current)) !== keyOf(at.entry)) return next(e)
@@ -2032,6 +2091,10 @@ export const register: Register = on => {
     const viewed = e.props.view?.agentId
     viewedFork = viewed
     const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
+    const isSwapView = isSwap && viewed !== undefined
+    const main = isSwapView ? await read($, mainSaid) : []
+    if (isSwapView) void refreshMain($).catch(() => undefined)
+    const isCompact = target !== undefined || isSwapView
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
@@ -2047,18 +2110,8 @@ export const register: Register = on => {
     }
     const open = (entry: Entry) => async () => {
       try {
-        const viewed = await $.ui.view({ agentId: entry.agentId })
-        if (viewed.deny === undefined) return
-        if (entry.isWorking) {
-          $.ui.toast(`${keyName(entry.name)} could not be opened: ${printable(String(viewed.deny))}`)
-          return
-        }
-        const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))
-        if (!sent.isDelivered) {
-          $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
-          return
-        }
-        if ((await $.ui.view({ agentId: sent.agentId })).deny !== undefined) $.ui.toast(`${keyName(entry.name)} is back: select it in the agent list.`)
+        const failed = await viewFork($, entry)
+        if (failed !== undefined) $.ui.toast(failed)
       } catch {
         $.ui.toast(`${keyName(entry.name)} could not be opened.`)
       }
@@ -2139,8 +2192,8 @@ export const register: Register = on => {
           </Text>
           {close}
         </Box>
-        {target !== undefined && heading('FORKS')}
-        {target !== undefined &&
+        {isCompact && heading('FORKS')}
+        {isCompact &&
           [...needs, ...cut, ...working, ...waiting, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
             <Box key={`row-${entry.agentId}`}>{title(entry, labelOf(entry))}</Box>
           ))}
@@ -2167,8 +2220,21 @@ export const register: Register = on => {
             </Box>
           </Box>
         )}
-        {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
-        {target === undefined && needs.map(entry => (
+        {isSwapView && heading('SWITCHBOARD')}
+        {isSwapView && (
+          <Box paddingLeft={2} flexDirection="column">
+            {[...main].reverse().map((one, index) => (
+              <Box key={`main-${index}`} flexDirection="column" marginTop={1}>
+                <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                  {one.isUser ? 'you' : 'switchboard'}
+                </Text>
+                <Text wrap="wrap">{one.text}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {!isCompact && needs.length > 0 && heading('NEEDS YOU')}
+        {!isCompact && needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">
             {title(entry, entry.kind ?? 'note')}
             <Box paddingLeft={2} flexDirection="column">
@@ -2203,8 +2269,8 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
-        {target === undefined && cut.length > 0 && heading('STOPPED BY A RESTART')}
-        {target === undefined && cut.map(entry => (
+        {!isCompact && cut.length > 0 && heading('STOPPED BY A RESTART')}
+        {!isCompact && cut.map(entry => (
           <Box key={`cut-${entry.agentId}`} flexDirection="column">
             {title(entry, 'stopped mid-turn')}
             <Box paddingLeft={2} flexDirection="column">
@@ -2225,8 +2291,8 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
-        {target === undefined && working.length > 0 && heading('WORKING')}
-        {target === undefined && working.map(entry => (
+        {!isCompact && working.length > 0 && heading('WORKING')}
+        {!isCompact && working.map(entry => (
           <Box key={`work-${entry.agentId}`} flexDirection="column">
             {title(entry, 'working')}
             <Box paddingLeft={2} flexDirection="column">
@@ -2234,8 +2300,8 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
-        {target === undefined && waiting.length > 0 && heading('WAITING ON A PULL REQUEST')}
-        {target === undefined && waiting.map(entry => (
+        {!isCompact && waiting.length > 0 && heading('WAITING ON A PULL REQUEST')}
+        {!isCompact && waiting.map(entry => (
           <Box key={`wait-${entry.agentId}`} flexDirection="column">
             {title(entry, 'waiting')}
             <Box paddingLeft={2} flexDirection="column">
@@ -2246,7 +2312,7 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
-        {target === undefined && done.length > 0 && (
+        {!isCompact && done.length > 0 && (
           <Box marginTop={1} flexDirection="row" gap={2}>
             <Button key="done-toggle" plain hotkey="d" onPress={() => void update($, isDoneOpen, value => !value)}>
               {`${isOpen ? 'hide' : 'show'} done · ${done.length}`}
@@ -2256,7 +2322,7 @@ export const register: Register = on => {
             </Button>
           </Box>
         )}
-        {target === undefined && isOpen &&
+        {!isCompact && isOpen &&
           done.map(entry => (
             <Box key={`done-${entry.agentId}`} flexDirection="column">
               {title(entry, entry.kind ?? 'note')}

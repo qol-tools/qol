@@ -2284,3 +2284,37 @@ test('sb runs the command the words name, lists a level that needs more, and lea
     ['sessions', 'switchboard', 'auth', 'default'],
   ])
 })
+
+test('with fork swap on, a bare key-name and Enter shows that fork in the main view and main and Enter comes back', async ($, on) => {
+  const viewed: string[] = []
+  engine(on)
+  on('session.messages', (_: unknown, e: { agentId?: string }) => ({ value: e.agentId === undefined ? [{ role: 'user', text: 'what runs?' }, { role: 'assistant', text: 'Two forks.' }] : [] }))
+  on('ui.view', (_: unknown, e: { agentId?: string }) => {
+    viewed.push(e.agentId ?? 'main')
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'other-fork: other')
+  await typed($, 'asking-fork')
+  expect(viewed).toEqual([])
+  expect((await typed($, 'qols swap')).drop).toContain('Fork swap on')
+  expect((await typed($, 'asking-fork')).drop).toBe('→ asking-fork')
+  expect(viewed).toEqual(['a8'])
+  const band = promptBand(false)
+  const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'a8' } } })
+  expect(await inFork.find({ type: 'Text', text: /main and Enter goes back/ })).toBeDefined()
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 'a8' } } })
+  await settle()
+  await pane.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, view: { agentId: 'a8' } } })
+  expect(await again.find({ type: 'Text', text: 'SWITCHBOARD' })).toBeDefined()
+  expect(await again.find({ type: 'Text', text: /Two forks\./ })).toBeDefined()
+  await again.unmount()
+  expect((await typed($, 'other-fork')).drop).toBe('→ other-fork')
+  expect((await typed($, 'yes please')).text).toBe('yes please')
+  expect((await typed($, 'main')).drop).toBe('→ main')
+  expect(viewed).toEqual(['a8', 'a9', 'main'])
+  await inFork.unmount()
+  expect((await typed($, 'qols swap')).drop).toBe('Fork swap off.')
+})
