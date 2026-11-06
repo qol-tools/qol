@@ -273,7 +273,7 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
     const words = role === 'user' ? userWords(text) : text
     const shown = plainText(words)
-    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown)))) return []
+    if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
     return [{ isUser: role === 'user', text: clipSaid(shown) }]
   })
   return said.slice(-kept)
@@ -287,6 +287,8 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
 const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+
+const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
 const isPluginNote = (text: string): boolean => {
   const said = text.replace(COORDINATOR_NOTE, '').trim()
@@ -1523,7 +1525,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     if (resumed !== undefined) return { fork: keyName(resumed), said: 'resumed' }
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
-    return { fork: keyName(filed.entry.name), said: filed.entry.headline }
+    return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline }
   } catch {
     return undefined
   }
