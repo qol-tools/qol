@@ -54,9 +54,11 @@ impl engine::Remapper for Services {
             backend.idle(&config, &layout, self.state.input());
             backend.lease(layout.physical)
         });
-        self.state
-            .input()
-            .set_hotkeys_relayed(lease.as_ref().is_some_and(|(_, lease)| lease.lease));
+        self.state.input().set_hotkeys_relayed(
+            lease
+                .as_ref()
+                .is_some_and(|(_, lease)| lease.lease && lease.unrelayed.is_empty()),
+        );
         if let Some((relay, lease)) = lease {
             hotkeys::send_lease(&relay, &lease);
         }

@@ -335,7 +335,7 @@ pub(super) fn secure_input_result(
             DoctorCheckResult::ok(
                 id,
                 format!(
-                    "{} (pid {}) holds Secure Input; Key Remap and qol hotkeys keep working through it. Key backend: {label}.",
+                    "{} (pid {}) holds Secure Input; Key Remap and the qol hotkeys Karabiner-Elements relays keep working. Key backend: {label}.",
                     holder.app, holder.pid
                 ),
             )
