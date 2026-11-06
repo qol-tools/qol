@@ -97,8 +97,8 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
   on('clock.every', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 1_800_000_000_000 }))
   const open = new Set<string>()
-  on('ui.open', (_: unknown, e: { id: string }) => {
-    panes.push(`open ${e.id}`)
+  on('ui.open', (_: unknown, e: { id: string; closeOnEscape?: true }) => {
+    panes.push(`open ${e.id}${(e as { closeOnEscape?: true }).closeOnEscape === true ? ' esc' : ''}`)
     open.add(e.id)
     return { value: { isPlaced: true } }
   })
@@ -1773,7 +1773,7 @@ test('Tab walks the forks in board order and Shift+Tab walks back, wrapping at b
   expect(nextKey([], '')).toBeUndefined()
 })
 
-test('a full key, or a unique start of one with a colon, addresses a fork; anything else is a prompt', () => {
+test('a full key, or a unique start of one with a colon, addresses a fork with or without a message; anything else is a prompt', () => {
   const cases: [string, string | undefined, string | undefined][] = [
     ['kcd2-next-tasks yes, restart it', 'a1', 'yes, restart it'],
     ['  kcd2-next-tasks:   yes\nand more', 'a1', 'yes\nand more'],
@@ -1783,8 +1783,8 @@ test('a full key, or a unique start of one with a colon, addresses a fork; anyth
     ['kcd2 yes', undefined, undefined],
     ['s: hi', undefined, undefined],
     ['what is running?', undefined, undefined],
-    ['kcd2-next-tasks', undefined, undefined],
-    ['kcd2-next-tasks   ', undefined, undefined],
+    ['kcd2-next-tasks', 'a1', ''],
+    ['kcd2-next-tasks   ', 'a1', ''],
     ['old-one hi', undefined, undefined],
     ['Kcd2-next-tasks hi', undefined, undefined],
   ]
@@ -1943,6 +1943,116 @@ test('typing a fork key and a message sends the message to that fork, keeps the 
   expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
   expect((await typed($, 'asking yes')).text).toBe('asking yes')
   expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')
+})
+
+test('with the board open, a sent message makes that fork current: its chat stays and text without a key goes to it', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'b9', 'other-fork: other')
+  await typed($, 'qols board')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  sent.length = 0
+  panes.length = 0
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  expect(panes).toContain('open board esc')
+  await settle()
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /yes, amber/ })).toBeDefined()
+  const band = await $.ui.mount(promptBand(false))
+  expect(await band.find({ type: 'Text', text: /esc on an empty prompt leaves/ })).toBeDefined()
+  await band.unmount()
+  expect((await typed($, 'and the hips')).drop).toContain('→ asking-fork: and the hips')
+  expect(sent.map(one => one.text)).toEqual([fromUser('yes, amber'), fromUser('and the hips')])
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
+  expect(await ui.find({ type: 'Text', text: /yes, amber/ })).toBeUndefined()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
+  expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /FORKS/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a bare fork key makes that fork current and lets esc on an empty prompt leave it, and the board stays without one', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork')).text).toBe('asking-fork')
+  await typed($, 'qols board')
+  sent.length = 0
+  panes.length = 0
+  expect((await typed($, 'asking-fork')).drop).toContain('Writing to asking-fork')
+  expect(panes).toEqual(['open board esc'])
+  expect(sent).toEqual([])
+  expect((await typed($, 'hello')).drop).toContain('→ asking-fork: hello')
+})
+
+test('a fork that replies while another chat shows gets a new reply mark until its chat is shown', async ($, on) => {
+  engine(on)
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'b9', 'other-fork: other')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  await deliver($, notification('b9', 'other-fork: other', 'Pull request #9 merged.'), 'task-notification')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour?'), 'task-notification')
+  const marks = await ui.findAll({ type: 'Text', text: /new reply/ })
+  expect(marks.length).toBe(1)
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
+  await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
+  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a new reply mark goes once the fork is opened in its own view', async ($, on) => {
+  engine(on)
+  on('clock.after', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'b9', 'other-fork: other')
+  await deliver($, notification('b9', 'other-fork: other', 'Which colour?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  await ui.unmount()
+  const viewed = promptBand(false)
+  const band = await $.ui.mount({ ...viewed, props: { ...viewed.props, view: { agentId: 'b9' } } })
+  await settle()
+  await band.unmount()
+  const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await after.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  await after.unmount()
+})
+
+test('the same words sent twice show twice until the fork holds both, and the band names only a fork that is still there', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  const held: { role: string; text: string }[] = []
+  on('session.messages', () => ({ value: [...held] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await typed($, 'asking-fork yes')
+  held.push({ role: 'user', text: fromUser('yes') })
+  await typed($, 'yes')
+  await settle()
+  expect((await ui.findAll({ type: 'Text', text: /^yes$/ })).length).toBe(2)
+  held.push({ role: 'user', text: fromUser('yes') })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  expect((await ui.findAll({ type: 'Text', text: /^yes$/ })).length).toBe(2)
+  await ui.unmount()
 })
 
 test('a typed message the prompt hook could not send goes out from the band, and the view stays', async ($, on) => {

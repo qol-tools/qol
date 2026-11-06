@@ -18,6 +18,7 @@ export type Entry = {
   isInterrupted?: boolean
   key?: string
   isDone?: boolean
+  hasNewReply?: boolean
 }
 
 export type Pull = {
@@ -38,6 +39,7 @@ declare module 'claude-code' {
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
       starting: string
+      current: string
     }
   }
 }
