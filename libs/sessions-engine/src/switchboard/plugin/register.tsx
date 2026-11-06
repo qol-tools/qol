@@ -101,6 +101,7 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
+const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -273,7 +274,7 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
     const at = Math.min(one.after, rows.length)
     return [...rows.slice(0, at), { isUser: true, text: one.text }, ...rows.slice(at)]
   }, all)
-  return placed.slice(-SAID_KEPT)
+  return placed
 }
 
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
@@ -304,7 +305,7 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
-const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
@@ -320,6 +321,7 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
   await update($, writingSaid, () => [])
   if (entry?.hasNewReply === true) await seen($, agentId)
   await refreshWriting($, agentId)
+  if (agentId !== '') await placeFocus($)
 }
 
 const seen = ($: EngineInterface, agentId: string): Promise<void> =>
@@ -380,8 +382,45 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
-  const said = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const all = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const said = all.slice(-SAID_KEPT)
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
+  focusRows = { agentId: target, rows: all.slice(-FOCUS_KEPT) }
+  const shown = await read($, focusShown)
+  if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
+}
+
+const FOCUS_PREFIX = 'focus-'
+const FOCUS_KEPT = 40
+const FOCUS_SETTLE_MS = 80
+const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
+
+let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
+let focusPlaced = 0
+let focusWait = 0
+let isPlacingFocus = false
+
+const placeFocus = async ($: EngineInterface): Promise<void> => {
+  const target = await read($, writingTo)
+  const entry = target === '' || viewedFork !== undefined ? undefined : (await read($, board)).find(one => one.agentId === target)
+  if (entry === undefined) return
+  focusPlaced += 1
+  const id = `${FOCUS_PREFIX}${await $.clock.now()}-${focusPlaced}`
+  isPlacingFocus = true
+  const placed = await $.ui.place({ id }).catch(() => undefined).finally(() => {
+    isPlacingFocus = false
+  })
+  if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
+  const rows = focusRows.agentId === target ? focusRows.rows : []
+  await update($, focusShown, () => ({ id, agentId: target, key: keyOf(entry), rows }))
+}
+
+const followFocus = async ($: EngineInterface): Promise<void> => {
+  if (isPlacingFocus || (await read($, writingTo)) === '' || viewedFork !== undefined) return
+  const wait = ++focusWait
+  $.clock.after(FOCUS_SETTLE_MS, () => {
+    if (wait === focusWait) void placeFocus($).catch(() => {})
+  })
 }
 
 let loading: Promise<void> | undefined
@@ -1365,6 +1404,7 @@ export const logEvent = async ($: EngineInterface, event: Quiet): Promise<void> 
   logs.set(id, event)
   if (logs.size > LOG_KEPT) logs.delete(logs.keys().next().value as string)
   await $.ui.place({ id }).catch(() => undefined)
+  await followFocus($)
 }
 
 export const fileMerged = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<Entry> => {
@@ -1734,6 +1774,27 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Placed' }, async ($, e, next) => {
+    if (e.props.plugin !== NAME || !e.props.id.startsWith(FOCUS_PREFIX)) return next(e)
+    const { Box, Text, Markdown } = $.ui.resolve(e)
+    const shown = await read($, focusShown)
+    if (e.props.id !== shown.id) return <Box />
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>{`── ${shown.key} ──`}</Text>
+        {shown.rows.length === 0 && <Text dimColor>No messages yet.</Text>}
+        {shown.rows.map((one, index) => (
+          <Box key={`focus-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+            <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+              {one.isUser ? 'you' : shown.key}
+            </Text>
+            <Markdown text={one.text} />
+          </Box>
+        ))}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Placed' }, async ($, e, next) => {
     const one = e.props.plugin === NAME ? logs.get(e.props.id) : undefined
     if (one === undefined) return next(e)
     const { Box, Text } = $.ui.resolve(e)
@@ -1896,6 +1957,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
+    if (e.agentId === undefined) await followFocus($).catch(() => {})
     if (e.agentId !== undefined || dropped.length === 0) return next(e)
     const text = textOf(e.message.content)
     const at = text.startsWith(DROP_NOTICE) ? dropped.indexOf(text.slice(DROP_NOTICE.length)) : -1
@@ -2014,6 +2076,7 @@ export const register: Register = on => {
     const done = await next(e)
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
+    if (e.agentId === undefined) await followFocus($).catch(() => {})
     return done
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
@@ -2024,6 +2087,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => (next.called ? { isShown: false } : next(e)))
 
   on('session.append', async ($, e, next) => {
+    if (e.agentId === undefined && FOCUS_DOORS.includes(e.door)) await followFocus($).catch(() => {})
     const origin = e.origin.kind
     if (!INTAKE_DOORS.includes(e.door) || (origin !== 'peer' && origin !== 'task-notification')) return next(e)
     if (e.agentId !== undefined && origin !== 'task-notification') return next(e)

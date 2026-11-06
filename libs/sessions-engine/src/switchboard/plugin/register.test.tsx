@@ -295,6 +295,8 @@ test('a report line keeps no terminal codes, control characters or line breaks f
 const placedRow = (id: string, surface: 'terminal' | 'desktop' = 'terminal', plugin = 'qol-switchboard') =>
   ({ plugin: 'qol-switchboard', surface, component: 'Placed', requestId: `placed-${id}`, props: { id, plugin } }) as const
 
+const boardCalls = (panes: string[]) => panes.filter(one => !one.startsWith('place focus-'))
+
 const logIds = (panes: string[]) => panes.filter(one => one.startsWith('place ')).map(one => one.slice('place '.length))
 
 test('a logged event is a row in the chat, each fork in its own colour, and a fork report places none', async ($, on) => {
@@ -2041,7 +2043,7 @@ test('a bare fork key makes that fork current and lets esc on an empty prompt le
   sent.length = 0
   panes.length = 0
   expect((await typed($, 'asking-fork')).drop).toContain('Writing to asking-fork')
-  expect(panes).toEqual(['open board esc'])
+  expect(boardCalls(panes)).toEqual(['open board esc'])
   expect(sent).toEqual([])
   expect((await typed($, 'hello')).drop).toContain('→ asking-fork')
 })
@@ -2057,12 +2059,12 @@ test('a send while the board is hidden leaves the current fork and takes back th
   await typed($, 'qols board')
   panes.length = 0
   expect((await typed($, 'asking-fork yes')).drop).toBe('→ asking-fork')
-  expect(panes).toEqual(['open board esc'])
+  expect(boardCalls(panes)).toEqual(['open board esc'])
   hidden.add('board')
   expect((await typed($, 'asking-fork again')).drop).toBe('→ asking-fork')
-  expect(panes).toEqual(['open board esc', 'open board'])
+  expect(boardCalls(panes)).toEqual(['open board esc', 'open board'])
   expect((await typed($, 'asking-fork once more')).drop).toBe('→ asking-fork')
-  expect(panes).toEqual(['open board esc', 'open board'])
+  expect(boardCalls(panes)).toEqual(['open board esc', 'open board'])
 })
 
 test('a start with the board already open sets its esc anew from the current fork, as after a reload', async ($, on) => {
@@ -2076,7 +2078,7 @@ test('a start with the board already open sets its esc anew from the current for
   await typed($, 'asking-fork yes')
   panes.length = 0
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  expect(panes).toEqual(['open board esc'])
+  expect(boardCalls(panes)).toEqual(['open board esc'])
 })
 
 test('a fork that replies while another chat shows gets a new reply mark until its chat is shown', async ($, on) => {
@@ -2215,6 +2217,59 @@ test('WRITING TO keeps two sent lines in send order once the fork has taken in o
   const lines = (await ui.findAll({ type: 'Text', text: /^(Amber or teal\?|teal|and wide)$/ })).map((one: any) => one.text)
   expect(lines).toEqual(['and wide', 'teal', 'Amber or teal?'])
   await ui.unmount()
+})
+
+const focusIds = (panes: string[]) => panes.filter(one => one.startsWith('place focus-')).map(one => one.slice('place '.length))
+
+test('writing to a fork shows its whole conversation in the chat, newest block only, without harness notes', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  const long = `Here is the plan.\n\n${'More detail. '.repeat(40).trim()}`
+  const said = [
+    { role: 'assistant', text: 'Amber or teal?' },
+    { role: 'user', text: '[Request interrupted by user for tool use]' },
+    { role: 'assistant', text: long },
+  ]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  const [first] = focusIds(panes)
+  expect(first).toBeDefined()
+  const block = await $.ui.mount(placedRow(first as string))
+  expect(await block.find({ type: 'Text', text: '── asking-fork ──' })).toBeDefined()
+  const rows = (await block.findAll({ type: 'Markdown' })).map((one: any) => one.props?.text ?? one.text)
+  expect(rows).toEqual(['Amber or teal?', long, 'teal'])
+  await block.unmount()
+  timers.length = 0
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: 'Prompt dropped by a hook: x' }] }, door: 'notice', origin: { kind: 'engine' } })
+  timers.splice(0).forEach(resolve => resolve())
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(focusIds(panes).length).toBe(2)
+  const old = await $.ui.mount(placedRow(first as string))
+  expect(await old.find({ type: 'Text', text: '── asking-fork ──' })).toBeUndefined()
+  await old.unmount()
+})
+
+test('a notice in the chat moves the fork conversation below it once things settle', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'asking-fork teal')
+  const placed = focusIds(panes).length
+  expect(placed).toBe(1)
+  timers.length = 0
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: 'Prompt dropped by a hook: x' }] }, door: 'notice', origin: { kind: 'engine' } })
+  expect(focusIds(panes).length).toBe(1)
+  timers.splice(0).forEach(resolve => resolve())
+  await new Promise(resolve => setTimeout(resolve, 10))
+  expect(focusIds(panes).length).toBe(2)
 })
 
 test('the prompt box offers fork keys for its first word only', async ($, on) => {
