@@ -10,6 +10,8 @@ pub(crate) use platform::{
     PIXEL_FORMAT_420F,
 };
 
+pub(crate) const SHOT_HANG_GUARD: Duration = Duration::from_secs(3);
+
 pub(crate) fn fresh_frame_target(window: &WindowInfo) -> Option<(u32, (usize, usize))> {
     if window.is_minimized || !live_shots_available() {
         return None;
@@ -23,7 +25,7 @@ pub(crate) fn capture_live_frame(wid: u32, (width, height): (usize, usize)) -> O
     if !session.request_capture(wid, width, height, &tx) {
         return None;
     }
-    match rx.recv_timeout(Duration::from_millis(120)) {
+    match rx.recv_timeout(SHOT_HANG_GUARD) {
         Ok((reply_wid, Some(buf)))
             if reply_wid == wid && buf.pixel_format() == PIXEL_FORMAT_420F =>
         {

@@ -18,7 +18,10 @@ pub(crate) fn watch(input: Arc<InputState>) {
             let client = qol_runtime::PlatformStateClient::from_env();
             loop {
                 let holder = qol_platform::secure_input_holder();
-                if let Some(toast) = watch.observe(holder.as_ref(), input.backend.get()) {
+                let hotkeys_paused = input.hotkeys_paused_by_secure_input();
+                if let Some(toast) =
+                    watch.observe(holder.as_ref(), input.backend.get(), hotkeys_paused)
+                {
                     log::warn!("{}", toast.title);
                     if !client.send_notification(&toast.title, &toast.body, NotificationLevel::Warn)
                     {

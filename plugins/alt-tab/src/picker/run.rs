@@ -6,14 +6,12 @@ use crate::discovery::{Platform, WindowDiscovery, WindowInfo};
 use crate::picker::gather::{build_icon_cache, PreviewCaptureScheduler};
 use crate::picker::{LiveFrameMap, PickerWindowState, SharedIconCache};
 use crate::runtime::daemon;
-use futures::FutureExt;
 use gpui::*;
 use qol_gpui::command_loop::LoopFlow;
 use qol_gpui::monitor::MonitorTracker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 pub(crate) type WindowCache = Arc<Mutex<Vec<WindowInfo>>>;
 pub(crate) type SharedPreviewCache = Arc<Mutex<crate::picker::PreviewMap>>;
@@ -317,7 +315,17 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
                 .unwrap_or_default()
         })
         .await;
+    let open = crate::picker::state::begin_open();
     let fresh_target = windows.first().and_then(capture::fresh_frame_target);
+    let fresh_shot = fresh_target.map(|target| start_fresh_frame_capture(&executor, target));
+    let fresh_cards: Vec<u32> = match fresh_target {
+        Some(_) => windows
+            .iter()
+            .filter(|w| !w.is_minimized)
+            .map(|w| w.id)
+            .collect(),
+        None => Vec::new(),
+    };
     let rendered_icons = refresh_icon_cache(&executor, &windows, &state.caches.icon_cache).await;
     #[cfg(debug_assertions)]
     let (query_ms, window_count) = (t_query.elapsed().as_millis(), windows.len());
@@ -332,9 +340,11 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     let t_update = std::time::Instant::now();
     let _ = cx.update(move |app_cx| {
         apply_show_windows(&state_for_update.caches, windows, app_cx);
-        await_fresh_frame(
+        await_fresh_frames(
             &state_for_update.current,
+            open,
             fresh_target.map(|(wid, _)| wid),
+            fresh_cards,
             app_cx,
         );
         if let Some(icons) = rendered_icons {
@@ -346,8 +356,8 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
         #[cfg(debug_assertions)]
         crate::app::clear_cycle_origin();
     });
-    if let Some(target) = fresh_target {
-        spawn_fresh_frame_capture(cx, state.current.clone(), target);
+    if let Some((wid, shot)) = fresh_shot {
+        land_fresh_frame_capture(cx, state.current.clone(), open, wid, shot);
     }
     #[cfg(debug_assertions)]
     let update_ms = t_update.elapsed().as_millis();
@@ -375,8 +385,6 @@ async fn dispatch_show(cx: &AsyncApp, reverse: bool, state: &PickerState) {
     );
 }
 
-const FRESH_FRAME_BAIL: Duration = Duration::from_millis(200);
-
 fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::app::AltTabApp>> {
     current
         .borrow()
@@ -386,31 +394,41 @@ fn picker_handles(current: &PickerWindowState) -> Vec<WindowHandle<crate::app::A
         .collect()
 }
 
-fn await_fresh_frame(current: &PickerWindowState, wid: Option<u32>, app: &mut App) {
+fn await_fresh_frames(
+    current: &PickerWindowState,
+    open: u64,
+    target: Option<u32>,
+    cards: Vec<u32>,
+    app: &mut App,
+) {
     for handle in picker_handles(current) {
+        let cards = cards.clone();
         let _ = handle.update(app, |view, _, cx| {
             view.delegate
-                .update(cx, |state, _| state.await_fresh_frame(wid));
+                .update(cx, |state, _| state.await_fresh_frames(open, target, cards));
         });
     }
 }
 
-fn spawn_fresh_frame_capture(
+fn start_fresh_frame_capture(
+    executor: &BackgroundExecutor,
+    (wid, dims): (u32, (usize, usize)),
+) -> (u32, Task<Option<capture::SendCVBuf>>) {
+    (
+        wid,
+        executor.spawn(async move { capture::capture_live_frame(wid, dims) }),
+    )
+}
+
+fn land_fresh_frame_capture(
     cx: &AsyncApp,
     current: PickerWindowState,
-    (wid, dims): (u32, (usize, usize)),
+    open: u64,
+    wid: u32,
+    shot: Task<Option<capture::SendCVBuf>>,
 ) {
-    let executor = cx.background_executor().clone();
     cx.spawn(async move |cx: &mut AsyncApp| {
-        let capture = executor
-            .spawn(async move { capture::capture_live_frame(wid, dims) })
-            .fuse();
-        let bail = executor.timer(FRESH_FRAME_BAIL).fuse();
-        futures::pin_mut!(capture, bail);
-        let frame = futures::select_biased! {
-            frame = capture => frame,
-            _ = bail => None,
-        };
+        let frame = shot.await;
         qol_runtime::probe!(
             "PREVIEW_FRESH",
             "wid={wid} outcome={}",
@@ -427,7 +445,7 @@ fn spawn_fresh_frame_capture(
                 let _ = handle.update(app, |view, _, cx| {
                     let landed = view
                         .delegate
-                        .update(cx, |state, _| state.land_fresh_frame(wid, frames));
+                        .update(cx, |state, _| state.land_fresh_frame(wid, open, frames));
                     if landed {
                         cx.notify();
                     }

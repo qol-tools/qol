@@ -447,8 +447,13 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
         .h(px(metrics.preview_height))
         .flex_none()
         .overflow_hidden()
-        .child(if context.fresh.awaiting == Some(win.id) {
-            placeholder_frame(metrics, palette, snap.system.border_subtle).into_any_element()
+        .child(if context.fresh.awaits(win.id) {
+            app_placeholder(
+                context.icons.get(&win.app_name),
+                metrics,
+                palette,
+                snap.system.border_subtle,
+            )
         } else if render_gpui_preview {
             let tile = preview_tile(
                 context.live_frames.get(&win.id),
@@ -458,10 +463,19 @@ fn render_preview(win: &WindowInfo, context: &CardRenderContext<'_>, metrics: &C
                 palette,
                 snap.system.border_subtle,
             );
-            if context.fresh.landed == Some(win.id) {
-                fade_in(tile, context.fresh.generation, metrics, palette)
-            } else {
-                tile
+            match context.fresh.fade_key(win.id) {
+                Some(key) => fade_in(
+                    tile,
+                    key,
+                    app_placeholder(
+                        context.icons.get(&win.app_name),
+                        metrics,
+                        palette,
+                        snap.system.border_subtle,
+                    ),
+                    metrics,
+                ),
+                None => tile,
             }
         } else {
             preview_plane_slot(metrics, snap.system.border_subtle)
@@ -593,7 +607,7 @@ fn preview_tile(
         return img(render_image.clone())
             .w(px(metrics.preview_width))
             .h(px(metrics.preview_height))
-            .object_fit(ObjectFit::Fill)
+            .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
     empty_placeholder(metrics, palette, border_subtle)
@@ -601,9 +615,9 @@ fn preview_tile(
 
 fn fade_in(
     tile: AnyElement,
-    generation: usize,
+    key: usize,
+    placeholder: AnyElement,
     metrics: &CardMetrics,
-    palette: &PickerSurfacePalette,
 ) -> AnyElement {
     div()
         .relative()
@@ -614,9 +628,9 @@ fn fade_in(
             div()
                 .absolute()
                 .inset_0()
-                .bg(rgb(palette.placeholder_bg))
+                .child(placeholder)
                 .with_animation(
-                    ("fresh-frame", generation),
+                    ("fresh-frame", key),
                     qol_gpui::motion::animation(qol_gpui::theme::Motion::SETTLE),
                     |overlay, delta| overlay.opacity(1.0 - delta),
                 ),
@@ -643,6 +657,18 @@ fn minimized_placeholder(
     placeholder_frame(metrics, palette, border_subtle)
         .child(img(icon.clone()).w(px(icon_px)).h(px(icon_px)))
         .into_any_element()
+}
+
+fn app_placeholder(
+    icon: Option<&Arc<RenderImage>>,
+    metrics: &CardMetrics,
+    palette: &PickerSurfacePalette,
+    border_subtle: u32,
+) -> AnyElement {
+    match icon {
+        Some(icon) => minimized_placeholder(icon, metrics, palette, border_subtle),
+        None => placeholder_frame(metrics, palette, border_subtle).into_any_element(),
+    }
 }
 
 fn empty_placeholder(

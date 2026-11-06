@@ -17,12 +17,13 @@ impl SecureInputWatch {
         &mut self,
         holder: Option<&SecureInputHolder>,
         backend: BackendId,
+        hotkeys_paused: bool,
     ) -> Option<Toast> {
         let Some(holder) = holder else {
             self.warned_for = None;
             return None;
         };
-        if self.warned_for == Some(holder.pid) {
+        if !hotkeys_paused || self.warned_for == Some(holder.pid) {
             return None;
         }
         self.warned_for = Some(holder.pid);
@@ -73,27 +74,35 @@ mod tests {
     #[test]
     fn warns_once_per_episode() {
         let mut watch = SecureInputWatch::default();
-        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_some());
-        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_none());
         assert!(watch
-            .observe(Some(&kitty()), BackendId::HidHelper)
+            .observe(Some(&kitty()), BackendId::EventTap, true)
+            .is_some());
+        assert!(watch
+            .observe(Some(&kitty()), BackendId::EventTap, true)
+            .is_none());
+        assert!(watch
+            .observe(Some(&kitty()), BackendId::HidHelper, true)
             .is_none());
     }
 
     #[test]
     fn a_new_holder_starts_a_new_episode() {
         let mut watch = SecureInputWatch::default();
-        watch.observe(Some(&kitty()), BackendId::EventTap);
-        let toast = watch.observe(Some(&teams()), BackendId::EventTap).unwrap();
+        watch.observe(Some(&kitty()), BackendId::EventTap, true);
+        let toast = watch
+            .observe(Some(&teams()), BackendId::EventTap, true)
+            .unwrap();
         assert!(toast.title.contains("Microsoft Teams"));
     }
 
     #[test]
     fn secure_input_turning_off_ends_the_episode() {
         let mut watch = SecureInputWatch::default();
-        watch.observe(Some(&kitty()), BackendId::EventTap);
-        assert!(watch.observe(None, BackendId::EventTap).is_none());
-        assert!(watch.observe(Some(&kitty()), BackendId::EventTap).is_some());
+        watch.observe(Some(&kitty()), BackendId::EventTap, true);
+        assert!(watch.observe(None, BackendId::EventTap, true).is_none());
+        assert!(watch
+            .observe(Some(&kitty()), BackendId::EventTap, true)
+            .is_some());
     }
 
     #[test]
@@ -115,5 +124,26 @@ mod tests {
             "qol hotkeys are paused: kitty has turned on Secure Input."
         );
         assert!(toast.body.contains("Key Remap keeps working"));
+    }
+
+    #[test]
+    fn relayed_hotkeys_never_warn() {
+        let mut watch = SecureInputWatch::default();
+        assert!(watch
+            .observe(Some(&kitty()), BackendId::KarabinerElements, false)
+            .is_none());
+        assert!(watch
+            .observe(Some(&kitty()), BackendId::KarabinerElements, false)
+            .is_none());
+    }
+
+    #[test]
+    fn losing_the_relay_during_an_episode_warns() {
+        let mut watch = SecureInputWatch::default();
+        watch.observe(Some(&kitty()), BackendId::KarabinerElements, false);
+        let toast = watch
+            .observe(Some(&kitty()), BackendId::KarabinerElements, true)
+            .unwrap();
+        assert!(toast.title.starts_with("qol hotkeys are paused: kitty"));
     }
 }

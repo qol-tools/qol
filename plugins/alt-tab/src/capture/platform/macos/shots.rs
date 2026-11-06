@@ -16,7 +16,7 @@ pub(crate) fn live_frame_element(frame: &LiveFrame, width: f32, height: f32) -> 
     surface(frame.clone())
         .w(px(width))
         .h(px(height))
-        .object_fit(ObjectFit::Cover)
+        .object_fit(ObjectFit::Contain)
         .into_any_element()
 }
 
