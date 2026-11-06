@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register } from 'claude-code'
+import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
 import type { Entry, Kind, Pull } from '../types'
 
@@ -198,7 +198,7 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
     await $.ui.close({ id: PANE })
     return 'Fork board closed. qols board or /board opens it again.'
   }
-  const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
+  const opened = await openBoard($, false, true)
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
@@ -315,12 +315,19 @@ const currentOf = async ($: EngineInterface): Promise<Entry | undefined> => {
 
 const writeToTyped = async ($: EngineInterface, typed: Entry | undefined): Promise<void> => writeTo($, typed ?? (await currentOf($)))
 
+let escArmed = false
+
+const openBoard = async ($: EngineInterface, armed: boolean, focus?: true): Promise<UiOpenResult> => {
+  const opened = await $.ui.open({ id: PANE, title: TITLE, ...(focus === undefined ? {} : { focus }), ...(armed ? { closeOnEscape: true } : {}) })
+  escArmed = armed
+  return opened
+}
+
 const setCurrent = async ($: EngineInterface, entry: Entry | undefined): Promise<void> => {
-  const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown)
-  const key = entry === undefined || !isShown ? '' : keyOf(entry)
-  if ((await read($, current)) === key) return
-  await update($, current, () => key)
-  if (isShown) await $.ui.open({ id: PANE, title: TITLE, ...(key === '' ? {} : { closeOnEscape: true }) })
+  const pane = (await $.ui.panes()).find(one => one.id === PANE)
+  const key = entry === undefined || pane?.isShown !== true ? '' : keyOf(entry)
+  if ((await read($, current)) !== key) await update($, current, () => key)
+  if (pane !== undefined && escArmed !== (key !== '')) await openBoard($, key !== '')
 }
 
 const sameSaid = (a: Said[], b: Said[]): boolean =>
@@ -1621,6 +1628,7 @@ export const register: Register = on => {
         isDeferred: false,
       })
       await refreshStatus($)
+      if ((await $.ui.panes()).some(one => one.id === PANE)) await openBoard($, (await read($, current)) !== '')
       void loadTree($)
       isAutoOpenPending = e.isInteractive
       $.clock.every(MINUTE, () => $.ui.invalidate('ui.render'))
@@ -1647,7 +1655,7 @@ export const register: Register = on => {
     const docks = e.viewport?.isFullscreen
     if (isAutoOpenPending && docks !== undefined) {
       isAutoOpenPending = false
-      if (docks) void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
+      if (docks) void openBoard($, (await read($, current)) !== '').catch(() => {})
     }
     const loading = await read($, starting)
     const shown = viewedFork === undefined ? await currentOf($) : undefined
@@ -1755,18 +1763,22 @@ export const register: Register = on => {
     await writeTo($, at.entry)
     await refreshWriting($, at.entry.agentId)
     clearBox($, text => text === e.text)
-    return dropAs(`→ ${keyOf(at.entry)}: ${oneLine(at.message)}`)
+    return dropAs(`→ ${keyOf(at.entry)}`)
   }).catch(($, e, next) => (next.called ? next(e) : dropAs('The fork board could not open.')))
 
   on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person' && (await read($, current)) !== '') {
-      await setCurrent($, undefined)
-      await writeTo($, undefined)
+    if (e.origin.kind === 'person' && escArmed) {
+      if ((await read($, current)) !== '') {
+        await update($, current, () => '')
+        await writeTo($, undefined).catch(() => undefined)
+      }
+      $.clock.after(0, () => void openBoard($, false).catch(() => undefined))
       return
     }
     await next(e)
+    escArmed = false
     await update($, current, () => '')
-  }).catch(($, e, next) => (next.called ? undefined : next(e)))
+  }).catch(($, e, next) => (next.called || (e.origin.kind === 'person' && escArmed) ? undefined : next(e)))
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)

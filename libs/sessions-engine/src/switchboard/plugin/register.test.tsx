@@ -67,7 +67,7 @@ type Spawned = { prompt: string; description: string }
 
 type Answer = (e: any) => { isDelivered: boolean; reason?: string }
 
-const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true })) => {
+const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Spawned[] = [], store = new Map<string, unknown>(), answer: Answer = () => ({ isDelivered: true }), hidden = new Set<string>()) => {
   on('agent.spawn', (_: unknown, e: Spawned) => {
     spawned.push({ prompt: e.prompt, description: e.description })
     const fork = /^Project: \/work\nLauncher: [^\n]*\nfork (\S+)$/.exec(e.prompt)
@@ -118,7 +118,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
-  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('ui.panes', () => ({ value: [...open].map(id => ({ id, title: id, isShown: !hidden.has(id), isFocused: false, isPlaced: true })) }))
   on('ui.notify', () => ({ value: { isSent: false, reason: 'no-surface' } }))
   on('command.register', () => ({ value: { command: 'board' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__qol-switchboard__fork_board' } }))
@@ -1935,12 +1935,12 @@ test('typing a fork key and a message sends the message to that fork, keeps the 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   sent.length = 0
-  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork')
   expect(sent.length).toBe(1)
   expect(JSON.stringify(sent[0].to)).toContain('a8')
   expect(sent[0].text).toBe(fromUser('yes, amber'))
   expect(viewed).toEqual([])
-  expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork: and the hips')
+  expect((await typed($, 'asking: and the hips')).drop).toContain('→ asking-fork')
   expect((await typed($, 'asking yes')).text).toBe('asking yes')
   expect((await typed($, 'asking-fork yes', 'task-notification')).text).toBe('asking-fork yes')
 })
@@ -1959,7 +1959,7 @@ test('with the board open, a sent message makes that fork current: its chat stay
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   sent.length = 0
   panes.length = 0
-  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork')
   expect(panes).toContain('open board esc')
   await settle()
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
@@ -1967,7 +1967,7 @@ test('with the board open, a sent message makes that fork current: its chat stay
   const band = await $.ui.mount(promptBand(false))
   expect(await band.find({ type: 'Text', text: /esc on an empty prompt leaves/ })).toBeDefined()
   await band.unmount()
-  expect((await typed($, 'and the hips')).drop).toContain('→ asking-fork: and the hips')
+  expect((await typed($, 'and the hips')).drop).toContain('→ asking-fork')
   expect(sent.map(one => one.text)).toEqual([fromUser('yes, amber'), fromUser('and the hips')])
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
   expect(await ui.find({ type: 'Text', text: /yes, amber/ })).toBeUndefined()
@@ -1992,7 +1992,40 @@ test('a bare fork key makes that fork current and lets esc on an empty prompt le
   expect((await typed($, 'asking-fork')).drop).toContain('Writing to asking-fork')
   expect(panes).toEqual(['open board esc'])
   expect(sent).toEqual([])
-  expect((await typed($, 'hello')).drop).toContain('→ asking-fork: hello')
+  expect((await typed($, 'hello')).drop).toContain('→ asking-fork')
+})
+
+test('a send while the board is hidden leaves the current fork and takes back the esc that would close the board', async ($, on) => {
+  const panes: string[] = []
+  const hidden = new Set<string>()
+  engine(on, [], panes, [], new Map(), () => ({ isDelivered: true }), hidden)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  panes.length = 0
+  expect((await typed($, 'asking-fork yes')).drop).toBe('→ asking-fork')
+  expect(panes).toEqual(['open board esc'])
+  hidden.add('board')
+  expect((await typed($, 'asking-fork again')).drop).toBe('→ asking-fork')
+  expect(panes).toEqual(['open board esc', 'open board'])
+  expect((await typed($, 'asking-fork once more')).drop).toBe('→ asking-fork')
+  expect(panes).toEqual(['open board esc', 'open board'])
+})
+
+test('a start with the board already open sets its esc anew from the current fork, as after a reload', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork yes')
+  panes.length = 0
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(panes).toEqual(['open board esc'])
 })
 
 test('a fork that replies while another chat shows gets a new reply mark until its chat is shown', async ($, on) => {
@@ -2067,7 +2100,7 @@ test('a typed message the prompt hook could not send goes out from the band, and
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   sent.length = 0
-  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork: yes, amber')
+  expect((await typed($, 'asking-fork yes, amber')).drop).toContain('→ asking-fork')
   await settle()
   await renderBand($)
   expect(sent.map(one => one.text)).toEqual([fromUser('yes, amber'), fromUser('yes, amber')])
@@ -2111,7 +2144,7 @@ test('a fork key typed in a fork view goes to the viewed fork, never to the name
   expect((await typed($, 'asking-fork yes')).text).toBe('asking-fork yes')
   await inFork.unmount()
   const inMain = await $.ui.mount(band)
-  expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork: yes')
+  expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork')
   await inMain.unmount()
 })
 
