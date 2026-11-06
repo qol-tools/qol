@@ -122,8 +122,8 @@ fn extract_cgimage_pixels(img: CGImageRef, max_w: usize, max_h: usize) -> Option
         data: &raw,
         bytes_per_row: unsafe { CGImageGetBytesPerRow(img) },
     };
-    let cover = compute_cover_rect(src_w, src_h, max_w, max_h);
-    Some(blit_cover(&src, &cover))
+    let fit = compute_fit_rect(src_w, src_h, max_w, max_h);
+    Some(blit_fit(&src, &fit))
 }
 
 fn copy_cgimage_data(img: CGImageRef) -> Option<Vec<u8>> {
@@ -147,52 +147,31 @@ struct BlitSource<'a> {
     bytes_per_row: usize,
 }
 
-struct CoverRect {
-    src_x: usize,
-    src_y: usize,
+struct FitRect {
     src_w: usize,
     src_h: usize,
     dst_w: usize,
     dst_h: usize,
 }
 
-fn compute_cover_rect(src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> CoverRect {
-    let src_aspect = src_w as f64 / src_h as f64;
-    let dst_aspect = dst_w as f64 / dst_h as f64;
-    if src_aspect > dst_aspect {
-        let crop_w = ((src_h as f64 * dst_aspect).round() as usize)
-            .max(1)
-            .min(src_w);
-        return CoverRect {
-            src_x: (src_w - crop_w) / 2,
-            src_y: 0,
-            src_w: crop_w,
-            src_h,
-            dst_w,
-            dst_h,
-        };
-    }
-
-    let crop_h = ((src_w as f64 / dst_aspect).round() as usize)
-        .max(1)
-        .min(src_h);
-    CoverRect {
-        src_x: 0,
-        src_y: (src_h - crop_h) / 2,
+fn compute_fit_rect(src_w: usize, src_h: usize, max_w: usize, max_h: usize) -> FitRect {
+    let (dst_w, dst_h) =
+        crate::rendering::preview_image::fit_within(src_w as f32, src_h as f32, max_w, max_h);
+    FitRect {
         src_w,
-        src_h: crop_h,
+        src_h,
         dst_w,
         dst_h,
     }
 }
 
-fn blit_cover(src: &BlitSource, rect: &CoverRect) -> RgbaImage {
+fn blit_fit(src: &BlitSource, rect: &FitRect) -> RgbaImage {
     let mut bgra = vec![0u8; rect.dst_w * rect.dst_h * 4];
     for y in 0..rect.dst_h {
-        let src_y = rect.src_y + (y * rect.src_h) / rect.dst_h;
+        let src_y = (y * rect.src_h) / rect.dst_h;
         let src_row = src_y * src.bytes_per_row;
         let dst_row = y * rect.dst_w;
-        blit_cover_row(src, rect, src_row, &mut bgra, dst_row);
+        blit_fit_row(src, rect, src_row, &mut bgra, dst_row);
     }
     RgbaImage {
         data: bgra,
@@ -201,15 +180,9 @@ fn blit_cover(src: &BlitSource, rect: &CoverRect) -> RgbaImage {
     }
 }
 
-fn blit_cover_row(
-    src: &BlitSource,
-    rect: &CoverRect,
-    src_row: usize,
-    dst: &mut [u8],
-    dst_row: usize,
-) {
+fn blit_fit_row(src: &BlitSource, rect: &FitRect, src_row: usize, dst: &mut [u8], dst_row: usize) {
     for x in 0..rect.dst_w {
-        let src_x = rect.src_x + (x * rect.src_w) / rect.dst_w;
+        let src_x = (x * rect.src_w) / rect.dst_w;
         let s = src_row + src_x * 4;
         if s + 4 > src.data.len() {
             continue;
@@ -221,23 +194,18 @@ fn blit_cover_row(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_cover_rect;
+    use super::compute_fit_rect;
 
     #[test]
-    fn cover_rect_crops_height_for_tall_source() {
-        let rect = compute_cover_rect(1600, 1000, 542, 305);
-        assert_eq!(rect.src_x, 0);
-        assert!(rect.src_h < 1000);
-        assert_eq!(rect.dst_w, 542);
-        assert_eq!(rect.dst_h, 305);
-    }
-
-    #[test]
-    fn cover_rect_crops_width_for_wide_source() {
-        let rect = compute_cover_rect(2400, 1000, 542, 305);
-        assert_eq!(rect.src_y, 0);
-        assert!(rect.src_w < 2400);
-        assert_eq!(rect.dst_w, 542);
-        assert_eq!(rect.dst_h, 305);
+    fn a_snapshot_keeps_the_whole_window() {
+        let cases = [
+            ("tall source", (1600, 1000), (488, 305)),
+            ("wide source", (2400, 1000), (542, 226)),
+        ];
+        for (label, (src_w, src_h), (dst_w, dst_h)) in cases {
+            let rect = compute_fit_rect(src_w, src_h, 542, 305);
+            assert_eq!((rect.src_w, rect.src_h), (src_w, src_h), "{label}");
+            assert_eq!((rect.dst_w, rect.dst_h), (dst_w, dst_h), "{label}");
+        }
     }
 }

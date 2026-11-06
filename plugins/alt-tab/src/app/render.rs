@@ -607,7 +607,7 @@ fn preview_tile(
         return img(render_image.clone())
             .w(px(metrics.preview_width))
             .h(px(metrics.preview_height))
-            .object_fit(ObjectFit::Fill)
+            .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
     empty_placeholder(metrics, palette, border_subtle)
