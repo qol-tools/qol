@@ -23,6 +23,7 @@ pub(crate) enum BackendId {
 pub(crate) struct Capabilities {
     pub(crate) survives_secure_input: bool,
     pub(crate) owns_key_events: bool,
+    pub(crate) relays_qol_hotkeys: bool,
 }
 
 impl BackendId {
@@ -41,10 +42,17 @@ impl BackendId {
             Self::EventTap => Capabilities {
                 survives_secure_input: false,
                 owns_key_events: false,
+                relays_qol_hotkeys: false,
             },
-            Self::HidHelper | Self::KarabinerElements => Capabilities {
+            Self::HidHelper => Capabilities {
                 survives_secure_input: true,
                 owns_key_events: true,
+                relays_qol_hotkeys: false,
+            },
+            Self::KarabinerElements => Capabilities {
+                survives_secure_input: true,
+                owns_key_events: true,
+                relays_qol_hotkeys: true,
             },
         }
     }
@@ -126,7 +134,12 @@ pub(crate) struct InputState {
     pub(crate) backend: BackendCell,
     pub(crate) markers: MarkerBook,
     helper_allowed: AtomicBool,
+    hotkeys_relayed: AtomicU8,
 }
+
+const RELAY_UNKNOWN: u8 = 0;
+const RELAY_ON: u8 = 1;
+const RELAY_OFF: u8 = 2;
 
 impl Default for InputState {
     fn default() -> Self {
@@ -134,6 +147,7 @@ impl Default for InputState {
             backend: BackendCell::default(),
             markers: MarkerBook::default(),
             helper_allowed: AtomicBool::new(true),
+            hotkeys_relayed: AtomicU8::new(RELAY_UNKNOWN),
         }
     }
 }
@@ -145,6 +159,25 @@ impl InputState {
 
     pub(crate) fn allow_helper(&self, allowed: bool) {
         self.helper_allowed.store(allowed, Ordering::SeqCst);
+    }
+
+    pub(crate) fn hotkeys_relayed(&self) -> Option<bool> {
+        match self.hotkeys_relayed.load(Ordering::SeqCst) {
+            RELAY_UNKNOWN => None,
+            relayed => Some(relayed == RELAY_ON),
+        }
+    }
+
+    pub(crate) fn set_hotkeys_relayed(&self, relayed: bool) {
+        let relayed = if relayed { RELAY_ON } else { RELAY_OFF };
+        self.hotkeys_relayed.store(relayed, Ordering::SeqCst);
+    }
+
+    pub(crate) fn hotkeys_paused_by_secure_input(&self) -> bool {
+        match self.hotkeys_relayed() {
+            Some(relayed) => !relayed,
+            None => !self.backend.get().capabilities().relays_qol_hotkeys,
+        }
     }
 }
 
@@ -235,5 +268,23 @@ mod tests {
         };
         let decoded = qol_runtime::keyremap_marker::decode(marker_for(right_option, 0x13)).unwrap();
         assert_eq!(decoded.mods, qol_runtime::keyremap_marker::MOD_ALT);
+    }
+
+    #[test]
+    fn only_a_live_karabiner_relay_keeps_qol_hotkeys_through_secure_input() {
+        let input = InputState::default();
+        assert!(input.hotkeys_paused_by_secure_input());
+
+        input.backend.set(BackendId::HidHelper);
+        assert!(input.hotkeys_paused_by_secure_input());
+
+        input.backend.set(BackendId::KarabinerElements);
+        assert!(!input.hotkeys_paused_by_secure_input());
+
+        input.set_hotkeys_relayed(false);
+        assert!(input.hotkeys_paused_by_secure_input());
+
+        input.set_hotkeys_relayed(true);
+        assert!(!input.hotkeys_paused_by_secure_input());
     }
 }
