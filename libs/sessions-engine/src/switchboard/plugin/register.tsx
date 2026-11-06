@@ -26,7 +26,7 @@ const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
 const SB = 'sb'
 const TYPED_SB = /^\s*sb(?:\s|$)/
 const SB_TIMEOUT_MS = 60_000
-const CLEAR_TYPED_MS = 100
+const CLEAR_TYPED_MS = [100, 300, 600]
 const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
@@ -203,13 +203,18 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
-const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): void => {
-  $.clock.after(CLEAR_TYPED_MS, () => {
+const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
+  const [after, ...later] = waits
+  if (after === undefined) return
+  $.clock.after(after, () => {
     void (async () => {
-      if (isDropped((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      const { text } = await $.prompt.read()
+      if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      else if (text === '') clearBox($, isDropped, later)
     })().catch(() => {})
   })
 }
+
 
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
 

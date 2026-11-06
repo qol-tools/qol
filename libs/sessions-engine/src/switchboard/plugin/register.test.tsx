@@ -513,6 +513,33 @@ test('typing qols board empties the prompt box once the engine puts the dropped 
   expect(timers).toEqual([])
 })
 
+test('a sent message still leaves the box when the engine puts it back late', async ($, on) => {
+  engine(on)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  let box = ''
+  const fills: string[] = []
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    box = e.text
+    return { isFilled: true }
+  })
+  const tick = async () => {
+    expect(timers.length).toBe(1)
+    timers.splice(0).forEach(resolve => resolve())
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  timers.length = 0
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  await tick()
+  box = 'qols board'
+  await tick()
+  expect(fills).toEqual([''])
+  expect(timers).toEqual([])
+})
+
 test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
