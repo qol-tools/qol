@@ -2320,6 +2320,17 @@ test('a notice in the chat moves the fork conversation below it once things sett
   expect(focusIds(panes).length).toBe(2)
 })
 
+test('a fork key and message typed on the phone through Remote Control go to that fork, not the model', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal', 'bridge')).drop).toContain('→ asking-fork')
+  expect(sent.map(one => one.text)).toEqual([fromUser('teal')])
+})
+
 test('the prompt box offers fork keys for its first word only', async ($, on) => {
   engine(on)
   on('prompt.autocomplete', () => ({ suggestions: [] }))

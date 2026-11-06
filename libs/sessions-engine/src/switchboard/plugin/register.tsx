@@ -29,6 +29,7 @@ const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = [100, 300, 600]
 const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
+const TYPED_ORIGINS: readonly string[] = ['composer', 'bridge', 'person']
 const KEEP = 100
 const REPORT_CHARS = 16_000
 const HAIKU_MS = 20_000
@@ -1888,7 +1889,7 @@ export const register: Register = on => {
       await logSaid($, oneLine(quiet.fork), quiet.said).catch(() => {})
       return dropAs(reportLine(quiet))
     }
-    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    if (e.command !== undefined || e.isMeta === true || !TYPED_ORIGINS.includes(e.origin.kind)) return next(e)
     if (viewedFork === undefined && TYPED_SB.test(e.text)) {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
