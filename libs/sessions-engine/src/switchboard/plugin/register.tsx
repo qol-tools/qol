@@ -101,6 +101,7 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
+const mainSaid = atom({ plugin: 'qol-switchboard', key: 'mainSaid' } as const, [] as { isUser: boolean; text: string }[])
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
@@ -390,6 +391,16 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
 }
 
+let mainFetch = 0
+
+const refreshMain = async ($: EngineInterface): Promise<void> => {
+  const fetch = ++mainFetch
+  const found = await $.session.messages({}).catch(() => undefined)
+  if (found === undefined || fetch !== mainFetch) return
+  const said = recentWords(found)
+  if (!sameSaid(said, await read($, mainSaid))) await update($, mainSaid, () => said)
+}
+
 const FOCUS_PREFIX = 'focus-'
 const FOCUS_KEPT = 40
 const FOCUS_SETTLE_MS = 80
@@ -458,6 +469,7 @@ const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promi
 const ready = async ($: EngineInterface): Promise<void> => {
   await update($, starting, () => '')
   await refreshStatus($).catch(() => undefined)
+  await refreshMain($).catch(() => undefined)
 }
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
@@ -2045,6 +2057,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (isHeld || [BACK, WAIT_FOR_USER, REOPENED].some(one => e.text.includes(one)))) {
       await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
     }
+    if (e.agentId === undefined) await refreshMain($).catch(() => {})
     if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
@@ -2077,6 +2090,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
     if (e.agentId === undefined) await followFocus($).catch(() => {})
+    if (e.agentId === undefined) await refreshMain($).catch(() => {})
     return done
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
@@ -2107,7 +2121,7 @@ export const register: Register = on => {
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
-    const said = await read($, writingSaid)
+    const switchboardSaid = await read($, mainSaid)
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
@@ -2236,17 +2250,21 @@ export const register: Register = on => {
               </Text>
             </Text>
             <Box paddingLeft={2} flexDirection="column">
-              {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
-              {[...said].reverse().map((one, index) => (
-                <Box key={`said-${index}`} flexDirection="column" marginTop={1}>
-                  <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
-                    {one.isUser ? 'you' : keyOf(target)}
-                  </Text>
-                  <Text wrap="wrap">{one.text}</Text>
-                </Box>
-              ))}
               {prs(target)}
             </Box>
+          </Box>
+        )}
+        {target !== undefined && switchboardSaid.length > 0 && heading('SWITCHBOARD')}
+        {target !== undefined && (
+          <Box paddingLeft={2} flexDirection="column">
+            {[...switchboardSaid].reverse().map((one, index) => (
+              <Box key={`main-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+                <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+                  {one.isUser ? 'you' : 'switchboard'}
+                </Text>
+                <Text wrap="wrap">{one.text}</Text>
+              </Box>
+            ))}
           </Box>
         )}
         {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
