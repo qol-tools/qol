@@ -196,8 +196,11 @@ fn install_signed(source: &Path, identity: &str) -> Result<String> {
     }
     signed?;
     finish_file(&helper, HELPER_BINARY, 0o755)?;
-    place_signed_client(Path::new(&staged), &client)?;
     write_file(REQUIREMENT_PATH, &requirement, 0o644)?;
+    if let Err(error) = place_signed_client(Path::new(&staged), &client) {
+        let _ = fs::remove_file(REQUIREMENT_PATH);
+        return Err(error);
+    }
     Ok(cdhash)
 }
 
