@@ -391,6 +391,14 @@ fn installed(plugins: &PluginManager, data_root: Option<&Path>) -> Installed {
     }) else {
         return Installed::Absent;
     };
+    if !plugin
+        .manifest
+        .daemon
+        .as_ref()
+        .is_some_and(|daemon| daemon.enabled)
+    {
+        return Installed::Absent;
+    }
     if is_legacy_pointz(&plugin.manifest) {
         return Installed::Legacy;
     }

@@ -13,13 +13,14 @@ use tokio::{
 
 use super::{
     discovery::{advertised_name, cancelled, Advertisement, DiscoveryEvent, CLOSE_TIMEOUT},
+    enrollment::Gate,
     nearby::Nearby,
     routing::{rank, Routes, MAX_HANDSHAKES, MAX_PEERS},
     NetworkOptions, NetworkSnapshot,
 };
 use crate::{
     admin::NetworkRevision,
-    network::{DiscoveryStatus, ListenerStatus, NetworkFailure},
+    network::{DiscoveryStatus, IdleReason, ListenerStatus, NetworkFailure},
     service::{
         session::{NormalSession, SessionError},
         PeerAuthority,
@@ -63,7 +64,7 @@ pub(super) async fn run(
     view: watch::Sender<NetworkSnapshot>,
     operations: std::sync::Arc<super::operations::Hub>,
     workers: mpsc::Receiver<super::operations::Worker>,
-    link: Option<u16>,
+    gate: std::sync::Arc<Gate>,
 ) -> Result<(), NetworkFailure> {
     let mut owner = Supervisor {
         authority,
@@ -80,7 +81,7 @@ pub(super) async fn run(
         workers,
         dispatches: JoinSet::new(),
     };
-    let result = owner.serve(options, &mut stop, link).await;
+    let result = owner.serve_gated(options, &mut stop, &gate).await;
     owner.view.send_modify(|view| {
         view.status.stopping = true;
         view.status.listener = ListenerStatus::Closed {};
@@ -128,17 +129,87 @@ pub(super) async fn run(
 }
 
 impl Supervisor {
+    fn serving(&self, gate: &Gate) -> bool {
+        !self.trusted.is_empty() || gate.nearby_open()
+    }
+
+    fn start_worker(&mut self, worker: Option<super::operations::Worker>) {
+        if let Some(worker) = worker {
+            let hub = self.operations.clone();
+            self.dispatches.spawn_blocking(move || hub.execute(worker));
+        }
+    }
+
+    fn dispatch_finished(
+        &self,
+        completion: Option<Result<super::operations::Completion, tokio::task::JoinError>>,
+    ) -> Result<(), NetworkFailure> {
+        match completion {
+            Some(Ok(completion)) => self.operations.completed(completion),
+            Some(Err(_)) => Err(NetworkFailure::Cleanup),
+            None => Ok(()),
+        }
+    }
+
+    async fn serve_gated(
+        &mut self,
+        options: NetworkOptions,
+        stop: &mut watch::Receiver<bool>,
+        gate: &Gate,
+    ) -> Result<(), NetworkFailure> {
+        let mut changes = self.authority.watch_changes();
+        let mut gate_changes = gate.subscribe();
+        loop {
+            self.refresh_authority()?;
+            if *stop.borrow() {
+                return Ok(());
+            }
+            if self.serving(gate) {
+                self.view
+                    .send_modify(|view| view.status.discovery = DiscoveryStatus::Starting {});
+                self.serve(options.clone(), stop, gate).await?;
+                if *stop.borrow() {
+                    return Ok(());
+                }
+                self.view.send_modify(|view| view.status.stopping = false);
+            }
+            self.view.send_modify(|view| {
+                view.status.listener = ListenerStatus::Idle {
+                    reason: IdleReason::NoLinkedPeers,
+                };
+                view.status.discovery = DiscoveryStatus::Closed {};
+            });
+            while !self.serving(gate) && !*stop.borrow() {
+                tokio::select! {
+                    biased;
+                    () = cancelled(stop) => return Ok(()),
+                    change = changes.changed() => {
+                        if change.is_err() { return Err(NetworkFailure::Authority); }
+                        self.refresh_authority()?;
+                    },
+                    _ = gate_changes.changed() => {},
+                    completion = self.dispatches.join_next(), if !self.dispatches.is_empty() => {
+                        self.dispatch_finished(completion)?;
+                    },
+                    worker = self.workers.recv() => self.start_worker(worker),
+                }
+            }
+        }
+    }
+
     async fn serve(
         &mut self,
         options: NetworkOptions,
         stop: &mut watch::Receiver<bool>,
-        link: Option<u16>,
+        gate: &Gate,
     ) -> Result<(), NetworkFailure> {
         let mut changes = self.authority.watch_changes();
+        let mut gate_changes = gate.subscribe();
         self.refresh_authority()?;
         if *stop.borrow() {
             return Ok(());
         }
+        let link = gate.link();
         let listener = TcpListener::bind(SocketAddrV4::new(options.bind, 0))
             .await
             .map_err(|_| NetworkFailure::Listener)?;
@@ -177,8 +248,16 @@ impl Supervisor {
         let mut discovery_events_open = true;
         let mut discovery_deadline = None;
         let result = loop {
+            if !self.serving(gate) {
+                break Ok(());
+            }
             self.dial_ready();
             let retry = self.next_retry();
+            let lease = if self.trusted.is_empty() {
+                gate.nearby_deadline()
+            } else {
+                None
+            };
             tokio::select! {
                 biased;
                 () = cancelled(stop) => break Ok(()),
@@ -186,19 +265,12 @@ impl Supervisor {
                     if change.is_err() { break Err(NetworkFailure::Authority); }
                     if let Err(error) = self.refresh_authority() { break Err(error); }
                 },
+                _ = gate_changes.changed() => {},
+                () = retry_at(lease) => {},
                 completion = self.dispatches.join_next(), if !self.dispatches.is_empty() => {
-                    match completion {
-                        Some(Ok(completion)) => if let Err(error) = self.operations.completed(completion) { break Err(error); },
-                        Some(Err(_)) => break Err(NetworkFailure::Cleanup),
-                        None => {},
-                    }
+                    if let Err(error) = self.dispatch_finished(completion) { break Err(error); }
                 },
-                worker = self.workers.recv() => {
-                    if let Some(worker) = worker {
-                        let hub = self.operations.clone();
-                        self.dispatches.spawn_blocking(move || hub.execute(worker));
-                    }
-                },
+                worker = self.workers.recv() => self.start_worker(worker),
                 result = self.sessions.join_next(), if !self.sessions.is_empty() => {
                     match result {
                         Some(Ok(session)) => if let Err(error) = self.exited(session) { break Err(error); },

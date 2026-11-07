@@ -295,6 +295,9 @@ fn network_projection_schema_rejects_recursive_extras_and_duplicates() {
         strict::<ListenerStatus>(json!({"state": state}));
     }
     strict::<ListenerStatus>(json!({"state": "listening", "port": 1234}));
+    for reason in ["no_linked_peers", "nothing_open"] {
+        strict::<ListenerStatus>(json!({"state": "idle", "reason": reason}));
+    }
     for error in [
         "listener",
         "discovery",

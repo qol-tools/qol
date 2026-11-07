@@ -3,7 +3,7 @@ use crate::network::DiscoveryStatus;
 
 #[tokio::test]
 async fn queued_start_is_not_readiness_and_late_discovery_failure_preserves_listener() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     assert_eq!(
         owner.control.snapshot().status.discovery,
         DiscoveryStatus::Starting {}
@@ -34,7 +34,7 @@ async fn queued_start_is_not_readiness_and_late_discovery_failure_preserves_list
 
 #[tokio::test]
 async fn dropping_control_cancels_but_completion_waits_for_discovery_receipt() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     owner.port().await;
     owner.release.send_replace(false);
     drop(owner.control);
@@ -48,7 +48,7 @@ async fn dropping_control_cancels_but_completion_waits_for_discovery_receipt() {
 
 #[tokio::test]
 async fn startup_failure_closes_the_partial_discovery_owner_and_leaves_listener_usable() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     let port = owner.port().await;
     let (unused, _) = mpsc::channel(1);
     drop(std::mem::replace(&mut owner.events, unused));
@@ -72,6 +72,13 @@ async fn persistent_writer_is_reacquired_only_after_all_network_work_is_reaped()
     let authority =
         PeerAuthority::create_persistent(&root, "local".into(), SystemTime::now()).unwrap();
     let identity = authority.local_pin().unwrap().peer_id();
+    authority
+        .insert_link(
+            authority.projection().unwrap().revision,
+            super::authority("remote").local_pin().unwrap(),
+            "remote".into(),
+        )
+        .unwrap();
     let mut owner = Fixture::start(authority);
     let port = owner.port().await;
     let _handshake = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
@@ -108,7 +115,7 @@ impl DiscoveryFactory for ConstructorFailure {
 
 #[tokio::test]
 async fn discovery_constructor_failure_does_not_lose_the_listener_or_authority() {
-    let authority = authority("local");
+    let authority = linked().0;
     let identity = authority.local_pin().unwrap().peer_id();
     let (control, task) = prepare(
         authority.clone(),
@@ -201,7 +208,7 @@ async fn closed_discovery_events_with_pending_cleanup_allow_trusted_inbound_tls(
 
 #[tokio::test(start_paused = true)]
 async fn cancelled_discovery_that_never_completes_fails_within_the_owner_budget() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     owner.port().await;
     owner.release.send_replace(false);
     let mut view = owner.control.subscribe();
@@ -223,7 +230,7 @@ async fn cancelled_discovery_that_never_completes_fails_within_the_owner_budget(
 
 #[tokio::test(start_paused = true)]
 async fn closed_event_channel_cleanup_deadline_is_not_restarted_by_stop() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     owner.port().await;
     owner.release.send_replace(false);
     let (unused, _) = mpsc::channel(1);
@@ -245,7 +252,7 @@ async fn closed_event_channel_cleanup_deadline_is_not_restarted_by_stop() {
 
 #[tokio::test(start_paused = true)]
 async fn event_channel_close_exposes_cleanup_timeout_before_an_explicit_stop() {
-    let mut owner = Fixture::start(authority("local"));
+    let mut owner = Fixture::start(linked().0);
     owner.port().await;
     owner.release.send_replace(false);
     let (unused, _) = mpsc::channel(1);

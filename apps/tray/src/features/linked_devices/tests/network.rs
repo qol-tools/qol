@@ -115,6 +115,10 @@ impl Fixture {
     }
 
     async fn ready(&mut self) {
+        self.request(Request::Nearby {
+            request: qol_peers::admin::NearbyRequest::List {},
+        })
+        .await;
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if *self.started.borrow() > 0 {

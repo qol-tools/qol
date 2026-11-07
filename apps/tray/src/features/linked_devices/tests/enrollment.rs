@@ -88,7 +88,7 @@ impl Fixture {
         authority(&self.shared).expected()
     }
 
-    pub(crate) async fn ready(&self) -> u16 {
+    pub(crate) async fn ready(&self) {
         let mut view = self
             .owner
             .handle
@@ -103,9 +103,11 @@ impl Fixture {
             .subscribe();
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if let ListenerStatus::Listening { port } = view.borrow().status.enrollment_listener
-                {
-                    return port;
+                if !matches!(
+                    view.borrow().status.enrollment_listener,
+                    ListenerStatus::Starting {}
+                ) {
+                    return;
                 }
                 view.changed().await.unwrap();
             }
