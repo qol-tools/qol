@@ -1830,7 +1830,7 @@ export const register: Register = on => {
     const activity = await read($, focusActivity)
     const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" paddingX={2} paddingY={1}>
         <Text dimColor>{`── ${shown.key}${state} ──`}</Text>
         {shown.rows.length === 0 && <Text dimColor>No messages yet.</Text>}
         {shown.rows.map((one, index) => (
