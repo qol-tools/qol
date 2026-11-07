@@ -167,7 +167,7 @@ impl GitRepo {
             checkout_remote_into_local(&repo, remote_oid)?;
             return Ok(());
         }
-        refuse_device_local_paths(&repo, remote_oid)?;
+        refuse_unsafe_entries(&repo, remote_oid)?;
         fast_forward(&repo, remote_oid)
     }
 
@@ -253,10 +253,10 @@ impl GitRepo {
 
     pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
         let repo = self.open_repo()?;
-        refuse_device_local_paths(&repo, oid)?;
+        refuse_unsafe_entries(&repo, oid)?;
         let object = repo.find_object(oid, None)?;
         repo.reset(&object, git2::ResetType::Hard, None)?;
-        Ok(())
+        prune_repo_workdir(&repo)
     }
 
     pub fn head_sha(&self) -> Result<Option<String>> {
@@ -459,40 +459,79 @@ fn fast_forward(repo: &Repository, target: git2::Oid) -> Result<()> {
     reference.set_target(target, "fast-forward")?;
     repo.set_head(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
     repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
-    Ok(())
+    prune_repo_workdir(repo)
 }
 
-fn refuse_device_local_paths(repo: &Repository, oid: git2::Oid) -> Result<()> {
+fn refuse_unsafe_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
     let tree = repo.find_commit(oid)?.tree()?;
-    let mut offending: Vec<String> = Vec::new();
+    let mut offending: Vec<(&'static str, String)> = Vec::new();
     tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
-        if entry.kind() == Some(git2::ObjectType::Blob) {
-            let path = format!("{root}{}", entry.name().unwrap_or(""));
-            if crate::scope::is_device_local(Path::new(&path)) {
-                offending.push(path);
-            }
+        let path = format!("{root}{}", String::from_utf8_lossy(entry.name_bytes()));
+        if entry.filemode() == 0o120000 {
+            offending.push(("a symlink", path));
+        } else if entry.kind() == Some(git2::ObjectType::Commit) {
+            offending.push(("a submodule", path));
+        } else if entry.kind() == Some(git2::ObjectType::Blob)
+            && crate::scope::is_device_local(Path::new(&path))
+        {
+            offending.push(("a device-local file", path));
         }
         git2::TreeWalkResult::Ok
     })?;
     match offending.as_slice() {
         [] => Ok(()),
-        [only] => Err(anyhow!(
-            "the sync repo holds device-local files that are never synced, for example {only}; remove them from the repo before syncing again"
+        [(what, only)] => Err(anyhow!(
+            "the sync repo holds {what} at {only}, which is never synced; remove it from the repo before syncing again"
         )),
-        [first, ..] => Err(anyhow!(
-            "the sync repo holds {} device-local files that are never synced, for example {first}; remove them from the repo before syncing again",
+        [(what, first), ..] => Err(anyhow!(
+            "the sync repo holds {} entries that are never synced, for example {what} at {first}; remove them from the repo before syncing again",
             offending.len()
         )),
     }
 }
 
+fn prune_non_allowlisted(repo: &Repository, workdir: &Path) -> Result<()> {
+    let tree = repo.head()?.peel_to_commit()?.tree()?;
+    let mut doomed: Vec<String> = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            let path = format!("{root}{}", String::from_utf8_lossy(entry.name_bytes()));
+            if !crate::scope::is_sync_allowlisted(Path::new(&path)) {
+                doomed.push(path);
+            }
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+    for rel in doomed {
+        let full = workdir.join(&rel);
+        match std::fs::symlink_metadata(&full) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => match std::fs::remove_file(&full) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).with_context(|| format!("remove {rel}")),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("inspect {rel}")),
+        }
+    }
+    Ok(())
+}
+
+fn prune_repo_workdir(repo: &Repository) -> Result<()> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("the sync repo is bare and has no working copy"))?;
+    prune_non_allowlisted(repo, workdir)
+}
+
 fn checkout_remote_into_local(repo: &Repository, remote_oid: git2::Oid) -> Result<()> {
-    refuse_device_local_paths(repo, remote_oid)?;
+    refuse_unsafe_entries(repo, remote_oid)?;
     let commit = repo.find_commit(remote_oid)?;
     repo.branch(DEFAULT_BRANCH, &commit, true)?;
     repo.set_head(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
     repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
-    Ok(())
+    prune_repo_workdir(repo)
 }
 
 #[cfg(test)]
@@ -795,20 +834,93 @@ mod tests {
 
     #[test]
     fn a_remote_commit_holding_a_device_local_file_is_refused() {
+        for rel in [
+            "default/device/task-runner.json",
+            "Default/DEVICE/task-runner.json",
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+            let head_before = bob.head_sha().unwrap();
+
+            commit_raw(&alice_path, rel, "{}");
+            alice.push(None).unwrap();
+
+            let error = bob.pull(None).unwrap_err();
+            assert!(
+                format!("{error:#}")
+                    .to_lowercase()
+                    .contains(&rel.to_lowercase()),
+                "error must name the path: {error:#}"
+            );
+            assert_eq!(bob.head_sha().unwrap(), head_before);
+            assert!(!bob_path.join(rel).exists());
+        }
+    }
+
+    #[test]
+    fn a_remote_symlink_entry_is_refused() {
         let tmp = TempDir::new().unwrap();
         let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
         let head_before = bob.head_sha().unwrap();
 
-        commit_raw(&alice_path, "default/device/task-runner.json", "{}");
+        let repo = Repository::open(&alice_path).unwrap();
+        let mut index = repo.index().unwrap();
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o120000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::zero(),
+            flags: 0,
+            flags_extended: 0,
+            path: b"default/core/link".to_vec(),
+        };
+        index.add_frombuffer(&entry, b"../../device").unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = signature().to_git_signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "link", &tree, &[&parent])
+            .unwrap();
         alice.push(None).unwrap();
 
         let error = bob.pull(None).unwrap_err();
+        let message = format!("{error:#}");
         assert!(
-            format!("{error:#}").contains("default/device/task-runner.json"),
-            "error must name the path: {error:#}"
+            message.contains("a symlink"),
+            "error must say symlink: {message}"
+        );
+        assert!(
+            message.contains("default/core/link"),
+            "error must name the path: {message}"
         );
         assert_eq!(bob.head_sha().unwrap(), head_before);
-        assert!(!bob_path.join("default/device/task-runner.json").exists());
+        assert!(std::fs::symlink_metadata(bob_path.join("default/core/link")).is_err());
+    }
+
+    #[test]
+    fn a_pull_drops_files_outside_the_allowlist_from_the_working_copy() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+        let head_before = bob.head_sha().unwrap();
+
+        commit_raw(&alice_path, "default/core/plugins.lock.json", "{\"v\":2}");
+        commit_raw(&alice_path, "default/notes.txt", "notes");
+        commit_raw(&alice_path, ".DS_Store", "junk");
+        alice.push(None).unwrap();
+
+        let outcome = bob.pull(None).unwrap();
+        assert!(
+            matches!(outcome, PullOutcome::FastForwarded { .. }),
+            "expected fast-forward, got {outcome:?}"
+        );
+        assert!(bob_path.join("default/core/plugins.lock.json").exists());
+        assert!(!bob_path.join("default/notes.txt").exists());
+        assert!(!bob_path.join(".DS_Store").exists());
+        assert_ne!(bob.head_sha().unwrap(), head_before);
     }
 
     #[test]

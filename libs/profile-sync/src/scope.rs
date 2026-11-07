@@ -70,9 +70,13 @@ pub fn is_device_local(rel: &Path) -> bool {
             _ => return false,
         }
     }
-    match parts.as_slice() {
-        ["active"] | ["sync.json"] => true,
-        [_, second, ..] => *second == DEVICE_SUBDIR,
+    let folded: Vec<&str> = parts
+        .iter()
+        .map(|part| part.trim_end_matches(['.', ' ']))
+        .collect();
+    match folded.as_slice() {
+        [only] => only.eq_ignore_ascii_case("active") || only.eq_ignore_ascii_case("sync.json"),
+        [_, second, ..] => second.eq_ignore_ascii_case(DEVICE_SUBDIR),
         _ => false,
     }
 }
@@ -209,6 +213,11 @@ mod tests {
             "sync.json",
             "default/device/task-runner.json",
             "work/device/plugin-configs/x.json",
+            "Default/DEVICE/x",
+            "default/device./x",
+            "default/Device /x",
+            "ACTIVE",
+            "Sync.JSON",
         ] {
             assert!(
                 is_device_local(Path::new(raw)),
