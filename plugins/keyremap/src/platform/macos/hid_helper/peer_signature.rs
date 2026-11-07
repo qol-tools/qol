@@ -1,7 +1,9 @@
 use std::ffi::c_void;
+use std::fs;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::ptr;
 
 use anyhow::{ensure, Context, Result};
@@ -11,6 +13,9 @@ use core_foundation::data::{CFData, CFDataRef};
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::string::{CFString, CFStringRef};
 
+use super::install::REQUIREMENT_PATH;
+
+const CDHASH_LENGTHS: [usize; 2] = [40, 64];
 const SIGNING_INFORMATION: u32 = 1 << 1;
 const SOL_LOCAL: i32 = 0;
 const LOCAL_PEERTOKEN: i32 = 0x006;
@@ -52,7 +57,9 @@ pub(super) struct Signer(CFTypeRef);
 impl Signer {
     pub(super) fn of_this_helper() -> Result<Self> {
         let certificate = own_leaf_certificate()?;
-        Self::from_requirement(&leaf_requirement(certificate.bytes())?)
+        let leaf = leaf_requirement(certificate.bytes())?;
+        let client = pinned_client_requirement(Path::new(REQUIREMENT_PATH))?;
+        Self::from_requirement(&trusted_requirement(&leaf, &client))
     }
 
     fn from_requirement(text: &str) -> Result<Self> {
@@ -144,6 +151,63 @@ fn leaf_requirement(certificate: &[u8]) -> Result<String> {
     Ok(format!("certificate leaf = H\"{hex}\""))
 }
 
+pub(super) fn is_cdhash(text: &str) -> bool {
+    CDHASH_LENGTHS.contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_identifier(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
+}
+
+pub(super) fn client_requirement(identifier: &str, cdhash: &str) -> Result<String> {
+    ensure!(
+        is_identifier(identifier),
+        "the client identifier `{identifier}` has characters outside A-Z, a-z, 0-9, `.` and `-`"
+    );
+    ensure!(
+        is_cdhash(cdhash),
+        "the client cdhash `{cdhash}` is not 40 or 64 hex characters"
+    );
+    Ok(format!(
+        "identifier \"{identifier}\" and cdhash H\"{cdhash}\""
+    ))
+}
+
+fn split_client_requirement(text: &str) -> Option<(&str, &str)> {
+    let rest = text.strip_prefix("identifier \"")?;
+    let (identifier, rest) = rest.split_once('"')?;
+    let cdhash = rest.strip_prefix(" and cdhash H\"")?.strip_suffix('"')?;
+    Some((identifier, cdhash))
+}
+
+fn validated_client_requirement(text: &str) -> Result<String> {
+    let (identifier, cdhash) = split_client_requirement(text.trim())
+        .context("it does not read: identifier \"<name>\" and cdhash H\"<hex>\"")?;
+    client_requirement(identifier, cdhash)
+}
+
+fn pinned_client_requirement(path: &Path) -> Result<String> {
+    let text = fs::read_to_string(path).with_context(|| {
+        format!(
+            "cannot read {}, so no Key Remap build is trusted; run: sudo qol-keyremap install-hid-helper",
+            path.display()
+        )
+    })?;
+    validated_client_requirement(&text).with_context(|| {
+        format!(
+            "{} is malformed; run: sudo qol-keyremap install-hid-helper",
+            path.display()
+        )
+    })
+}
+
+fn trusted_requirement(leaf: &str, client: &str) -> String {
+    format!("{leaf} and ({client})")
+}
+
 fn peer_audit_token(stream: &UnixStream) -> Result<[u8; AUDIT_TOKEN_SIZE]> {
     let mut token = [0u8; AUDIT_TOKEN_SIZE];
     let mut len = AUDIT_TOKEN_SIZE as u32;
@@ -168,6 +232,7 @@ fn peer_audit_token(stream: &UnixStream) -> Result<[u8; AUDIT_TOKEN_SIZE]> {
 
 #[cfg(test)]
 pub(super) mod tests {
+    use super::super::install::CLIENT_IDENTIFIER;
     use super::*;
 
     pub(in crate::platform::macos::hid_helper) fn trusting_anyone() -> Signer {
@@ -184,6 +249,86 @@ pub(super) mod tests {
             leaf_requirement(b"abc").unwrap(),
             "certificate leaf = H\"a9993e364706816aba3e25717850c26c9cd0d89d\""
         );
+    }
+
+    const SHA1_CDHASH: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn the_client_requirement_names_the_identifier_and_the_cdhash() {
+        assert_eq!(
+            client_requirement(CLIENT_IDENTIFIER, SHA1_CDHASH).unwrap(),
+            format!("identifier \"com.qol-tools.keyremap\" and cdhash H\"{SHA1_CDHASH}\"")
+        );
+        assert!(client_requirement(CLIENT_IDENTIFIER, &"ab".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn the_trusted_requirement_needs_the_leaf_and_the_pinned_client() {
+        let leaf = leaf_requirement(b"abc").unwrap();
+        let client = client_requirement(CLIENT_IDENTIFIER, SHA1_CDHASH).unwrap();
+        let composed = trusted_requirement(&leaf, &client);
+        assert_eq!(composed, format!("{leaf} and ({client})"));
+        assert!(Signer::from_requirement(&composed).is_ok());
+    }
+
+    #[test]
+    fn a_good_requirement_file_is_accepted_with_surrounding_whitespace() {
+        let text = format!("identifier \"com.qol-tools.keyremap\" and cdhash H\"{SHA1_CDHASH}\"\n");
+        assert_eq!(
+            validated_client_requirement(&text).unwrap(),
+            text.trim().to_string()
+        );
+    }
+
+    #[test]
+    fn a_requirement_file_without_a_cdhash_or_with_bad_characters_is_refused() {
+        let cdhash_missing = "identifier \"com.qol-tools.keyremap\"";
+        let wrong_length = "identifier \"com.qol-tools.keyremap\" and cdhash H\"abcdef\"";
+        let not_hex = format!(
+            "identifier \"com.qol-tools.keyremap\" and cdhash H\"{}\"",
+            "zz".repeat(20)
+        );
+        let quote_in_identifier =
+            format!("identifier \"a\" or anchor apple and cdhash H\"{SHA1_CDHASH}\"");
+        let space_in_identifier = format!("identifier \"com qol\" and cdhash H\"{SHA1_CDHASH}\"");
+        let extra_clause = format!(
+            "identifier \"com.qol-tools.keyremap\" and cdhash H\"{SHA1_CDHASH}\" or anchor apple"
+        );
+        let empty_identifier = format!("identifier \"\" and cdhash H\"{SHA1_CDHASH}\"");
+        for text in [
+            cdhash_missing,
+            wrong_length,
+            not_hex.as_str(),
+            quote_in_identifier.as_str(),
+            space_in_identifier.as_str(),
+            extra_clause.as_str(),
+            empty_identifier.as_str(),
+            "",
+        ] {
+            assert!(validated_client_requirement(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_missing_or_malformed_requirement_file_names_the_install_command() {
+        let directory =
+            std::env::temp_dir().join(format!("qol-keyremap-requirement-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let missing = directory.join("missing");
+        let error = format!("{:#}", pinned_client_requirement(&missing).unwrap_err());
+        assert!(error.contains("install-hid-helper"), "{error}");
+        let malformed = directory.join("malformed");
+        fs::write(&malformed, "anchor apple").unwrap();
+        let error = format!("{:#}", pinned_client_requirement(&malformed).unwrap_err());
+        assert!(error.contains("install-hid-helper"), "{error}");
+        let good = directory.join("good");
+        fs::write(
+            &good,
+            client_requirement(CLIENT_IDENTIFIER, SHA1_CDHASH).unwrap(),
+        )
+        .unwrap();
+        assert!(pinned_client_requirement(&good).is_ok());
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]

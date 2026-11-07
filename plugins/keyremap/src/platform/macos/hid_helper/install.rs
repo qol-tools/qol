@@ -8,6 +8,7 @@ use anyhow::{bail, ensure, Context, Result};
 use qol_hotkeys::layout::physical_layout;
 use qol_hotkeys::macos_keycode::PhysicalLayout;
 
+use super::peer_signature::{client_requirement, is_cdhash};
 use super::protocol::SOCKET_PATH;
 use crate::platform::macos::doctor::INPUT_MONITORING_FIX;
 use crate::platform::macos::virtual_hid::client::request::{
@@ -20,6 +21,9 @@ use crate::platform::macos::virtual_hid::{
 pub(crate) const HELPER_LABEL: &str = "com.qol-tools.keyremap.hid-helper";
 pub(crate) const HELPER_BINARY: &str =
     "/Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper";
+pub(crate) const CLIENT_IDENTIFIER: &str = "com.qol-tools.keyremap";
+pub(crate) const REQUIREMENT_PATH: &str =
+    "/Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper.requirement";
 pub(crate) const HELPER_PLIST: &str =
     "/Library/LaunchDaemons/com.qol-tools.keyremap.hid-helper.plist";
 pub(crate) const OWN_DAEMON_PLIST: &str =
@@ -42,9 +46,13 @@ pub(crate) fn install() -> Result<String> {
     let current = std::env::current_exe().context("find the running qol-keyremap binary")?;
     match qol_config::codesign_identity() {
         Some(identity) => {
-            install_signed(&current, &identity)?;
+            let cdhash = install_signed(&current, &identity)?;
             steps.push(format!(
                 "Copied {} to {HELPER_BINARY} and signed it as {identity}.",
+                current.display()
+            ));
+            steps.push(format!(
+                "Pinned {} (cdhash {cdhash}) as the only Key Remap build the helper trusts. Install the helper again after every Key Remap update.",
                 current.display()
             ));
         }
@@ -85,7 +93,7 @@ pub(crate) fn uninstall() -> Result<String> {
     ensure_root("uninstall-hid-helper")?;
     let mut steps = Vec::new();
     bootout(HELPER_LABEL);
-    for path in [HELPER_PLIST, HELPER_BINARY, SOCKET_PATH] {
+    for path in [HELPER_PLIST, HELPER_BINARY, REQUIREMENT_PATH, SOCKET_PATH] {
         remove_if_present(path)?;
     }
     steps.push(format!("Stopped and removed {HELPER_LABEL}."));
@@ -159,20 +167,86 @@ fn install_file(source: &Path, target: &str, mode: u32) -> Result<()> {
     finish_file(&staging, target, mode)
 }
 
-fn install_signed(source: &Path, identity: &str) -> Result<()> {
+fn install_signed(source: &Path, identity: &str) -> Result<String> {
     let keychain = login_keychain()?;
+    let cdhash = resign_client(source, identity, &keychain)?;
+    let requirement = client_requirement(CLIENT_IDENTIFIER, &cdhash)?;
     let staging = format!("{HELPER_BINARY}.new");
     fs::copy(source, &staging).with_context(|| format!("copy to {staging}"))?;
-    let arguments = codesign_arguments(identity, &keychain, &staging);
-    let signed = run(
-        CODESIGN,
-        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
-    );
+    let signed = sign(&codesign_arguments(
+        identity,
+        &keychain,
+        HELPER_LABEL,
+        &staging,
+    ));
     if signed.is_err() {
         let _ = fs::remove_file(&staging);
     }
     signed?;
-    finish_file(&staging, HELPER_BINARY, 0o755)
+    finish_file(&staging, HELPER_BINARY, 0o755)?;
+    write_file(REQUIREMENT_PATH, &requirement, 0o644)?;
+    Ok(cdhash)
+}
+
+fn resign_client(source: &Path, identity: &str, keychain: &str) -> Result<String> {
+    let client = fs::canonicalize(source).context("resolve the running qol-keyremap binary")?;
+    let client_text = client
+        .to_str()
+        .context("the running qol-keyremap path is not valid UTF-8")?;
+    let staging = format!("{client_text}.signing");
+    fs::copy(&client, &staging).with_context(|| format!("copy to {staging}"))?;
+    let swapped = sign(&codesign_arguments(
+        identity,
+        keychain,
+        CLIENT_IDENTIFIER,
+        &staging,
+    ))
+    .and_then(|()| client_cdhash(&staging))
+    .and_then(|cdhash| swap_in_signed_client(&staging, &client).map(|()| cdhash));
+    if swapped.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    swapped
+}
+
+fn swap_in_signed_client(staging: &str, client: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let original = fs::metadata(client).with_context(|| format!("stat {}", client.display()))?;
+    std::os::unix::fs::chown(staging, Some(original.uid()), Some(original.gid()))
+        .with_context(|| format!("chown {staging}"))?;
+    fs::set_permissions(staging, original.permissions())
+        .with_context(|| format!("chmod {staging}"))?;
+    fs::rename(staging, client).with_context(|| format!("move {staging} over {}", client.display()))
+}
+
+fn sign(arguments: &[String]) -> Result<()> {
+    run(
+        CODESIGN,
+        &arguments.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+}
+
+fn client_cdhash(path: &str) -> Result<String> {
+    let output = Command::new(CODESIGN)
+        .args(["--display", "--verbose=4", path])
+        .output()
+        .with_context(|| format!("run {CODESIGN}"))?;
+    ensure!(
+        output.status.success(),
+        "{CODESIGN} --display {path} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    parse_cdhash(&String::from_utf8_lossy(&output.stderr))
+        .with_context(|| format!("{CODESIGN} printed no CDHash for {path}"))
+}
+
+fn parse_cdhash(display: &str) -> Option<String> {
+    display
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("CDHash="))
+        .map(str::trim)
+        .filter(|hash| is_cdhash(hash))
+        .map(str::to_owned)
 }
 
 fn login_keychain() -> Result<String> {
@@ -187,15 +261,17 @@ fn login_keychain() -> Result<String> {
     Ok(keychain.to_string_lossy().into_owned())
 }
 
-fn codesign_arguments(identity: &str, keychain: &str, path: &str) -> Vec<String> {
+fn codesign_arguments(identity: &str, keychain: &str, identifier: &str, path: &str) -> Vec<String> {
     [
         "--force",
         "--sign",
         identity,
         "--keychain",
         keychain,
+        "--options",
+        "runtime",
         "--identifier",
-        HELPER_LABEL,
+        identifier,
         path,
     ]
     .map(str::to_owned)
@@ -355,6 +431,7 @@ mod tests {
             codesign_arguments(
                 "KMRH47",
                 "/Users/me/Library/Keychains/login.keychain-db",
+                HELPER_LABEL,
                 "/tmp/helper"
             ),
             [
@@ -363,11 +440,56 @@ mod tests {
                 "KMRH47",
                 "--keychain",
                 "/Users/me/Library/Keychains/login.keychain-db",
+                "--options",
+                "runtime",
                 "--identifier",
                 "com.qol-tools.keyremap.hid-helper",
                 "/tmp/helper"
             ]
         );
+    }
+
+    #[test]
+    fn the_client_is_signed_in_place_under_its_own_identifier() {
+        assert_eq!(
+            codesign_arguments(
+                "KMRH47",
+                "/Users/me/Library/Keychains/login.keychain-db",
+                CLIENT_IDENTIFIER,
+                "/plugins/keyremap/qol-keyremap"
+            ),
+            [
+                "--force",
+                "--sign",
+                "KMRH47",
+                "--keychain",
+                "/Users/me/Library/Keychains/login.keychain-db",
+                "--options",
+                "runtime",
+                "--identifier",
+                "com.qol-tools.keyremap",
+                "/plugins/keyremap/qol-keyremap"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_cdhash_is_read_from_the_codesign_display_output() {
+        let display = "Executable=/plugins/keyremap/qol-keyremap\n\
+Identifier=com.qol-tools.keyremap\n\
+Format=Mach-O thin (arm64)\n\
+CodeDirectory v=20500 size=1234 flags=0x10000(runtime) hashes=30+2 location=embedded\n\
+Hash type=sha256 size=32\n\
+CandidateCDHash sha256=1111111111111111111111111111111111111111\n\
+CandidateCDHashFull sha256=2222222222222222222222222222222222222222222222222222222222222222\n\
+CDHash=0123456789abcdef0123456789abcdef01234567\n\
+Signature size=9000\n";
+        assert_eq!(
+            parse_cdhash(display).as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(parse_cdhash("Identifier=x\nCDHash=xyz\n"), None);
+        assert_eq!(parse_cdhash("Identifier=x\n"), None);
     }
 
     #[test]
