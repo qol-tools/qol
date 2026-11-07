@@ -2846,3 +2846,35 @@ test('saved model choices that fail their first load are never overwritten by on
   expect(saved['asking-fork']).toMatchObject({ model: 'opus', effort: 'high' })
   await ui.unmount()
 })
+
+test('a fork whose run ends with no report coming, as after its one hand-back, stops reading working once the wait passes', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const timers: (() => void)[] = []
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const rows = () => (store.get('board:switchboard-session') as any[]) ?? []
+  await $.turn.complete({ turnId: 'run-1', agentId: 'a8', answer: 'May I mark it ready?', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(rows().find(row => row.agentId === 'a8')?.isWorking).toBe(true)
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  expect(rows().find(row => row.agentId === 'a8')).toMatchObject({ isWorking: false })
+  expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
+})
+
+test('a hand-back that starts a switchboard turn leaves no you row in the SWITCHBOARD log', async ($, on) => {
+  const store = new Map<string, unknown>()
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await $.turn.start({ turnId: 'main-1', text: handback('a8', 'May I mark it ready?') })
+  await $.turn.start({ turnId: 'main-2', text: '<agent-message from="a8">\n[Subagent hand-back] The report follows:\n  May I mark it ready?\n</agent-message>' })
+  await settle()
+  const log = (store.get('sblog-3') as { who: string }[] | undefined) ?? []
+  expect(log.filter(row => row.who === 'you')).toEqual([])
+  await $.turn.start({ turnId: 'main-3', text: 'hello there' })
+  await settle()
+  expect(((store.get('sblog-3') as { who: string }[] | undefined) ?? []).filter(row => row.who === 'you')).toHaveLength(1)
+})

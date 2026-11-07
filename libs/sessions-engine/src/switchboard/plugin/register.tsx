@@ -545,9 +545,11 @@ const saveLog = ($: EngineInterface): Promise<void> => {
   return logSaving
 }
 
+const PEER_PREFIX = 'Another Claude session sent a message:'
+
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
   const text = clipSaid(plainText(said))
-  if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
+  if (text === '' || isPluginNote(text) || /^<[a-z-]+[\s>]/.test(text) || text.startsWith(PEER_PREFIX)) return
   const row = { who, text, at: await $.clock.now() }
   unsaved.push(row)
   await update($, switchboardLog, rows => [...rows, row].slice(-SB_LOG_KEPT))
@@ -694,6 +696,11 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
 }
 
 const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, ...entry }: Entry): Entry => entry
+
+const RUN_OVER_MS = 15_000
+
+const settleRun = ($: EngineInterface, agentId: string): Promise<void> =>
+  change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   const now = await $.clock.now()
@@ -2447,6 +2454,7 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
+    if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')
