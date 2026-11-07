@@ -46,8 +46,8 @@ impl Gate {
         self.wake.subscribe()
     }
 
-    pub(in crate::service::network) fn link(&self) -> Option<u16> {
-        *self.link.borrow()
+    pub(in crate::service::network) fn link_watch(&self) -> watch::Receiver<Option<u16>> {
+        self.link.subscribe()
     }
 
     pub(in crate::service::network) fn nearby_deadline(&self) -> Option<Instant> {

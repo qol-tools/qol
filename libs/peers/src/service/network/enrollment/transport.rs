@@ -84,18 +84,29 @@ impl Owner {
         listener: &mut Option<TcpListener>,
         view: &watch::Sender<NetworkSnapshot>,
         receiving: bool,
-    ) -> Result<(), NetworkFailure> {
+    ) -> bool {
         let wanted = self.listener_wanted(authority, receiving);
         if wanted && listener.is_none() {
-            let opened = self.gate.open().map_err(|_| NetworkFailure::Listener)?;
-            let port = opened
-                .local_addr()
-                .map_err(|_| NetworkFailure::Listener)?
-                .port();
-            *listener = Some(opened);
-            view.send_modify(|view| {
-                view.status.enrollment_listener = ListenerStatus::Listening { port }
-            });
+            let opened = self
+                .gate
+                .open()
+                .and_then(|opened| opened.local_addr().map(|address| (opened, address.port())));
+            match opened {
+                Ok((opened, port)) => {
+                    *listener = Some(opened);
+                    view.send_modify(|view| {
+                        view.status.enrollment_listener = ListenerStatus::Listening { port }
+                    });
+                }
+                Err(_) => {
+                    view.send_modify(|view| {
+                        view.status.enrollment_listener = ListenerStatus::Failed {
+                            error: NetworkFailure::Listener,
+                        }
+                    });
+                    return true;
+                }
+            }
         } else if !wanted && listener.is_some() && self.gate.release() {
             *listener = None;
             view.send_modify(|view| {
@@ -104,7 +115,7 @@ impl Owner {
                 }
             });
         }
-        Ok(())
+        false
     }
 
     async fn serve(
@@ -131,13 +142,13 @@ impl Owner {
             if authority.check_enrollment_ready().is_err() {
                 return Err(NetworkFailure::Authority);
             }
-            self.reconcile(authority, &mut listener, view, !inbound.is_empty())?;
+            let retry_bind = self.reconcile(authority, &mut listener, view, !inbound.is_empty());
             tokio::select! {
                 biased;
                 () = cancelled(stop) => return Ok(()),
                 change = changes.changed() => if change.is_err() { return Err(NetworkFailure::Authority); },
                 _ = gate_changes.changed() => {},
-                () = recheck(listener.is_some()) => {},
+                () = recheck(listener.is_some() || retry_bind) => {},
                 result = outbound.join_next(), if !outbound.is_empty() => {
                     match result {
                         Some(Ok((transaction, state))) => self.state(transaction, state, true),

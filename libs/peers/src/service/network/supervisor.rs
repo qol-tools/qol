@@ -209,7 +209,6 @@ impl Supervisor {
         if *stop.borrow() {
             return Ok(());
         }
-        let link = gate.link();
         let listener = TcpListener::bind(SocketAddrV4::new(options.bind, 0))
             .await
             .map_err(|_| NetworkFailure::Listener)?;
@@ -239,7 +238,7 @@ impl Supervisor {
                 port,
                 bind: options.bind,
                 name,
-                link,
+                link: gate.link_watch(),
             },
             events,
             stopping,

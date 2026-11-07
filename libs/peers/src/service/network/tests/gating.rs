@@ -151,7 +151,7 @@ async fn the_nearby_lease_advertises_the_link_port_and_lapses_to_idle() {
             .advertised
             .borrow()
             .as_ref()
-            .and_then(|advertised| advertised.link),
+            .and_then(|advertised| *advertised.link.borrow()),
         Some(port)
     );
     tokio::time::sleep(Duration::from_secs(12)).await;
@@ -162,5 +162,56 @@ async fn the_nearby_lease_advertises_the_link_port_and_lapses_to_idle() {
         .await;
     assert_eq!(view.status.discovery, DiscoveryStatus::Closed {});
     assert_eq!(owner.closed.load(Ordering::SeqCst), 1);
+    owner.stop_without_discovery().await;
+}
+
+fn advertised_link(owner: &Fixture) -> Option<u16> {
+    owner
+        .advertised
+        .borrow()
+        .as_ref()
+        .and_then(|advertised| *advertised.link.borrow())
+}
+
+async fn until_advertised_link(owner: &Fixture, expected: Option<u16>) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while advertised_link(owner) != expected {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the advertised link port never reached the expected value");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_peered_device_advertises_the_link_port_only_while_the_nearby_page_is_open() {
+    let (local, _remote) = linked();
+    let owner = Fixture::start(local);
+    owner
+        .wait(|view| matches!(view.status.listener, ListenerStatus::Listening { .. }))
+        .await;
+    until_advertised_link(&owner, None).await;
+    owner.control.open_to_nearby().unwrap();
+    let view = owner
+        .wait(|view| {
+            matches!(
+                view.status.enrollment_listener,
+                ListenerStatus::Listening { .. }
+            )
+        })
+        .await;
+    let ListenerStatus::Listening { port } = view.status.enrollment_listener else {
+        unreachable!();
+    };
+    until_advertised_link(&owner, Some(port)).await;
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    owner
+        .wait(|view| view.status.enrollment_listener == NOTHING_OPEN)
+        .await;
+    until_advertised_link(&owner, None).await;
+    assert!(matches!(
+        owner.control.snapshot().status.listener,
+        ListenerStatus::Listening { .. }
+    ));
     owner.stop_without_discovery().await;
 }
