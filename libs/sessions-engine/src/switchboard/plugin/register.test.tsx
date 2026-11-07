@@ -513,6 +513,33 @@ test('typing qols board empties the prompt box once the engine puts the dropped 
   expect(timers).toEqual([])
 })
 
+test('a sent message still leaves the box when the engine puts it back late', async ($, on) => {
+  engine(on)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  let box = ''
+  const fills: string[] = []
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    box = e.text
+    return { isFilled: true }
+  })
+  const tick = async () => {
+    expect(timers.length).toBe(1)
+    timers.splice(0).forEach(resolve => resolve())
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  timers.length = 0
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  await tick()
+  box = 'qols board'
+  await tick()
+  expect(fills).toEqual([''])
+  expect(timers).toEqual([])
+})
+
 test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -2144,6 +2171,50 @@ test('recentWords keeps the last spoken lines, the user\'s own words without the
   expect(recentWords(messages)).toEqual([{ isUser: true, text: 'which colour?' }, { isUser: false, text: 'Amber.' }])
   expect(recentWords(messages, 1)).toEqual([{ isUser: false, text: 'Amber.' }])
   expect(recentWords({ deny: 'no' })).toEqual([])
+})
+
+test('recentWords reads a message the fork took in mid-turn as the user\'s own words', () => {
+  const queued = `<system-reminder id="6888">\nThe coordinator sent a message while you were working:\n${fromUser('it jumps?')}\n\nAddress this before completing your current task.\n</system-reminder>`
+  expect(recentWords([{ role: 'assistant', text: 'Look.' }, { role: 'user', text: queued }, { role: 'assistant', text: 'Yes.' }])).toEqual([
+    { isUser: false, text: 'Look.' },
+    { isUser: true, text: 'it jumps?' },
+    { isUser: false, text: 'Yes.' },
+  ])
+})
+
+test('WRITING TO keeps a sent line the fork has not taken in where it was sent, not under newer replies', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  const said: { role: string; text: string }[] = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  said.push({ role: 'assistant', text: 'Still working on it.' })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: 'Still working on it.', durationMs: 1, isAborted: false, reason: 'done' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const lines = (await ui.findAll({ type: 'Text', text: /^(Amber or teal\?|teal|Still working on it\.)$/ })).map((one: any) => one.text)
+  expect(lines).toEqual(['Still working on it.', 'teal', 'Amber or teal?'])
+  await ui.unmount()
+})
+
+test('WRITING TO keeps two sent lines in send order once the fork has taken in only the first', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('clock.after', () => new Promise(() => {}))
+  const said: { role: string; text: string }[] = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'asking-fork and wide')).drop).toContain('→ asking-fork')
+  said.push({ role: 'user', text: fromUser('teal') })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const lines = (await ui.findAll({ type: 'Text', text: /^(Amber or teal\?|teal|and wide)$/ })).map((one: any) => one.text)
+  expect(lines).toEqual(['and wide', 'teal', 'Amber or teal?'])
+  await ui.unmount()
 })
 
 test('the prompt box offers fork keys for its first word only', async ($, on) => {

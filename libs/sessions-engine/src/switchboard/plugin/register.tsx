@@ -26,7 +26,7 @@ const TYPED_TOGGLE = /^\s*qols\s+board\s*$/i
 const SB = 'sb'
 const TYPED_SB = /^\s*sb(?:\s|$)/
 const SB_TIMEOUT_MS = 60_000
-const CLEAR_TYPED_MS = 100
+const CLEAR_TYPED_MS = [100, 300, 600]
 const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
 const KEEP = 100
@@ -203,13 +203,18 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
-const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean): void => {
-  $.clock.after(CLEAR_TYPED_MS, () => {
+const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
+  const [after, ...later] = waits
+  if (after === undefined) return
+  $.clock.after(after, () => {
     void (async () => {
-      if (isDropped((await $.prompt.read()).text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      const { text } = await $.prompt.read()
+      if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
+      else if (text === '') clearBox($, isDropped, later)
     })().catch(() => {})
   })
 }
+
 
 const clearTypedToggle = ($: EngineInterface): void => clearBox($, text => TYPED_TOGGLE.test(text))
 
@@ -227,6 +232,7 @@ const plainText = (text: string): string =>
 
 export type Said = { isUser: boolean; text: string }
 
+const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder>/g
 const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
 
 const userWords = (text: string): string => {
@@ -238,7 +244,7 @@ const clipSaid = (text: string): string => (text.length > SAID_CHARS ? `${text.s
 
 const UNSEEN_MS = 10 * 60_000
 
-type Unseen = { text: string; at: number; heldBefore: number }
+type Unseen = { text: string; at: number; heldBefore: number; after: number }
 
 const unseenSent = new Map<string, Unseen[]>()
 
@@ -247,7 +253,8 @@ const timesSaid = (all: Said[], text: string): number => all.filter(row => row.i
 const noteSent = (agentId: string, text: string, all: Said[], at: number): Unseen => {
   const waiting = unseenSent.get(agentId) ?? []
   const pending = waiting.filter(other => other.text === text && timesSaid(all, text) <= other.heldBefore).length
-  const one = { text, at, heldBefore: timesSaid(all, text) + pending }
+  const unseen = waiting.filter(other => timesSaid(all, other.text) <= other.heldBefore).length
+  const one = { text, at, heldBefore: timesSaid(all, text) + pending, after: all.length + unseen }
   unseenSent.set(agentId, [...waiting, one])
   return one
 }
@@ -262,7 +269,11 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
   const waiting = (unseenSent.get(agentId) ?? []).filter(one => now - one.at < UNSEEN_MS && timesSaid(all, one.text) <= one.heldBefore)
   if (waiting.length === 0) unseenSent.delete(agentId)
   else unseenSent.set(agentId, waiting)
-  return [...all, ...waiting.map(one => ({ isUser: true, text: one.text }))].slice(-SAID_KEPT)
+  const placed = waiting.reduce((rows, one) => {
+    const at = Math.min(one.after, rows.length)
+    return [...rows.slice(0, at), { isUser: true, text: one.text }, ...rows.slice(at)]
+  }, all)
+  return placed.slice(-SAID_KEPT)
 }
 
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
@@ -271,6 +282,13 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
     if (typeof one !== 'object' || one === null) return []
     const { role, text } = one as { role?: unknown; text?: unknown }
     if (typeof text !== 'string' || (role !== 'user' && role !== 'assistant')) return []
+    const queued = role === 'user' ? [...text.matchAll(QUEUED_NOTE)].map(match => match[1] ?? '').filter(note => COORDINATOR_NOTE.test(note.trim())) : []
+    if (queued.length > 0) {
+      return queued.flatMap(note => {
+        const shown = plainText(userWords(note.trim()))
+        return shown === '' || isPluginNote(shown) ? [] : [{ isUser: true, text: clipSaid(shown) }]
+      })
+    }
     const words = role === 'user' ? userWords(text) : text
     const shown = plainText(words)
     if (shown === '' || (role === 'user' && (/^<[a-z-]+>/.test(shown) || isPluginNote(shown))) || (role === 'assistant' && isHeldReply(shown))) return []
