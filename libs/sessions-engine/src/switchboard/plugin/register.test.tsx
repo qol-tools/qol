@@ -542,6 +542,29 @@ test('a sent message still leaves the box when the engine puts it back late', as
   expect(timers).toEqual([])
 })
 
+test('a sent line the engine puts back leaves the box at once, and only that line', async ($, on) => {
+  engine(on)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [] }))
+  const fills: string[] = []
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    return { isFilled: true }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'asking-fork teal', cursor: 16 })
+  expect(fills).toEqual([''])
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'asking-fork teal', cursor: 16 })
+  expect(fills).toEqual([''])
+  expect((await typed($, 'asking-fork amber')).drop).toContain('→ asking-fork')
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork amber', cursor: 17 })
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'something new', cursor: 13 })
+  expect(fills).toEqual([''])
+})
+
 test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -2358,6 +2381,71 @@ test('a switchboard log moved from its old key keeps each old entry once, and re
   const yes = { who: 'you → fork', text: 'yes' }
   expect(mergedLog([a, b, a, b], [b, c, yes, yes])).toEqual([a, b, c, yes, yes])
   expect(mergedLog([], [yes, yes])).toEqual([yes, yes])
+})
+
+test('the switchboard log keeps the lines of earlier conversations after a restart, oldest first', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const line = (text: string) => ({ who: 'you → asking-fork', text })
+  store.set('sblog:first-session', [line('one'), line('one')])
+  store.set('sblog-2:first-session', [line('one'), line('two')])
+  store.set('board:switchboard-session', [])
+  store.set('sblog-2:second-session', [line('three')])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork four')
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const rows = (await ui.findAll({ type: 'Text', text: /^(one|two|three|four)$/ })).map((one: any) => one.text)
+  expect(rows).toEqual(['four', 'three', 'two', 'one'])
+  expect([...store.keys()].filter(key => key.startsWith('sblog'))).toEqual(['sblog-3'])
+  await ui.unmount()
+  store.set('sblog-3', [...(store.get('sblog-3') as unknown[]), { who: 'you → other-fork', text: 'elsewhere' }])
+  await typed($, 'asking-fork five')
+  await settle()
+  const saved = (store.get('sblog-3') as { text: string }[]).map(one => one.text)
+  expect([...saved].sort()).toEqual(['elsewhere', 'five', 'four', 'one', 'three', 'two'])
+  expect(saved.at(-1)).toBe('five')
+})
+
+test('a saved switchboard log keeps repeated lines in place when it loads and saves', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const yes = { who: 'you → asking-fork', text: 'yes' }
+  const asked = { who: 'asking-fork', text: 'Sure?' }
+  store.set('sblog-3', [yes, asked, yes])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'asking-fork yes')
+  await settle()
+  expect(store.get('sblog-3')).toEqual([yes, asked, yes, yes])
+})
+
+test('a switchboard log that fails its first load saves nothing until it loads, so earlier conversations still move in', async ($, on) => {
+  class FlakyStore extends Map<string, unknown> {
+    failures = 1
+    override get(key: string): unknown {
+      if (key === 'sblog-3' && this.failures-- > 0) throw new Error('busy')
+      return super.get(key)
+    }
+  }
+  const store = new FlakyStore()
+  store.set('sblog-2:first-session', [{ who: 'you → asking-fork', text: 'one' }])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'asking-fork two')
+  await settle()
+  await typed($, 'asking-fork three')
+  await settle()
+  expect((store.get('sblog-3') as { text: string }[]).map(one => one.text)).toEqual(['one', 'two', 'three'])
 })
 
 test('two switchboard lines logged at once both stay in the log', async ($, on) => {
