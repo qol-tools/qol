@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use qol_plugin_daemon::notification::send_notification;
-use std::fs::File;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -51,8 +50,8 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         plan.audio.len()
     );
     let request = serde_json::to_string(&plan).context("failed to encode capture request")?;
-    let log_file = File::create(crate::platform::capture_log_path())
-        .context("failed to create recording log")?;
+    let log_file =
+        crate::platform::open_capture_log(true).context("failed to create recording log")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log")?;
