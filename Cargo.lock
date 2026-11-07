@@ -7025,7 +7025,7 @@ dependencies = [
 
 [[package]]
 name = "qol-lights"
-version = "1.83.1"
+version = "1.83.2"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -7608,7 +7608,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.138.6"
+version = "3.138.7"
 dependencies = [
  "anyhow",
  "axum",
