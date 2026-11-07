@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, singleLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2351,11 +2351,49 @@ test('a fork key and message typed on the phone through Remote Control go to tha
   expect(sent.map(one => one.text)).toEqual([fromUser('teal')])
 })
 
-test('a switchboard log saved twice over keeps each entry once, in its first place', () => {
+test('a switchboard log moved from its old key keeps each old entry once, and repeats saved under the new key stay', () => {
   const a = { who: 'you → fork', text: 'teal' }
   const b = { who: 'fork', text: 'Teal it is.' }
   const c = { who: 'switchboard', text: 'Started fork.' }
-  expect(singleLog([a, b, a, b, c])).toEqual([a, b, c])
+  const yes = { who: 'you → fork', text: 'yes' }
+  expect(mergedLog([a, b, a, b], [b, c, yes, yes])).toEqual([a, b, c, yes, yes])
+  expect(mergedLog([], [yes, yes])).toEqual([yes, yes])
+})
+
+test('two switchboard lines logged at once both stay in the log', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  await Promise.all([$.turn.start({ turnId: 'main-1', text: 'first' }), $.turn.start({ turnId: 'main-2', text: 'second' })])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await typed($, 'asking-fork teal')
+  await settle()
+  const rows = (await ui.findAll({ type: 'Text', text: /^(first|second|teal)$/ })).map((one: any) => one.text)
+  expect([...rows].sort()).toEqual(['first', 'second', 'teal'])
+  await ui.unmount()
+})
+
+test('leaving the fork empties its chat block', async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
+  timers.splice(0).forEach(resolve => resolve())
+  await settle()
+  expect(await forkChat($, panes)).toEqual(['Amber or teal?'])
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'hello', cursor: 5 })
+  timers.splice(0).forEach(resolve => resolve())
+  await settle()
+  expect(await forkChat($, panes)).toEqual([])
 })
 
 test('the prompt box offers fork keys for its first word only', async ($, on) => {

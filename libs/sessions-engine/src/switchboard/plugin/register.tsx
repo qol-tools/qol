@@ -325,6 +325,7 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
   await update($, writingSaid, () => [])
   await update($, focusActivity, () => '')
   await update($, freshReply, () => '')
+  if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
   if (entry?.hasNewReply === true) await seen($, agentId)
   await refreshWriting($, agentId)
   if (agentId !== '') await placeFocus($)
@@ -408,8 +409,14 @@ type Logged = { who: string; text: string }
 const loggedRows = (saved: unknown): Logged[] =>
   Array.isArray(saved) ? saved.filter((one): one is Logged => typeof one?.who === 'string' && typeof one?.text === 'string') : []
 
-export const singleLog = (rows: readonly Logged[]): Logged[] =>
-  rows.filter((one, at) => rows.findIndex(other => other.who === one.who && other.text === one.text) === at)
+const sameLogged = (a: Logged, b: Logged): boolean => a.who === b.who && a.text === b.text
+
+const singleLog = (rows: readonly Logged[]): Logged[] => rows.filter((one, at) => rows.findIndex(other => sameLogged(one, other)) === at)
+
+export const mergedLog = (old: readonly Logged[], saved: readonly Logged[]): Logged[] => [
+  ...singleLog(old).filter(one => !saved.some(other => sameLogged(one, other))),
+  ...saved,
+]
 
 let logLoading: Promise<void> | undefined
 
@@ -417,26 +424,40 @@ const readLog = async ($: EngineInterface): Promise<void> => {
   const session = await $.session.id()
   const old = loggedRows(await $.store.get(OLD_SB_LOG_PREFIX + session).catch(() => undefined))
   const saved = loggedRows(await $.store.get(SB_LOG_PREFIX + session).catch(() => undefined))
-  const rows = singleLog([...old, ...saved]).slice(-SB_LOG_KEPT)
+  const rows = mergedLog(old, saved).slice(-SB_LOG_KEPT)
   await update($, switchboardLog, () => rows)
-  if (old.length > 0) {
-    await $.store.set(SB_LOG_PREFIX + session, rows).catch(() => undefined)
-    await $.store.set(OLD_SB_LOG_PREFIX + session, []).catch(() => undefined)
-  }
+  if (old.length === 0) return
+  const moved = await $.store.set(SB_LOG_PREFIX + session, rows).then(
+    () => true,
+    () => false,
+  )
+  if (moved) await $.store.set(OLD_SB_LOG_PREFIX + session, []).catch(() => undefined)
 }
 
 const loadLog = ($: EngineInterface): Promise<void> => {
-  logLoading ??= readLog($).catch(() => undefined)
+  logLoading ??= readLog($).catch(() => {
+    logLoading = undefined
+  })
   return logLoading
+}
+
+let logSaving: Promise<void> = Promise.resolve()
+
+const saveLog = ($: EngineInterface): Promise<void> => {
+  logSaving = logSaving
+    .then(async () => {
+      await $.store.set(SB_LOG_PREFIX + (await $.session.id()), await read($, switchboardLog))
+    })
+    .catch(() => undefined)
+  return logSaving
 }
 
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
   const text = clipSaid(plainText(said))
   if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
   await loadLog($)
-  const rows = [...(await read($, switchboardLog)), { who, text }].slice(-SB_LOG_KEPT)
-  await update($, switchboardLog, () => rows)
-  await $.store.set(SB_LOG_PREFIX + (await $.session.id()), rows).catch(() => undefined)
+  await update($, switchboardLog, rows => [...rows, { who, text }].slice(-SB_LOG_KEPT))
+  await saveLog($)
 }
 
 const FOCUS_PREFIX = 'focus-'
