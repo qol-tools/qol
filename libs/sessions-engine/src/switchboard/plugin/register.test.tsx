@@ -2360,6 +2360,28 @@ test('a switchboard log moved from its old key keeps each old entry once, and re
   expect(mergedLog([], [yes, yes])).toEqual([yes, yes])
 })
 
+test('the switchboard log keeps the lines of earlier conversations after a restart, oldest first', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const line = (text: string) => ({ who: 'you → asking-fork', text })
+  store.set('sblog:first-session', [line('one'), line('one')])
+  store.set('sblog-2:first-session', [line('one'), line('two')])
+  store.set('board:switchboard-session', [])
+  store.set('sblog-2:second-session', [line('three')])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'qols board')
+  await typed($, 'asking-fork four')
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const rows = (await ui.findAll({ type: 'Text', text: /^(one|two|three|four)$/ })).map((one: any) => one.text)
+  expect(rows).toEqual(['four', 'three', 'two', 'one'])
+  expect([...store.keys()].filter(key => key.startsWith('sblog'))).toEqual(['sblog-3'])
+  await ui.unmount()
+})
+
 test('two switchboard lines logged at once both stay in the log', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
