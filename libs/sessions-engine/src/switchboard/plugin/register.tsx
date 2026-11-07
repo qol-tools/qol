@@ -1349,15 +1349,10 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
   if (modelsLoaded) await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
 }
 
-const CHIP = /^(model|effort)-(.+)-([a-z]+)$/
+const SETTING = /^(model|effort)-(.+)-([a-z]+)$/
 
-export const chipGroup = (element: string | undefined): string | undefined => {
-  const parts = element === undefined ? null : CHIP.exec(element)
-  return parts === null ? undefined : `${parts[1]}-${parts[2]}`
-}
-
-const pickChip = async ($: EngineInterface, element: string): Promise<void> => {
-  const parts = CHIP.exec(element)
+const pickSetting = async ($: EngineInterface, element: string): Promise<void> => {
+  const parts = SETTING.exec(element)
   if (parts === null) return
   const [, kind, key = '', value] = parts
   await loadModels($)
@@ -1378,8 +1373,6 @@ const pickChip = async ($: EngineInterface, element: string): Promise<void> => {
   await choose($, key, { effort: to })
   await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${to}, from its next model call`)
 }
-
-let focusedChip: string | undefined
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
   const agentId = e.agentId
@@ -2485,17 +2478,8 @@ export const register: Register = on => {
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    const was = focusedChip
-    const result = await next(e)
-    if (result.deny !== undefined) return result
-    focusedChip = chipGroup(e.element) === undefined ? undefined : e.element
-    if (e.element !== undefined && e.element !== was && chipGroup(was) !== undefined && chipGroup(was) === chipGroup(e.element)) void pickChip($, e.element).catch(() => undefined)
-    return result
-  })
-
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = $.ui.resolve(e)
     await ensureLoaded($)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
@@ -2596,7 +2580,7 @@ export const register: Register = on => {
     )
 
     const keys = isFocused
-      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · ← → switch model or effort'} · x closes · esc back to the prompt`
+      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
       : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const inner = Math.max(24, e.props.bodyColumns - 4)
     const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
@@ -2666,13 +2650,6 @@ export const register: Register = on => {
       const takesNone = was !== undefined && was.effort === undefined && pickedModel === undefined && pickedEffort === undefined
       return { was, pickedModel, pickedEffort, shownModel, model: pickedModel ?? shownModel, effort: pickedEffort ?? was?.effort, takesNone, isPending: pickedModel !== undefined || pickedEffort !== undefined }
     }
-    const chip = (id: string, text: string, isOn: boolean, isPicked: boolean) => (
-      <Button key={id} plain onPress={() => pickChip($, id)}>
-        <Text bold={isOn} dimColor={!isOn} {...(isOn && isPicked ? { color: 'suggestion' } : {})}>
-          {` ${text} `}
-        </Text>
-      </Button>
-    )
     const modelRows = (key: string, fallback: string | undefined, isFork: boolean) => {
       const one = modelOf(key, fallback, isFork)
       const label = (text: string) => <Text dimColor>{text} </Text>
@@ -2686,16 +2663,30 @@ export const register: Register = on => {
           </Box>
         )
       const family = familyOf(one.model)
+      const level = EFFORTS.findIndex(choice => choice === one.effort)
       return (
         <Box flexDirection="row">
           {label('model')}
-          {MODELS.map(choice => chip(`model-${key}-${choice}`, choice === family && one.model !== undefined ? modelName(one.model) : modelName(choice), choice === family, one.pickedModel !== undefined))}
-          <Text dimColor>{'   '}</Text>
+          <Select
+            key={`model-${key}`}
+            options={MODELS.map(choice => ({ value: choice, label: choice === family && one.model !== undefined ? modelName(one.model) : modelName(choice) }))}
+            {...(family === undefined ? {} : { value: family })}
+            onSelect={value => void pickSetting($, `model-${key}-${value}`)}
+          />
+          <Text dimColor>{'    '}</Text>
           {label('effort')}
           {one.takesNone ? (
             <Text dimColor>none on {modelName(one.was?.model ?? '')}</Text>
           ) : (
-            EFFORTS.map(level => chip(`effort-${key}-${level}`, level, level === one.effort, one.pickedEffort !== undefined))
+            <Box flexDirection="row">
+              {level !== -1 && (
+                <Text>
+                  <Text color="warning">{'■'.repeat(level + 1)}</Text>
+                  <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
+                </Text>
+              )}
+              <Select key={`effort-${key}`} options={EFFORTS.map(choice => ({ value: choice }))} {...(one.effort === undefined ? {} : { value: one.effort })} onSelect={value => void pickSetting($, `effort-${key}-${value}`)} />
+            </Box>
           )}
         </Box>
       )
