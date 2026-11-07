@@ -231,6 +231,7 @@ fn handle_client(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn accept_client(
     stream: HandshakeStream,
     expected: Option<&[u8]>,
