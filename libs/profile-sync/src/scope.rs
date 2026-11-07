@@ -25,6 +25,15 @@ pub const PLUGINS_LOCK_FILE: &str = "plugins.lock.json";
 /// limited to the sync allowlist plus anything the user adds.
 pub const GITIGNORE_CONTENTS: &str = "/active\n/sync.json\n*/device/\n";
 
+pub fn ensure_gitignore(repo_path: &Path) -> std::io::Result<()> {
+    let path = repo_path.join(".gitignore");
+    let current = std::fs::read_to_string(&path).ok();
+    if current.as_deref() == Some(GITIGNORE_CONTENTS) {
+        return Ok(());
+    }
+    std::fs::write(&path, GITIGNORE_CONTENTS)
+}
+
 /// Whether a relative profile path is part of the synced profile.
 pub fn is_sync_allowlisted(rel: &Path) -> bool {
     if rel
@@ -113,6 +122,24 @@ pub fn mergeable_path(rel: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ensure_gitignore_rewrites_a_changed_file_and_leaves_a_matching_one() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(".gitignore");
+        std::fs::write(&path, "!/active\n").unwrap();
+
+        ensure_gitignore(tmp.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), GITIGNORE_CONTENTS);
+
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        ensure_gitignore(tmp.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), GITIGNORE_CONTENTS);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            before
+        );
+    }
 
     #[test]
     fn allowlist_accepts_gitignore_manifest_core_os_bucket_and_sync_backups() {

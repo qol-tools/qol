@@ -1,4 +1,5 @@
 use super::model::{AppRef, Shortcut, ShortcutAction, ShortcutSource};
+use std::path::{Path, PathBuf};
 
 const MAX_NAME_LEN: usize = 128;
 const MAX_URL_LEN: usize = 2048;
@@ -107,7 +108,25 @@ fn validate_url(url: &str) -> Result<(), String> {
     reject_null_bytes(url, "url")
 }
 
+fn qol_owned_dirs() -> Vec<PathBuf> {
+    [
+        crate::paths::shared_config_dir(),
+        crate::paths::base_data_dir(),
+    ]
+    .into_iter()
+    .filter_map(Result::ok)
+    .collect()
+}
+
 fn validate_app_ref(app_ref: &AppRef, field: &str) -> Result<(), String> {
+    validate_app_ref_against(app_ref, field, &qol_owned_dirs())
+}
+
+fn validate_app_ref_against(
+    app_ref: &AppRef,
+    field: &str,
+    owned: &[PathBuf],
+) -> Result<(), String> {
     match app_ref {
         AppRef::BundleId { id } => {
             if id.trim().is_empty() {
@@ -126,7 +145,18 @@ fn validate_app_ref(app_ref: &AppRef, field: &str) -> Result<(), String> {
                 ));
             }
             reject_null_bytes(path, field)?;
-            reject_traversal(path, field)
+            reject_traversal(path, field)?;
+            let parsed = Path::new(path);
+            if !parsed.is_absolute() {
+                return Err(format!("{} path must be absolute", field));
+            }
+            if owned.iter().any(|dir| parsed.starts_with(dir)) {
+                return Err(format!(
+                    "{} path must not point inside qol-tray's own directories",
+                    field
+                ));
+            }
+            Ok(())
         }
         AppRef::Name { name } => {
             if name.trim().is_empty() {
@@ -273,6 +303,36 @@ mod tests {
             },
         ));
         assert!(r.is_err(), "overlong path should reject");
+    }
+
+    #[test]
+    fn validate_app_ref_rejects_relative_paths() {
+        for path in ["bin/tool", "tool", "./tool"] {
+            let app = AppRef::Path { path: path.into() };
+            let error = validate_app_ref_against(&app, "app", &[]).unwrap_err();
+            assert_eq!(error, "app path must be absolute", "path {path:?}");
+        }
+    }
+
+    #[test]
+    fn validate_app_ref_rejects_paths_inside_qol_dirs() {
+        let owned = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let owned_dirs = [owned.path().to_path_buf()];
+
+        let inside = AppRef::Path {
+            path: owned.path().join("plugins/run.sh").display().to_string(),
+        };
+        let error = validate_app_ref_against(&inside, "app", &owned_dirs).unwrap_err();
+        assert_eq!(
+            error,
+            "app path must not point inside qol-tray's own directories"
+        );
+
+        let elsewhere = AppRef::Path {
+            path: outside.path().join("tool").display().to_string(),
+        };
+        assert!(validate_app_ref_against(&elsewhere, "app", &owned_dirs).is_ok());
     }
 
     #[test]

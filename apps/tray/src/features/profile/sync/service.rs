@@ -90,7 +90,8 @@ impl SyncService {
                 clone_remote_via_staging(&clone_target, &repo_path, &token, &|| false)?
             } else {
                 let repo = GitRepo::init(&repo_path, &clone_target.repo_url)?;
-                ensure_gitignore(&repo_path)?;
+                qol_profile_sync::ensure_gitignore(&repo_path)
+                    .with_context(|| format!("write {}/.gitignore", repo_path.display()))?;
                 repo.commit_all(
                     "qol-tray: initial commit",
                     &SignatureSpec::default_for_app(),
@@ -852,15 +853,6 @@ fn create_staging_dir(profile_dir: &Path) -> Result<PathBuf> {
     )
 }
 
-fn ensure_gitignore(repo_path: &Path) -> Result<()> {
-    let path = repo_path.join(".gitignore");
-    if path.exists() {
-        return Ok(());
-    }
-    std::fs::write(&path, qol_profile_sync::GITIGNORE_CONTENTS)
-        .with_context(|| format!("write {}", path.display()))
-}
-
 fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
@@ -919,7 +911,8 @@ fn push_profile_changes(
     reason: &str,
 ) -> Result<PushTaskOutput> {
     let repo = GitRepo::open(repo_path)?;
-    ensure_gitignore(repo_path)?;
+    qol_profile_sync::ensure_gitignore(repo_path)
+        .with_context(|| format!("write {}/.gitignore", repo_path.display()))?;
     repair_profile_schema_under_guard(repo_path)?;
     repo.commit_all(reason, &SignatureSpec::default_for_app())?;
     let mut applied_remote = false;

@@ -138,7 +138,8 @@ fn sync_profile() -> Result<SyncOutcome> {
             repo_path.display()
         )
     })?;
-    ensure_gitignore(&repo_path)?;
+    qol_profile_sync::ensure_gitignore(&repo_path)
+        .with_context(|| format!("write {}/.gitignore", repo_path.display()))?;
 
     if repair_profile_schema(&repo_path)? {
         repo.commit_all("repair profile schema", &SignatureSpec::default_for_cli())?;
@@ -289,7 +290,8 @@ fn apply_merged_profile(
     merged: &BTreeMap<String, Value>,
 ) -> Result<()> {
     repo.reset_to_remote()?;
-    ensure_gitignore(repo_path)?;
+    qol_profile_sync::ensure_gitignore(repo_path)
+        .with_context(|| format!("write {}/.gitignore", repo_path.display()))?;
     write_merged_profile(repo_path, merged)
 }
 
@@ -306,15 +308,6 @@ fn write_merged_profile(repo_path: &Path, merged: &BTreeMap<String, Value>) -> R
     }
     repair_profile_schema(repo_path)?;
     Ok(())
-}
-
-fn ensure_gitignore(repo_path: &Path) -> Result<()> {
-    let path = repo_path.join(".gitignore");
-    if path.exists() {
-        return Ok(());
-    }
-    std::fs::write(&path, qol_profile_sync::GITIGNORE_CONTENTS)
-        .with_context(|| format!("write {}", path.display()))
 }
 
 fn write_conflict_backup_for(repo: &GitRepo, paths: &SyncPaths) -> Result<String> {

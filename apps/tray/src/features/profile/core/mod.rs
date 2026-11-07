@@ -12,8 +12,7 @@ pub(crate) use plugins_lock::sync_plugins_lock_from_plugins_with_generation;
 pub use plugins_lock::{import_plugins, sync_plugins_lock_from_plugins};
 pub use storage::{
     ensure_profile_dirs, load_manifest, load_plugins_lock, read_hotkeys_list, read_plugin_configs,
-    read_shortcuts_list, read_task_runner_value, replace_plugin_configs, save_manifest,
-    save_plugins_lock,
+    read_shortcuts_list, replace_plugin_configs, save_manifest, save_plugins_lock,
 };
 pub use types::{
     ApplyProfileResult, ImportPluginResult, PluginLockEntry, PluginsLock, ProfileExportBundle,

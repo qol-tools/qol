@@ -1,8 +1,9 @@
 use super::{
-    read_hotkeys_list, read_plugin_configs, read_shortcuts_list, read_task_runner_value,
-    PluginLockEntry, ProfileExportBundle, CURRENT_PROFILE_VERSION,
+    read_hotkeys_list, read_plugin_configs, read_shortcuts_list, PluginLockEntry,
+    ProfileExportBundle, CURRENT_PROFILE_VERSION,
 };
 use anyhow::Result;
+use serde_json::Value;
 
 pub fn build_export_bundle(
     exported_at: String,
@@ -14,7 +15,7 @@ pub fn build_export_bundle(
         exported_at,
         hotkeys: read_hotkeys_list(),
         shortcuts: read_shortcuts_list(),
-        task_runner: read_task_runner_value(),
+        task_runner: Value::Null,
         plugin_configs,
         plugins,
     })

@@ -177,7 +177,18 @@ impl GitRepo {
     ) -> Result<Option<CommitInfo>> {
         let repo = self.open_repo()?;
         let mut index = repo.index().context("open index")?;
-        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+        let allowlisted = &mut |path: &Path, _spec: &[u8]| -> i32 {
+            if crate::scope::is_sync_allowlisted(path) {
+                0
+            } else {
+                1
+            }
+        };
+        index.add_all(
+            ["*"].iter(),
+            git2::IndexAddOption::DEFAULT,
+            Some(allowlisted as &mut git2::IndexMatchedPath<'_>),
+        )?;
         index.write()?;
         let tree_oid = index.write_tree()?;
         let tree = repo.find_tree(tree_oid)?;
@@ -539,6 +550,31 @@ mod tests {
 
         let second = repo.commit_all("second", &signature()).unwrap();
         assert!(second.is_none(), "clean tree should produce no commit");
+    }
+
+    #[test]
+    fn commit_all_stages_only_allowlisted_paths() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        write_file(&repo_path.join("default/device/sync/state.json"), "{}");
+        write_file(&repo_path.join("random.txt"), "x");
+
+        let info = repo.commit_all("seed", &signature()).unwrap().unwrap();
+
+        let git = Repository::open(&repo_path).unwrap();
+        let commit = git
+            .find_commit(git2::Oid::from_str(&info.sha).unwrap())
+            .unwrap();
+        let tree = commit.tree().unwrap();
+        assert!(tree
+            .get_path(Path::new("default/core/plugins.lock.json"))
+            .is_ok());
+        assert!(tree
+            .get_path(Path::new("default/device/sync/state.json"))
+            .is_err());
+        assert!(tree.get_path(Path::new("random.txt")).is_err());
     }
 
     #[test]
