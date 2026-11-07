@@ -59,6 +59,24 @@ pub fn is_sync_allowlisted(rel: &Path) -> bool {
     }
 }
 
+pub fn is_device_local(rel: &Path) -> bool {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(part) => match part.to_str() {
+                Some(part) => parts.push(part),
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    match parts.as_slice() {
+        ["active"] | ["sync.json"] => true,
+        [_, second, ..] => *second == DEVICE_SUBDIR,
+        _ => false,
+    }
+}
+
 /// Error from [`device_local_dir`] when a profile name or namespace cannot
 /// be safely mapped under the profile root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +198,32 @@ mod tests {
             assert!(
                 !is_sync_allowlisted(Path::new(raw)),
                 "must not allowlist: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_local_paths_are_the_gitignore_set() {
+        for raw in [
+            "active",
+            "sync.json",
+            "default/device/task-runner.json",
+            "work/device/plugin-configs/x.json",
+        ] {
+            assert!(
+                is_device_local(Path::new(raw)),
+                "must be device-local: {raw}"
+            );
+        }
+        for raw in [
+            "default/os/linux/task-runner.json",
+            "default/core/plugins.lock.json",
+            ".gitignore",
+            "default/active",
+        ] {
+            assert!(
+                !is_device_local(Path::new(raw)),
+                "must not be device-local: {raw}"
             );
         }
     }

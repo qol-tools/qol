@@ -167,6 +167,7 @@ impl GitRepo {
             checkout_remote_into_local(&repo, remote_oid)?;
             return Ok(());
         }
+        refuse_device_local_paths(&repo, remote_oid)?;
         fast_forward(&repo, remote_oid)
     }
 
@@ -252,6 +253,7 @@ impl GitRepo {
 
     pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
         let repo = self.open_repo()?;
+        refuse_device_local_paths(&repo, oid)?;
         let object = repo.find_object(oid, None)?;
         repo.reset(&object, git2::ResetType::Hard, None)?;
         Ok(())
@@ -460,7 +462,32 @@ fn fast_forward(repo: &Repository, target: git2::Oid) -> Result<()> {
     Ok(())
 }
 
+fn refuse_device_local_paths(repo: &Repository, oid: git2::Oid) -> Result<()> {
+    let tree = repo.find_commit(oid)?.tree()?;
+    let mut offending: Vec<String> = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            let path = format!("{root}{}", entry.name().unwrap_or(""));
+            if crate::scope::is_device_local(Path::new(&path)) {
+                offending.push(path);
+            }
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+    match offending.as_slice() {
+        [] => Ok(()),
+        [only] => Err(anyhow!(
+            "the sync repo holds device-local files that are never synced, for example {only}; remove them from the repo before syncing again"
+        )),
+        [first, ..] => Err(anyhow!(
+            "the sync repo holds {} device-local files that are never synced, for example {first}; remove them from the repo before syncing again",
+            offending.len()
+        )),
+    }
+}
+
 fn checkout_remote_into_local(repo: &Repository, remote_oid: git2::Oid) -> Result<()> {
+    refuse_device_local_paths(repo, remote_oid)?;
     let commit = repo.find_commit(remote_oid)?;
     repo.branch(DEFAULT_BRANCH, &commit, true)?;
     repo.set_head(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
@@ -736,6 +763,71 @@ mod tests {
 
         let outcome = local.pull(None).unwrap();
         assert_eq!(outcome, PullOutcome::AlreadyUpToDate);
+    }
+
+    fn commit_raw(repo_path: &Path, rel: &str, contents: &str) {
+        write_file(&repo_path.join(rel), contents);
+        let repo = Repository::open(repo_path).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(rel)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = signature().to_git_signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "raw", &tree, &[&parent])
+            .unwrap();
+    }
+
+    fn seeded_pair(tmp: &TempDir) -> (GitRepo, PathBuf, GitRepo, PathBuf) {
+        let origin_dir = tmp.path().join("origin.git");
+        let url = init_bare_origin(&origin_dir);
+
+        let alice_path = tmp.path().join("alice");
+        let alice = GitRepo::init(&alice_path, &url).unwrap();
+        write_file(&alice_path.join("default/core/plugins.lock.json"), "{}");
+        alice.commit_all("seed", &signature()).unwrap();
+        alice.push(None).unwrap();
+
+        let bob_path = tmp.path().join("bob");
+        let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
+        (alice, alice_path, bob, bob_path)
+    }
+
+    #[test]
+    fn a_remote_commit_holding_a_device_local_file_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+        let head_before = bob.head_sha().unwrap();
+
+        commit_raw(&alice_path, "default/device/task-runner.json", "{}");
+        alice.push(None).unwrap();
+
+        let error = bob.pull(None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("default/device/task-runner.json"),
+            "error must name the path: {error:#}"
+        );
+        assert_eq!(bob.head_sha().unwrap(), head_before);
+        assert!(!bob_path.join("default/device/task-runner.json").exists());
+    }
+
+    #[test]
+    fn a_remote_commit_without_device_local_files_still_fast_forwards() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+
+        commit_raw(&alice_path, "default/core/plugins.lock.json", "{\"v\":2}");
+        alice.push(None).unwrap();
+
+        let outcome = bob.pull(None).unwrap();
+        assert!(
+            matches!(outcome, PullOutcome::FastForwarded { .. }),
+            "expected fast-forward, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(bob_path.join("default/core/plugins.lock.json")).unwrap(),
+            "{\"v\":2}"
+        );
     }
 
     #[test]

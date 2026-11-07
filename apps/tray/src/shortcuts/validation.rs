@@ -118,15 +118,81 @@ fn qol_owned_dirs() -> Vec<PathBuf> {
     .collect()
 }
 
-fn validate_app_ref(app_ref: &AppRef, field: &str) -> Result<(), String> {
-    validate_app_ref_against(app_ref, field, &qol_owned_dirs())
+fn resolved(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn validate_app_ref_against(
+fn inside_owned(candidate: &Path, owned: &[PathBuf]) -> bool {
+    owned.iter().any(|dir| candidate.starts_with(resolved(dir)))
+}
+
+pub fn ensure_program_allowed(app_ref: &AppRef) -> Result<(), String> {
+    ensure_program_allowed_against(app_ref, &qol_owned_dirs())
+}
+
+fn ensure_program_allowed_against(app_ref: &AppRef, owned: &[PathBuf]) -> Result<(), String> {
+    let AppRef::Path { path } = app_ref else {
+        return Ok(());
+    };
+    let parsed = Path::new(path);
+    if is_bare_name(parsed) {
+        return Ok(());
+    }
+    if !parsed.is_absolute() {
+        return Err("app path must be absolute".into());
+    }
+    let canonical = std::fs::canonicalize(parsed).map_err(|_| format!("{path} does not exist"))?;
+    if inside_owned(&canonical, owned) {
+        return Err("app path must not point inside qol-tray's own directories".into());
+    }
+    Ok(())
+}
+
+pub fn validate_shortcut_for_write(shortcut: &Shortcut) -> Result<(), String> {
+    validate_shortcut(shortcut)?;
+    validate_program_location(&shortcut.action, &qol_owned_dirs())
+}
+
+fn validate_program_location(action: &ShortcutAction, owned: &[PathBuf]) -> Result<(), String> {
+    match action {
+        ShortcutAction::OpenUrl {
+            browser_override: Some(app_ref),
+            ..
+        } => validate_program_location_against(app_ref, "browser_override", owned),
+        ShortcutAction::LaunchApp { app } => validate_program_location_against(app, "app", owned),
+        _ => Ok(()),
+    }
+}
+
+fn validate_program_location_against(
     app_ref: &AppRef,
     field: &str,
     owned: &[PathBuf],
 ) -> Result<(), String> {
+    let AppRef::Path { path } = app_ref else {
+        return Ok(());
+    };
+    let parsed = Path::new(path);
+    if is_bare_name(parsed) {
+        return Ok(());
+    }
+    if !parsed.is_absolute() {
+        return Err(format!("{} path must be absolute", field));
+    }
+    if inside_owned(&resolved(parsed), owned) {
+        return Err(format!(
+            "{} path must not point inside qol-tray's own directories",
+            field
+        ));
+    }
+    Ok(())
+}
+
+fn is_bare_name(path: &Path) -> bool {
+    !path.is_absolute() && path.components().count() == 1
+}
+
+fn validate_app_ref(app_ref: &AppRef, field: &str) -> Result<(), String> {
     match app_ref {
         AppRef::BundleId { id } => {
             if id.trim().is_empty() {
@@ -145,18 +211,7 @@ fn validate_app_ref_against(
                 ));
             }
             reject_null_bytes(path, field)?;
-            reject_traversal(path, field)?;
-            let parsed = Path::new(path);
-            if !parsed.is_absolute() {
-                return Err(format!("{} path must be absolute", field));
-            }
-            if owned.iter().any(|dir| parsed.starts_with(dir)) {
-                return Err(format!(
-                    "{} path must not point inside qol-tray's own directories",
-                    field
-                ));
-            }
-            Ok(())
+            reject_traversal(path, field)
         }
         AppRef::Name { name } => {
             if name.trim().is_empty() {
@@ -306,12 +361,40 @@ mod tests {
     }
 
     #[test]
-    fn validate_app_ref_rejects_relative_paths() {
-        for path in ["bin/tool", "tool", "./tool"] {
+    fn program_locations_must_be_absolute_unless_a_bare_name() {
+        for path in ["bin/tool", "./tool"] {
             let app = AppRef::Path { path: path.into() };
-            let error = validate_app_ref_against(&app, "app", &[]).unwrap_err();
+            let error = validate_program_location_against(&app, "app", &[]).unwrap_err();
             assert_eq!(error, "app path must be absolute", "path {path:?}");
+            assert_eq!(
+                ensure_program_allowed_against(&app, &[]).unwrap_err(),
+                "app path must be absolute",
+                "path {path:?}"
+            );
         }
+        let bare = AppRef::Path {
+            path: "tool".into(),
+        };
+        assert!(validate_program_location_against(&bare, "app", &[]).is_ok());
+        assert!(ensure_program_allowed_against(&bare, &[]).is_ok());
+    }
+
+    #[test]
+    fn a_shortcut_with_a_relative_program_still_loads_but_cannot_be_written() {
+        let entry = shortcut(
+            "ok",
+            "Tool",
+            ShortcutAction::LaunchApp {
+                app: AppRef::Path {
+                    path: "bin/tool".into(),
+                },
+            },
+        );
+        assert!(validate_shortcut(&entry).is_ok());
+        assert_eq!(
+            validate_shortcut_for_write(&entry).unwrap_err(),
+            "app path must be absolute"
+        );
     }
 
     #[test]
@@ -323,7 +406,7 @@ mod tests {
         let inside = AppRef::Path {
             path: owned.path().join("plugins/run.sh").display().to_string(),
         };
-        let error = validate_app_ref_against(&inside, "app", &owned_dirs).unwrap_err();
+        let error = validate_program_location_against(&inside, "app", &owned_dirs).unwrap_err();
         assert_eq!(
             error,
             "app path must not point inside qol-tray's own directories"
@@ -332,7 +415,73 @@ mod tests {
         let elsewhere = AppRef::Path {
             path: outside.path().join("tool").display().to_string(),
         };
-        assert!(validate_app_ref_against(&elsewhere, "app", &owned_dirs).is_ok());
+        assert!(validate_program_location_against(&elsewhere, "app", &owned_dirs).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_app_ref_follows_a_symlink_into_qol_dirs() {
+        let owned = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = owned.path().join("run.sh");
+        std::fs::write(&target, "x").unwrap();
+        let link = outside.path().join("link.sh");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let owned_dirs = [owned.path().to_path_buf()];
+
+        let app = AppRef::Path {
+            path: link.display().to_string(),
+        };
+        let error = validate_program_location_against(&app, "app", &owned_dirs).unwrap_err();
+        assert_eq!(
+            error,
+            "app path must not point inside qol-tray's own directories"
+        );
+    }
+
+    #[test]
+    fn ensure_program_allowed_refuses_a_missing_program_and_a_qol_owned_one() {
+        let owned = tempfile::TempDir::new().unwrap();
+        let owned_dirs = [owned.path().to_path_buf()];
+
+        let missing = owned.path().join("missing").display().to_string();
+        let error = ensure_program_allowed_against(
+            &AppRef::Path {
+                path: missing.clone(),
+            },
+            &owned_dirs,
+        )
+        .unwrap_err();
+        assert_eq!(error, format!("{missing} does not exist"));
+
+        let inside = owned.path().join("run.sh");
+        std::fs::write(&inside, "x").unwrap();
+        let error = ensure_program_allowed_against(
+            &AppRef::Path {
+                path: inside.display().to_string(),
+            },
+            &owned_dirs,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "app path must not point inside qol-tray's own directories"
+        );
+
+        let name = AppRef::Name { name: "x".into() };
+        assert!(ensure_program_allowed_against(&name, &owned_dirs).is_ok());
+    }
+
+    #[test]
+    fn ensure_program_allowed_accepts_a_real_program_outside_qol_dirs() {
+        let owned = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let program = outside.path().join("tool");
+        std::fs::write(&program, "x").unwrap();
+        let app = AppRef::Path {
+            path: program.display().to_string(),
+        };
+        assert!(ensure_program_allowed_against(&app, &[owned.path().to_path_buf()]).is_ok());
     }
 
     #[test]
