@@ -7195,6 +7195,7 @@ version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
+ "curve25519-dalek",
  "hkdf",
  "hmac",
  "if-addrs 0.15.0",
@@ -7217,7 +7218,6 @@ dependencies = [
  "tokio-rustls",
  "windows-sys 0.59.0",
  "workspace-hack",
- "x25519-dalek",
  "x509-cert",
  "x509-parser",
  "zeroize",
@@ -11940,18 +11940,6 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
-
-[[package]]
-name = "x25519-dalek"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
-dependencies = [
- "curve25519-dalek",
- "rand_core 0.6.4",
- "serde",
- "zeroize",
-]
 
 [[package]]
 name = "x509-cert"

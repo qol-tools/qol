@@ -1,6 +1,6 @@
 # POINTZ-1 Pairing Secret Is Broadcast In Plaintext During Discovery
 
-- **Status:** Proposed
+- **Status:** Superseded by [POINTZ-2](POINTZ-2-pairing-uses-spake2.md)
 - **Issue:** none (security finding F1, reproduced in a `linux/mint-cinnamon` guest on 2026-08-05)
 - **Date:** 2026-08-05
 - **Related:** F2 wheel-storm and F3 cursor-poison input bounds (fixed separately, same review); pointz-client Flutter repo (companion change required)
