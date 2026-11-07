@@ -1,5 +1,7 @@
+use std::ffi::{c_char, c_int, c_uint, CString};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -19,6 +21,7 @@ use crate::platform::macos::virtual_hid::{
 };
 
 pub(crate) const HELPER_LABEL: &str = "com.qol-tools.keyremap.hid-helper";
+const PRIVILEGED_DIR: &str = "/Library/PrivilegedHelperTools";
 pub(crate) const HELPER_BINARY: &str =
     "/Library/PrivilegedHelperTools/com.qol-tools.keyremap.hid-helper";
 pub(crate) const CLIENT_IDENTIFIER: &str = "com.qol-tools.keyremap";
@@ -169,54 +172,168 @@ fn install_file(source: &Path, target: &str, mode: u32) -> Result<()> {
 
 fn install_signed(source: &Path, identity: &str) -> Result<String> {
     let keychain = login_keychain()?;
-    let cdhash = resign_client(source, identity, &keychain)?;
+    let client = fs::canonicalize(source).context("resolve the running qol-keyremap binary")?;
+    let stage = Stage::create_in(Path::new(PRIVILEGED_DIR))?;
+    let staged = stage.copy_of(&client)?;
+    sign(&codesign_arguments(
+        identity,
+        &keychain,
+        CLIENT_IDENTIFIER,
+        &staged,
+    ))?;
+    let cdhash = client_cdhash(&staged)?;
     let requirement = client_requirement(CLIENT_IDENTIFIER, &cdhash)?;
-    let staging = format!("{HELPER_BINARY}.new");
-    fs::copy(source, &staging).with_context(|| format!("copy to {staging}"))?;
+    let helper = format!("{HELPER_BINARY}.new");
+    fs::copy(&staged, &helper).with_context(|| format!("copy to {helper}"))?;
     let signed = sign(&codesign_arguments(
         identity,
         &keychain,
         HELPER_LABEL,
-        &staging,
+        &helper,
     ));
     if signed.is_err() {
-        let _ = fs::remove_file(&staging);
+        let _ = fs::remove_file(&helper);
     }
     signed?;
-    finish_file(&staging, HELPER_BINARY, 0o755)?;
+    finish_file(&helper, HELPER_BINARY, 0o755)?;
+    place_signed_client(Path::new(&staged), &client)?;
     write_file(REQUIREMENT_PATH, &requirement, 0o644)?;
     Ok(cdhash)
 }
 
-fn resign_client(source: &Path, identity: &str, keychain: &str) -> Result<String> {
-    let client = fs::canonicalize(source).context("resolve the running qol-keyremap binary")?;
-    let client_text = client
-        .to_str()
-        .context("the running qol-keyremap path is not valid UTF-8")?;
-    let staging = format!("{client_text}.signing");
-    fs::copy(&client, &staging).with_context(|| format!("copy to {staging}"))?;
-    let swapped = sign(&codesign_arguments(
-        identity,
-        keychain,
-        CLIENT_IDENTIFIER,
-        &staging,
-    ))
-    .and_then(|()| client_cdhash(&staging))
-    .and_then(|cdhash| swap_in_signed_client(&staging, &client).map(|()| cdhash));
-    if swapped.is_err() {
-        let _ = fs::remove_file(&staging);
+struct Stage(std::path::PathBuf);
+
+impl Stage {
+    fn create_in(root: &Path) -> Result<Self> {
+        let dir = root.join(format!("{HELPER_LABEL}.stage-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).with_context(|| format!("create {}", dir.display()))?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("chmod {}", dir.display()))?;
+        Ok(Self(dir))
     }
-    swapped
+
+    fn copy_of(&self, client: &Path) -> Result<String> {
+        let staged = self.0.join("qol-keyremap");
+        fs::copy(client, &staged).with_context(|| format!("copy to {}", staged.display()))?;
+        staged
+            .to_str()
+            .map(str::to_owned)
+            .context("the staging path is not valid UTF-8")
+    }
 }
 
-fn swap_in_signed_client(staging: &str, client: &Path) -> Result<()> {
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+extern "C" {
+    fn openat(dir: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
+    fn renameat(from_dir: c_int, from: *const c_char, to_dir: c_int, to: *const c_char) -> c_int;
+    fn unlinkat(dir: c_int, path: *const c_char, flags: c_int) -> c_int;
+    fn fchown(fd: c_int, uid: u32, gid: u32) -> c_int;
+    fn fchmod(fd: c_int, mode: u16) -> c_int;
+}
+
+const O_WRONLY: c_int = 0x1;
+const O_CREAT: c_int = 0x200;
+const O_EXCL: c_int = 0x800;
+const O_NOFOLLOW: c_int = 0x100;
+const O_DIRECTORY: c_int = 0x0010_0000;
+const O_CLOEXEC: c_int = 0x0100_0000;
+
+fn place_signed_client(staged: &Path, client: &Path) -> Result<()> {
+    let folder = client
+        .parent()
+        .with_context(|| format!("{} has no folder", client.display()))?;
+    let name = client
+        .file_name()
+        .with_context(|| format!("{} has no name", client.display()))?;
+    let original =
+        fs::symlink_metadata(client).with_context(|| format!("stat {}", client.display()))?;
+    ensure!(
+        original.is_file(),
+        "{} is not a regular file",
+        client.display()
+    );
+    let folder_fd = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECTORY | O_NOFOLLOW)
+        .open(folder)
+        .with_context(|| format!("open {}", folder.display()))?;
+    let temp_name = c_name(&format!(
+        ".{}.signed-{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ))?;
+    let fd = unsafe {
+        openat(
+            folder_fd.as_raw_fd(),
+            temp_name.as_ptr(),
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o700 as c_uint,
+        )
+    };
+    ensure!(
+        fd >= 0,
+        "cannot create the signed copy in {}: {}",
+        folder.display(),
+        std::io::Error::last_os_error()
+    );
+    let mut file = unsafe { fs::File::from_raw_fd(fd) };
+    let placed = fill_and_swap(
+        &mut file,
+        staged,
+        &folder_fd,
+        &temp_name,
+        &c_name(&name.to_string_lossy())?,
+        &original,
+    );
+    if placed.is_err() {
+        let _ = unsafe { unlinkat(folder_fd.as_raw_fd(), temp_name.as_ptr(), 0) };
+    }
+    placed
+}
+
+fn fill_and_swap(
+    file: &mut fs::File,
+    staged: &Path,
+    folder_fd: &fs::File,
+    temp_name: &CString,
+    name: &CString,
+    original: &fs::Metadata,
+) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
-    let original = fs::metadata(client).with_context(|| format!("stat {}", client.display()))?;
-    std::os::unix::fs::chown(staging, Some(original.uid()), Some(original.gid()))
-        .with_context(|| format!("chown {staging}"))?;
-    fs::set_permissions(staging, original.permissions())
-        .with_context(|| format!("chmod {staging}"))?;
-    fs::rename(staging, client).with_context(|| format!("move {staging} over {}", client.display()))
+    std::io::copy(
+        &mut fs::File::open(staged).with_context(|| format!("open {}", staged.display()))?,
+        file,
+    )
+    .context("write the signed copy")?;
+    file.sync_all().context("flush the signed copy")?;
+    let fd = file.as_raw_fd();
+    ensure!(
+        unsafe { fchown(fd, original.uid(), original.gid()) } == 0,
+        "cannot give the signed copy back to its owner: {}",
+        std::io::Error::last_os_error()
+    );
+    ensure!(
+        unsafe { fchmod(fd, (original.mode() & 0o7777) as u16) } == 0,
+        "cannot restore the signed copy's mode: {}",
+        std::io::Error::last_os_error()
+    );
+    let folder = folder_fd.as_raw_fd();
+    ensure!(
+        unsafe { renameat(folder, temp_name.as_ptr(), folder, name.as_ptr()) } == 0,
+        "cannot move the signed copy over the client: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
+fn c_name(name: &str) -> Result<CString> {
+    CString::new(name).context("the file name holds a NUL byte")
 }
 
 fn sign(arguments: &[String]) -> Result<()> {
@@ -490,6 +607,65 @@ Signature size=9000\n";
         );
         assert_eq!(parse_cdhash("Identifier=x\nCDHash=xyz\n"), None);
         assert_eq!(parse_cdhash("Identifier=x\n"), None);
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("qol-keyremap-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_stage_is_a_private_folder_removed_when_dropped() {
+        let root = scratch("stage");
+        let source = root.join("source");
+        fs::write(&source, b"binary").unwrap();
+        let stage = Stage::create_in(&root).unwrap();
+        let dir = stage.0.clone();
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let staged = stage.copy_of(&source).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), b"binary");
+        drop(stage);
+        assert!(!dir.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_signed_copy_replaces_the_client_and_keeps_its_mode() {
+        let root = scratch("place");
+        let client = root.join("plugins").join("qol-keyremap");
+        fs::create_dir_all(client.parent().unwrap()).unwrap();
+        fs::write(&client, b"old").unwrap();
+        fs::set_permissions(&client, fs::Permissions::from_mode(0o750)).unwrap();
+        let staged = root.join("staged");
+        fs::write(&staged, b"signed").unwrap();
+        place_signed_client(&staged, &client).unwrap();
+        assert_eq!(fs::read(&client).unwrap(), b"signed");
+        assert_eq!(
+            fs::metadata(&client).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read_dir(client.parent().unwrap()).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_planted_entry_at_the_temporary_name_stops_the_placement() {
+        let root = scratch("planted");
+        let client = root.join("qol-keyremap");
+        fs::write(&client, b"old").unwrap();
+        let planted = root.join(format!(".qol-keyremap.signed-{}", std::process::id()));
+        std::os::unix::fs::symlink(root.join("victim"), &planted).unwrap();
+        let staged = root.join("staged");
+        fs::write(&staged, b"signed").unwrap();
+        assert!(place_signed_client(&staged, &client).is_err());
+        assert_eq!(fs::read(&client).unwrap(), b"old");
+        assert!(!root.join("victim").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
