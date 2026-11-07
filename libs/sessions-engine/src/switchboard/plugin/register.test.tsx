@@ -542,6 +542,29 @@ test('a sent message still leaves the box when the engine puts it back late', as
   expect(timers).toEqual([])
 })
 
+test('a sent line the engine puts back leaves the box at once, and only that line', async ($, on) => {
+  engine(on)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.messages', () => ({ value: [] }))
+  const fills: string[] = []
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    fills.push(e.text)
+    return { isFilled: true }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'asking-fork teal', cursor: 16 })
+  expect(fills).toEqual([''])
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'asking-fork teal', cursor: 16 })
+  expect(fills).toEqual([''])
+  expect((await typed($, 'asking-fork amber')).drop).toContain('→ asking-fork')
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork amber', cursor: 17 })
+  await $.prompt.change({ origin: { kind: 'engine' }, text: 'something new', cursor: 13 })
+  expect(fills).toEqual([''])
+})
+
 test('/board shows the whole board in an agent view too', async ($, on) => {
   engine(on)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })

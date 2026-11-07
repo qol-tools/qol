@@ -208,14 +208,25 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
+let putBack: ((text: string) => boolean) | undefined
+
+const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
+  if (putBack === undefined || text === '' || !putBack(text)) return
+  putBack = undefined
+  await $.prompt.fill({ text: '', mode: 'replace' })
+}
+
 const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
   const [after, ...later] = waits
+  putBack = after === undefined ? undefined : isDropped
   if (after === undefined) return
   $.clock.after(after, () => {
     void (async () => {
       const { text } = await $.prompt.read()
+      if (putBack !== isDropped) return
+      if (text === '') return clearBox($, isDropped, later)
+      putBack = undefined
       if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
-      else if (text === '') clearBox($, isDropped, later)
     })().catch(() => {})
   })
 }
@@ -2084,6 +2095,7 @@ export const register: Register = on => {
   on('prompt.change', async ($, e, next) => {
     const after = await next(e)
     try {
+      if (e.origin.kind === 'engine') await clearPutBack($, e.text)
       if (viewedFork === undefined) await writeToTyped($, typedTarget(await read($, board), e.text))
     } catch {}
     return after
