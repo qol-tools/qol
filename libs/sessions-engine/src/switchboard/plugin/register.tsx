@@ -53,7 +53,6 @@ const TERMINAL_CODE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[\]P^_X][^\u0007\u001b]*(?:\
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
-const DONE: readonly Kind[] = ['merged', 'note']
 const MARKUP = /^[\s*_`#>-]+|[\s*_`]+$/g
 const HANDBACK = /^(Another Claude session sent a message:\n<agent-message from="([A-Za-z0-9_-]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)((?:(?: {2}[^\n]*)?\n)*?)(<\/agent-message>\n)/
 const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
@@ -185,18 +184,22 @@ const filingOf = async ($: EngineInterface, report: string): Promise<Filing> => 
 
 const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`
 
+const isEnded = (entry: Entry): boolean => entry.isDone === true || entry.kind === 'merged'
+
 const stateOf = (entry: Entry): string =>
   isCut(entry)
     ? 'stopped by a restart'
     : entry.isWorking
     ? 'working'
-    : entry.isDone === true
+    : isEnded(entry)
       ? 'done'
       : entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
         ? 'needs the user'
         : entry.kind === 'waiting'
           ? 'waiting on its pull request'
-          : 'done'
+          : entry.isStoppedByUser === true
+            ? 'stopped'
+            : 'idle'
 
 const toggleBoard = async ($: EngineInterface): Promise<string> => {
   const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
@@ -279,6 +282,44 @@ const forgetSent = (agentId: string, one: Unseen): void => {
   const waiting = (unseenSent.get(agentId) ?? []).filter(other => other !== one)
   if (waiting.length === 0) unseenSent.delete(agentId)
   else unseenSent.set(agentId, waiting)
+}
+
+const SENT_PREFIX = 'sent:'
+const SENT_KEPT = 30
+
+export type SentNote = { text: string; anchor: string }
+
+const sentNotes = (saved: unknown): SentNote[] =>
+  Array.isArray(saved) ? saved.filter((one): one is SentNote => typeof one?.text === 'string' && typeof one?.anchor === 'string') : []
+
+export const withSent = (all: Said[], logged: readonly SentNote[]): Said[] => {
+  const missing = new Map<string, number>()
+  for (const one of logged) missing.set(one.text, (missing.get(one.text) ?? 0) + 1)
+  for (const [text, count] of missing) missing.set(text, count - timesSaid(all, text))
+  let rows = all
+  let from = 0
+  for (const one of logged) {
+    if ((missing.get(one.text) ?? 0) <= 0) continue
+    const anchor = one.anchor === '' ? -1 : rows.findIndex((row, index) => index >= from && !row.isUser && row.text === one.anchor)
+    if (one.anchor !== '' && anchor === -1) continue
+    let place = anchor + 1
+    while (rows[place]?.isUser === true) place += 1
+    rows = [...rows.slice(0, place), { isUser: true, text: one.text }, ...rows.slice(place)]
+    missing.set(one.text, (missing.get(one.text) ?? 0) - 1)
+    from = Math.max(anchor, 0)
+  }
+  return rows
+}
+
+const noteSentLog = async ($: EngineInterface, key: string, one: SentNote): Promise<void> => {
+  const saved = sentNotes(await $.store.get(`${SENT_PREFIX}${key}`))
+  await $.store.set(`${SENT_PREFIX}${key}`, [...saved, one].slice(-SENT_KEPT))
+}
+
+const forgetSentLog = async ($: EngineInterface, key: string, one: SentNote): Promise<void> => {
+  const saved = sentNotes(await $.store.get(`${SENT_PREFIX}${key}`))
+  const at = saved.map(other => other.text === one.text && other.anchor === one.anchor).lastIndexOf(true)
+  if (at !== -1) await $.store.set(`${SENT_PREFIX}${key}`, [...saved.slice(0, at), ...saved.slice(at + 1)])
 }
 
 const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
@@ -400,7 +441,10 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
-  const all = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const entry = (await read($, board)).find(one => one.agentId === target)
+  const logged = entry === undefined ? [] : sentNotes(await $.store.get(`${SENT_PREFIX}${keyOf(entry)}`).catch(() => undefined))
+  if (fetch !== writingFetch || (await read($, writingTo)) !== target) return
+  const all = withUnseen(target, withSent(recentWords(found, Infinity), logged), await $.clock.now())
   const said = all.slice(-SAID_KEPT)
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
   focusRows = { agentId: target, rows: all.slice(-FOCUS_KEPT) }
@@ -603,7 +647,7 @@ const suggestFork = ($: EngineInterface, list: Entry[]): void => {
 const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking && entry.isDone !== true
 
 export const isUnfinished = (entry: Entry): boolean =>
-  !entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true
+  !entry.isDismissed && entry.successor === undefined && entry.isDone !== true
 
 const needsYou = (entry: Entry): boolean =>
   !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
@@ -709,13 +753,12 @@ export const keyOf = (entry: Entry): string => entry.key ?? keyName(entry.name)
 export const reachable = (list: Entry[]): Entry[] => {
   const shown = list.filter(entry => !entry.isDismissed && entry.successor === undefined)
   const by = (keep: (entry: Entry) => boolean) => shown.filter(keep).sort((a, b) => a.at - b.at)
-  const ended = (entry: Entry) => entry.isDone === true || (entry.kind !== undefined && DONE.includes(entry.kind))
   const ordered = [
     ...by(needsYou),
     ...by(isCut),
     ...by(entry => entry.isWorking),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !ended(entry)),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && ended(entry)).reverse(),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry)),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && isEnded(entry)).reverse(),
   ]
   const seen = new Set<string>()
   return ordered.filter(entry => {
@@ -1807,7 +1850,7 @@ export const register: Register = on => {
         $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request, is idle, was stopped or is done; only a fork that called fork_done or whose pull request merged is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -1951,8 +1994,11 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin.kind !== 'task-notification' || e.props.isExpanded) return next(e)
+    const list = await read($, board)
+    const taskId = e.props.task?.id
+    const isOtherFork = taskId !== undefined && viewedFork === undefined && (await read($, writingTo)) !== '' && list.some(entry => entry.agentId === taskId)
     const name = RESUMED_SUMMARY.exec(e.props.text.trim())?.[1]
-    if (name === undefined || !(await read($, board)).some(entry => namesFork(entry.name, name))) return next(e)
+    if (!isOtherFork && (name === undefined || !list.some(entry => namesFork(entry.name, name)))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   }).catch(($, e, next) => next(e))
@@ -2008,15 +2054,26 @@ export const register: Register = on => {
       await writeTo($, at.entry)
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
-      const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
+      const fetched = await $.session.messages({ agentId: at.entry.agentId }).then(
+        found => found,
+        () => undefined,
+      )
+      const before = recentWords(fetched ?? [], Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
+      const note = { text: noted.text, anchor: [...before].reverse().find(row => !row.isUser)?.text ?? '' }
+      const key = keyOf(at.entry)
+      if (fetched !== undefined) await noteSentLog($, key, note).catch(() => {})
+      const forget = () => {
+        forgetSent(at.entry.agentId, noted)
+        void forgetSentLog($, key, note).catch(() => {})
+      }
       const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
         void tell($, at.entry, fromUser(at.message))
           .then(isDelivered => {
-            if (!isDelivered) forgetSent(at.entry.agentId, noted)
+            if (!isDelivered) forget()
           })
-          .catch(() => forgetSent(at.entry.agentId, noted))
+          .catch(forget)
       }
       await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
@@ -2039,6 +2096,7 @@ export const register: Register = on => {
     await next(e)
     escArmed = false
     await update($, current, () => '')
+    await writeTo($, undefined).catch(() => undefined)
   }).catch(($, e, next) => (next.called ? undefined : e.origin.kind === 'person' && escArmed ? KEPT_OPEN : next(e)))
 
   on('prompt.autocomplete', async ($, e, next) => {
@@ -2279,9 +2337,11 @@ export const register: Register = on => {
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
     const working = list.filter(entry => entry.isWorking).sort((a, b) => a.at - b.at)
     const waiting = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind === 'waiting')
-    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && (entry.isDone === true || (entry.kind !== undefined && DONE.includes(entry.kind)))).reverse()
+    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && isEnded(entry)).reverse()
+    const idle = list.filter(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry) && entry.kind !== 'waiting').sort((a, b) => a.at - b.at)
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
-    const labelOf = (entry: Entry): string => (entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note'))
+    const labelOf = (entry: Entry): string =>
+      entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : idle.includes(entry) && entry.isStoppedByUser === true ? 'stopped' : (entry.kind ?? 'note')
     let n = 0
     const hotkey = () => {
       n += 1
@@ -2385,7 +2445,7 @@ export const register: Register = on => {
         </Box>
         {target !== undefined && heading('FORKS')}
         {target !== undefined &&
-          [...needs, ...cut, ...working, ...waiting, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
+          [...needs, ...cut, ...working, ...waiting, ...idle, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
             <Box key={`row-${entry.agentId}`}>{title(entry, labelOf(entry))}</Box>
           ))}
         {target !== undefined && heading('WRITING TO')}
@@ -2394,7 +2454,7 @@ export const register: Register = on => {
             <Text>
               <Text color={target.isWorking ? 'claude' : isCut(target) ? 'warning' : COLOR[target.kind ?? 'note']}>●</Text> <Text bold>{keyName(target.name)}</Text>{' '}
               <Text dimColor>
-                {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
+                {labelOf(target)} · {age(now - target.at)}
               </Text>
               {fresh === target.agentId && (
                 <Text bold color="suggestion">
@@ -2492,6 +2552,18 @@ export const register: Register = on => {
         {target === undefined && waiting.map(entry => (
           <Box key={`wait-${entry.agentId}`} flexDirection="column">
             {title(entry, 'waiting')}
+            <Box paddingLeft={2} flexDirection="column">
+              <Text dimColor wrap="wrap">
+                {entry.headline}
+              </Text>
+              {prs(entry)}
+            </Box>
+          </Box>
+        ))}
+        {target === undefined && idle.length > 0 && heading('IDLE')}
+        {target === undefined && idle.map(entry => (
+          <Box key={`idle-${entry.agentId}`} flexDirection="column">
+            {title(entry, entry.isStoppedByUser === true ? 'stopped' : 'idle')}
             <Box paddingLeft={2} flexDirection="column">
               <Text dimColor wrap="wrap">
                 {entry.headline}

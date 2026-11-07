@@ -209,7 +209,7 @@ mod tests {
             "const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })",
             "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
-            "!entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true",
+            "!entry.isDismissed && entry.successor === undefined && entry.isDone !== true",
             "[program, 'sessions', 'record', verb, ...args]",
             "await recordRun($, 'resume', ['--key', marked])",
             "'--description', claimed?.description ?? session.description",
