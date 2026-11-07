@@ -41,7 +41,7 @@ declare module 'claude-code' {
       switchboardLog: { who: string; text: string }[]
       focusActivity: string
       freshReply: string
-      focusShown: { id: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
+      focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
       starting: string
       current: string
     }

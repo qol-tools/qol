@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, singleLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2269,7 +2269,7 @@ test('while writing to a fork the board shows the switchboard log, newest first,
   await ui.unmount()
 })
 
-test('writing to a fork shows its whole conversation in the chat, newest block only, without harness notes', async ($, on) => {
+test('writing to a fork shows its whole conversation in the chat, the old block kept until the new one draws, without harness notes', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
   const timers: Array<() => void> = []
@@ -2296,6 +2296,14 @@ test('writing to a fork shows its whole conversation in the chat, newest block o
   timers.splice(0).forEach(resolve => resolve())
   await new Promise(resolve => setTimeout(resolve, 10))
   expect(focusIds(panes).length).toBe(2)
+  const kept = await $.ui.mount(placedRow(first as string))
+  expect(await kept.find({ type: 'Text', text: /^── asking-fork / })).toBeDefined()
+  await kept.unmount()
+  const fresh = await $.ui.mount(placedRow(focusIds(panes).at(-1) as string))
+  expect(await fresh.find({ type: 'Text', text: /^── asking-fork / })).toBeDefined()
+  await fresh.unmount()
+  timers.splice(0).forEach(resolve => resolve())
+  await new Promise(resolve => setTimeout(resolve, 10))
   const old = await $.ui.mount(placedRow(first as string))
   expect(await old.find({ type: 'Text', text: /^── asking-fork / })).toBeUndefined()
   await old.unmount()
@@ -2329,6 +2337,13 @@ test('a fork key and message typed on the phone through Remote Control go to tha
   await spawn($, 'a8', 'asking-fork: asks')
   expect((await typed($, 'asking-fork teal', 'bridge')).drop).toContain('→ asking-fork')
   expect(sent.map(one => one.text)).toEqual([fromUser('teal')])
+})
+
+test('a switchboard log saved twice over keeps each entry once, in its first place', () => {
+  const a = { who: 'you → fork', text: 'teal' }
+  const b = { who: 'fork', text: 'Teal it is.' }
+  const c = { who: 'switchboard', text: 'Started fork.' }
+  expect(singleLog([a, b, a, b, c])).toEqual([a, b, c])
 })
 
 test('the prompt box offers fork keys for its first word only', async ($, on) => {

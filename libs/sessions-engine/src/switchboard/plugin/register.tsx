@@ -105,7 +105,7 @@ const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
 const switchboardLog = atom({ plugin: 'qol-switchboard', key: 'switchboardLog' } as const, [] as { who: string; text: string }[])
 const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
 const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
-const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
+const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -401,14 +401,33 @@ const SB_LOG_KEPT = 12
 export const YOU = 'you'
 export const SWITCHBOARD = 'switchboard'
 
-let isLogLoaded = false
+const OLD_SB_LOG_PREFIX = 'sblog:'
 
-const loadLog = async ($: EngineInterface): Promise<void> => {
-  if (isLogLoaded) return
-  isLogLoaded = true
-  const saved = await $.store.get(SB_LOG_PREFIX + (await $.session.id())).catch(() => undefined)
-  const rows = Array.isArray(saved) ? saved.filter((one): one is { who: string; text: string } => typeof one?.who === 'string' && typeof one?.text === 'string') : []
-  await update($, switchboardLog, () => rows.slice(-SB_LOG_KEPT))
+type Logged = { who: string; text: string }
+
+const loggedRows = (saved: unknown): Logged[] =>
+  Array.isArray(saved) ? saved.filter((one): one is Logged => typeof one?.who === 'string' && typeof one?.text === 'string') : []
+
+export const singleLog = (rows: readonly Logged[]): Logged[] =>
+  rows.filter((one, at) => rows.findIndex(other => other.who === one.who && other.text === one.text) === at)
+
+let logLoading: Promise<void> | undefined
+
+const readLog = async ($: EngineInterface): Promise<void> => {
+  const session = await $.session.id()
+  const old = loggedRows(await $.store.get(OLD_SB_LOG_PREFIX + session).catch(() => undefined))
+  const saved = loggedRows(await $.store.get(SB_LOG_PREFIX + session).catch(() => undefined))
+  const rows = singleLog([...old, ...saved]).slice(-SB_LOG_KEPT)
+  await update($, switchboardLog, () => rows)
+  if (old.length > 0) {
+    await $.store.set(SB_LOG_PREFIX + session, rows).catch(() => undefined)
+    await $.store.set(OLD_SB_LOG_PREFIX + session, []).catch(() => undefined)
+  }
+}
+
+const loadLog = ($: EngineInterface): Promise<void> => {
+  logLoading ??= readLog($).catch(() => undefined)
+  return logLoading
 }
 
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
@@ -423,6 +442,8 @@ const logSaid = async ($: EngineInterface, who: string, said: string): Promise<v
 const FOCUS_PREFIX = 'focus-'
 const FOCUS_KEPT = 40
 const FOCUS_SETTLE_MS = 16
+const FOCUS_SWAP_MS = 60
+let swapFor = ''
 const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
 
 let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
@@ -442,7 +463,7 @@ const placeFocus = async ($: EngineInterface): Promise<void> => {
   })
   if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
   const rows = focusRows.agentId === target ? focusRows.rows : []
-  await update($, focusShown, () => ({ id, agentId: target, key: keyOf(entry), rows }))
+  await update($, focusShown, shown => ({ id, prevId: shown.agentId === target ? shown.id : '', agentId: target, key: keyOf(entry), rows }))
 }
 
 const TOOL_TEXT = 60
@@ -1824,7 +1845,12 @@ export const register: Register = on => {
     if (e.props.plugin !== NAME || !e.props.id.startsWith(FOCUS_PREFIX)) return next(e)
     const { Box, Text, Markdown } = $.ui.resolve(e)
     const shown = await read($, focusShown)
-    if (e.props.id !== shown.id) return <Box />
+    const id = e.props.id
+    if (id !== shown.id && (shown.prevId === '' || id !== shown.prevId)) return <Box />
+    if (id === shown.id && shown.prevId !== '' && swapFor !== id) {
+      swapFor = id
+      $.clock.after(FOCUS_SWAP_MS, () => void update($, focusShown, one => (one.id === id ? { ...one, prevId: '' } : one)).catch(() => {}))
+    }
     const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
     const activity = await read($, focusActivity)
     const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
@@ -2181,7 +2207,7 @@ export const register: Register = on => {
     const writing = await read($, writingTo)
     const switchboardSaid = await read($, switchboardLog)
     const fresh = await read($, freshReply)
-    if (!isLogLoaded) $.clock.after(0, () => void loadLog($).catch(() => {}))
+    if (logLoading === undefined) $.clock.after(0, () => void loadLog($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
