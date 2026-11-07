@@ -2054,11 +2054,15 @@ export const register: Register = on => {
       await writeTo($, at.entry)
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
-      const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
+      const fetched = await $.session.messages({ agentId: at.entry.agentId }).then(
+        found => found,
+        () => undefined,
+      )
+      const before = recentWords(fetched ?? [], Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
       const note = { text: noted.text, anchor: [...before].reverse().find(row => !row.isUser)?.text ?? '' }
       const key = keyOf(at.entry)
-      await noteSentLog($, key, note).catch(() => {})
+      if (fetched !== undefined) await noteSentLog($, key, note).catch(() => {})
       const forget = () => {
         forgetSent(at.entry.agentId, noted)
         void forgetSentLog($, key, note).catch(() => {})
@@ -2092,6 +2096,7 @@ export const register: Register = on => {
     await next(e)
     escArmed = false
     await update($, current, () => '')
+    await writeTo($, undefined).catch(() => undefined)
   }).catch(($, e, next) => (next.called ? undefined : e.origin.kind === 'person' && escArmed ? KEPT_OPEN : next(e)))
 
   on('prompt.autocomplete', async ($, e, next) => {
@@ -2449,7 +2454,7 @@ export const register: Register = on => {
             <Text>
               <Text color={target.isWorking ? 'claude' : isCut(target) ? 'warning' : COLOR[target.kind ?? 'note']}>●</Text> <Text bold>{keyName(target.name)}</Text>{' '}
               <Text dimColor>
-                {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
+                {labelOf(target)} · {age(now - target.at)}
               </Text>
               {fresh === target.agentId && (
                 <Text bold color="suggestion">

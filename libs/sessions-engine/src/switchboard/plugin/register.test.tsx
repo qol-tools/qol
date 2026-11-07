@@ -266,7 +266,7 @@ test("a fork's resume notice that reaches a busy switchboard draws as nothing, a
   }
 })
 
-test("while the prompt writes to a fork, fork notification rows draw as nothing so only that fork's conversation shows", async ($, on) => {
+test("while the prompt writes to a fork, fork notification rows draw as nothing so only that fork's conversation shows, and the board's close brings them back", async ($, on) => {
   const sent: any[] = []
   const panes: string[] = []
   engine(on, sent, panes)
@@ -290,6 +290,10 @@ test("while the prompt writes to a fork, fork notification rows draw as nothing 
   expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([true, true, true])
   expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
   expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([false, false, true])
+
+  expect((await typed($, 'qols board')).drop).toContain('Fork board opened.')
+  expect((await typed($, 'qols board')).drop).toContain('Fork board closed.')
+  expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([true, true, true])
 })
 
 test("a message typed to a fork from the switchboard's prompt shows in the fork's view as the user's words alone", async ($, on) => {
