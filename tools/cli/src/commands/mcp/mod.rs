@@ -6,7 +6,7 @@ use qol_conventions::{local_base_url, HTTP_AGENT_HOME_HEADER, HTTP_AUTH_HEADER};
 
 mod configure;
 
-use configure::{apply_codex_entry, apply_json_entry, codex_entry_text, config_path, json_entry};
+use configure::{apply_codex_entry, apply_json_entry, config_path, json_entry};
 
 const USAGE: &str = "qol mcp <url|token|headers|configure>";
 
@@ -50,32 +50,31 @@ fn run_configure(args: &[OsString]) -> Result<()> {
     })?;
     let url = url_text();
     let token = token_text()?;
-    let (updated, entry_text, baked) = match harness {
+    let (updated, shown_entry, baked) = match harness {
         Harness::Codex => {
             let agent_home = Registry::load().current(Harness::Codex).id;
             let updated = apply_codex_entry(&document, &url, &token, &agent_home)?;
-            let entry = codex_entry_text(&url, &token, &agent_home)?;
-            (updated, entry, Some(agent_home))
+            (updated, None, Some(agent_home))
         }
         Harness::Kimi => {
             let agent_home = Registry::load().current(Harness::Kimi).id;
             let entry = json_entry(Harness::Kimi, &url, &token, &agent_home);
-            let text = serde_json::to_string_pretty(&entry)
-                .map_err(|error| anyhow!("failed to render the mcp entry: {error}"))?;
-            (apply_json_entry(&document, entry)?, text, Some(agent_home))
+            (apply_json_entry(&document, entry)?, None, Some(agent_home))
         }
         other => {
             let agent_home = Registry::load().current(other).id;
             let entry = json_entry(other, &url, &token, &agent_home);
             let text = serde_json::to_string_pretty(&entry)
                 .map_err(|error| anyhow!("failed to render the mcp entry: {error}"))?;
-            (apply_json_entry(&document, entry)?, text, None)
+            (apply_json_entry(&document, entry)?, Some(text), None)
         }
     };
-    std::fs::write(&path, updated)
+    qol_fs::atomic_write_private(&path, updated.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
     println!("updated {}", path.display());
-    println!("{entry_text}");
+    if let Some(entry_text) = shown_entry {
+        println!("{entry_text}");
+    }
     if let Some(agent_home) = baked {
         println!("agent home {agent_home} baked in; run qol mcp configure again after re-homing");
     }
@@ -132,8 +131,9 @@ Details:
   the x-qol-agent-home header to the agent home id.
   configure writes or replaces the qol MCP entry in the named harness's user
   config; claude and pi reference the qol CLI for their headers and token,
-  while codex and kimi embed the token value directly. Existing servers,
-  tables, and comments survive; the config file must already exist.
+  while codex and kimi embed the token value, so their config file is written
+  owner-only and the entry is not echoed. Existing servers, tables, and
+  comments survive; the config file must already exist.
 "#
 }
 

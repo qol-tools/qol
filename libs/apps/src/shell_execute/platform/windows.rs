@@ -157,12 +157,8 @@ fn program_path(target: &OsStr) -> Option<&str> {
 }
 
 fn launched_child_inherits(key: &OsStr) -> bool {
-    key.to_str().is_none_or(|key| {
-        key != qol_conventions::ENV_DAEMON_SOCKET
-            && key != qol_conventions::ENV_INSTALL_ID
-            && key != qol_conventions::ENV_HTTP_TOKEN
-            && !qol_conventions::is_daemon_handoff_env(key)
-    })
+    key.to_str()
+        .is_none_or(qol_conventions::launched_child_inherits)
 }
 
 fn child_environment(variables: impl IntoIterator<Item = (OsString, OsString)>) -> Vec<u16> {

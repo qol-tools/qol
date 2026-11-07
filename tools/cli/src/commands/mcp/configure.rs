@@ -94,10 +94,6 @@ fn codex_entry_table(url: &str, token: &str, agent_home: &str) -> toml_edit::Tab
     entry
 }
 
-pub(crate) fn codex_entry_text(url: &str, token: &str, agent_home: &str) -> Result<String> {
-    apply_codex_entry("", url, token, agent_home)
-}
-
 pub(crate) fn apply_codex_entry(
     document: &str,
     url: &str,

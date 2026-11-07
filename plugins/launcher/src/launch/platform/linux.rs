@@ -14,11 +14,8 @@ pub(crate) fn launch_app(_path: &Path, exec: &[String]) -> io::Result<()> {
         ));
     };
     let mut command = Command::new(program);
-    command
-        .args(args)
-        .env_remove(qol_conventions::ENV_DAEMON_SOCKET)
-        .env_remove(qol_conventions::ENV_INSTALL_ID);
-    qol_conventions::scrub_daemon_handoff_env(&mut command);
+    command.args(args);
+    qol_conventions::scrub_launched_child_env(&mut command);
     if let Some(dir) = qol_platform::launch_working_dir() {
         command.current_dir(dir);
     }
