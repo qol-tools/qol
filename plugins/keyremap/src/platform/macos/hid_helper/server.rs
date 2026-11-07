@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -16,6 +16,8 @@ use super::Shared;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(1);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(1);
+const HELLO_MAX: usize = 4096;
+const UNTRUSTED_CLIENT_REASON: &str = "the keyboard helper trusts only the Key Remap build it was installed with, and this build is not it; run: sudo qol-keyremap install-hid-helper";
 const WRITE_TIMEOUT: Duration = Duration::from_millis(50);
 
 extern "C" {
@@ -113,13 +115,10 @@ fn accept(
         "peer uid {peer} is not the console user {}",
         owner.uid
     );
-    stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+    let hello = read_hello(&stream)?;
     let mut writer = stream.try_clone()?;
-    let mut lines = BufReader::new(stream).lines();
-    let hello = lines
-        .next()
-        .context("the client closed before saying hello")??;
+    let lines = BufReader::new(stream).lines();
     let ToHelper::Hello { protocol, role } = protocol::parse_message(&hello)? else {
         bail!("the first message was not hello");
     };
@@ -136,9 +135,16 @@ fn accept(
     match role {
         Role::Status => protocol::write_message(&mut writer, &ToDaemon::Status(shared.status()))?,
         Role::Session => {
-            signer
-                .context("the helper has no certificate to verify keyremap with")?
-                .verify(&writer)?;
+            if let Err(error) = verify_session(signer, &writer) {
+                let _ = protocol::write_message(
+                    &mut writer,
+                    &ToDaemon::Refused {
+                        protocol: PROTOCOL_VERSION,
+                        reason: UNTRUSTED_CLIENT_REASON.to_string(),
+                    },
+                );
+                return Err(error);
+            }
             *generation += 1;
             let session = *generation;
             protocol::write_message(
@@ -156,6 +162,50 @@ fn accept(
         }
     }
     Ok(())
+}
+
+fn verify_session(signer: Option<&Signer>, stream: &UnixStream) -> Result<()> {
+    signer
+        .context(
+            "the helper has no certificate and pinned Key Remap build to verify keyremap with",
+        )?
+        .verify(stream)
+}
+
+fn read_hello(stream: &UnixStream) -> Result<String> {
+    let deadline = Instant::now() + HELLO_TIMEOUT;
+    let mut reader = stream;
+    let mut line = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .context("the client was too slow saying hello")?;
+        stream.set_read_timeout(Some(remaining))?;
+        match reader.read(&mut byte) {
+            Ok(0) => bail!("the client closed before saying hello"),
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => {
+                ensure!(
+                    line.len() < HELLO_MAX,
+                    "the hello is longer than {HELLO_MAX} bytes"
+                );
+                line.push(byte[0]);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                bail!("the client was too slow saying hello")
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    String::from_utf8(line).context("the hello is not valid UTF-8")
 }
 
 fn read_session(generation: u64, lines: impl Iterator<Item = io::Result<String>>, shared: &Shared) {
@@ -313,6 +363,52 @@ mod tests {
         assert!(format!("{error:#}").contains("certificate"), "{error:#}");
         assert_eq!(generation, 0);
         assert!(!shared.lock().watchdog.is_current(1));
+        let ToDaemon::Refused { protocol, reason } = hear(&client) else {
+            panic!("expected a refusal")
+        };
+        assert_eq!(protocol, PROTOCOL_VERSION);
+        assert!(reason.contains("install-hid-helper"), "{reason}");
+        assert!(reason.contains("installed with"), "{reason}");
+    }
+
+    #[test]
+    fn a_hello_without_a_newline_is_refused_at_the_cap() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let shared = Arc::new(Shared::default());
+        client.write_all(&vec![b'a'; 5000]).unwrap();
+        let started = Instant::now();
+        let error = accept(server, me(), None, &shared, &mut 0).unwrap_err();
+        assert!(format!("{error:#}").contains("longer"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_silent_client_is_refused_after_the_hello_timeout() {
+        let (client, server) = UnixStream::pair().unwrap();
+        let shared = Arc::new(Shared::default());
+        let started = Instant::now();
+        let error = accept(server, me(), None, &shared, &mut 0).unwrap_err();
+        assert!(format!("{error:#}").contains("too slow"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        drop(client);
+    }
+
+    #[test]
+    fn a_hello_trickled_past_the_deadline_is_refused() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let shared = Arc::new(Shared::default());
+        let trickle = std::thread::spawn(move || {
+            for _ in 0..100 {
+                if client.write_all(b" ").is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        assert!(accept(server, me(), None, &shared, &mut 0).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        trickle.join().unwrap();
     }
 
     #[test]
@@ -327,6 +423,7 @@ mod tests {
             },
         );
         assert!(accept(server, me(), None, &shared, &mut 0).is_err());
+        assert!(matches!(hear(&client), ToDaemon::Refused { .. }));
     }
 
     #[test]

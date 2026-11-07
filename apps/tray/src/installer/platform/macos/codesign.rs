@@ -128,12 +128,18 @@ fn create_local_identity(keychain: &Path) -> Result<()> {
         .arg(&certificate)
         .arg("-out")
         .arg(&bundle))?;
-    run(Command::new("security")
-        .arg("import")
-        .arg(&bundle)
-        .arg("-k")
-        .arg(keychain)
-        .args(["-P", TRANSIENT_PASSWORD, "-T", "/usr/bin/codesign"]))
+    run(Command::new("security").args(import_args(&bundle, keychain)))
+}
+
+fn import_args(bundle: &Path, keychain: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("import"),
+        bundle.as_os_str().to_os_string(),
+        OsString::from("-k"),
+        keychain.as_os_str().to_os_string(),
+        OsString::from("-P"),
+        OsString::from(TRANSIENT_PASSWORD),
+    ]
 }
 
 fn certificate_config(name: &str) -> String {
@@ -212,6 +218,18 @@ mod tests {
         let bundle = Path::new("/Users/someone/Applications/QoL Tray.app");
         let args = codesign_args("Test Signing Identity", bundle);
         assert_eq!(args.last().unwrap(), bundle.as_os_str());
+    }
+
+    #[test]
+    fn the_key_import_grants_no_application_access() {
+        let args = import_args(
+            Path::new("/tmp/identity.p12"),
+            Path::new("/Users/me/Library/Keychains/login.keychain-db"),
+        );
+        assert!(!args.contains(&OsString::from("-T")));
+        assert!(!args.contains(&OsString::from("/usr/bin/codesign")));
+        assert_eq!(args[0], OsString::from("import"));
+        assert_eq!(args[1], OsString::from("/tmp/identity.p12"));
     }
 
     #[test]

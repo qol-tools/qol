@@ -108,6 +108,9 @@ fn session(
         .context("the keyboard helper closed the connection")??;
     match protocol::parse_message::<ToDaemon>(&greeting)? {
         ToDaemon::Welcome { .. } => log::info!("connected to the keyboard helper"),
+        ToDaemon::Refused { protocol, reason } if protocol == PROTOCOL_VERSION => {
+            bail!("the keyboard helper refused this keyremap: {reason}")
+        }
         ToDaemon::Refused { protocol, reason } => bail!(
             "the keyboard helper speaks protocol {protocol} and keyremap speaks {PROTOCOL_VERSION} ({reason}); run sudo qol-keyremap install-hid-helper"
         ),
@@ -422,6 +425,21 @@ mod tests {
             error.contains('9') && error.contains(&PROTOCOL_VERSION.to_string()),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_trust_refusal_carries_its_reason_and_leaves_the_event_tap_on() {
+        let environment = Arc::new(environment(true));
+        let (mut helper, session) = connect(Arc::clone(&environment));
+        helper.say(&ToDaemon::Refused {
+            protocol: PROTOCOL_VERSION,
+            reason: "trusts only the build it was installed with; run: sudo qol-keyremap install-hid-helper"
+                .to_string(),
+        });
+        let error = format!("{:#}", session.join().unwrap().unwrap_err());
+        assert!(error.contains("installed with"), "{error}");
+        assert!(error.contains("install-hid-helper"), "{error}");
+        assert_eq!(environment.input.backend.get(), BackendId::EventTap);
     }
 
     #[test]
