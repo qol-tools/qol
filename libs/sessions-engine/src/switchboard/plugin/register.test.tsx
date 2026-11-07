@@ -2380,6 +2380,34 @@ test('the switchboard log keeps the lines of earlier conversations after a resta
   expect(rows).toEqual(['four', 'three', 'two', 'one'])
   expect([...store.keys()].filter(key => key.startsWith('sblog'))).toEqual(['sblog-3'])
   await ui.unmount()
+  store.set('sblog-3', [...(store.get('sblog-3') as unknown[]), { who: 'you → other-fork', text: 'elsewhere' }])
+  await typed($, 'asking-fork five')
+  await settle()
+  const saved = (store.get('sblog-3') as { text: string }[]).map(one => one.text)
+  expect([...saved].sort()).toEqual(['elsewhere', 'five', 'four', 'one', 'three', 'two'])
+  expect(saved.at(-1)).toBe('five')
+})
+
+test('a switchboard log that fails its first load saves nothing until it loads, so earlier conversations still move in', async ($, on) => {
+  class FlakyStore extends Map<string, unknown> {
+    failures = 1
+    override get(key: string): unknown {
+      if (key === 'sblog-3' && this.failures-- > 0) throw new Error('busy')
+      return super.get(key)
+    }
+  }
+  const store = new FlakyStore()
+  store.set('sblog-2:first-session', [{ who: 'you → asking-fork', text: 'one' }])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'asking-fork two')
+  await settle()
+  await typed($, 'asking-fork three')
+  await settle()
+  expect((store.get('sblog-3') as { text: string }[]).map(one => one.text)).toEqual(['one', 'two', 'three'])
 })
 
 test('two switchboard lines logged at once both stay in the log', async ($, on) => {

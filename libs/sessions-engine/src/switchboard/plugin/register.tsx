@@ -430,17 +430,25 @@ export const sessionLogs = (saved: ReadonlyArray<readonly [string, unknown]>): L
   return sessions.flatMap(session => mergedLog(rowsOf(`sblog:${session}`), rowsOf(`sblog-2:${session}`)))
 }
 
+let logLoaded = false
+
+const withStored = async ($: EngineInterface, stored: readonly Logged[]): Promise<Logged[]> => {
+  let rows: Logged[] = []
+  await update($, switchboardLog, now => (rows = mergedLog(stored, now).slice(-SB_LOG_KEPT)))
+  return rows
+}
+
 const readLog = async ($: EngineInterface): Promise<void> => {
   const saved = await $.store.get(SB_LOG_KEY)
   if (saved !== undefined) {
-    await update($, switchboardLog, () => loggedRows(saved).slice(-SB_LOG_KEPT))
+    await withStored($, loggedRows(saved))
+    logLoaded = true
     return
   }
   const keys = (await $.store.keys()).filter(key => SESSION_LOG_PREFIXES.some(prefix => key.startsWith(prefix)))
   const earlier = await Promise.all(keys.map(async key => [key, await $.store.get(key)] as const))
-  const rows = sessionLogs(earlier).slice(-SB_LOG_KEPT)
-  await $.store.set(SB_LOG_KEY, rows)
-  await update($, switchboardLog, () => rows)
+  await $.store.set(SB_LOG_KEY, await withStored($, sessionLogs(earlier)))
+  logLoaded = true
   await Promise.all(keys.map(key => $.store.delete(key).catch(() => undefined)))
 }
 
@@ -456,7 +464,8 @@ let logSaving: Promise<void> = Promise.resolve()
 const saveLog = ($: EngineInterface): Promise<void> => {
   logSaving = logSaving
     .then(async () => {
-      await $.store.set(SB_LOG_KEY, await read($, switchboardLog))
+      if (!logLoaded) return
+      await $.store.set(SB_LOG_KEY, await withStored($, loggedRows(await $.store.get(SB_LOG_KEY))))
     })
     .catch(() => undefined)
   return logSaving
