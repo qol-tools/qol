@@ -1,9 +1,12 @@
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
 use tungstenite::Message;
 
 use super::state::{current_target, SharedTarget};
@@ -16,6 +19,8 @@ mod platform;
 const SEND_INTERVAL: Duration = Duration::from_millis(100);
 const BIND_RETRY_WINDOW: Duration = Duration::from_secs(30);
 const BIND_RETRY_INTERVAL: Duration = Duration::from_millis(500);
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CLIENTS: usize = 4;
 
 #[derive(Debug, Deserialize)]
 struct WsCommand {
@@ -46,6 +51,16 @@ pub fn start(
 
     start_send_loop(buffer.clone(), service, target);
 
+    let expected: Arc<Option<Vec<u8>>> = Arc::new(
+        std::env::var(qol_conventions::ENV_HTTP_TOKEN)
+            .ok()
+            .filter(|token| !token.is_empty())
+            .map(|token| token.into_bytes()),
+    );
+    if expected.is_none() {
+        log::warn!("ws: no tray token in the environment; every live color client is refused");
+    }
+
     thread::Builder::new()
         .name("ws-accept".into())
         .spawn(move || {
@@ -62,7 +77,7 @@ pub fn start(
                     }
                 };
             log::info!("ws: listening on 127.0.0.1:{}", ws_port);
-            accept_loop(listener, buffer)
+            accept_loop(listener, buffer, expected)
         })
         .ok();
 }
@@ -90,24 +105,53 @@ fn bind_ws_listener(port: u16) -> std::io::Result<TcpListener> {
     platform::bind_listener(port)
 }
 
-fn accept_loop(listener: TcpListener, buffer: CommandBuffer) {
+fn accept_loop(listener: TcpListener, buffer: CommandBuffer, expected: Arc<Option<Vec<u8>>>) {
+    let live = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming().flatten() {
+        let Some(slot) = ClientSlot::take(&live) else {
+            log::debug!("ws: client cap reached");
+            continue;
+        };
         let buf = buffer.clone();
+        let expected = expected.clone();
         thread::Builder::new()
             .name("ws-client".into())
-            .spawn(move || handle_client(stream, buf))
+            .spawn(move || handle_client(stream, buf, expected, slot))
             .ok();
     }
 }
 
-fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
-    let mut ws = match tungstenite::accept(stream) {
-        Ok(ws) => ws,
-        Err(e) => {
-            log::warn!("ws: handshake failed: {}", e);
-            return;
+struct ClientSlot(Arc<AtomicUsize>);
+
+impl ClientSlot {
+    fn take(live: &Arc<AtomicUsize>) -> Option<Self> {
+        if live.fetch_add(1, Ordering::SeqCst) >= MAX_CLIENTS {
+            live.fetch_sub(1, Ordering::SeqCst);
+            return None;
         }
+        Some(Self(live.clone()))
+    }
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn handle_client(
+    stream: TcpStream,
+    buffer: CommandBuffer,
+    expected: Arc<Option<Vec<u8>>>,
+    _slot: ClientSlot,
+) {
+    let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT));
+    let Some(mut ws) = accept_client(stream, expected.as_deref()) else {
+        return;
     };
+    let _ = ws.get_ref().set_read_timeout(None);
+    let _ = ws.get_ref().set_write_timeout(None);
 
     loop {
         let msg = match ws.read() {
@@ -132,6 +176,50 @@ fn handle_client(stream: std::net::TcpStream, buffer: CommandBuffer) {
             *buf = Some(pending);
         }
     }
+}
+
+fn accept_client(
+    stream: TcpStream,
+    expected: Option<&[u8]>,
+) -> Option<tungstenite::WebSocket<TcpStream>> {
+    let check = |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+        let refuse = |status: StatusCode| {
+            let mut refused = ErrorResponse::new(None);
+            *refused.status_mut() = status;
+            refused
+        };
+        if request
+            .headers()
+            .contains_key(tungstenite::http::header::ORIGIN)
+        {
+            return Err(refuse(StatusCode::FORBIDDEN));
+        }
+        let presented = request.headers().get(qol_conventions::HTTP_AUTH_HEADER);
+        let authorised = match (expected, presented) {
+            (Some(expected), Some(presented)) => same_token(presented.as_bytes(), expected),
+            _ => false,
+        };
+        if !authorised {
+            return Err(refuse(StatusCode::UNAUTHORIZED));
+        }
+        Ok(response)
+    };
+    match tungstenite::accept_hdr(stream, check) {
+        Ok(ws) => Some(ws),
+        Err(error) => {
+            log::warn!("ws: handshake refused: {error}");
+            None
+        }
+    }
+}
+
+fn same_token(presented: &[u8], expected: &[u8]) -> bool {
+    presented.len() == expected.len()
+        && presented
+            .iter()
+            .zip(expected)
+            .fold(0u8, |diff, (left, right)| diff | (left ^ right))
+            == 0
 }
 
 fn parse_pending(cmd: &WsCommand) -> Option<PendingCommand> {
@@ -265,6 +353,110 @@ mod tests {
                 "hex: {hex}"
             );
         }
+    }
+
+    fn serve_one(expected: Option<&'static str>) -> (u16, std::thread::JoinHandle<bool>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            accept_client(stream, expected.map(str::as_bytes)).is_some()
+        });
+        (port, server)
+    }
+
+    fn client_request(port: u16) -> tungstenite::client::ClientRequestBuilder {
+        tungstenite::client::ClientRequestBuilder::new(
+            format!("ws://127.0.0.1:{port}").parse().unwrap(),
+        )
+    }
+
+    fn refused_status<T>(result: Result<T, tungstenite::Error>) -> StatusCode {
+        match result {
+            Err(tungstenite::Error::Http(response)) => response.status(),
+            Err(other) => panic!("expected an http refusal, got {other}"),
+            Ok(_) => panic!("expected a refusal, the handshake was accepted"),
+        }
+    }
+
+    #[test]
+    fn a_handshake_with_the_token_and_no_origin_is_accepted() {
+        let (port, server) = serve_one(Some("secret"));
+
+        let connected = tungstenite::connect(
+            client_request(port).with_header(qol_conventions::HTTP_AUTH_HEADER, "secret"),
+        );
+
+        assert!(connected.is_ok());
+        assert!(server.join().unwrap());
+    }
+
+    #[test]
+    fn a_handshake_with_an_origin_header_is_refused() {
+        let (port, server) = serve_one(Some("secret"));
+
+        let connected = tungstenite::connect(
+            client_request(port)
+                .with_header(qol_conventions::HTTP_AUTH_HEADER, "secret")
+                .with_header("Origin", "http://page.example"),
+        );
+
+        assert_eq!(refused_status(connected), StatusCode::FORBIDDEN);
+        assert!(!server.join().unwrap());
+    }
+
+    #[test]
+    fn a_handshake_without_the_token_is_refused() {
+        let (port, server) = serve_one(Some("secret"));
+
+        let connected = tungstenite::connect(client_request(port));
+
+        assert_eq!(refused_status(connected), StatusCode::UNAUTHORIZED);
+        assert!(!server.join().unwrap());
+    }
+
+    #[test]
+    fn a_handshake_with_a_wrong_token_is_refused() {
+        let (port, server) = serve_one(Some("secret"));
+
+        let connected = tungstenite::connect(
+            client_request(port).with_header(qol_conventions::HTTP_AUTH_HEADER, "wrong!"),
+        );
+
+        assert_eq!(refused_status(connected), StatusCode::UNAUTHORIZED);
+        assert!(!server.join().unwrap());
+    }
+
+    #[test]
+    fn a_daemon_without_a_token_refuses_every_handshake() {
+        let (port, server) = serve_one(None);
+
+        let connected = tungstenite::connect(
+            client_request(port).with_header(qol_conventions::HTTP_AUTH_HEADER, "secret"),
+        );
+
+        assert_eq!(refused_status(connected), StatusCode::UNAUTHORIZED);
+        assert!(!server.join().unwrap());
+    }
+
+    #[test]
+    fn the_client_cap_frees_a_slot_when_a_client_leaves() {
+        let live = Arc::new(AtomicUsize::new(0));
+        let mut slots: Vec<ClientSlot> = (0..MAX_CLIENTS)
+            .map(|_| ClientSlot::take(&live).expect("a slot below the cap"))
+            .collect();
+
+        assert!(ClientSlot::take(&live).is_none());
+        slots.pop();
+
+        assert!(ClientSlot::take(&live).is_some());
+    }
+
+    #[test]
+    fn same_token_compares_whole_values() {
+        assert!(same_token(b"secret", b"secret"));
+        assert!(!same_token(b"secret", b"secre"));
+        assert!(!same_token(b"secret", b"secreT"));
     }
 
     fn assert_rgb(command: Option<PendingCommand>, red: u8, green: u8, blue: u8) {

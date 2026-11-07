@@ -14,14 +14,16 @@ enum StreamMessage {
 
 pub(super) struct StreamClient {
     url: Option<String>,
+    token: Option<String>,
     count: AtomicUsize,
     sender: Mutex<Option<mpsc::Sender<StreamMessage>>>,
 }
 
 impl StreamClient {
-    pub(super) fn new(url: Option<String>) -> Self {
+    pub(super) fn new(url: Option<String>, token: Option<String>) -> Self {
         Self {
             url,
+            token,
             count: AtomicUsize::new(0),
             sender: Mutex::new(None),
         }
@@ -31,14 +33,14 @@ impl StreamClient {
         if self.count.fetch_add(1, Ordering::SeqCst) > 0 {
             return;
         }
-        let Some(url) = self.url.clone() else {
+        let (Some(url), Some(token)) = (self.url.clone(), self.token.clone()) else {
             return;
         };
         let (sender, receiver) = mpsc::channel();
         *self.sender.lock().expect("stream sender lock") = Some(sender);
         std::thread::Builder::new()
             .name("qol-settings-stream".into())
-            .spawn(move || write_loop(url, receiver))
+            .spawn(move || write_loop(url, token, receiver))
             .ok();
     }
 
@@ -152,8 +154,19 @@ impl Throttle {
     }
 }
 
-fn write_loop(url: String, receiver: mpsc::Receiver<StreamMessage>) {
-    let Ok((mut socket, _)) = tungstenite::connect(&url) else {
+fn stream_request(url: &str, token: &str) -> Option<tungstenite::client::ClientRequestBuilder> {
+    let uri: tungstenite::http::Uri = url.parse().ok()?;
+    Some(
+        tungstenite::client::ClientRequestBuilder::new(uri)
+            .with_header(qol_conventions::HTTP_AUTH_HEADER, token),
+    )
+}
+
+fn write_loop(url: String, token: String, receiver: mpsc::Receiver<StreamMessage>) {
+    let Some(request) = stream_request(&url, &token) else {
+        return;
+    };
+    let Ok((mut socket, _)) = tungstenite::connect(request) else {
         return;
     };
     let mut throttle = Throttle::default();
@@ -231,10 +244,11 @@ fn valid_hex(hex: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{brightness_frame, color_frame, StreamClient, Throttle};
+    use super::{brightness_frame, color_frame, stream_request, StreamClient, Throttle};
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+    use tungstenite::client::IntoClientRequest;
 
     const INTERVAL: Duration = Duration::from_millis(100);
 
@@ -343,7 +357,10 @@ mod tests {
     #[test]
     fn closing_delivers_the_held_last_frame_and_drops_the_superseded_one() {
         let (port, received) = stub_server();
-        let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
+        let client = StreamClient::new(
+            Some(format!("ws://127.0.0.1:{port}")),
+            Some("test-token".to_owned()),
+        );
         let interval = Duration::from_secs(60);
         client.open();
         client.send("live", interval, "frame-0".into());
@@ -356,7 +373,10 @@ mod tests {
     #[test]
     fn a_held_frame_reaches_the_daemon_when_its_window_closes() {
         let (port, received) = stub_server();
-        let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
+        let client = StreamClient::new(
+            Some(format!("ws://127.0.0.1:{port}")),
+            Some("test-token".to_owned()),
+        );
         client.open();
         client.send("live", INTERVAL, "first".into());
         client.send("live", INTERVAL, "last".into());
@@ -371,7 +391,10 @@ mod tests {
     #[test]
     fn open_refcounts_one_connection_and_close_at_zero_ends_it() {
         let (port, received) = stub_server();
-        let client = StreamClient::new(Some(format!("ws://127.0.0.1:{port}")));
+        let client = StreamClient::new(
+            Some(format!("ws://127.0.0.1:{port}")),
+            Some("test-token".to_owned()),
+        );
         client.open();
         client.open();
         client.send("live", INTERVAL, "first".into());
@@ -384,11 +407,22 @@ mod tests {
 
     #[test]
     fn a_client_without_a_daemon_port_never_connects_or_panics() {
-        let client = StreamClient::new(None);
+        let client = StreamClient::new(None, None);
         client.open();
         client.send("live", INTERVAL, "frame".into());
         client.close();
         client.send("live", INTERVAL, "after".into());
+    }
+
+    #[test]
+    fn the_stream_request_carries_the_tray_token_and_no_origin() {
+        let request = stream_request("ws://127.0.0.1:1", "secret")
+            .unwrap()
+            .into_client_request()
+            .unwrap();
+        let token = request.headers().get("x-qol-token").unwrap();
+        assert_eq!(token.to_str().unwrap(), "secret");
+        assert!(request.headers().get("origin").is_none());
     }
 
     #[test]
