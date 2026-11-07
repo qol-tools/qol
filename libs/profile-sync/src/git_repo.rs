@@ -1026,16 +1026,13 @@ mod tests {
 
         let oid = repo.local_oid().unwrap().unwrap();
         let snap = repo
-            .snapshot_json_at(oid, |p| p.starts_with("core"))
+            .snapshot_json_at(oid, |p| p.starts_with("default/core"))
             .unwrap();
         assert_eq!(
             snap.get("default/core/plugin-configs/a.json"),
             Some(&serde_json::json!({"x": 1}))
         );
-        assert!(
-            !snap.contains_key("default/core/note.txt"),
-            "non-json is excluded"
-        );
+        assert!(!snap.contains_key("note.txt"), "non-json is excluded");
     }
 
     #[test]

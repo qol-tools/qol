@@ -1039,7 +1039,9 @@ fn resolve_onto_remote(
     }
     write_conflict_backup(&serde_json::json!({ "local": local.files, "remote": remote.files }))?;
     if let Err(error) = push_merged_profile(repo, repo_path, token, &merged.merged) {
-        restore_local_branch(repo, local_oid)?;
+        if let Err(rollback) = restore_local_branch(repo, local_oid) {
+            log::warn!("sync: the local branch was not restored after a failed push: {rollback:#}");
+        }
         return Err(error);
     }
     Ok(Vec::new())
