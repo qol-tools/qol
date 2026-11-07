@@ -254,6 +254,7 @@ impl GitRepo {
 
     pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
         let repo = self.open_repo()?;
+        refuse_link_entries(&repo, oid)?;
         let object = repo.find_object(oid, None)?;
         repo.reset(&object, git2::ResetType::Hard, None)?;
         prune_repo_workdir(&repo)
@@ -467,6 +468,14 @@ fn fast_forward(repo: &Repository, target: git2::Oid) -> Result<()> {
 }
 
 fn refuse_unsafe_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
+    refuse_entries(repo, oid, true)
+}
+
+fn refuse_link_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
+    refuse_entries(repo, oid, false)
+}
+
+fn refuse_entries(repo: &Repository, oid: git2::Oid, device_local: bool) -> Result<()> {
     let tree = repo.find_commit(oid)?.tree()?;
     let mut offending: Vec<(&'static str, String)> = Vec::new();
     tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
@@ -475,7 +484,8 @@ fn refuse_unsafe_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
             offending.push(("a symlink", path));
         } else if entry.kind() == Some(git2::ObjectType::Commit) {
             offending.push(("a submodule", path));
-        } else if entry.kind() == Some(git2::ObjectType::Blob)
+        } else if device_local
+            && entry.kind() == Some(git2::ObjectType::Blob)
             && crate::scope::is_device_local(Path::new(&path))
         {
             offending.push(("a device-local file", path));
@@ -896,13 +906,8 @@ mod tests {
         assert!(!repo_path.join("default/device/task-runner.json").exists());
     }
 
-    #[test]
-    fn a_remote_symlink_entry_is_refused() {
-        let tmp = TempDir::new().unwrap();
-        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
-        let head_before = bob.head_sha().unwrap();
-
-        let repo = Repository::open(&alice_path).unwrap();
+    fn commit_symlink(repo_path: &Path) {
+        let repo = Repository::open(repo_path).unwrap();
         let mut index = repo.index().unwrap();
         let entry = git2::IndexEntry {
             ctime: git2::IndexTime::new(0, 0),
@@ -924,6 +929,32 @@ mod tests {
         let sig = signature().to_git_signature().unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "link", &tree, &[&parent])
             .unwrap();
+    }
+
+    #[test]
+    fn a_rollback_to_a_local_commit_holding_a_symlink_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        repo.commit_all("seed", &signature()).unwrap();
+        commit_symlink(&repo_path);
+        let linked_oid = repo.local_oid().unwrap().unwrap();
+        commit_raw(&repo_path, "default/core/other.json", "{}");
+
+        let error = repo.reset_to(linked_oid).unwrap_err();
+
+        assert!(format!("{error:#}").contains("a symlink"), "{error:#}");
+        assert_ne!(repo.local_oid().unwrap().unwrap(), linked_oid);
+    }
+
+    #[test]
+    fn a_remote_symlink_entry_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+        let head_before = bob.head_sha().unwrap();
+
+        commit_symlink(&alice_path);
         alice.push(None).unwrap();
 
         let error = bob.pull(None).unwrap_err();
