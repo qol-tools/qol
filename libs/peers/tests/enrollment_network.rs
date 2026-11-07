@@ -433,6 +433,7 @@ impl Rig {
             .unwrap()[0]
             .port();
         initiator_control.open_to_nearby().unwrap();
+        responder_control.open_to_nearby().unwrap();
         events
             .send(DiscoveryEvent::Resolved {
                 source: "responder".into(),

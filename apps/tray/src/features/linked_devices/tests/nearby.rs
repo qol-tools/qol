@@ -39,6 +39,8 @@ impl DiscoveryFactory for Lan {
             for (other, sender) in others {
                 let _ = sender.send(resolved(&advertisement)).await;
                 let _ = events.send(resolved(&other)).await;
+                tokio::spawn(follow_link(advertisement.clone(), sender));
+                tokio::spawn(follow_link(other, events.clone()));
             }
             while !*stop.borrow_and_update() {
                 if stop.changed().await.is_err() {
@@ -47,6 +49,15 @@ impl DiscoveryFactory for Lan {
             }
             Ok(())
         })
+    }
+}
+
+async fn follow_link(advertisement: Advertisement, listener: mpsc::Sender<DiscoveryEvent>) {
+    let mut link = advertisement.link.clone();
+    while link.changed().await.is_ok() {
+        if listener.send(resolved(&advertisement)).await.is_err() {
+            return;
+        }
     }
 }
 
