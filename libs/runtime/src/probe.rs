@@ -67,11 +67,7 @@ fn write_batch(
     let f = match file {
         Some(f) => f,
         None => {
-            let Ok(opened) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_file)
-            else {
+            let Some(opened) = open_log(log_file) else {
                 return;
             };
             if let Ok(metadata) = opened.metadata() {
@@ -83,6 +79,36 @@ fn write_batch(
     if f.write_all(batch.as_bytes()).is_ok() {
         *bytes += batch.len() as u64;
     }
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn open_log(log_file: &str) -> Option<std::fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(log_file)
+        .ok()?;
+    let metadata = file.metadata().ok()?;
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return None;
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    Some(file)
+}
+
+#[cfg(all(debug_assertions, not(unix)))]
+fn open_log(log_file: &str) -> Option<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+        .ok()
 }
 
 /// Sanitizes `value` to an identifier-safe token for probe log lines:
@@ -247,5 +273,63 @@ mod tests {
         drop(file);
         let _ = std::fs::remove_file(&log);
         let _ = std::fs::remove_file(&rotated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_log_is_created_owner_only_and_a_wide_one_is_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fresh = std::env::temp_dir()
+            .join(format!("qol-probe-private-fresh-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let wide = std::env::temp_dir()
+            .join(format!("qol-probe-private-wide-{}", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let _ = std::fs::remove_file(&fresh);
+        let _ = std::fs::remove_file(&wide);
+
+        let mut file: Option<std::fs::File> = None;
+        let mut bytes: u64 = 0;
+        write_batch(&mut file, &mut bytes, &fresh, 1000, "first");
+        let mode = std::fs::metadata(&fresh).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        std::fs::write(&wide, "old").unwrap();
+        std::fs::set_permissions(&wide, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut file: Option<std::fs::File> = None;
+        let mut bytes: u64 = 0;
+        write_batch(&mut file, &mut bytes, &wide, 1000, "new");
+        let mode = std::fs::metadata(&wide).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&wide).unwrap(), "oldnew");
+
+        let _ = std::fs::remove_file(&fresh);
+        let _ = std::fs::remove_file(&wide);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_probe_log_is_not_followed() {
+        let target =
+            std::env::temp_dir().join(format!("qol-probe-symlink-target-{}", std::process::id()));
+        let link =
+            std::env::temp_dir().join(format!("qol-probe-symlink-log-{}", std::process::id()));
+        let _ = std::fs::remove_file(&target);
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&target, "target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut file: Option<std::fs::File> = None;
+        let mut bytes: u64 = 0;
+        write_batch(&mut file, &mut bytes, &link.to_string_lossy(), 1000, "leak");
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "target");
+        assert!(file.is_none());
+
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_file(&target);
     }
 }

@@ -55,6 +55,10 @@ pub(crate) fn set_private_dir(_: &Path) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn ensure_private_file(_: &Path, _: &std::fs::Metadata) -> io::Result<()> {
+    Ok(())
+}
+
 pub(crate) fn sync_parent(_: &Path) -> io::Result<()> {
     Ok(())
 }

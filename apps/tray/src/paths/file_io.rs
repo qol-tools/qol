@@ -36,6 +36,11 @@ pub(crate) fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
         .with_context(|| format!("Failed to atomically write {}", path.display()))
 }
 
+pub(crate) fn atomic_write_private(path: &Path, content: &[u8]) -> Result<()> {
+    qol_fs::atomic_write_private(path, content)
+        .with_context(|| format!("Failed to privately write {}", path.display()))
+}
+
 pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
