@@ -276,6 +276,15 @@ pub fn token_proof(token: &str, nonce: &str) -> Option<String> {
     Some(hex(&mac.finalize().into_bytes()))
 }
 
+pub fn stream_token(token: &str, port: u16) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+    let mut mac = Hmac::<Sha256>::new_from_slice(token.as_bytes()).ok()?;
+    mac.update(format!("stream:{port}").as_bytes());
+    Some(hex(&mac.finalize().into_bytes()))
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -449,9 +458,20 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
-    use super::token_proof;
+    use super::{stream_token, token_proof};
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn stream_token_is_bound_to_the_port_and_differs_from_the_token() {
+        let first = stream_token("secret-token", 42710).unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(stream_token("secret-token", 42710), Some(first.clone()));
+        assert_ne!(stream_token("secret-token", 42711), Some(first.clone()));
+        assert_ne!(first, "secret-token");
+        assert_eq!(stream_token("", 42710), None);
+    }
 
     #[test]
     fn a_token_proof_is_the_hmac_of_a_well_formed_nonce() {

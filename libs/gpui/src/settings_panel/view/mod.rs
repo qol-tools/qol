@@ -486,6 +486,9 @@ impl SettingsPanelView {
             form: None,
             list_item: None,
         };
+        let stream_token = std::env::var(qol_conventions::ENV_HTTP_TOKEN)
+            .ok()
+            .filter(|token| !token.is_empty());
         let mut view = Self {
             panel,
             parent_link: Rc::clone(&parent_link),
@@ -501,6 +504,7 @@ impl SettingsPanelView {
                         source
                             .daemon_port
                             .map(|port| format!("ws://127.0.0.1:{port}")),
+                        stream_token.clone(),
                     )
                 })
                 .collect(),
