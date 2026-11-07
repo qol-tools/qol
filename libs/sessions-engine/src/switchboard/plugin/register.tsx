@@ -2284,7 +2284,8 @@ export const register: Register = on => {
     const done = list.filter(entry => !entry.isWorking && !isCut(entry) && isEnded(entry)).reverse()
     const idle = list.filter(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry) && entry.kind !== 'waiting').sort((a, b) => a.at - b.at)
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
-    const labelOf = (entry: Entry): string => (entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note'))
+    const labelOf = (entry: Entry): string =>
+      entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : idle.includes(entry) && entry.isStoppedByUser === true ? 'stopped' : (entry.kind ?? 'note')
     let n = 0
     const hotkey = () => {
       n += 1
