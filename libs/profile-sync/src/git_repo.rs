@@ -247,13 +247,13 @@ impl GitRepo {
     }
 
     pub fn reset_to_remote(&self) -> Result<()> {
-        self.reset_to(self.remote_oid()?)
-            .context("reset local branch to remote")
+        let oid = self.remote_oid()?;
+        refuse_unsafe_entries(&self.open_repo()?, oid)?;
+        self.reset_to(oid).context("reset local branch to remote")
     }
 
     pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
         let repo = self.open_repo()?;
-        refuse_unsafe_entries(&repo, oid)?;
         let object = repo.find_object(oid, None)?;
         repo.reset(&object, git2::ResetType::Hard, None)?;
         prune_repo_workdir(&repo)
@@ -274,7 +274,11 @@ impl GitRepo {
         let statuses = repo
             .statuses(Some(&mut opts))
             .context("compute git status")?;
-        Ok(!statuses.is_empty())
+        Ok(statuses.iter().any(|entry| {
+            entry
+                .path()
+                .is_some_and(|path| crate::scope::is_sync_allowlisted(Path::new(path)))
+        }))
     }
 
     pub fn local_oid(&self) -> Result<Option<git2::Oid>> {
@@ -666,6 +670,23 @@ mod tests {
         assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
     }
 
+    #[test]
+    fn pruned_files_outside_the_allowlist_never_dirty_the_profile() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+
+        commit_raw(&alice_path, "default/notes.txt", "notes");
+        alice.push(None).unwrap();
+
+        bob.pull(None).unwrap();
+        assert!(!bob_path.join("default/notes.txt").exists());
+        assert!(!bob.is_dirty().unwrap());
+        assert!(bob
+            .commit_all("after pull", &signature())
+            .unwrap()
+            .is_none());
+    }
+
     fn stale_clone(tmp: &TempDir) -> GitRepo {
         let origin_dir = tmp.path().join("origin.git");
         let url = init_bare_origin(&origin_dir);
@@ -855,6 +876,24 @@ mod tests {
             assert_eq!(bob.head_sha().unwrap(), head_before);
             assert!(!bob_path.join(rel).exists());
         }
+    }
+
+    #[test]
+    fn a_rollback_to_a_local_commit_holding_a_device_local_file_is_not_refused() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        repo.commit_all("seed", &signature()).unwrap();
+
+        commit_raw(&repo_path, "default/device/task-runner.json", "{}");
+        let rollback_oid = repo.local_oid().unwrap().unwrap();
+        commit_raw(&repo_path, "default/core/other.json", "{}");
+
+        repo.reset_to(rollback_oid).unwrap();
+
+        assert_eq!(repo.local_oid().unwrap().unwrap(), rollback_oid);
+        assert!(!repo_path.join("default/device/task-runner.json").exists());
     }
 
     #[test]

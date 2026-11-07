@@ -75,7 +75,11 @@ pub fn is_device_local(rel: &Path) -> bool {
         .map(|part| part.trim_end_matches(['.', ' ']))
         .collect();
     match folded.as_slice() {
-        [only] => only.eq_ignore_ascii_case("active") || only.eq_ignore_ascii_case("sync.json"),
+        [first, ..]
+            if first.eq_ignore_ascii_case("active") || first.eq_ignore_ascii_case("sync.json") =>
+        {
+            true
+        }
         [_, second, ..] => second.eq_ignore_ascii_case(DEVICE_SUBDIR),
         _ => false,
     }
@@ -218,6 +222,8 @@ mod tests {
             "default/Device /x",
             "ACTIVE",
             "Sync.JSON",
+            "active/x",
+            "Sync.JSON/nested/y",
         ] {
             assert!(
                 is_device_local(Path::new(raw)),
