@@ -167,6 +167,7 @@ impl GitRepo {
             checkout_remote_into_local(&repo, remote_oid)?;
             return Ok(());
         }
+        refuse_unsafe_entries(&repo, remote_oid)?;
         fast_forward(&repo, remote_oid)
     }
 
@@ -177,7 +178,18 @@ impl GitRepo {
     ) -> Result<Option<CommitInfo>> {
         let repo = self.open_repo()?;
         let mut index = repo.index().context("open index")?;
-        index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+        let allowlisted = &mut |path: &Path, _spec: &[u8]| -> i32 {
+            if crate::scope::is_sync_allowlisted(path) {
+                0
+            } else {
+                1
+            }
+        };
+        index.add_all(
+            ["*"].iter(),
+            git2::IndexAddOption::DEFAULT,
+            Some(allowlisted as &mut git2::IndexMatchedPath<'_>),
+        )?;
         index.write()?;
         let tree_oid = index.write_tree()?;
         let tree = repo.find_tree(tree_oid)?;
@@ -235,15 +247,17 @@ impl GitRepo {
     }
 
     pub fn reset_to_remote(&self) -> Result<()> {
-        self.reset_to(self.remote_oid()?)
-            .context("reset local branch to remote")
+        let oid = self.remote_oid()?;
+        refuse_unsafe_entries(&self.open_repo()?, oid)?;
+        self.reset_to(oid).context("reset local branch to remote")
     }
 
     pub fn reset_to(&self, oid: git2::Oid) -> Result<()> {
         let repo = self.open_repo()?;
+        refuse_link_entries(&repo, oid)?;
         let object = repo.find_object(oid, None)?;
         repo.reset(&object, git2::ResetType::Hard, None)?;
-        Ok(())
+        prune_repo_workdir(&repo)
     }
 
     pub fn head_sha(&self) -> Result<Option<String>> {
@@ -261,7 +275,11 @@ impl GitRepo {
         let statuses = repo
             .statuses(Some(&mut opts))
             .context("compute git status")?;
-        Ok(!statuses.is_empty())
+        Ok(statuses.iter().any(|entry| {
+            entry
+                .path()
+                .is_some_and(|path| crate::scope::is_sync_allowlisted(Path::new(path)))
+        }))
     }
 
     pub fn local_oid(&self) -> Result<Option<git2::Oid>> {
@@ -446,15 +464,88 @@ fn fast_forward(repo: &Repository, target: git2::Oid) -> Result<()> {
     reference.set_target(target, "fast-forward")?;
     repo.set_head(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
     repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+    prune_repo_workdir(repo)
+}
+
+fn refuse_unsafe_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
+    refuse_entries(repo, oid, true)
+}
+
+fn refuse_link_entries(repo: &Repository, oid: git2::Oid) -> Result<()> {
+    refuse_entries(repo, oid, false)
+}
+
+fn refuse_entries(repo: &Repository, oid: git2::Oid, device_local: bool) -> Result<()> {
+    let tree = repo.find_commit(oid)?.tree()?;
+    let mut offending: Vec<(&'static str, String)> = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        let path = format!("{root}{}", String::from_utf8_lossy(entry.name_bytes()));
+        if entry.filemode() == 0o120000 {
+            offending.push(("a symlink", path));
+        } else if entry.kind() == Some(git2::ObjectType::Commit) {
+            offending.push(("a submodule", path));
+        } else if device_local
+            && entry.kind() == Some(git2::ObjectType::Blob)
+            && crate::scope::is_device_local(Path::new(&path))
+        {
+            offending.push(("a device-local file", path));
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+    match offending.as_slice() {
+        [] => Ok(()),
+        [(what, only)] => Err(anyhow!(
+            "the sync repo holds {what} at {only}, which is never synced; remove it from the repo before syncing again"
+        )),
+        [(what, first), ..] => Err(anyhow!(
+            "the sync repo holds {} entries that are never synced, for example {what} at {first}; remove them from the repo before syncing again",
+            offending.len()
+        )),
+    }
+}
+
+fn prune_non_allowlisted(repo: &Repository, workdir: &Path) -> Result<()> {
+    let tree = repo.head()?.peel_to_commit()?.tree()?;
+    let mut doomed: Vec<String> = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            let path = format!("{root}{}", String::from_utf8_lossy(entry.name_bytes()));
+            if !crate::scope::is_sync_allowlisted(Path::new(&path)) {
+                doomed.push(path);
+            }
+        }
+        git2::TreeWalkResult::Ok
+    })?;
+    for rel in doomed {
+        let full = workdir.join(&rel);
+        match std::fs::symlink_metadata(&full) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => match std::fs::remove_file(&full) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).with_context(|| format!("remove {rel}")),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("inspect {rel}")),
+        }
+    }
     Ok(())
 }
 
+fn prune_repo_workdir(repo: &Repository) -> Result<()> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("the sync repo is bare and has no working copy"))?;
+    prune_non_allowlisted(repo, workdir)
+}
+
 fn checkout_remote_into_local(repo: &Repository, remote_oid: git2::Oid) -> Result<()> {
+    refuse_unsafe_entries(repo, remote_oid)?;
     let commit = repo.find_commit(remote_oid)?;
     repo.branch(DEFAULT_BRANCH, &commit, true)?;
     repo.set_head(&format!("refs/heads/{DEFAULT_BRANCH}"))?;
     repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
-    Ok(())
+    prune_repo_workdir(repo)
 }
 
 #[cfg(test)]
@@ -532,13 +623,38 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let repo_path = tmp.path().join("local");
         let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
-        write_file(&repo_path.join("hello.txt"), "world");
+        write_file(&repo_path.join("default/core/hello.txt"), "world");
 
         let first = repo.commit_all("first", &signature()).unwrap();
         assert!(first.is_some());
 
         let second = repo.commit_all("second", &signature()).unwrap();
         assert!(second.is_none(), "clean tree should produce no commit");
+    }
+
+    #[test]
+    fn commit_all_stages_only_allowlisted_paths() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        write_file(&repo_path.join("default/device/sync/state.json"), "{}");
+        write_file(&repo_path.join("random.txt"), "x");
+
+        let info = repo.commit_all("seed", &signature()).unwrap().unwrap();
+
+        let git = Repository::open(&repo_path).unwrap();
+        let commit = git
+            .find_commit(git2::Oid::from_str(&info.sha).unwrap())
+            .unwrap();
+        let tree = commit.tree().unwrap();
+        assert!(tree
+            .get_path(Path::new("default/core/plugins.lock.json"))
+            .is_ok());
+        assert!(tree
+            .get_path(Path::new("default/device/sync/state.json"))
+            .is_err());
+        assert!(tree.get_path(Path::new("random.txt")).is_err());
     }
 
     #[test]
@@ -551,7 +667,7 @@ mod tests {
             "fresh repo with no files is clean"
         );
 
-        write_file(&repo_path.join("note.txt"), "hello");
+        write_file(&repo_path.join("default/core/note.txt"), "hello");
         assert!(
             repo.is_dirty().unwrap(),
             "untracked file makes the tree dirty"
@@ -560,8 +676,25 @@ mod tests {
         repo.commit_all("seed", &signature()).unwrap();
         assert!(!repo.is_dirty().unwrap(), "committed tree is clean");
 
-        write_file(&repo_path.join("note.txt"), "changed");
+        write_file(&repo_path.join("default/core/note.txt"), "changed");
         assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
+    }
+
+    #[test]
+    fn pruned_files_outside_the_allowlist_never_dirty_the_profile() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+
+        commit_raw(&alice_path, "default/notes.txt", "notes");
+        alice.push(None).unwrap();
+
+        bob.pull(None).unwrap();
+        assert!(!bob_path.join("default/notes.txt").exists());
+        assert!(!bob.is_dirty().unwrap());
+        assert!(bob
+            .commit_all("after pull", &signature())
+            .unwrap()
+            .is_none());
     }
 
     fn stale_clone(tmp: &TempDir) -> GitRepo {
@@ -570,17 +703,17 @@ mod tests {
 
         let alice_path = tmp.path().join("alice");
         let alice = GitRepo::init(&alice_path, &url).unwrap();
-        write_file(&alice_path.join("data.txt"), "alice");
+        write_file(&alice_path.join("default/core/data.txt"), "alice");
         alice.commit_all("alice initial", &signature()).unwrap();
         alice.push(None).unwrap();
 
         let bob_path = tmp.path().join("bob");
         let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
-        write_file(&bob_path.join("data.txt"), "bob");
+        write_file(&bob_path.join("default/core/data.txt"), "bob");
         bob.commit_all("bob update", &signature()).unwrap();
         bob.push(None).unwrap();
 
-        write_file(&alice_path.join("data.txt"), "alice diverged");
+        write_file(&alice_path.join("default/core/data.txt"), "alice diverged");
         alice.commit_all("alice diverged", &signature()).unwrap();
         alice
     }
@@ -640,7 +773,7 @@ mod tests {
 
         let local_path = tmp.path().join("local");
         let local = GitRepo::init(&local_path, &url).unwrap();
-        write_file(&local_path.join("data.txt"), "hello");
+        write_file(&local_path.join("default/core/data.txt"), "hello");
         local.commit_all("initial", &signature()).unwrap();
 
         let first = local.push(None).unwrap();
@@ -660,18 +793,18 @@ mod tests {
 
         let alice_path = tmp.path().join("alice");
         let alice = GitRepo::init(&alice_path, &url).unwrap();
-        write_file(&alice_path.join("data.txt"), "alpha");
+        write_file(&alice_path.join("default/core/data.txt"), "alpha");
         alice.commit_all("alice initial", &signature()).unwrap();
         alice.push(None).unwrap();
 
         let bob_path = tmp.path().join("bob");
         let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
         assert_eq!(
-            std::fs::read_to_string(bob_path.join("data.txt")).unwrap(),
+            std::fs::read_to_string(bob_path.join("default/core/data.txt")).unwrap(),
             "alpha"
         );
 
-        write_file(&bob_path.join("data.txt"), "alpha-updated");
+        write_file(&bob_path.join("default/core/data.txt"), "alpha-updated");
         bob.commit_all("bob update", &signature()).unwrap();
         bob.push(None).unwrap();
 
@@ -681,7 +814,7 @@ mod tests {
             "expected fast-forward, got {outcome:?}"
         );
         assert_eq!(
-            std::fs::read_to_string(alice_path.join("data.txt")).unwrap(),
+            std::fs::read_to_string(alice_path.join("default/core/data.txt")).unwrap(),
             "alpha-updated"
         );
     }
@@ -694,7 +827,7 @@ mod tests {
 
         let local_path = tmp.path().join("local");
         let local = GitRepo::init(&local_path, &url).unwrap();
-        write_file(&local_path.join("a.txt"), "x");
+        write_file(&local_path.join("default/core/a.txt"), "x");
         local.commit_all("seed", &signature()).unwrap();
         local.push(None).unwrap();
 
@@ -702,21 +835,201 @@ mod tests {
         assert_eq!(outcome, PullOutcome::AlreadyUpToDate);
     }
 
+    fn commit_raw(repo_path: &Path, rel: &str, contents: &str) {
+        write_file(&repo_path.join(rel), contents);
+        let repo = Repository::open(repo_path).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(rel)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = signature().to_git_signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "raw", &tree, &[&parent])
+            .unwrap();
+    }
+
+    fn seeded_pair(tmp: &TempDir) -> (GitRepo, PathBuf, GitRepo, PathBuf) {
+        let origin_dir = tmp.path().join("origin.git");
+        let url = init_bare_origin(&origin_dir);
+
+        let alice_path = tmp.path().join("alice");
+        let alice = GitRepo::init(&alice_path, &url).unwrap();
+        write_file(&alice_path.join("default/core/plugins.lock.json"), "{}");
+        alice.commit_all("seed", &signature()).unwrap();
+        alice.push(None).unwrap();
+
+        let bob_path = tmp.path().join("bob");
+        let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
+        (alice, alice_path, bob, bob_path)
+    }
+
+    #[test]
+    fn a_remote_commit_holding_a_device_local_file_is_refused() {
+        for rel in [
+            "default/device/task-runner.json",
+            "Default/DEVICE/task-runner.json",
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+            let head_before = bob.head_sha().unwrap();
+
+            commit_raw(&alice_path, rel, "{}");
+            alice.push(None).unwrap();
+
+            let error = bob.pull(None).unwrap_err();
+            assert!(
+                format!("{error:#}")
+                    .to_lowercase()
+                    .contains(&rel.to_lowercase()),
+                "error must name the path: {error:#}"
+            );
+            assert_eq!(bob.head_sha().unwrap(), head_before);
+            assert!(!bob_path.join(rel).exists());
+        }
+    }
+
+    #[test]
+    fn a_rollback_to_a_local_commit_holding_a_device_local_file_is_not_refused() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        repo.commit_all("seed", &signature()).unwrap();
+
+        commit_raw(&repo_path, "default/device/task-runner.json", "{}");
+        let rollback_oid = repo.local_oid().unwrap().unwrap();
+        commit_raw(&repo_path, "default/core/other.json", "{}");
+
+        repo.reset_to(rollback_oid).unwrap();
+
+        assert_eq!(repo.local_oid().unwrap().unwrap(), rollback_oid);
+        assert!(!repo_path.join("default/device/task-runner.json").exists());
+    }
+
+    fn commit_symlink(repo_path: &Path) {
+        let repo = Repository::open(repo_path).unwrap();
+        let mut index = repo.index().unwrap();
+        let entry = git2::IndexEntry {
+            ctime: git2::IndexTime::new(0, 0),
+            mtime: git2::IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o120000,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: git2::Oid::zero(),
+            flags: 0,
+            flags_extended: 0,
+            path: b"default/core/link".to_vec(),
+        };
+        index.add_frombuffer(&entry, b"../../device").unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = signature().to_git_signature().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "link", &tree, &[&parent])
+            .unwrap();
+    }
+
+    #[test]
+    fn a_rollback_to_a_local_commit_holding_a_symlink_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path().join("local");
+        let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
+        write_file(&repo_path.join("default/core/plugins.lock.json"), "{}");
+        repo.commit_all("seed", &signature()).unwrap();
+        commit_symlink(&repo_path);
+        let linked_oid = repo.local_oid().unwrap().unwrap();
+        commit_raw(&repo_path, "default/core/other.json", "{}");
+
+        let error = repo.reset_to(linked_oid).unwrap_err();
+
+        assert!(format!("{error:#}").contains("a symlink"), "{error:#}");
+        assert_ne!(repo.local_oid().unwrap().unwrap(), linked_oid);
+    }
+
+    #[test]
+    fn a_remote_symlink_entry_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+        let head_before = bob.head_sha().unwrap();
+
+        commit_symlink(&alice_path);
+        alice.push(None).unwrap();
+
+        let error = bob.pull(None).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("a symlink"),
+            "error must say symlink: {message}"
+        );
+        assert!(
+            message.contains("default/core/link"),
+            "error must name the path: {message}"
+        );
+        assert_eq!(bob.head_sha().unwrap(), head_before);
+        assert!(std::fs::symlink_metadata(bob_path.join("default/core/link")).is_err());
+    }
+
+    #[test]
+    fn a_pull_drops_files_outside_the_allowlist_from_the_working_copy() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+        let head_before = bob.head_sha().unwrap();
+
+        commit_raw(&alice_path, "default/core/plugins.lock.json", "{\"v\":2}");
+        commit_raw(&alice_path, "default/notes.txt", "notes");
+        commit_raw(&alice_path, ".DS_Store", "junk");
+        alice.push(None).unwrap();
+
+        let outcome = bob.pull(None).unwrap();
+        assert!(
+            matches!(outcome, PullOutcome::FastForwarded { .. }),
+            "expected fast-forward, got {outcome:?}"
+        );
+        assert!(bob_path.join("default/core/plugins.lock.json").exists());
+        assert!(!bob_path.join("default/notes.txt").exists());
+        assert!(!bob_path.join(".DS_Store").exists());
+        assert_ne!(bob.head_sha().unwrap(), head_before);
+    }
+
+    #[test]
+    fn a_remote_commit_without_device_local_files_still_fast_forwards() {
+        let tmp = TempDir::new().unwrap();
+        let (alice, alice_path, bob, bob_path) = seeded_pair(&tmp);
+
+        commit_raw(&alice_path, "default/core/plugins.lock.json", "{\"v\":2}");
+        alice.push(None).unwrap();
+
+        let outcome = bob.pull(None).unwrap();
+        assert!(
+            matches!(outcome, PullOutcome::FastForwarded { .. }),
+            "expected fast-forward, got {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(bob_path.join("default/core/plugins.lock.json")).unwrap(),
+            "{\"v\":2}"
+        );
+    }
+
     #[test]
     fn snapshot_json_at_reads_matching_json_from_a_commit() {
         let tmp = TempDir::new().unwrap();
         let repo_path = tmp.path().join("local");
         let repo = GitRepo::init(&repo_path, "https://example.invalid/r.git").unwrap();
-        write_file(&repo_path.join("core/plugin-configs/a.json"), "{\"x\": 1}");
+        write_file(
+            &repo_path.join("default/core/plugin-configs/a.json"),
+            "{\"x\": 1}",
+        );
         write_file(&repo_path.join("note.txt"), "ignore me");
         repo.commit_all("seed", &signature()).unwrap();
 
         let oid = repo.local_oid().unwrap().unwrap();
         let snap = repo
-            .snapshot_json_at(oid, |p| p.starts_with("core"))
+            .snapshot_json_at(oid, |p| p.starts_with("default/core"))
             .unwrap();
         assert_eq!(
-            snap.get("core/plugin-configs/a.json"),
+            snap.get("default/core/plugin-configs/a.json"),
             Some(&serde_json::json!({"x": 1}))
         );
         assert!(!snap.contains_key("note.txt"), "non-json is excluded");
@@ -730,18 +1043,18 @@ mod tests {
 
         let a_path = tmp.path().join("a");
         let a = GitRepo::init(&a_path, &url).unwrap();
-        write_file(&a_path.join("core/x.json"), "{\"v\":1}");
+        write_file(&a_path.join("default/core/x.json"), "{\"v\":1}");
         a.commit_all("seed", &signature()).unwrap();
         a.push(None).unwrap();
 
         let b_path = tmp.path().join("b");
         let b = GitRepo::clone(&url, &b_path, None).unwrap();
 
-        write_file(&a_path.join("core/x.json"), "{\"v\":2}");
+        write_file(&a_path.join("default/core/x.json"), "{\"v\":2}");
         a.commit_all("a2", &signature()).unwrap();
         a.push(None).unwrap();
 
-        write_file(&b_path.join("core/y.json"), "{\"v\":1}");
+        write_file(&b_path.join("default/core/y.json"), "{\"v\":1}");
         b.commit_all("b2", &signature()).unwrap();
 
         let outcome = b.pull(None).unwrap();

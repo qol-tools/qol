@@ -231,10 +231,6 @@ pub fn read_shortcuts_list() -> Vec<Value> {
     read_wrapped_json_array(crate::paths::shortcuts_path(), "shortcuts")
 }
 
-pub fn read_task_runner_value() -> Value {
-    read_json_file_or_default(crate::paths::task_runner_config_path())
-}
-
 pub(super) fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
     if let Some(hotkeys) = &bundle.hotkeys {
         crate::hotkeys::HotkeyLayers::active()?.save_values(hotkeys)?;
@@ -244,9 +240,6 @@ pub(super) fn write_core_settings(bundle: &ProfileImportBundle) -> Result<()> {
             crate::paths::shortcuts_path()?,
             &serde_json::json!({ "shortcuts": shortcuts }),
         )?;
-    }
-    if let Some(task_runner) = &bundle.task_runner {
-        write_json_config(crate::paths::task_runner_config_path()?, task_runner)?;
     }
     Ok(())
 }

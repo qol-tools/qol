@@ -66,8 +66,8 @@ pub use migrate::repair_profile_schema;
 pub use promote::{promote_allowlisted_clone, promote_clone_git_dir, PromotionScope};
 pub use reconcile::reconcile;
 pub use scope::{
-    current_os_bucket, device_local_dir, is_sync_allowlisted, mergeable_path, DeviceLocalDirError,
-    GITIGNORE_CONTENTS,
+    current_os_bucket, device_local_dir, ensure_gitignore, is_device_local, is_sync_allowlisted,
+    mergeable_path, DeviceLocalDirError, GITIGNORE_CONTENTS,
 };
 pub use state::{
     backup_file_path, build_status, clear_sync_target, ensure_sync_dirs, filename_string,

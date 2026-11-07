@@ -199,10 +199,11 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
             profile::read_shortcuts_list(),
             vec![json!({ "id": "sc-source" })]
         );
-        assert_eq!(
-            profile::read_task_runner_value(),
-            json!({ "actions": { "source": {} } })
-        );
+        let task_runner: Value = serde_json::from_str(
+            &fs::read_to_string(paths::task_runner_config_path().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(task_runner, json!({ "actions": { "old": {} } }));
         assert_eq!(
             read_profile_plugin_config("plugin-live"),
             Some(json!({ "source": "live" }))
@@ -226,6 +227,7 @@ async fn profile_export_import_round_trip_preserves_effective_state() {
 
     assert_eq!(target_bundle.hotkeys, source_bundle.hotkeys);
     assert_eq!(target_bundle.shortcuts, source_bundle.shortcuts);
+    assert!(source_bundle.task_runner.is_null());
     assert_eq!(target_bundle.task_runner, source_bundle.task_runner);
     assert_eq!(target_bundle.plugin_configs, source_bundle.plugin_configs);
 }

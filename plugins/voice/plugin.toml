@@ -21,6 +21,8 @@ audio = "os"
 "audio.input_device" = "device"
 recognition = "os"
 "recognition.model_dir" = "device"
+"recognition.provider" = "device"
+"recognition.websocket_endpoint" = "device"
 segmentation = "os"
 
 [runtime]

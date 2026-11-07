@@ -11,6 +11,7 @@ use tokio::sync::mpsc::{
     self as tokio_mpsc, error::TrySendError, UnboundedReceiver, UnboundedSender,
 };
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::audio::{AudioFormat, AudioFrame};
@@ -73,6 +74,7 @@ pub(crate) fn probe_endpoint(endpoint: &str) -> Result<(), TranscriptionError> {
             "Server address cannot be empty".to_owned(),
         ));
     }
+    require_secure_off_loopback(endpoint)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -98,6 +100,29 @@ pub(crate) fn probe_endpoint(endpoint: &str) -> Result<(), TranscriptionError> {
     })
 }
 
+fn require_secure_off_loopback(endpoint: &str) -> Result<(), TranscriptionError> {
+    let refused = || {
+        TranscriptionError::InvalidConfiguration(
+            "a transcription endpoint outside this machine must use wss://; ws:// is allowed for 127.0.0.1, ::1 and localhost only"
+                .to_owned(),
+        )
+    };
+    let uri = endpoint.trim().parse::<Uri>().map_err(|_| refused())?;
+    let scheme = uri.scheme_str().ok_or_else(refused)?;
+    if scheme.eq_ignore_ascii_case("wss") {
+        return Ok(());
+    }
+    let loopback = uri.host().is_some_and(|host| {
+        ["127.0.0.1", "::1", "[::1]", "localhost"]
+            .iter()
+            .any(|allowed| host.eq_ignore_ascii_case(allowed))
+    });
+    if scheme.eq_ignore_ascii_case("ws") && loopback {
+        return Ok(());
+    }
+    Err(refused())
+}
+
 fn create_from_options(
     options: &BTreeMap<String, String>,
 ) -> Result<Box<dyn Transcriber>, TranscriptionError> {
@@ -107,6 +132,7 @@ fn create_from_options(
             "WebSocket provider requires option endpoint=ws://...".to_owned(),
         )
     })?;
+    require_secure_off_loopback(&endpoint)?;
     let engine = options
         .get("engine")
         .cloned()
@@ -479,7 +505,31 @@ mod tests {
     use crate::audio::{AudioEncoding, AudioFormat, AudioFrame};
     use crate::transcribe::{AudioSubmit, Transcriber};
 
-    use super::{WebSocketTranscriber, WebSocketTranscriberConfig};
+    use super::{require_secure_off_loopback, WebSocketTranscriber, WebSocketTranscriberConfig};
+
+    #[test]
+    fn ws_endpoints_are_accepted_on_loopback_only() {
+        assert!(require_secure_off_loopback("ws://127.0.0.1:5001").is_ok());
+        assert!(require_secure_off_loopback("ws://localhost:5001").is_ok());
+        assert!(require_secure_off_loopback("ws://[::1]:5001").is_ok());
+        assert!(require_secure_off_loopback("ws://10.0.0.5:5001").is_err());
+        assert!(require_secure_off_loopback("ws://attacker.example").is_err());
+        assert!(require_secure_off_loopback("ws://localhost@attacker.example").is_err());
+    }
+
+    #[test]
+    fn wss_endpoints_are_accepted_anywhere() {
+        assert!(require_secure_off_loopback("wss://10.0.0.5:5001").is_ok());
+        assert!(require_secure_off_loopback("wss://stt.example.com/stream").is_ok());
+        assert!(require_secure_off_loopback("wss://127.0.0.1:5001").is_ok());
+    }
+
+    #[test]
+    fn an_endpoint_without_a_scheme_is_refused() {
+        assert!(require_secure_off_loopback("127.0.0.1:5001").is_err());
+        assert!(require_secure_off_loopback("attacker.example").is_err());
+        assert!(require_secure_off_loopback("http://127.0.0.1:5001").is_err());
+    }
 
     #[test]
     fn streams_audio_and_orders_finalize_at_the_accepted_boundary() {

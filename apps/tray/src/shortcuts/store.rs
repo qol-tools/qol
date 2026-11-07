@@ -160,7 +160,7 @@ pub fn find_by_id(config: &ShortcutsConfig, id: &str) -> Option<Shortcut> {
 }
 
 pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), String> {
-    validation::validate_shortcut(&shortcut)?;
+    validation::validate_shortcut_for_write(&shortcut)?;
     if shortcut.source.is_some() {
         return Err("source is owned by qol-tray and cannot be set on a new shortcut".to_string());
     }
@@ -177,7 +177,7 @@ pub fn add(config: &mut ShortcutsConfig, shortcut: Shortcut) -> Result<(), Strin
 }
 
 pub fn update(config: &mut ShortcutsConfig, mut shortcut: Shortcut) -> Result<(), String> {
-    validation::validate_shortcut(&shortcut)?;
+    validation::validate_shortcut_for_write(&shortcut)?;
     let existing = match config.shortcuts.iter_mut().find(|s| s.id == shortcut.id) {
         Some(e) => e,
         None => return Err(format!("shortcut '{}' not found", shortcut.id)),

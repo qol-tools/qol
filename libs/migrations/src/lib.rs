@@ -12,6 +12,7 @@ pub mod sentinel;
 pub mod transforms;
 mod v3_115_to_v3_116_device_plugin_fields;
 mod v3_137_to_v3_138_keyremap_backend_device;
+mod v3_138_to_v3_139_sync_code_channels;
 mod v3_15_to_v3_16;
 mod v3_15_to_v3_16_gist_to_repo;
 mod v3_16_to_v3_17_device_to_os;
@@ -124,6 +125,9 @@ impl PreFlightRegistry {
         ));
         registry.register(Box::new(
             v3_137_to_v3_138_keyremap_backend_device::V3_137ToV3_138KeyremapBackendDevice,
+        ));
+        registry.register(Box::new(
+            v3_138_to_v3_139_sync_code_channels::V3_138ToV3_139SyncCodeChannels,
         ));
         registry
     }
