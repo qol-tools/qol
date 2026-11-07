@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use std::fs::OpenOptions;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -45,11 +44,8 @@ fn convert_with_avconvert(capture_file: &Path, output_file: &Path) -> Result<()>
 
 pub(super) fn run_conversion_command(command: &mut Command, name: &str) -> Result<()> {
     qol_runtime::probe!("SHOT_RECORD_CONVERT", "tool={name} stage=start");
-    let log_file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(crate::platform::CAPTURE_LOG)
-        .context("failed to open recording log file")?;
+    let log_file =
+        crate::platform::open_capture_log(false).context("failed to open recording log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log file")?;

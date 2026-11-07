@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -443,14 +443,8 @@ pub(super) fn screencapture_recording_args(
 }
 
 fn capture_log_files(mode: CaptureLogMode) -> Result<(File, File)> {
-    let log_file = match mode {
-        CaptureLogMode::Truncate => File::create(crate::platform::CAPTURE_LOG),
-        CaptureLogMode::Append => OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(crate::platform::CAPTURE_LOG),
-    }
-    .context("failed to open recording log file")?;
+    let log_file = crate::platform::open_capture_log(matches!(mode, CaptureLogMode::Truncate))
+        .context("failed to open recording log file")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log file")?;
