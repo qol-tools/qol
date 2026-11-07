@@ -2027,16 +2027,19 @@ test('a fork key that leaves the box keeps its chat a moment, so a send that emp
   await ui.unmount()
 })
 
-test('a fork whose run ended is no longer working, so a restart does not call it stopped mid-turn', async ($, on) => {
+test('a fork whose run ended before its report was filed stays working on the board, and a restart does not call it stopped mid-turn', async ($, on) => {
   const store = new Map<string, unknown>()
   engine(on, [], [], [], store)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
-  const working = () => ((store.get('board:switchboard-session') as any[]) ?? []).find(row => row.agentId === 'a8')?.isWorking
-  expect(working()).toBe(true)
+  await spawn($, 'a9', 'busy-fork: busy')
+  const rows = () => (store.get('board:switchboard-session') as any[]) ?? []
   await $.turn.complete({ turnId: 'run-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
-  expect(working()).toBe(false)
-  expect(mergeBoards(store.get('board:switchboard-session') as unknown[], []).map(row => row.isInterrupted === true)).toEqual([false])
+  expect(rows().map(row => [row.agentId, row.isWorking])).toEqual([['a8', true], ['a9', true]])
+  expect(mergeBoards(rows(), []).map(row => [row.agentId, row.isWorking, row.isInterrupted === true]).sort()).toEqual([['a8', false, false], ['a9', false, true]])
+  await typed($, notification('a8', 'asking-fork: asks', 'Amber or teal?'), 'task-notification')
+  await settle()
+  expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
 })
 
 test("a fork's restart reply leaves no line in the SWITCHBOARD log, while a report does", async ($, on) => {

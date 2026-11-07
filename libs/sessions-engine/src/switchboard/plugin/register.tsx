@@ -661,7 +661,7 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
 const isEntry = (entry: unknown): entry is Entry =>
   typeof entry === 'object' && entry !== null && typeof (entry as { agentId?: unknown }).agentId === 'string' && typeof (entry as { name?: unknown }).name === 'string'
 
-const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })
+const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })
 
 export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]): Entry[] => {
   const kept = own.filter(isEntry)
@@ -680,7 +680,7 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
   return [...carried, ...kept].slice(-KEEP)
 }
 
-const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, ...entry }: Entry): Entry => entry
+const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, ...entry }: Entry): Entry => entry
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   const now = await $.clock.now()
@@ -2286,7 +2286,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     const ended = e.agentId
-    if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isWorking: false } : one)))
+    if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')
