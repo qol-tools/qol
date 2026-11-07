@@ -548,7 +548,7 @@ class SelectionMatchesTests(unittest.TestCase):
 
 class ReservedPluginIdsTests(unittest.TestCase):
     def test_auto_excluded_derives_from_qol_conventions(self):
-        self.assertEqual(pv.AUTO_EXCLUDED_PLUGIN_IDS, {"qol-template"})
+        self.assertEqual(pv.auto_excluded_plugin_ids(), {"qol-template"})
 
 
 class SquashMergeBumpTests(unittest.TestCase):

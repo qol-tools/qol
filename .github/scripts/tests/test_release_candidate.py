@@ -1224,3 +1224,24 @@ class TargetBuildTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScriptsImportWithoutTheWorkspaceTests(unittest.TestCase):
+    def test_release_candidate_imports_from_a_scripts_only_tree(self):
+        import shutil
+        import subprocess
+        import sys
+        import tempfile
+
+        scripts = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "trusted" / ".github" / "scripts"
+            shutil.copytree(scripts, copy, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            result = subprocess.run(
+                [sys.executable, "-c", "import release_candidate"],
+                cwd=copy,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
