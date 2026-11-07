@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextEffort, nextKey, nextModel, pullDetailOf, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2542,7 +2542,7 @@ test('a saved switchboard log keeps repeated lines in place when it loads and sa
   await spawn($, 'a8', 'asking-fork: asks')
   await typed($, 'asking-fork yes')
   await settle()
-  expect(store.get('sblog-3')).toEqual([yes, asked, yes, yes])
+  expect((store.get('sblog-3') as { who: string; text: string }[]).map(({ who, text }) => ({ who, text }))).toEqual([yes, asked, yes, yes])
 })
 
 test('a switchboard log that fails its first load saves nothing until it loads, so earlier conversations still move in', async ($, on) => {
@@ -2740,4 +2740,83 @@ test('sb runs the command the words name, lists a level that needs more, and lea
     ['sessions', 'switchboard', 'auth', 'clauded'],
     ['sessions', 'switchboard', 'auth', 'default'],
   ])
+})
+
+test('a model id reads as its family and version, and m and e step through the models and the effort levels', () => {
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelName('claude-sonnet-4-20250514')).toBe('Sonnet 4')
+  expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelName('opus')).toBe('Opus')
+  expect(modelName('gpt-x')).toBe('gpt-x')
+  expect(nextModel('claude-opus-5-5')).toBe('sonnet')
+  expect(nextModel('sonnet')).toBe('haiku')
+  expect(nextModel('claude-haiku-4-5')).toBe('opus')
+  expect(nextModel(undefined)).toBe('opus')
+  expect(nextEffort('high')).toBe('xhigh')
+  expect(nextEffort('max')).toBe('low')
+  expect(nextEffort(undefined)).toBe('high')
+})
+
+test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
+  const view = {
+    isDraft: true,
+    state: 'OPEN',
+    statusCheckRollup: [
+      { __typename: 'CheckRun', name: 'claude review', status: 'COMPLETED', conclusion: 'SUCCESS' },
+      { __typename: 'CheckRun', name: 'lint + test', status: 'IN_PROGRESS', conclusion: '' },
+      { __typename: 'CheckRun', name: 'CodeQL', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+      { __typename: 'CheckRun', name: 'batch role', status: 'COMPLETED', conclusion: 'SKIPPED' },
+      { __typename: 'CheckRun', name: 'merge gate', status: 'COMPLETED', conclusion: 'FAILURE' },
+      { __typename: 'StatusContext', context: 'deploy', state: 'PENDING' },
+    ],
+  }
+  expect(pullDetailOf(view, 'Live test needed', 5)).toEqual({ at: 5, state: 'draft', passed: 2, failed: 1, running: 2, total: 5, review: 'pass', liveTest: 'needed' })
+  expect(pullDetailOf({ state: 'MERGED', isDraft: false }, '', 6)).toEqual({ at: 6, state: 'merged', passed: 0, failed: 0, running: 0, total: 0 })
+  expect(pullDetailOf({ state: 'CLOSED', isDraft: true }, 'No live test needed', 7)?.state).toBe('closed')
+  expect(pullDetailOf({ state: 'OPEN', isDraft: false }, 'No live test needed', 7)?.liveTest).toBe('not needed')
+  expect(pullDetailOf(null, '', 8)).toBeUndefined()
+})
+
+test('the fork you write to shows its model and effort, m and e change its next model call, and the switchboard keeps its own', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const steps: { agentId?: string; model: string; effort?: unknown }[] = []
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('session.messages', () => ({ value: [] }))
+  on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number; model: string; effort?: unknown }) {
+    steps.push({ ...(e.agentId === undefined ? {} : { agentId: e.agentId }), model: e.model, effort: e.effort })
+    yield { kind: 'text', index: 0, text: 'ok' }
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  const step = async (agentId: string | undefined, model: string, effort?: string) => {
+    const stream = $.turn.step({ turnId: `t-${steps.length}`, index: 2, model, ...(effort === undefined ? {} : { effort }), messageCount: 2, ...(agentId === undefined ? {} : { agentId }) })
+    for await (const _ of stream) {
+    }
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'medium' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^medium$/ })).toBeDefined()
+  await ui.press({ key: 'model-asking-fork' })
+  expect(await ui.find({ type: 'Text', text: /^Sonnet$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^ from its next model call$/ })).toBeDefined()
+  await ui.press({ key: 'effort-asking-fork' })
+  expect(await ui.find({ type: 'Text', text: /^high$/ })).toBeDefined()
+  expect((store.get('model-choices') as Record<string, { model?: string; effort?: string }>)['asking-fork']).toMatchObject({ model: 'sonnet', effort: 'high' })
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'sonnet', effort: 'high' })
+  await step(undefined, 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
+  expect(await ui.find({ type: 'Text', text: /^ from its next model call$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /effort medium → high, from its next model call/ })).toBeDefined()
+  await ui.unmount()
 })
