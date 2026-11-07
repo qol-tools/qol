@@ -2258,7 +2258,7 @@ export const register: Register = on => {
     if (e.agentId === undefined && !isHeld) await logSaid($, YOU, userWords(e.text)).catch(() => {})
     if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
-      if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
+      if (list.some(entry => entry.agentId === e.agentId && (!entry.isWorking || entry.isRunOver === true))) await markWorking($, e.agentId, undefined)
     }
     return next(e)
   }).catch(($, e, next) => next(e))

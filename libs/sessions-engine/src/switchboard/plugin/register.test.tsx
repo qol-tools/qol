@@ -2027,7 +2027,7 @@ test('a fork key that leaves the box keeps its chat a moment, so a send that emp
   await ui.unmount()
 })
 
-test('a fork whose run ended before its report was filed stays working on the board, and a restart does not call it stopped mid-turn', async ($, on) => {
+test('a fork whose run ended before its report was filed stays working on the board, a restart does not call it stopped mid-turn, and its next run counts again', async ($, on) => {
   const store = new Map<string, unknown>()
   engine(on, [], [], [], store)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -2037,7 +2037,10 @@ test('a fork whose run ended before its report was filed stays working on the bo
   await $.turn.complete({ turnId: 'run-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
   expect(rows().map(row => [row.agentId, row.isWorking])).toEqual([['a8', true], ['a9', true]])
   expect(mergeBoards(rows(), []).map(row => [row.agentId, row.isWorking, row.isInterrupted === true]).sort()).toEqual([['a8', false, false], ['a9', false, true]])
-  await typed($, notification('a8', 'asking-fork: asks', 'Amber or teal?'), 'task-notification')
+  await $.turn.start({ turnId: 'run-2', agentId: 'a8', text: 'teal' })
+  expect(mergeBoards(rows(), []).map(row => [row.agentId, row.isInterrupted === true]).sort()).toEqual([['a8', true], ['a9', true]])
+  await $.turn.complete({ turnId: 'run-2', agentId: 'a8', answer: 'Teal it is.', durationMs: 1, isAborted: false, reason: 'done' })
+  await typed($, notification('a8', 'asking-fork: asks', 'Teal it is.'), 'task-notification')
   await settle()
   expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
 })
