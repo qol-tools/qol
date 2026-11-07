@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2025,6 +2025,38 @@ test('a fork key that leaves the box keeps its chat a moment, so a send that emp
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a fork whose run ended before its report was filed stays working on the board, a restart does not call it stopped mid-turn, and its next run counts again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'busy-fork: busy')
+  const rows = () => (store.get('board:switchboard-session') as any[]) ?? []
+  await $.turn.complete({ turnId: 'run-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(rows().map(row => [row.agentId, row.isWorking])).toEqual([['a8', true], ['a9', true]])
+  expect(mergeBoards(rows(), []).map(row => [row.agentId, row.isWorking, row.isInterrupted === true]).sort()).toEqual([['a8', false, false], ['a9', false, true]])
+  await $.turn.start({ turnId: 'run-2', agentId: 'a8', text: 'teal' })
+  expect(mergeBoards(rows(), []).map(row => [row.agentId, row.isInterrupted === true]).sort()).toEqual([['a8', true], ['a9', true]])
+  await $.turn.complete({ turnId: 'run-2', agentId: 'a8', answer: 'Teal it is.', durationMs: 1, isAborted: false, reason: 'done' })
+  await typed($, notification('a8', 'asking-fork: asks', 'Teal it is.'), 'task-notification')
+  await settle()
+  expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
+})
+
+test("a fork's restart reply leaves no line in the SWITCHBOARD log, while a report does", async ($, on) => {
+  const store = new Map<string, unknown>()
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, notification('a8', 'asking-fork: asks', 'Should I use teal?'), 'task-notification')
+  await settle()
+  const logged = () => ((store.get('sblog-3') as { who: string; text: string }[]) ?? []).filter(row => row.who === 'asking-fork').map(row => row.text)
+  expect(logged()).toEqual(['Should I use teal?'])
+  await typed($, notification('a8', 'asking-fork: asks', 'Back on the fork board.'), 'task-notification')
+  await settle()
+  expect(logged()).toEqual(['Should I use teal?'])
 })
 
 test('the fork chat shows the reply a fork gives while its key stays in the prompt', async ($, on) => {
