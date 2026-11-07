@@ -12,6 +12,8 @@ const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
 const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_ID_INFO_CLASS: i32 = 18;
+const ERROR_FILE_EXISTS: i32 = 80;
+const ERROR_ALREADY_EXISTS: i32 = 183;
 
 #[repr(C)]
 #[derive(Default)]
@@ -35,6 +37,7 @@ struct FileIdInfo {
 extern "system" {
     fn GetFileAttributesW(file_name: *const u16) -> u32;
     fn SetFileAttributesW(file_name: *const u16, attributes: u32) -> i32;
+    fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
     fn GetFileInformationByHandle(
         file: RawHandle,
         information: *mut ByHandleFileInformation,
@@ -116,4 +119,19 @@ pub fn file_identity(path: &Path, _: &std::fs::Metadata) -> Option<crate::FileId
         index,
         links: u64::from(information.number_of_links),
     })
+}
+
+pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = wide_nul(from);
+    let to = wide_nul(to);
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } != 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(ERROR_FILE_EXISTS | ERROR_ALREADY_EXISTS) => {
+            Err(io::Error::new(io::ErrorKind::AlreadyExists, error))
+        }
+        _ => Err(error),
+    }
 }

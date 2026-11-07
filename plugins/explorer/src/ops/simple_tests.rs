@@ -104,6 +104,19 @@ fn rename_never_overwrites_a_sibling() {
 }
 
 #[test]
+fn rename_never_replaces_a_folder_with_a_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let moved = dir.path().join("a");
+    let taken = dir.path().join("b");
+    fs::create_dir(&moved).unwrap();
+    fs::create_dir(&taken).unwrap();
+    fs::write(taken.join("keep.md"), "kept").unwrap();
+    assert_eq!(rename(&moved, "b"), Err(NameProblem::Taken));
+    assert_eq!(fs::read_to_string(taken.join("keep.md")).unwrap(), "kept");
+    assert!(moved.exists());
+}
+
+#[test]
 fn rename_changes_only_the_case() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("notes.md");

@@ -1,22 +1,52 @@
-use std::fs::{self, File};
+use std::fs::{self, File, Metadata};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use super::platform;
 
 const CHUNK: usize = 1 << 20;
 
+pub(super) const ALREADY_THERE: &str = "that folder is already there";
+
 pub(super) trait Meter {
     fn advance(&mut self, bytes: u64);
 }
 
-pub(super) fn copy_node(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<()> {
+pub(super) struct Copied {
+    path: PathBuf,
+    folder: bool,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl Copied {
+    fn entry(path: &Path, meta: &Metadata) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            folder: meta.is_dir(),
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        }
+    }
+}
+
+pub(super) fn copy_node(
+    src: &Path,
+    dst: &Path,
+    meter: &mut dyn Meter,
+    copied: &mut Vec<Copied>,
+) -> io::Result<()> {
     let meta = fs::symlink_metadata(src)?;
     if meta.file_type().is_symlink() {
-        return platform::copy_link(src, dst);
+        platform::copy_link(src, dst)?;
+        copied.push(Copied::entry(src, &meta));
+        return Ok(());
     }
     if meta.is_file() {
-        return copy_file(src, dst, meter);
+        let read = copy_file(src, dst, meter)?;
+        copied.push(Copied::entry(src, &read));
+        return Ok(());
     }
     if !meta.is_dir() {
         return Err(io::Error::new(
@@ -25,10 +55,11 @@ pub(super) fn copy_node(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Re
         ));
     }
     platform::new_dir(dst)?;
+    copied.push(Copied::entry(src, &meta));
     let mut children = fs::read_dir(src)?.collect::<io::Result<Vec<_>>>()?;
     children.sort_by_key(|entry| entry.file_name());
     for child in children {
-        copy_node(&child.path(), &dst.join(child.file_name()), meter)?;
+        copy_node(&child.path(), &dst.join(child.file_name()), meter, copied)?;
     }
     if let Ok(handle) = platform::open_dir(dst) {
         platform::keep_mode(&handle, &meta)?;
@@ -39,7 +70,7 @@ pub(super) fn copy_node(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Re
     Ok(())
 }
 
-pub(super) fn copy_file(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<()> {
+pub(super) fn copy_file(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<Metadata> {
     let outcome = write_verified(src, dst, meter);
     if outcome.is_err() {
         let _ = fs::remove_file(dst);
@@ -47,7 +78,7 @@ pub(super) fn copy_file(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Re
     outcome
 }
 
-fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<()> {
+fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<Metadata> {
     let mut reader = File::open(src)?;
     let meta = reader.metadata()?;
     let mut writer = platform::new_file(dst)?;
@@ -73,7 +104,27 @@ fn write_verified(src: &Path, dst: &Path, meter: &mut dyn Meter) -> io::Result<(
             "the copy came out a different size",
         ));
     }
-    Ok(())
+    Ok(meta)
+}
+
+pub(super) fn same_object(a: &Path, b: &Path) -> bool {
+    let identity = |path: &Path| {
+        let meta = fs::metadata(path).ok()?;
+        qol_fs::file_identity(path, &meta)
+    };
+    match (identity(a), identity(b)) {
+        (Some(left), Some(right)) => left.device == right.device && left.index == right.index,
+        _ => matches!(
+            (fs::canonicalize(a), fs::canonicalize(b)),
+            (Ok(left), Ok(right)) if left == right
+        ),
+    }
+}
+
+pub(super) fn same_entry(a: &Path, b: &Path) -> bool {
+    let plain =
+        |path: &Path| fs::symlink_metadata(path).is_ok_and(|meta| !meta.file_type().is_symlink());
+    plain(a) && plain(b) && same_object(a, b)
 }
 
 pub(super) fn same_link(a: &Path, b: &Path) -> bool {
@@ -112,4 +163,21 @@ pub(super) fn remove_all(path: &Path) -> io::Result<()> {
     } else {
         fs::remove_file(path)
     }
+}
+
+pub(super) fn remove_copied(copied: &[Copied]) -> io::Result<()> {
+    for entry in copied.iter().rev() {
+        if entry.folder {
+            fs::remove_dir(&entry.path)?;
+            continue;
+        }
+        let meta = fs::symlink_metadata(&entry.path)?;
+        if meta.len() != entry.len || meta.modified().ok() != entry.modified {
+            return Err(io::Error::other(
+                "it changed while it was being copied, so it was left where it is",
+            ));
+        }
+        fs::remove_file(&entry.path)?;
+    }
+    Ok(())
 }

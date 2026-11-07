@@ -3,7 +3,7 @@ use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
-use super::copy::same_link;
+use super::copy::{same_entry, same_link, same_object, ALREADY_THERE};
 use super::{platform, Clash, CopyOnly, Resolve, Room, Stamp, Survey, Transfer, Verb};
 
 const MTIME_SLACK: Duration = Duration::from_secs(2);
@@ -29,7 +29,12 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
             .file_name()
             .ok_or_else(|| invalid("that item has no name"))?;
         let parent = fs::canonicalize(source.parent().unwrap_or(source))?;
-        if meta.is_dir() && into.starts_with(parent.join(name)) {
+        if meta.is_dir()
+            && (into.starts_with(parent.join(name))
+                || into
+                    .ancestors()
+                    .any(|ancestor| same_object(ancestor, source)))
+        {
             return Err(invalid("a folder cannot go inside itself"));
         }
         crosses_volume |= crosses(source, &transfer.into);
@@ -41,7 +46,7 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
                 });
             }
         }
-        if parent == into {
+        if same_object(source.parent().unwrap_or(source), &into) {
             if transfer.verb != Verb::Move {
                 tally.bytes += tree_bytes(source);
             }
@@ -53,7 +58,12 @@ pub fn survey(transfer: Transfer) -> io::Result<Survey> {
                 tally.bytes += tree_bytes(source);
             }
             Err(error) => return Err(error),
-            Ok(here) if meta.is_dir() && here.is_dir() => merge(source, &existing, &mut tally)?,
+            Ok(here) if meta.is_dir() && here.is_dir() => {
+                if same_object(source, &existing) {
+                    return Err(invalid(ALREADY_THERE));
+                }
+                merge(source, &existing, &mut tally)?
+            }
             Ok(here) => top_level(source, &existing, &meta, &here, &mut tally),
         }
     }
@@ -100,8 +110,9 @@ fn top_level(source: &Path, existing: &Path, meta: &Metadata, here: &Metadata, t
     let incoming = stamp(source, meta);
     let stored = stamp(existing, here);
     let mismatched = incoming.folder != stored.folder;
-    let same = is_same(&stored, &incoming) || same_link(source, existing);
-    if !same {
+    let aliased = same_entry(source, existing);
+    let same = !aliased && (is_same(&stored, &incoming) || same_link(source, existing));
+    if !same && !aliased {
         tally.bytes += incoming.bytes;
     }
     tally.clashes.push(Clash {
@@ -110,7 +121,7 @@ fn top_level(source: &Path, existing: &Path, meta: &Metadata, here: &Metadata, t
         here: stored,
         incoming,
         same,
-        choice: if mismatched {
+        choice: if mismatched || aliased {
             Resolve::Keep
         } else {
             default_choice(&stored, &incoming, same)
@@ -129,22 +140,30 @@ fn merge(source: &Path, existing: &Path, tally: &mut Tally) -> io::Result<()> {
         let target = existing.join(child.file_name());
         match fs::symlink_metadata(&target) {
             Err(_) => tally.bytes += tree_bytes(&path),
-            Ok(here) if meta.is_dir() && here.is_dir() => merge(&path, &target, tally)?,
+            Ok(here) if meta.is_dir() && here.is_dir() => {
+                if same_object(&path, &target) {
+                    return Err(invalid(ALREADY_THERE));
+                }
+                merge(&path, &target, tally)?
+            }
             Ok(here) => {
                 let incoming = stamp(&path, &meta);
                 let stored = stamp(&target, &here);
-                if is_same(&stored, &incoming) || same_link(&path, &target) {
+                let aliased = same_entry(&path, &target);
+                if !aliased && (is_same(&stored, &incoming) || same_link(&path, &target)) {
                     tally.same_inside += 1;
                     continue;
                 }
-                tally.bytes += incoming.bytes;
+                if !aliased {
+                    tally.bytes += incoming.bytes;
+                }
                 tally.clashes.push(Clash {
                     source: path,
                     existing: target,
                     here: stored,
                     incoming,
                     same: false,
-                    choice: if incoming.folder != stored.folder {
+                    choice: if aliased || incoming.folder != stored.folder {
                         Resolve::Keep
                     } else {
                         default_choice(&stored, &incoming, false)
