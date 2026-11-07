@@ -7126,7 +7126,7 @@ dependencies = [
 
 [[package]]
 name = "qol-monitor"
-version = "0.54.3"
+version = "0.54.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -7607,7 +7607,7 @@ dependencies = [
 
 [[package]]
 name = "qol-tray"
-version = "3.138.8"
+version = "3.138.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -7724,7 +7724,7 @@ dependencies = [
 
 [[package]]
 name = "qol-voice"
-version = "0.81.2"
+version = "0.81.3"
 dependencies = [
  "anyhow",
  "candle-core",
