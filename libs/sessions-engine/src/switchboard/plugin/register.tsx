@@ -396,7 +396,7 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
 }
 
-const SB_LOG_PREFIX = 'sblog:'
+const SB_LOG_PREFIX = 'sblog-2:'
 const SB_LOG_KEPT = 12
 export const YOU = 'you'
 export const SWITCHBOARD = 'switchboard'
@@ -407,9 +407,8 @@ const loadLog = async ($: EngineInterface): Promise<void> => {
   if (isLogLoaded) return
   isLogLoaded = true
   const saved = await $.store.get(SB_LOG_PREFIX + (await $.session.id())).catch(() => undefined)
-  if (!Array.isArray(saved)) return
-  const rows = saved.filter((one): one is { who: string; text: string } => typeof one?.who === 'string' && typeof one?.text === 'string')
-  await update($, switchboardLog, now => [...rows, ...now].slice(-SB_LOG_KEPT))
+  const rows = Array.isArray(saved) ? saved.filter((one): one is { who: string; text: string } => typeof one?.who === 'string' && typeof one?.text === 'string') : []
+  await update($, switchboardLog, () => rows.slice(-SB_LOG_KEPT))
 }
 
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
@@ -423,7 +422,7 @@ const logSaid = async ($: EngineInterface, who: string, said: string): Promise<v
 
 const FOCUS_PREFIX = 'focus-'
 const FOCUS_KEPT = 40
-const FOCUS_SETTLE_MS = 80
+const FOCUS_SETTLE_MS = 16
 const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
 
 let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
@@ -2017,14 +2016,14 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
-    if (e.agentId === undefined) await followFocus($).catch(() => {})
-    if (e.agentId !== undefined || dropped.length === 0) return next(e)
+    if (e.agentId !== undefined) return next(e)
     const text = textOf(e.message.content)
-    const at = text.startsWith(DROP_NOTICE) ? dropped.indexOf(text.slice(DROP_NOTICE.length)) : -1
-    if (at === -1) return next(e)
-    const [reason] = dropped.splice(at, 1)
-    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reason ?? text }] } })
-  }).catch(($, e, next) => next(e))
+    const at = dropped.length === 0 || !text.startsWith(DROP_NOTICE) ? -1 : dropped.indexOf(text.slice(DROP_NOTICE.length))
+    const reason = at === -1 ? undefined : dropped.splice(at, 1)[0]
+    const done = await next(reason === undefined ? e : { ...e, message: { ...e.message, content: [{ type: 'text', text: reason }] } })
+    await followFocus($).catch(() => {})
+    return done
+  }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
