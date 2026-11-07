@@ -1806,7 +1806,7 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     if (loading === '') {
       return (
-        <Box>
+        <Box marginTop={1}>
           <Text dimColor>writing to </Text>
           <Text bold color="claude">{key}</Text>
           <Text dimColor> · esc on an empty prompt leaves</Text>
