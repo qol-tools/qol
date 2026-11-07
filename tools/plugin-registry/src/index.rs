@@ -309,7 +309,36 @@ fn verify_source(
     let compressed = registry.blob(&entry.tree.digest, entry.tree.size)?;
     let tree_tar = gunzip_up_to(&compressed, expected.len())
         .with_context(|| format!("{}: the tree layer is not a gzip file", release.tag))?;
-    check_source(release, entry, &source, &expected, &tree_tar)
+    check_source(
+        release,
+        entry,
+        &source,
+        &without_mtimes(&expected),
+        &without_mtimes(&tree_tar),
+    )
+}
+
+fn without_mtimes(tar: &[u8]) -> Vec<u8> {
+    let mut out = tar.to_vec();
+    let mut offset = 0;
+    while offset + 512 <= out.len() {
+        if out[offset..offset + 512].iter().all(|byte| *byte == 0) {
+            break;
+        }
+        let size = octal_field(&out[offset + 124..offset + 136]);
+        for byte in &mut out[offset + 136..offset + 156] {
+            *byte = 0;
+        }
+        offset += 512 + size.div_ceil(512) * 512;
+    }
+    out
+}
+
+fn octal_field(field: &[u8]) -> usize {
+    field
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .fold(0, |acc, byte| acc * 8 + usize::from(byte - b'0'))
 }
 
 fn gunzip_up_to(compressed: &[u8], len: usize) -> Result<Vec<u8>> {
@@ -911,6 +940,35 @@ mod tests {
             dir: dir.to_string(),
             plugin_toml: plugin_toml.to_string(),
         }
+    }
+
+    fn tar_with(mtime: &[u8], content: &[u8]) -> Vec<u8> {
+        let mut header = [0u8; 512];
+        header[..1].copy_from_slice(b"a");
+        header[100..108].copy_from_slice(b"0000644\0");
+        header[124..136].copy_from_slice(format!("{:011o}\0", content.len()).as_bytes());
+        header[136..136 + mtime.len()].copy_from_slice(mtime);
+        header[148..156].copy_from_slice(b"        ");
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+        header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+        let mut tar = header.to_vec();
+        tar.extend_from_slice(content);
+        tar.resize(512 + content.len().div_ceil(512) * 512 + 1024, 0);
+        tar
+    }
+
+    #[test]
+    fn tree_tars_match_when_only_mtimes_differ() {
+        let early = tar_with(b"00000000000\0", b"same");
+        let late = tar_with(b"17777777777\0", b"same");
+        let other = tar_with(b"00000000000\0", b"diff");
+
+        assert_ne!(early, late);
+        assert_eq!(without_mtimes(&early), without_mtimes(&late));
+        assert_ne!(without_mtimes(&early), without_mtimes(&other));
     }
 
     #[test]
