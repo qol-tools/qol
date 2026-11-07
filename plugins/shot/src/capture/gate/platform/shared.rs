@@ -1,6 +1,6 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const LOCK_FILE_NAME: &str = "qol-shot-capture.lock";
 
@@ -10,7 +10,18 @@ pub(crate) struct CaptureGuard {
 }
 
 pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
-    try_acquire_at(&lock_path(), action)
+    let dir = match crate::platform::ensure_runtime_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            qol_runtime::probe!(
+                "SHOT_CAPTURE_LOCK",
+                "action={action} result=dir-error err={}",
+                error.kind()
+            );
+            return None;
+        }
+    };
+    try_acquire_at(&dir.join(LOCK_FILE_NAME), action)
 }
 
 fn try_acquire_at(path: &Path, action: &'static str) -> Option<CaptureGuard> {
@@ -57,10 +68,6 @@ impl Drop for CaptureGuard {
             self.action
         );
     }
-}
-
-fn lock_path() -> PathBuf {
-    crate::platform::runtime_dir().join(LOCK_FILE_NAME)
 }
 
 #[cfg(test)]

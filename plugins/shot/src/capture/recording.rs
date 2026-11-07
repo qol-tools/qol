@@ -384,6 +384,7 @@ fn write_capture_state(session: &platform::CaptureSession) -> Result<()> {
         session.segments.len(),
         platform::RECORD_REGION_BASE
     );
+    platform::ensure_runtime_dir().context("failed to prepare the capture state dir")?;
     qol_fs::atomic_write_private(&state_file_path(), format!("{content}\n").as_bytes())
         .context("failed to write capture state")
 }

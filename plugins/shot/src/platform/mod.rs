@@ -28,25 +28,38 @@ macro_rules! record_region_base {
 }
 pub const RECORD_REGION_BASE: &str = record_region_base!();
 
+const CAPTURE_STATE_NAME: &str = concat!(record_region_base!(), ".pid");
+const CAPTURE_LOG_NAME: &str = concat!(record_region_base!(), ".log");
+
 pub fn runtime_dir() -> PathBuf {
-    let dir = qol_config::runtime_dir()
+    qol_config::runtime_dir()
         .map(|dir| dir.join("shot"))
-        .unwrap_or_else(|| std::env::temp_dir().join("qol-shot"));
-    if let Err(error) = qol_fs::create_private_dir(&dir) {
-        log::warn!("failed to create {}: {error}", dir.display());
+        .unwrap_or_else(|| std::env::temp_dir().join("qol-shot"))
+}
+
+pub fn ensure_runtime_dir() -> std::io::Result<PathBuf> {
+    let dir = runtime_dir();
+    qol_fs::create_private_dir(&dir)?;
+    let metadata = std::fs::symlink_metadata(&dir)?;
+    if !owned_by_current_user(&metadata) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("{} is owned by another user", dir.display()),
+        ));
     }
-    dir
+    Ok(dir)
 }
 
 pub fn capture_state_path() -> PathBuf {
-    runtime_dir().join(format!("{RECORD_REGION_BASE}.pid"))
+    runtime_dir().join(CAPTURE_STATE_NAME)
 }
 
 pub fn capture_log_path() -> PathBuf {
-    runtime_dir().join(format!("{RECORD_REGION_BASE}.log"))
+    runtime_dir().join(CAPTURE_LOG_NAME)
 }
 
 pub fn open_capture_log(truncate: bool) -> std::io::Result<std::fs::File> {
+    let dir = ensure_runtime_dir()?;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true);
     if truncate {
@@ -59,7 +72,7 @@ pub fn open_capture_log(truncate: bool) -> std::io::Result<std::fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    options.open(capture_log_path())
+    options.open(dir.join(CAPTURE_LOG_NAME))
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
