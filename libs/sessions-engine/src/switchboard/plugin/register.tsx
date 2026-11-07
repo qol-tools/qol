@@ -211,14 +211,25 @@ const toggleBoard = async ($: EngineInterface): Promise<string> => {
   return opened.isPlaced ? 'Fork board opened. qols board or /board closes it.' : `The fork board waits for room: ${opened.reason}`
 }
 
+let putBack: ((text: string) => boolean) | undefined
+
+const clearPutBack = async ($: EngineInterface, text: string): Promise<void> => {
+  if (putBack === undefined || text === '' || !putBack(text)) return
+  putBack = undefined
+  await $.prompt.fill({ text: '', mode: 'replace' })
+}
+
 const clearBox = ($: EngineInterface, isDropped: (text: string) => boolean, waits: readonly number[] = CLEAR_TYPED_MS): void => {
   const [after, ...later] = waits
+  putBack = after === undefined ? undefined : isDropped
   if (after === undefined) return
   $.clock.after(after, () => {
     void (async () => {
       const { text } = await $.prompt.read()
+      if (putBack !== isDropped) return
+      if (text === '') return clearBox($, isDropped, later)
+      putBack = undefined
       if (isDropped(text)) await $.prompt.fill({ text: '', mode: 'replace' })
-      else if (text === '') clearBox($, isDropped, later)
     })().catch(() => {})
   })
 }
@@ -400,12 +411,12 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
 }
 
-const SB_LOG_PREFIX = 'sblog-2:'
+const SB_LOG_KEY = 'sblog-3'
 const SB_LOG_KEPT = 12
 export const YOU = 'you'
 export const SWITCHBOARD = 'switchboard'
 
-const OLD_SB_LOG_PREFIX = 'sblog:'
+const SESSION_LOG_PREFIXES = ['sblog:', 'sblog-2:'] as const
 
 type Logged = { who: string; text: string }
 
@@ -423,18 +434,36 @@ export const mergedLog = (old: readonly Logged[], saved: readonly Logged[]): Log
 
 let logLoading: Promise<void> | undefined
 
+export const sessionLogs = (saved: ReadonlyArray<readonly [string, unknown]>): Logged[] => {
+  const sessionOf = (key: string): string[] => {
+    const prefix = SESSION_LOG_PREFIXES.find(one => key.startsWith(one))
+    return prefix === undefined ? [] : [key.slice(prefix.length)]
+  }
+  const rowsOf = (key: string): Logged[] => loggedRows(saved.find(([one]) => one === key)?.[1])
+  const sessions = [...new Set(saved.flatMap(([key]) => sessionOf(key)))]
+  return sessions.flatMap(session => mergedLog(rowsOf(`sblog:${session}`), rowsOf(`sblog-2:${session}`)))
+}
+
+let logLoaded = false
+let unsaved: Logged[] = []
+
+const showLog = ($: EngineInterface, stored: readonly Logged[]): Promise<void> =>
+  update($, switchboardLog, () => [...stored, ...unsaved].slice(-SB_LOG_KEPT))
+
 const readLog = async ($: EngineInterface): Promise<void> => {
-  const session = await $.session.id()
-  const old = loggedRows(await $.store.get(OLD_SB_LOG_PREFIX + session).catch(() => undefined))
-  const saved = loggedRows(await $.store.get(SB_LOG_PREFIX + session).catch(() => undefined))
-  const rows = mergedLog(old, saved).slice(-SB_LOG_KEPT)
-  await update($, switchboardLog, () => rows)
-  if (old.length === 0) return
-  const moved = await $.store.set(SB_LOG_PREFIX + session, rows).then(
-    () => true,
-    () => false,
-  )
-  if (moved) await $.store.set(OLD_SB_LOG_PREFIX + session, []).catch(() => undefined)
+  const saved = await $.store.get(SB_LOG_KEY)
+  if (saved !== undefined) {
+    await showLog($, loggedRows(saved))
+    logLoaded = true
+    return
+  }
+  const keys = (await $.store.keys()).filter(key => SESSION_LOG_PREFIXES.some(prefix => key.startsWith(prefix)))
+  const earlier = await Promise.all(keys.map(async key => [key, await $.store.get(key)] as const))
+  const rows = sessionLogs(earlier).slice(-SB_LOG_KEPT)
+  await $.store.set(SB_LOG_KEY, rows)
+  await showLog($, rows)
+  logLoaded = true
+  await Promise.all(keys.map(key => $.store.delete(key).catch(() => undefined)))
 }
 
 const loadLog = ($: EngineInterface): Promise<void> => {
@@ -449,7 +478,15 @@ let logSaving: Promise<void> = Promise.resolve()
 const saveLog = ($: EngineInterface): Promise<void> => {
   logSaving = logSaving
     .then(async () => {
-      await $.store.set(SB_LOG_PREFIX + (await $.session.id()), await read($, switchboardLog))
+      if (!logLoaded || unsaved.length === 0) return
+      const taken = unsaved.splice(0)
+      try {
+        const rows = [...loggedRows(await $.store.get(SB_LOG_KEY)), ...taken].slice(-SB_LOG_KEPT)
+        await $.store.set(SB_LOG_KEY, rows)
+        await showLog($, rows)
+      } catch {
+        unsaved = [...taken, ...unsaved]
+      }
     })
     .catch(() => undefined)
   return logSaving
@@ -458,8 +495,9 @@ const saveLog = ($: EngineInterface): Promise<void> => {
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
   const text = clipSaid(plainText(said))
   if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
-  await loadLog($)
+  unsaved.push({ who, text })
   await update($, switchboardLog, rows => [...rows, { who, text }].slice(-SB_LOG_KEPT))
+  await loadLog($)
   await saveLog($)
 }
 
@@ -2059,6 +2097,7 @@ export const register: Register = on => {
   on('prompt.change', async ($, e, next) => {
     const after = await next(e)
     try {
+      if (e.origin.kind === 'engine') await clearPutBack($, e.text)
       if (viewedFork === undefined) await writeToTyped($, typedTarget(await read($, board), e.text))
     } catch {}
     return after
