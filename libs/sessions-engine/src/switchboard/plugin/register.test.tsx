@@ -2388,6 +2388,21 @@ test('the switchboard log keeps the lines of earlier conversations after a resta
   expect(saved.at(-1)).toBe('five')
 })
 
+test('a saved switchboard log keeps repeated lines in place when it loads and saves', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const yes = { who: 'you → asking-fork', text: 'yes' }
+  const asked = { who: 'asking-fork', text: 'Sure?' }
+  store.set('sblog-3', [yes, asked, yes])
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, 'asking-fork yes')
+  await settle()
+  expect(store.get('sblog-3')).toEqual([yes, asked, yes, yes])
+})
+
 test('a switchboard log that fails its first load saves nothing until it loads, so earlier conversations still move in', async ($, on) => {
   class FlakyStore extends Map<string, unknown> {
     failures = 1

@@ -431,23 +431,23 @@ export const sessionLogs = (saved: ReadonlyArray<readonly [string, unknown]>): L
 }
 
 let logLoaded = false
+let unsaved: Logged[] = []
 
-const withStored = async ($: EngineInterface, stored: readonly Logged[]): Promise<Logged[]> => {
-  let rows: Logged[] = []
-  await update($, switchboardLog, now => (rows = mergedLog(stored, now).slice(-SB_LOG_KEPT)))
-  return rows
-}
+const showLog = ($: EngineInterface, stored: readonly Logged[]): Promise<void> =>
+  update($, switchboardLog, () => [...stored, ...unsaved].slice(-SB_LOG_KEPT))
 
 const readLog = async ($: EngineInterface): Promise<void> => {
   const saved = await $.store.get(SB_LOG_KEY)
   if (saved !== undefined) {
-    await withStored($, loggedRows(saved))
+    await showLog($, loggedRows(saved))
     logLoaded = true
     return
   }
   const keys = (await $.store.keys()).filter(key => SESSION_LOG_PREFIXES.some(prefix => key.startsWith(prefix)))
   const earlier = await Promise.all(keys.map(async key => [key, await $.store.get(key)] as const))
-  await $.store.set(SB_LOG_KEY, await withStored($, sessionLogs(earlier)))
+  const rows = sessionLogs(earlier).slice(-SB_LOG_KEPT)
+  await $.store.set(SB_LOG_KEY, rows)
+  await showLog($, rows)
   logLoaded = true
   await Promise.all(keys.map(key => $.store.delete(key).catch(() => undefined)))
 }
@@ -464,8 +464,15 @@ let logSaving: Promise<void> = Promise.resolve()
 const saveLog = ($: EngineInterface): Promise<void> => {
   logSaving = logSaving
     .then(async () => {
-      if (!logLoaded) return
-      await $.store.set(SB_LOG_KEY, await withStored($, loggedRows(await $.store.get(SB_LOG_KEY))))
+      if (!logLoaded || unsaved.length === 0) return
+      const taken = unsaved.splice(0)
+      try {
+        const rows = [...loggedRows(await $.store.get(SB_LOG_KEY)), ...taken].slice(-SB_LOG_KEPT)
+        await $.store.set(SB_LOG_KEY, rows)
+        await showLog($, rows)
+      } catch {
+        unsaved = [...taken, ...unsaved]
+      }
     })
     .catch(() => undefined)
   return logSaving
@@ -474,8 +481,9 @@ const saveLog = ($: EngineInterface): Promise<void> => {
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
   const text = clipSaid(plainText(said))
   if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
-  await loadLog($)
+  unsaved.push({ who, text })
   await update($, switchboardLog, rows => [...rows, { who, text }].slice(-SB_LOG_KEPT))
+  await loadLog($)
   await saveLog($)
 }
 
