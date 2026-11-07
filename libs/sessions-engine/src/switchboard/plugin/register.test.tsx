@@ -1632,7 +1632,7 @@ test('a fork the record cannot mark done stays not done', async ($, on) => {
   expect(board).toContain('(working, agent id a1)')
 })
 
-test('the restart rule ignores kind: a note row comes back, a done or stopped or dismissed or replaced one does not', async ($, on) => {
+test('the restart rule ignores kind: a note or stopped row comes back, a done or dismissed or replaced one does not', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const row = (agentId: string, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'note', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
@@ -1655,7 +1655,7 @@ test('the restart rule ignores kind: a note row comes back, a done or stopped or
     for (const fire of timers.splice(0)) fire()
     await settle()
   }
-  expect(sent.map(one => one.to).sort()).toEqual(['n1', 'n2', 'w1'])
+  expect(sent.map(one => one.to).sort()).toEqual(['n1', 'n2', 's1', 'w1'])
 })
 
 test('opening the switchboard takes done and stopped from the record, keeps a local mark the record missed, and gives a keyless row a record', async ($, on) => {
@@ -1695,7 +1695,7 @@ test('opening the switchboard takes done and stopped from the record, keeps a lo
     ['part', '--key', 'gen4', '--agent-id', 'k1', '--transcript', TRANSCRIPT('k1')],
     ['part', '--key', 'gen5', '--agent-id', 'k2', '--transcript', TRANSCRIPT('k2')],
   ])
-  expect(sent.map(one => one.to).sort()).toEqual(['k1', 'k2'])
+  expect(sent.map(one => one.to).sort()).toEqual(['k1', 'k2', 's1'])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(board).toContain('(done, agent id d1)')
   expect(board).toContain('(needs the user, agent id s1)')
@@ -1897,7 +1897,7 @@ test("a row keyed by a newer duplicate record goes back to the oldest record's k
   expect(calls.some(call => call[0] === 'claim')).toBe(false)
 })
 
-test('a fork whose record is unfinished comes back after a restart even when the board lost its row', async ($, on) => {
+test('a fork whose record is unfinished comes back after a restart even when the board lost its row, and a stopped one with no row stays closed', async ($, on) => {
   const store = new Map<string, unknown>()
   const sent: any[] = []
   const calls: string[][] = []

@@ -606,7 +606,7 @@ const suggestFork = ($: EngineInterface, list: Entry[]): void => {
 const isCut = (entry: Entry): boolean => entry.isInterrupted === true && !entry.isDismissed && !entry.isWorking && entry.isDone !== true
 
 export const isUnfinished = (entry: Entry): boolean =>
-  !entry.isDismissed && entry.isStoppedByUser !== true && entry.successor === undefined && entry.isDone !== true
+  !entry.isDismissed && entry.successor === undefined && entry.isDone !== true
 
 const needsYou = (entry: Entry): boolean =>
   !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
