@@ -1253,13 +1253,6 @@ export const modelName = (model: string): string => {
 
 const familyOf = (model: string | undefined): string | undefined => (model === undefined ? undefined : MODEL_NAME.exec(model)?.[1]?.toLowerCase())
 
-export const nextModel = (model: string | undefined): string => MODELS[(MODELS.findIndex(one => one === familyOf(model)) + 1) % MODELS.length] ?? 'opus'
-
-export const nextEffort = (effort: string | undefined): ModelChoice['effort'] => {
-  const at = EFFORTS.findIndex(one => one === effort)
-  return at === -1 ? 'high' : EFFORTS[(at + 1) % EFFORTS.length]
-}
-
 const checkResult = (row: Record<string, unknown>): CheckResult | 'skipped' => {
   if (typeof row.context === 'string') return row.state === 'SUCCESS' ? 'pass' : row.state === 'PENDING' || row.state === 'EXPECTED' ? 'running' : 'fail'
   if (row.status !== 'COMPLETED') return 'running'
@@ -1327,12 +1320,14 @@ const recordOf = <T,>(saved: unknown, isShape: (one: unknown) => one is T): Reco
   typeof saved === 'object' && saved !== null && !Array.isArray(saved) ? Object.fromEntries(Object.entries(saved).filter((pair): pair is [string, T] => isShape(pair[1]))) : {}
 
 let modelsLoading: Promise<void> | undefined
+let modelsLoaded = false
 
 const loadModels = ($: EngineInterface): Promise<void> => {
   modelsLoading ??= (async () => {
     const [choices, seen] = await Promise.all([$.store.get(CHOICES_KEY), $.store.get(SEEN_KEY)])
     await update($, modelChoices, all => ({ ...recordOf(choices, choiceShape), ...all }))
     await update($, modelsSeen, all => ({ ...recordOf(seen, seenShape), ...all }))
+    modelsLoaded = true
   })().catch(() => {
     modelsLoading = undefined
   })
@@ -1343,7 +1338,7 @@ const choose = async ($: EngineInterface, key: string, choice: Omit<ModelChoice,
   await loadModels($)
   const at = Math.max(await $.clock.now(), ((await read($, modelsSeen))[key]?.at ?? 0) + 1)
   await update($, modelChoices, all => ({ ...all, [key]: { ...all[key], ...choice, at } }))
-  await $.store.set(CHOICES_KEY, await read($, modelChoices)).catch(() => undefined)
+  if (modelsLoaded) await $.store.set(CHOICES_KEY, await read($, modelChoices)).catch(() => undefined)
 }
 
 const noteSeen = async ($: EngineInterface, key: string, model: string, effort: string | undefined, choice: ModelChoice | undefined): Promise<void> => {
@@ -1351,7 +1346,7 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
   if (was !== undefined && was.model === model && was.effort === effort && (choice === undefined || was.at > choice.at)) return
   const at = Math.max(await $.clock.now(), (choice?.at ?? 0) + 1)
   await update($, modelsSeen, all => ({ ...all, [key]: { model, ...(effort === undefined ? {} : { effort }), at } }))
-  await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
+  if (modelsLoaded) await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
 }
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
@@ -2459,7 +2454,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = $.ui.resolve(e)
     await ensureLoaded($)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
@@ -2560,7 +2555,7 @@ export const register: Register = on => {
     )
 
     const keys = isFocused
-      ? `digit opens a fork${target === undefined ? '' : ' · m model · e effort'} · tab walks · x closes · esc back to the prompt`
+      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · ↑↓ and enter pick a model or effort'} · x closes · esc back to the prompt`
       : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const inner = Math.max(24, e.props.bodyColumns - 4)
     const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
@@ -2623,23 +2618,16 @@ export const register: Register = on => {
         {forkRows.map(forkRow)}
       </Box>,
     )
-    const changeModel = (key: string) => async () => {
-      const from = (await read($, modelChoices))[key]?.model ?? (await read($, modelsSeen))[key]?.model
-      const to = nextModel(from)
+    const changeModel = (key: string, from: string | undefined) => async (to: string) => {
+      if (familyOf(from) === to) return
       await choose($, key, { model: to })
       await logSaid($, `${YOU} → ${key}`, `model ${from === undefined ? '' : `${modelName(from)} → `}${modelName(to)}, from its next model call`)
     }
-    const changeEffort = (key: string) => async () => {
-      const was = (await read($, modelsSeen))[key]
-      const choice = (await read($, modelChoices))[key]
-      if (was !== undefined && was.effort === undefined && choice?.model === undefined && choice?.effort === undefined) {
-        $.ui.toast(`${modelName(was.model)} takes no effort level.`)
-        return
-      }
-      const from = choice?.effort ?? was?.effort
-      const to = nextEffort(from)
-      await choose($, key, { effort: to })
-      await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${to}, from its next model call`)
+    const changeEffort = (key: string, from: string | undefined) => async (to: string) => {
+      const level = EFFORTS.find(one => one === to)
+      if (level === undefined || level === from) return
+      await choose($, key, { effort: level })
+      await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${level}, from its next model call`)
     }
     const modelRows = (key: string, fallback: string | undefined, isFork: boolean) => {
       const was = seen[key]
@@ -2648,6 +2636,7 @@ export const register: Register = on => {
       const pickedModel = isNewer ? choice?.model : undefined
       const pickedEffort = isNewer ? choice?.effort : undefined
       const shownModel = was?.model ?? fallback
+      const model = pickedModel ?? shownModel
       const effort = pickedEffort ?? was?.effort
       const level = EFFORTS.findIndex(one => one === effort)
       const takesNone = was !== undefined && was.effort === undefined && pickedModel === undefined && pickedEffort === undefined
@@ -2656,52 +2645,54 @@ export const register: Register = on => {
           <Text dimColor>{text}</Text>
         </Box>
       )
+      const pending = <Text dimColor> from its next model call</Text>
+      const meter =
+        level === -1 ? undefined : (
+          <Text>
+            <Text color="warning">{'■'.repeat(level + 1)}</Text>
+            <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
+          </Text>
+        )
+      if (!isFork)
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="row">
+              {label('model')}
+              {shownModel === undefined ? <Text dimColor>shows at its next model call</Text> : <Text bold>{modelName(shownModel)}</Text>}
+              <Box flexGrow={1} />
+              <Text dimColor>/model changes it</Text>
+            </Box>
+            <Box flexDirection="row">
+              {label('effort')}
+              {meter}
+              <Text bold>{effort ?? '·'}</Text>
+            </Box>
+          </Box>
+        )
+      const family = familyOf(model)
       return (
         <Box flexDirection="column">
           <Box flexDirection="row">
             {label('model')}
-            {pickedModel !== undefined ? (
-              <Text>
-                {shownModel !== undefined && <Text dimColor>{modelName(shownModel)} → </Text>}
-                <Text bold color="suggestion">
-                  {modelName(pickedModel)}
-                </Text>
-                <Text dimColor> from its next model call</Text>
-              </Text>
-            ) : shownModel !== undefined ? (
-              <Text bold>{modelName(shownModel)}</Text>
-            ) : (
-              <Text dimColor>shows at its next model call</Text>
-            )}
-            <Box flexGrow={1} />
-            {isFork ? (
-              <Button key={`model-${key}`} plain hotkey="m" onPress={changeModel(key)}>
-                change
-              </Button>
-            ) : (
-              <Text dimColor>/model</Text>
-            )}
+            <Select
+              key={`model-${key}`}
+              options={MODELS.map(one => ({ value: one, label: one === family && model !== undefined ? modelName(model) : modelName(one) }))}
+              {...(family === undefined ? {} : { value: family })}
+              onSelect={changeModel(key, model)}
+            />
+            {pickedModel !== undefined && pending}
+            {model === undefined && <Text dimColor> shows at its next model call</Text>}
           </Box>
           <Box flexDirection="row">
             {label('effort')}
             {takesNone ? (
-              <Text dimColor>no effort levels</Text>
-            ) : level === -1 ? (
-              <Text dimColor>·</Text>
+              <Text dimColor>{modelName(was.model)} takes no effort level</Text>
             ) : (
-              <Text>
-                <Text color="warning">{'■'.repeat(level + 1)}</Text>
-                <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)}</Text> <Text bold color={pickedEffort === undefined ? undefined : 'suggestion'}>{effort}</Text>
-                {pickedEffort !== undefined && pickedModel === undefined && <Text dimColor> from its next model call</Text>}
-              </Text>
-            )}
-            <Box flexGrow={1} />
-            {isFork ? (
-              <Button key={`effort-${key}`} plain hotkey="e" onPress={changeEffort(key)}>
-                change
-              </Button>
-            ) : (
-              <Text dimColor>/model</Text>
+              <Box flexDirection="row">
+                {meter}
+                <Select key={`effort-${key}`} options={EFFORTS.map(one => ({ value: one }))} {...(effort === undefined ? {} : { value: effort })} onSelect={changeEffort(key, effort)} />
+                {pickedEffort !== undefined && pickedModel === undefined && pending}
+              </Box>
             )}
           </Box>
         </Box>
@@ -2717,7 +2708,7 @@ export const register: Register = on => {
     )
     const pullSection = (entry: Entry) => {
       const own = pullsOf(ledger, entry.agentId)
-      const stateOfPull = (pull: Pull) => details[pull.pullRequest]?.state ?? (pull.mergeCommit !== undefined ? 'merged' : 'open')
+      const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
       const live = own.filter(pull => ['open', 'draft'].includes(stateOfPull(pull)))
       const closed = own.filter(pull => stateOfPull(pull) === 'closed')
       const merged = own.filter(pull => stateOfPull(pull) === 'merged')
