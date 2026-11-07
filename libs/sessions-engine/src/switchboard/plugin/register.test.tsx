@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2025,6 +2025,32 @@ test('a fork key that leaves the box keeps its chat a moment, so a send that emp
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
   expect(await ui.find({ type: 'Text', text: /WRITING TO/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('a fork whose run ended is no longer working, so a restart does not call it stopped mid-turn', async ($, on) => {
+  const store = new Map<string, unknown>()
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const working = () => ((store.get('board:switchboard-session') as any[]) ?? []).find(row => row.agentId === 'a8')?.isWorking
+  expect(working()).toBe(true)
+  await $.turn.complete({ turnId: 'run-1', agentId: 'a8', answer: 'Amber or teal?', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(working()).toBe(false)
+  expect(mergeBoards(store.get('board:switchboard-session') as unknown[], []).map(row => row.isInterrupted === true)).toEqual([false])
+})
+
+test("a fork's restart reply leaves no line in the SWITCHBOARD log, while a report does", async ($, on) => {
+  const store = new Map<string, unknown>()
+  engine(on, [], [], [], store)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await typed($, notification('a8', 'asking-fork: asks', 'Should I use teal?'), 'task-notification')
+  await settle()
+  const logged = () => ((store.get('sblog-3') as { who: string; text: string }[]) ?? []).filter(row => row.who === 'asking-fork').map(row => row.text)
+  expect(logged()).toEqual(['Should I use teal?'])
+  await typed($, notification('a8', 'asking-fork: asks', 'Back on the fork board.'), 'task-notification')
+  await settle()
+  expect(logged()).toEqual(['Should I use teal?'])
 })
 
 test('the fork chat shows the reply a fork gives while its key stays in the prompt', async ($, on) => {
