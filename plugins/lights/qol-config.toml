@@ -25,7 +25,7 @@ query = "find_lights"
 row_label = "{name}"
 row_subtitle = "{detail}"
 items_label = "paired lights"
-card_description = "lights that joined. reset a light to pair it."
+card_description = "lights that joined this search."
 
 [field.find_lights.lead]
 label = "search"
