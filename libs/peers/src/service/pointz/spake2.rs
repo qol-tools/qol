@@ -132,6 +132,11 @@ pub(super) fn respond(
     })
 }
 
+#[cfg(test)]
+pub(super) fn mask_n() -> EdwardsPoint {
+    mask(&MASK_N)
+}
+
 fn mask(encoded: &[u8; 32]) -> EdwardsPoint {
     CompressedEdwardsY(*encoded)
         .decompress()

@@ -2,7 +2,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
-use curve25519_dalek::scalar::Scalar;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -85,7 +84,6 @@ struct Pending {
 
 pub(crate) struct PairingSession {
     pin: String,
-    y: Zeroizing<Scalar>,
     salt: [u8; 16],
     opened_at: Instant,
     attempts_left: u32,
@@ -108,7 +106,6 @@ impl PairingSession {
     pub(crate) fn open() -> Option<Self> {
         Some(Self {
             pin: generate_pin()?,
-            y: Zeroizing::new(spake2::random_scalar()?),
             salt: random_bytes::<16>()?,
             opened_at: Instant::now(),
             attempts_left: MAX_ATTEMPTS,
@@ -170,8 +167,11 @@ impl PairingSession {
         if self.pending.len() >= MAX_PENDING && !self.pending.contains_key(&device_id) {
             return HandleOutcome::Reply(error("busy", self.attempts_left));
         }
+        let Some(y) = spake2::random_scalar().map(Zeroizing::new) else {
+            return HandleOutcome::Reply(error(UNAVAILABLE, self.attempts_left));
+        };
         let Some(responder) =
-            spake2::respond(&self.y, &self.pin, &device_id, server_id, &pa, &self.salt)
+            spake2::respond(&y, &self.pin, &device_id, server_id, &pa, &self.salt)
         else {
             return HandleOutcome::Reply(error("bad_request", self.attempts_left));
         };
@@ -334,6 +334,46 @@ mod tests {
 
     fn wrong_pin(real: &str) -> String {
         format!("{:06}", (real.parse::<u32>().unwrap() + 1) % 1_000_000)
+    }
+
+    fn offered_share(session: &mut PairingSession, client: &TestClient) -> [u8; 32] {
+        let offer = reply_json(&session.handle(SERVER_ID, &client.hello()));
+        URL_SAFE_NO_PAD
+            .decode(offer["pb"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn every_hello_gets_a_fresh_responder_secret() {
+        let mut session = PairingSession::open().unwrap();
+        let client = TestClient::new(DEVICE, session.pin(), SERVER_ID);
+
+        let first = offered_share(&mut session, &client);
+        let second = offered_share(&mut session, &client);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn two_devices_cannot_subtract_their_shares_to_test_pins_offline() {
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        let mut session = PairingSession::open().unwrap();
+        let other_device = [5; 16];
+        let first_client = TestClient::new(DEVICE, session.pin(), SERVER_ID);
+        let second_client = TestClient::new(other_device, session.pin(), SERVER_ID);
+
+        let first = CompressedEdwardsY(offered_share(&mut session, &first_client))
+            .decompress()
+            .unwrap();
+        let second = CompressedEdwardsY(offered_share(&mut session, &second_client))
+            .decompress()
+            .unwrap();
+        let w_difference = spake2::password_scalar(session.pin(), &DEVICE, SERVER_ID)
+            - spake2::password_scalar(session.pin(), &other_device, SERVER_ID);
+
+        assert_ne!(first - second, spake2::mask_n() * w_difference);
     }
 
     #[test]
