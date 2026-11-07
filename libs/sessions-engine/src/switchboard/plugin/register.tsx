@@ -29,6 +29,7 @@ const SB_TIMEOUT_MS = 60_000
 const CLEAR_TYPED_MS = [100, 300, 600]
 const TYPED_SETTLE_MS = 250
 const INTAKE_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment']
+const TYPED_ORIGINS: readonly string[] = ['composer', 'bridge', 'person']
 const KEEP = 100
 const REPORT_CHARS = 16_000
 const HAIKU_MS = 20_000
@@ -101,6 +102,10 @@ export const STARTING = 'Starting the switchboard…'
 export const bringingBack = (count: number): string => `Bringing back ${count} fork${count === 1 ? '' : 's'}…`
 const writingSaid = atom({ plugin: 'qol-switchboard', key: 'writingSaid' } as const, [] as { isUser: boolean; text: string }[])
 const current = atom({ plugin: 'qol-switchboard', key: 'current' } as const, '')
+const switchboardLog = atom({ plugin: 'qol-switchboard', key: 'switchboardLog' } as const, [] as { who: string; text: string }[])
+const focusActivity = atom({ plugin: 'qol-switchboard', key: 'focusActivity' } as const, '')
+const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as const, '')
+const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
 
@@ -232,7 +237,7 @@ const plainText = (text: string): string =>
 
 export type Said = { isUser: boolean; text: string }
 
-const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder>/g
+const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder[^>]*>/g
 const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
 
 const userWords = (text: string): string => {
@@ -273,7 +278,7 @@ const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
     const at = Math.min(one.after, rows.length)
     return [...rows.slice(0, at), { isUser: true, text: one.text }, ...rows.slice(at)]
   }, all)
-  return placed.slice(-SAID_KEPT)
+  return placed
 }
 
 export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
@@ -304,7 +309,7 @@ const typedTarget = (list: Entry[], text: string): Entry | undefined => {
 
 const COORDINATOR_NOTE = /^The coordinator sent a message while you were working:\n+/
 
-const HARNESS_NOTES = ['[CLI Sessions]', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
+const HARNESS_NOTES = ['[CLI Sessions]', '[Request interrupted by user', 'This session is being continued from a previous conversation', '[SYSTEM NOTIFICATION']
 
 const isHeldReply = (text: string): boolean => [RESTARTED_REPLY, READY].includes(text.trim())
 
@@ -318,8 +323,12 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
   if ((await read($, writingTo)) === agentId) return
   await update($, writingTo, () => agentId)
   await update($, writingSaid, () => [])
+  await update($, focusActivity, () => '')
+  await update($, freshReply, () => '')
+  if (agentId === '') await update($, focusShown, () => ({ id: '', prevId: '', agentId: '', key: '', rows: [] }))
   if (entry?.hasNewReply === true) await seen($, agentId)
   await refreshWriting($, agentId)
+  if (agentId !== '') await placeFocus($)
 }
 
 const seen = ($: EngineInterface, agentId: string): Promise<void> =>
@@ -380,8 +389,126 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
-  const said = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const all = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const said = all.slice(-SAID_KEPT)
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
+  focusRows = { agentId: target, rows: all.slice(-FOCUS_KEPT) }
+  const shown = await read($, focusShown)
+  if (shown.agentId === target && !sameSaid(focusRows.rows, shown.rows)) await update($, focusShown, one => ({ ...one, rows: focusRows.rows }))
+}
+
+const SB_LOG_PREFIX = 'sblog-2:'
+const SB_LOG_KEPT = 12
+export const YOU = 'you'
+export const SWITCHBOARD = 'switchboard'
+
+const OLD_SB_LOG_PREFIX = 'sblog:'
+
+type Logged = { who: string; text: string }
+
+const loggedRows = (saved: unknown): Logged[] =>
+  Array.isArray(saved) ? saved.filter((one): one is Logged => typeof one?.who === 'string' && typeof one?.text === 'string') : []
+
+const sameLogged = (a: Logged, b: Logged): boolean => a.who === b.who && a.text === b.text
+
+const singleLog = (rows: readonly Logged[]): Logged[] => rows.filter((one, at) => rows.findIndex(other => sameLogged(one, other)) === at)
+
+export const mergedLog = (old: readonly Logged[], saved: readonly Logged[]): Logged[] => [
+  ...singleLog(old).filter(one => !saved.some(other => sameLogged(one, other))),
+  ...saved,
+]
+
+let logLoading: Promise<void> | undefined
+
+const readLog = async ($: EngineInterface): Promise<void> => {
+  const session = await $.session.id()
+  const old = loggedRows(await $.store.get(OLD_SB_LOG_PREFIX + session).catch(() => undefined))
+  const saved = loggedRows(await $.store.get(SB_LOG_PREFIX + session).catch(() => undefined))
+  const rows = mergedLog(old, saved).slice(-SB_LOG_KEPT)
+  await update($, switchboardLog, () => rows)
+  if (old.length === 0) return
+  const moved = await $.store.set(SB_LOG_PREFIX + session, rows).then(
+    () => true,
+    () => false,
+  )
+  if (moved) await $.store.set(OLD_SB_LOG_PREFIX + session, []).catch(() => undefined)
+}
+
+const loadLog = ($: EngineInterface): Promise<void> => {
+  logLoading ??= readLog($).catch(() => {
+    logLoading = undefined
+  })
+  return logLoading
+}
+
+let logSaving: Promise<void> = Promise.resolve()
+
+const saveLog = ($: EngineInterface): Promise<void> => {
+  logSaving = logSaving
+    .then(async () => {
+      await $.store.set(SB_LOG_PREFIX + (await $.session.id()), await read($, switchboardLog))
+    })
+    .catch(() => undefined)
+  return logSaving
+}
+
+const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
+  const text = clipSaid(plainText(said))
+  if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
+  await loadLog($)
+  await update($, switchboardLog, rows => [...rows, { who, text }].slice(-SB_LOG_KEPT))
+  await saveLog($)
+}
+
+const FOCUS_PREFIX = 'focus-'
+const FOCUS_KEPT = 40
+const FOCUS_SETTLE_MS = 16
+const FOCUS_SWAP_MS = 60
+let swapFor = ''
+const FOCUS_DOORS: readonly string[] = ['prompt', 'delivery', 'attachment', 'queue']
+
+let focusRows: { agentId: string; rows: Said[] } = { agentId: '', rows: [] }
+let focusPlaced = 0
+let focusWait = 0
+let isPlacingFocus = false
+
+const placeFocus = async ($: EngineInterface): Promise<void> => {
+  const target = await read($, writingTo)
+  const entry = target === '' || viewedFork !== undefined ? undefined : (await read($, board)).find(one => one.agentId === target)
+  if (entry === undefined) return
+  focusPlaced += 1
+  const id = `${FOCUS_PREFIX}${await $.clock.now()}-${focusPlaced}`
+  isPlacingFocus = true
+  const placed = await $.ui.place({ id }).catch(() => undefined).finally(() => {
+    isPlacingFocus = false
+  })
+  if (placed?.isPlaced !== true || (await read($, writingTo)) !== target) return
+  const rows = focusRows.agentId === target ? focusRows.rows : []
+  await update($, focusShown, shown => ({ id, prevId: shown.agentId === target ? shown.id : '', agentId: target, key: keyOf(entry), rows }))
+}
+
+const TOOL_TEXT = 60
+
+const toolLabel = (tool: string, input: Record<string, unknown>): string => {
+  const name = tool.replace(/^mcp__.+?__/, '')
+  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? oneLine(value) : undefined)
+  const path = text(input.file_path) ?? text(input.notebook_path) ?? text(input.path)
+  const detail = text(input.description) ?? (path === undefined ? undefined : path.replace(/^.*[\\/]/, '')) ?? text(input.pattern) ?? text(input.command) ?? text(input.prompt)
+  return clip(detail === undefined ? name : `${name}: ${detail}`, TOOL_TEXT)
+}
+
+const noteActivity = async ($: EngineInterface, agentId: string, label: string): Promise<void> => {
+  if ((await read($, writingTo)) !== agentId || (await read($, focusActivity)) === label) return
+  await update($, focusActivity, () => label)
+}
+
+const followFocus = async ($: EngineInterface): Promise<void> => {
+  if (isPlacingFocus || (await read($, writingTo)) === '' || viewedFork !== undefined) return
+  const wait = ++focusWait
+  $.clock.after(FOCUS_SETTLE_MS, () => {
+    if (wait !== focusWait) return
+    void placeFocus($).catch(() => {})
+  })
 }
 
 let loading: Promise<void> | undefined
@@ -1363,8 +1490,10 @@ export const logEvent = async ($: EngineInterface, event: Quiet): Promise<void> 
   logged += 1
   const id = `${LOG_PREFIX}${await $.clock.now()}-${logged}`
   logs.set(id, event)
+  await logSaid($, oneLine(event.fork), event.said).catch(() => {})
   if (logs.size > LOG_KEPT) logs.delete(logs.keys().next().value as string)
   await $.ui.place({ id }).catch(() => undefined)
+  await followFocus($)
 }
 
 export const fileMerged = async ($: EngineInterface, result: Delivery, fork: ForkRecord): Promise<Entry> => {
@@ -1718,7 +1847,7 @@ export const register: Register = on => {
     const { Box, Text } = $.ui.resolve(e)
     if (loading === '') {
       return (
-        <Box>
+        <Box marginTop={1}>
           <Text dimColor>writing to </Text>
           <Text bold color="claude">{key}</Text>
           <Text dimColor> · esc on an empty prompt leaves</Text>
@@ -1729,6 +1858,41 @@ export const register: Register = on => {
       <Box>
         <Text color="claude">◐ </Text>
         <Text>{loading}</Text>
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Placed' }, async ($, e, next) => {
+    if (e.props.plugin !== NAME || !e.props.id.startsWith(FOCUS_PREFIX)) return next(e)
+    const { Box, Text, Markdown } = $.ui.resolve(e)
+    const shown = await read($, focusShown)
+    const id = e.props.id
+    if (id !== shown.id && (shown.prevId === '' || id !== shown.prevId)) return <Box />
+    if (id === shown.id && shown.prevId !== '' && swapFor !== id) {
+      swapFor = id
+      $.clock.after(FOCUS_SWAP_MS, () => void update($, focusShown, one => (one.id === id ? { ...one, prevId: '' } : one)).catch(() => {}))
+    }
+    const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
+    const activity = await read($, focusActivity)
+    const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
+    return (
+      <Box flexDirection="column" paddingX={2} paddingY={1}>
+        <Text dimColor>{`── ${shown.key}${state} ──`}</Text>
+        {shown.rows.length === 0 && <Text dimColor>No messages yet.</Text>}
+        {shown.rows.map((one, index) => (
+          <Box key={`focus-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+            <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
+              {one.isUser ? 'you' : shown.key}
+            </Text>
+            <Markdown text={one.text} />
+          </Box>
+        ))}
+        {entry?.isWorking === true && (
+          <Box marginTop={1}>
+            <Text color="claude">● </Text>
+            <Text dimColor wrap="truncate">{activity === '' ? 'working…' : `working · ${activity}`}</Text>
+          </Box>
+        )}
       </Box>
     )
   })
@@ -1768,9 +1932,10 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
+      await logSaid($, oneLine(quiet.fork), quiet.said).catch(() => {})
       return dropAs(reportLine(quiet))
     }
-    if (e.command !== undefined || e.isMeta === true || e.origin.kind !== 'composer') return next(e)
+    if (e.command !== undefined || e.isMeta === true || !TYPED_ORIGINS.includes(e.origin.kind)) return next(e)
     if (viewedFork === undefined && TYPED_SB.test(e.text)) {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
@@ -1803,6 +1968,8 @@ export const register: Register = on => {
       }
       await setCurrent($, at.entry).catch(() => undefined)
       await writeTo($, at.entry)
+      if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
+      await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
       const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
       const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
@@ -1896,13 +2063,14 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('session.append', { door: 'notice' }, async ($, e, next) => {
-    if (e.agentId !== undefined || dropped.length === 0) return next(e)
+    if (e.agentId !== undefined) return next(e)
     const text = textOf(e.message.content)
-    const at = text.startsWith(DROP_NOTICE) ? dropped.indexOf(text.slice(DROP_NOTICE.length)) : -1
-    if (at === -1) return next(e)
-    const [reason] = dropped.splice(at, 1)
-    return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: reason ?? text }] } })
-  }).catch(($, e, next) => next(e))
+    const at = dropped.length === 0 || !text.startsWith(DROP_NOTICE) ? -1 : dropped.indexOf(text.slice(DROP_NOTICE.length))
+    const reason = at === -1 ? undefined : dropped.splice(at, 1)[0]
+    const done = await next(reason === undefined ? e : { ...e, message: { ...e.message, content: [{ type: 'text', text: reason }] } })
+    await followFocus($).catch(() => {})
+    return done
+  }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
   on('tool.call', { tool: TOOL_NAME }, async ($, e) => {
     const fork = typeof e.fork === 'string' ? e.fork : undefined
@@ -1975,6 +2143,13 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId !== undefined && CROSS_SESSION.test(e.tool)) return { deny: FORK_RESUME }
+    if (e.agentId !== undefined) {
+      const agentId = e.agentId
+      try {
+        const label = toolLabel(e.tool, e as unknown as Record<string, unknown>)
+        void noteActivity($, agentId, label).catch(() => {})
+      } catch {}
+    }
     return next(e)
   }).catch(($, e, next) => (e.agentId === undefined ? next(e) : { deny: FORK_RESUME }))
 
@@ -1983,6 +2158,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (isHeld || [BACK, WAIT_FOR_USER, REOPENED].some(one => e.text.includes(one)))) {
       await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
     }
+    if (e.agentId === undefined && !isHeld) await logSaid($, YOU, userWords(e.text)).catch(() => {})
     if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
@@ -2013,7 +2189,13 @@ export const register: Register = on => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
+    if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
+      await update($, focusActivity, () => '')
+      if (typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) await update($, freshReply, () => e.agentId ?? '')
+    }
     if (e.agentId === undefined && viewedFork === undefined) suggestFork($, await read($, board))
+    if (e.agentId === undefined) await followFocus($).catch(() => {})
+    if (e.agentId === undefined && typeof e.answer === 'string' && !e.isAborted) await logSaid($, SWITCHBOARD, e.answer).catch(() => {})
     return done
   }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
@@ -2024,6 +2206,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => (next.called ? { isShown: false } : next(e)))
 
   on('session.append', async ($, e, next) => {
+    if (e.agentId === undefined && FOCUS_DOORS.includes(e.door)) await followFocus($).catch(() => {})
     const origin = e.origin.kind
     if (!INTAKE_DOORS.includes(e.door) || (origin !== 'peer' && origin !== 'task-notification')) return next(e)
     if (e.agentId !== undefined && origin !== 'task-notification') return next(e)
@@ -2043,7 +2226,9 @@ export const register: Register = on => {
     const isOpen = await read($, isDoneOpen)
     const asking = await read($, confirming)
     const writing = await read($, writingTo)
-    const said = await read($, writingSaid)
+    const switchboardSaid = await read($, switchboardLog)
+    const fresh = await read($, freshReply)
+    if (logLoading === undefined) $.clock.after(0, () => void loadLog($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
     const now = await $.clock.now()
@@ -2119,9 +2304,11 @@ export const register: Register = on => {
       ))
     const heading = (text: string) => (
       <Box marginTop={1}>
-        <Text dimColor bold>
+        <Text inverse> </Text>
+        <Text inverse bold>
           {text}
         </Text>
+        <Text inverse> </Text>
       </Box>
     )
 
@@ -2170,19 +2357,29 @@ export const register: Register = on => {
               <Text dimColor>
                 {target.isWorking ? 'working' : isCut(target) ? 'stopped mid-turn' : (target.kind ?? 'note')} · {age(now - target.at)}
               </Text>
+              {fresh === target.agentId && (
+                <Text bold color="suggestion">
+                  {' '}
+                  · new reply
+                </Text>
+              )}
             </Text>
             <Box paddingLeft={2} flexDirection="column">
-              {said.length === 0 && target.headline !== '' && <Text wrap="wrap">{target.headline}</Text>}
-              {[...said].reverse().map((one, index) => (
-                <Box key={`said-${index}`} flexDirection="column" marginTop={1}>
-                  <Text bold color={one.isUser ? 'suggestion' : 'claude'}>
-                    {one.isUser ? 'you' : keyOf(target)}
-                  </Text>
-                  <Text wrap="wrap">{one.text}</Text>
-                </Box>
-              ))}
               {prs(target)}
             </Box>
+          </Box>
+        )}
+        {target !== undefined && switchboardSaid.length > 0 && heading('SWITCHBOARD')}
+        {target !== undefined && (
+          <Box paddingLeft={2} flexDirection="column">
+            {[...switchboardSaid].reverse().map((one, index) => (
+              <Box key={`main-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+                <Text bold color={one.who.startsWith(YOU) ? 'suggestion' : one.who === SWITCHBOARD ? undefined : 'claude'}>
+                  {one.who}
+                </Text>
+                <Text wrap="wrap">{one.text}</Text>
+              </Box>
+            ))}
           </Box>
         )}
         {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
