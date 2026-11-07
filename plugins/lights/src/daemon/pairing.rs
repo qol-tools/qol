@@ -33,11 +33,15 @@ impl PairingSession {
         }
     }
 
-    pub fn light_joined(&mut self, ieee: String, now: Instant) {
+    pub fn light_joined(&mut self, ieee: String, known: bool, now: Instant) -> bool {
+        if known || !matches!(self.phase(true, now), PairingPhase::Searching(_)) {
+            return false;
+        }
         if !self.joined.contains(&ieee) {
             self.joined.push(ieee);
         }
         self.stop(now);
+        true
     }
 
     pub fn joined(&self) -> &[String] {
@@ -105,13 +109,13 @@ mod tests {
     }
 
     #[test]
-    fn a_joined_light_ends_the_search_and_a_new_search_forgets_it() {
+    fn a_new_light_ends_the_search_and_a_new_search_forgets_it() {
         let start = Instant::now();
         let mut session = PairingSession::default();
         session.start(start);
-        session.light_joined("AA".into(), start);
-        session.light_joined("AA".into(), start);
 
+        assert!(session.light_joined("AA".into(), false, start));
+        assert!(!session.light_joined("AA".into(), false, start));
         assert_eq!(session.joined(), ["AA".to_string()]);
         assert_eq!(session.phase(true, start), PairingPhase::Ended);
 
@@ -121,6 +125,28 @@ mod tests {
             session.phase(true, start),
             PairingPhase::Searching(PAIRING_WINDOW)
         );
+    }
+
+    #[test]
+    fn a_rejoin_outside_a_search_or_of_a_known_light_is_not_counted() {
+        let start = Instant::now();
+        let cases = [
+            ("no search yet", None, false),
+            ("known light mid search", Some(Duration::from_secs(5)), true),
+            ("window over", Some(PAIRING_WINDOW), false),
+        ];
+        for (case, started_ago, known) in cases {
+            let now = start + Duration::from_secs(120);
+            let mut session = PairingSession::default();
+            if let Some(ago) = started_ago {
+                session.start(now - ago);
+            }
+            let before = session.phase(true, now);
+
+            assert!(!session.light_joined("AA".into(), known, now), "{case}");
+            assert!(session.joined().is_empty(), "{case}");
+            assert_eq!(session.phase(true, now), before, "{case}");
+        }
     }
 
     #[test]

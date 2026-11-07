@@ -67,14 +67,20 @@ fn device_monitor_loop(
                     online: true,
                     network_address: Some(device.network_address),
                 };
+                let mut known = false;
                 if let Ok(mut config) = store::load() {
+                    known = config.devices.contains_key(&ieee);
                     config.devices.insert(ieee.clone(), entry);
                     let _ = store::save(&config);
                     log::info!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 }
+                let mut counted = false;
                 pairing::update(&pairing, |session| {
-                    session.light_joined(ieee.clone(), Instant::now())
+                    counted = session.light_joined(ieee.clone(), known, Instant::now())
                 });
+                if !counted {
+                    continue;
+                }
                 if let Ok(guard) = service.lock() {
                     if let Some(svc) = guard.as_ref() {
                         let _ = svc.backend().permit_join(0);
