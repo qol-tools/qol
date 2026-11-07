@@ -2178,6 +2178,18 @@ test('recentWords reads a message the fork took in mid-turn as the user\'s own w
   ])
 })
 
+test('recentWords reads every line taken in mid-turn when the reminders carry ids on both tags', () => {
+  const note = (id: string, said: string) =>
+    `<system-reminder id="${id}">\nThe coordinator sent a message while you were working:\n${fromUser(said)}\n\nAddress this before completing your current task.\n</system-reminder id="${id}">`
+  const text = `105 pass\n${note('47e9', 'it flashes')}\n${note('870e', 'like this')}`
+  expect(recentWords([{ role: 'assistant', text: 'Fixed.' }, { role: 'user', text }, { role: 'assistant', text: 'Both fixed.' }])).toEqual([
+    { isUser: false, text: 'Fixed.' },
+    { isUser: true, text: 'it flashes' },
+    { isUser: true, text: 'like this' },
+    { isUser: false, text: 'Both fixed.' },
+  ])
+})
+
 test('the fork chat keeps a sent line the fork has not taken in where it was sent, not under newer replies', async ($, on) => {
   const sent: any[] = []
   const panes: string[] = []

@@ -237,7 +237,7 @@ const plainText = (text: string): string =>
 
 export type Said = { isUser: boolean; text: string }
 
-const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder>/g
+const QUEUED_NOTE = /<system-reminder[^>]*>([\s\S]*?)<\/system-reminder[^>]*>/g
 const ADDRESS_NOTE = /\n+Address this before completing your current task\.\s*$/
 
 const userWords = (text: string): string => {
