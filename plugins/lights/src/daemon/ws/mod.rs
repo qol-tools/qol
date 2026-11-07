@@ -1,8 +1,9 @@
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
@@ -55,7 +56,8 @@ pub fn start(
         std::env::var(qol_conventions::ENV_HTTP_TOKEN)
             .ok()
             .filter(|token| !token.is_empty())
-            .map(|token| token.into_bytes()),
+            .and_then(|token| qol_runtime::local_http::stream_token(&token, ws_port))
+            .map(String::into_bytes),
     );
     if expected.is_none() {
         log::warn!("ws: no tray token in the environment; every live color client is refused");
@@ -121,6 +123,59 @@ fn accept_loop(listener: TcpListener, buffer: CommandBuffer, expected: Arc<Optio
     }
 }
 
+struct HandshakeStream {
+    inner: TcpStream,
+    deadline: Option<Instant>,
+}
+
+impl HandshakeStream {
+    fn new(inner: TcpStream, deadline: Instant) -> Self {
+        Self {
+            inner,
+            deadline: Some(deadline),
+        }
+    }
+
+    fn settle(&mut self) {
+        self.deadline = None;
+        let _ = self.inner.set_read_timeout(None);
+        let _ = self.inner.set_write_timeout(None);
+    }
+
+    fn remaining(&self) -> std::io::Result<Option<Duration>> {
+        let Some(deadline) = self.deadline else {
+            return Ok(None);
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::from(std::io::ErrorKind::TimedOut));
+        }
+        Ok(Some(remaining))
+    }
+}
+
+impl Read for HandshakeStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(remaining) = self.remaining()? {
+            self.inner.set_read_timeout(Some(remaining))?;
+        }
+        self.inner.read(buf)
+    }
+}
+
+impl Write for HandshakeStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(remaining) = self.remaining()? {
+            self.inner.set_write_timeout(Some(remaining))?;
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 struct ClientSlot(Arc<AtomicUsize>);
 
 impl ClientSlot {
@@ -145,13 +200,11 @@ fn handle_client(
     expected: Arc<Option<Vec<u8>>>,
     _slot: ClientSlot,
 ) {
-    let _ = stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
-    let _ = stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT));
+    let stream = HandshakeStream::new(stream, Instant::now() + HANDSHAKE_TIMEOUT);
     let Some(mut ws) = accept_client(stream, expected.as_deref()) else {
         return;
     };
-    let _ = ws.get_ref().set_read_timeout(None);
-    let _ = ws.get_ref().set_write_timeout(None);
+    ws.get_mut().settle();
 
     loop {
         let msg = match ws.read() {
@@ -179,9 +232,9 @@ fn handle_client(
 }
 
 fn accept_client(
-    stream: TcpStream,
+    stream: HandshakeStream,
     expected: Option<&[u8]>,
-) -> Option<tungstenite::WebSocket<TcpStream>> {
+) -> Option<tungstenite::WebSocket<HandshakeStream>> {
     let check = |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
         let refuse = |status: StatusCode| {
             let mut refused = ErrorResponse::new(None);
@@ -360,6 +413,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
+            let stream = HandshakeStream::new(stream, Instant::now() + HANDSHAKE_TIMEOUT);
             accept_client(stream, expected.map(str::as_bytes)).is_some()
         });
         (port, server)
@@ -437,6 +491,35 @@ mod tests {
 
         assert_eq!(refused_status(connected), StatusCode::UNAUTHORIZED);
         assert!(!server.join().unwrap());
+    }
+
+    #[test]
+    fn a_stalled_handshake_ends_at_the_total_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (done, server_done) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let started = Instant::now();
+            let stream = HandshakeStream::new(stream, started + Duration::from_millis(300));
+            let result = accept_client(stream, Some(b"secret"));
+            let _ = done.send(());
+            (result.is_none(), started.elapsed())
+        });
+
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n").unwrap();
+        for _ in 0..3 {
+            thread::sleep(Duration::from_millis(120));
+            let _ = client.write_all(b"X-Slow: 1\r\n");
+        }
+        let _ = server_done.recv_timeout(Duration::from_secs(10));
+        drop(client);
+
+        let (refused, elapsed) = server.join().unwrap();
+        assert!(refused);
+        assert!(elapsed >= Duration::from_millis(300), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 
     #[test]

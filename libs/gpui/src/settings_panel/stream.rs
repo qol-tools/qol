@@ -156,9 +156,10 @@ impl Throttle {
 
 fn stream_request(url: &str, token: &str) -> Option<tungstenite::client::ClientRequestBuilder> {
     let uri: tungstenite::http::Uri = url.parse().ok()?;
+    let credential = qol_runtime::local_http::stream_token(token, uri.port_u16()?)?;
     Some(
         tungstenite::client::ClientRequestBuilder::new(uri)
-            .with_header(qol_conventions::HTTP_AUTH_HEADER, token),
+            .with_header(qol_conventions::HTTP_AUTH_HEADER, credential),
     )
 }
 
@@ -415,13 +416,17 @@ mod tests {
     }
 
     #[test]
-    fn the_stream_request_carries_the_tray_token_and_no_origin() {
+    fn the_stream_request_carries_the_derived_credential_and_no_origin() {
         let request = stream_request("ws://127.0.0.1:1", "secret")
             .unwrap()
             .into_client_request()
             .unwrap();
         let token = request.headers().get("x-qol-token").unwrap();
-        assert_eq!(token.to_str().unwrap(), "secret");
+        assert_eq!(
+            token.to_str().unwrap(),
+            qol_runtime::local_http::stream_token("secret", 1).unwrap()
+        );
+        assert_ne!(token.to_str().unwrap(), "secret");
         assert!(request.headers().get("origin").is_none());
     }
 
