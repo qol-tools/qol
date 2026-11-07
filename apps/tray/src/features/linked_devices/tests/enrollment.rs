@@ -116,6 +116,32 @@ impl Fixture {
         .unwrap()
     }
 
+    pub(crate) async fn enrollment_port(&self) -> u16 {
+        let mut view = self
+            .owner
+            .handle
+            .inner
+            .lock()
+            .unwrap()
+            .authority()
+            .unwrap()
+            .network
+            .as_ref()
+            .unwrap()
+            .subscribe();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let ListenerStatus::Listening { port } = view.borrow().status.enrollment_listener
+                {
+                    return port;
+                }
+                view.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+    }
+
     pub(crate) async fn close(self) {
         self.owner.handle().shutdown_and_wait().await.unwrap();
         self.owner.closed().await.unwrap();

@@ -55,7 +55,7 @@ fn resolved(advertisement: &Advertisement) -> DiscoveryEvent {
         source: advertisement.peer.to_string(),
         peer: advertisement.peer,
         endpoints: vec![SocketAddrV4::new(Ipv4Addr::LOCALHOST, advertisement.port)],
-        claim: advertisement.link.map(|link| NearbyAdvertisement {
+        claim: (*advertisement.link.borrow()).map(|link| NearbyAdvertisement {
             name: advertisement.name.clone(),
             link,
         }),

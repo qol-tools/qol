@@ -344,7 +344,7 @@ mod enrollment_tests {
             qol_peers::service::enrollment::Invitation::import(document.expose()).unwrap();
         assert_eq!(
             imported.endpoints(),
-            &[(Ipv4Addr::LOCALHOST, inviter.ready().await).into()]
+            &[(Ipv4Addr::LOCALHOST, inviter.enrollment_port().await).into()]
         );
         let Response::JoinPrepared { transaction, .. } = action(
             &joiner,
@@ -449,7 +449,7 @@ mod enrollment_tests {
             .await,
             Response::Changed { .. }
         ));
-        let port = inviter.ready().await;
+        let port = inviter.enrollment_port().await;
         action(
             &joiner,
             EnrollmentRequest::Recover {
@@ -553,7 +553,7 @@ mod enrollment_tests {
                     .await,
                     Response::Changed { .. }
                 ));
-                let port = inviter.ready().await;
+                let port = inviter.enrollment_port().await;
                 action(
                     &joiner,
                     EnrollmentRequest::Recover {
@@ -614,7 +614,7 @@ mod enrollment_tests {
         inviter.close().await;
         let inviter = Fixture::new(&inviter_root).await;
         let joiner = Fixture::new(&joiner_root).await;
-        let port = inviter.ready().await;
+        let port = inviter.enrollment_port().await;
         joiner.ready().await;
         assert_eq!(joiner.expected().authority_id, old.authority_id);
         assert_ne!(joiner.expected().activation_id, old.activation_id);
@@ -647,7 +647,13 @@ mod enrollment_tests {
         ));
         let stranger = Fixture::new(&temporary.path().join("stranger")).await;
         start(&stranger, false, "stranger").await;
-        let wrong_port = stranger.ready().await;
+        stranger.ready().await;
+        let Response::Invitation { .. } =
+            call(&stranger, stranger.automatic_invitation_request()).await
+        else {
+            panic!("stranger invitation");
+        };
+        let wrong_port = stranger.enrollment_port().await;
         action(
             &joiner,
             EnrollmentRequest::Recover {
