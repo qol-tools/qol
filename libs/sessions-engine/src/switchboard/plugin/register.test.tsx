@@ -2770,6 +2770,18 @@ test('a pull request reads as its state, its checks without the skipped ones, th
   expect(pullDetailOf(null, '', 8)).toBeUndefined()
 })
 
+test('a ready pull request reads as armed or queued, and a queue failure from an earlier attempt counts as running once it is queued again', () => {
+  const rollup = [
+    { __typename: 'CheckRun', name: 'claude review', status: 'COMPLETED', conclusion: 'SUCCESS' },
+    { __typename: 'StatusContext', context: 'merge queue', state: 'FAILURE' },
+  ]
+  expect(pullDetailOf({ state: 'OPEN', isDraft: false, isInMergeQueue: true, autoMergeRequest: null, statusCheckRollup: rollup }, '', 9)).toEqual({ at: 9, state: 'open', passed: 1, failed: 0, running: 1, total: 2, review: 'pass', merge: 'queued' })
+  expect(pullDetailOf({ state: 'OPEN', isDraft: false, isInMergeQueue: false, autoMergeRequest: { enabledAt: 'x' }, statusCheckRollup: rollup }, '', 9)).toEqual({ at: 9, state: 'open', passed: 1, failed: 1, running: 0, total: 2, review: 'pass', merge: 'auto' })
+  expect(pullDetailOf({ state: 'OPEN', isDraft: false, autoMergeRequest: null, statusCheckRollup: rollup }, '', 9)?.merge).toBeUndefined()
+  expect(pullDetailOf({ state: 'OPEN', isDraft: true, isInMergeQueue: true }, '', 9)?.merge).toBeUndefined()
+  expect(pullDetailOf({ state: 'MERGED', isDraft: false, isInMergeQueue: true }, '', 9)?.merge).toBeUndefined()
+})
+
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []

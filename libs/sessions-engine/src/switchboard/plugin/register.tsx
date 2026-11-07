@@ -1246,7 +1246,8 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
     isWatched: row.is_watched,
   }))
 
-const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/[0-9]{1,10}$/
+const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/([0-9]{1,10})$/
+const IN_QUEUE_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}'
 const HEAD_SHA = /^[0-9a-f]{40}$/
 const MODEL_NAME = /(opus|sonnet|haiku|fable)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?/i
 
@@ -1271,8 +1272,14 @@ export const pullDetailOf = (view: unknown, liveTitle: string, at: number): Pull
   if (typeof view !== 'object' || view === null) return undefined
   const pull = view as Record<string, unknown>
   const state = pull.state === 'MERGED' ? 'merged' : pull.state === 'CLOSED' ? 'closed' : pull.isDraft === true ? 'draft' : 'open'
+  const merge = state !== 'open' ? undefined : pull.isInMergeQueue === true ? 'queued' : typeof pull.autoMergeRequest === 'object' && pull.autoMergeRequest !== null ? 'auto' : undefined
   const rows = Array.isArray(pull.statusCheckRollup) ? pull.statusCheckRollup.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null) : []
-  const checks = rows.map(row => ({ name: typeof row.name === 'string' ? row.name : typeof row.context === 'string' ? row.context : '', result: checkResult(row) }))
+  const checks = rows.map(row => {
+    const name = typeof row.name === 'string' ? row.name : typeof row.context === 'string' ? row.context : ''
+    const read = checkResult(row)
+    const result: CheckResult | 'skipped' = merge === 'queued' && name === 'merge queue' && read === 'fail' ? 'running' : read
+    return { name, result }
+  })
   const counted = checks.filter(check => check.result !== 'skipped')
   const review = checks.find(check => check.name === 'claude review')?.result
   const liveTest = /^live test needed/i.test(liveTitle) ? 'needed' : /^no live test/i.test(liveTitle) ? 'not needed' : undefined
@@ -1285,6 +1292,7 @@ export const pullDetailOf = (view: unknown, liveTitle: string, at: number): Pull
     total: counted.length,
     ...(review === undefined || review === 'skipped' ? {} : { review }),
     ...(liveTest === undefined ? {} : { liveTest }),
+    ...(merge === undefined ? {} : { merge }),
   }
 }
 
@@ -1293,9 +1301,16 @@ const detailTried = new Map<string, number>()
 const fetchDetail = async ($: EngineInterface, url: string): Promise<void> => {
   const repo = PULL_REPO.exec(url)
   if (repo === null) return
-  const viewed = await $.process.run(['gh', 'pr', 'view', url, '--json', 'isDraft,state,headRefOid,statusCheckRollup'], { timeoutMs: GH_TIMEOUT_MS })
+  const viewed = await $.process.run(['gh', 'pr', 'view', url, '--json', 'isDraft,state,headRefOid,statusCheckRollup,autoMergeRequest'], { timeoutMs: GH_TIMEOUT_MS })
   if (viewed.exitCode !== 0) return
   const view = JSON.parse(viewed.stdout) as Record<string, unknown>
+  const queued =
+    view.state !== 'OPEN' || view.isDraft === true
+      ? undefined
+      : await $.process
+          .run(['gh', 'api', 'graphql', '-f', `query=${IN_QUEUE_QUERY}`, '-F', `owner=${repo[1]}`, '-F', `name=${repo[2]}`, '-F', `number=${repo[3]}`, '--jq', '.data.repository.pullRequest.isInMergeQueue'], { timeoutMs: GH_TIMEOUT_MS })
+          .catch(() => undefined)
+  if (queued?.exitCode === 0) view.isInMergeQueue = queued.stdout.trim() === 'true'
   const sha = typeof view.headRefOid === 'string' && HEAD_SHA.test(view.headRefOid) ? view.headRefOid : undefined
   const live =
     sha === undefined || view.state !== 'OPEN'
@@ -2699,7 +2714,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const PULL_COLUMNS = [8, 9, 11, 10, 12] as const
+    const PULL_COLUMNS = [8, 12, 11, 10, 12] as const
     const column = (index: number, text: string, color?: string, isDim?: boolean) => (
       <Box width={PULL_COLUMNS[index] ?? 8}>
         <Text {...(color === undefined ? {} : { color })} dimColor={isDim === true}>
@@ -2735,10 +2750,11 @@ export const register: Register = on => {
               detail === undefined ? ['…', undefined] : detail.total === 0 ? ['·', undefined] : detail.failed > 0 ? [`${detail.passed}/${detail.total} ✗`, 'error'] : detail.running > 0 ? [`${detail.passed}/${detail.total} ◐`, 'warning'] : [`${detail.passed}/${detail.total} ✓`, 'success']
             const review = detail?.review === 'pass' ? ['pass', 'success'] : detail?.review === 'fail' ? ['fail', 'error'] : detail?.review === 'running' ? ['running', 'warning'] : ['·', undefined]
             const liveTest = detail?.liveTest === 'needed' ? ['needed', 'warning'] : detail?.liveTest === 'not needed' ? ['not needed', undefined] : ['·', undefined]
+            const state = detail?.merge === 'queued' ? ['in queue', 'suggestion'] : detail?.merge === 'auto' ? ['auto-merge', 'suggestion'] : [stateOfPull(pull), stateOfPull(pull) === 'draft' ? 'warning' : undefined]
             return (
               <Box key={`pull-${pull.pullRequest}`} flexDirection="row">
                 {column(0, `#${pull.number ?? '?'}`)}
-                {column(1, stateOfPull(pull), stateOfPull(pull) === 'draft' ? 'warning' : undefined)}
+                {column(1, state[0] ?? 'open', state[1])}
                 {column(2, checks[0] ?? '…', checks[1], checks[1] === undefined)}
                 {column(3, review[0] ?? '·', review[1], review[1] === undefined)}
                 {column(4, liveTest[0] ?? '·', liveTest[1], liveTest[1] === undefined)}

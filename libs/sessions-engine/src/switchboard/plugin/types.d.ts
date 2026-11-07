@@ -43,6 +43,7 @@ export type PullDetail = {
   total: number
   review?: CheckResult
   liveTest?: 'needed' | 'not needed'
+  merge?: 'auto' | 'queued'
 }
 
 export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; at: number }
