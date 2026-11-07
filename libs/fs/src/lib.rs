@@ -77,6 +77,17 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
     platform::set_private_dir(path)
 }
 
+pub fn ensure_private_file(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private file path is a symlink",
+        ));
+    }
+    platform::ensure_private_file(path, &metadata)
+}
+
 pub fn recreate_private_dir(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -365,6 +376,43 @@ mod tests {
 
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_file_tightens_a_wide_mode_and_refuses_a_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let wide = dir.path().join("wide");
+        fs::write(&wide, b"x").unwrap();
+        fs::set_permissions(&wide, fs::Permissions::from_mode(0o644)).unwrap();
+        ensure_private_file(&wide).unwrap();
+        assert_eq!(
+            fs::metadata(&wide).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let tight = dir.path().join("tight");
+        fs::write(&tight, b"x").unwrap();
+        fs::set_permissions(&tight, fs::Permissions::from_mode(0o600)).unwrap();
+        ensure_private_file(&tight).unwrap();
+        assert_eq!(
+            fs::metadata(&tight).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let target = dir.path().join("target");
+        let link = dir.path().join("link");
+        fs::write(&target, b"x").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        symlink(&target, &link).unwrap();
+        let error = ensure_private_file(&link).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 
     #[test]

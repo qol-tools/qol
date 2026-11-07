@@ -371,6 +371,7 @@ fn read_regular_file(path: &Path) -> Option<String> {
     if metadata.file_type().is_symlink() {
         return None;
     }
+    let _ = qol_fs::ensure_private_file(path);
     std::fs::read_to_string(path).ok()
 }
 

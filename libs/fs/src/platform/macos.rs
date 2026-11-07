@@ -11,6 +11,13 @@ pub(crate) fn set_private_dir(path: &Path) -> io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
 
+pub(crate) fn ensure_private_file(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
+    if metadata.permissions().mode() & 0o077 == 0 {
+        return Ok(());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
 pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
     match File::open(path)?.sync_all() {
         Ok(()) => Ok(()),

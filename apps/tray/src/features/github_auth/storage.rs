@@ -44,7 +44,7 @@ pub(crate) fn store_github_credential(record: &GitHubCredentialRecord) -> Result
     let path = crate::paths::github_auth_path()?;
     ensure_parent_dir(&path)?;
     let content = serde_json::to_vec_pretty(record)?;
-    crate::file_io::atomic_write(&path, &content)?;
+    crate::file_io::atomic_write_private(&path, &content)?;
     delete_legacy_github_token()?;
     Ok(())
 }
@@ -74,6 +74,9 @@ fn read_regular_file(path: &std::path::Path) -> Option<String> {
     if metadata.file_type().is_symlink() {
         log::warn!("Rejecting symlink credential file: {}", path.display());
         return None;
+    }
+    if let Err(error) = qol_fs::ensure_private_file(path) {
+        log::warn!("Could not make {} private: {error}", path.display());
     }
     std::fs::read_to_string(path).ok()
 }
@@ -167,6 +170,58 @@ mod tests {
         store_github_credential(&record).unwrap();
 
         assert_eq!(load_github_credential(), Some(record));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stores_the_credential_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_guard, _root, _env) = setup();
+        store_github_credential(&GitHubCredentialRecord {
+            access_token: "secret".to_string(),
+            source: GitHubCredentialSource::Oauth,
+            login: None,
+            scopes: Vec::new(),
+        })
+        .unwrap();
+
+        let path = crate::paths::github_auth_path().unwrap();
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loading_tightens_a_wide_credential_and_legacy_token() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_guard, _root, _env) = setup();
+        let record = GitHubCredentialRecord {
+            access_token: "secret".to_string(),
+            source: GitHubCredentialSource::Oauth,
+            login: Some("octocat".to_string()),
+            scopes: vec!["repo".to_string()],
+        };
+        let path = crate::paths::github_auth_path().unwrap();
+        ensure_parent_dir(&path).unwrap();
+        std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(load_github_credential(), Some(record));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        std::fs::remove_file(&path).unwrap();
+        let legacy = crate::paths::github_token_path().unwrap();
+        ensure_parent_dir(&legacy).unwrap();
+        std::fs::write(&legacy, "legacy-secret\n").unwrap();
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let credential = load_github_credential().unwrap();
+        assert_eq!(credential.access_token, "legacy-secret");
+        let mode = std::fs::metadata(&legacy).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

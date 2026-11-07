@@ -219,31 +219,20 @@ fn timestamp_before_ms(event_ms: u128, grab_ms: u128) -> bool {
 }
 
 #[cfg(debug_assertions)]
-fn trace_capture_key(device: &str, keycode: u16, value: i32) {
-    qol_runtime::probe!(
-        "HOTKEY_CAPTURE",
-        "event=key dev={} code={} value={}",
-        device,
-        keycode_name(keycode),
-        value
-    );
+fn trace_capture_key(device: &str, value: i32) {
+    qol_runtime::probe!("HOTKEY_CAPTURE", "event=key dev={} value={}", device, value);
 }
 
 #[cfg(not(debug_assertions))]
-fn trace_capture_key(_device: &str, _keycode: u16, _value: i32) {}
+fn trace_capture_key(_device: &str, _value: i32) {}
 
 #[cfg(debug_assertions)]
-fn trace_capture_emit(keycode: u16, value: i32) {
-    qol_runtime::probe!(
-        "HOTKEY_CAPTURE",
-        "event=emit code={} value={}",
-        keycode_name(keycode),
-        value
-    );
+fn trace_capture_emit(value: i32) {
+    qol_runtime::probe!("HOTKEY_CAPTURE", "event=emit value={}", value);
 }
 
 #[cfg(not(debug_assertions))]
-fn trace_capture_emit(_keycode: u16, _value: i32) {}
+fn trace_capture_emit(_value: i32) {}
 
 #[cfg(debug_assertions)]
 fn trace_capture_batch(device: &str, count: usize) {
@@ -256,33 +245,31 @@ fn trace_capture_batch(device: &str, count: usize) {
 fn trace_capture_batch(_device: &str, _count: usize) {}
 
 #[cfg(debug_assertions)]
-fn trace_capture_drop(device: &str, keycode: u16, value: i32, reason: &str) {
+fn trace_capture_drop(device: &str, value: i32, reason: &str) {
     qol_runtime::probe!(
         "HOTKEY_CAPTURE",
-        "event=drop dev={} code={} value={} reason={}",
+        "event=drop dev={} value={} reason={}",
         device,
-        keycode_name(keycode),
         value,
         reason
     );
 }
 
 #[cfg(not(debug_assertions))]
-fn trace_capture_drop(_device: &str, _keycode: u16, _value: i32, _reason: &str) {}
+fn trace_capture_drop(_device: &str, _value: i32, _reason: &str) {}
 
 #[cfg(debug_assertions)]
-fn trace_capture_replay(device: &str, keycode: u16, value: i32) {
+fn trace_capture_replay(device: &str, value: i32) {
     qol_runtime::probe!(
         "HOTKEY_CAPTURE",
-        "event=state_replay dev={} code={} value={}",
+        "event=state_replay dev={} value={}",
         device,
-        keycode_name(keycode),
         value
     );
 }
 
 #[cfg(not(debug_assertions))]
-fn trace_capture_replay(_device: &str, _keycode: u16, _value: i32) {}
+fn trace_capture_replay(_device: &str, _value: i32) {}
 
 /// Install a process-wide panic hook that aborts after logging. This ensures a
 /// panic in any thread terminates the process, closes every grabbed-device fd,
@@ -811,7 +798,7 @@ fn replay_state(
     code: u16,
     value: i32,
 ) {
-    trace_capture_replay(device, code, value);
+    trace_capture_replay(device, value);
     let events = match matcher.lock() {
         Ok(mut guard) => guard.reconcile(code, value),
         Err(_) => Vec::new(),
@@ -842,10 +829,10 @@ fn process_event(
         return;
     };
     if event_before(&event, grab_time) {
-        trace_capture_drop(device, key_code.0, value, "pre_grab");
+        trace_capture_drop(device, value, "pre_grab");
         return;
     }
-    trace_capture_key(device, key_code.0, value);
+    trace_capture_key(device, value);
     reader_held.observe(key_code.0, value);
     let decision = match matcher.lock() {
         Ok(mut m) => m.observe(key_code.0, value),
@@ -856,7 +843,7 @@ fn process_event(
     };
     if decision.forward {
         forward(event, virtual_device);
-        trace_capture_emit(key_code.0, value);
+        trace_capture_emit(value);
     }
     for capture_event in decision.events {
         log::info!(
