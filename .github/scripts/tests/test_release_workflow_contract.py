@@ -829,7 +829,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 workflow = (ROOT / ".github/workflows" / name).read_text()
                 gate = workflow.split(gate_end, 1)[0]
                 trusted = named_step(gate, "Checkout release scripts from main", "      ")
-                for contract in ["ref: main", "path: trusted", "sparse-checkout: .github/scripts", "persist-credentials: false"]:
+                for contract in ["ref: main", "path: trusted", "sparse-checkout: |\n            .github/scripts\n            libs/conventions/src", "persist-credentials: false"]:
                     with self.subTest(contract=contract):
                         self.assertIn(contract, trusted)
                 self.assertIn("python trusted/.github/scripts/release_candidate.py verify", gate)
@@ -901,6 +901,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 self.assertIn("T12", ignored[1])
         self.assertNotIn('"vendor/**"', codeql)
         self.assertIn('"vendor/ravif/**"', codeql)
+
+    def test_trusted_script_checkouts_carry_the_files_the_scripts_import(self):
+        for name in ("release.yml", "qol-tray-release.yml"):
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            with self.subTest(workflow=name):
+                trusted = workflow.split("          path: trusted\n", 1)[1]
+                sparse = trusted.split("          persist-credentials: false\n", 1)[0]
+                self.assertIn("            .github/scripts\n", sparse)
+                self.assertIn("            libs/conventions/src\n", sparse)
+                self.assertIn("python trusted/.github/scripts/release_candidate.py verify", workflow)
 
     def test_ci_asserts_lockfile_freshness_with_a_full_resolve(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
