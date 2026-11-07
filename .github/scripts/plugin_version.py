@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import re
 import subprocess
@@ -59,7 +60,8 @@ VERSION_PLUGIN_MANIFEST_RE = re.compile(
 )
 
 
-def _reserved_plugin_ids() -> set[str]:
+@functools.cache
+def auto_excluded_plugin_ids() -> set[str]:
     lib = Path(__file__).resolve().parents[2] / "libs/conventions/src/lib.rs"
     match = re.search(
         r"RESERVED_PLUGIN_IDS:\s*&\[&str\]\s*=\s*&\[(.*?)\]", lib.read_text(), re.DOTALL
@@ -68,8 +70,6 @@ def _reserved_plugin_ids() -> set[str]:
         raise RuntimeError("RESERVED_PLUGIN_IDS not found in qol-conventions")
     return set(re.findall(r'"([^"]+)"', match.group(1)))
 
-
-AUTO_EXCLUDED_PLUGIN_IDS = _reserved_plugin_ids()
 HOST_RELEASE_UNITS = (("qol-tray", "apps/tray"),)
 
 
@@ -789,7 +789,7 @@ def discover_plugins(root: Path, packages: dict[str, Package], selected: str | N
         if plugin_id in seen_ids:
             raise RuntimeError(f"Duplicate plugin id {plugin_id!r} declared under plugins/")
         seen_ids.add(plugin_id)
-        if selected is None and plugin_id in AUTO_EXCLUDED_PLUGIN_IDS:
+        if selected is None and plugin_id in auto_excluded_plugin_ids():
             continue
         if selected is not None and not selection_matches(plugin_id, selected):
             continue
