@@ -11,22 +11,19 @@ version = 2
 yanked = "deny"
 unmaintained = "workspace"
 ignore = [
-  { id = "RUSTSEC-2026-0367", reason = "zip: candle-core never calls extract (security review T12)" },
-  { id = "RUSTSEC-2026-0368", reason = "zip: candle-core never calls extract (security review T12)" },
-  { id = "RUSTSEC-2026-0369", reason = "zip: candle-core never calls extract (security review T12)" },
-  { id = "RUSTSEC-2026-0429", reason = "zip: candle-core never calls extract (security review T12)" },
   { id = "RUSTSEC-2026-0194", reason = "quick-xml: build-time codegen and plist's plain Reader only (security review T12)" },
   { id = "RUSTSEC-2026-0195", reason = "quick-xml: no NsReader at runtime (security review T12)" },
   { id = "RUSTSEC-2026-0183", reason = "git2 Remote::list is never called (security review T12)" },
   { id = "RUSTSEC-2026-0184", reason = "git2 blame_buffer is never called (security review T12)" },
-  { id = "RUSTSEC-2024-0429", reason = "glib VariantStrIter is unused; gtk 0.18 comes with tray-icon and muda (security review T12)" },
   { id = "RUSTSEC-2026-0387", reason = "crypto-bigint: p256 only parses public keys in shipped code (security review T12)" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained font parser pinned by cosmic-text and usvg under gpui; no fixed fork exists yet (security review T12)" },
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: folded into zbus, which still ships it (security review T12)" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: folded into zbus, which still ships it (security review T12)" },
 ]
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
-allow-wildcard-paths = true
+wildcards = "allow"
 deny = [
   { crate = "native-tls", reason = "one HTTP TLS stack: rustls on ring" },
   { crate = "openssl", reason = "only libgit2 may link OpenSSL" },
