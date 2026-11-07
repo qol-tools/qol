@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, chipGroup, modelName, nextKey, pullDetailOf, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2742,6 +2742,13 @@ test('sb runs the command the words name, lists a level that needs more, and lea
   ])
 })
 
+test('a chip belongs to its model or effort row of one fork, so moving along that row switches it', () => {
+  expect(chipGroup('model-asking-fork-sonnet')).toBe('model-asking-fork')
+  expect(chipGroup('effort-asking-fork-xhigh')).toBe('effort-asking-fork')
+  expect(chipGroup('open-a8')).toBeUndefined()
+  expect(chipGroup(undefined)).toBeUndefined()
+})
+
 test('a model id reads as its family and version', () => {
   expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
   expect(modelName('claude-sonnet-4-20250514')).toBe('Sonnet 4')
@@ -2770,7 +2777,7 @@ test('a pull request reads as its state, its checks without the skipped ones, th
   expect(pullDetailOf(null, '', 8)).toBeUndefined()
 })
 
-test('the fork you write to shows its model and effort, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
+test('the fork you write to shows its model and effort on one row, a chip changes its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []
   engine(on, [], [], [], store)
@@ -2797,21 +2804,19 @@ test('the fork you write to shows its model and effort, its pickers change its n
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'medium' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
-  const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
-  expect(picker).toMatchObject({ props: { value: 'opus' } })
-  expect((picker?.props as { options: { label?: string }[] }).options.map(one => one.label)).toEqual(['Opus 5.5', 'Sonnet', 'Haiku'])
-  expect(await ui.find({ type: 'Select', key: 'effort-asking-fork' })).toMatchObject({ props: { value: 'medium' } })
-  await ui.select({ key: 'model-asking-fork', value: 'sonnet' })
-  expect(await ui.find({ type: 'Select', key: 'model-asking-fork' })).toMatchObject({ props: { value: 'sonnet' } })
-  expect(await ui.find({ type: 'Text', text: /^ from its next model call$/ })).toBeDefined()
-  await ui.select({ key: 'effort-asking-fork', value: 'high' })
-  expect(await ui.find({ type: 'Select', key: 'effort-asking-fork' })).toMatchObject({ props: { value: 'high' } })
+  expect(await ui.find({ type: 'Text', text: /^ Opus 5\.5 $/ })).toMatchObject({ props: { bold: true } })
+  expect(await ui.find({ type: 'Text', text: /^ medium $/ })).toMatchObject({ props: { bold: true } })
+  await ui.press({ key: 'model-asking-fork-sonnet' })
+  expect(await ui.find({ type: 'Text', text: /^ Sonnet $/ })).toMatchObject({ props: { bold: true, color: 'suggestion' } })
+  expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeDefined()
+  await ui.press({ key: 'effort-asking-fork-high' })
+  expect(await ui.find({ type: 'Text', text: /^ high $/ })).toMatchObject({ props: { bold: true, color: 'suggestion' } })
   expect((store.get('model-choices') as Record<string, { model?: string; effort?: string }>)['asking-fork']).toMatchObject({ model: 'sonnet', effort: 'high' })
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'sonnet', effort: 'high' })
   await step(undefined, 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
-  expect(await ui.find({ type: 'Text', text: /^ from its next model call$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /effort medium → high, from its next model call/ })).toBeDefined()
   await ui.unmount()
 })
@@ -2838,9 +2843,9 @@ test('saved model choices that fail their first load are never overwritten by on
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
-  await ui.select({ key: 'model-asking-fork', value: 'opus' })
-  expect(store.get('model-choices')).toEqual({ 'other-fork': { model: 'haiku', at: 1 } })
-  await ui.select({ key: 'effort-asking-fork', value: 'high' })
+  await ui.press({ key: 'model-asking-fork-opus' })
+  expect((store.get('model-choices') as Record<string, unknown>)['other-fork']).toEqual({ model: 'haiku', at: 1 })
+  await ui.press({ key: 'effort-asking-fork-high' })
   const saved = store.get('model-choices') as Record<string, { model?: string; effort?: string }>
   expect(saved['other-fork']).toEqual({ model: 'haiku', at: 1 })
   expect(saved['asking-fork']).toMatchObject({ model: 'opus', effort: 'high' })

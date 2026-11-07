@@ -1349,6 +1349,38 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
   if (modelsLoaded) await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
 }
 
+const CHIP = /^(model|effort)-(.+)-([a-z]+)$/
+
+export const chipGroup = (element: string | undefined): string | undefined => {
+  const parts = element === undefined ? null : CHIP.exec(element)
+  return parts === null ? undefined : `${parts[1]}-${parts[2]}`
+}
+
+const pickChip = async ($: EngineInterface, element: string): Promise<void> => {
+  const parts = CHIP.exec(element)
+  if (parts === null) return
+  const [, kind, key = '', value] = parts
+  await loadModels($)
+  const was = (await read($, modelsSeen))[key]
+  const choice = (await read($, modelChoices))[key]
+  const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
+  if (kind === 'model') {
+    const to = MODELS.find(one => one === value)
+    const from = (isNewer ? choice?.model : undefined) ?? was?.model
+    if (to === undefined || familyOf(from) === to) return
+    await choose($, key, { model: to })
+    await logSaid($, `${YOU} → ${key}`, `model ${from === undefined ? '' : `${modelName(from)} → `}${modelName(to)}, from its next model call`)
+    return
+  }
+  const to = EFFORTS.find(one => one === value)
+  const from = (isNewer ? choice?.effort : undefined) ?? was?.effort
+  if (to === undefined || to === from) return
+  await choose($, key, { effort: to })
+  await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${to}, from its next model call`)
+}
+
+let focusedChip: string | undefined
+
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
   const agentId = e.agentId
   const entry = agentId === undefined ? undefined : (await read($, board)).find(one => one.agentId === agentId)
@@ -2453,8 +2485,17 @@ export const register: Register = on => {
     return next({ ...e, message: { ...e.message, content: [{ type: 'text', text: filed.text }] } })
   }).catch(($, e, next) => next(e))
 
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const was = focusedChip
+    const result = await next(e)
+    if (result.deny !== undefined) return result
+    focusedChip = chipGroup(e.element) === undefined ? undefined : e.element
+    if (e.element !== undefined && e.element !== was && chipGroup(was) !== undefined && chipGroup(was) === chipGroup(e.element)) void pickChip($, e.element).catch(() => undefined)
+    return result
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Select } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     await ensureLoaded($)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
@@ -2555,7 +2596,7 @@ export const register: Register = on => {
     )
 
     const keys = isFocused
-      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · ↑↓ and enter pick a model or effort'} · x closes · esc back to the prompt`
+      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · ← → switch model or effort'} · x closes · esc back to the prompt`
       : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const inner = Math.max(24, e.props.bodyColumns - 4)
     const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
@@ -2615,82 +2656,47 @@ export const register: Register = on => {
         {forkRows.map(forkRow)}
       </Box>,
     )
-    const changeModel = (key: string, from: string | undefined) => async (to: string) => {
-      if (familyOf(from) === to) return
-      await choose($, key, { model: to })
-      await logSaid($, `${YOU} → ${key}`, `model ${from === undefined ? '' : `${modelName(from)} → `}${modelName(to)}, from its next model call`)
-    }
-    const changeEffort = (key: string, from: string | undefined) => async (to: string) => {
-      const level = EFFORTS.find(one => one === to)
-      if (level === undefined || level === from) return
-      await choose($, key, { effort: level })
-      await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${level}, from its next model call`)
-    }
-    const modelRows = (key: string, fallback: string | undefined, isFork: boolean) => {
+    const modelOf = (key: string, fallback: string | undefined, isFork: boolean) => {
       const was = seen[key]
       const choice = isFork ? choices[key] : undefined
       const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
       const pickedModel = isNewer ? choice?.model : undefined
       const pickedEffort = isNewer ? choice?.effort : undefined
       const shownModel = fallback ?? was?.model
-      const model = pickedModel ?? shownModel
-      const effort = pickedEffort ?? was?.effort
-      const level = EFFORTS.findIndex(one => one === effort)
       const takesNone = was !== undefined && was.effort === undefined && pickedModel === undefined && pickedEffort === undefined
-      const label = (text: string) => (
-        <Box width={8}>
-          <Text dimColor>{text}</Text>
-        </Box>
-      )
-      const pending = <Text dimColor> from its next model call</Text>
-      const meter =
-        level === -1 ? undefined : (
-          <Text>
-            <Text color="warning">{'■'.repeat(level + 1)}</Text>
-            <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
-          </Text>
-        )
+      return { was, pickedModel, pickedEffort, shownModel, model: pickedModel ?? shownModel, effort: pickedEffort ?? was?.effort, takesNone, isPending: pickedModel !== undefined || pickedEffort !== undefined }
+    }
+    const chip = (id: string, text: string, isOn: boolean, isPicked: boolean) => (
+      <Button key={id} plain onPress={() => pickChip($, id)}>
+        <Text bold={isOn} dimColor={!isOn} {...(isOn && isPicked ? { color: 'suggestion' } : {})}>
+          {` ${text} `}
+        </Text>
+      </Button>
+    )
+    const modelRows = (key: string, fallback: string | undefined, isFork: boolean) => {
+      const one = modelOf(key, fallback, isFork)
+      const label = (text: string) => <Text dimColor>{text} </Text>
       if (!isFork)
         return (
-          <Box flexDirection="column">
-            <Box flexDirection="row">
-              {label('model')}
-              {shownModel === undefined ? <Text dimColor>shows at its next model call</Text> : <Text bold>{modelName(shownModel)}</Text>}
-              <Box flexGrow={1} />
-            </Box>
-            <Box flexDirection="row">
-              {label('effort')}
-              {meter}
-              <Text bold>{effort ?? '·'}</Text>
-            </Box>
-          </Box>
-        )
-      const family = familyOf(model)
-      return (
-        <Box flexDirection="column">
           <Box flexDirection="row">
             {label('model')}
-            <Select
-              key={`model-${key}`}
-              options={MODELS.map(one => ({ value: one, label: one === family && model !== undefined ? modelName(model) : modelName(one) }))}
-              {...(family === undefined ? {} : { value: family })}
-              onSelect={changeModel(key, model)}
-            />
-            {pickedModel !== undefined && pending}
-            {model === undefined && <Text dimColor> shows at its next model call</Text>}
+            {one.shownModel === undefined ? <Text dimColor>shows at its next model call</Text> : <Text bold>{modelName(one.shownModel)}</Text>}
+            <Text dimColor>{'   '}effort </Text>
+            <Text bold>{one.effort ?? '·'}</Text>
           </Box>
-          <Box flexDirection="row">
-            {label('effort')}
-            {takesNone ? (
-              <Text dimColor>{modelName(was.model)} takes no effort level</Text>
-            ) : (
-              <Box flexDirection="row">
-                {meter}
-                <Select key={`effort-${key}`} options={EFFORTS.map(one => ({ value: one }))} {...(effort === undefined ? {} : { value: effort })} onSelect={changeEffort(key, effort)} />
-                {pickedEffort !== undefined && pickedModel === undefined && pending}
-              </Box>
-            )}
-          </Box>
+        )
+      const family = familyOf(one.model)
+      return (
+        <Box flexDirection="row">
+          {label('model')}
+          {MODELS.map(choice => chip(`model-${key}-${choice}`, choice === family && one.model !== undefined ? modelName(one.model) : modelName(choice), choice === family, one.pickedModel !== undefined))}
+          <Text dimColor>{'   '}</Text>
+          {label('effort')}
+          {one.takesNone ? (
+            <Text dimColor>none on {modelName(one.was?.model ?? '')}</Text>
+          ) : (
+            EFFORTS.map(level => chip(`effort-${key}-${level}`, level, level === one.effort, one.pickedEffort !== undefined))
+          )}
         </Box>
       )
     }
@@ -2762,6 +2768,7 @@ export const register: Register = on => {
           WRITING TO {keyName(entry.name)}
         </Text>,
         <Text>
+          {modelOf(keyOf(entry), undefined, true).isPending && <Text color="suggestion">applies at its next model call · </Text>}
           <Text dimColor>
             {labelOf(entry)} · {age(now - entry.at)}
           </Text>
