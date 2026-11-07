@@ -30,6 +30,26 @@ export type Pull = {
   isWatched: boolean
 }
 
+export type PullState = 'open' | 'draft' | 'closed' | 'merged'
+
+export type CheckResult = 'pass' | 'fail' | 'running'
+
+export type PullDetail = {
+  at: number
+  state: PullState
+  passed: number
+  failed: number
+  running: number
+  total: number
+  review?: CheckResult
+  liveTest?: 'needed' | 'not needed'
+  merge?: 'auto' | 'queued'
+}
+
+export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; at: number }
+
+export type ModelSeen = { model: string; effort?: string; at: number }
+
 declare module 'claude-code' {
   interface PluginState {
     'qol-switchboard': {
@@ -39,7 +59,10 @@ declare module 'claude-code' {
       pulls: Pull[]
       writingTo: string
       writingSaid: { isUser: boolean; text: string }[]
-      switchboardLog: { who: string; text: string }[]
+      switchboardLog: { who: string; text: string; at?: number }[]
+      pullDetails: Record<string, PullDetail>
+      modelChoices: Record<string, ModelChoice>
+      modelsSeen: Record<string, ModelSeen>
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }

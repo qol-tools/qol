@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, Register, UiOpenResult } from 'claude-code'
 
-import type { Entry, Kind, Pull } from '../types'
+import type { CheckResult, Entry, Kind, ModelChoice, ModelSeen, Pull, PullDetail } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
 const FORK = 'project-fork'
@@ -37,6 +37,15 @@ const MINUTE = 60_000
 const DELIVER_MS = 2_000
 const DELIVER_TIMEOUT_MS = 20_000
 const MERGED_EXIT = 0
+const MODELS = ['opus', 'sonnet', 'haiku'] as const
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+const CHOICES_KEY = 'model-choices'
+const SEEN_KEY = 'models-seen'
+const DETAIL_MS = 60_000
+const GH_TIMEOUT_MS = 20_000
+const FORK_STATE_WIDTH = 18
+const FORK_NAME_MAX = 34
+const LOG_BAND = '#1a1b20'
 const PULL_NUMBER = /\/pull\/([0-9]{1,10})$/
 const SAFE_ARG = /^[A-Za-z0-9_@%+=:,./-]+$/
 const WATCHER = /^\s*node\s+([A-Za-z0-9_@%+=:,./-]*pr-watch\.cjs)((?:\s+[A-Za-z0-9_@%+=:,./-]+)*)\s*$/
@@ -107,6 +116,9 @@ const freshReply = atom({ plugin: 'qol-switchboard', key: 'freshReply' } as cons
 const focusShown = atom({ plugin: 'qol-switchboard', key: 'focusShown' } as const, { id: '', prevId: '', agentId: '', key: '', rows: [] as { isUser: boolean; text: string }[] })
 const confirming = atom({ plugin: 'qol-switchboard', key: 'confirming' } as const, '')
 const pulls = atom({ plugin: 'qol-switchboard', key: 'pulls' } as const, [] as Pull[])
+const pullDetails = atom({ plugin: 'qol-switchboard', key: 'pullDetails' } as const, {} as Record<string, PullDetail>)
+const modelChoices = atom({ plugin: 'qol-switchboard', key: 'modelChoices' } as const, {} as Record<string, ModelChoice>)
+const modelsSeen = atom({ plugin: 'qol-switchboard', key: 'modelsSeen' } as const, {} as Record<string, ModelSeen>)
 
 type Filing = { kind: Kind; headline: string; recommend?: string }
 type Sorting = { kind: Kind; recommend?: string }
@@ -459,7 +471,7 @@ export const SWITCHBOARD = 'switchboard'
 
 const SESSION_LOG_PREFIXES = ['sblog:', 'sblog-2:'] as const
 
-type Logged = { who: string; text: string }
+type Logged = { who: string; text: string; at?: number }
 
 const loggedRows = (saved: unknown): Logged[] =>
   Array.isArray(saved) ? saved.filter((one): one is Logged => typeof one?.who === 'string' && typeof one?.text === 'string') : []
@@ -533,11 +545,14 @@ const saveLog = ($: EngineInterface): Promise<void> => {
   return logSaving
 }
 
+const PEER_PREFIX = 'Another Claude session sent a message:'
+
 const logSaid = async ($: EngineInterface, who: string, said: string): Promise<void> => {
   const text = clipSaid(plainText(said))
-  if (text === '' || isPluginNote(text) || /^<[a-z-]+>/.test(text)) return
-  unsaved.push({ who, text })
-  await update($, switchboardLog, rows => [...rows, { who, text }].slice(-SB_LOG_KEPT))
+  if (text === '' || isPluginNote(text) || /^<[a-z-]+[\s>]/.test(text) || text.startsWith(PEER_PREFIX)) return
+  const row = { who, text, at: await $.clock.now() }
+  unsaved.push(row)
+  await update($, switchboardLog, rows => [...rows, row].slice(-SB_LOG_KEPT))
   await loadLog($)
   await saveLog($)
 }
@@ -681,6 +696,11 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
 }
 
 const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, ...entry }: Entry): Entry => entry
+
+const RUN_OVER_MS = 15_000
+
+const settleRun = ($: EngineInterface, agentId: string): Promise<void> =>
+  change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   const now = await $.clock.now()
@@ -1225,6 +1245,168 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
     ...(typeof row.merge_commit === 'string' ? { mergeCommit: row.merge_commit } : {}),
     isWatched: row.is_watched,
   }))
+
+const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/([0-9]{1,10})$/
+const IN_QUEUE_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}'
+const HEAD_SHA = /^[0-9a-f]{40}$/
+const MODEL_NAME = /(opus|sonnet|haiku|fable)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?/i
+
+export const modelName = (model: string): string => {
+  const match = MODEL_NAME.exec(model)
+  const family = match?.[1]?.toLowerCase()
+  if (match === null || family === undefined) return printable(model)
+  const name = `${family.charAt(0).toUpperCase()}${family.slice(1)}`
+  return match[2] === undefined ? name : `${name} ${match[2]}${match[3] === undefined ? '' : `.${match[3]}`}`
+}
+
+const familyOf = (model: string | undefined): string | undefined => (model === undefined ? undefined : MODEL_NAME.exec(model)?.[1]?.toLowerCase())
+
+const checkResult = (row: Record<string, unknown>): CheckResult | 'skipped' => {
+  if (typeof row.context === 'string') return row.state === 'SUCCESS' ? 'pass' : row.state === 'PENDING' || row.state === 'EXPECTED' ? 'running' : 'fail'
+  if (row.status !== 'COMPLETED') return 'running'
+  if (row.conclusion === 'SKIPPED') return 'skipped'
+  return row.conclusion === 'SUCCESS' || row.conclusion === 'NEUTRAL' ? 'pass' : 'fail'
+}
+
+export const pullDetailOf = (view: unknown, liveTitle: string, at: number): PullDetail | undefined => {
+  if (typeof view !== 'object' || view === null) return undefined
+  const pull = view as Record<string, unknown>
+  const state = pull.state === 'MERGED' ? 'merged' : pull.state === 'CLOSED' ? 'closed' : pull.isDraft === true ? 'draft' : 'open'
+  const merge = state !== 'open' ? undefined : pull.isInMergeQueue === true ? 'queued' : typeof pull.autoMergeRequest === 'object' && pull.autoMergeRequest !== null ? 'auto' : undefined
+  const rows = Array.isArray(pull.statusCheckRollup) ? pull.statusCheckRollup.filter((row): row is Record<string, unknown> => typeof row === 'object' && row !== null) : []
+  const checks = rows.map(row => {
+    const name = typeof row.name === 'string' ? row.name : typeof row.context === 'string' ? row.context : ''
+    const read = checkResult(row)
+    const result: CheckResult | 'skipped' = merge === 'queued' && name === 'merge queue' && read === 'fail' ? 'running' : read
+    return { name, result }
+  })
+  const counted = checks.filter(check => check.result !== 'skipped')
+  const review = checks.find(check => check.name === 'claude review')?.result
+  const liveTest = /^live test needed/i.test(liveTitle) ? 'needed' : /^no live test/i.test(liveTitle) ? 'not needed' : undefined
+  return {
+    at,
+    state,
+    passed: counted.filter(check => check.result === 'pass').length,
+    failed: counted.filter(check => check.result === 'fail').length,
+    running: counted.filter(check => check.result === 'running').length,
+    total: counted.length,
+    ...(review === undefined || review === 'skipped' ? {} : { review }),
+    ...(liveTest === undefined ? {} : { liveTest }),
+    ...(merge === undefined ? {} : { merge }),
+  }
+}
+
+const detailTried = new Map<string, number>()
+
+const fetchDetail = async ($: EngineInterface, url: string): Promise<void> => {
+  const repo = PULL_REPO.exec(url)
+  if (repo === null) return
+  const viewed = await $.process.run(['gh', 'pr', 'view', url, '--json', 'isDraft,state,headRefOid,statusCheckRollup,autoMergeRequest'], { timeoutMs: GH_TIMEOUT_MS })
+  if (viewed.exitCode !== 0) return
+  const view = JSON.parse(viewed.stdout) as Record<string, unknown>
+  const queued =
+    view.state !== 'OPEN' || view.isDraft === true
+      ? undefined
+      : await $.process
+          .run(['gh', 'api', 'graphql', '-f', `query=${IN_QUEUE_QUERY}`, '-F', `owner=${repo[1]}`, '-F', `name=${repo[2]}`, '-F', `number=${repo[3]}`, '--jq', '.data.repository.pullRequest.isInMergeQueue'], { timeoutMs: GH_TIMEOUT_MS })
+          .catch(() => undefined)
+  if (queued?.exitCode === 0) view.isInMergeQueue = queued.stdout.trim() === 'true'
+  const sha = typeof view.headRefOid === 'string' && HEAD_SHA.test(view.headRefOid) ? view.headRefOid : undefined
+  const live =
+    sha === undefined || view.state !== 'OPEN'
+      ? undefined
+      : await $.process
+          .run(['gh', 'api', `repos/${repo[1]}/${repo[2]}/commits/${sha}/check-runs?check_name=live%20test`, '--jq', '.check_runs[0].output.title // ""'], { timeoutMs: GH_TIMEOUT_MS })
+          .catch(() => undefined)
+  const detail = pullDetailOf(view, live?.exitCode === 0 ? live.stdout.trim() : '', await $.clock.now())
+  if (detail !== undefined) await update($, pullDetails, all => ({ ...all, [url]: detail }))
+}
+
+const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Record<string, PullDetail>, now: number): void => {
+  for (const pull of own) {
+    const known = details[pull.pullRequest]
+    const tried = detailTried.get(pull.pullRequest) ?? 0
+    if (pull.mergeCommit !== undefined || known?.state === 'merged' || known?.state === 'closed' || now - tried < DETAIL_MS) continue
+    detailTried.set(pull.pullRequest, now)
+    $.clock.after(0, () => void fetchDetail($, pull.pullRequest).catch(() => undefined))
+  }
+}
+
+const choiceShape = (one: unknown): one is ModelChoice =>
+  typeof one === 'object' && one !== null && typeof (one as ModelChoice).at === 'number' && ((one as ModelChoice).model === undefined || typeof (one as ModelChoice).model === 'string') && ((one as ModelChoice).effort === undefined || EFFORTS.some(level => level === (one as ModelChoice).effort))
+
+const seenShape = (one: unknown): one is ModelSeen =>
+  typeof one === 'object' && one !== null && typeof (one as ModelSeen).model === 'string' && typeof (one as ModelSeen).at === 'number' && ((one as ModelSeen).effort === undefined || typeof (one as ModelSeen).effort === 'string')
+
+const recordOf = <T,>(saved: unknown, isShape: (one: unknown) => one is T): Record<string, T> =>
+  typeof saved === 'object' && saved !== null && !Array.isArray(saved) ? Object.fromEntries(Object.entries(saved).filter((pair): pair is [string, T] => isShape(pair[1]))) : {}
+
+let modelsLoading: Promise<void> | undefined
+let modelsLoaded = false
+
+const loadModels = ($: EngineInterface): Promise<void> => {
+  modelsLoading ??= (async () => {
+    const [choices, seen] = await Promise.all([$.store.get(CHOICES_KEY), $.store.get(SEEN_KEY)])
+    await update($, modelChoices, all => ({ ...recordOf(choices, choiceShape), ...all }))
+    await update($, modelsSeen, all => ({ ...recordOf(seen, seenShape), ...all }))
+    modelsLoaded = true
+  })().catch(() => {
+    modelsLoading = undefined
+  })
+  return modelsLoading
+}
+
+const choose = async ($: EngineInterface, key: string, choice: Omit<ModelChoice, 'at'>): Promise<void> => {
+  await loadModels($)
+  const at = Math.max(await $.clock.now(), ((await read($, modelsSeen))[key]?.at ?? 0) + 1)
+  await update($, modelChoices, all => ({ ...all, [key]: { ...all[key], ...choice, at } }))
+  if (modelsLoaded) await $.store.set(CHOICES_KEY, await read($, modelChoices)).catch(() => undefined)
+}
+
+const noteSeen = async ($: EngineInterface, key: string, model: string, effort: string | undefined, choice: ModelChoice | undefined): Promise<void> => {
+  const was = (await read($, modelsSeen))[key]
+  if (was !== undefined && was.model === model && was.effort === effort && (choice === undefined || was.at > choice.at)) return
+  const at = Math.max(await $.clock.now(), (choice?.at ?? 0) + 1)
+  await update($, modelsSeen, all => ({ ...all, [key]: { model, ...(effort === undefined ? {} : { effort }), at } }))
+  if (modelsLoaded) await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
+}
+
+const SETTING = /^(model|effort)-(.+)-([a-z]+)$/
+
+const pickSetting = async ($: EngineInterface, element: string): Promise<void> => {
+  const parts = SETTING.exec(element)
+  if (parts === null) return
+  const [, kind, key = '', value] = parts
+  await loadModels($)
+  const was = (await read($, modelsSeen))[key]
+  const choice = (await read($, modelChoices))[key]
+  const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
+  if (kind === 'model') {
+    const to = MODELS.find(one => one === value)
+    const from = (isNewer ? choice?.model : undefined) ?? was?.model
+    if (to === undefined || familyOf(from) === to) return
+    await choose($, key, { model: to })
+    await logSaid($, `${YOU} → ${key}`, `model ${from === undefined ? '' : `${modelName(from)} → `}${modelName(to)}, from its next model call`)
+    return
+  }
+  const to = EFFORTS.find(one => one === value)
+  const from = (isNewer ? choice?.effort : undefined) ?? was?.effort
+  if (to === undefined || to === from) return
+  await choose($, key, { effort: to })
+  await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${to}, from its next model call`)
+}
+
+export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
+  const agentId = e.agentId
+  const entry = agentId === undefined ? undefined : (await read($, board)).find(one => one.agentId === agentId)
+  const key = agentId === undefined ? SWITCHBOARD : entry === undefined ? undefined : keyOf(entry)
+  if (key === undefined) return e
+  await loadModels($)
+  const choice = agentId === undefined ? undefined : (await read($, modelChoices))[key]
+  const sent = { ...e, ...(choice?.model === undefined ? {} : { model: choice.model }), ...(choice?.effort === undefined ? {} : { effort: choice.effort }) }
+  await noteSeen($, key, sent.model, typeof sent.effort === 'string' ? sent.effort : undefined, choice)
+  return sent
+}
 
 export const printable = (text: string): string => text.replace(TERMINAL_CODE, '').replace(CONTROL, '')
 
@@ -2267,7 +2449,7 @@ export const register: Register = on => {
     const reply = await heldReply($, e.agentId, e.turnId)
     if (reply === undefined || e.index > 1) {
       if (reply !== undefined && e.agentId !== undefined) await finishHold($, e.agentId)
-      return yield* next(e)
+      return yield* next(await withChoice($, e).catch(() => e))
     }
     const base = { turnId: e.turnId, index: e.index, usage: null }
     if (e.index === 0) {
@@ -2287,6 +2469,7 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
+    if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')
@@ -2319,7 +2502,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Select } = $.ui.resolve(e)
     await ensureLoaded($)
     const list = (await read($, board)).filter(entry => !entry.isDismissed)
     const isOpen = await read($, isDoneOpen)
@@ -2330,10 +2513,16 @@ export const register: Register = on => {
     if (logLoading === undefined) $.clock.after(0, () => void loadLog($).catch(() => {}))
     const loading = await read($, starting)
     const ledger = await read($, pulls)
+    const details = await read($, pullDetails)
+    const choices = await read($, modelChoices)
+    const seen = await read($, modelsSeen)
+    if (modelsLoading === undefined) $.clock.after(0, () => void loadModels($))
     const now = await $.clock.now()
     const viewed = e.props.view?.agentId
     viewedFork = viewed
     const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
+    if (target !== undefined) refreshDetails($, pullsOf(ledger, target.agentId), details, now)
+    const mainModel = target === undefined ? undefined : await $.session.model().catch(() => undefined)
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
@@ -2413,7 +2602,226 @@ export const register: Register = on => {
       </Box>
     )
 
-    const keys = isFocused ? 'digit opens a fork · tab walks · x closes · esc back to the prompt' : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
+    const keys = isFocused
+      ? `digit opens a fork · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
+      : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
+    const inner = Math.max(24, e.props.bodyColumns - 4)
+    const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
+      <Box key={key} flexDirection="column" borderStyle="single" borderDimColor paddingX={1} marginTop={1}>
+        <Box flexDirection="row">
+          <Text>{title}</Text>
+          <Box flexGrow={1} />
+          {right !== undefined && <Text>{right}</Text>}
+        </Box>
+        {body}
+      </Box>
+    )
+    const divider = (text: string) => (
+      <Text dimColor>
+        {'─ '}
+        <Text bold dimColor={false}>
+          {text}
+        </Text>{' '}
+        {'─'.repeat(Math.max(1, inner - text.length - 3))}
+      </Text>
+    )
+    const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
+    const forkRows = [...needs, ...cut, ...working, ...waiting, ...idle, ...done.filter(entry => entry.hasNewReply === true)]
+    const nameWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...forkRows.map(entry => keyName(entry.name).length))) + 2
+    const forkRow = (entry: Entry) => {
+      const key: { hotkey?: string } = hotkey()
+      return (
+        <Box key={`row-${entry.agentId}`} {...(entry.agentId === target?.agentId ? { backgroundColor: LOG_BAND } : {})}>
+          <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
+            {key.hotkey === undefined ? '   ' : ''}
+            <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold>{cell(keyName(entry.name), nameWidth)}</Text>
+            <Text dimColor>
+              {cell(labelOf(entry), FORK_STATE_WIDTH)}
+              {age(now - entry.at)}
+            </Text>
+            {entry.hasNewReply === true && entry.agentId !== target?.agentId && (
+              <Text bold color="suggestion">
+                {' '}
+                · new reply
+              </Text>
+            )}
+          </Button>
+        </Box>
+      )
+    }
+    const forksFrame = frame(
+      'forks',
+      <Text bold>FORKS</Text>,
+      undefined,
+      <Box flexDirection="column">
+        <Text dimColor>
+          {'     '}
+          {cell('fork', nameWidth)}
+          {cell('state', FORK_STATE_WIDTH)}
+          since
+        </Text>
+        {forkRows.map(forkRow)}
+      </Box>,
+    )
+    const modelOf = (key: string, fallback: string | undefined, isFork: boolean) => {
+      const was = seen[key]
+      const choice = isFork ? choices[key] : undefined
+      const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
+      const pickedModel = isNewer ? choice?.model : undefined
+      const pickedEffort = isNewer ? choice?.effort : undefined
+      const shownModel = fallback ?? was?.model
+      const takesNone = was !== undefined && was.effort === undefined && pickedModel === undefined && pickedEffort === undefined
+      return { was, pickedModel, pickedEffort, shownModel, model: pickedModel ?? shownModel, effort: pickedEffort ?? was?.effort, takesNone, isPending: pickedModel !== undefined || pickedEffort !== undefined }
+    }
+    const modelRows = (key: string, fallback: string | undefined, isFork: boolean) => {
+      const one = modelOf(key, fallback, isFork)
+      const label = (text: string) => <Text dimColor>{text} </Text>
+      if (!isFork)
+        return (
+          <Box flexDirection="row">
+            {label('model')}
+            {one.shownModel === undefined ? <Text dimColor>shows at its next model call</Text> : <Text bold>{modelName(one.shownModel)}</Text>}
+            <Text dimColor>{'   '}effort </Text>
+            <Text bold>{one.effort ?? '·'}</Text>
+          </Box>
+        )
+      const family = familyOf(one.model)
+      const level = EFFORTS.findIndex(choice => choice === one.effort)
+      return (
+        <Box flexDirection="row">
+          {label('model')}
+          <Select
+            key={`model-${key}`}
+            options={MODELS.map(choice => ({ value: choice, label: choice === family && one.model !== undefined ? modelName(one.model) : modelName(choice) }))}
+            {...(family === undefined ? {} : { value: family })}
+            onSelect={value => void pickSetting($, `model-${key}-${value}`)}
+          />
+          <Text dimColor>{'    '}</Text>
+          {label('effort')}
+          {one.takesNone ? (
+            <Text dimColor>none on {modelName(one.was?.model ?? '')}</Text>
+          ) : (
+            <Box flexDirection="row">
+              {level !== -1 && (
+                <Text>
+                  <Text color="warning">{'■'.repeat(level + 1)}</Text>
+                  <Text dimColor>{'□'.repeat(EFFORTS.length - level - 1)} </Text>
+                </Text>
+              )}
+              <Select key={`effort-${key}`} options={EFFORTS.map(choice => ({ value: choice }))} {...(one.effort === undefined ? {} : { value: one.effort })} onSelect={value => void pickSetting($, `effort-${key}-${value}`)} />
+            </Box>
+          )}
+        </Box>
+      )
+    }
+    const PULL_COLUMNS = [8, 12, 11, 10, 12] as const
+    const column = (index: number, text: string, color?: string, isDim?: boolean) => (
+      <Box width={PULL_COLUMNS[index] ?? 8}>
+        <Text {...(color === undefined ? {} : { color })} dimColor={isDim === true}>
+          {text}
+        </Text>
+      </Box>
+    )
+    const pullSection = (entry: Entry) => {
+      const own = pullsOf(ledger, entry.agentId)
+      const stateOfPull = (pull: Pull) => (pull.mergeCommit !== undefined ? 'merged' : (details[pull.pullRequest]?.state ?? 'open'))
+      const live = own.filter(pull => ['open', 'draft'].includes(stateOfPull(pull)))
+      const closed = own.filter(pull => stateOfPull(pull) === 'closed')
+      const merged = own.filter(pull => stateOfPull(pull) === 'merged')
+      const newest = merged[merged.length - 1]
+      const isStopped = isCut(entry) || entry.isStoppedByUser === true
+      return (
+        <Box flexDirection="column">
+          {divider('PULL REQUESTS')}
+          {own.length === 0 && <Text dimColor>no pull requests yet</Text>}
+          {live.length > 0 && (
+            <Box flexDirection="row">
+              {column(0, '#', undefined, true)}
+              {column(1, 'state', undefined, true)}
+              {column(2, 'checks', undefined, true)}
+              {column(3, 'review', undefined, true)}
+              {column(4, 'live test', undefined, true)}
+              <Text dimColor>watcher</Text>
+            </Box>
+          )}
+          {live.map(pull => {
+            const detail = details[pull.pullRequest]
+            const checks =
+              detail === undefined ? ['…', undefined] : detail.total === 0 ? ['·', undefined] : detail.failed > 0 ? [`${detail.passed}/${detail.total} ✗`, 'error'] : detail.running > 0 ? [`${detail.passed}/${detail.total} ◐`, 'warning'] : [`${detail.passed}/${detail.total} ✓`, 'success']
+            const review = detail?.review === 'pass' ? ['pass', 'success'] : detail?.review === 'fail' ? ['fail', 'error'] : detail?.review === 'running' ? ['running', 'warning'] : ['·', undefined]
+            const liveTest = detail?.liveTest === 'needed' ? ['needed', 'warning'] : detail?.liveTest === 'not needed' ? ['not needed', undefined] : ['·', undefined]
+            const state = detail?.merge === 'queued' ? ['in queue', 'suggestion'] : detail?.merge === 'auto' ? ['auto-merge', 'suggestion'] : [stateOfPull(pull), stateOfPull(pull) === 'draft' ? 'warning' : undefined]
+            return (
+              <Box key={`pull-${pull.pullRequest}`} flexDirection="row">
+                {column(0, `#${pull.number ?? '?'}`)}
+                {column(1, state[0] ?? 'open', state[1])}
+                {column(2, checks[0] ?? '…', checks[1], checks[1] === undefined)}
+                {column(3, review[0] ?? '·', review[1], review[1] === undefined)}
+                {column(4, liveTest[0] ?? '·', liveTest[1], liveTest[1] === undefined)}
+                <Text color={pull.isWatched ? 'success' : 'error'}>{pull.isWatched ? 'on' : isStopped ? 'off · the fork stopped' : 'off'}</Text>
+              </Box>
+            )
+          })}
+          {closed.map(pull => (
+            <Text key={`closed-${pull.pullRequest}`} dimColor>
+              #{pull.number ?? '?'} closed, not merged
+            </Text>
+          ))}
+          {newest !== undefined && (
+            <Text color="success">
+              {merged.length} merged · newest #{newest.number ?? '?'}
+              {newest.mergeCommit === undefined ? '' : ` ${newest.mergeCommit.slice(0, 7)}`}
+            </Text>
+          )}
+        </Box>
+      )
+    }
+    const writingFrame = (entry: Entry) =>
+      frame(
+        `to-${entry.agentId}`,
+        <Text bold>
+          WRITING TO {keyName(entry.name)}
+        </Text>,
+        <Text>
+          {modelOf(keyOf(entry), undefined, true).isPending && <Text color="suggestion">applies at its next model call · </Text>}
+          <Text dimColor>
+            {labelOf(entry)} · {age(now - entry.at)}
+          </Text>
+          {fresh === entry.agentId && (
+            <Text bold color="suggestion">
+              {' '}
+              · new reply
+            </Text>
+          )}
+        </Text>,
+        <Box flexDirection="column">
+          {modelRows(keyOf(entry), undefined, true)}
+          {pullSection(entry)}
+        </Box>,
+      )
+    const switchboardFrame = frame(
+      'switchboard',
+      <Text bold>SWITCHBOARD</Text>,
+      <Text dimColor>this chat · /model here changes only the switchboard</Text>,
+      <Box flexDirection="column">
+        {modelRows(SWITCHBOARD, mainModel, false)}
+        {switchboardSaid.length > 0 && divider('LOG')}
+        {[...switchboardSaid].reverse().map((one, index) => (
+          <Box key={`main-${index}`} flexDirection="column" {...(index % 2 === 1 ? { backgroundColor: LOG_BAND } : {})}>
+            <Box flexDirection="row">
+              <Text bold color={one.who.startsWith(YOU) ? 'suggestion' : one.who === SWITCHBOARD ? undefined : 'claude'}>
+                {one.who}
+              </Text>
+              <Box flexGrow={1} />
+              {typeof one.at === 'number' && <Text dimColor>{age(now - one.at)}</Text>}
+            </Box>
+            <Box paddingLeft={2}>
+              <Text wrap="wrap">{one.text}</Text>
+            </Box>
+          </Box>
+        ))}
+      </Box>,
+    )
     const asks = needs.length + cut.length
     const summary = asks === 0 ? 'Nothing needs you.' : `${asks} need${asks === 1 ? 's' : ''} you.`
     const close = (
@@ -2445,44 +2853,9 @@ export const register: Register = on => {
           </Text>
           {close}
         </Box>
-        {target !== undefined && heading('FORKS')}
-        {target !== undefined &&
-          [...needs, ...cut, ...working, ...waiting, ...idle, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
-            <Box key={`row-${entry.agentId}`}>{title(entry, labelOf(entry))}</Box>
-          ))}
-        {target !== undefined && heading('WRITING TO')}
-        {target !== undefined && (
-          <Box key={`to-${target.agentId}`} flexDirection="column">
-            <Text>
-              <Text color={target.isWorking ? 'claude' : isCut(target) ? 'warning' : COLOR[target.kind ?? 'note']}>●</Text> <Text bold>{keyName(target.name)}</Text>{' '}
-              <Text dimColor>
-                {labelOf(target)} · {age(now - target.at)}
-              </Text>
-              {fresh === target.agentId && (
-                <Text bold color="suggestion">
-                  {' '}
-                  · new reply
-                </Text>
-              )}
-            </Text>
-            <Box paddingLeft={2} flexDirection="column">
-              {prs(target)}
-            </Box>
-          </Box>
-        )}
-        {target !== undefined && switchboardSaid.length > 0 && heading('SWITCHBOARD')}
-        {target !== undefined && (
-          <Box paddingLeft={2} flexDirection="column">
-            {[...switchboardSaid].reverse().map((one, index) => (
-              <Box key={`main-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
-                <Text bold color={one.who.startsWith(YOU) ? 'suggestion' : one.who === SWITCHBOARD ? undefined : 'claude'}>
-                  {one.who}
-                </Text>
-                <Text wrap="wrap">{one.text}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
+        {target !== undefined && forksFrame}
+        {target !== undefined && writingFrame(target)}
+        {target !== undefined && switchboardFrame}
         {target === undefined && needs.length > 0 && heading('NEEDS YOU')}
         {target === undefined && needs.map(entry => (
           <Box key={`need-${entry.agentId}`} flexDirection="column">
