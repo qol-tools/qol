@@ -123,7 +123,10 @@ fn resolved(path: &Path) -> PathBuf {
 }
 
 fn inside_owned(candidate: &Path, owned: &[PathBuf]) -> bool {
-    owned.iter().any(|dir| candidate.starts_with(resolved(dir)))
+    let canonical = resolved(candidate);
+    owned
+        .iter()
+        .any(|dir| candidate.starts_with(dir) || canonical.starts_with(resolved(dir)))
 }
 
 pub fn ensure_program_allowed(app_ref: &AppRef) -> Result<(), String> {
@@ -141,8 +144,8 @@ fn ensure_program_allowed_against(app_ref: &AppRef, owned: &[PathBuf]) -> Result
     if !parsed.is_absolute() {
         return Err("app path must be absolute".into());
     }
-    let canonical = std::fs::canonicalize(parsed).map_err(|_| format!("{path} does not exist"))?;
-    if inside_owned(&canonical, owned) {
+    std::fs::canonicalize(parsed).map_err(|_| format!("{path} does not exist"))?;
+    if inside_owned(parsed, owned) {
         return Err("app path must not point inside qol-tray's own directories".into());
     }
     Ok(())
@@ -179,7 +182,7 @@ fn validate_program_location_against(
     if !parsed.is_absolute() {
         return Err(format!("{} path must be absolute", field));
     }
-    if inside_owned(&resolved(parsed), owned) {
+    if inside_owned(parsed, owned) {
         return Err(format!(
             "{} path must not point inside qol-tray's own directories",
             field
