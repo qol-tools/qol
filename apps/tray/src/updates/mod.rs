@@ -1,7 +1,5 @@
-use crate::features::connection_health::SendObserved;
 use crate::features::plugin_store::release_integrity::{self, IndexedHostRelease};
 use anyhow::Result;
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime};
@@ -36,42 +34,31 @@ impl std::fmt::Display for IncompatibleUpdate {
 impl std::error::Error for IncompatibleUpdate {}
 
 pub(super) const GITHUB_REPO: &str = "qol-tools/qol";
-pub(super) const HOST_TAG_PREFIX: &str = "qol-tray";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const NO_CONNECTION: &str = "No connection to GitHub";
-const UNREADABLE_REPLY: &str = "GitHub sent a reply qol-tray could not read";
 
 struct UpdateState {
     last_attempt: Option<SystemTime>,
     last_success: Option<SystemTime>,
     last_error: Option<String>,
     checking: bool,
-    etag: Option<String>,
     update_found: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
 }
 
 struct FetchedRelease {
     update_found: bool,
     latest: Option<FoundUpdate>,
-    etag: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FoundUpdate {
     PluginIndex(IndexedHostRelease),
-    GitHubRelease { version: String },
 }
 
 impl FoundUpdate {
     pub(super) fn version(&self) -> &str {
         match self {
             Self::PluginIndex(release) => &release.version,
-            Self::GitHubRelease { version } => version,
         }
     }
 }
@@ -167,7 +154,6 @@ pub async fn check_for_updates() -> Result<bool> {
         Ok(release) => {
             state.last_success = Some(SystemTime::now());
             state.last_error = None;
-            state.etag = release.etag;
             state.update_found = release.update_found;
             store_latest_update(release.latest);
             Ok(state.update_found)
@@ -212,12 +198,14 @@ fn check_delay(last_error: Option<&str>) -> Duration {
 
 async fn fetch_host_update() -> Result<FetchedRelease, String> {
     let indexed = release_integrity::latest_host_release(platform::index_os()).await;
-    let Some(release) = newer_index_release(indexed, CURRENT_VERSION) else {
-        return fetch_host_release().await;
+    let Some(release) = newer_index_release(indexed, CURRENT_VERSION)? else {
+        log::info!("No updates available (current: {})", CURRENT_VERSION);
+        return Ok(no_update());
     };
     if workspace_build::is_running() && !workspace_build::precedes_release(&release.revision).await
     {
-        return fetch_host_release().await;
+        log::info!("No updates available (current: {})", CURRENT_VERSION);
+        return Ok(no_update());
     }
     log::info!(
         "Update available: {} -> {} (plugin index)",
@@ -227,103 +215,29 @@ async fn fetch_host_update() -> Result<FetchedRelease, String> {
     Ok(FetchedRelease {
         update_found: true,
         latest: Some(FoundUpdate::PluginIndex(release)),
-        etag: None,
     })
+}
+
+fn no_update() -> FetchedRelease {
+    FetchedRelease {
+        update_found: false,
+        latest: None,
+    }
 }
 
 fn newer_index_release(
     indexed: Result<Option<IndexedHostRelease>>,
     current: &str,
-) -> Option<IndexedHostRelease> {
+) -> Result<Option<IndexedHostRelease>, String> {
     match indexed {
-        Ok(Some(release)) if version::is_newer_version(&release.version, current) => Some(release),
-        Ok(Some(_) | None) => None,
+        Ok(Some(release)) if version::is_newer_version(&release.version, current) => {
+            Ok(Some(release))
+        }
+        Ok(Some(_) | None) => Ok(None),
         Err(error) => {
-            log::warn!(
-                "Could not read qol-tray updates from the plugin index, checking GitHub Releases: {error:#}"
-            );
-            None
+            log::warn!("Could not read qol-tray updates from the plugin index: {error:#}");
+            Err(plain_update_failure(&error))
         }
-    }
-}
-
-async fn fetch_host_release() -> Result<FetchedRelease, String> {
-    let url = format!(
-        "https://api.github.com/repos/{}/releases?per_page={}",
-        GITHUB_REPO,
-        crate::features::plugin_store::source::RELEASES_PER_PAGE
-    );
-    let token = crate::credentials::github_bearer_token();
-    let etag = lock_update_state().and_then(|state| state.etag.clone());
-    let mut request = crate::features::plugin_store::github::build_github_request(
-        http_client(),
-        &url,
-        token.as_deref(),
-    );
-    if let Some(etag) = &etag {
-        request = request.header(reqwest::header::IF_NONE_MATCH, etag);
-    }
-    let response = request
-        .send_observed()
-        .await
-        .map_err(|_| NO_CONNECTION.to_string())?;
-    let status = response.status();
-    if status == reqwest::StatusCode::NOT_MODIFIED {
-        let Some(state) = lock_update_state() else {
-            return Err(NO_CONNECTION.to_string());
-        };
-        return Ok(FetchedRelease {
-            update_found: state.update_found,
-            latest: latest_update(),
-            etag: state.etag.clone(),
-        });
-    }
-    if !status.is_success() {
-        return Err(github_status_message(status.as_u16()));
-    }
-    let new_etag = response
-        .headers()
-        .get(reqwest::header::ETAG)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
-    let releases: Vec<GitHubRelease> = response
-        .json()
-        .await
-        .map_err(|error| release_list_failure(error.is_decode()).to_string())?;
-    if releases.len() == crate::features::plugin_store::source::RELEASES_PER_PAGE {
-        log::warn!(
-            "release list page is full ({} releases); the newest tag may be outside the fetched window",
-            releases.len()
-        );
-    }
-    let newest = pick_latest_host_release(&releases);
-    let update_found = match newest.as_ref() {
-        Some((tag, version)) if version::is_newer_version(version, CURRENT_VERSION) => {
-            !workspace_build::is_running() || workspace_build::precedes_release(tag).await
-        }
-        _ => false,
-    };
-    match newest.as_ref() {
-        Some((_, latest)) if update_found => {
-            log::info!("Update available: {} -> {}", CURRENT_VERSION, latest)
-        }
-        Some(_) => log::info!("No updates available (current: {})", CURRENT_VERSION),
-        None => log::info!("No qol-tray-v* releases published yet (current: {CURRENT_VERSION})"),
-    }
-    Ok(FetchedRelease {
-        update_found,
-        latest: newest
-            .filter(|_| update_found)
-            .map(|(_, version)| FoundUpdate::GitHubRelease { version }),
-        etag: new_etag,
-    })
-}
-
-fn release_list_failure(unreadable: bool) -> &'static str {
-    if unreadable {
-        UNREADABLE_REPLY
-    } else {
-        NO_CONNECTION
     }
 }
 
@@ -422,20 +336,9 @@ fn update_state() -> &'static Mutex<UpdateState> {
             last_success: None,
             last_error: None,
             checking: false,
-            etag: None,
             update_found: false,
         })
     })
-}
-
-fn pick_latest_host_release(releases: &[GitHubRelease]) -> Option<(&str, String)> {
-    use crate::features::plugin_store::source::{select_release_tag, version_from_plugin_tag};
-    let tag = select_release_tag(
-        releases.iter().map(|r| r.tag_name.as_str()),
-        HOST_TAG_PREFIX,
-    )?;
-    let version = version_from_plugin_tag(tag, HOST_TAG_PREFIX)?;
-    Some((tag, version))
 }
 
 const STAND_IN_REFUSAL: &str =
@@ -630,57 +533,49 @@ mod tests {
         SourceIdentity, SCHEMA_VERSION,
     };
 
-    fn rel(tag: &str) -> GitHubRelease {
-        GitHubRelease {
-            tag_name: tag.to_string(),
-        }
-    }
-
-    fn picked_version(releases: &[GitHubRelease]) -> Option<String> {
-        pick_latest_host_release(releases).map(|(_, version)| version)
-    }
-
     #[test]
     fn the_plugin_index_answers_only_when_it_names_a_newer_host() {
         let listed = |version: &str| Ok(Some(IndexedHostRelease::test_fixture(version, &[])));
         type Case = (
             &'static str,
             Result<Option<IndexedHostRelease>>,
-            Option<&'static str>,
+            Result<Option<&'static str>, &'static str>,
         );
         let cases: Vec<Case> = vec![
-            ("index newer", listed("3.2.0"), Some("3.2.0")),
-            ("index the running version", listed("3.1.0"), None),
-            ("index older", listed("3.0.9"), None),
+            ("index newer", listed("3.2.0"), Ok(Some("3.2.0"))),
+            ("index the running version", listed("3.1.0"), Ok(None)),
+            ("index older", listed("3.0.9"), Ok(None)),
             (
                 "index prerelease of the running version",
                 listed("3.1.0-rc.1"),
-                None,
+                Ok(None),
             ),
-            ("index has no entry for this os", Ok(None), None),
-            ("index unavailable", Err(anyhow::anyhow!("offline")), None),
+            ("index has no entry for this os", Ok(None), Ok(None)),
+            (
+                "index unavailable",
+                Err(anyhow::anyhow!("offline")),
+                Err("The update could not be installed"),
+            ),
+            (
+                "index signature refused",
+                Err(anyhow::anyhow!("the index signature does not verify")),
+                Err("The update could not be installed"),
+            ),
         ];
         for (case, indexed, expected) in cases {
             let picked = newer_index_release(indexed, "3.1.0");
-            assert_eq!(
-                picked.as_ref().map(|release| release.version.as_str()),
-                expected,
-                "case: {case}"
-            );
+            let picked = picked
+                .as_ref()
+                .map(|release| release.as_ref().map(|release| release.version.as_str()))
+                .map_err(String::as_str);
+            assert_eq!(picked, expected, "case: {case}");
         }
     }
 
     #[test]
-    fn a_found_update_names_its_version_from_either_source() {
-        let cases = [
-            FoundUpdate::PluginIndex(IndexedHostRelease::test_fixture("3.2.0", &[])),
-            FoundUpdate::GitHubRelease {
-                version: "3.2.0".to_string(),
-            },
-        ];
-        for update in cases {
-            assert_eq!(update.version(), "3.2.0", "{update:?}");
-        }
+    fn a_found_update_names_its_version() {
+        let update = FoundUpdate::PluginIndex(IndexedHostRelease::test_fixture("3.2.0", &[]));
+        assert_eq!(update.version(), "3.2.0");
     }
 
     fn update_identity(version: &str, target: &str) -> BuildIdentity {
@@ -764,56 +659,6 @@ mod tests {
     }
 
     #[test]
-    fn pick_latest_host_version_strips_qol_tray_prefix() {
-        let cases = [
-            (vec!["qol-tray-v1.2.3"], Some("1.2.3")),
-            (vec!["qol-tray-v0.6.0"], Some("0.6.0")),
-            (vec!["qol-tray-v9.9.9-beta.1"], Some("9.9.9-beta.1")),
-        ];
-        for (tags, expected) in cases {
-            let releases: Vec<_> = tags.iter().map(|t| rel(t)).collect();
-            assert_eq!(
-                picked_version(&releases).as_deref(),
-                expected,
-                "tags: {tags:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn pick_latest_host_version_ignores_plugin_tags() {
-        let releases = vec![
-            rel("qol-launcher-v1.8.0"),
-            rel("qol-alt-tab-v2.0.1"),
-            rel("qol-keyremap-v0.3.0"),
-        ];
-        assert_eq!(picked_version(&releases), None);
-    }
-
-    #[test]
-    fn pick_latest_host_version_picks_max_host_version_when_mixed() {
-        let releases = vec![
-            rel("qol-launcher-v1.8.0"),
-            rel("qol-tray-v3.1.0"),
-            rel("qol-tray-v3.2.1"),
-            rel("qol-alt-tab-v2.0.1"),
-        ];
-        assert_eq!(picked_version(&releases).as_deref(), Some("3.2.1"));
-    }
-
-    #[test]
-    fn pick_latest_host_version_returns_none_when_empty() {
-        let releases: Vec<GitHubRelease> = vec![];
-        assert_eq!(picked_version(&releases), None);
-    }
-
-    #[test]
-    fn pick_latest_host_version_rejects_collision_with_other_prefix() {
-        let releases = vec![rel("qol-tray-doctor-v1.0.0")];
-        assert_eq!(picked_version(&releases), None);
-    }
-
-    #[test]
     fn is_newer_version_strict_ordering() {
         let cases = [
             ("1.2.4", "1.2.3", true),
@@ -832,37 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn selected_host_release_agrees_with_availability() {
-        let releases = vec![rel("qol-tray-v1.2.4-rc.1"), rel("qol-tray-v1.2.3")];
-        let (tag, version) =
-            pick_latest_host_release(&releases).expect("a host release is selected");
-        assert_eq!(tag, "qol-tray-v1.2.4-rc.1");
-        assert_eq!(version, "1.2.4-rc.1");
-        assert!(
-            version::is_newer_version(&version, "1.2.2"),
-            "selected host release {version} must be offered over 1.2.2"
-        );
-    }
-
-    #[test]
-    fn selected_host_prerelease_is_not_offered_over_its_stable() {
-        let releases = vec![rel("qol-tray-v3.67.0-rc.9")];
-        let (tag, version) =
-            pick_latest_host_release(&releases).expect("a host release is selected");
-        assert_eq!(tag, "qol-tray-v3.67.0-rc.9");
-        assert_eq!(version, "3.67.0-rc.9");
-        assert!(
-            !version::is_newer_version(&version, "3.67.0"),
-            "the selected prerelease must not be offered over the stable it precedes"
-        );
-    }
-
-    #[test]
-    fn host_tag_prefix_matches_release_workflow() {
-        assert_eq!(HOST_TAG_PREFIX, "qol-tray");
-    }
-
-    #[test]
     fn github_repo_targets_monorepo() {
         assert_eq!(GITHUB_REPO, "qol-tools/qol");
     }
@@ -878,15 +692,6 @@ mod tests {
         for (status, expected) in cases {
             assert_eq!(github_status_message(status), expected, "status={status}");
         }
-    }
-
-    #[test]
-    fn an_unreadable_release_list_is_not_reported_as_a_lost_connection() {
-        assert_eq!(
-            release_list_failure(true),
-            "GitHub sent a reply qol-tray could not read"
-        );
-        assert_eq!(release_list_failure(false), "No connection to GitHub");
     }
 
     #[test]
@@ -911,7 +716,7 @@ mod tests {
             ("last check succeeded", None, CHECK_INTERVAL),
             ("no connection at boot", Some(NO_CONNECTION), OFFLINE_RETRY),
             ("rate limited", Some(rate_limited.as_str()), CHECK_INTERVAL),
-            ("unreadable reply", Some(UNREADABLE_REPLY), CHECK_INTERVAL),
+            ("server error", Some("GitHub answered 500"), CHECK_INTERVAL),
         ];
         for (name, last_error, expected) in cases {
             assert_eq!(check_delay(last_error), expected, "case: {name}");
@@ -926,7 +731,6 @@ mod tests {
             last_success: Some(now),
             last_error: None,
             checking: false,
-            etag: None,
             update_found: false,
         };
         assert_eq!(begin_check(&mut state, now), None);

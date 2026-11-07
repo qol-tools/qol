@@ -1,19 +1,22 @@
+use crate::git;
 use crate::host::HostConfig;
 use crate::oci::{
-    is_sha256_digest, Descriptor, Manifest, ASSET_MEDIA_TYPE, CONFIG_MEDIA_TYPE, DIR_ANNOTATION,
-    HOST_CONFIG_MEDIA_TYPE, TREE_MEDIA_TYPE,
+    is_lower_hex, is_sha256_digest, Descriptor, Manifest, ASSET_MEDIA_TYPE, CONFIG_MEDIA_TYPE,
+    DIR_ANNOTATION, HOST_CONFIG_MEDIA_TYPE, REVISION_ANNOTATION, TREE_MEDIA_TYPE,
 };
 use crate::parallel::parallel_map;
-use crate::provenance::{verify_assets, Provenance};
+use crate::provenance::{verify_assets, Provenance, Provenances, MAIN_REF};
 use crate::registry::Registry;
 use crate::release::{declared_id, declared_version};
 use crate::release::{newest_per_plugin, ReleaseTag};
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
 use qol_plugin_index::{
     Blob, IndexDocument, IndexedHost, IndexedHostVersion, IndexedPlugin, IndexedVersion,
     RegistryLocation, HOST_KEEP, SCHEMA,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 
 const FETCH_WORKERS: usize = 8;
 
@@ -30,14 +33,15 @@ struct Gathered<T> {
     fetched: usize,
 }
 
-type HostOutcome = std::result::Result<IndexedHostVersion, String>;
+type Outcome<T> = std::result::Result<T, String>;
+type HostOutcome = Outcome<IndexedHostVersion>;
 
 pub fn build(
     registry: &Registry,
     previous: Option<&IndexDocument>,
     keep: usize,
     now: u64,
-    provenance: Option<&dyn Provenance>,
+    provenance: Option<&Provenances<'_>>,
 ) -> Result<Built> {
     let tags = registry.tags()?;
     let (plugin_tags, host_tags) = split_tags(&tags, keep);
@@ -45,14 +49,19 @@ pub fn build(
     let plugins = gather(
         plugin_tags,
         |release| {
-            reusable?
+            let entry = reusable?
                 .plugins
                 .get(&release.plugin_id)?
                 .versions
-                .get(&release.version)
-                .cloned()
+                .get(&release.version)?;
+            Some(Ok(entry.clone()))
         },
-        |release| fetch_version(registry, release),
+        |release| {
+            Ok(
+                fetch_version(registry, release, provenance.map(|p| p.plugin))
+                    .map_err(|error| left_out(release, &error)),
+            )
+        },
     )?;
     let hosts = gather(
         host_tags,
@@ -65,15 +74,19 @@ pub fn build(
             Some(Ok(entry.clone()))
         },
         |release| {
-            Ok(fetch_host_version(registry, release, provenance)
-                .map_err(|error| format!("{} is left out of the index: {error:#}", release.tag)))
+            Ok(
+                fetch_host_version(registry, release, provenance.map(|p| p.host))
+                    .map_err(|error| left_out(release, &error)),
+            )
         },
     )?;
-    let (host, warnings) = assemble_host(hosts.versions);
+    let (plugin_versions, mut warnings) = split_outcomes(plugins.versions);
+    let (host, host_warnings) = assemble_host(hosts.versions);
+    warnings.extend(host_warnings);
     let document = IndexDocument {
         host,
         ..assemble(
-            plugins.versions.into_iter(),
+            plugin_versions.into_iter(),
             registry.location().clone(),
             next_serial(previous, now),
         )
@@ -190,9 +203,13 @@ fn assemble(
     }
 }
 
-fn assemble_host(
-    outcomes: Vec<(ReleaseTag, HostOutcome)>,
-) -> (BTreeMap<String, IndexedHost>, Vec<String>) {
+fn left_out(release: &ReleaseTag, error: &anyhow::Error) -> String {
+    format!("{} is left out of the index: {error:#}", release.tag)
+}
+
+fn split_outcomes<T>(
+    outcomes: Vec<(ReleaseTag, Outcome<T>)>,
+) -> (Vec<(ReleaseTag, T)>, Vec<String>) {
     let mut versions = Vec::new();
     let mut warnings = Vec::new();
     for (release, outcome) in outcomes {
@@ -201,6 +218,13 @@ fn assemble_host(
             Err(warning) => warnings.push(warning),
         }
     }
+    (versions, warnings)
+}
+
+fn assemble_host(
+    outcomes: Vec<(ReleaseTag, HostOutcome)>,
+) -> (BTreeMap<String, IndexedHost>, Vec<String>) {
+    let (versions, warnings) = split_outcomes(outcomes);
     let host = grouped(versions.into_iter(), |release| {
         release.host_system().unwrap_or_default().to_string()
     })
@@ -231,7 +255,11 @@ fn fetch_manifest(
     Ok((fetched.digest, manifest, config))
 }
 
-fn fetch_version(registry: &Registry, release: &ReleaseTag) -> Result<IndexedVersion> {
+fn fetch_version(
+    registry: &Registry,
+    release: &ReleaseTag,
+    provenance: Option<&dyn Provenance>,
+) -> Result<IndexedVersion> {
     let (manifest_digest, manifest, config) = fetch_manifest(registry, release, CONFIG_MEDIA_TYPE)?;
     let plugin_toml = String::from_utf8(config)
         .with_context(|| format!("{}: plugin.toml is not UTF-8", release.tag))?;
@@ -240,7 +268,85 @@ fn fetch_version(registry: &Registry, release: &ReleaseTag) -> Result<IndexedVer
     {
         anyhow::bail!("{}: plugin.toml names another release", release.tag);
     }
-    version_entry(&manifest_digest, &manifest, plugin_toml)
+    let entry = version_entry(&manifest_digest, &manifest, plugin_toml)?;
+    if let Some(provenance) = provenance {
+        let tag_ref = format!("refs/tags/{}", release.tag);
+        verify_assets(
+            &entry.assets,
+            |blob| registry.blob(&blob.digest, blob.size),
+            provenance,
+            &[tag_ref.as_str(), MAIN_REF],
+        )?;
+        verify_source(registry, release, &manifest, &entry)?;
+    }
+    Ok(entry)
+}
+
+fn source_revision<'a>(release: &ReleaseTag, manifest: &'a Manifest) -> Result<&'a str> {
+    manifest
+        .annotations
+        .get(REVISION_ANNOTATION)
+        .map(String::as_str)
+        .filter(|revision| is_lower_hex(revision, 40))
+        .with_context(|| format!("{}: no source revision", release.tag))
+}
+
+fn verify_source(
+    registry: &Registry,
+    release: &ReleaseTag,
+    manifest: &Manifest,
+    entry: &IndexedVersion,
+) -> Result<()> {
+    let revision = source_revision(release, manifest)?;
+    if !git::is_ancestor_of_head(revision)? {
+        anyhow::bail!("{}: revision {revision} is not on main", release.tag);
+    }
+    let source = git::plugin_at(revision, &release.plugin_id)?;
+    let expected = git::tree_tar(&source.commit, &source.dir)?;
+    let compressed = registry.blob(&entry.tree.digest, entry.tree.size)?;
+    let tree_tar = gunzip_up_to(&compressed, expected.len())
+        .with_context(|| format!("{}: the tree layer is not a gzip file", release.tag))?;
+    check_source(release, entry, &source, &expected, &tree_tar)
+}
+
+fn gunzip_up_to(compressed: &[u8], len: usize) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    GzDecoder::new(compressed)
+        .take(len as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn check_source(
+    release: &ReleaseTag,
+    entry: &IndexedVersion,
+    source: &git::PluginAtRevision,
+    expected_tar: &[u8],
+    tree_tar: &[u8],
+) -> Result<()> {
+    if source.dir != entry.dir {
+        anyhow::bail!(
+            "{}: the manifest names directory {} but the source revision has {}",
+            release.tag,
+            entry.dir,
+            source.dir
+        );
+    }
+    if source.plugin_toml != entry.plugin_toml {
+        anyhow::bail!(
+            "{}: plugin.toml differs from the source revision {}",
+            release.tag,
+            source.commit
+        );
+    }
+    if tree_tar != expected_tar {
+        anyhow::bail!(
+            "{}: the tree layer differs from the source revision {}",
+            release.tag,
+            source.commit
+        );
+    }
+    Ok(())
 }
 
 fn fetch_host_version(
@@ -253,9 +359,10 @@ fn fetch_host_version(
     let entry = host_version_entry(release, &manifest_digest, &manifest, &config)?;
     if let Some(provenance) = provenance {
         verify_assets(
-            &entry,
+            &entry.assets,
             |blob| registry.blob(&blob.digest, blob.size),
             provenance,
+            &[MAIN_REF],
         )?;
     }
     Ok(entry)
@@ -751,5 +858,154 @@ mod tests {
                 "- host linux 3.101.3"
             ]
         );
+    }
+
+    #[test]
+    fn failed_plugin_versions_are_left_out_with_a_warning() {
+        let location = RegistryLocation {
+            url: "u".to_string(),
+            repository: "r".to_string(),
+        };
+        let outcomes: Vec<(ReleaseTag, Outcome<IndexedVersion>)> = [
+            ("qol-shot-v1.1.0", false),
+            ("qol-shot-v1.0.0", true),
+            ("qol-launcher-v2.0.0", false),
+        ]
+        .iter()
+        .map(|(tag, verified)| {
+            let release = ReleaseTag::parse(tag).unwrap();
+            let outcome = if *verified {
+                Ok(entry(tag))
+            } else {
+                Err(left_out(
+                    &release,
+                    &anyhow::anyhow!("no valid build provenance"),
+                ))
+            };
+            (release, outcome)
+        })
+        .collect();
+        let (versions, warnings) = split_outcomes(outcomes);
+        let index = assemble(versions.into_iter(), location, 1);
+        assert_eq!(index.plugins.keys().collect::<Vec<_>>(), ["qol-shot"]);
+        assert_eq!(index.plugins["qol-shot"].latest, "1.0.0");
+        assert_eq!(index.plugins["qol-shot"].versions.len(), 1);
+        assert_eq!(
+            warnings,
+            [
+                "qol-shot-v1.1.0 is left out of the index: no valid build provenance",
+                "qol-launcher-v2.0.0 is left out of the index: no valid build provenance"
+            ]
+        );
+    }
+
+    fn source_fixture(dir: &str, plugin_toml: &str) -> git::PluginAtRevision {
+        git::PluginAtRevision {
+            commit: COMMIT.to_string(),
+            dir: dir.to_string(),
+            plugin_toml: plugin_toml.to_string(),
+        }
+    }
+
+    #[test]
+    fn check_source_accepts_a_matching_source_and_refuses_each_mismatch() {
+        let release = ReleaseTag::parse("qol-shot-v1.0.0").unwrap();
+        let indexed = IndexedVersion {
+            plugin_toml: "toml".to_string(),
+            ..entry("m")
+        };
+        let cases: &[(&str, git::PluginAtRevision, &[u8], Option<&str>)] = &[
+            ("matching", source_fixture("shot", "toml"), b"tar", None),
+            (
+                "other directory",
+                source_fixture("alt-tab", "toml"),
+                b"tar",
+                Some("the manifest names directory shot but the source revision has alt-tab"),
+            ),
+            (
+                "other plugin.toml",
+                source_fixture("shot", "other"),
+                b"tar",
+                Some("plugin.toml differs from the source revision"),
+            ),
+            (
+                "other tree",
+                source_fixture("shot", "toml"),
+                b"other tar",
+                Some("the tree layer differs from the source revision"),
+            ),
+            (
+                "empty tree",
+                source_fixture("shot", "toml"),
+                b"",
+                Some("the tree layer differs from the source revision"),
+            ),
+        ];
+        for (case, source, tree_tar, failure) in cases {
+            let result = check_source(&release, &indexed, source, b"tar", tree_tar);
+            match failure {
+                None => assert!(result.is_ok(), "{case}: {result:?}"),
+                Some(failure) => {
+                    let error = format!("{:#}", result.unwrap_err());
+                    assert!(error.contains(failure), "{case}: {error}");
+                    assert!(error.starts_with("qol-shot-v1.0.0: "), "{case}: {error}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_revision_is_exactly_forty_lowercase_hex_characters() {
+        let release = ReleaseTag::parse("qol-shot-v1.0.0").unwrap();
+        let with = |revision: Option<&str>| {
+            let mut manifest = manifest(vec![layer(TREE_MEDIA_TYPE, &sha("t"), None)], "shot");
+            if let Some(revision) = revision {
+                manifest
+                    .annotations
+                    .insert(REVISION_ANNOTATION.to_string(), revision.to_string());
+            }
+            manifest
+        };
+        let upper = COMMIT.to_uppercase();
+        let long = format!("{COMMIT}0");
+        let cases: &[(&str, Option<&str>, bool)] = &[
+            ("exact", Some(COMMIT), true),
+            ("missing", None, false),
+            ("empty", Some(""), false),
+            ("short", Some("0123abc"), false),
+            ("long", Some(&long), false),
+            ("uppercase", Some(&upper), false),
+            ("option", Some("--output=/tmp/x"), false),
+            ("name", Some("main"), false),
+        ];
+        for (case, revision, valid) in cases {
+            let manifest = with(*revision);
+            let result = source_revision(&release, &manifest);
+            assert_eq!(result.is_ok(), *valid, "{case}");
+            if !*valid {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "qol-shot-v1.0.0: no source revision",
+                    "{case}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gunzip_up_to_reads_one_byte_past_the_limit() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&[7u8; 100]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let cases: &[(usize, usize)] = &[(10, 11), (99, 100), (100, 100), (500, 100)];
+        for (limit, read) in cases {
+            let bytes = gunzip_up_to(&compressed, *limit).unwrap();
+            assert_eq!(bytes.len(), *read, "limit {limit}");
+        }
+        assert!(gunzip_up_to(b"not gzip", 10).is_err());
     }
 }

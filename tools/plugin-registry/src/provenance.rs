@@ -1,15 +1,20 @@
 use anyhow::{Context, Result};
-use qol_plugin_index::{Blob, IndexedHostVersion};
+use qol_plugin_index::Blob;
+use std::collections::BTreeMap;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// Versioning only releases from main, so every genuine attestation names it.
-const RELEASE_REF: &str = "refs/heads/main";
+pub const MAIN_REF: &str = "refs/heads/main";
 
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
 
 pub trait Provenance: Sync {
-    fn verify(&self, bytes: &[u8]) -> Result<()>;
+    fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()>;
+}
+
+pub struct Provenances<'a> {
+    pub plugin: &'a dyn Provenance,
+    pub host: &'a dyn Provenance,
 }
 
 pub struct GhAttestation {
@@ -18,7 +23,7 @@ pub struct GhAttestation {
 }
 
 impl Provenance for GhAttestation {
-    fn verify(&self, bytes: &[u8]) -> Result<()> {
+    fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()> {
         let file = std::env::temp_dir().join(format!(
             "qol-provenance-{}-{}",
             std::process::id(),
@@ -34,7 +39,7 @@ impl Provenance for GhAttestation {
                 "--signer-workflow",
                 &format!("{}/{}", self.repo, self.workflow),
             ])
-            .args(["--source-ref", RELEASE_REF, "--deny-self-hosted-runners"])
+            .args(["--source-ref", source_ref, "--deny-self-hosted-runners"])
             .output();
         std::fs::remove_file(&file).ok();
         let output = output.context("could not run gh attestation verify")?;
@@ -49,15 +54,27 @@ impl Provenance for GhAttestation {
 }
 
 pub fn verify_assets(
-    entry: &IndexedHostVersion,
+    assets: &BTreeMap<String, Blob>,
     download: impl Fn(&Blob) -> Result<Vec<u8>>,
     provenance: &dyn Provenance,
+    source_refs: &[&str],
 ) -> Result<()> {
-    for (name, blob) in &entry.assets {
+    for (name, blob) in assets {
         let bytes = download(blob)?;
-        provenance
-            .verify(&bytes)
-            .with_context(|| format!("{name} has no valid build provenance"))?;
+        let mut refusal = anyhow::anyhow!("no source ref was given");
+        let verified =
+            source_refs
+                .iter()
+                .any(|source_ref| match provenance.verify(&bytes, source_ref) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        refusal = error;
+                        false
+                    }
+                });
+        if !verified {
+            return Err(refusal).with_context(|| format!("{name} has no valid build provenance"));
+        }
     }
     Ok(())
 }
@@ -65,34 +82,50 @@ pub fn verify_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::sync::Mutex;
 
-    struct Refuses(&'static [u8]);
+    struct Refuses {
+        bytes: &'static [u8],
+        accepted_ref: Option<&'static str>,
+        seen: Mutex<Vec<String>>,
+    }
 
-    impl Provenance for Refuses {
-        fn verify(&self, bytes: &[u8]) -> Result<()> {
-            if bytes == self.0 {
-                anyhow::bail!("not attested");
+    impl Refuses {
+        fn new(bytes: &'static [u8], accepted_ref: Option<&'static str>) -> Self {
+            Self {
+                bytes,
+                accepted_ref,
+                seen: Mutex::new(Vec::new()),
             }
-            Ok(())
         }
     }
 
-    fn entry(assets: &[(&str, &str)]) -> IndexedHostVersion {
-        IndexedHostVersion {
-            manifest_digest: "sha256:m".to_string(),
-            revision: "r".to_string(),
-            assets: assets
-                .iter()
-                .map(|(name, digest)| {
-                    let blob = Blob {
-                        digest: digest.to_string(),
-                        size: 1,
-                    };
-                    (name.to_string(), blob)
-                })
-                .collect(),
+    impl Provenance for Refuses {
+        fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()> {
+            self.seen.lock().unwrap().push(source_ref.to_string());
+            if bytes == self.bytes {
+                anyhow::bail!("not attested");
+            }
+            match self.accepted_ref {
+                Some(accepted) if accepted != source_ref => {
+                    anyhow::bail!("built from another ref")
+                }
+                _ => Ok(()),
+            }
         }
+    }
+
+    fn assets(assets: &[(&str, &str)]) -> BTreeMap<String, Blob> {
+        assets
+            .iter()
+            .map(|(name, digest)| {
+                let blob = Blob {
+                    digest: digest.to_string(),
+                    size: 1,
+                };
+                (name.to_string(), blob)
+            })
+            .collect()
     }
 
     type Case = (
@@ -123,8 +156,9 @@ mod tests {
                 Some("missing blob"),
             ),
         ];
-        for (case, assets, failure) in cases {
-            let result = verify_assets(&entry(assets), download, &Refuses(b"b"));
+        for (case, listed, failure) in cases {
+            let provenance = Refuses::new(b"b", None);
+            let result = verify_assets(&assets(listed), download, &provenance, &[MAIN_REF]);
             match failure {
                 None => assert!(result.is_ok(), "{case}: {result:?}"),
                 Some(failure) => {
@@ -133,5 +167,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_asset_passes_when_any_listed_ref_verifies() {
+        let download = |_: &Blob| Ok(b"a".to_vec());
+        let listed = assets(&[("tray", "sha256:a")]);
+        let tag_ref = "refs/tags/qol-shot-v1.0.0";
+        let cases: &[(&str, &str, &[&str], &[&str], Option<&str>)] = &[
+            ("first ref", tag_ref, &[tag_ref, MAIN_REF], &[tag_ref], None),
+            (
+                "second ref",
+                MAIN_REF,
+                &[tag_ref, MAIN_REF],
+                &[tag_ref, MAIN_REF],
+                None,
+            ),
+            (
+                "no ref",
+                "refs/heads/other",
+                &[tag_ref, MAIN_REF],
+                &[tag_ref, MAIN_REF],
+                Some("built from another ref"),
+            ),
+            (
+                "no refs given",
+                MAIN_REF,
+                &[],
+                &[],
+                Some("no source ref was given"),
+            ),
+        ];
+        for (case, accepted_ref, source_refs, tried, failure) in cases {
+            let provenance = Refuses::new(b"b", Some(*accepted_ref));
+            let result = verify_assets(&listed, download, &provenance, source_refs);
+            match failure {
+                None => assert!(result.is_ok(), "{case}: {result:?}"),
+                Some(failure) => {
+                    let error = format!("{:#}", result.unwrap_err());
+                    assert!(
+                        error.contains("tray has no valid build provenance")
+                            && error.contains(failure),
+                        "{case}: {error}"
+                    );
+                }
+            }
+            assert_eq!(*provenance.seen.lock().unwrap(), *tried, "{case}");
+        }
+    }
+
+    #[test]
+    fn each_asset_is_downloaded_once() {
+        let downloads = Mutex::new(0);
+        let download = |_: &Blob| {
+            *downloads.lock().unwrap() += 1;
+            Ok(b"a".to_vec())
+        };
+        let provenance = Refuses::new(b"b", Some(MAIN_REF));
+        let listed = assets(&[("tray", "sha256:a"), ("installer", "sha256:b")]);
+        verify_assets(&listed, download, &provenance, &["refs/tags/x", MAIN_REF]).unwrap();
+        assert_eq!(*downloads.lock().unwrap(), 2);
     }
 }

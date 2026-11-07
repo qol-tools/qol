@@ -16,7 +16,7 @@ mod release;
 use anyhow::{Context, Result};
 use artifact::Pushed;
 use host::HostConfig;
-use provenance::{GhAttestation, Provenance};
+use provenance::{GhAttestation, Provenance, Provenances};
 use qol_plugin_index::HOST_KEEP;
 use registry::{Access, Credentials, Registry};
 use std::io::Write;
@@ -30,7 +30,8 @@ usage: qol-plugin-registry <command> [options]
   push-host   --registry R --source URL --os OS --version V --revision SHA --files DIR
   backfill    --registry R --source URL --github-repo OWNER/REPO
   index       --registry R --public-key FILE --output FILE [--previous-url URL] [--keep N]
-              [--provenance-repo OWNER/REPO --provenance-workflow PATH]
+              [--provenance-repo OWNER/REPO --host-provenance-workflow PATH
+               --plugin-provenance-workflow PATH]
   push-index  --registry R --signed FILE
   prune       --registry R --public-key FILE --index-url URL [--keep-host N] [--dry-run]
 
@@ -124,28 +125,40 @@ fn index(args: &mut pico_args::Arguments) -> Result<()> {
     if keep == 0 {
         anyhow::bail!("--keep must be at least 1");
     }
-    let provenance = match (
-        args.opt_value_from_str("--provenance-repo")?,
-        args.opt_value_from_str("--provenance-workflow")?,
+    let attestations = match (
+        args.opt_value_from_str::<_, String>("--provenance-repo")?,
+        args.opt_value_from_str::<_, String>("--host-provenance-workflow")?,
+        args.opt_value_from_str::<_, String>("--plugin-provenance-workflow")?,
     ) {
-        (Some(repo), Some(workflow)) => Some(GhAttestation { repo, workflow }),
-        (None, None) => None,
-        _ => anyhow::bail!("--provenance-repo and --provenance-workflow go together"),
+        (Some(repo), Some(host_workflow), Some(plugin_workflow)) => Some((
+            GhAttestation {
+                repo: repo.clone(),
+                workflow: host_workflow,
+            },
+            GhAttestation {
+                repo,
+                workflow: plugin_workflow,
+            },
+        )),
+        (None, None, None) => None,
+        _ => anyhow::bail!(
+            "--provenance-repo, --host-provenance-workflow and --plugin-provenance-workflow go together"
+        ),
     };
+    let provenance = attestations.as_ref().map(|(host, plugin)| Provenances {
+        plugin: plugin as &dyn Provenance,
+        host: host as &dyn Provenance,
+    });
     let previous = match &previous_url {
-        Some(url) => deployed::fetch(&registry::agent(), url, &public_key)?,
+        Some(url) => Some(
+            deployed::fetch(&registry::agent(), url, &public_key)?.with_context(|| {
+                format!("the deployed index at {url} is missing; refusing to rebuild from nothing")
+            })?,
+        ),
         None => None,
     };
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let built = index::build(
-        &registry,
-        previous.as_ref(),
-        keep,
-        now,
-        provenance
-            .as_ref()
-            .map(|verifier| verifier as &dyn Provenance),
-    )?;
+    let built = index::build(&registry, previous.as_ref(), keep, now, provenance.as_ref())?;
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }

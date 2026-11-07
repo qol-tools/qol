@@ -62,19 +62,16 @@ jobs:
             --tag "${RELEASE_TAG}" \
             --report "${RUNNER_TEMP}/release-verification-report.json"
 
-  # Rerunnable: a tag that already holds this release is accepted, different
-  # content is refused.
-  registry:
-    name: Publish registry artifact
+  attest:
+    name: Attest release files
     needs: setup
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
-      packages: write
       actions: read
-    env:
-      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,6 +101,43 @@ jobs:
             --tag "${RELEASE_TAG}" \
             --files release_files \
             --report "${RUNNER_TEMP}/release-files-report.json"
+
+      - name: Attest release files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release_files/*
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ env.RELEASE_TAG }}
+          path: release_files/*
+          retention-days: 90
+          if-no-files-found: error
+
+  # Rerunnable: a tag that already holds this release is accepted, different
+  # content is refused.
+  registry:
+    name: Publish registry artifact
+    needs: attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          persist-credentials: false
+
+      - name: Download release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ env.RELEASE_TAG }}
+          path: release_files
 
       - uses: ./.github/actions/rust-setup
         with:
