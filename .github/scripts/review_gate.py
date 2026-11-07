@@ -14,7 +14,7 @@ from queue_verdict import gh_json
 REVIEW_BOT = "github-actions[bot]"
 REVIEW_WORKFLOW = "claude-review.yml"
 VERDICT_JOB = "claude review"
-COMMAND = re.compile(r"/review-override ([0-9a-f]{7,40})")
+COMMAND = re.compile(r"/review-override ([0-9a-f]{40})")
 RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) -->")
 CANCEL_GRACE_SECONDS = 300
 RESTART_POLLS = 12
@@ -122,10 +122,10 @@ def refuse(repo: str, pr: str, reason: str) -> int:
 def apply_override(repo: str, pr: str, body: str, actor: str, sleep: Callable[[float], None] = time.sleep) -> int:
     named = COMMAND.fullmatch((body.strip().splitlines() or [""])[0].strip())
     if not named:
-        return refuse(repo, pr, "name the head commit the override is for: `/review-override <sha>`.")
+        return refuse(repo, pr, "name the full 40-character head commit the override is for: `/review-override <sha>`.")
     head_sha = gh_json([f"repos/{repo}/pulls/{pr}"])["head"]["sha"]
-    if not head_sha.startswith(named.group(1)):
-        return refuse(repo, pr, f"`{named.group(1)}` is not the head commit `{head_sha[:7]}`, so its review was not overridden.")
+    if head_sha != named.group(1):
+        return refuse(repo, pr, f"`{named.group(1)[:7]}` is not the head commit `{head_sha[:7]}`, so its review was not overridden.")
     review = max(review_runs(repo, head_sha), key=lambda run: run["id"], default=None)
     if review is None or review.get("status") != "completed":
         return refuse(repo, pr, f"the review of `{head_sha[:7]}` has not finished, so there is no verdict to override yet.")

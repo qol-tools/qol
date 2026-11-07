@@ -823,6 +823,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 download = workflow.index("- name: Download candidate files")
                 self.assertLess(verify, download)
 
+    def test_release_workflows_verify_with_the_scripts_from_main(self):
+        for name, gate_end in [("release.yml", "  registry:\n"), ("qol-tray-release.yml", "  release:\n")]:
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github/workflows" / name).read_text()
+                gate = workflow.split(gate_end, 1)[0]
+                trusted = named_step(gate, "Checkout release scripts from main", "      ")
+                for contract in ["ref: main", "path: trusted", "sparse-checkout: .github/scripts", "persist-credentials: false"]:
+                    with self.subTest(contract=contract):
+                        self.assertIn(contract, trusted)
+                self.assertIn("python trusted/.github/scripts/release_candidate.py verify", gate)
+                self.assertNotIn("python .github/scripts/release_candidate.py verify", gate)
+
+    def test_versioning_prepare_runs_in_the_main_only_environment(self):
+        workflow = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        prepare = workflow.split("  prepare:\n", 1)[1].split("\n  plugin_candidate:", 1)[0]
+        self.assertIn("    environment: versioning\n", prepare.split("    steps:", 1)[0])
+        self.assertIn("ssh-key: ${{ secrets.VERSIONING_DEPLOY_KEY }}", prepare)
+        self.assertEqual(workflow.count("secrets.VERSIONING_DEPLOY_KEY"), 1)
+
     def test_ci_runs_release_profile_builds(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 

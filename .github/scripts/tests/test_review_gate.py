@@ -16,6 +16,7 @@ _SPEC.loader.exec_module(gate)
 
 SHA = "1f8c4b72353946d1433cb338fd46c3e9c09a0432"
 OTHER = "0719d4cc4" + "0" * 31
+FULL_SHA_REASON = "name the full 40-character head commit the override is for: `/review-override <sha>`."
 BOT = {"login": "github-actions[bot]"}
 
 
@@ -160,7 +161,7 @@ class ReviewRunsTests(unittest.TestCase):
 
 
 class ApplyOverrideTests(unittest.TestCase):
-    NAMED = f"/review-override {SHA[:7]}"
+    NAMED = f"/review-override {SHA}"
 
     def apply(self, api: FakeApi, entries: list[dict], body: str = NAMED) -> tuple[int, mock.Mock, str]:
         sleep = mock.Mock()
@@ -204,9 +205,10 @@ class ApplyOverrideTests(unittest.TestCase):
 
     def test_the_override_names_the_head_commit_or_is_refused(self):
         for body, reason in [
-            (f"/review-override {OTHER[:7]}", f"`{OTHER[:7]}` is not the head commit `1f8c4b7`, so its review was not overridden."),
-            ("/review-override 1f8c", "name the head commit the override is for: `/review-override <sha>`."),
-            (f"/review-override {SHA[:7]} please", "name the head commit the override is for: `/review-override <sha>`."),
+            (f"/review-override {OTHER}", f"`{OTHER[:7]}` is not the head commit `1f8c4b7`, so its review was not overridden."),
+            ("/review-override 1f8c", FULL_SHA_REASON),
+            (f"/review-override {SHA[:7]}", FULL_SHA_REASON),
+            (f"/review-override {SHA} please", FULL_SHA_REASON),
         ]:
             with self.subTest(body=body):
                 api = FakeApi(review=[run(6)])
