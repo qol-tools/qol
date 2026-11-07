@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use crate::znp::{Device, Endpoint};
 use anyhow::Result;
@@ -9,6 +10,8 @@ use crate::config::store;
 use crate::domain::model::{LightCommand, LightTarget, RgbColor};
 use crate::runtime::actions;
 use crate::service::light_service::LightService;
+
+use super::pairing::{self, SharedPairing};
 
 const BRIGHTNESS_STEP: u8 = 10;
 const MIREK_STEP: u16 = 25;
@@ -28,6 +31,7 @@ pub struct DaemonState {
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
     config: PluginConfig,
     main_target: SharedTarget,
+    pairing: SharedPairing,
     current_brightness: u8,
     current_mirek: u16,
 }
@@ -48,6 +52,7 @@ impl DaemonState {
             service: loaded.service,
             config: loaded.config,
             main_target: Arc::new(Mutex::new(loaded.main_target)),
+            pairing: SharedPairing::default(),
             current_brightness: loaded.current_brightness,
             current_mirek: loaded.current_mirek,
         })
@@ -59,6 +64,10 @@ impl DaemonState {
 
     pub fn shared_main_target(&self) -> SharedTarget {
         self.main_target.clone()
+    }
+
+    pub fn shared_pairing(&self) -> SharedPairing {
+        self.pairing.clone()
     }
 
     pub fn events(&self) -> crossbeam_channel::Receiver<crate::znp::ZigbeeEvent> {
@@ -98,10 +107,19 @@ impl DaemonState {
             return self.adjust_mirek(-(MIREK_STEP as i32));
         }
         if action == actions::PAIR {
-            return self.with_service(|svc| svc.backend().permit_join(60));
+            let window = pairing::PAIRING_WINDOW.as_secs() as u8;
+            let outcome = self.with_service(|svc| svc.backend().permit_join(window));
+            if matches!(outcome, DaemonOutcome::Handled) {
+                pairing::update(&self.pairing, |session| session.start(Instant::now()));
+            }
+            return outcome;
         }
         if action == actions::STOP_PAIR {
-            return self.with_service(|svc| svc.backend().permit_join(0));
+            let outcome = self.with_service(|svc| svc.backend().permit_join(0));
+            if matches!(outcome, DaemonOutcome::Handled) {
+                pairing::update(&self.pairing, |session| session.stop(Instant::now()));
+            }
+            return outcome;
         }
         if action == actions::SET_COLOR_MAIN {
             return self.apply_live_color();

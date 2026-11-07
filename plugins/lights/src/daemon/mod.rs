@@ -1,8 +1,11 @@
+mod pairing;
+mod payloads;
 mod state;
 pub mod ws;
 
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use qol_plugin_daemon::daemon::{self as core_daemon, DaemonConfig, ReadResult, SocketSource};
@@ -12,6 +15,8 @@ use crate::config::model::{DeviceEntry, EndpointEntry};
 use crate::config::store;
 use crate::service::light_service::LightService;
 
+use pairing::SharedPairing;
+use payloads::{DongleStatus, LightRow};
 pub use state::{DaemonOutcome, DaemonState};
 
 enum DaemonRuntime {
@@ -42,6 +47,7 @@ pub fn execute_action_once(action: &str) -> Result<()> {
 fn device_monitor_loop(
     events: crossbeam_channel::Receiver<crate::znp::ZigbeeEvent>,
     service: Arc<Mutex<Option<LightService<ZigbeeBackend>>>>,
+    pairing: SharedPairing,
 ) {
     while let Ok(event) = events.recv() {
         match event {
@@ -66,6 +72,9 @@ fn device_monitor_loop(
                     let _ = store::save(&config);
                     log::info!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 }
+                pairing::update(&pairing, |session| {
+                    session.light_joined(ieee.clone(), Instant::now())
+                });
                 if let Ok(guard) = service.lock() {
                     if let Some(svc) = guard.as_ref() {
                         let _ = svc.backend().permit_join(0);
@@ -94,9 +103,10 @@ fn runtime_state() -> DaemonRuntime {
 fn start_background_services(state: &DaemonState) {
     let events = state.events();
     let monitor_service = state.shared_service();
+    let monitor_pairing = state.shared_pairing();
     let _ = thread::Builder::new()
         .name("device-monitor".into())
-        .spawn(move || device_monitor_loop(events, monitor_service));
+        .spawn(move || device_monitor_loop(events, monitor_service, monitor_pairing));
 
     let command_buffer = ws::CommandBuffer::default();
     ws::start(
@@ -113,12 +123,13 @@ fn format_ieee(addr: &[u8; 8]) -> String {
         .join(":")
 }
 
-const CONNECTION_STATUS_QUERY: &str = "connection_status";
-const LIST_DEVICES_QUERY: &str = "list_devices";
+const LIGHTS_QUERY: &str = "lights";
+const FIND_LIGHTS_QUERY: &str = "find_lights";
+const DONGLE_QUERY: &str = "dongle";
 const LIGHT_OPTIONS_QUERY: &str = "light_options";
 const PING_ACTION: &str = "ping";
 const AUTOMATIC_LIGHT_LABEL: &str = "Automatic (one light only)";
-const NO_COORDINATOR_MESSAGE: &str = "No light dongle found. Plug one in, then scan again.";
+const NO_COORDINATOR_MESSAGE: &str = "No light dongle found. Plug one in, then find it again.";
 
 fn handle_action(runtime: &mut DaemonRuntime, action: &str) -> ReadResult<()> {
     let outcome = dispatch_action(runtime, action);
@@ -142,60 +153,26 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
         return DaemonOutcome::Handled;
     }
 
-    if action == LIST_DEVICES_QUERY {
-        let devices: Vec<serde_json::Value> = match runtime {
-            DaemonRuntime::Ready(s) => {
-                let guard = s.shared_service();
-                let Ok(lock) = guard.lock() else {
-                    return DaemonOutcome::Error("service lock poisoned".into());
-                };
-                match lock.as_ref() {
-                    Some(svc) => svc
-                        .backend()
-                        .devices()
-                        .iter()
-                        .map(|d| {
-                            serde_json::json!({
-                                "address": format!("0x{:04X}", d.network_address),
-                                "name": format_ieee(&d.ieee_address),
-                                "ieee": format_ieee(&d.ieee_address),
-                                "online": true,
-                            })
-                        })
-                        .collect(),
-                    None => vec![],
-                }
-            }
-            DaemonRuntime::Unavailable(_) => vec![],
-        };
-        return DaemonOutcome::HandledWithData(serde_json::json!(devices));
+    if action == LIGHTS_QUERY {
+        let main_target_id = store::load()
+            .map(|config| config.main_target_id)
+            .unwrap_or_default();
+        return DaemonOutcome::HandledWithData(payloads::lights_payload(
+            &light_rows(runtime),
+            &main_target_id,
+        ));
+    }
+
+    if action == FIND_LIGHTS_QUERY {
+        return find_lights(runtime);
+    }
+
+    if action == DONGLE_QUERY {
+        return DaemonOutcome::HandledWithData(payloads::dongle_payload(&dongle_status(runtime)));
     }
 
     if action == LIGHT_OPTIONS_QUERY {
         return light_options(runtime);
-    }
-
-    if action == CONNECTION_STATUS_QUERY {
-        let data = match runtime {
-            DaemonRuntime::Ready(_) => serde_json::json!({
-                "state": "ok",
-                "can_pair": true,
-            }),
-            DaemonRuntime::Unavailable(message) => {
-                let user_message = user_facing_unavailable_message(message);
-                let state = if user_message == NO_COORDINATOR_MESSAGE {
-                    "no_target"
-                } else {
-                    "offline"
-                };
-                serde_json::json!({
-                    "state": state,
-                    "can_pair": false,
-                    "message": user_message,
-                })
-            }
-        };
-        return DaemonOutcome::HandledWithData(data);
     }
 
     if let DaemonRuntime::Ready(state) = runtime {
@@ -225,31 +202,92 @@ fn dispatch_action(runtime: &mut DaemonRuntime, action: &str) -> DaemonOutcome {
     DaemonOutcome::Handled
 }
 
-fn light_options(runtime: &DaemonRuntime) -> DaemonOutcome {
+fn light_rows(runtime: &DaemonRuntime) -> Vec<LightRow> {
     let DaemonRuntime::Ready(state) = runtime else {
-        return DaemonOutcome::HandledWithData(serde_json::json!([]));
+        return Vec::new();
     };
     let guard = state.shared_service();
     let Ok(lock) = guard.lock() else {
-        return DaemonOutcome::Error("service lock poisoned".into());
+        return Vec::new();
+    };
+    let Some(svc) = lock.as_ref() else {
+        return Vec::new();
     };
     let names = store::load()
         .map(|config| config.devices)
         .unwrap_or_default();
+    svc.backend()
+        .devices()
+        .iter()
+        .map(|device| {
+            let ieee = format_ieee(&device.ieee_address);
+            let name = names
+                .get(&ieee)
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| ieee.clone());
+            LightRow {
+                ieee,
+                name,
+                network_address: device.network_address,
+            }
+        })
+        .collect()
+}
+
+fn find_lights(runtime: &DaemonRuntime) -> DaemonOutcome {
+    let session = match runtime {
+        DaemonRuntime::Ready(state) => pairing::snapshot(&state.shared_pairing()),
+        DaemonRuntime::Unavailable(_) => pairing::PairingSession::default(),
+    };
+    let ready = matches!(runtime, DaemonRuntime::Ready(_));
+    let lights = light_rows(runtime);
+    let joined = session
+        .joined()
+        .iter()
+        .filter_map(|ieee| lights.iter().find(|light| &light.ieee == ieee).cloned())
+        .collect::<Vec<_>>();
+    DaemonOutcome::HandledWithData(payloads::find_lights_payload(
+        session.phase(ready, Instant::now()),
+        &joined,
+    ))
+}
+
+fn dongle_status(runtime: &DaemonRuntime) -> DongleStatus {
+    match runtime {
+        DaemonRuntime::Ready(state) => {
+            let guard = state.shared_service();
+            let Ok(lock) = guard.lock() else {
+                return DongleStatus::Offline("service lock poisoned".into());
+            };
+            match lock.as_ref() {
+                Some(svc) => DongleStatus::Ready {
+                    port: svc.backend().serial_port().to_string(),
+                    channel: svc.backend().channel(),
+                },
+                None => DongleStatus::Offline("service not available".into()),
+            }
+        }
+        DaemonRuntime::Unavailable(message) => {
+            let user_message = user_facing_unavailable_message(message);
+            if user_message == NO_COORDINATOR_MESSAGE {
+                DongleStatus::Missing(user_message)
+            } else {
+                DongleStatus::Offline(user_message)
+            }
+        }
+    }
+}
+
+fn light_options(runtime: &DaemonRuntime) -> DaemonOutcome {
     let mut options = vec![serde_json::json!({
         "value": "",
         "label": AUTOMATIC_LIGHT_LABEL,
     })];
-    if let Some(svc) = lock.as_ref() {
-        options.extend(svc.backend().devices().iter().map(|device| {
-            let ieee = format_ieee(&device.ieee_address);
-            let label = names
-                .get(&ieee)
-                .map(|entry| entry.name.clone())
-                .unwrap_or_else(|| ieee.clone());
-            serde_json::json!({ "value": ieee, "label": label })
-        }));
-    }
+    options.extend(
+        light_rows(runtime)
+            .into_iter()
+            .map(|light| serde_json::json!({ "value": light.ieee, "label": light.name })),
+    );
     DaemonOutcome::HandledWithData(serde_json::json!(options))
 }
 
@@ -312,42 +350,47 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_runtime_status_reports_pairing_unavailable() {
-        let mut runtime = DaemonRuntime::Unavailable(
-            "no Zigbee coordinator responded on auto-detected serial ports: /dev/tty.fake"
-                .to_string(),
-        );
-        let outcome = dispatch_action(&mut runtime, CONNECTION_STATUS_QUERY);
-
-        match outcome {
-            DaemonOutcome::HandledWithData(data) => assert_eq!(
-                data,
-                serde_json::json!({
-                    "state": "no_target",
-                    "can_pair": false,
-                    "message": NO_COORDINATOR_MESSAGE,
-                })
+    fn unavailable_runtime_reports_the_dongle_and_offers_to_find_it() {
+        let cases = [
+            (
+                "no Zigbee coordinator responded on auto-detected serial ports: /dev/tty.fake",
+                "No dongle found",
+                NO_COORDINATOR_MESSAGE,
             ),
-            _ => panic!("expected status data"),
+            ("permission denied", "Dongle offline", "permission denied"),
+        ];
+        for (failure, label, detail) in cases {
+            let mut runtime = DaemonRuntime::Unavailable(failure.to_string());
+            let DaemonOutcome::HandledWithData(data) = dispatch_action(&mut runtime, DONGLE_QUERY)
+            else {
+                panic!("expected dongle data for {failure}");
+            };
+            assert_eq!(data["lead"]["label"], label);
+            assert_eq!(data["lead"]["detail"], detail);
+            assert_eq!(data["lead"]["can_find"], true);
         }
     }
 
     #[test]
-    fn unavailable_runtime_status_stays_offline_for_other_failures() {
-        let mut runtime = DaemonRuntime::Unavailable("permission denied".to_string());
-        let outcome = dispatch_action(&mut runtime, CONNECTION_STATUS_QUERY);
-
-        match outcome {
-            DaemonOutcome::HandledWithData(data) => assert_eq!(
-                data,
-                serde_json::json!({
-                    "state": "offline",
-                    "can_pair": false,
-                    "message": "permission denied",
-                })
-            ),
-            _ => panic!("expected status data"),
+    fn unavailable_runtime_answers_every_settings_list_query() {
+        let cases = [
+            (LIGHTS_QUERY, serde_json::json!([])),
+            (FIND_LIGHTS_QUERY, serde_json::json!([])),
+        ];
+        for (query, items) in cases {
+            let mut runtime = DaemonRuntime::Unavailable("permission denied".to_string());
+            let DaemonOutcome::HandledWithData(data) = dispatch_action(&mut runtime, query) else {
+                panic!("expected data for {query}");
+            };
+            assert_eq!(data["items"], items, "{query}");
         }
+        let mut runtime = DaemonRuntime::Unavailable("permission denied".to_string());
+        let DaemonOutcome::HandledWithData(find) = dispatch_action(&mut runtime, FIND_LIGHTS_QUERY)
+        else {
+            panic!("expected find data");
+        };
+        assert_eq!(find["lead"]["can_find"], true);
+        assert_eq!(find["lead"]["can_start"], false);
     }
 
     #[test]

@@ -39,16 +39,20 @@ description = "Apply the live color temperature to the main target"
 [action.reload]
 description = "Reconnect to the Zigbee coordinator"
 
-[query.list_devices]
-description = "All known Zigbee devices"
+[query.lights]
+description = "Lights paired with the dongle, with the main light marked"
+poll_interval_ms = 1000
+
+[query.find_lights]
+description = "Pairing state and the lights that joined during the current or last search"
+poll_interval_ms = 500
+
+[query.dongle]
+description = "Whether the light dongle is connected, and on which port and channel"
 poll_interval_ms = 3000
 
 [query.light_options]
 description = "Paired lights that can be the main light"
-poll_interval_ms = 3000
-
-[query.connection_status]
-description = "Current coordinator connection state"
 poll_interval_ms = 3000
 
 [stream.live_color]

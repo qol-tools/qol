@@ -1,60 +1,74 @@
 schema_version = 1
 title = "Lights"
-description = "Turn lights on and off and change their color and brightness."
+description = "Pair lights with your dongle and control the main light."
 
-[section.connection]
-label = "Connection"
-description = "Your light dongle and the lights paired with it."
+[section.lights]
+label = "Lights"
+description = "The lights paired with your dongle, and finding new ones."
 
-[section.controls]
-label = "Controls"
-description = "What the main light does right now."
-
-[section.advanced]
-label = "Advanced"
-description = "Only change these if Scan for dongle cannot find your dongle."
-
-[field.coordinator_status]
-type = "status"
-label = "Dongle"
-section = "connection"
-query = "connection_status"
-value_from = "state"
-label_map = { ok = "Connected", offline = "Offline", no_target = "No dongle found" }
-tone_map = { ok = "success", offline = "danger", no_target = "danger" }
-
-[field.reconnect]
-type = "action"
-label = "Scan for dongle"
-section = "connection"
-action = "reload"
-variant = "primary"
-description = "Use after plugging in your light dongle."
-
-[field.pair_device]
-type = "action"
-label = "Pair device"
-section = "connection"
-action = "pair"
-variant = "primary"
-description = "Needs a compatible light dongle plugged in."
-
-[field.known_devices]
+[field.lights]
 type = "list"
-label = "Devices"
-section = "connection"
-query = "list_devices"
+label = "Lights"
+section = "lights"
+query = "lights"
 row_label = "{name}"
-row_subtitle = "{address}"
-empty_message = "No lights paired yet. Press Pair device to start."
-card_description = "The lights paired with your dongle."
+row_subtitle = "{detail}"
+empty_message = "No lights paired. Find lights to pair one."
+card_description = "Lights paired with your dongle."
+
+[field.find_lights]
+type = "list"
+label = "Find lights"
+description = "Search for new lights and pair them with your dongle."
+section = "lights"
+query = "find_lights"
+row_label = "{name}"
+row_subtitle = "{detail}"
+items_label = "paired lights"
+card_description = "lights that joined. reset a light to pair it."
+
+[field.find_lights.lead]
+label = "search"
+description = "{description}"
+row_label = "{label}"
+row_subtitle = "{detail}"
+
+[[field.find_lights.lead.actions]]
+action = "reload"
+label = "Find dongle"
+when = "can_find"
+
+[[field.find_lights.lead.actions]]
+action = "stop_pair"
+label = "Stop"
+when = "can_stop"
+
+[[field.find_lights.lead.actions]]
+action = "pair"
+label = "Search"
+when = "can_start"
+
+[[field.find_lights.lead.actions]]
+action = "pair"
+label = "Search again"
+when = "can_search_again"
+
+[[field.find_lights.row_actions]]
+label = "Open"
+description = "Shows the light in Lights."
+when = "paired"
+open = "lights"
+
+[section.main_light]
+label = "Main light"
+description = "What the main light does now. The main light hotkeys drive the same light."
 
 [field.main_target_id]
 type = "select"
 config_key = "main_target_id"
 label = "Main light"
-description = "The light that the controls below and the main light hotkeys drive. Needed once two or more lights are paired."
-section = "controls"
+description = "The light these controls and the main light hotkeys drive. Needed once two or more lights are paired."
+section = "main_light"
 default = ""
 query = "light_options"
 lookup_label = "lights"
@@ -62,9 +76,9 @@ card_description = "The light these controls drive."
 
 [field.toggle_power]
 type = "action"
-label = "Turn main light on or off"
+label = "Turn on or off"
 description = "Switches the main light's power to the opposite of what it is now."
-section = "controls"
+section = "main_light"
 action = "toggle_main"
 variant = "primary"
 
@@ -72,8 +86,8 @@ variant = "primary"
 type = "color"
 config_key = "live_color_hex"
 label = "Color"
-description = "Pick the color the main light glows."
-section = "controls"
+description = "The color the main light glows."
+section = "main_light"
 default = "#FFFFFF"
 stream = "live_color"
 
@@ -81,8 +95,8 @@ stream = "live_color"
 type = "number"
 config_key = "live_brightness"
 label = "Brightness"
-description = "Drag the knob to set how bright the main light is."
-section = "controls"
+description = "How bright the main light is."
+section = "main_light"
 default = 100
 min = 1
 max = 100
@@ -95,8 +109,8 @@ action = "set_brightness_main"
 type = "number"
 config_key = "live_mirek"
 label = "Color temperature"
-description = "Drag the knob to set how warm the main light's white is. 153 is coolest and 500 is warmest."
-section = "controls"
+description = "How warm the main light's white is. 153 is coolest and 500 is warmest."
+section = "main_light"
 default = 300
 min = 153
 max = 500
@@ -104,20 +118,44 @@ step = 1
 variant = "slider"
 action = "set_colortemp_main"
 
+[section.dongle]
+label = "Dongle"
+description = "The light dongle and the radio channel your lights use."
+
+[field.dongle]
+type = "list"
+label = "Light dongle"
+section = "dongle"
+query = "dongle"
+row_label = "{name}"
+row_subtitle = "{detail}"
+card_description = "The dongle your lights pair with."
+items_label = "dongle"
+
+[field.dongle.lead]
+label = "dongle"
+row_label = "{label}"
+row_subtitle = "{detail}"
+
+[[field.dongle.lead.actions]]
+action = "reload"
+label = "Find dongle"
+when = "can_find"
+
 [field.serial_port]
 type = "string"
 config_key = "backend.serial_port"
 label = "Dongle port"
 description = "The serial port your dongle is on. Leave it as auto to find the dongle by itself. Applies the next time the plugin connects to the dongle."
-section = "advanced"
+section = "dongle"
 default = "auto"
 
 [field.channel]
 type = "number"
 config_key = "backend.channel"
 label = "Zigbee channel"
-description = "The radio channel the lights use, from 11 to 26. Applies the next time the plugin connects to the dongle."
-section = "advanced"
+description = "The radio channel your lights use, from 11 to 26. Applies the next time the plugin connects to the dongle."
+section = "dongle"
 default = 11
 min = 11
 max = 26
