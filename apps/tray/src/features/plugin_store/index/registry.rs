@@ -167,7 +167,7 @@ async fn send(request: reqwest::RequestBuilder, url: &str) -> Result<reqwest::Re
     request
         .send_observed()
         .await
-        .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))
+        .map_err(|error| anyhow::Error::new(error).context(format!("could not reach {url}")))
 }
 
 fn remembered_token(scope: &str) -> Option<String> {

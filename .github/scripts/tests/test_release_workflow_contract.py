@@ -1109,10 +1109,16 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
     def test_plugin_registry_push_waits_for_every_target_file(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
-        self.assertIn("needs: setup", registry)
+        attest = workflow.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
+        self.assertIn("needs: setup", attest)
         self.assertLess(
-            registry.index("release_candidate.py require-release-files"),
+            attest.index("release_candidate.py require-release-files"),
+            attest.index("- name: Attest release files"),
+        )
+        registry = workflow.split("  registry:\n", 1)[1].split("  index:\n", 1)[0]
+        self.assertIn("needs: attest", registry)
+        self.assertLess(
+            registry.index("- name: Download release files"),
             registry.index("- name: Push registry artifact"),
         )
         self.assertIn("packages: write", registry)
@@ -1125,6 +1131,37 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, push)
+
+    def test_plugin_releases_attest_the_files_before_the_registry_push(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        attest = workflow.split("  attest:\n", 1)[1].split("\n  registry:\n", 1)[0]
+        self.assertIn("needs: setup", attest)
+        self.assertIn("actions/attest-build-provenance@", attest)
+        self.assertIn("subject-path: release_files/*", attest)
+        named_step(attest, "Require every target", "      ")
+        self.assertIn("retention-days: 90", named_step(attest, "Upload release files", "      "))
+        self.assertNotIn("cargo", attest)
+        registry = workflow.split("  registry:\n", 1)[1].split("\n  index:\n", 1)[0]
+        self.assertIn("needs: attest", registry)
+        self.assertIn("persist-credentials: false", registry)
+        self.assertIn("name: release-${{ env.RELEASE_TAG }}", registry)
+        self.assertNotIn("id-token", registry)
+        self.assertNotIn("run-id:", registry)
+        build = named_step(registry, "Build registry tool", "      ")
+        self.assertNotIn("token", build)
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        self.assertIn('gh workflow run release.yml --ref "${tag}" -f tag="${tag}"', versioning)
+        self.assertNotIn("gh workflow run release.yml --ref main", versioning)
+
+    def test_the_index_verifies_plugin_and_host_provenance(self):
+        workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
+        self.assertLess(workflow.index("fetch-depth: 0"), workflow.index("- name: Build index"))
+        self.assertIn("--host-provenance-workflow .github/workflows/qol-tray-host-publish.yml", workflow)
+        self.assertIn("--plugin-provenance-workflow .github/workflows/release.yml", workflow)
+        self.assertNotIn("--provenance-workflow ", workflow)
+        build = workflow.split("  build:\n", 1)[1].split("  sign:\n", 1)[0]
+        fail = named_step(build, "Fail when a version is left out", "      ")
+        self.assertIn("version(s) were left out", fail)
 
     def test_registry_tool_compiles_in_a_step_that_holds_no_token(self):
         jobs = {
@@ -1227,17 +1264,17 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         positions = [sign.index(marker) for marker in order]
         self.assertEqual(positions, sorted(positions))
 
-    def test_plugin_index_fails_after_publishing_when_a_host_version_is_left_out(self):
+    def test_plugin_index_fails_after_publishing_when_a_version_is_left_out(self):
         workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()
         build = workflow.split("  build:\n", 1)[1].split("  sign:\n", 1)[0]
         deploy = workflow.split("  deploy:\n", 1)[1].split("  registry:\n", 1)[0]
         registry = workflow.split("  registry:\n", 1)[1]
         for job in (deploy, registry):
             self.assertIn("if: ${{ !cancelled() && needs.sign.result == 'success' }}", job)
-        fail = named_step(build, "Fail when a host version is left out", "      ")
+        fail = named_step(build, "Fail when a version is left out", "      ")
         self.assertIn("if: steps.index.outputs.left_out != '0'", fail)
         self.assertIn("exit 1", fail)
-        self.assertGreater(build.index("- name: Fail when a host version is left out"), build.index("actions/upload-artifact"))
+        self.assertGreater(build.index("- name: Fail when a version is left out"), build.index("actions/upload-artifact"))
         index = named_step(build, "Build index", "      ")
         self.assertIn("id: index", index)
         script = textwrap.dedent(index.split("        run: |\n", 1)[1])

@@ -3,11 +3,9 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::daemon::{DaemonEvent, EventBus};
-use crate::features::plugin_store::release_integrity::{
-    self, GitHubAsset, GitHubRelease, IndexedHostAsset, IndexedHostRelease,
-};
+use crate::features::plugin_store::release_integrity::{IndexedHostAsset, IndexedHostRelease};
 
-use super::super::{FoundUpdate, GITHUB_REPO, HOST_TAG_PREFIX};
+use super::super::FoundUpdate;
 
 #[cfg(feature = "dev")]
 pub(super) fn dev_update_url() -> Option<String> {
@@ -26,23 +24,17 @@ pub(super) struct HostUpdate {
 
 enum HostFiles {
     PluginIndex(IndexedHostRelease),
-    GitHubRelease(GitHubRelease),
 }
 
 pub(super) enum HostAsset {
     PluginIndex(IndexedHostAsset),
-    GitHubRelease(GitHubAsset),
 }
 
-pub(super) async fn resolve_update(update: Option<FoundUpdate>) -> Result<HostUpdate> {
+pub(super) fn resolve_update(update: Option<FoundUpdate>) -> Result<HostUpdate> {
     let update = update.ok_or_else(|| anyhow::anyhow!("No update version available"))?;
     let version = update.version().to_string();
     let files = match update {
         FoundUpdate::PluginIndex(release) => HostFiles::PluginIndex(release),
-        FoundUpdate::GitHubRelease { version } => {
-            let tag = format!("{HOST_TAG_PREFIX}-v{version}");
-            HostFiles::GitHubRelease(release_integrity::fetch_release(GITHUB_REPO, &tag).await?)
-        }
     };
     Ok(HostUpdate { version, files })
 }
@@ -55,9 +47,6 @@ impl HostUpdate {
     pub(super) fn asset(&self, name: &str) -> Result<HostAsset> {
         match &self.files {
             HostFiles::PluginIndex(release) => release.asset(name).map(HostAsset::PluginIndex),
-            HostFiles::GitHubRelease(release) => {
-                release_integrity::verified_asset(release, name).map(HostAsset::GitHubRelease)
-            }
         }
     }
 }
@@ -66,7 +55,6 @@ impl HostAsset {
     fn location(&self) -> String {
         match self {
             Self::PluginIndex(asset) => asset.location(),
-            Self::GitHubRelease(asset) => asset.browser_download_url.clone(),
         }
     }
 
@@ -75,10 +63,6 @@ impl HostAsset {
             Self::PluginIndex(asset) => {
                 write_response(asset.open().await?, dest, on_percent).await?;
                 asset.verify_file(dest)
-            }
-            Self::GitHubRelease(asset) => {
-                download_to(&asset.browser_download_url, dest, on_percent).await?;
-                release_integrity::verify_file(asset, dest)
             }
         }
     }
@@ -144,29 +128,9 @@ async fn write_response(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::{Digest, Sha256};
 
     const HOST: &str = "qol-tray-host.exe";
     const INSTALLER: &str = "qol-tray-install.exe";
-
-    fn github(immutable: bool, assets: &[(&str, Option<&[u8]>)]) -> HostUpdate {
-        let assets = assets
-            .iter()
-            .map(|(name, bytes)| GitHubAsset {
-                name: name.to_string(),
-                browser_download_url: format!("https://github.invalid/{name}"),
-                digest: bytes.map(|bytes| format!("sha256:{:x}", Sha256::digest(bytes))),
-            })
-            .collect();
-        HostUpdate {
-            version: "3.2.0".to_string(),
-            files: HostFiles::GitHubRelease(GitHubRelease {
-                tag_name: "qol-tray-v3.2.0".to_string(),
-                immutable,
-                assets,
-            }),
-        }
-    }
 
     fn indexed(assets: &[(&str, &[u8])]) -> HostUpdate {
         HostUpdate {
@@ -176,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn each_asset_comes_from_the_source_that_found_the_update() {
+    fn each_asset_comes_from_the_plugin_index() {
         let cases: Vec<(&str, HostUpdate, &str, Result<&str, &str>)> = vec![
             (
                 "index lists the asset",
@@ -189,30 +153,6 @@ mod tests {
                 indexed(&[(HOST, b"host")]),
                 INSTALLER,
                 Err("lists no qol-tray-install.exe"),
-            ),
-            (
-                "immutable release with a digest",
-                github(true, &[(HOST, Some(b"host")), (INSTALLER, Some(b"i"))]),
-                INSTALLER,
-                Ok("https://github.invalid/qol-tray-install.exe"),
-            ),
-            (
-                "mutable release",
-                github(false, &[(HOST, Some(b"host"))]),
-                HOST,
-                Err("mutable"),
-            ),
-            (
-                "release asset without a digest",
-                github(true, &[(HOST, None)]),
-                HOST,
-                Err("no digest"),
-            ),
-            (
-                "release without the asset",
-                github(true, &[(HOST, Some(b"host"))]),
-                INSTALLER,
-                Err("missing asset"),
             ),
         ];
         for (case, update, name, expected) in cases {

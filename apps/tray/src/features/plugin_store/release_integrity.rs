@@ -90,12 +90,6 @@ pub(crate) async fn download_verified(asset: &GitHubAsset, destination: &Path) -
     })
 }
 
-pub(crate) fn verify_file(asset: &GitHubAsset, path: &Path) -> Result<()> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("failed to read downloaded asset {}", path.display()))?;
-    verify_bytes(asset, &bytes)
-}
-
 fn verify_bytes(asset: &GitHubAsset, bytes: &[u8]) -> Result<()> {
     let label = format!("release asset '{}'", asset.name);
     compare_sha256(expected_sha256(asset)?, bytes, &label)

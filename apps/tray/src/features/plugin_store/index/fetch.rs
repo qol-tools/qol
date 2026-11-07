@@ -111,7 +111,7 @@ pub(super) async fn get(client: &reqwest::Client, url: &str) -> Result<reqwest::
         .get(url)
         .send_observed()
         .await
-        .map_err(|error| anyhow::anyhow!("could not reach {url}: {error}"))?;
+        .map_err(|error| anyhow::Error::new(error).context(format!("could not reach {url}")))?;
     let status = response.status();
     if !status.is_success() {
         return Err(anyhow::anyhow!("{url} answered {status}"));
@@ -124,7 +124,7 @@ pub(super) async fn read_body<T>(
     body: impl std::future::Future<Output = reqwest::Result<T>>,
 ) -> Result<T> {
     body.await
-        .map_err(|error| anyhow::anyhow!("could not read {url}: {error}"))
+        .map_err(|error| anyhow::Error::new(error).context(format!("could not read {url}")))
 }
 
 fn keep_newest(

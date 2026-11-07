@@ -54,7 +54,33 @@ pub fn tree_tar(commit: &str, dir: &str) -> Result<Vec<u8>> {
     )
 }
 
+pub fn is_ancestor_of_head(revision: &str) -> Result<bool> {
+    let args = ["merge-base", "--is-ancestor", revision, "HEAD"];
+    let output = git_status(&args, None)?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
+}
+
 fn git(args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>> {
+    let output = git_status(args, stdin)?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output.stdout)
+}
+
+fn git_status(args: &[&str], stdin: Option<&[u8]>) -> Result<std::process::Output> {
     let mut child = Command::new("git")
         .args(args)
         .stdin(if stdin.is_some() {
@@ -69,15 +95,7 @@ fn git(args: &[&str], stdin: Option<&[u8]>) -> Result<Vec<u8>> {
     if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
         pipe.write_all(input)?;
     }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(output.stdout)
+    Ok(child.wait_with_output()?)
 }
 
 fn text(bytes: &[u8]) -> Result<String> {

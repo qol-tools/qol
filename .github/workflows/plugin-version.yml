@@ -878,7 +878,7 @@ jobs:
               gh workflow run qol-tray-release.yml --ref main -f tag="${tag}"
               continue
             fi
-            gh workflow run release.yml --ref main -f tag="${tag}"
+            gh workflow run release.yml --ref "${tag}" -f tag="${tag}"
           done
 
       - name: Upload attestation report

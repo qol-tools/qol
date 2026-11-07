@@ -155,7 +155,7 @@ pub(super) async fn download_and_install(
     let update = if dev_override {
         None
     } else {
-        Some(download::resolve_update(update).await?)
+        Some(download::resolve_update(update)?)
     };
     download::download_update_asset(update.as_ref(), dev_url, &asset_name(), &dest, &events)
         .await?;
