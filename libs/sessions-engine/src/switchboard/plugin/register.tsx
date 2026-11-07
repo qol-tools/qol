@@ -2474,7 +2474,7 @@ export const register: Register = on => {
     viewedFork = viewed
     const target = viewed === undefined ? list.find(entry => entry.agentId === writing) : undefined
     if (target !== undefined) refreshDetails($, pullsOf(ledger, target.agentId), details, now)
-    const mainModel = target === undefined || seen[SWITCHBOARD] !== undefined ? undefined : await $.session.model().catch(() => undefined)
+    const mainModel = target === undefined ? undefined : await $.session.model().catch(() => undefined)
     const isFocused = e.props.isFocused
     const needs = list.filter(needsYou).sort((a, b) => a.at - b.at)
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
@@ -2560,14 +2560,11 @@ export const register: Register = on => {
     const inner = Math.max(24, e.props.bodyColumns - 4)
     const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
       <Box key={key} flexDirection="column" borderStyle="single" borderDimColor paddingX={1} marginTop={1}>
-        <Box position="absolute" top={-1} left={1}>
-          <Text> {title} </Text>
+        <Box flexDirection="row">
+          <Text>{title}</Text>
+          <Box flexGrow={1} />
+          {right !== undefined && <Text>{right}</Text>}
         </Box>
-        {right !== undefined && (
-          <Box position="absolute" top={-1} right={1}>
-            <Text> {right} </Text>
-          </Box>
-        )}
         {body}
       </Box>
     )
@@ -2635,7 +2632,7 @@ export const register: Register = on => {
       const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
       const pickedModel = isNewer ? choice?.model : undefined
       const pickedEffort = isNewer ? choice?.effort : undefined
-      const shownModel = was?.model ?? fallback
+      const shownModel = fallback ?? was?.model
       const model = pickedModel ?? shownModel
       const effort = pickedEffort ?? was?.effort
       const level = EFFORTS.findIndex(one => one === effort)
@@ -2660,7 +2657,6 @@ export const register: Register = on => {
               {label('model')}
               {shownModel === undefined ? <Text dimColor>shows at its next model call</Text> : <Text bold>{modelName(shownModel)}</Text>}
               <Box flexGrow={1} />
-              <Text dimColor>/model changes it</Text>
             </Box>
             <Box flexDirection="row">
               {label('effort')}
@@ -2784,7 +2780,7 @@ export const register: Register = on => {
     const switchboardFrame = frame(
       'switchboard',
       <Text bold>SWITCHBOARD</Text>,
-      <Text dimColor>this chat</Text>,
+      <Text dimColor>this chat · /model here changes only the switchboard</Text>,
       <Box flexDirection="column">
         {modelRows(SWITCHBOARD, mainModel, false)}
         {switchboardSaid.length > 0 && divider('LOG')}
