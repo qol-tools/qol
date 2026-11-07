@@ -6750,6 +6750,7 @@ dependencies = [
  "qol-apps",
  "qol-config",
  "qol-conventions",
+ "qol-fs",
  "qol-gpui",
  "qol-headless",
  "qol-log",

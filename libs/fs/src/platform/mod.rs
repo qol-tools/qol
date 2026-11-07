@@ -4,17 +4,21 @@ mod fallback;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(not(target_os = "windows"))]
+mod rename_check;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix_call;
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-pub use fallback::file_identity;
+pub use fallback::{file_identity, rename_noreplace};
 #[cfg(target_os = "linux")]
-pub use linux::file_identity;
+pub use linux::{file_identity, rename_noreplace};
 #[cfg(target_os = "macos")]
-pub use macos::file_identity;
+pub use macos::{file_identity, rename_noreplace};
 #[cfg(target_os = "windows")]
-pub use windows::file_identity;
+pub use windows::{file_identity, rename_noreplace};
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub(crate) use fallback::{

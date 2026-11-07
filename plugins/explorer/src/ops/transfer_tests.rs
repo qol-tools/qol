@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
+use super::copy::{copy_node, remove_copied, Meter};
 use super::{
     partial_name, partial_of, start, survey, Done, Progress, Resolve, Room, Transfer, Verb,
 };
@@ -439,4 +440,104 @@ fn links_with_the_same_target_count_as_the_same_whatever_their_age() {
     let found = survey(transfer(Verb::Copy, &[&from.join("docs")], &into)).unwrap();
     assert!(found.clashes.is_empty());
     assert_eq!(found.same_inside, 1);
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn a_hard_linked_pair_is_a_kept_clash_and_a_move_leaves_the_source_file() {
+    let (_root, from, into) = two_folders();
+    write(&from.join("a.txt"), "shared", 50);
+    fs::hard_link(from.join("a.txt"), into.join("a.txt")).unwrap();
+    let found = survey(transfer(Verb::Move, &[&from.join("a.txt")], &into)).unwrap();
+    assert_eq!(found.clashes.len(), 1);
+    assert!(!found.clashes[0].same);
+    assert_eq!(found.clashes[0].choice, Resolve::Keep);
+    assert_eq!(found.bytes, 0);
+    let (done, _) = run(found);
+    assert!(done.failures.is_empty());
+    assert!(done.placed.is_empty());
+    assert_eq!(fs::read_to_string(from.join("a.txt")).unwrap(), "shared");
+    assert_eq!(fs::read_to_string(into.join("a.txt")).unwrap(), "shared");
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[test]
+fn a_hard_linked_pair_inside_a_merge_is_a_kept_clash_and_stays_put() {
+    let (_root, from, into) = two_folders();
+    write(&from.join("docs/a.txt"), "shared", 50);
+    fs::create_dir_all(into.join("docs")).unwrap();
+    fs::hard_link(from.join("docs/a.txt"), into.join("docs/a.txt")).unwrap();
+    let found = survey(transfer(Verb::Move, &[&from.join("docs")], &into)).unwrap();
+    assert_eq!(found.same_inside, 0);
+    assert_eq!(found.clashes.len(), 1);
+    assert_eq!(found.clashes[0].choice, Resolve::Keep);
+    let (done, _) = run(found);
+    assert!(done.failures.is_empty());
+    assert!(done.matched.is_empty());
+    assert_eq!(
+        fs::read_to_string(from.join("docs/a.txt")).unwrap(),
+        "shared"
+    );
+    assert_eq!(
+        fs::read_to_string(into.join("docs/a.txt")).unwrap(),
+        "shared"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn survey_refuses_a_folder_inside_itself_through_a_symlinked_target() {
+    let (root, from, _into) = two_folders();
+    fs::create_dir_all(from.join("sub")).unwrap();
+    let link = root.path().join("link");
+    std::os::unix::fs::symlink(from.join("sub"), &link).unwrap();
+    let error = survey(transfer(Verb::Move, &[&from], &link)).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+struct Quiet;
+
+impl Meter for Quiet {
+    fn advance(&mut self, _bytes: u64) {}
+}
+
+fn copied_tree() -> (TempDir, PathBuf, Vec<super::copy::Copied>) {
+    let root = tempfile::tempdir().unwrap();
+    let src = root.path().join("src");
+    write(&src.join("a.txt"), "a", 50);
+    write(&src.join("b.txt"), "b", 50);
+    write(&src.join("sub/c.txt"), "c", 50);
+    let mut copied = Vec::new();
+    copy_node(&src, &root.path().join("dst"), &mut Quiet, &mut copied).unwrap();
+    (root, src, copied)
+}
+
+#[test]
+fn removing_a_recorded_tree_takes_every_recorded_entry() {
+    let (_root, src, copied) = copied_tree();
+    remove_copied(&copied).unwrap();
+    assert!(!src.exists());
+}
+
+#[test]
+fn removal_keeps_a_file_that_landed_in_a_copied_folder_and_stops_at_the_error() {
+    let (_root, src, copied) = copied_tree();
+    write(&src.join("sub/late.txt"), "late", 1);
+    let error = remove_copied(&copied).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::DirectoryNotEmpty);
+    assert_eq!(names(&src), vec!["a.txt", "b.txt", "sub"]);
+    assert_eq!(names(&src.join("sub")), vec!["late.txt"]);
+}
+
+#[test]
+fn removal_keeps_a_file_edited_after_it_was_copied_and_stops_at_the_error() {
+    let (_root, src, copied) = copied_tree();
+    write(&src.join("a.txt"), "edited after the copy", 1);
+    let error = remove_copied(&copied).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    assert_eq!(names(&src), vec!["a.txt"]);
+    assert_eq!(
+        fs::read_to_string(src.join("a.txt")).unwrap(),
+        "edited after the copy"
+    );
 }

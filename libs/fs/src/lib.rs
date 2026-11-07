@@ -1,6 +1,6 @@
 mod platform;
 
-pub use platform::file_identity;
+pub use platform::{file_identity, rename_noreplace};
 
 use std::fs;
 use std::io::{self, Write};
@@ -239,6 +239,55 @@ mod tests {
             let refused = copy_dir_all(&source, &temp.path().join("again")).unwrap_err();
             assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
         }
+    }
+
+    #[test]
+    fn rename_noreplace_moves_onto_a_free_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let from = temp.path().join("from");
+        let to = temp.path().join("to");
+        fs::write(&from, "x").unwrap();
+
+        rename_noreplace(&from, &to).unwrap();
+
+        assert!(!from.exists());
+        assert_eq!(fs::read_to_string(&to).unwrap(), "x");
+    }
+
+    #[test]
+    fn rename_noreplace_refuses_an_existing_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let from = temp.path().join("from");
+        let to = temp.path().join("to");
+        fs::write(&from, "incoming").unwrap();
+        fs::write(&to, "existing").unwrap();
+
+        let refused = rename_noreplace(&from, &to).unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&from).unwrap(), "incoming");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "existing");
+    }
+
+    #[test]
+    fn rename_noreplace_refuses_an_existing_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let from = temp.path().join("from");
+        let to = temp.path().join("to");
+        fs::create_dir(&from).unwrap();
+        fs::write(from.join("incoming"), "incoming").unwrap();
+        fs::create_dir(&to).unwrap();
+        fs::write(to.join("existing"), "existing").unwrap();
+
+        let refused = rename_noreplace(&from, &to).unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(from.join("incoming")).unwrap(),
+            "incoming"
+        );
+        assert_eq!(fs::read_to_string(to.join("existing")).unwrap(), "existing");
+        assert!(!to.join("incoming").exists());
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]

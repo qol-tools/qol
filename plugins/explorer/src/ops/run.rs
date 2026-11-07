@@ -7,7 +7,10 @@ use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::copy::{copy_node, remove_all, same_content, same_link, Meter};
+use super::copy::{
+    copy_node, remove_all, remove_copied, same_content, same_entry, same_link, same_object, Meter,
+    ALREADY_THERE,
+};
 use super::simple::plain;
 use super::{
     copy_name, free_name, next_job_id, restore, trash, Done, Failure, Job, JobId, Progress,
@@ -204,7 +207,7 @@ impl Run {
 
     fn place(&mut self, src: &Path, target: &Path, moving: bool) -> bool {
         if moving {
-            match fs::rename(src, target) {
+            match qol_fs::rename_noreplace(src, target) {
                 Ok(()) => return true,
                 Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {}
                 Err(error) => {
@@ -218,18 +221,19 @@ impl Run {
         else {
             return false;
         };
-        if let Err(error) = copy_node(src, &partial, self) {
+        let mut copied = Vec::new();
+        if let Err(error) = copy_node(src, &partial, self, &mut copied) {
             let _ = remove_all(&partial);
             self.fail(src, &error);
             return false;
         }
-        if let Err(error) = fs::rename(&partial, target) {
+        if let Err(error) = qol_fs::rename_noreplace(&partial, target) {
             let _ = remove_all(&partial);
             self.fail(src, &error);
             return false;
         }
         if moving {
-            if let Err(error) = remove_all(src) {
+            if let Err(error) = remove_copied(&copied) {
                 self.fail(src, &error);
             }
         }
@@ -237,6 +241,11 @@ impl Run {
     }
 
     fn merge(&mut self, src: &Path, existing: &Path, moving: bool) -> bool {
+        if same_object(src, existing) {
+            let error = io::Error::new(io::ErrorKind::InvalidInput, ALREADY_THERE);
+            self.fail(src, &error);
+            return false;
+        }
         let mut children =
             match fs::read_dir(src).and_then(|dir| dir.collect::<io::Result<Vec<_>>>()) {
                 Ok(children) => children,
@@ -291,6 +300,7 @@ impl Run {
 
     fn identical(&self, src: &Path, target: &Path) -> bool {
         !self.choices.contains_key(target)
+            && !same_entry(src, target)
             && (same_link(src, target)
                 || fs::symlink_metadata(target).is_ok_and(|meta| meta.is_file())
                     && fs::symlink_metadata(src).is_ok_and(|meta| meta.is_file())
@@ -299,10 +309,7 @@ impl Run {
 }
 
 fn same_folder(src: &Path, into: &Path) -> bool {
-    match (src.parent().map(fs::canonicalize), fs::canonicalize(into)) {
-        (Some(Ok(parent)), Ok(into)) => parent == into,
-        _ => false,
-    }
+    src.parent().is_some_and(|parent| same_object(parent, into))
 }
 
 pub fn partial_of(target: &Path, entry: &Path) -> bool {
