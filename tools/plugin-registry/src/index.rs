@@ -5,7 +5,7 @@ use crate::oci::{
     DIR_ANNOTATION, HOST_CONFIG_MEDIA_TYPE, REVISION_ANNOTATION, TREE_MEDIA_TYPE,
 };
 use crate::parallel::parallel_map;
-use crate::provenance::{verify_assets, Provenance, Provenances, MAIN_REF};
+use crate::provenance::{verify_assets, Provenance, Provenances, Source, MAIN_REF};
 use crate::registry::Registry;
 use crate::release::{declared_id, declared_version};
 use crate::release::{newest_per_plugin, ReleaseTag};
@@ -270,14 +270,18 @@ fn fetch_version(
     }
     let entry = version_entry(&manifest_digest, &manifest, plugin_toml)?;
     if let Some(provenance) = provenance {
+        let revision = source_revision(release, &manifest)?;
+        verify_source(registry, release, revision, &entry)?;
         let tag_ref = format!("refs/tags/{}", release.tag);
         verify_assets(
             &entry.assets,
             |blob| registry.blob(&blob.digest, blob.size),
             provenance,
-            &[tag_ref.as_str(), MAIN_REF],
+            &Source {
+                reference: &tag_ref,
+                digest: Some(revision),
+            },
         )?;
-        verify_source(registry, release, &manifest, &entry)?;
     }
     Ok(entry)
 }
@@ -294,10 +298,9 @@ fn source_revision<'a>(release: &ReleaseTag, manifest: &'a Manifest) -> Result<&
 fn verify_source(
     registry: &Registry,
     release: &ReleaseTag,
-    manifest: &Manifest,
+    revision: &str,
     entry: &IndexedVersion,
 ) -> Result<()> {
-    let revision = source_revision(release, manifest)?;
     if !git::is_ancestor_of_head(revision)? {
         anyhow::bail!("{}: revision {revision} is not on main", release.tag);
     }
@@ -362,7 +365,10 @@ fn fetch_host_version(
             &entry.assets,
             |blob| registry.blob(&blob.digest, blob.size),
             provenance,
-            &[MAIN_REF],
+            &Source {
+                reference: MAIN_REF,
+                digest: None,
+            },
         )?;
     }
     Ok(entry)

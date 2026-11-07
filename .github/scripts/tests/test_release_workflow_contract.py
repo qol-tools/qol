@@ -1149,6 +1149,9 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("run-id:", registry)
         build = named_step(registry, "Build registry tool", "      ")
         self.assertNotIn("token", build)
+        versioning = (ROOT / ".github/workflows/plugin-version.yml").read_text()
+        self.assertIn('gh workflow run release.yml --ref "${tag}" -f tag="${tag}"', versioning)
+        self.assertNotIn("gh workflow run release.yml --ref main", versioning)
 
     def test_the_index_verifies_plugin_and_host_provenance(self):
         workflow = (ROOT / ".github/workflows/plugin-index.yml").read_text()

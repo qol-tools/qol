@@ -8,8 +8,13 @@ pub const MAIN_REF: &str = "refs/heads/main";
 
 static NEXT_FILE: AtomicUsize = AtomicUsize::new(0);
 
+pub struct Source<'a> {
+    pub reference: &'a str,
+    pub digest: Option<&'a str>,
+}
+
 pub trait Provenance: Sync {
-    fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()>;
+    fn verify(&self, bytes: &[u8], source: &Source<'_>) -> Result<()>;
 }
 
 pub struct Provenances<'a> {
@@ -23,14 +28,15 @@ pub struct GhAttestation {
 }
 
 impl Provenance for GhAttestation {
-    fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()> {
+    fn verify(&self, bytes: &[u8], source: &Source<'_>) -> Result<()> {
         let file = std::env::temp_dir().join(format!(
             "qol-provenance-{}-{}",
             std::process::id(),
             NEXT_FILE.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::write(&file, bytes).with_context(|| format!("cannot write {}", file.display()))?;
-        let output = Command::new("gh")
+        let mut command = Command::new("gh");
+        command
             .arg("attestation")
             .arg("verify")
             .arg(&file)
@@ -39,8 +45,15 @@ impl Provenance for GhAttestation {
                 "--signer-workflow",
                 &format!("{}/{}", self.repo, self.workflow),
             ])
-            .args(["--source-ref", source_ref, "--deny-self-hosted-runners"])
-            .output();
+            .args([
+                "--source-ref",
+                source.reference,
+                "--deny-self-hosted-runners",
+            ]);
+        if let Some(digest) = source.digest {
+            command.args(["--source-digest", digest]);
+        }
+        let output = command.output();
         std::fs::remove_file(&file).ok();
         let output = output.context("could not run gh attestation verify")?;
         if !output.status.success() {
@@ -57,24 +70,13 @@ pub fn verify_assets(
     assets: &BTreeMap<String, Blob>,
     download: impl Fn(&Blob) -> Result<Vec<u8>>,
     provenance: &dyn Provenance,
-    source_refs: &[&str],
+    source: &Source<'_>,
 ) -> Result<()> {
     for (name, blob) in assets {
         let bytes = download(blob)?;
-        let mut refusal = anyhow::anyhow!("no source ref was given");
-        let verified =
-            source_refs
-                .iter()
-                .any(|source_ref| match provenance.verify(&bytes, source_ref) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        refusal = error;
-                        false
-                    }
-                });
-        if !verified {
-            return Err(refusal).with_context(|| format!("{name} has no valid build provenance"));
-        }
+        provenance
+            .verify(&bytes, source)
+            .with_context(|| format!("{name} has no valid build provenance"))?;
     }
     Ok(())
 }
@@ -82,33 +84,30 @@ pub fn verify_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+
+    const MAIN: Source<'static> = Source {
+        reference: MAIN_REF,
+        digest: None,
+    };
+    const TAG_REF: &str = "refs/tags/qol-shot-v1.0.0";
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     struct Refuses {
         bytes: &'static [u8],
-        accepted_ref: Option<&'static str>,
-        seen: Mutex<Vec<String>>,
-    }
-
-    impl Refuses {
-        fn new(bytes: &'static [u8], accepted_ref: Option<&'static str>) -> Self {
-            Self {
-                bytes,
-                accepted_ref,
-                seen: Mutex::new(Vec::new()),
-            }
-        }
+        built_from: Option<(&'static str, &'static str)>,
     }
 
     impl Provenance for Refuses {
-        fn verify(&self, bytes: &[u8], source_ref: &str) -> Result<()> {
-            self.seen.lock().unwrap().push(source_ref.to_string());
+        fn verify(&self, bytes: &[u8], source: &Source<'_>) -> Result<()> {
             if bytes == self.bytes {
                 anyhow::bail!("not attested");
             }
-            match self.accepted_ref {
-                Some(accepted) if accepted != source_ref => {
+            match self.built_from {
+                Some((reference, _)) if reference != source.reference => {
                     anyhow::bail!("built from another ref")
+                }
+                Some((_, digest)) if source.digest.is_some_and(|wanted| wanted != digest) => {
+                    anyhow::bail!("built from another commit")
                 }
                 _ => Ok(()),
             }
@@ -157,8 +156,11 @@ mod tests {
             ),
         ];
         for (case, listed, failure) in cases {
-            let provenance = Refuses::new(b"b", None);
-            let result = verify_assets(&assets(listed), download, &provenance, &[MAIN_REF]);
+            let provenance = Refuses {
+                bytes: b"b",
+                built_from: None,
+            };
+            let result = verify_assets(&assets(listed), download, &provenance, &MAIN);
             match failure {
                 None => assert!(result.is_ok(), "{case}: {result:?}"),
                 Some(failure) => {
@@ -170,37 +172,50 @@ mod tests {
     }
 
     #[test]
-    fn an_asset_passes_when_any_listed_ref_verifies() {
+    fn an_asset_must_come_from_the_named_ref_and_commit() {
         let download = |_: &Blob| Ok(b"a".to_vec());
         let listed = assets(&[("tray", "sha256:a")]);
-        let tag_ref = "refs/tags/qol-shot-v1.0.0";
-        let cases: &[(&str, &str, &[&str], &[&str], Option<&str>)] = &[
-            ("first ref", tag_ref, &[tag_ref, MAIN_REF], &[tag_ref], None),
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        let cases: &[(&str, Source<'_>, Option<&str>)] = &[
             (
-                "second ref",
-                MAIN_REF,
-                &[tag_ref, MAIN_REF],
-                &[tag_ref, MAIN_REF],
+                "tag and commit",
+                Source {
+                    reference: TAG_REF,
+                    digest: Some(COMMIT),
+                },
                 None,
             ),
             (
-                "no ref",
-                "refs/heads/other",
-                &[tag_ref, MAIN_REF],
-                &[tag_ref, MAIN_REF],
+                "tag only",
+                Source {
+                    reference: TAG_REF,
+                    digest: None,
+                },
+                None,
+            ),
+            (
+                "another ref",
+                Source {
+                    reference: MAIN_REF,
+                    digest: Some(COMMIT),
+                },
                 Some("built from another ref"),
             ),
             (
-                "no refs given",
-                MAIN_REF,
-                &[],
-                &[],
-                Some("no source ref was given"),
+                "another commit",
+                Source {
+                    reference: TAG_REF,
+                    digest: Some(other),
+                },
+                Some("built from another commit"),
             ),
         ];
-        for (case, accepted_ref, source_refs, tried, failure) in cases {
-            let provenance = Refuses::new(b"b", Some(*accepted_ref));
-            let result = verify_assets(&listed, download, &provenance, source_refs);
+        for (case, source, failure) in cases {
+            let provenance = Refuses {
+                bytes: b"b",
+                built_from: Some((TAG_REF, COMMIT)),
+            };
+            let result = verify_assets(&listed, download, &provenance, source);
             match failure {
                 None => assert!(result.is_ok(), "{case}: {result:?}"),
                 Some(failure) => {
@@ -212,20 +227,6 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(*provenance.seen.lock().unwrap(), *tried, "{case}");
         }
-    }
-
-    #[test]
-    fn each_asset_is_downloaded_once() {
-        let downloads = Mutex::new(0);
-        let download = |_: &Blob| {
-            *downloads.lock().unwrap() += 1;
-            Ok(b"a".to_vec())
-        };
-        let provenance = Refuses::new(b"b", Some(MAIN_REF));
-        let listed = assets(&[("tray", "sha256:a"), ("installer", "sha256:b")]);
-        verify_assets(&listed, download, &provenance, &["refs/tags/x", MAIN_REF]).unwrap();
-        assert_eq!(*downloads.lock().unwrap(), 2);
     }
 }
