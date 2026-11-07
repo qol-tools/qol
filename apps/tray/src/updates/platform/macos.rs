@@ -202,7 +202,7 @@ pub(super) async fn download_and_install(
     let update = if dev_override {
         None
     } else {
-        Some(download::resolve_update(update).await?)
+        Some(download::resolve_update(update)?)
     };
     let expected_version = update.as_ref().map(HostUpdate::version);
     download::download_update_asset(

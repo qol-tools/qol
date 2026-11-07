@@ -30,7 +30,7 @@ pub(super) enum HostAsset {
     PluginIndex(IndexedHostAsset),
 }
 
-pub(super) async fn resolve_update(update: Option<FoundUpdate>) -> Result<HostUpdate> {
+pub(super) fn resolve_update(update: Option<FoundUpdate>) -> Result<HostUpdate> {
     let update = update.ok_or_else(|| anyhow::anyhow!("No update version available"))?;
     let version = update.version().to_string();
     let files = match update {
