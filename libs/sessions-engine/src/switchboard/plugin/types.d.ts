@@ -16,6 +16,7 @@ export type Entry = {
   resumedFrom?: string
   isStoppedByUser?: boolean
   isInterrupted?: boolean
+  isRunOver?: true
   key?: string
   isDone?: boolean
   hasNewReply?: boolean

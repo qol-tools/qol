@@ -117,7 +117,7 @@ type Adopted = { agentId: string; name?: string; cwd?: string; brought: string }
 type Sent = { isDelivered: boolean; reason?: unknown; agentId: string }
 type ClosedSession = { transcript: string; cwd: string; description: string; title?: string; message?: string }
 type Resumed = { isResumed: true; text: string } | { isResumed: false; reason: string }
-type Quiet = { fork: string; said: string }
+type Quiet = { fork: string; said: string; isUnlogged?: true }
 type LedgerRow = { agent_id: string; pull_request: string; number?: number | null; merge_commit?: string | null; is_watched: boolean }
 
 const pending = new Map<string, Promise<Sorting>>()
@@ -661,7 +661,7 @@ const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) =
 const isEntry = (entry: unknown): entry is Entry =>
   typeof entry === 'object' && entry !== null && typeof (entry as { agentId?: unknown }).agentId === 'string' && typeof (entry as { name?: unknown }).name === 'string'
 
-const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })
+const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })
 
 export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]): Entry[] => {
   const kept = own.filter(isEntry)
@@ -680,7 +680,7 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
   return [...carried, ...kept].slice(-KEEP)
 }
 
-const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, ...entry }: Entry): Entry => entry
+const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, ...entry }: Entry): Entry => entry
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   const now = await $.clock.now()
@@ -1683,7 +1683,7 @@ export const intake = async (
     result === null
       ? block.replace('</task-notification>', () => `<result>${line}</result>\n</task-notification>`)
       : block.replace(RESULT, (_, open: string, __, close: string) => `${open}${line}${close}`)
-  return { text: text.replace(block, () => filed), entry }
+  return { text: text.replace(block, () => filed), entry, ...(report === RESTARTED_REPLY ? { isRestart: true as const } : {}) }
 }
 
 const age = (ms: number): string => {
@@ -1762,7 +1762,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     if (resumed !== undefined) return { fork: keyName(resumed), said: 'resumed' }
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
-    return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline }
+    return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline, ...('isRestart' in filed || filed.entry.headline.trim() === '' ? { isUnlogged: true as const } : {}) }
   } catch {
     return undefined
   }
@@ -2016,7 +2016,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
-      await logSaid($, oneLine(quiet.fork), quiet.said).catch(() => {})
+      if (quiet.isUnlogged !== true) await logSaid($, oneLine(quiet.fork), quiet.said).catch(() => {})
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || !TYPED_ORIGINS.includes(e.origin.kind)) return next(e)
@@ -2258,7 +2258,7 @@ export const register: Register = on => {
     if (e.agentId === undefined && !isHeld) await logSaid($, YOU, userWords(e.text)).catch(() => {})
     if (e.agentId !== undefined && !isHeld) {
       const list = await read($, board)
-      if (list.some(entry => entry.agentId === e.agentId && !entry.isWorking)) await markWorking($, e.agentId, undefined)
+      if (list.some(entry => entry.agentId === e.agentId && (!entry.isWorking || entry.isRunOver === true))) await markWorking($, e.agentId, undefined)
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -2285,6 +2285,8 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined && (await holdOf($, e.agentId))?.turnId === e.turnId) await finishHold($, e.agentId)
     const done = await next(e)
+    const ended = e.agentId
+    if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')

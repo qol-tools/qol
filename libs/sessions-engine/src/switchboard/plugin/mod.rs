@@ -206,7 +206,7 @@ mod tests {
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
-            "const cutIfWorking = (entry: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking ? { isInterrupted: true } : {}) })",
+            "const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })",
             "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
             "!entry.isDismissed && entry.successor === undefined && entry.isDone !== true",
