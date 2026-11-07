@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, missingForks, nextKey, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2264,6 +2264,41 @@ test('the fork chat keeps two sent lines in send order once the fork has taken i
   said.push({ role: 'user', text: fromUser('teal') })
   await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
   expect(await forkChat($, panes)).toEqual(['Amber or teal?', 'teal', 'and wide'])
+})
+
+test('the fork chat keeps a sent line once a restart drops it from the fork transcript', async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  const said: { role: string; text: string }[] = [{ role: 'assistant', text: 'Amber or teal?' }]
+  on('session.messages', () => ({ value: [...said] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  said.push({ role: 'user', text: fromUser('teal') }, { role: 'assistant', text: 'Teal it is.' })
+  await $.turn.complete({ turnId: 'reply-1', agentId: 'a8', answer: 'Teal it is.', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(await forkChat($, panes)).toEqual(['Amber or teal?', 'teal', 'Teal it is.'])
+  said.splice(1, 1)
+  said.push({ role: 'assistant', text: 'Done.' })
+  await $.turn.complete({ turnId: 'reply-2', agentId: 'a8', answer: 'Done.', durationMs: 1, isAborted: false, reason: 'done' })
+  expect(await forkChat($, panes)).toEqual(['Amber or teal?', 'teal', 'Teal it is.', 'Done.'])
+})
+
+test('withSent puts back only the sent lines the transcript lacks, after the reply they answered, in send order', () => {
+  const a = (text: string) => ({ isUser: false, text })
+  const u = (text: string) => ({ isUser: true, text })
+  const rows = [a('one'), a('two'), u('ok'), a('three')]
+  expect(withSent(rows, [{ text: 'first', anchor: '' }, { text: 'ok', anchor: 'one' }, { text: 'go', anchor: 'one' }, { text: 'lost', anchor: 'gone' }, { text: 'ok', anchor: 'two' }])).toEqual([
+    u('first'),
+    a('one'),
+    u('ok'),
+    u('go'),
+    a('two'),
+    u('ok'),
+    a('three'),
+  ])
+  expect(withSent(rows, [{ text: 'ok', anchor: 'two' }])).toEqual(rows)
 })
 
 const focusIds = (panes: string[]) => panes.filter(one => one.startsWith('place focus-')).map(one => one.slice('place '.length))

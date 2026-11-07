@@ -284,6 +284,44 @@ const forgetSent = (agentId: string, one: Unseen): void => {
   else unseenSent.set(agentId, waiting)
 }
 
+const SENT_PREFIX = 'sent:'
+const SENT_KEPT = 30
+
+export type SentNote = { text: string; anchor: string }
+
+const sentNotes = (saved: unknown): SentNote[] =>
+  Array.isArray(saved) ? saved.filter((one): one is SentNote => typeof one?.text === 'string' && typeof one?.anchor === 'string') : []
+
+export const withSent = (all: Said[], logged: readonly SentNote[]): Said[] => {
+  const missing = new Map<string, number>()
+  for (const one of logged) missing.set(one.text, (missing.get(one.text) ?? 0) + 1)
+  for (const [text, count] of missing) missing.set(text, count - timesSaid(all, text))
+  let rows = all
+  let from = 0
+  for (const one of logged) {
+    if ((missing.get(one.text) ?? 0) <= 0) continue
+    const anchor = one.anchor === '' ? -1 : rows.findIndex((row, index) => index >= from && !row.isUser && row.text === one.anchor)
+    if (one.anchor !== '' && anchor === -1) continue
+    let place = anchor + 1
+    while (rows[place]?.isUser === true) place += 1
+    rows = [...rows.slice(0, place), { isUser: true, text: one.text }, ...rows.slice(place)]
+    missing.set(one.text, (missing.get(one.text) ?? 0) - 1)
+    from = Math.max(anchor, 0)
+  }
+  return rows
+}
+
+const noteSentLog = async ($: EngineInterface, key: string, one: SentNote): Promise<void> => {
+  const saved = sentNotes(await $.store.get(`${SENT_PREFIX}${key}`))
+  await $.store.set(`${SENT_PREFIX}${key}`, [...saved, one].slice(-SENT_KEPT))
+}
+
+const forgetSentLog = async ($: EngineInterface, key: string, one: SentNote): Promise<void> => {
+  const saved = sentNotes(await $.store.get(`${SENT_PREFIX}${key}`))
+  const at = saved.map(other => other.text === one.text && other.anchor === one.anchor).lastIndexOf(true)
+  if (at !== -1) await $.store.set(`${SENT_PREFIX}${key}`, [...saved.slice(0, at), ...saved.slice(at + 1)])
+}
+
 const withUnseen = (agentId: string, all: Said[], now: number): Said[] => {
   const waiting = (unseenSent.get(agentId) ?? []).filter(one => now - one.at < UNSEEN_MS && timesSaid(all, one.text) <= one.heldBefore)
   if (waiting.length === 0) unseenSent.delete(agentId)
@@ -403,7 +441,10 @@ const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<voi
   const fetch = ++writingFetch
   const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
-  const all = withUnseen(target, recentWords(found, Infinity), await $.clock.now())
+  const entry = (await read($, board)).find(one => one.agentId === target)
+  const logged = entry === undefined ? [] : sentNotes(await $.store.get(`${SENT_PREFIX}${keyOf(entry)}`).catch(() => undefined))
+  if (fetch !== writingFetch || (await read($, writingTo)) !== target) return
+  const all = withUnseen(target, withSent(recentWords(found, Infinity), logged), await $.clock.now())
   const said = all.slice(-SAID_KEPT)
   if (!sameSaid(said, await read($, writingSaid))) await update($, writingSaid, () => said)
   focusRows = { agentId: target, rows: all.slice(-FOCUS_KEPT) }
@@ -2012,13 +2053,20 @@ export const register: Register = on => {
       await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
       const before = recentWords(await $.session.messages({ agentId: at.entry.agentId }).catch(() => []), Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
+      const note = { text: noted.text, anchor: [...before].reverse().find(row => !row.isUser)?.text ?? '' }
+      const key = keyOf(at.entry)
+      await noteSentLog($, key, note).catch(() => {})
+      const forget = () => {
+        forgetSent(at.entry.agentId, noted)
+        void forgetSentLog($, key, note).catch(() => {})
+      }
       const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
         void tell($, at.entry, fromUser(at.message))
           .then(isDelivered => {
-            if (!isDelivered) forgetSent(at.entry.agentId, noted)
+            if (!isDelivered) forget()
           })
-          .catch(() => forgetSent(at.entry.agentId, noted))
+          .catch(forget)
       }
       await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
