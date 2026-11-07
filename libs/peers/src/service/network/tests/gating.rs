@@ -191,7 +191,11 @@ async fn a_peered_device_advertises_the_link_port_only_while_the_nearby_page_is_
         .wait(|view| matches!(view.status.listener, ListenerStatus::Listening { .. }))
         .await;
     until_advertised_link(&owner, None).await;
-    owner.control.open_to_nearby().unwrap();
+    let reserved = owner
+        .control
+        .invitation_endpoints(vec![Ipv4Addr::LOCALHOST.into()])
+        .unwrap()[0]
+        .port();
     let view = owner
         .wait(|view| {
             matches!(
@@ -200,15 +204,25 @@ async fn a_peered_device_advertises_the_link_port_only_while_the_nearby_page_is_
             )
         })
         .await;
-    let ListenerStatus::Listening { port } = view.status.enrollment_listener else {
-        unreachable!();
-    };
+    assert_eq!(
+        view.status.enrollment_listener,
+        ListenerStatus::Listening { port: reserved }
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(advertised_link(&owner), None);
+    owner.control.open_to_nearby().unwrap();
+    let port = reserved;
     until_advertised_link(&owner, Some(port)).await;
     tokio::time::sleep(Duration::from_secs(12)).await;
+    until_advertised_link(&owner, None).await;
+    assert_eq!(
+        owner.control.snapshot().status.enrollment_listener,
+        ListenerStatus::Listening { port }
+    );
+    tokio::time::sleep(Duration::from_secs(20)).await;
     owner
         .wait(|view| view.status.enrollment_listener == NOTHING_OPEN)
         .await;
-    until_advertised_link(&owner, None).await;
     assert!(matches!(
         owner.control.snapshot().status.listener,
         ListenerStatus::Listening { .. }

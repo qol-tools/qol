@@ -85,6 +85,7 @@ impl Owner {
         view: &watch::Sender<NetworkSnapshot>,
         receiving: bool,
     ) -> bool {
+        self.gate.refresh();
         let wanted = self.listener_wanted(authority, receiving);
         if wanted && listener.is_none() {
             let opened = self
@@ -186,8 +187,9 @@ impl Owner {
                 accepted = accept(&listener), if listener.is_some() && inbound.len() < MAX_EXCHANGES => {
                     let (stream, _) = accepted.map_err(|_| NetworkFailure::Listener)?;
                     let authority = authority.clone();
+                    let gate = self.gate.clone();
                     inbound.spawn(async move {
-                        let _ = timeout(EXCHANGE_DEADLINE, receive(authority, stream)).await;
+                        let _ = timeout(EXCHANGE_DEADLINE, receive(authority, gate, stream)).await;
                     });
                 },
             }
@@ -210,7 +212,11 @@ async fn recheck(open: bool) {
     }
 }
 
-async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), EnrollmentError> {
+async fn receive(
+    authority: PeerAuthority,
+    gate: std::sync::Arc<super::Gate>,
+    stream: TcpStream,
+) -> Result<(), EnrollmentError> {
     let local = stream
         .local_addr()
         .map_err(|_| EnrollmentError::Transport)?;
@@ -223,16 +229,20 @@ async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), Enro
     tokio::select! {
         biased;
         () = invalidated(&authority) => Err(EnrollmentError::Transport),
-        result = serve(&authority, connection, local) => result,
+        result = serve(&authority, &gate, connection, local) => result,
     }
 }
 
 async fn serve(
     authority: &PeerAuthority,
+    gate: &super::Gate,
     connection: crate::service::PeerConnection<TcpStream>,
     local: SocketAddr,
 ) -> Result<(), EnrollmentError> {
     match connection.session_kind() {
+        crate::service::SessionKind::Nearby if !gate.nearby_open() => {
+            Err(EnrollmentError::Transport)
+        }
         crate::service::SessionKind::Nearby => authority.serve_nearby(connection, local).await,
         _ => authority.serve_enrollment(connection).await.map(|_| ()),
     }

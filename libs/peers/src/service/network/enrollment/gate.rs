@@ -21,11 +21,37 @@ struct State {
     closed: bool,
 }
 
+impl State {
+    fn nearby_open(&self, now: Instant) -> bool {
+        self.nearby_until.is_some_and(|deadline| deadline > now)
+    }
+
+    fn held(&self, now: Instant) -> bool {
+        [self.reserved_until, self.nearby_until]
+            .into_iter()
+            .flatten()
+            .any(|deadline| deadline > now)
+    }
+
+    fn bound_port(&self) -> Option<u16> {
+        self.port.or_else(|| {
+            self.unadopted
+                .as_ref()
+                .and_then(|socket| socket.local_addr().ok())
+                .map(|address| address.port())
+        })
+    }
+
+    fn nearby_link(&self, now: Instant) -> Option<u16> {
+        self.nearby_open(now).then(|| self.bound_port()).flatten()
+    }
+}
+
 pub(in crate::service::network) struct Gate {
     bind: Ipv4Addr,
     state: Mutex<State>,
     wake: watch::Sender<()>,
-    link: watch::Sender<Option<u16>>,
+    nearby_link: watch::Sender<Option<u16>>,
 }
 
 impl Gate {
@@ -34,7 +60,7 @@ impl Gate {
             bind,
             state: Mutex::new(State::default()),
             wake: watch::channel(()).0,
-            link: watch::channel(None).0,
+            nearby_link: watch::channel(None).0,
         }
     }
 
@@ -42,12 +68,17 @@ impl Gate {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
+    fn publish(&self, state: &State) {
+        self.nearby_link
+            .send_replace(state.nearby_link(Instant::now()));
+    }
+
     pub(in crate::service::network) fn subscribe(&self) -> watch::Receiver<()> {
         self.wake.subscribe()
     }
 
-    pub(in crate::service::network) fn link_watch(&self) -> watch::Receiver<Option<u16>> {
-        self.link.subscribe()
+    pub(in crate::service::network) fn nearby_link_watch(&self) -> watch::Receiver<Option<u16>> {
+        self.nearby_link.subscribe()
     }
 
     pub(in crate::service::network) fn nearby_deadline(&self) -> Option<Instant> {
@@ -61,12 +92,12 @@ impl Gate {
     }
 
     pub(super) fn held(&self) -> bool {
+        self.lock().held(Instant::now())
+    }
+
+    pub(super) fn refresh(&self) {
         let state = self.lock();
-        let now = Instant::now();
-        [state.reserved_until, state.nearby_until]
-            .into_iter()
-            .flatten()
-            .any(|deadline| deadline > now)
+        self.publish(&state);
     }
 
     pub(super) fn hold_for_invitation(&self) -> Result<u16, Error> {
@@ -89,13 +120,9 @@ impl Gate {
             &mut state.reserved_until
         };
         *slot = Some(slot.map_or(deadline, |current| current.max(deadline)));
-        let port = match (state.port, &state.unadopted) {
-            (Some(port), _) => port,
-            (None, Some(socket)) => socket
-                .local_addr()
-                .map_err(|_| refusal(EnrollmentFailure::Unavailable))?
-                .port(),
-            (None, None) => {
+        let port = match state.bound_port() {
+            Some(port) => port,
+            None => {
                 let socket = std::net::TcpListener::bind(SocketAddrV4::new(self.bind, 0))
                     .map_err(|_| refusal(EnrollmentFailure::Unavailable))?;
                 socket
@@ -106,10 +133,10 @@ impl Gate {
                     .map_err(|_| refusal(EnrollmentFailure::Unavailable))?
                     .port();
                 state.unadopted = Some(socket);
-                self.link.send_replace(Some(port));
                 port
             }
         };
+        self.publish(&state);
         drop(state);
         self.wake.send_replace(());
         Ok(port)
@@ -126,25 +153,19 @@ impl Gate {
             }
         };
         let listener = TcpListener::from_std(socket)?;
-        let port = listener.local_addr()?.port();
-        state.port = Some(port);
-        self.link.send_replace(Some(port));
+        state.port = Some(listener.local_addr()?.port());
+        self.publish(&state);
         Ok(listener)
     }
 
     pub(super) fn release(&self) -> bool {
         let mut state = self.lock();
-        let now = Instant::now();
-        if [state.reserved_until, state.nearby_until]
-            .into_iter()
-            .flatten()
-            .any(|deadline| deadline > now)
-        {
+        if state.held(Instant::now()) {
             return false;
         }
         state.port = None;
         state.unadopted = None;
-        self.link.send_replace(None);
+        self.publish(&state);
         true
     }
 
@@ -153,7 +174,7 @@ impl Gate {
         state.closed = true;
         state.port = None;
         state.unadopted = None;
-        self.link.send_replace(None);
+        self.publish(&state);
         drop(state);
         self.wake.send_replace(());
     }

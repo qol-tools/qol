@@ -238,7 +238,7 @@ impl Supervisor {
                 port,
                 bind: options.bind,
                 name,
-                link: gate.link_watch(),
+                link: gate.nearby_link_watch(),
             },
             events,
             stopping,
