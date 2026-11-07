@@ -14,13 +14,14 @@ pub(crate) fn try_acquire(action: &'static str) -> Option<CaptureGuard> {
 }
 
 fn try_acquire_at(path: &Path, action: &'static str) -> Option<CaptureGuard> {
-    let mut file = match OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .truncate(false)
-        .open(path)
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) => {
             qol_runtime::probe!(
@@ -59,7 +60,7 @@ impl Drop for CaptureGuard {
 }
 
 fn lock_path() -> PathBuf {
-    std::env::temp_dir().join(LOCK_FILE_NAME)
+    crate::platform::runtime_dir().join(LOCK_FILE_NAME)
 }
 
 #[cfg(test)]

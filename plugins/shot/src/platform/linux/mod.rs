@@ -24,7 +24,7 @@ mod selector_cache;
 mod system;
 mod window;
 
-pub use super::unix::{capture_log_path, directory_is_read_only, watch_daemon_stop};
+pub use super::unix::{directory_is_read_only, owned_by_current_user, watch_daemon_stop};
 pub use clipboard::{copy_image_to_clipboard, copy_path_to_clipboard};
 pub use display::{full_screen_bounds, get_monitors};
 pub use preview::{capture_frozen_frame, grab_preview_rgba};

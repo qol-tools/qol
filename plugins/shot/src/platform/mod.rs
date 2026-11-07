@@ -27,10 +27,39 @@ macro_rules! record_region_base {
     };
 }
 pub const RECORD_REGION_BASE: &str = record_region_base!();
-pub const CAPTURE_LOG: &str = concat!("/tmp/", record_region_base!(), ".log");
 
-pub fn capture_state_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("{RECORD_REGION_BASE}.pid"))
+pub fn runtime_dir() -> PathBuf {
+    let dir = qol_config::runtime_dir()
+        .map(|dir| dir.join("shot"))
+        .unwrap_or_else(|| std::env::temp_dir().join("qol-shot"));
+    if let Err(error) = qol_fs::create_private_dir(&dir) {
+        log::warn!("failed to create {}: {error}", dir.display());
+    }
+    dir
+}
+
+pub fn capture_state_path() -> PathBuf {
+    runtime_dir().join(format!("{RECORD_REGION_BASE}.pid"))
+}
+
+pub fn capture_log_path() -> PathBuf {
+    runtime_dir().join(format!("{RECORD_REGION_BASE}.log"))
+}
+
+pub fn open_capture_log(truncate: bool) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true);
+    if truncate {
+        options.truncate(true);
+    } else {
+        options.append(true);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(capture_log_path())
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]

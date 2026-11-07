@@ -1,5 +1,6 @@
-pub fn capture_log_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(super::CAPTURE_LOG)
+pub fn owned_by_current_user(metadata: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    metadata.uid() == unsafe { libc::geteuid() }
 }
 
 pub fn directory_is_read_only(metadata: &std::fs::Metadata) -> bool {

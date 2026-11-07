@@ -320,7 +320,23 @@ fn stop_capture_processes(state: &platform::CaptureSession, config: &Config) -> 
 }
 
 fn read_capture_state() -> Option<platform::CaptureSession> {
-    let content = fs::read_to_string(state_file_path()).ok()?;
+    read_capture_state_from(&state_file_path())
+}
+
+fn read_capture_state_from(path: &Path) -> Option<platform::CaptureSession> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() {
+        log::warn!("ignoring symlinked capture state {}", path.display());
+        return None;
+    }
+    if !platform::owned_by_current_user(&metadata) {
+        log::warn!(
+            "ignoring capture state {} owned by another user",
+            path.display()
+        );
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
     parse_capture_state(&content)
 }
 
@@ -368,7 +384,8 @@ fn write_capture_state(session: &platform::CaptureSession) -> Result<()> {
         session.segments.len(),
         platform::RECORD_REGION_BASE
     );
-    fs::write(state_file_path(), format!("{content}\n")).context("failed to write capture state")
+    qol_fs::atomic_write_private(&state_file_path(), format!("{content}\n").as_bytes())
+        .context("failed to write capture state")
 }
 
 fn remove_state_file() {
@@ -421,6 +438,22 @@ fn path_label(path: Option<&Path>) -> String {
 mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_state_file_is_ignored() {
+        let dir = std::env::temp_dir().join(format!("qol-shot-state-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("state.pid");
+        let link = dir.join("link.pid");
+        let _ = std::fs::remove_file(&link);
+        std::fs::write(&file, "123\n/a/final.webm\n").unwrap();
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+
+        assert!(super::read_capture_state_from(&link).is_none());
+        assert!(super::read_capture_state_from(&file).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn capture_state_reads_output_and_capture_paths() {

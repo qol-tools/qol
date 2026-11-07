@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use qol_plugin_daemon::notification::send_notification;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -33,14 +33,6 @@ enum Readiness {
     TimedOut,
 }
 
-pub fn capture_log_path() -> PathBuf {
-    let name = Path::new(crate::platform::CAPTURE_LOG)
-        .file_name()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(crate::platform::RECORD_REGION_BASE));
-    std::env::temp_dir().join(name)
-}
-
 pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result<CaptureSession> {
     let Some(ffmpeg) = ffmpeg::resolve_ffmpeg() else {
         send_notification(
@@ -59,7 +51,8 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         plan.audio.len()
     );
     let request = serde_json::to_string(&plan).context("failed to encode capture request")?;
-    let log_file = File::create(capture_log_path()).context("failed to create recording log")?;
+    let log_file = File::create(crate::platform::capture_log_path())
+        .context("failed to create recording log")?;
     let stdout_log = log_file
         .try_clone()
         .context("failed to clone recording log")?;
@@ -81,7 +74,7 @@ pub fn start_capture(rect: &Rect, config: &Config, output_file: &Path) -> Result
         }
         send_notification(
             "Recording failed",
-            &format!("Check {}", capture_log_path().display()),
+            &format!("Check {}", crate::platform::capture_log_path().display()),
         );
         return Err(error);
     }
