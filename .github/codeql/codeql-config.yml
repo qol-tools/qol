@@ -1,10 +1,13 @@
 name: qol CodeQL config
 
-# Test code, vendored upstream code and research scripts are not shipped.
+# Test code, research scripts and the one vendored crate nothing links are
+# not shipped; the gpui and global-hotkey forks are patched into every binary.
 paths-ignore:
   - "**/tests/**"
   - "**/tests.rs"
-  - "vendor/**"
+  - "vendor/ravif/**"
+  - "vendor/gpui/examples/**"
+  - "vendor/gpui/target/**"
   - "docs/**"
 
 # These rules flag inline #[cfg(test)] modules, which a path filter cannot

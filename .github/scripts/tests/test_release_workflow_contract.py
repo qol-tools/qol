@@ -883,6 +883,25 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 ]
                 self.assertEqual(lenient, [])
 
+    def test_the_dependency_gate_checks_the_lockfile_against_deny_toml(self):
+        workflow = (ROOT / ".github/workflows/cargo-deny.yml").read_text()
+        config = (ROOT / "deny.toml").read_text()
+        codeql = (ROOT / ".github/codeql/codeql-config.yml").read_text()
+
+        self.assertIn("cargo deny --locked check advisories bans sources", workflow)
+        self.assertIn("schedule:", workflow)
+        self.assertIn("      - Cargo.lock\n", workflow)
+        self.assertIn("      - deny.toml\n", workflow)
+        self.assertNotIn("cargo build", workflow)
+        self.assertIn("[advisories]", config)
+        self.assertIn('yanked = "deny"', config)
+        self.assertIn('unknown-git = "deny"', config)
+        for ignored in re.findall(r'\{ id = "(RUSTSEC-[0-9-]+)", reason = "([^"]*)"', config):
+            with self.subTest(advisory=ignored[0]):
+                self.assertIn("T12", ignored[1])
+        self.assertNotIn('"vendor/**"', codeql)
+        self.assertIn('"vendor/ravif/**"', codeql)
+
     def test_ci_asserts_lockfile_freshness_with_a_full_resolve(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
 
