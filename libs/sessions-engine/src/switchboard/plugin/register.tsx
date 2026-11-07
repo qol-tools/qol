@@ -1994,8 +1994,11 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin.kind !== 'task-notification' || e.props.isExpanded) return next(e)
+    const list = await read($, board)
+    const taskId = e.props.task?.id
+    const isOtherFork = taskId !== undefined && viewedFork === undefined && (await read($, writingTo)) !== '' && list.some(entry => entry.agentId === taskId)
     const name = RESUMED_SUMMARY.exec(e.props.text.trim())?.[1]
-    if (name === undefined || !(await read($, board)).some(entry => namesFork(entry.name, name))) return next(e)
+    if (!isOtherFork && (name === undefined || !list.some(entry => namesFork(entry.name, name)))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   }).catch(($, e, next) => next(e))

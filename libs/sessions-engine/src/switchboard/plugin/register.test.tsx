@@ -266,6 +266,32 @@ test("a fork's resume notice that reaches a busy switchboard draws as nothing, a
   }
 })
 
+test("while the prompt writes to a fork, fork notification rows draw as nothing so only that fork's conversation shows", async ($, on) => {
+  const sent: any[] = []
+  const panes: string[] = []
+  engine(on, sent, panes)
+  on('clock.after', () => new Promise(() => {}))
+  on('session.messages', () => ({ value: [{ role: 'assistant', text: 'Amber or teal?' }] }))
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{e.props.text}</Text>
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a7', 'quiet-fork: quiet')
+  await spawn($, 'a8', 'asking-fork: asks')
+  const row = (id: string) =>
+    ({ plugin: 'qol-switchboard', surface: 'terminal', component: 'UserMessage', props: { text: `${id} reported`, origin: { kind: 'task-notification' }, isExpanded: false, task: { id } } }) as const
+  const shows = async (id: string) => {
+    const mounted = await $.ui.mount(row(id))
+    const found = (await mounted.find({ type: 'Text' })) !== undefined
+    await mounted.unmount()
+    return found
+  }
+  expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([true, true, true])
+  expect((await typed($, 'asking-fork teal')).drop).toContain('→ asking-fork')
+  expect([await shows('a7'), await shows('a8'), await shows('b1')]).toEqual([false, false, true])
+})
+
 test("a message typed to a fork from the switchboard's prompt shows in the fork's view as the user's words alone", async ($, on) => {
   engine(on)
   on('ui.render', ($: any, e: any) => {
