@@ -53,7 +53,6 @@ const TERMINAL_CODE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[\]P^_X][^\u0007\u001b]*(?:\
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g
 const KINDS: readonly Kind[] = ['ask', 'test', 'failed', 'blocked', 'waiting', 'merged', 'note']
 const NEEDS_YOU: readonly Kind[] = ['ask', 'test', 'failed', 'blocked']
-const DONE: readonly Kind[] = ['merged', 'note']
 const MARKUP = /^[\s*_`#>-]+|[\s*_`]+$/g
 const HANDBACK = /^(Another Claude session sent a message:\n<agent-message from="([A-Za-z0-9_-]+)">\n\[Subagent hand-back\][^\n]*?The report follows:\n)((?:(?: {2}[^\n]*)?\n)*?)(<\/agent-message>\n)/
 const NOTIFICATION = /^<task-notification>\n[\s\S]*<\/task-notification>$/
@@ -185,18 +184,22 @@ const filingOf = async ($: EngineInterface, report: string): Promise<Filing> => 
 
 const boardLine = (entry: Entry): string => `[fork board] ${keyName(entry.name)}: ${entry.headline}`
 
+const isEnded = (entry: Entry): boolean => entry.isDone === true || entry.kind === 'merged'
+
 const stateOf = (entry: Entry): string =>
   isCut(entry)
     ? 'stopped by a restart'
     : entry.isWorking
     ? 'working'
-    : entry.isDone === true
+    : isEnded(entry)
       ? 'done'
       : entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
         ? 'needs the user'
         : entry.kind === 'waiting'
           ? 'waiting on its pull request'
-          : 'done'
+          : entry.isStoppedByUser === true
+            ? 'stopped'
+            : 'idle'
 
 const toggleBoard = async ($: EngineInterface): Promise<string> => {
   const isShown = (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
@@ -671,13 +674,12 @@ export const keyOf = (entry: Entry): string => entry.key ?? keyName(entry.name)
 export const reachable = (list: Entry[]): Entry[] => {
   const shown = list.filter(entry => !entry.isDismissed && entry.successor === undefined)
   const by = (keep: (entry: Entry) => boolean) => shown.filter(keep).sort((a, b) => a.at - b.at)
-  const ended = (entry: Entry) => entry.isDone === true || (entry.kind !== undefined && DONE.includes(entry.kind))
   const ordered = [
     ...by(needsYou),
     ...by(isCut),
     ...by(entry => entry.isWorking),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !ended(entry)),
-    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && ended(entry)).reverse(),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry)),
+    ...by(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && isEnded(entry)).reverse(),
   ]
   const seen = new Set<string>()
   return ordered.filter(entry => {
@@ -1769,7 +1771,7 @@ export const register: Register = on => {
         $.tool.register({
         name: TOOL,
         description:
-          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request or is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
+          "Reads the fork board, where the qol-switchboard plugin files every fork's final report. With no fork, one line per fork: key-name, the first sentence of its last report, and whether it is working, needs the user, is waiting on its pull request, is idle, was stopped or is done; only a fork that called fork_done or whose pull request merged is done. With fork set to a key-name or agent id, that fork's full last report. A fork another fork started sits under that fork's row in the agent list, not at the top level, and its row names that fork.",
         inputSchema: {
           type: 'object',
           properties: { fork: { type: 'string', description: "A fork's key-name or agent id; leave it out for every row." } },
@@ -2240,7 +2242,8 @@ export const register: Register = on => {
     const cut = list.filter(isCut).sort((a, b) => a.at - b.at)
     const working = list.filter(entry => entry.isWorking).sort((a, b) => a.at - b.at)
     const waiting = list.filter(entry => !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind === 'waiting')
-    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && (entry.isDone === true || (entry.kind !== undefined && DONE.includes(entry.kind)))).reverse()
+    const done = list.filter(entry => !entry.isWorking && !isCut(entry) && isEnded(entry)).reverse()
+    const idle = list.filter(entry => !entry.isWorking && !isCut(entry) && !needsYou(entry) && !isEnded(entry) && entry.kind !== 'waiting').sort((a, b) => a.at - b.at)
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string => (entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note'))
     let n = 0
@@ -2346,7 +2349,7 @@ export const register: Register = on => {
         </Box>
         {target !== undefined && heading('FORKS')}
         {target !== undefined &&
-          [...needs, ...cut, ...working, ...waiting, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
+          [...needs, ...cut, ...working, ...waiting, ...idle, ...done.filter(entry => entry.hasNewReply === true)].map(entry => (
             <Box key={`row-${entry.agentId}`}>{title(entry, labelOf(entry))}</Box>
           ))}
         {target !== undefined && heading('WRITING TO')}
@@ -2453,6 +2456,18 @@ export const register: Register = on => {
         {target === undefined && waiting.map(entry => (
           <Box key={`wait-${entry.agentId}`} flexDirection="column">
             {title(entry, 'waiting')}
+            <Box paddingLeft={2} flexDirection="column">
+              <Text dimColor wrap="wrap">
+                {entry.headline}
+              </Text>
+              {prs(entry)}
+            </Box>
+          </Box>
+        ))}
+        {target === undefined && idle.length > 0 && heading('IDLE')}
+        {target === undefined && idle.map(entry => (
+          <Box key={`idle-${entry.agentId}`} flexDirection="column">
+            {title(entry, entry.isStoppedByUser === true ? 'stopped' : 'idle')}
             <Box paddingLeft={2} flexDirection="column">
               <Text dimColor wrap="wrap">
                 {entry.headline}

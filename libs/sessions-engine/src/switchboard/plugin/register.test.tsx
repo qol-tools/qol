@@ -1549,6 +1549,28 @@ test('a fork the user stops with Esc is marked stopped in its record', async ($,
   expect(verbs(calls, 'stopped')).toHaveLength(1)
 })
 
+test('a fork that reports or is stopped without fork_done reads idle or stopped, on the board and in its pane', async ($, on) => {
+  const calls: string[][] = []
+  engine(on)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await deliver($, notification('a1', 'one-fork: one', 'The advisor closed by itself.'))
+  await deliver($, stopNotification('a2', 'two-fork: two'))
+  await settle()
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('one-fork: The advisor closed by itself. (idle, agent id a1)')
+  expect(board).toContain('(stopped, agent id a2)')
+  expect(board).not.toContain('(done')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /show done/ })).toBeUndefined()
+  await ui.unmount()
+  await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'Nothing left.', agentId: 'a1' } as any)
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(done, agent id a1)')
+})
+
 test('fork_done from a fork marks only its own row done, and the switchboard is refused', async ($, on) => {
   const calls: string[][] = []
   engine(on)
