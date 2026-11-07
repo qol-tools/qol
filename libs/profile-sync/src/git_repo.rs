@@ -623,7 +623,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let repo_path = tmp.path().join("local");
         let repo = GitRepo::init(&repo_path, "https://example.invalid/repo.git").unwrap();
-        write_file(&repo_path.join("hello.txt"), "world");
+        write_file(&repo_path.join("default/core/hello.txt"), "world");
 
         let first = repo.commit_all("first", &signature()).unwrap();
         assert!(first.is_some());
@@ -667,7 +667,7 @@ mod tests {
             "fresh repo with no files is clean"
         );
 
-        write_file(&repo_path.join("note.txt"), "hello");
+        write_file(&repo_path.join("default/core/note.txt"), "hello");
         assert!(
             repo.is_dirty().unwrap(),
             "untracked file makes the tree dirty"
@@ -676,7 +676,7 @@ mod tests {
         repo.commit_all("seed", &signature()).unwrap();
         assert!(!repo.is_dirty().unwrap(), "committed tree is clean");
 
-        write_file(&repo_path.join("note.txt"), "changed");
+        write_file(&repo_path.join("default/core/note.txt"), "changed");
         assert!(repo.is_dirty().unwrap(), "modified tracked file is dirty");
     }
 
@@ -703,17 +703,17 @@ mod tests {
 
         let alice_path = tmp.path().join("alice");
         let alice = GitRepo::init(&alice_path, &url).unwrap();
-        write_file(&alice_path.join("data.txt"), "alice");
+        write_file(&alice_path.join("default/core/data.txt"), "alice");
         alice.commit_all("alice initial", &signature()).unwrap();
         alice.push(None).unwrap();
 
         let bob_path = tmp.path().join("bob");
         let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
-        write_file(&bob_path.join("data.txt"), "bob");
+        write_file(&bob_path.join("default/core/data.txt"), "bob");
         bob.commit_all("bob update", &signature()).unwrap();
         bob.push(None).unwrap();
 
-        write_file(&alice_path.join("data.txt"), "alice diverged");
+        write_file(&alice_path.join("default/core/data.txt"), "alice diverged");
         alice.commit_all("alice diverged", &signature()).unwrap();
         alice
     }
@@ -773,7 +773,7 @@ mod tests {
 
         let local_path = tmp.path().join("local");
         let local = GitRepo::init(&local_path, &url).unwrap();
-        write_file(&local_path.join("data.txt"), "hello");
+        write_file(&local_path.join("default/core/data.txt"), "hello");
         local.commit_all("initial", &signature()).unwrap();
 
         let first = local.push(None).unwrap();
@@ -793,18 +793,18 @@ mod tests {
 
         let alice_path = tmp.path().join("alice");
         let alice = GitRepo::init(&alice_path, &url).unwrap();
-        write_file(&alice_path.join("data.txt"), "alpha");
+        write_file(&alice_path.join("default/core/data.txt"), "alpha");
         alice.commit_all("alice initial", &signature()).unwrap();
         alice.push(None).unwrap();
 
         let bob_path = tmp.path().join("bob");
         let bob = GitRepo::clone(&url, &bob_path, None).unwrap();
         assert_eq!(
-            std::fs::read_to_string(bob_path.join("data.txt")).unwrap(),
+            std::fs::read_to_string(bob_path.join("default/core/data.txt")).unwrap(),
             "alpha"
         );
 
-        write_file(&bob_path.join("data.txt"), "alpha-updated");
+        write_file(&bob_path.join("default/core/data.txt"), "alpha-updated");
         bob.commit_all("bob update", &signature()).unwrap();
         bob.push(None).unwrap();
 
@@ -814,7 +814,7 @@ mod tests {
             "expected fast-forward, got {outcome:?}"
         );
         assert_eq!(
-            std::fs::read_to_string(alice_path.join("data.txt")).unwrap(),
+            std::fs::read_to_string(alice_path.join("default/core/data.txt")).unwrap(),
             "alpha-updated"
         );
     }
@@ -827,7 +827,7 @@ mod tests {
 
         let local_path = tmp.path().join("local");
         let local = GitRepo::init(&local_path, &url).unwrap();
-        write_file(&local_path.join("a.txt"), "x");
+        write_file(&local_path.join("default/core/a.txt"), "x");
         local.commit_all("seed", &signature()).unwrap();
         local.push(None).unwrap();
 
@@ -1017,7 +1017,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let repo_path = tmp.path().join("local");
         let repo = GitRepo::init(&repo_path, "https://example.invalid/r.git").unwrap();
-        write_file(&repo_path.join("core/plugin-configs/a.json"), "{\"x\": 1}");
+        write_file(
+            &repo_path.join("default/core/plugin-configs/a.json"),
+            "{\"x\": 1}",
+        );
         write_file(&repo_path.join("note.txt"), "ignore me");
         repo.commit_all("seed", &signature()).unwrap();
 
@@ -1026,10 +1029,13 @@ mod tests {
             .snapshot_json_at(oid, |p| p.starts_with("core"))
             .unwrap();
         assert_eq!(
-            snap.get("core/plugin-configs/a.json"),
+            snap.get("default/core/plugin-configs/a.json"),
             Some(&serde_json::json!({"x": 1}))
         );
-        assert!(!snap.contains_key("note.txt"), "non-json is excluded");
+        assert!(
+            !snap.contains_key("default/core/note.txt"),
+            "non-json is excluded"
+        );
     }
 
     #[test]
@@ -1040,18 +1046,18 @@ mod tests {
 
         let a_path = tmp.path().join("a");
         let a = GitRepo::init(&a_path, &url).unwrap();
-        write_file(&a_path.join("core/x.json"), "{\"v\":1}");
+        write_file(&a_path.join("default/core/x.json"), "{\"v\":1}");
         a.commit_all("seed", &signature()).unwrap();
         a.push(None).unwrap();
 
         let b_path = tmp.path().join("b");
         let b = GitRepo::clone(&url, &b_path, None).unwrap();
 
-        write_file(&a_path.join("core/x.json"), "{\"v\":2}");
+        write_file(&a_path.join("default/core/x.json"), "{\"v\":2}");
         a.commit_all("a2", &signature()).unwrap();
         a.push(None).unwrap();
 
-        write_file(&b_path.join("core/y.json"), "{\"v\":1}");
+        write_file(&b_path.join("default/core/y.json"), "{\"v\":1}");
         b.commit_all("b2", &signature()).unwrap();
 
         let outcome = b.pull(None).unwrap();
