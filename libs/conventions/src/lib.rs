@@ -74,6 +74,21 @@ pub fn scrub_daemon_handoff_env(command: &mut std::process::Command) {
     }
 }
 
+pub fn launched_child_inherits(key: &str) -> bool {
+    key != ENV_DAEMON_SOCKET
+        && key != ENV_INSTALL_ID
+        && key != ENV_HTTP_TOKEN
+        && !is_daemon_handoff_env(key)
+}
+
+pub fn scrub_launched_child_env(command: &mut std::process::Command) {
+    command
+        .env_remove(ENV_DAEMON_SOCKET)
+        .env_remove(ENV_INSTALL_ID)
+        .env_remove(ENV_HTTP_TOKEN);
+    scrub_daemon_handoff_env(command);
+}
+
 pub const ENV_DEV_GENERATION_MODE: &str = "QOL_DEV_GENERATION_MODE";
 pub const ENV_DEV_GENERATION_ID: &str = "QOL_DEV_GENERATION_ID";
 pub const ENV_DEV_READY_FILE: &str = "QOL_DEV_READY_FILE";
@@ -365,6 +380,43 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn launched_child_inherits_refuses_the_tray_token_sockets_and_handoff_keys() {
+        assert!(!launched_child_inherits(ENV_HTTP_TOKEN));
+        assert!(!launched_child_inherits(ENV_DAEMON_SOCKET));
+        assert!(!launched_child_inherits(ENV_INSTALL_ID));
+        assert!(!launched_child_inherits(ENV_DAEMON_LISTENER_FD));
+        assert!(!launched_child_inherits(&format!(
+            "{ENV_DAEMON_PORT_FD}_DISCOVERY"
+        )));
+        assert!(launched_child_inherits("PATH"));
+        assert!(launched_child_inherits("HOME"));
+        assert!(launched_child_inherits(ENV_PLUGIN_ID));
+        assert!(launched_child_inherits(ENV_THEME_NAME));
+    }
+
+    #[test]
+    fn scrub_launched_child_env_removes_the_token_from_a_command() {
+        let mut command = std::process::Command::new("true");
+        command
+            .env(ENV_HTTP_TOKEN, "secret")
+            .env(ENV_DAEMON_SOCKET, "s")
+            .env(ENV_INSTALL_ID, "i");
+        scrub_launched_child_env(&mut command);
+        let removed: std::collections::HashMap<_, _> = command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.is_none()))
+            .collect();
+        for key in [ENV_HTTP_TOKEN, ENV_DAEMON_SOCKET, ENV_INSTALL_ID] {
+            assert_eq!(removed.get(std::ffi::OsStr::new(key)), Some(&true));
+        }
+        for (key, value) in command.get_envs() {
+            if value.is_none() {
+                assert!(!launched_child_inherits(key.to_str().unwrap()));
+            }
+        }
+    }
 
     #[test]
     fn base_url_uses_the_default_port() {
