@@ -124,6 +124,14 @@ pub fn settings_selected_text(text: gpui::Div, kit: Kit) -> gpui::Div {
     text.bg(rgb(bg)).text_color(rgb(ink))
 }
 
+fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
+    let element = element.bg(rest);
+    match hover {
+        Some(color) => element.group_hover(SETTINGS_ROW_GROUP, move |style| style.bg(color)),
+        None => element,
+    }
+}
+
 const MASTHEAD_RULE_HEIGHT: f32 = 1.0;
 
 fn masthead_rule() -> gpui::Div {
