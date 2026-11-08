@@ -218,7 +218,7 @@ mod tests {
             "await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])",
             "const recent = recentlyClosed(everyRow)",
             "void recordRun($, 'archive', ['--key', entry.key])",
-            "void recordRun($, 'stopped', ['--key', key])",
+            "void recordRun($, 'stopped', ['--key', before.key])",
             "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
             "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
