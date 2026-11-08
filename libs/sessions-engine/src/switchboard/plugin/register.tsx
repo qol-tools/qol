@@ -669,9 +669,11 @@ const ready = async ($: EngineInterface): Promise<void> => {
   await refreshStatus($).catch(() => undefined)
 }
 
+export const needYouCount = (list: Entry[]): number => list.filter(entry => needsYou(entry) || (isCut(entry) && parentOf(list, entry) === undefined)).length
+
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
-  const count = list.filter(entry => needsYou(entry) || isCut(entry)).length
+  const count = needYouCount(list)
   const loading = await read($, starting)
   const parts = [loading === '' ? undefined : loading, tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
@@ -790,11 +792,17 @@ export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => (
 let marksWritten = ''
 let marksQueue: Promise<void> = Promise.resolve()
 
+export const pickedLabel = (model: string): string => {
+  const at = model.indexOf('[')
+  const id = at < 0 ? model : model.slice(0, at)
+  return id.startsWith('claude-') ? model : `${modelName(id)}${at < 0 ? '' : printable(model.slice(at))}`
+}
+
 const pickedModels = async ($: EngineInterface, list: Entry[]): Promise<Record<string, { model?: string; effort?: string }>> => {
   const shown = await Promise.all(list.filter(entry => !entry.isDismissed && !isEnded(entry)).map(async entry => [entry.agentId, await settingOf($, keyOf(entry))] as const))
   return Object.fromEntries(
     shown.flatMap(([agentId, one]) =>
-      one.model === undefined && one.effort === undefined ? [] : [[agentId, { ...(one.model === undefined ? {} : { model: modelName(one.model) }), ...(one.effort === undefined ? {} : { effort: one.effort }) }]],
+      one.model === undefined && one.effort === undefined ? [] : [[agentId, { ...(one.model === undefined ? {} : { model: pickedLabel(one.model) }), ...(one.effort === undefined ? {} : { effort: one.effort }) }]],
     ),
   )
 }

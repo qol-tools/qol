@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1816,6 +1816,7 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
   expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
   expect(parentOf(list, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }))?.agentId).toBe('p1')
+  expect(needYouCount([parent, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }), row('c1', { kind: 'note', isInterrupted: true }), row('a2', { kind: 'ask' })])).toBe(2)
   expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
   expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
   expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
@@ -3193,6 +3194,15 @@ test('a model id reads as its family and version', () => {
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
   expect(modelName('opus')).toBe('Opus')
   expect(modelName('gpt-x')).toBe('gpt-x')
+})
+
+test('a picked model keeps the full id the agent list labels, with its [1m] suffix', () => {
+  for (const [model, label] of [
+    ['claude-opus-4-6[1m]', 'claude-opus-4-6[1m]'],
+    ['claude-sonnet-4-5', 'claude-sonnet-4-5'],
+    ['opus[1m]', 'Opus[1m]'],
+    ['haiku', 'Haiku'],
+  ]) expect(pickedLabel(model)).toBe(label)
 })
 
 test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
