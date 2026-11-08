@@ -87,6 +87,7 @@ pub(super) struct PagesView {
     visiting: bool,
     pressing: Option<(String, String)>,
     asking: Option<(String, String)>,
+    copied: Option<(String, String)>,
     codes: HashMap<String, Result<Vec<bool>, String>>,
     poller: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
@@ -133,6 +134,7 @@ impl PagesView {
             visiting: false,
             pressing: None,
             asking: None,
+            copied: None,
             codes: HashMap::new(),
             poller: None,
             subscriptions: Vec::new(),
@@ -395,6 +397,7 @@ impl PagesView {
 
     fn back_to(&mut self, level: usize, cx: &mut Context<Self>) {
         self.asking = None;
+        self.copied = None;
         let stop = self.stop_on_leaving(level);
         self.sequence = self.sequence.wrapping_add(1);
         let depth = self.stack.len().saturating_sub(1);
@@ -468,6 +471,9 @@ impl PagesView {
         };
         let items = model::items(page);
         if let Some(row) = model::row_at(page, &items, index) {
+            if place.selected.as_ref() != Some(&row.id) {
+                self.copied = None;
+            }
             place.index = index;
             place.selected = Some(row.id.clone());
             place.scroll.follow(
@@ -507,7 +513,7 @@ impl PagesView {
         self.asking = None;
         if let Some(text) = row.copies() {
             cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
-            (self.notify)(CustomPanelNoticeTone::Success, "Copied".into(), cx);
+            self.copied = Some((page, row.id));
             return;
         }
         match row.enter {
@@ -575,6 +581,9 @@ impl PagesView {
             return;
         }
         let wanted = intent(key, event.keystroke.key_char.as_deref(), false);
+        if !matches!(wanted, Some(Intent::Activate)) {
+            self.copied = None;
+        }
         if !matches!(wanted, Some(Intent::Activate | Intent::Close)) && self.asking.take().is_some()
         {
             cx.notify();
@@ -930,12 +939,17 @@ impl CustomSettingsBreadcrumbs for PagesView {
                 }
             }
         }
+        let copied = selected
+            .as_ref()
+            .is_some_and(|(page, row)| self.copied == Some((page.clone(), row.id.clone())));
         let row = selected.map(|(_, row)| row);
         if let Some(Control::Feature { .. }) = row.as_ref().and_then(|row| row.control.as_ref()) {
             left.push(SettingsHint::new(Key::LEFT, "off"));
             left.push(SettingsHint::new(Key::RIGHT, "on"));
         }
-        if let Some(verb) = row.as_ref().and_then(model::enter_verb) {
+        if copied {
+            left.push(SettingsHint::new(Key::ENTER, "copied"));
+        } else if let Some(verb) = row.as_ref().and_then(model::enter_verb) {
             left.push(SettingsHint::new(Key::ENTER, verb));
         }
         if !matches!(
