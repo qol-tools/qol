@@ -1,25 +1,32 @@
 use std::collections::{BTreeSet, HashSet};
 
 const CAPACITY: usize = 65_536;
+const MAX_NONCE_BYTES: usize = 16;
+
+type Key = [u8; 16 + MAX_NONCE_BYTES + 1];
 
 #[derive(Default)]
 pub(crate) struct ReplayWindow {
-    expiry: BTreeSet<(u64, [u8; 32])>,
-    seen: HashSet<[u8; 32]>,
+    expiry: BTreeSet<(u64, Key)>,
+    seen: HashSet<Key>,
 }
 
 impl ReplayWindow {
     pub(crate) fn insert(
         &mut self,
         device_id: &[u8; 16],
-        nonce: &[u8; 16],
+        nonce: &[u8],
         expires_at_ms: u64,
         now_ms: u64,
     ) -> bool {
         self.expire(now_ms);
-        let mut key = [0u8; 32];
+        if nonce.len() > MAX_NONCE_BYTES {
+            return false;
+        }
+        let mut key = [0u8; 16 + MAX_NONCE_BYTES + 1];
         key[..16].copy_from_slice(device_id);
-        key[16..].copy_from_slice(nonce);
+        key[16..16 + nonce.len()].copy_from_slice(nonce);
+        key[16 + MAX_NONCE_BYTES] = nonce.len() as u8;
         if self.seen.contains(&key) || self.seen.len() >= CAPACITY {
             return false;
         }
@@ -94,5 +101,23 @@ mod tests {
         assert!(window.insert(&[1; 16], &nonce, 1_000, 0));
         assert!(window.insert(&[2; 16], &nonce, 1_000, 0));
         assert!(!window.insert(&[1; 16], &nonce, 1_000, 0));
+    }
+
+    #[test]
+    fn nonces_of_different_lengths_with_the_same_leading_bytes_do_not_collide() {
+        let mut window = ReplayWindow::default();
+        let device = [1; 16];
+
+        assert!(window.insert(&device, &[7; 12], 1_000, 0));
+        assert!(window.insert(&device, &[&[7u8; 12][..], &[0u8; 4][..]].concat(), 1_000, 0));
+        assert!(!window.insert(&device, &[7; 12], 1_000, 0));
+    }
+
+    #[test]
+    fn a_nonce_longer_than_the_wire_maximum_is_refused() {
+        let mut window = ReplayWindow::default();
+
+        assert!(!window.insert(&[1; 16], &[0; 17], 1_000, 0));
+        assert_eq!(window.seen.len(), 0);
     }
 }

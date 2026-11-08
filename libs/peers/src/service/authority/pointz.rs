@@ -5,7 +5,7 @@ use zeroize::Zeroizing;
 use super::state::{sanitize_name, PointzDeviceRecord, PointzState, State};
 use super::{AuthorityError, PeerAuthority};
 use crate::pointz::{PointzDevice, PointzDeviceId, PointzImport, PointzProjection};
-use crate::service::pointz::{LegacyPointz, Seed, MAX_DEVICES};
+use crate::service::pointz::{DeviceKey, LegacyPointz, Seed, MAX_DEVICES};
 use crate::StoreRevision;
 
 const DEVICE_FALLBACK_NAME: &str = "Phone";
@@ -43,6 +43,7 @@ impl PeerAuthority {
                         key: device.key,
                         name: sanitize_name(&device.name, DEVICE_FALLBACK_NAME),
                         paired_at_ms: device.paired_at_ms,
+                        sealed_only: false,
                     })
                     .collect(),
                 import: legacy.import,
@@ -101,7 +102,7 @@ impl PeerAuthority {
             .ok_or(AuthorityError::PointzAbsent)
     }
 
-    pub(crate) fn pointz_key(&self, device: &PointzDeviceId) -> Option<Zeroizing<[u8; 32]>> {
+    pub(crate) fn pointz_key(&self, device: &PointzDeviceId) -> Option<DeviceKey> {
         let inner = self.lock().ok()?;
         inner.ensure_ready().ok()?;
         inner
@@ -111,7 +112,10 @@ impl PeerAuthority {
             .devices
             .iter()
             .find(|entry| entry.id == *device)
-            .map(|entry| entry.key.clone())
+            .map(|entry| DeviceKey {
+                key: entry.key.clone(),
+                sealed_only: entry.sealed_only,
+            })
     }
 
     pub(crate) fn pair_pointz(
@@ -132,6 +136,7 @@ impl PeerAuthority {
                 key,
                 name,
                 paired_at_ms: unix_time_ms(),
+                sealed_only: true,
             });
             Ok(())
         })

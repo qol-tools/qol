@@ -17,6 +17,10 @@ kind = "settings"
 picture = "gear"
 args = ["--action", "settings"]
 
+[action.begin_pairing]
+label = "Pair a phone"
+args = ["begin_pairing"]
+
 [capabilities]
 gpui = true
 doctor = true
