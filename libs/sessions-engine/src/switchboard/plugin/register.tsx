@@ -836,13 +836,16 @@ export const reachable = (list: Entry[]): Entry[] => {
   })
 }
 
-const isTypedOf = (key: string, typed: string): boolean => key.startsWith(typed) || key.split('-').some(part => part.startsWith(typed))
+const keyStarts = (rows: Entry[], typed: string): Entry[] => rows.filter(entry => keyOf(entry).startsWith(typed))
+
+const wordStarts = (rows: Entry[], typed: string): Entry[] =>
+  rows.filter(entry => !keyOf(entry).startsWith(typed) && keyOf(entry).split('-').some(part => part.startsWith(typed)))
 
 export const keyCompletions = (list: Entry[], token: string): PromptAutocompleteSuggestion[] => {
   const typed = token.toLowerCase()
   if (!KEY_SHAPE.test(typed)) return []
-  return reachable(list)
-    .filter(entry => isTypedOf(keyOf(entry), typed))
+  const rows = reachable(list)
+  return [...keyStarts(rows, typed), ...wordStarts(rows, typed)]
     .map(entry => ({ text: `${keyOf(entry)} `, label: keyOf(entry), description: `${friendlyName(entry.name)}${entry.project === undefined ? '' : ` · ${entry.project}`}` }))
 }
 
@@ -862,7 +865,8 @@ export const toFork = (list: Entry[], text: string): { entry: Entry; message: st
   const exact = rows.find(entry => keyOf(entry) === word)
   if (exact !== undefined) return { entry: exact, message: message.trim() }
   if (colon !== ':') return undefined
-  const typed = rows.filter(entry => isTypedOf(keyOf(entry), word))
+  const starts = keyStarts(rows, word)
+  const typed = starts.length > 0 ? starts : wordStarts(rows, word)
   return typed.length === 1 && typed[0] !== undefined ? { entry: typed[0], message: message.trim() } : undefined
 }
 
