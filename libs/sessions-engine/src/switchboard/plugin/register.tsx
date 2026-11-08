@@ -35,7 +35,12 @@ const MINUTE = 60_000
 const DELIVER_MS = 2_000
 const DELIVER_TIMEOUT_MS = 20_000
 const STATES_TIMEOUT_MS = 20_000
-const SUB_FORK_KEYS = 'abcdefghijklmopqrstuvwz'
+const PROMPT_EVENT = 'UserPromptSubmit'
+const PROMPT_HOOK_MS = 10_000
+const HOOK_BLOCKED = 'A prompt hook stopped this message.'
+const HOOK_NOTE = '\n\n<system-reminder>\nUserPromptSubmit hook additional context: '
+const IDLE_KEY = 'i'
+const SUB_FORK_KEYS = 'abcdefghjklmopqrstuvwz'
 const NEW_REPLY = '◉'
 const NO_MARK = '  '
 const SINCE_WIDTH = 6
@@ -127,6 +132,7 @@ const pullDetails = atom({ plugin: 'qol-switchboard', key: 'pullDetails' } as co
 const modelChoices = atom({ plugin: 'qol-switchboard', key: 'modelChoices' } as const, {} as Record<string, ModelChoice>)
 const modelsSeen = atom({ plugin: 'qol-switchboard', key: 'modelsSeen' } as const, {} as Record<string, ModelSeen>)
 const forkStates = atom({ plugin: 'qol-switchboard', key: 'forkStates' } as const, {} as Record<string, RunState>)
+const idleShown = atom({ plugin: 'qol-switchboard', key: 'idleShown' } as const, false)
 
 type Filing = { kind: Kind; headline: string; recommend?: string }
 type Sorting = { kind: Kind; recommend?: string }
@@ -862,8 +868,18 @@ const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOv
 
 const RUN_OVER_MS = 15_000
 
-const settleRun = ($: EngineInterface, agentId: string): Promise<void> =>
-  change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
+const lastAnswers = new Map<string, string>()
+
+const settleRun = async ($: EngineInterface, agentId: string): Promise<void> => {
+  const answer = lastAnswers.get(agentId)
+  lastAnswers.delete(agentId)
+  const entry = (await read($, board)).find(one => one.agentId === agentId)
+  if (answer !== undefined && entry?.isWorking === true && entry.isRunOver === true) {
+    await file($, { agentId, status: 'completed', report: answer })
+    return
+  }
+  await change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
+}
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
   keeping.delete(agentId)
@@ -1107,7 +1123,14 @@ const FROM_USER = 'The user typed this to you in the switchboard chat:\n\n'
 
 export const fromUser = (message: string): string => `${FROM_USER}${message}`
 
-export const typedByUser = (text: string): string | undefined => (text.startsWith(FROM_USER) && text.length > FROM_USER.length ? text.slice(FROM_USER.length) : undefined)
+export const withHookContext = (text: string, context: readonly string[]): string => `${text}${context.map(one => `${HOOK_NOTE}${one}\n</system-reminder>`).join('')}`
+
+export const typedByUser = (text: string): string | undefined => {
+  if (!text.startsWith(FROM_USER) || text.length <= FROM_USER.length) return undefined
+  const words = text.slice(FROM_USER.length)
+  const cut = words.indexOf(HOOK_NOTE)
+  return cut === -1 ? words : words.slice(0, cut)
+}
 
 type SessionRecord = { key: string; friendly?: string; cwd?: string; created_ms?: number; parts?: unknown[]; done?: { at_ms?: number; reason?: string }; stopped_ms?: number }
 
@@ -1198,6 +1221,128 @@ const subagentPath = async ($: EngineInterface, agentId: string): Promise<string
   const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
   if (conversations === undefined || conversations === '') return undefined
   return `${conversations}/${await $.session.id()}/subagents/agent-${agentId}.jsonl`
+}
+
+export type Hooked = { context: string[]; block?: string }
+
+type PromptCommand = { command: string; timeoutMs: number; root?: string }
+
+const NOT_HOOKED: Hooked = { context: [] }
+
+const promptGroups = (file: unknown): unknown => {
+  if (typeof file !== 'object' || file === null) return undefined
+  const hooks = (file as { hooks?: unknown }).hooks
+  return typeof hooks === 'object' && hooks !== null ? hooks : file
+}
+
+export const promptCommands = (hooks: unknown, root?: string): PromptCommand[] => {
+  const groups = typeof hooks === 'object' && hooks !== null ? (hooks as Record<string, unknown>)[PROMPT_EVENT] : undefined
+  if (!Array.isArray(groups)) return []
+  return groups.flatMap(group => {
+    const listed = typeof group === 'object' && group !== null ? (group as { hooks?: unknown }).hooks : undefined
+    if (!Array.isArray(listed)) return []
+    return listed.flatMap((hook): PromptCommand[] => {
+      const { type, command, timeout } = (typeof hook === 'object' && hook !== null ? hook : {}) as { type?: unknown; command?: unknown; timeout?: unknown }
+      if (type !== 'command' || typeof command !== 'string' || command.trim() === '') return []
+      const timeoutMs = typeof timeout === 'number' && timeout > 0 ? Math.min(timeout * 1000, PROMPT_HOOK_MS) : PROMPT_HOOK_MS
+      return [{ command, timeoutMs, ...(root === undefined ? {} : { root }) }]
+    })
+  })
+}
+
+export const hookAnswer = (ran: { exitCode: number; stdout: string; stderr: string }): Hooked => {
+  if (ran.exitCode === 2) return { context: [], block: ran.stderr.trim() || HOOK_BLOCKED }
+  const out = ran.stdout.trim()
+  if (ran.exitCode !== 0 || out === '') return NOT_HOOKED
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(out)
+  } catch {
+    return { context: [out] }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { context: [out] }
+  const answer = parsed as { continue?: unknown; stopReason?: unknown; decision?: unknown; reason?: unknown; hookSpecificOutput?: { additionalContext?: unknown } }
+  const extra = answer.hookSpecificOutput?.additionalContext
+  const context = typeof extra === 'string' && extra.trim() !== '' ? [extra] : []
+  if (answer.continue === false) return { context, block: typeof answer.stopReason === 'string' && answer.stopReason !== '' ? answer.stopReason : HOOK_BLOCKED }
+  if (answer.decision === 'block') return { context, block: typeof answer.reason === 'string' && answer.reason !== '' ? answer.reason : HOOK_BLOCKED }
+  return { context }
+}
+
+const readJson = async ($: EngineInterface, path: string): Promise<unknown> => {
+  try {
+    return (await $.fs.exists(path)) ? (JSON.parse(String(await $.fs.read(path))) as unknown) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const inPlugin = (root: string, path: string): string => `${root}/${path.replace(/^\.\//, '')}`
+
+const pluginCommands = async ($: EngineInterface, root: string): Promise<PromptCommand[]> => {
+  const declared = ((await readJson($, `${root}/.claude-plugin/plugin.json`)) as { hooks?: unknown } | undefined)?.hooks
+  const named = typeof declared === 'string' ? [declared] : Array.isArray(declared) ? declared.filter((one): one is string => typeof one === 'string') : []
+  const files = [...new Set([inPlugin(root, 'hooks/hooks.json'), ...named.map(one => inPlugin(root, one))])]
+  const inline = typeof declared === 'object' && declared !== null && !Array.isArray(declared) ? [declared] : []
+  const read = await Promise.all(files.map(path => readJson($, path)))
+  return [...read, ...inline].flatMap(one => promptCommands(promptGroups(one), root))
+}
+
+const enabledRoots = async ($: EngineInterface, enabled: unknown): Promise<string[]> => {
+  if (typeof enabled !== 'object' || enabled === null) return []
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${(await $.env.get('HOME')) ?? ''}/.claude`
+  const installed = ((await readJson($, `${config}/plugins/installed_plugins.json`)) as { plugins?: Record<string, unknown> } | undefined)?.plugins
+  if (typeof installed !== 'object' || installed === null) return []
+  return Object.entries(enabled).flatMap(([name, isOn]) => {
+    const copies = isOn === true ? installed[name] : undefined
+    const root = Array.isArray(copies) ? (copies[0] as { installPath?: unknown } | undefined)?.installPath : undefined
+    return typeof root === 'string' && root !== '' ? [root] : []
+  })
+}
+
+const promptHookCommands = async ($: EngineInterface, project: string | undefined): Promise<PromptCommand[]> => {
+  const settings = ((await $.settings.read()) ?? {}) as { hooks?: unknown; enabledPlugins?: unknown; disableAllHooks?: unknown }
+  if (settings.disableAllHooks === true) return []
+  const own = project === undefined ? [] : await Promise.all(['settings.json', 'settings.local.json'].map(name => readJson($, `${project}/.claude/${name}`)))
+  const roots = await enabledRoots($, settings.enabledPlugins)
+  const plugins = await Promise.all(roots.map(root => pluginCommands($, root)))
+  const seen = new Set<string>()
+  return [...promptCommands(settings.hooks), ...own.flatMap(one => promptCommands(promptGroups(one))), ...plugins.flat()].filter(one => {
+    const key = `${one.root ?? ''}\n${one.command}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export const promptHooks = async ($: EngineInterface, target: Entry, prompt: string): Promise<Hooked> => {
+  try {
+    const sessionCwd = await $.session.cwd()
+    const cwd = target.project ?? sessionCwd
+    const commands = await promptHookCommands($, target.project === sessionCwd ? undefined : target.project)
+    if (commands.length === 0) return NOT_HOOKED
+    const input = JSON.stringify({
+      session_id: await $.session.id(),
+      transcript_path: (await subagentPath($, target.agentId).catch(() => undefined)) ?? '',
+      cwd,
+      hook_event_name: PROMPT_EVENT,
+      prompt,
+      source: 'user',
+      agent_id: target.agentId,
+      agent_type: FORK,
+    })
+    const answers = await Promise.all(
+      commands.map(one =>
+        $.process
+          .run(['bash', '-c', one.command], { cwd, stdin: input, timeoutMs: one.timeoutMs, env: { CLAUDE_PROJECT_DIR: cwd, ...(one.root === undefined ? {} : { CLAUDE_PLUGIN_ROOT: one.root }) } })
+          .then(hookAnswer, () => NOT_HOOKED),
+      ),
+    )
+    const block = answers.find(one => one.block !== undefined)?.block
+    return { context: answers.flatMap(one => one.context), ...(block === undefined ? {} : { block }) }
+  } catch {
+    return NOT_HOOKED
+  }
 }
 
 const recordPart = async ($: EngineInterface, key: string, agentId: string): Promise<void> => {
@@ -1388,7 +1533,7 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
   )
   const entry = filed as Entry
   if (entry.key !== undefined) void recordRun($, 'archive', ['--key', entry.key])
-  if (isNew && needsYou(entry)) {
+  if (isNew && !isShown && needsYou(entry)) {
     void $.ui.notify(entry.headline, { title: keyName(entry.name) }).catch(() => {})
   }
   return entry
@@ -2471,7 +2616,8 @@ export const register: Register = on => {
       return dropAs(reportLine(quiet))
     }
     if (e.command !== undefined || e.isMeta === true || !TYPED_ORIGINS.includes(e.origin.kind)) return next(e)
-    if (viewedFork === undefined && TYPED_SB.test(e.text)) {
+    const viewing = viewedFork
+    if (TYPED_SB.test(e.text)) {
       if (tree.commands.length === 0) await loadTree($)
       const at = sbAt(tree.commands, `${e.text.trim()} `)
       if (at !== undefined && (at.missing === undefined || at.path.length > 0)) {
@@ -2479,18 +2625,31 @@ export const register: Register = on => {
         return dropAs(await runSb($, e.text))
       }
     }
-    const typed =
-      viewedFork === undefined
-        ? await ensureLoaded($)
-            .then(async () => toFork(await read($, board), e.text))
-            .catch(() => undefined)
-        : undefined
+    const typed = await ensureLoaded($)
+      .then(async () => toFork(await read($, board), e.text))
+      .catch(() => undefined)
     if (TYPED_TOGGLE.test(e.text)) {
       isAutoOpenPending = false
       clearTypedToggle($)
       return dropAs(await toggleBoard($))
     }
-    const at = typed ?? (viewedFork === undefined ? await currentOf($).then(entry => (entry === undefined ? undefined : { entry, message: e.text.trim() })) : undefined)
+    if (viewing !== undefined && (typed === undefined || typed.entry.agentId === viewing)) {
+      const own = (await read($, board)).find(entry => entry.agentId === viewing)
+      const text = typed === undefined ? e.text : typed.message
+      if (own === undefined || text.trim() === '') return next(e)
+      const hooked = await promptHooks($, own, text)
+      if (hooked.block !== undefined) {
+        clearBox($, typedText => typedText === e.text)
+        return dropAs(hooked.block)
+      }
+      return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })
+    }
+    if (viewing !== undefined && typed !== undefined && typed.message === '') {
+      clearBox($, text => text === e.text)
+      const shown = await $.ui.view({ agentId: typed.entry.agentId }).catch(() => ({ deny: 'it is not in the agent list' }))
+      return dropAs(shown.deny === undefined ? `Opened ${keyOf(typed.entry)}.` : `${keyOf(typed.entry)} could not be opened: ${printable(String(shown.deny))}`)
+    }
+    const at = typed ?? (viewing === undefined ? await currentOf($).then(entry => (entry === undefined ? undefined : { entry, message: e.text.trim() })) : undefined)
     if (at === undefined) return next(e)
     sending = at.entry
     try {
@@ -2501,8 +2660,15 @@ export const register: Register = on => {
         clearBox($, text => text === e.text)
         return dropAs(`Writing to ${keyOf(at.entry)}. Esc on an empty prompt leaves.`)
       }
-      await setCurrent($, at.entry).catch(() => undefined)
-      await writeTo($, at.entry)
+      const hooked = await promptHooks($, at.entry, at.message)
+      if (hooked.block !== undefined) {
+        clearBox($, text => text === e.text)
+        return dropAs(hooked.block)
+      }
+      if (viewing === undefined) {
+        await setCurrent($, at.entry).catch(() => undefined)
+        await writeTo($, at.entry)
+      }
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
       const fetched = await $.session.messages({ agentId: at.entry.agentId }).then(
@@ -2518,15 +2684,16 @@ export const register: Register = on => {
         forgetSent(at.entry.agentId, noted)
         void forgetSentLog($, key, note).catch(() => {})
       }
-      const sent = await sendTo($, at.entry, fromUser(at.message), direct($)).catch(() => undefined)
+      const said = withHookContext(fromUser(at.message), hooked.context)
+      const sent = await sendTo($, at.entry, said, direct($)).catch(() => undefined)
       if (sent?.isDelivered !== true) {
-        void tell($, at.entry, fromUser(at.message))
+        void tell($, at.entry, said)
           .then(isDelivered => {
             if (!isDelivered) forget()
           })
           .catch(forget)
       }
-      await refreshWriting($, at.entry.agentId)
+      if (viewing === undefined) await refreshWriting($, at.entry.agentId)
       clearBox($, text => text === e.text)
       return dropAs(`→ ${keyOf(at.entry)}`)
     } finally {
@@ -2552,7 +2719,6 @@ export const register: Register = on => {
 
   on('prompt.autocomplete', async ($, e, next) => {
     const own = await next(e)
-    if (viewedFork !== undefined) return own
     const sb = sbCompletions(tree.commands, e.text, e.start, e.token)
     if (sb.length > 0) return { suggestions: [...own.suggestions, ...sb] }
     if (e.text.slice(0, e.start).trim() !== '') return own
@@ -2567,7 +2733,8 @@ export const register: Register = on => {
 
   on('prompt.edit', async ($, e, next) => {
     const isTab = e.key?.key === 'tab' && e.key.ctrl === undefined && e.key.meta === undefined
-    if (isTab && viewedFork === undefined) {
+    const isMain = viewedFork === undefined
+    if (isTab) {
       const sb = sbTab(tree.commands, e.text, e.key?.shift === true ? -1 : 1)
       if (sb !== undefined) {
         const hint = sbHint(tree.commands, sb, sb.length)
@@ -2578,22 +2745,23 @@ export const register: Register = on => {
       const isKeyOnly = e.text === '' || (e.text === `${current} ` && reachable(list).some(entry => keyOf(entry) === current))
       const key = isKeyOnly ? nextKey(list, current, e.key?.shift === true ? -1 : 1) : undefined
       if (key !== undefined) {
-        await writeTo($, reachable(list).find(entry => keyOf(entry) === key))
+        if (isMain) await writeTo($, reachable(list).find(entry => keyOf(entry) === key))
         return { text: `${key} `, cursor: key.length + 1, decorations: [{ start: 0, end: key.length, bold: true }] }
       }
     }
     const after = await next(e)
     try {
-      if (viewedFork !== undefined) return after
       const hint = sbHint(tree.commands, after.text, after.cursor)
       if (hint !== undefined) return { ...after, decorations: [...(after.decorations ?? []), hint] }
       if (after.text === '') {
-        await writeToTyped($, undefined)
-        suggestFork($, await read($, board))
+        if (isMain) {
+          await writeToTyped($, undefined)
+          suggestFork($, await read($, board))
+        }
         return after
       }
       const target = typedTarget(await read($, board), after.text)
-      await writeToTyped($, target)
+      if (isMain) await writeToTyped($, target)
       if (target === undefined) return after
       return { ...after, decorations: [...(after.decorations ?? []), { start: 0, end: keyOf(target).length, bold: true }] }
     } catch {
@@ -2723,6 +2891,7 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
+    if (ended !== undefined && typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) lastAnswers.set(ended, e.answer)
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
@@ -2770,6 +2939,7 @@ export const register: Register = on => {
     const ledger = await read($, pulls)
     const details = await read($, pullDetails)
     const states = await read($, forkStates)
+    const isIdleShown = await read($, idleShown)
     const choices = await read($, modelChoices)
     const seen = await read($, modelsSeen)
     if (modelsLoading === undefined) $.clock.after(0, () => void loadModels($))
@@ -2792,6 +2962,12 @@ export const register: Register = on => {
     const waiting = top.filter(entry => !needs.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !isCut(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
     const askers = needs.flatMap(askersOf)
+    const badgeOf = (entry: Entry): string => {
+      const count = familyIn(entry).filter(one => !isEnded(one)).length
+      return count === 0 ? '' : ` +${count}`
+    }
+    const folded = isIdleShown ? [] : idle.filter(entry => entry.agentId !== target?.agentId)
+    const foldedUnread = folded.filter(entry => hasUnread(list, entry)).length
     const firstAsk = askers.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string => shownState(entry, list, states).label
     const looks = await looksOf($)
@@ -2855,7 +3031,8 @@ export const register: Register = on => {
     const title = (entry: Entry, label: string) => (
       <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
         {dot(entry)} {mark(entry)}
-        <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>{' '}
+        <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>
+        <Text dimColor>{badgeOf(entry)}</Text>{' '}
         {stateText(entry, label)}
         <Text dimColor> · {age(now - entry.at)}</Text>
       </Button>
@@ -2871,7 +3048,7 @@ export const register: Register = on => {
     )
 
     const keys = isFocused
-      ? `digit opens a fork${target !== undefined && subForksOf(list, target).length > 0 ? ' · letter opens a sub-fork' : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
+      ? `digit opens a fork${target !== undefined && subForksOf(list, target).length > 0 ? ' · letter opens a sub-fork' : ''}${idle.length > 0 ? ` · ${IDLE_KEY} ${isIdleShown ? 'hides' : 'shows'} the idle forks` : ''} · tab walks${target === undefined ? '' : ' · tab to model or effort, arrows and enter pick'} · x closes · esc back to the prompt`
       : 'ctrl+x tab to use the board · qols board or ctrl+x x closes it'
     const inner = Math.max(24, e.props.bodyColumns - 4)
     const frame = (key: string, title: JSX.Children, right: JSX.Children | undefined, body: JSX.Children) => (
@@ -2894,7 +3071,18 @@ export const register: Register = on => {
       </Text>
     )
     const cell = (text: string, width: number) => (text.length > width - 1 ? `${text.slice(0, Math.max(1, width - 2))}… ` : text.padEnd(width))
-    const forkRows = [...needs, ...cut, ...working, ...waiting, ...idle]
+    const forkRows = [...needs, ...cut, ...working, ...waiting, ...idle.filter(entry => !folded.includes(entry))]
+    const idleFold =
+      idle.length === 0 || (!isIdleShown && folded.length === 0) ? undefined : (
+        <Button key="idle-fold" plain dimColor {...(isFocused ? { hotkey: IDLE_KEY } : {})} onPress={() => void update($, idleShown, was => !was)}>
+          {isIdleShown ? <Text>hide idle</Text> : <Text>{`${folded.length} idle`}</Text>}
+          {foldedUnread > 0 && (
+            <Text bold color="suggestion">
+              {` · ${foldedUnread} ${NEW_REPLY}`}
+            </Text>
+          )}
+        </Button>
+      )
     const pullCell = (agentId: string) => {
       const own = pullsOf(ledger, agentId)
       const live = own.filter(isOpen)
@@ -2915,7 +3103,7 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const nameWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...[...forkRows, ...recent].map(entry => keyName(entry.name).length))) + 2
+    const nameWidth = Math.min(FORK_NAME_MAX, Math.max(4, ...[...forkRows, ...recent].map(entry => keyName(entry.name).length + badgeOf(entry).length))) + 2
     const forkRow = (entry: Entry) => {
       const key: { hotkey?: string } = hotkey()
       return (
@@ -2923,7 +3111,7 @@ export const register: Register = on => {
           <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
             {key.hotkey === undefined ? '   ' : ''}
             {dot(entry)} {mark(entry)}
-            <Text bold>{cell(keyName(entry.name), nameWidth)}</Text>
+            <Text bold>{cell(`${keyName(entry.name)}${badgeOf(entry)}`, nameWidth)}</Text>
             {stateText(entry, cell(labelOf(entry), FORK_STATE_WIDTH))}
             <Text dimColor>{cell(age(now - entry.at), SINCE_WIDTH)}</Text>
             {pullCell(entry.agentId)}
@@ -2944,6 +3132,7 @@ export const register: Register = on => {
           pull requests
         </Text>
         {forkRows.map(forkRow)}
+        {idleFold !== undefined && <Box paddingLeft={5}>{idleFold}</Box>}
         {recent.length > 0 && <Text dimColor>recent</Text>}
         {recent.map(forkRow)}
       </Box>,
@@ -3264,8 +3453,8 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
-        {target === undefined && idle.length > 0 && heading('IDLE')}
-        {target === undefined && idle.map(entry => (
+        {target === undefined && idle.length > folded.length && heading('IDLE')}
+        {target === undefined && idle.filter(entry => !folded.includes(entry)).map(entry => (
           <Box key={`idle-${entry.agentId}`} flexDirection="column">
             {title(entry, entry.isStoppedByUser === true ? 'stopped' : 'idle')}
             <Box paddingLeft={2} flexDirection="column">
@@ -3275,6 +3464,7 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
+        {target === undefined && idleFold !== undefined && <Box marginTop={1}>{idleFold}</Box>}
         {target === undefined && recent.length > 0 && heading('RECENT')}
         {target === undefined && recent.map(entry => (
           <Box key={`recent-${entry.agentId}`} flexDirection="column">

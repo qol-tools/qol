@@ -66,6 +66,7 @@ declare module 'claude-code' {
       modelChoices: Record<string, ModelChoice>
       modelsSeen: Record<string, ModelSeen>
       forkStates: Record<string, RunState>
+      idleShown: boolean
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }
