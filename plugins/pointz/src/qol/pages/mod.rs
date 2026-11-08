@@ -39,6 +39,7 @@ pub(crate) struct Pairing {
 pub(crate) struct Snapshot {
     pub serving: Serving,
     pub phones: Vec<Phone>,
+    pub listed: bool,
     pub pairing: Option<Pairing>,
     pub hostname: String,
     pub ip: Option<String>,
@@ -58,8 +59,14 @@ impl Memory {
         }
     }
 
-    pub(crate) fn began(&mut self, phones: &[Phone]) {
-        self.pairing_from = Some(phones.iter().map(|phone| phone.id.clone()).collect());
+    pub(crate) fn began(&mut self, snapshot: &Snapshot) {
+        self.pairing_from = snapshot.listed.then(|| {
+            snapshot
+                .phones
+                .iter()
+                .map(|phone| phone.id.clone())
+                .collect()
+        });
     }
 
     pub(crate) fn stopped(&mut self) {
@@ -80,6 +87,7 @@ impl Memory {
         if let Some(joined) = snapshot
             .phones
             .iter()
+            .filter(|_| snapshot.listed)
             .find(|phone| !before.contains(&phone.id))
         {
             self.focus = Some(phone_id(&joined.id));

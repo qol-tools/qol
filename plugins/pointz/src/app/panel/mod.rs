@@ -79,7 +79,7 @@ fn answer_press<C>(
                 tray.serve(true);
             }
             if tray.begin() {
-                memory.began(&before.phones);
+                memory.began(&before);
                 reply.go = Some(Go::Open(PAIR.into()));
                 press.open.push(PAIR.into());
             } else {
@@ -131,7 +131,11 @@ struct Live;
 impl Tray for Live {
     fn snapshot(&self) -> Snapshot {
         let status = super::pairing::status();
-        let phones = status.as_ref().map(phones).unwrap_or_default();
+        let listed = status.as_ref().map(phones);
+        let (phones, listed) = match listed {
+            Some(Some(phones)) => (phones, true),
+            _ => (Vec::new(), false),
+        };
         Snapshot {
             serving: status.as_ref().map_or(Serving::Unknown, serving),
             pairing: status.as_ref().and_then(|status| {
@@ -146,6 +150,7 @@ impl Tray for Live {
                 })
             }),
             phones,
+            listed,
             hostname: network::get_hostname(),
             ip: network::get_local_ip().map(|ip| ip.to_string()),
         }
@@ -159,10 +164,7 @@ impl Tray for Live {
     }
 
     fn begin(&self) -> bool {
-        matches!(
-            super::pairing::request(PointzRequest::BeginPairing {}),
-            Some(Response::PointzPairing { pairing }) if pairing.open
-        )
+        super::pairing::begin()
     }
 
     fn cancel(&self) {
@@ -199,9 +201,9 @@ fn serving(status: &PointzStatus) -> Serving {
     }
 }
 
-fn phones(status: &PointzStatus) -> Vec<Phone> {
+fn phones(status: &PointzStatus) -> Option<Vec<Phone>> {
     let Some(expected) = status.authority else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     let mut cursor = PageCursor {
         authority_id: expected.authority_id,
@@ -214,7 +216,7 @@ fn phones(status: &PointzStatus) -> Vec<Phone> {
         let Some(Response::PointzDevices { page }) =
             super::pairing::request(PointzRequest::Devices { cursor })
         else {
-            return phones;
+            return None;
         };
         phones.extend(page.items.into_iter().map(|device| Phone {
             id: device.device_id.to_string(),
@@ -223,7 +225,8 @@ fn phones(status: &PointzStatus) -> Vec<Phone> {
         }));
         match page.next {
             Some(next) if next.offset > cursor.offset => cursor = next,
-            _ => return phones,
+            Some(_) => return None,
+            None => return Some(phones),
         }
     }
 }

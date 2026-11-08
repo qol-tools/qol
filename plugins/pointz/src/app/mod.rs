@@ -42,7 +42,9 @@ pub(crate) fn run() {
     for command in rx {
         match command {
             daemon::Command::Settings => crate::qol::open_settings(),
-            daemon::Command::BeginPairing => pairing::begin(),
+            daemon::Command::BeginPairing => {
+                pairing::begin();
+            }
             daemon::Command::Input(input) => {
                 match serde_json::from_value::<crate::command::Command>(input) {
                     Ok(command) => {

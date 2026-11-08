@@ -17,6 +17,7 @@ impl Fake {
             snapshot: RefCell::new(Snapshot {
                 serving,
                 phones: vec![phone("a", "Pixel 8"), phone("b", "Galaxy S24")],
+                listed: true,
                 pairing: None,
                 hostname: "desk".into(),
                 ip: Some("10.0.0.2".into()),
@@ -287,5 +288,8 @@ fn transport_states_map_to_what_the_switch_says() {
     for (transport, expected) in cases {
         assert_eq!(serving(&status(transport)), expected);
     }
-    assert!(phones(&status(PointzTransport::Stopped {})).is_empty());
+    assert_eq!(
+        phones(&status(PointzTransport::Stopped {})),
+        Some(Vec::new())
+    );
 }

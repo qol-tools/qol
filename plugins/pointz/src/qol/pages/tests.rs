@@ -27,6 +27,7 @@ fn snapshot() -> Snapshot {
     Snapshot {
         serving: Serving::Running,
         phones: vec![pixel()],
+        listed: true,
         pairing: None,
         hostname: "kmrh-desk".into(),
         ip: Some("192.168.1.24".into()),
@@ -242,7 +243,7 @@ fn presses_name_what_the_row_does() {
 #[test]
 fn a_phone_that_pairs_closes_the_card_and_takes_the_focus() {
     let mut memory = Memory::new();
-    memory.began(&[pixel()]);
+    memory.began(&snapshot());
     let pairing = Snapshot {
         pairing: Some(Pairing {
             code: "482913".into(),
@@ -274,7 +275,7 @@ fn a_phone_that_pairs_closes_the_card_and_takes_the_focus() {
 #[test]
 fn pairing_that_runs_out_or_stops_is_forgotten() {
     let mut memory = Memory::new();
-    memory.began(&[pixel()]);
+    memory.began(&snapshot());
     assert!(!memory.observe(&snapshot(), &open(&[LIST])));
     let joined = Snapshot {
         phones: vec![pixel(), phone("galaxy", "Galaxy S24", now())],
@@ -282,9 +283,46 @@ fn pairing_that_runs_out_or_stops_is_forgotten() {
     };
     assert!(!memory.observe(&joined, &open(&[LIST])));
 
-    memory.began(&[pixel()]);
+    memory.began(&snapshot());
     memory.stopped();
     assert_eq!(memory, Memory::new());
+}
+
+#[test]
+fn an_incomplete_phone_list_never_reads_as_a_phone_that_joined() {
+    let mut memory = Memory::new();
+    let partial = Snapshot {
+        phones: Vec::new(),
+        listed: false,
+        pairing: Some(Pairing {
+            code: "482913".into(),
+            seconds: 40,
+        }),
+        ..snapshot()
+    };
+    memory.began(&partial);
+    assert!(!memory.observe(&snapshot(), &open(&[LIST, PAIR])));
+    assert_eq!(
+        build(&snapshot(), &memory, now()).page(LIST).unwrap().focus,
+        None
+    );
+
+    memory.began(&Snapshot {
+        listed: true,
+        ..partial.clone()
+    });
+    let unread = Snapshot {
+        phones: vec![pixel()],
+        ..partial
+    };
+    assert!(!memory.observe(&unread, &open(&[LIST, PAIR])));
+    assert!(memory.observe(
+        &Snapshot {
+            listed: true,
+            ..unread
+        },
+        &open(&[LIST, PAIR])
+    ));
 }
 
 #[test]
