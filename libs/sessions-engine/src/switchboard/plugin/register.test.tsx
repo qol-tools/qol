@@ -2782,6 +2782,40 @@ test('a ready pull request reads as armed or queued, and a queue failure from an
   expect(pullDetailOf({ state: 'MERGED', isDraft: false, isInMergeQueue: true }, '', 9)?.merge).toBeUndefined()
 })
 
+test('the close command stops the fork you write to and drops it from the board, a working one only when pressed again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const stops: string[] = []
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('session.messages', () => ({ value: [] }))
+  on('agent.list', () => ({ value: [{ id: 'a8', status: 'running' }, { id: 'a9', status: 'running' }] }))
+  on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
+    stops.push(`${e.tool} ${e.task_id ?? ''}`)
+    return { result: { message: 'stopped' } }
+  })
+  const close = async () => String((await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  const rows = () => (store.get('board:switchboard-session') as { agentId: string; isDismissed?: boolean }[] | undefined) ?? []
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(await close()).toContain('No fork to close')
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'other-fork: other')
+  await deliver($, notification('a9', 'other-fork: other', 'The build is green.'), 'task-notification')
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await close()).toContain('asking-fork is still working, so it stays open. ctrl+x ctrl+x again closes it anyway.')
+  expect(stops).toEqual([])
+  expect(await close()).toContain('Closed asking-fork.')
+  expect(stops).toEqual(['TaskStop a8'])
+  expect(rows().find(row => row.agentId === 'a8')?.isDismissed).toBe(true)
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'other-fork hi' })
+  expect(await close()).toContain('Closed other-fork.')
+  expect(stops).toEqual(['TaskStop a8', 'TaskStop a9'])
+  expect(rows().find(row => row.agentId === 'a9')?.isDismissed).toBe(true)
+})
+
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []

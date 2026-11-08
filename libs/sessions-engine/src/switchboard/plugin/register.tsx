@@ -1332,6 +1332,38 @@ const refreshDetails = ($: EngineInterface, own: readonly Pull[], details: Recor
   }
 }
 
+const CLOSE = 'close-fork'
+const CLOSE_CHORD = 'ctrl+x ctrl+x'
+export const CLOSE_AGAIN_MS = 10_000
+let closeArmed = { agentId: '', at: 0 }
+
+export const closeFork = async ($: EngineInterface): Promise<string> => {
+  const agentId = viewedFork ?? (await read($, writingTo))
+  const entry = agentId === '' ? undefined : (await read($, board)).find(one => one.agentId === agentId)
+  if (entry === undefined) return 'No fork to close: write to one or open its conversation first.'
+  const name = keyName(entry.name)
+  const now = await $.clock.now()
+  const watched = pullsOf(await read($, pulls), agentId).find(pull => pull.mergeCommit === undefined && pull.isWatched)
+  const busy = entry.isWorking ? 'is still working' : watched !== undefined ? `still watches #${watched.number ?? '?'}` : undefined
+  const isForced = closeArmed.agentId === agentId && now - closeArmed.at < CLOSE_AGAIN_MS
+  if (busy !== undefined && !isForced) {
+    closeArmed = { agentId, at: now }
+    return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway.`
+  }
+  closeArmed = { agentId: '', at: 0 }
+  if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
+    const failed = await $.tool
+      .call({ tool: 'TaskStop', task_id: agentId })
+      .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
+      .catch((error: unknown) => String(error))
+    if (failed !== undefined) return `${name} could not be closed: ${printable(failed)}`
+  }
+  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true } : one)))
+  if ((await read($, writingTo)) === agentId) await writeTo($, undefined)
+  if (viewedFork === agentId) await $.ui.view({}).catch(() => undefined)
+  return `Closed ${name}. It left the agent list and the board; resume_session brings it back.`
+}
+
 const choiceShape = (one: unknown): one is ModelChoice =>
   typeof one === 'object' && one !== null && typeof (one as ModelChoice).at === 'number' && ((one as ModelChoice).model === undefined || typeof (one as ModelChoice).model === 'string') && ((one as ModelChoice).effort === undefined || EFFORTS.some(level => level === (one as ModelChoice).effort))
 
@@ -2028,6 +2060,7 @@ export const register: Register = on => {
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
+      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open (${CLOSE_CHORD} once bound): it leaves the agent list and the board`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
@@ -2194,6 +2227,8 @@ export const register: Register = on => {
     isAutoOpenPending = false
     return { text: await toggleBoard($) }
   }).catch(() => ({ text: 'The fork board could not open.' }))
+
+  on('command.run', { command: CLOSE }, async $ => ({ text: await closeFork($) })).catch(() => ({ text: 'The fork could not be closed.' }))
 
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
