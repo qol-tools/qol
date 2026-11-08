@@ -868,14 +868,14 @@ const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOv
 
 const RUN_OVER_MS = 15_000
 
-const lastAnswers = new Map<string, string>()
+const lastAnswers = new Map<string, { turnId: string; answer: string }>()
 
-const settleRun = async ($: EngineInterface, agentId: string): Promise<void> => {
-  const answer = lastAnswers.get(agentId)
-  lastAnswers.delete(agentId)
+const settleRun = async ($: EngineInterface, agentId: string, turnId: string): Promise<void> => {
+  const last = lastAnswers.get(agentId)
+  if (last?.turnId === turnId) lastAnswers.delete(agentId)
   const entry = (await read($, board)).find(one => one.agentId === agentId)
-  if (answer !== undefined && entry?.isWorking === true && entry.isRunOver === true) {
-    await file($, { agentId, status: 'completed', report: answer })
+  if (last?.turnId === turnId && entry?.isWorking === true && entry.isRunOver === true) {
+    await file($, { agentId, status: 'completed', report: last.answer })
     return
   }
   await change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
@@ -1300,10 +1300,25 @@ const enabledRoots = async ($: EngineInterface, enabled: unknown): Promise<strin
   })
 }
 
+export const isTrusted = (config: unknown, folder: string): boolean => {
+  const projects = typeof config === 'object' && config !== null ? (config as { projects?: unknown }).projects : undefined
+  if (typeof projects !== 'object' || projects === null || !folder.startsWith('/')) return false
+  const parts = folder.split('/').filter(part => part !== '')
+  const folders = [...parts.map((_, at) => `/${parts.slice(0, parts.length - at).join('/')}`), '/']
+  return folders.some(one => ((projects as Record<string, unknown>)[one] as { hasTrustDialogAccepted?: unknown } | undefined)?.hasTrustDialogAccepted === true)
+}
+
+const isTrustedFolder = async ($: EngineInterface, folder: string): Promise<boolean> => {
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR'))?.replace(TRAILING_SLASH, '')
+  const home = (await $.env.get('HOME'))?.replace(TRAILING_SLASH, '')
+  const path = dir !== undefined && dir !== '' ? `${dir}/.claude.json` : home !== undefined && home !== '' ? `${home}/.claude.json` : undefined
+  return path !== undefined && isTrusted(await readJson($, path), folder)
+}
+
 const promptHookCommands = async ($: EngineInterface, project: string | undefined): Promise<PromptCommand[]> => {
   const settings = ((await $.settings.read()) ?? {}) as { hooks?: unknown; enabledPlugins?: unknown; disableAllHooks?: unknown }
   if (settings.disableAllHooks === true) return []
-  const own = project === undefined ? [] : await Promise.all(['settings.json', 'settings.local.json'].map(name => readJson($, `${project}/.claude/${name}`)))
+  const own = project === undefined || !(await isTrustedFolder($, project)) ? [] : await Promise.all(['settings.json', 'settings.local.json'].map(name => readJson($, `${project}/.claude/${name}`)))
   const roots = await enabledRoots($, settings.enabledPlugins)
   const plugins = await Promise.all(roots.map(root => pluginCommands($, root)))
   const seen = new Set<string>()
@@ -2636,11 +2651,15 @@ export const register: Register = on => {
     if (viewing !== undefined && (typed === undefined || typed.entry.agentId === viewing)) {
       const own = (await read($, board)).find(entry => entry.agentId === viewing)
       const text = typed === undefined ? e.text : typed.message
+      if (typed !== undefined && text.trim() === '') {
+        clearBox($, typedText => typedText === e.text)
+        return dropAs(`${keyOf(typed.entry)} is open.`)
+      }
       if (own === undefined || text.trim() === '') return next(e)
       const hooked = await promptHooks($, own, text)
       if (hooked.block !== undefined) {
         clearBox($, typedText => typedText === e.text)
-        return dropAs(hooked.block)
+        return dropAs(printable(hooked.block))
       }
       return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })
     }
@@ -2663,7 +2682,7 @@ export const register: Register = on => {
       const hooked = await promptHooks($, at.entry, at.message)
       if (hooked.block !== undefined) {
         clearBox($, text => text === e.text)
-        return dropAs(hooked.block)
+        return dropAs(printable(hooked.block))
       }
       if (viewing === undefined) {
         await setCurrent($, at.entry).catch(() => undefined)
@@ -2891,8 +2910,8 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
-    if (ended !== undefined && typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) lastAnswers.set(ended, e.answer)
-    if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended).catch(() => undefined))
+    if (ended !== undefined && typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) lastAnswers.set(ended, { turnId: e.turnId, answer: e.answer })
+    if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
       await update($, focusActivity, () => '')

@@ -169,6 +169,7 @@ mod tests {
             "const hooked = await promptHooks($, at.entry, at.message)",
             "return next({ ...e, text, ...(hooked.context.length === 0 ? {} : { context: [...(e.context ?? []), ...hooked.context] }) })",
             "$.env.get('CLAUDE_CONFIG_DIR')",
+            "const own = project === undefined || !(await isTrustedFolder($, project)) ? [] : await Promise.all(",
             "await file($, { agentId, status: 'completed', report: answer })",
             "await $.session.messages({ agentId: target })",
             "...missingForks(rows, [...records.values()], await $.clock.now())",

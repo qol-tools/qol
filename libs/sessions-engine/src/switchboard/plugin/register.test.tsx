@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -2985,6 +2985,7 @@ const hookFiles = (): Record<string, string> => ({
   '/plugins/de/hooks/hooks.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/de.mjs"', timeout: 5 }] }], Stop: [{ hooks: [{ type: 'command', command: 'stop-hook' }] }] } }),
   '/plugins/off/hooks/hooks.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'off-hook' }] }] } }),
   '/work/.claude/settings.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'project-hook' }, { type: 'prompt', prompt: 'ignored' }] }] } }),
+  '/home/me/.claude.json': JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: true } } }),
 })
 
 const hookEngine = (on: any, runs: { argv: string[]; init: any }[], files = hookFiles()) => {
@@ -3038,8 +3039,26 @@ test('your prompt hooks run on the words a fork gets, typed in its view or sent 
   expect(own.context).toEqual(['Be terse.', 'Design round rules.'])
   expect(JSON.parse(runs[0]?.init.stdin).agent_id).toBe('a9')
   expect((await typed($, 'de')).drop).toBe('de <what to design>')
+  expect((await typed($, 'other-fork')).drop).toBe('other-fork is open.')
   expect(sent.length).toBe(1)
   await inFork.unmount()
+})
+
+test('a project the user never trusted keeps its own prompt hooks from running, as Claude Code does', async ($, on) => {
+  const sent: any[] = []
+  const runs: { argv: string[]; init: any }[] = []
+  engine(on, sent)
+  hookEngine(on, runs, { ...hookFiles(), '/home/me/.claude.json': JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: false } } }) })
+  on('clock.after', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  runs.length = 0
+  expect((await typed($, 'asking-fork de launcher look')).drop).toContain('→ asking-fork')
+  expect(runs.map(one => one.argv[2]).sort()).toEqual(['cat ~/.claude/terse-rule.txt', 'node "${CLAUDE_PLUGIN_ROOT}/de.mjs"'])
+  expect(isTrusted({ projects: { '/media/disk': { hasTrustDialogAccepted: true }, '/media/disk/Git': { hasTrustDialogAccepted: false } } }, '/media/disk/Git/repo/')).toBe(true)
+  expect(isTrusted({ projects: { '/': { hasTrustDialogAccepted: true } } }, '/anything')).toBe(true)
+  for (const config of [undefined, null, {}, { projects: null }, { projects: { '/work': { hasTrustDialogAccepted: 'yes' } } }, { projects: { '/work/sub': { hasTrustDialogAccepted: true } } }]) expect(isTrusted(config, '/work')).toBe(false)
+  expect(isTrusted({ projects: { work: { hasTrustDialogAccepted: true } } }, 'work')).toBe(false)
 })
 
 test('a prompt hook answer reads as context, a block or nothing', () => {
