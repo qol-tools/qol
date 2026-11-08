@@ -2793,6 +2793,12 @@ test('the close command stops the fork you write to and drops it from the board,
   }))
   on('session.messages', () => ({ value: [] }))
   on('agent.list', () => ({ value: [{ id: 'a8', status: 'running' }, { id: 'a9', status: 'running' }] }))
+  let box = ''
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    box = e.text
+    return { isFilled: true }
+  })
   on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
     stops.push(`${e.tool} ${e.task_id ?? ''}`)
     return { result: { message: 'stopped' } }
@@ -2807,7 +2813,9 @@ test('the close command stops the fork you write to and drops it from the board,
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   expect(await close()).toContain('asking-fork is still working, so it stays open. ctrl+x ctrl+x again closes it anyway.')
   expect(stops).toEqual([])
+  box = 'asking-fork hi'
   expect(await close()).toContain('Closed asking-fork.')
+  expect(box).toBe('hi')
   expect(stops).toEqual(['TaskStop a8'])
   expect(rows().find(row => row.agentId === 'a8')?.isDismissed).toBe(true)
   await deliver($, stopNotification('a8', 'asking-fork: asks'), 'task-notification')

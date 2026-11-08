@@ -366,8 +366,10 @@ export const recentWords = (messages: unknown, kept = SAID_KEPT): Said[] => {
   return said.slice(-kept)
 }
 
+const TYPED_KEY = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/
+
 const typedTarget = (list: Entry[], text: string): Entry | undefined => {
-  const word = /^([a-z0-9][a-z0-9-]*)(?=[: \t])/.exec(text)?.[1]
+  const word = TYPED_KEY.exec(text)?.[1]
   return word === undefined ? undefined : reachable(list).find(entry => keyOf(entry) === word)
 }
 
@@ -1362,7 +1364,17 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
   await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true } : one)))
   if ((await read($, writingTo)) === agentId) await writeTo($, undefined)
   if (viewedFork === agentId) await $.ui.view({}).catch(() => undefined)
-  return `Closed ${name}. It left the agent list and the board; resume_session brings it back.`
+  const key = keyOf(entry)
+  await dropTypedKey($, key)
+  const [later] = CLEAR_TYPED_MS
+  if (later !== undefined) $.clock.after(later, () => void dropTypedKey($, key))
+  return `Closed ${name}. Its row in the agent list turns red until Claude Code drops it, within half a minute.`
+}
+
+const dropTypedKey = async ($: EngineInterface, key: string): Promise<void> => {
+  const { text } = await $.prompt.read().catch(() => ({ text: '' }))
+  if (TYPED_KEY.exec(text)?.[1] !== key) return
+  await $.prompt.fill({ text: text.slice(key.length).replace(/^[:\s]+/, ''), mode: 'replace' }).catch(() => undefined)
 }
 
 const choiceShape = (one: unknown): one is ModelChoice =>
@@ -2061,7 +2073,7 @@ export const register: Register = on => {
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
-      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open (${CLOSE_CHORD} once bound): it leaves the agent list and the board`, immediate: true })
+      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open (${CLOSE_CHORD} once bound): it leaves the board at once and the agent list within half a minute`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
