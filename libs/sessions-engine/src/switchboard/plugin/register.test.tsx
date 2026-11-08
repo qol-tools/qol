@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -173,7 +173,7 @@ test('a hand-back report is rewritten in place to its first sentence and Haiku s
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
-  await ui.press({ key: 'done-toggle' })
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /PR #77 merged\./ })).toBeDefined()
   await ui.unmount()
 })
@@ -917,7 +917,7 @@ test('until the open reaches it, a fork cut off mid-turn waits under its own hea
   const rows = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
   expect(rows).toContain('[fork board] mid-fork:  (stopped by a restart, agent id m1)')
   expect(rows).toContain('(stopped by a restart, agent id w1)')
-  expect(rows).toContain('done-fork: Pull request #5 merged. (done, agent id d1)')
+  expect(rows).toContain('done-fork: Pull request #5 merged. (idle, agent id d1)')
 
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ ...PANE, surface })
@@ -1353,10 +1353,8 @@ test('a merged result is filed on the board without waking its fork, and any oth
   expect(runs.filter(argv => argv[2] === '--claim').map(argv => argv[3])).toEqual(['watch-1-1', 'watch-2-2'])
   expect(sent.map(one => [one.to, one.text])).toEqual([['q2', 'a check failed']])
   const rows = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(rows).toContain('[fork board] q1-fork: Pull request #41 merged. (done, agent id q1)')
-  const done = recorded.filter(argv => argv.includes('done'))
-  expect(done).toHaveLength(1)
-  expect(done[0]?.slice(-2)).toEqual(['--reason', 'Pull request #41 merged.'])
+  expect(rows).toContain('[fork board] q1-fork: Pull request #41 merged. (idle, agent id q1)')
+  expect(recorded.filter(argv => argv.includes('done'))).toEqual([])
   const full = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board', fork: 'q1-fork' })).result)
   expect(full).toContain('without waking the fork')
   expect(full).toContain('````\nmerged\n```\nRecommend: obey\n````')
@@ -1602,7 +1600,7 @@ test('a fork the user stops with Esc is marked stopped in its record', async ($,
   expect(verbs(calls, 'stopped')).toHaveLength(1)
 })
 
-test('a fork that reports or is stopped without fork_done reads idle or stopped, on the board and in its pane', async ($, on) => {
+test('a fork that reports or is stopped reads idle or stopped, on the board and in its pane', async ($, on) => {
   const calls: string[][] = []
   engine(on)
   recordEngine(on, calls)
@@ -1618,48 +1616,54 @@ test('a fork that reports or is stopped without fork_done reads idle or stopped,
   expect(board).not.toContain('(done')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /show done/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeUndefined()
   await ui.unmount()
-  await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'Nothing left.', agentId: 'a1' } as any)
-  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(done, agent id a1)')
 })
 
-test('fork_done from a fork marks only its own row done, and the switchboard is refused', async ($, on) => {
+test('closing is the only end of a fork: a merge leaves it open, the close marks the record done and RECENT lists it', async ($, on) => {
   const calls: string[][] = []
   engine(on)
   recordEngine(on, calls)
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  const close = async () => String((await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a1', 'one-fork: one')
   await spawn($, 'a2', 'two-fork: two')
-  const tool = 'mcp__qol-switchboard__fork_done'
-
-  const refused = await $.tool.call({ tool, reason: 'merged' } as any)
-  expect(refused.deny).toBe('Only a fork marks itself done.')
-  expect(verbs(calls, 'done')).toEqual([])
-
-  const done = await $.tool.call({ tool, reason: 'Pull request #1 merged.', agentId: 'a1' } as any)
-  expect(String(done.result)).toContain('Marked one-fork done')
-  expect(verbs(calls, 'done')).toEqual([['done', '--key', 'one-fork', '--reason', 'Pull request #1 merged.']])
   await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await deliver($, notification('a2', 'two-fork: two', 'All finished.'))
+  await settle()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(idle, agent id a1)')
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
+  expect(await close()).toContain('Closed one-fork. It moved to RECENT on the board')
+  expect(verbs(calls, 'done')).toEqual([['done', '--key', 'one-fork', '--reason', 'Closed by the user.']])
   const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(done, agent id a1)')
-  expect(board).toContain('[fork board] two-fork (working, agent id a2)')
-
-  const none = await $.tool.call({ tool, agentId: 'a2' } as any)
-  expect(none.deny).toContain('needs a one-line reason')
-  expect(verbs(calls, 'done')).toHaveLength(1)
+  expect(board).not.toContain('agent id a1')
+  expect(board).toContain('(idle, agent id a2)')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /closed ·/ })).toBeDefined()
+  await ui.unmount()
 })
 
-test('a fork the record cannot mark done stays not done', async ($, on) => {
-  engine(on)
-  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_CLI_SESSIONS' ? '/bin/qol-cli-sessions' : undefined }))
-  on('process.run', () => ({ value: NO_RECORD }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await spawn($, 'a1', 'one-fork: one')
-  const done = await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'merged', agentId: 'a1' } as any)
-  expect(done.deny).toContain('not marked done')
-  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(working, agent id a1)')
+test('RECENT holds the five newest closed forks once each, never one open again or carried on by another', () => {
+  const row = (agentId: string, at: number, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, headline: '', report: '', at, isWorking: false, isDismissed: true, isClosed: true as const, isDone: true as const, ...extra })
+  const list = [
+    row('c1', 1),
+    row('c2', 2),
+    row('c3', 3),
+    row('c4', 4),
+    row('c5', 5),
+    row('c6', 6),
+    row('again', 7, { key: 'c6-fork' }),
+    row('was', 8, { key: 'live-fork' }),
+    { ...row('live', 9, { key: 'live-fork' }), isDismissed: false, isClosed: undefined, isDone: undefined },
+    row('moved', 10, { successor: 'next' }),
+  ]
+  expect(recentlyClosed(list).map(one => one.agentId)).toEqual(['again', 'c5', 'c4', 'c3', 'c2'])
+  expect(recentlyClosed([])).toEqual([])
 })
 
 test('the restart rule ignores kind: a note or stopped row comes back, a done or dismissed or replaced one does not', async ($, on) => {
@@ -1752,18 +1756,24 @@ test("a done or stopped mark ends with the fork's next real turn, in the row and
   const calls: string[][] = []
   engine(on)
   recordEngine(on, calls)
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a1', 'one-fork: one')
   await spawn($, 'a2', 'two-fork: two')
   await spawn($, 'a3', 'three-fork: three')
-  await $.tool.call({ tool: 'mcp__qol-switchboard__fork_done', reason: 'merged', agentId: 'a1' } as any)
   await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
   await deliver($, stopNotification('a2', 'two-fork: two'))
   await deliver($, notification('a3', 'three-fork: three', 'Which colour?'))
   await settle()
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
+  await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })
+  expect(verbs(calls, 'done')).toHaveLength(1)
   expect(verbs(calls, 'resume')).toEqual([])
   let board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
-  expect(board).toContain('(done, agent id a1)')
+  expect(board).not.toContain('agent id a1')
 
   for (const agentId of ['a1', 'a2', 'a3']) await $.turn.start({ text: 'carry on', turnId: `turn-${agentId}`, agentId })
   await settle()
@@ -1810,14 +1820,14 @@ test('a terminal session brought back as a fork is claimed with the description 
   expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'gen1']])
 })
 
-test('a row marked done lists in the done group even without a kind', async ($, on) => {
+test('a row marked done lists under RECENT even without a kind', async ($, on) => {
   const store = new Map<string, unknown>()
   store.set('board:switchboard-session', [{ agentId: 'd1', name: 'd1-fork: a fork', headline: 'All finished.', report: '', at: 1, isWorking: false, isDismissed: false, isDone: true }])
   engine(on, [], [], [], store)
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: false })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
-  await ui.press({ key: 'done-toggle' })
+  expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /All finished\./ })).toBeDefined()
   await ui.unmount()
 })
