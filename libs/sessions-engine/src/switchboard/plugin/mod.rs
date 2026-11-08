@@ -205,6 +205,7 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
+            "$.env.get('QOL_SWITCHBOARD_STATE_LOOKS')",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
             "const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })",

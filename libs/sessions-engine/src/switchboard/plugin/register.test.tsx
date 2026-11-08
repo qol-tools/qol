@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, sbAt, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, sbAt, sessionState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1600,6 +1600,80 @@ test('a fork the user stops with Esc is marked stopped in its record', async ($,
   expect(verbs(calls, 'stopped')).toHaveLength(1)
 })
 
+type Row = { agentId: string; isDismissed?: boolean; isStoppedByUser?: boolean }
+
+const killedAnswer = (killed: string[]): Answer => e =>
+  killed.includes(String(e.to)) ? { isDelivered: false, reason: `Agent ${e.to} was stopped by the user and won't be resumed.` } : { isDelivered: true }
+
+test('Esc on an idle fork only leaves its view: the board brings it straight back with no model turn, and a working fork stays stopped', async ($, on) => {
+  const calls: string[][] = []
+  const sent: any[] = []
+  const store = new Map<string, unknown>()
+  engine(on, sent, [], [], store, killedAnswer(['a1', 'a2']))
+  recordEngine(on, calls, [], { a1: { name: 'one-fork: one', cwd: '/work' }, a2: { name: 'two-fork: two', cwd: '/work' } })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await settle()
+  const dropped = await typed($, stopNotification('a1', 'one-fork: one'), 'task-notification')
+  expect(dropped.drop).toBe('one-fork: Esc only left its view; it stays open.')
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await deliver($, stopNotification('a2', 'two-fork: two'))
+  await settle()
+  expect(sent.map(one => [one.to, one.text])).toEqual([
+    ['a1', 'Esc stopped this fork while it was idle, so the board brought it back.'],
+    ['a1-copy', 'Esc stopped this fork while it was idle, so the board brought it back.'],
+  ])
+  expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'two-fork']])
+  await $.turn.start({ text: 'Esc stopped this fork while it was idle, so the board brought it back.', turnId: 'turn-a1-copy', agentId: 'a1-copy' })
+  const reply = await answered($, 'a1-copy', 1)
+  expect(reply.find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('agent id a1-copy')
+  expect(board).not.toContain('agent id a1)')
+  expect(board).toContain('(stopped, agent id a2)')
+  expect((store.get('board:switchboard-session') as Row[]).find(row => row.agentId === 'a1-copy')?.isStoppedByUser).toBeUndefined()
+})
+
+test('bringing a closed fork back from RECENT lists it once, under the id it came back with', async ($, on) => {
+  const calls: string[][] = []
+  const store = new Map<string, unknown>()
+  const viewed: string[] = []
+  engine(on, [], [], [], store, killedAnswer(['a1']))
+  recordEngine(on, calls, [], { a1: { name: 'one-fork: one', cwd: '/work' } })
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('agent.list', () => ({ value: [{ id: 'a1', status: 'completed' }] }))
+  on('tool.call', () => ({ result: { message: 'stopped' } }))
+  on('ui.view', (_: unknown, e: { agentId?: string }) => {
+    viewed.push(String(e.agentId))
+    return { value: e.agentId === 'a1' ? { deny: 'no agent holds the id' } : {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await settle()
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'one-fork hi' })
+  await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'open-a1' })
+  await ui.unmount()
+  expect(viewed.slice(-2)).toEqual(['a1', 'a1-copy'])
+  expect(verbs(calls, 'resume')).toEqual([['resume', '--key', 'one-fork']])
+  const rows = (store.get('board:switchboard-session') as Row[]).filter(row => !row.isDismissed)
+  expect(rows.map(row => row.agentId)).toEqual(['a1-copy'])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board.match(/one-fork/g)).toHaveLength(1)
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await again.find({ type: 'Text', text: 'RECENT' })).toBeUndefined()
+  await again.unmount()
+})
+
 test('a fork that reports or is stopped reads idle or stopped, on the board and in its pane', async ($, on) => {
   const calls: string[][] = []
   engine(on)
@@ -1644,7 +1718,7 @@ test('closing is the only end of a fork: a merge leaves it open, the close marks
   expect(board).toContain('(idle, agent id a2)')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /closed ·/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'closed' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -1664,6 +1738,41 @@ test('RECENT holds the five newest closed forks once each, never one open again 
   ]
   expect(recentlyClosed(list).map(one => one.agentId)).toEqual(['again', 'c5', 'c4', 'c3', 'c2'])
   expect(recentlyClosed([])).toEqual([])
+})
+
+const LOOKS = '[{"state":"working","color":"green","bold":false},{"state":"parked","color":"blue","bold":false},{"state":"your turn","color":"yellow","bold":true}]'
+
+test('the state colors come from CLI Sessions, and a board state takes the agent list state it matches', () => {
+  expect([...stateLooks(LOOKS)]).toEqual([
+    ['working', { color: 'green', isBold: false }],
+    ['parked', { color: 'blue', isBold: false }],
+    ['your turn', { color: 'yellow', isBold: true }],
+  ])
+  for (const broken of [undefined, '', 'nope', '{}', '[{"state":7,"color":"red"}]', '[{"state":"working","color":""}]']) expect(stateLooks(broken).size).toBe(0)
+  const row = (extra: Record<string, unknown>) => ({ agentId: 'a1', name: 'a1-fork: a fork', headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra })
+  expect(sessionState(row({ isWorking: true }))).toBe('working')
+  expect(sessionState(row({ kind: 'waiting' }))).toBe('parked')
+  for (const kind of ['ask', 'test', 'failed', 'blocked']) expect(sessionState(row({ kind }))).toBe('your turn')
+  for (const extra of [{ kind: 'note' }, { kind: 'merged' }, { kind: 'ask', isClosed: true }, { kind: 'ask', isDone: true }, { kind: 'waiting', isInterrupted: true }]) expect(sessionState(row(extra))).toBeUndefined()
+})
+
+test('the board paints each state in the color the agent list gives it, and keeps its own look without them', async ($, on) => {
+  const env: Record<string, string> = { QOL_SWITCHBOARD_STATE_LOOKS: LOOKS }
+  engine(on)
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await spawn($, 'a2', 'two-fork: two')
+  await deliver($, notification('a2', 'two-fork: two', 'Which colour should it be? I recommend amber.'))
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: 'working' }))?.props).toMatchObject({ color: 'green', bold: false })
+  expect((await ui.find({ type: 'Text', text: 'ask' }))?.props).toMatchObject({ color: 'yellow', bold: true })
+  await ui.unmount()
+  delete env.QOL_SWITCHBOARD_STATE_LOOKS
+  const plain = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await plain.find({ type: 'Text', text: 'working' }))?.props).toMatchObject({ dimColor: true })
+  await plain.unmount()
 })
 
 test('the restart rule ignores kind: a note or stopped row comes back, a done or dismissed or replaced one does not', async ($, on) => {

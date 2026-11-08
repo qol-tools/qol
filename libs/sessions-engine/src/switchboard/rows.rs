@@ -12,9 +12,7 @@ use super::fork_state::{self, ForkState};
 
 const MODEL_COLOR: &str = "\x1b[33m";
 const COLOR_OFF: &str = "\x1b[39m";
-const WORKING_COLOR: &str = "\x1b[32m";
-const PARKED_COLOR: &str = "\x1b[34m";
-const YOUR_TURN_COLOR: &str = "\x1b[1;33m";
+const BOLD: &str = "\x1b[1m";
 const BOLD_OFF: &str = "\x1b[22m";
 const DIM: &str = "\x1b[2m";
 const DIM_OFF: &str = "\x1b[22m";
@@ -53,6 +51,50 @@ const SESSION_COLORS: [(&str, &str); 8] = [
     ("pink", "\x1b[38;5;211m"),
 ];
 const KEY_COLORS: [&str; 7] = ["red", "blue", "green", "purple", "orange", "pink", "cyan"];
+
+struct StateLook {
+    state: &'static str,
+    color: &'static str,
+    bold: bool,
+}
+
+static STATE_LOOKS: [StateLook; 3] = [
+    StateLook {
+        state: WORKING_LABEL,
+        color: "green",
+        bold: false,
+    },
+    StateLook {
+        state: PARKED_LABEL,
+        color: "blue",
+        bold: false,
+    },
+    StateLook {
+        state: YOUR_TURN_LABEL,
+        color: "yellow",
+        bold: true,
+    },
+];
+
+pub(super) fn state_looks() -> String {
+    Value::Array(
+        STATE_LOOKS
+            .iter()
+            .map(|look| json!({"state": look.state, "color": look.color, "bold": look.bold}))
+            .collect(),
+    )
+    .to_string()
+}
+
+fn state_paint(state: &str) -> Option<String> {
+    let look = STATE_LOOKS.iter().find(|look| look.state == state)?;
+    let color = session_color(look.color)?;
+    Some(if look.bold {
+        format!("{BOLD}{color}")
+    } else {
+        color.to_owned()
+    })
+}
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -300,12 +342,12 @@ fn head(name: &str, color: &str, task: &Task, folder: Option<&str>, fit: HeadFit
 
 struct StateLabel {
     word: String,
-    color: Option<&'static str>,
+    color: Option<String>,
 }
 
 fn state_label(state: &ForkState) -> StateLabel {
-    let (word, color) = match state {
-        ForkState::Working => (WORKING_LABEL.to_owned(), Some(WORKING_COLOR)),
+    let (word, look) = match state {
+        ForkState::Working => (WORKING_LABEL.to_owned(), WORKING_LABEL),
         ForkState::Parked(prs) => {
             let numbers = prs
                 .iter()
@@ -317,12 +359,15 @@ fn state_label(state: &ForkState) -> StateLabel {
             } else {
                 format!("{PARKED_LABEL} {}", numbers.join(","))
             };
-            (word, Some(PARKED_COLOR))
+            (word, PARKED_LABEL)
         }
-        ForkState::YourTurn => (YOUR_TURN_LABEL.to_owned(), Some(YOUR_TURN_COLOR)),
-        ForkState::Idle => (IDLE_LABEL.to_owned(), None),
+        ForkState::YourTurn => (YOUR_TURN_LABEL.to_owned(), YOUR_TURN_LABEL),
+        ForkState::Idle => (IDLE_LABEL.to_owned(), IDLE_LABEL),
     };
-    StateLabel { word, color }
+    StateLabel {
+        word,
+        color: state_paint(look),
+    }
 }
 
 struct Tail {
@@ -343,7 +388,7 @@ impl Tail {
     fn text(&self, fit: TailFit, paint: bool) -> String {
         let mut parts = Vec::new();
         if let Some(state) = &self.state {
-            parts.push(match state.color.filter(|_| paint) {
+            parts.push(match state.color.as_deref().filter(|_| paint) {
                 Some(color) => format!("{color}{}{BOLD_OFF}{COLOR_OFF}", state.word),
                 None => state.word.clone(),
             });
@@ -1311,7 +1356,7 @@ mod tests {
             assert_eq!(visible(row).chars().count(), 40, "{row:?}");
         }
         assert!(
-            rows[0].ends_with("\x1b[1;33myour turn\x1b[22m\x1b[39m · 0 tokens"),
+            rows[0].ends_with("\x1b[1m\x1b[33myour turn\x1b[22m\x1b[39m · 0 tokens"),
             "{:?}",
             rows[0]
         );
@@ -1493,6 +1538,28 @@ mod tests {
         std::fs::write(&bare, first).unwrap();
         std::fs::write(dir.path().join("agent-a3.meta.json"), "{\"cwd\":\"\"}").unwrap();
         assert_eq!(fork_facts(&bare).folder, None);
+    }
+
+    #[test]
+    fn the_board_gets_the_state_colors_the_agent_list_paints() {
+        let looks: Value = serde_json::from_str(&state_looks()).unwrap();
+        assert_eq!(
+            looks,
+            json!([
+                {"state": "working", "color": "green", "bold": false},
+                {"state": "parked", "color": "blue", "bold": false},
+                {"state": "your turn", "color": "yellow", "bold": true},
+            ])
+        );
+        for look in &STATE_LOOKS {
+            let paint = state_paint(look.state).unwrap();
+            assert!(
+                paint.ends_with(session_color(look.color).unwrap()),
+                "{paint:?}"
+            );
+            assert_eq!(paint.starts_with(BOLD), look.bold, "{paint:?}");
+        }
+        assert_eq!(state_paint(IDLE_LABEL), None);
     }
 
     #[test]

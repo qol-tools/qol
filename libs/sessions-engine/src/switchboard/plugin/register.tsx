@@ -76,6 +76,11 @@ const STOPPED = /\bwas stopped by the user\b|\bwon't be resumed\b/i
 const USER_STOP = 'killed'
 const LAUNCHER = 'Launcher: '
 const RESTARTED_REPLY = 'Back on the fork board.'
+const KEPT = 'Esc stopped this fork while it was idle, so the board brought it back.'
+const KEPT_SAID = 'Esc only left its view; it stays open.'
+const WORKING_STATE = 'working'
+const PARKED_STATE = 'parked'
+const YOUR_TURN_STATE = 'your turn'
 const CONTINUE = 'The switchboard restarted, which stopped your turn. Continue your work from where you left off.'
 const BAND_WAIT_MS = 3_000
 const BAND_FRESH_MS = 90_000
@@ -666,6 +671,27 @@ export const isUnfinished = (entry: Entry): boolean =>
 const needsYou = (entry: Entry): boolean =>
   !entry.isDismissed && !entry.isWorking && !isCut(entry) && entry.isDone !== true && entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)
 
+type StateLook = { color: string; isBold: boolean }
+
+export const stateLooks = (text: string | undefined): Map<string, StateLook> => {
+  try {
+    const parsed: unknown = JSON.parse(text ?? '')
+    if (!Array.isArray(parsed)) return new Map()
+    return new Map(
+      parsed.flatMap((one: { state?: unknown; color?: unknown; bold?: unknown }) =>
+        typeof one?.state === 'string' && typeof one.color === 'string' && one.color !== '' ? [[one.state, { color: one.color, isBold: one.bold === true }] as const] : [],
+      ),
+    )
+  } catch {
+    return new Map()
+  }
+}
+
+export const sessionState = (entry: Entry): string | undefined =>
+  entry.isWorking ? WORKING_STATE : isEnded(entry) || isCut(entry) ? undefined : needsYou(entry) ? YOUR_TURN_STATE : entry.kind === 'waiting' ? PARKED_STATE : undefined
+
+const looksOf = async ($: EngineInterface): Promise<Map<string, StateLook>> => stateLooks(await $.env.get('QOL_SWITCHBOARD_STATE_LOOKS').catch(() => undefined))
+
 const upsert = (list: Entry[], agentId: string, fn: (entry: Entry | undefined) => Entry): Entry[] => {
   const index = list.findIndex(entry => entry.agentId === agentId)
   const next = fn(index === -1 ? undefined : list[index])
@@ -784,9 +810,9 @@ export const recentlyClosed = (list: Entry[]): Entry[] => {
     .slice(0, RECENT_MAX)
 }
 
-const reopen = async ($: EngineInterface, entry: Entry): Promise<void> => {
+const reopen = async ($: EngineInterface, entry: Entry, agentId: string): Promise<void> => {
   if (!isEnded(entry)) return
-  await change($, list => list.map(one => (one.agentId === entry.agentId ? { ...unstopped(one), isDismissed: false } : one)))
+  await change($, list => list.map(one => (one.agentId === agentId && one.successor === undefined ? { ...unstopped(one), isDismissed: false } : one)))
   if (entry.key !== undefined) await recordRun($, 'resume', ['--key', entry.key])
 }
 
@@ -1374,14 +1400,19 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
     return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway.`
   }
   closeArmed = { agentId: '', at: 0 }
-  if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
-    const failed = await $.tool
-      .call({ tool: 'TaskStop', task_id: agentId })
-      .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
-      .catch((error: unknown) => String(error))
-    if (failed !== undefined) return `${name} could not be closed: ${printable(failed)}`
+  closing.add(agentId)
+  try {
+    if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
+      const failed = await $.tool
+        .call({ tool: 'TaskStop', task_id: agentId })
+        .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
+        .catch((error: unknown) => String(error))
+      if (failed !== undefined) return `${name} could not be closed: ${printable(failed)}`
+    }
+    await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
+  } finally {
+    closing.delete(agentId)
   }
-  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
   const row = entry.key === undefined ? await backfill($, entry) : entry
   if (row.key !== undefined) await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])
   if ((await read($, writingTo)) === agentId) await writeTo($, undefined)
@@ -1912,10 +1943,12 @@ export const intake = async (
   const agentId = field(block, 'task-id')
   if (agentId === undefined || !isFork(agentId)) return undefined
   const status = field(block, 'status') ?? ''
+  let isKept = false
   if (status === USER_STOP) {
+    const before = (await read($, board)).find(one => one.agentId === agentId)
+    isKept = keeping.has(agentId) || (before !== undefined && !before.isWorking && before.isClosed !== true && before.successor === undefined && !closing.has(agentId))
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isStoppedByUser: true } : one)))
-    const key = (await read($, board)).find(one => one.agentId === agentId)?.key
-    if (key !== undefined) void recordRun($, 'stopped', ['--key', key])
+    if (!isKept && before?.key !== undefined) void recordRun($, 'stopped', ['--key', before.key])
   }
   const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
   const result = RESULT.exec(block)
@@ -1925,12 +1958,36 @@ export const intake = async (
   const entry =
     (report === RESTARTED_REPLY ? await rested($, agentId) : undefined) ??
     (await file($, { agentId, name, status, report, ...(report === RESTARTED_REPLY ? { filing: { kind: 'note' as Kind, headline: RESTARTED_REPLY } } : {}) }))
+  if (isKept) void keep($, agentId)
   const line = boardLine(entry)
   const filed =
     result === null
       ? block.replace('</task-notification>', () => `<result>${line}</result>\n</task-notification>`)
       : block.replace(RESULT, (_, open: string, __, close: string) => `${open}${line}${close}`)
-  return { text: text.replace(block, () => filed), entry, ...(report === RESTARTED_REPLY ? { isRestart: true as const } : {}) }
+  return {
+    text: text.replace(block, () => filed),
+    entry,
+    ...(report === RESTARTED_REPLY ? { isRestart: true as const } : {}),
+    ...(isKept ? { isKept: true as const } : {}),
+  }
+}
+
+const keeping = new Set<string>()
+const closing = new Set<string>()
+
+const unflagged = ({ isStoppedByUser: _, ...entry }: Entry): Entry => entry
+
+const keep = async ($: EngineInterface, agentId: string): Promise<void> => {
+  if (keeping.has(agentId)) return
+  keeping.add(agentId)
+  const entry = (await read($, board)).find(one => one.agentId === agentId)
+  if (entry === undefined) return
+  const sent = await sendTo($, entry, KEPT, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry))).catch(() => undefined)
+  if (sent?.isDelivered === true) {
+    await change($, list => list.map(one => (one.agentId === sent.agentId ? unflagged(one) : one)))
+    return
+  }
+  if (entry.key !== undefined) await recordRun($, 'stopped', ['--key', entry.key])
 }
 
 const age = (ms: number): string => {
@@ -2009,6 +2066,7 @@ const quietReport = async ($: EngineInterface, text: string, origin: string | un
     if (resumed !== undefined) return { fork: keyName(resumed), said: 'resumed' }
     const filed = await intake($, text, origin, agentId => list.some(entry => entry.agentId === agentId))
     if (filed === undefined) return undefined
+    if ('isKept' in filed) return { fork: keyName(filed.entry.name), said: KEPT_SAID, isUnlogged: true }
     return { fork: keyName(filed.entry.name), said: filed.entry.headline.trim() === '' ? 'back in the agent list' : filed.entry.headline, ...('isRestart' in filed || filed.entry.headline.trim() === '' ? { isUnlogged: true as const } : {}) }
   } catch {
     return undefined
@@ -2192,6 +2250,7 @@ export const register: Register = on => {
     }
     const entry = (await read($, board)).find(one => one.agentId === shown.agentId)
     const activity = await read($, focusActivity)
+    const working = (await looksOf($)).get(WORKING_STATE)
     const state = entry === undefined ? '' : ` · ${entry.isWorking ? 'working' : isCut(entry) ? 'stopped mid-turn' : (entry.kind ?? 'note')} · ${age((await $.clock.now()) - entry.at)}`
     return (
       <Box flexDirection="column" paddingX={2} paddingY={1}>
@@ -2207,8 +2266,11 @@ export const register: Register = on => {
         ))}
         {entry?.isWorking === true && (
           <Box marginTop={1}>
-            <Text color="claude">● </Text>
-            <Text dimColor wrap="truncate">{activity === '' ? 'working…' : `working · ${activity}`}</Text>
+            <Text color={working?.color ?? 'claude'}>● </Text>
+            <Text wrap="truncate">
+              {working === undefined ? <Text dimColor>working</Text> : <Text color={working.color} bold={working.isBold}>working</Text>}
+              <Text dimColor>{activity === '' ? '…' : ` · ${activity}`}</Text>
+            </Text>
           </Box>
         )}
       </Box>
@@ -2575,6 +2637,16 @@ export const register: Register = on => {
     const firstAsk = needs.find(entry => entry.recommend !== undefined)
     const labelOf = (entry: Entry): string =>
       entry.isWorking ? 'working' : isEnded(entry) ? 'closed' : isCut(entry) ? 'stopped mid-turn' : idle.includes(entry) && entry.isStoppedByUser === true ? 'stopped' : (entry.kind ?? 'note')
+    const looks = await looksOf($)
+    const lookOf = (entry: Entry): StateLook | undefined => {
+      const state = sessionState(entry)
+      return state === undefined ? undefined : looks.get(state)
+    }
+    const dot = (entry: Entry) => <Text color={lookOf(entry)?.color ?? (entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note'])}>●</Text>
+    const stateText = (entry: Entry, label: string) => {
+      const look = lookOf(entry)
+      return look === undefined ? <Text dimColor>{label}</Text> : <Text color={look.color} bold={look.isBold}>{label}</Text>
+    }
     let n = 0
     const hotkey = () => {
       n += 1
@@ -2593,7 +2665,7 @@ export const register: Register = on => {
           $.ui.toast(`${keyName(entry.name)} did not come back: ${printable(String(sent.reason ?? 'not delivered'))}`)
           return
         }
-        await reopen($, entry)
+        await reopen($, entry, sent.agentId)
         if ((await $.ui.view({ agentId: sent.agentId })).deny !== undefined) $.ui.toast(`${keyName(entry.name)} is back: select it in the agent list.`)
       } catch {
         $.ui.toast(`${keyName(entry.name)} could not be opened.`)
@@ -2617,10 +2689,9 @@ export const register: Register = on => {
     }
     const title = (entry: Entry, label: string) => (
       <Button key={`open-${entry.agentId}`} plain {...hotkey()} onPress={open(entry)}>
-        <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>{' '}
-        <Text dimColor>
-          {label} · {age(now - entry.at)}
-        </Text>
+        {dot(entry)} <Text bold={entry.agentId === viewed || entry.agentId === target?.agentId}>{keyName(entry.name)}</Text>{' '}
+        {stateText(entry, label)}
+        <Text dimColor> · {age(now - entry.at)}</Text>
         {entry.hasNewReply === true && entry.agentId !== target?.agentId && (
           <Text bold color="suggestion">
             {' '}
@@ -2677,11 +2748,9 @@ export const register: Register = on => {
         <Box key={`row-${entry.agentId}`} {...(entry.agentId === target?.agentId ? { backgroundColor: LOG_BAND } : {})}>
           <Button key={`open-${entry.agentId}`} plain {...key} onPress={open(entry)}>
             {key.hotkey === undefined ? '   ' : ''}
-            <Text color={entry.isWorking ? 'claude' : isCut(entry) ? 'warning' : COLOR[entry.kind ?? 'note']}>●</Text> <Text bold>{cell(keyName(entry.name), nameWidth)}</Text>
-            <Text dimColor>
-              {cell(labelOf(entry), FORK_STATE_WIDTH)}
-              {age(now - entry.at)}
-            </Text>
+            {dot(entry)} <Text bold>{cell(keyName(entry.name), nameWidth)}</Text>
+            {stateText(entry, cell(labelOf(entry), FORK_STATE_WIDTH))}
+            <Text dimColor>{age(now - entry.at)}</Text>
             {entry.hasNewReply === true && entry.agentId !== target?.agentId && (
               <Text bold color="suggestion">
                 {' '}
@@ -2877,7 +2946,7 @@ export const register: Register = on => {
       </Button>
     )
 
-    if (list.length === 0) {
+    if (list.length === 0 && recent.length === 0) {
       return (
         <Box flexDirection="column">
           <Text dimColor>No forks yet. Each fork's report lands here as one line.</Text>
