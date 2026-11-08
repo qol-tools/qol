@@ -1,3 +1,4 @@
+pub mod action_mark;
 pub mod activity_animation;
 pub mod artifact;
 pub mod busy;
@@ -45,6 +46,7 @@ pub mod vertical_label;
 pub mod window;
 pub mod window_options;
 
+pub use action_mark::ActionMark;
 pub use busy::Busy;
 pub use crumb_trail::{CrumbTrail, PathEdit, PathKey};
 pub use format::{format_bytes, plural};
