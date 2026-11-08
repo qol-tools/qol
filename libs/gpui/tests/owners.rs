@@ -134,17 +134,3 @@ fn every_action_mark_path_names_a_kit_item() {
         );
     }
 }
-
-#[test]
-fn every_retired_call_is_still_defined_in_the_kit() {
-    let entry = marks_entry();
-    assert!(strings(&entry["entry_points"]).is_empty());
-    let mut sources = Vec::new();
-    rust_sources(&workspace().join("libs/gpui/src"), &mut sources);
-    for function in strings(&entry["calls"]) {
-        assert!(
-            sources.iter().any(|source| defines(source, &function)),
-            "{function} is gone; drop it from the action marks entry"
-        );
-    }
-}

@@ -3,7 +3,9 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
 use qol_theme::TextStyle;
 
+use crate::action_mark::ActionMark;
 use crate::busy::Busy;
+use crate::icon::icon;
 use crate::kit::kit;
 use crate::kit::Kit;
 use crate::theme::Ground;
@@ -120,14 +122,6 @@ fn selection_colors(kit: Kit) -> (u32, u32) {
 pub fn settings_selected_text(text: gpui::Div, kit: Kit) -> gpui::Div {
     let (bg, ink) = selection_colors(kit);
     text.bg(rgb(bg)).text_color(rgb(ink))
-}
-
-fn ground_bg<E: InteractiveElement + Styled>(element: E, rest: Rgba, hover: Option<Rgba>) -> E {
-    let element = element.bg(rest);
-    match hover {
-        Some(color) => element.group_hover(SETTINGS_ROW_GROUP, move |style| style.bg(color)),
-        None => element,
-    }
 }
 
 const MASTHEAD_RULE_HEIGHT: f32 = 1.0;
@@ -304,63 +298,34 @@ pub fn settings_value_text(
     }
 }
 
-pub fn settings_action_affordance(
+const ACTION_MARK_SIZE: f32 = 14.0;
+
+pub fn settings_action_mark(
     id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    variant: Option<&str>,
+    mark: ActionMark,
     busy: bool,
     row: RowGround,
     kit: Kit,
 ) -> gpui::Div {
+    let frame = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(ACTION_MARK_SIZE));
+    if busy || mark == ActionMark::Busy {
+        return frame.child(settings_action_spinner(id, kit).size(px(12.)));
+    }
     let ground = row.rest(kit);
-    let hover = row.hover(kit);
-    let band = row == RowGround::Band;
-    let (background, text) = if band && variant != Some("danger") {
-        (rgba(ground.well.packed()), ground.ink)
+    let ink = if mark.is_danger() {
+        kit.palette.danger
     } else {
-        match variant {
-            Some("ghost") => (rgb(kit.grounds.menu.bg), kit.grounds.pane.soft),
-            Some("danger") => (
-                rgba(qol_theme::translucent(
-                    kit.palette.danger,
-                    qol_theme::Alpha::Halo,
-                )),
-                kit.palette.danger,
-            ),
-            Some("primary") | None | Some(_) => (rgb(kit.grounds.band.bg), kit.grounds.pane.ink),
+        match row {
+            RowGround::Pane => ground.soft,
+            RowGround::Band => ground.ink,
         }
     };
-    let mut control = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(qol_theme::SPACE_TIGHT));
-    if busy {
-        control = control.child(settings_action_spinner(id, kit).size(px(12.)));
-    }
-    let control = control
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_TIGHT))
-        .rounded(px(qol_theme::RADIUS_CONTROL))
-        .when(variant == Some("ghost") && !band, |control| {
-            control.shadow(crate::kit::raised_shadow(kit.grounds.pane.ink))
-        })
-        .text(TextStyle::ListName);
-    let control = if variant == Some("danger") {
-        control.bg(background)
-    } else {
-        ground_bg(
-            control,
-            background,
-            hover.map(|hover| rgba(hover.well.packed())),
-        )
-    };
-    let element = if variant == Some("danger") {
-        div().text_color(rgb(text))
-    } else {
-        ground_text(div(), rgb(text), hover.map(|hover| rgb(hover.ink)))
-    };
-    control.child(element.child(label.into()))
+    frame.children(mark.icon().map(|glyph| icon(glyph, ACTION_MARK_SIZE, ink)))
 }
 
 pub fn rail_caption_height() -> f32 {

@@ -13,6 +13,7 @@ use qol_config::pages::{
     Control, Enter, Go, Notice, Page, Pages, Press, PressReply, Row, Stack, Tone,
 };
 
+use crate::action_mark::ActionMark;
 use crate::deck;
 use crate::key::Key;
 use crate::kit::{kit, Chip};
@@ -23,7 +24,7 @@ use super::components::{
     settings_value_group, RowGround, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
 };
 use super::{
-    escape_step, intent, settings_action_affordance, settings_action_spinner, settings_value_text,
+    escape_step, intent, settings_action_mark, settings_action_spinner, settings_value_text,
     CustomHints, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime,
@@ -557,10 +558,9 @@ impl PagesView {
         }
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Some(Control::Button(label)) => values.child(settings_action_affordance(
+            Some(Control::Button(_)) => values.child(settings_action_mark(
                 (action_id, index),
-                label.clone(),
-                None,
+                ActionMark::Run,
                 busy,
                 ground,
                 kit,

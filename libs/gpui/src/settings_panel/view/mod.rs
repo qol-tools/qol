@@ -7,6 +7,7 @@ mod slider_flights;
 mod stored_values;
 mod structured_list_editor;
 
+use crate::action_mark::ActionMark;
 use crate::key::Key;
 use crate::kit::Chip;
 use list_card::{SLIDER_DISPATCH_INTERVAL, SLIDER_HOLD_DURATION};
@@ -24,7 +25,7 @@ use super::components::{
 };
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
-    rail_item_label, settings_accent_dot, settings_action_affordance, settings_action_spinner,
+    rail_item_label, settings_accent_dot, settings_action_mark, settings_action_spinner,
     settings_block_header, settings_error_line, settings_finder_empty, settings_label_group,
     settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
     settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback,
@@ -3728,10 +3729,9 @@ impl SettingsPanelView {
     }
 
     fn render_action_value(&self, index: usize, row: RowGround) -> Div {
-        settings_action_affordance(
+        settings_action_mark(
             ("settings-action-spinner", index),
-            self.display_value(index),
-            self.level().rows[index].variant.as_deref(),
+            ActionMark::for_variant(self.level().rows[index].variant.as_deref()),
             self.action_is_busy(index),
             row,
             self.kit,

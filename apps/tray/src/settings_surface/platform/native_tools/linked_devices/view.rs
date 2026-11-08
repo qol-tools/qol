@@ -17,13 +17,14 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, SettingsToggle,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_mark, settings_action_spinner,
     settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomSettingsBreadcrumbs, EscapeStep, Intent, SettingsDestination, SettingsGroupHeader,
     SettingsRow, SettingsValueTone, SETTINGS_LIST_GAP,
 };
 use qol_gpui::surface::SurfaceDismisser;
 use qol_gpui::text_edit::{self, TextField};
+use qol_gpui::ActionMark;
 use qol_peers::admin::{Request, Response};
 use qol_peers::enrollment::ExportedInvitation;
 use qol_peers::PeerId;
@@ -627,11 +628,14 @@ impl LinkedDevicesView {
                 values.child(settings_value_text(text.clone(), *tone, ground, kit))
             }
             Control::Toggle(on) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Control::Chip => values.children(row.verb.map(|verb| {
-                settings_action_affordance(
+            Control::Chip => values.children(row.verb.filter(|_| !row.opens).map(|verb| {
+                settings_action_mark(
                     (action_id, index),
-                    verb,
-                    DANGER_VERBS.contains(&verb).then_some("danger"),
+                    if DANGER_VERBS.contains(&verb) {
+                        ActionMark::Destroy
+                    } else {
+                        ActionMark::Run
+                    },
                     busy,
                     ground,
                     kit,

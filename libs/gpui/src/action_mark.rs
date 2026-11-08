@@ -1,3 +1,5 @@
+use crate::icon::Icon;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ActionMark {
     Page,
@@ -49,6 +51,25 @@ impl ActionMark {
             Self::Busy => "is working on it",
             Self::Chosen => "is the one in use",
             Self::Close => "closes or dismisses",
+        }
+    }
+
+    pub fn for_variant(variant: Option<&str>) -> Self {
+        if variant == Some("danger") {
+            Self::Destroy
+        } else {
+            Self::Run
+        }
+    }
+
+    pub fn icon(self) -> Option<Icon> {
+        match self {
+            Self::Run => Some(Icon::Enter),
+            Self::Destroy | Self::Close => Some(Icon::Close),
+            Self::Add => Some(Icon::Add),
+            Self::More => Some(Icon::More),
+            Self::Chosen => Some(Icon::Tick),
+            Self::Page | Self::Leave | Self::Busy => None,
         }
     }
 

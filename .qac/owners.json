@@ -86,8 +86,6 @@
       "Icon::Reveal", "Icon::Enter", "Icon::Close", "Icon::Add", "Icon::More", "Icon::Tick",
       "Busy::ring", "Busy::new"
     ],
-    "calls": ["settings_action_affordance"],
-    "entry_points": [],
     "allow": []
   }
 }

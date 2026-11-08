@@ -18,12 +18,13 @@ use qol_gpui::settings_panel::components::{
     SettingsHint, SettingsTextField,
 };
 use qol_gpui::settings_panel::{
-    adjacent_visible_row, escape_step, intent, settings_action_affordance, settings_action_spinner,
+    adjacent_visible_row, escape_step, intent, settings_action_mark, settings_action_spinner,
     settings_busy_message, settings_list, settings_value_text, CustomHints, CustomPanelCallback,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomSettingsBreadcrumbs, EscapeStep, Intent,
     SettingsDestination, SettingsGroupHeader, SettingsRow, SETTINGS_LIST_GAP,
 };
 use qol_gpui::text_edit::{self, TextField};
+use qol_gpui::ActionMark;
 
 use super::data;
 use super::model::{self, Enter, Level, NewInstalls, Row, RowAction, RowKind, Snapshot, Visit};
@@ -425,11 +426,14 @@ impl PluginsView {
                         .clone()
                         .map(|value| settings_value_text(value, row.tone, ground, kit)),
                 )
-                .children(row.affordance.map(|label| {
-                    settings_action_affordance(
+                .children(row.affordance.filter(|_| !row.opens()).map(|label| {
+                    settings_action_mark(
                         ("plugins-action", index),
-                        label,
-                        None,
+                        if label == "Remove" {
+                            ActionMark::Destroy
+                        } else {
+                            ActionMark::Run
+                        },
                         false,
                         ground,
                         kit,
