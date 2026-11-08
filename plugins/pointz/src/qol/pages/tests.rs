@@ -144,18 +144,18 @@ fn the_pointzerver_page_lists_phones_between_pairing_and_the_app() {
     );
     assert!(page.groups[0].rows[0].opens);
     assert_eq!(page.groups[0].rows[0].enter, Some(Enter::Press));
-    let shown: Vec<(&str, Option<&str>, bool)> = page.groups[1]
+    let shown: Vec<(&str, Option<&str>)> = page.groups[1]
         .rows
         .iter()
-        .map(|row| (row.label.as_str(), row.value.as_deref(), row.info))
+        .map(|row| (row.label.as_str(), row.copies()))
         .collect();
     assert_eq!(
         shown,
         [
-            ("Hostname", Some("kmrh-desk"), true),
-            ("IP address", Some("192.168.1.24"), true),
-            ("Control port", Some("45455"), true),
-            ("Discovery port", Some("45454"), true),
+            ("Hostname", Some("kmrh-desk")),
+            ("IP address", Some("192.168.1.24")),
+            ("Control port", Some("45455")),
+            ("Discovery port", Some("45454")),
         ]
     );
 }
@@ -180,7 +180,7 @@ fn the_code_shows_only_on_the_pair_card_while_pairing_is_open() {
     let code = card.row("code").unwrap();
     assert_eq!(code.value.as_deref(), Some("482 913"));
     assert_eq!(code.detail.as_deref(), Some("Runs out in 58 s"));
-    assert!(code.info);
+    assert_eq!(code.copies(), Some("482 913"));
     assert_eq!(card.focus.as_deref(), Some(APP));
     let leave = card.leave.as_ref().unwrap();
     assert_eq!(

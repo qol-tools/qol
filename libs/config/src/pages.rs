@@ -51,8 +51,6 @@ pub struct Row {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enter: Option<Enter>,
     #[serde(default, skip_serializing_if = "is_false")]
-    pub info: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
     pub attention: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dim: bool,
@@ -199,13 +197,13 @@ impl Pages {
                 if !seen.insert(row.id.as_str()) {
                     problems.push(format!("page `{id}` repeats row `{}`", row.id));
                 }
-                if row.info && row.enter.is_some() {
-                    problems.push(format!(
-                        "row `{}` on page `{id}` is info yet reacts to enter",
-                        row.id
-                    ));
-                }
                 match (&row.control, &row.enter) {
+                    (Some(Control::Toggle(_) | Control::Check | Control::Button(_)), None) => {
+                        problems.push(format!(
+                            "row `{}` on page `{id}` shows a control yet does nothing",
+                            row.id
+                        ))
+                    }
                     (Some(Control::Feature { .. }), Some(Enter::Open(_))) => {}
                     (Some(Control::Feature { .. }), _) => problems.push(format!(
                         "row `{}` on page `{id}` is a feature yet opens no page",
@@ -291,10 +289,10 @@ impl Row {
         }
     }
 
-    pub fn info(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self {
-            info: true,
-            ..Self::new(id, label)
+    pub fn copies(&self) -> Option<&str> {
+        match (&self.control, &self.enter) {
+            (None, None) => Some(self.value.as_deref().unwrap_or(&self.label)),
+            _ => None,
         }
     }
 
@@ -442,7 +440,7 @@ mod tests {
             "waiting",
             Page::new("waiting").group(
                 Group::new("waiting", "each tagged with its updater.").row(
-                    Row::info("apparmor", "AppArmor 4.0.1")
+                    Row::new("apparmor", "AppArmor 4.0.1")
                         .detail("3 packages, held by Ubuntu")
                         .tag("Update Manager")
                         .dim(true),
@@ -498,7 +496,7 @@ mod tests {
                 Group::new("g", "c.")
                     .row(Row::new("a", "A").open("nowhere"))
                     .row(Row::new("a", "A again").replace("elsewhere"))
-                    .row(Row::info("b", "B").press()),
+                    .row(Row::new("b", "B").button("go")),
             ),
         );
         assert_eq!(
@@ -506,7 +504,7 @@ mod tests {
             [
                 "the root page `home` is missing",
                 "page `dup` repeats row `a`",
-                "row `b` on page `dup` is info yet reacts to enter",
+                "row `b` on page `dup` shows a control yet does nothing",
             ]
         );
         assert_eq!(
@@ -652,5 +650,27 @@ mod tests {
                 "row `dull` on page `main` destroys yet is not pressed",
             ]
         );
+    }
+
+    #[test]
+    fn a_row_that_neither_reacts_nor_carries_a_control_copies_what_it_shows() {
+        assert_eq!(
+            Row::new("ip", "IP address").value("10.0.0.2").copies(),
+            Some("10.0.0.2")
+        );
+        assert_eq!(
+            Row::new("qol", "qol stops with it").detail("why").copies(),
+            Some("qol stops with it")
+        );
+        assert_eq!(Row::new("open", "Open").open("x").copies(), None);
+        assert_eq!(Row::new("on", "On").toggle(true).press().copies(), None);
+        assert_eq!(Row::new("qr", "App").qr("https://x").copies(), None);
+        let old: Row = serde_json::from_value(json!({
+            "id": "kernel",
+            "label": "Linux kernel",
+            "info": true
+        }))
+        .expect("an older plugin's row still reads");
+        assert_eq!(old.copies(), Some("Linux kernel"));
     }
 }

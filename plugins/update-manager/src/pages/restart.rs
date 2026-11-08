@@ -86,7 +86,7 @@ fn restart(session: &Session, now: NaiveDateTime) -> Sheet {
     }
     sheet.group("what finishes", "installed, waiting for the restart.");
     for (index, row) in session.finish().into_iter().enumerate() {
-        sheet.row(Row::info(format!("finish:{index}"), row.label).detail(row.finish));
+        sheet.row(Row::new(format!("finish:{index}"), row.label).detail(row.finish));
     }
     if let (Some(_), Some(run)) = (session.host.restart_at, run_at.as_deref()) {
         for update in session
@@ -95,7 +95,7 @@ fn restart(session: &Session, now: NaiveDateTime) -> Sheet {
             .filter(|update| update.restart && update.unattended && session.job.is_none())
         {
             sheet.row(
-                Row::info(format!("next:{}", update.id), update.label.as_str()).detail(format!(
+                Row::new(format!("next:{}", update.id), update.label.as_str()).detail(format!(
                     "{run} installs it before the restart, so it finishes too"
                 )),
             );
@@ -185,7 +185,7 @@ fn restart_now(session: &Session) -> Sheet {
     );
     if let Some(in_use) = session.in_use.as_ref() {
         sheet.row(
-            Row::info("in-use", format!("{} stops playing", in_use.label))
+            Row::new("in-use", format!("{} stops playing", in_use.label))
                 .detail(if in_use.bluetooth {
                     "It plays over Bluetooth"
                 } else {
@@ -196,16 +196,16 @@ fn restart_now(session: &Session) -> Sheet {
         );
     }
     sheet.row(
-        Row::info("apps", "Open apps close")
+        Row::new("apps", "Open apps close")
             .detail("Save your work first.")
             .value("closes"),
     );
     sheet.row(if session.borrowed {
-        Row::info("qol", "qol stops with it").detail("Start it again after the restart")
+        Row::new("qol", "qol stops with it").detail("Start it again after the restart")
     } else if session.rules.guard || session.rules.hold {
-        Row::info("qol", "qol starts again after it").detail("Its rules start off again")
+        Row::new("qol", "qol starts again after it").detail("Its rules start off again")
     } else {
-        Row::info("qol", "qol starts again after it").detail("With its rules as you left them")
+        Row::new("qol", "qol starts again after it").detail("With its rules as you left them")
     });
     sheet.group("choose", "esc cancels too.");
     sheet.row(

@@ -28,7 +28,7 @@ pub(super) fn row_at<'a>(page: &'a Page, items: &[Item], index: usize) -> Option
 
 pub(super) fn selectable(page: &Page, items: &[Item]) -> Vec<usize> {
     (0..items.len())
-        .filter(|index| row_at(page, items, *index).is_some_and(|row| !row.info))
+        .filter(|index| row_at(page, items, *index).is_some())
         .collect()
 }
 
@@ -76,6 +76,9 @@ pub(super) fn step(page: &Page, current: usize, direction: isize) -> Option<usiz
 }
 
 pub(super) fn enter_verb(row: &Row) -> Option<String> {
+    if row.copies().is_some() {
+        return Some("copy".into());
+    }
     match (&row.control, &row.enter) {
         (_, None) => None,
         (Some(Control::Toggle(_)), _) => Some("flip".into()),
@@ -184,7 +187,7 @@ mod tests {
             )
             .group(
                 Group::new("what finishes", "installed, waiting.")
-                    .row(Row::info("kernel", "Linux kernel 6.8.0-147"))
+                    .row(Row::new("kernel", "Linux kernel 6.8.0-147"))
                     .row(Row::new("now", "Restart now").button("restart…").press()),
             )
     }
@@ -202,7 +205,7 @@ mod tests {
                 Item::Row(1, 1),
             ]
         );
-        assert_eq!(selectable(&page(), &items(&page())), [1, 2, 5]);
+        assert_eq!(selectable(&page(), &items(&page())), [1, 2, 4, 5]);
         assert_eq!(header_of(&items(&page()), 5), Some(3));
         assert_eq!(header_of(&items(&page()), 2), Some(0));
     }
@@ -210,7 +213,7 @@ mod tests {
     #[test]
     fn selection_follows_the_row_id_then_the_old_place() {
         assert_eq!(resolve(&page(), &["now"], 0), Some(5));
-        assert_eq!(resolve(&page(), &["gone"], 3), Some(5));
+        assert_eq!(resolve(&page(), &["gone"], 3), Some(4));
         assert_eq!(resolve(&page(), &["gone"], 9), Some(5));
         assert_eq!(resolve(&page(), &["gone", "tonight"], 9), Some(2));
         assert_eq!(resolve(&page(), &[], 0), Some(1));
@@ -234,9 +237,10 @@ mod tests {
     }
 
     #[test]
-    fn steps_skip_headers_and_info_rows_and_stop_at_the_ends() {
-        assert_eq!(step(&page(), 2, 1), Some(5));
-        assert_eq!(step(&page(), 5, -1), Some(2));
+    fn steps_skip_headers_and_stop_at_the_ends() {
+        assert_eq!(step(&page(), 2, 1), Some(4));
+        assert_eq!(step(&page(), 4, 1), Some(5));
+        assert_eq!(step(&page(), 5, -1), Some(4));
         assert_eq!(step(&page(), 5, 1), Some(5));
         assert_eq!(step(&page(), 1, -1), Some(1));
     }
@@ -250,7 +254,7 @@ mod tests {
             [
                 Some("open".to_string()),
                 Some("flip".to_string()),
-                None,
+                Some("copy".to_string()),
                 Some("restart".to_string()),
             ]
         );

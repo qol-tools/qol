@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, App, AsyncApp, Context, Div, FocusHandle, Focusable, KeyDownEvent, Render,
-    Subscription, Task, WeakEntity, Window,
+    div, px, AnyElement, App, AsyncApp, ClipboardItem, Context, Div, FocusHandle, Focusable,
+    KeyDownEvent, Render, Subscription, Task, WeakEntity, Window,
 };
 use qol_config::contract::PagesSpec;
 use qol_config::pages::{
@@ -467,7 +467,7 @@ impl PagesView {
             return;
         };
         let items = model::items(page);
-        if let Some(row) = model::row_at(page, &items, index).filter(|row| !row.info) {
+        if let Some(row) = model::row_at(page, &items, index) {
             place.index = index;
             place.selected = Some(row.id.clone());
             place.scroll.follow(
@@ -505,6 +505,11 @@ impl PagesView {
             }
         }
         self.asking = None;
+        if let Some(text) = row.copies() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+            (self.notify)(CustomPanelNoticeTone::Success, "Copied".into(), cx);
+            return;
+        }
         match row.enter {
             Some(Enter::Open(target)) => self.navigate(&Go::Open(target), cx),
             Some(Enter::Replace(target)) => self.navigate(&Go::Replace(target), cx),
@@ -617,6 +622,7 @@ impl PagesView {
                 });
         let mut values = settings_value_group();
         if busy
+            && row.copies().is_none()
             && !matches!(
                 row.control,
                 Some(Control::Button(_) | Control::Destroy { .. })
@@ -655,6 +661,13 @@ impl PagesView {
                 ground,
                 kit,
             )),
+            None if row.copies().is_some() => values.child(settings_action_mark(
+                (action_id, index),
+                ActionMark::Run,
+                busy,
+                ground,
+                kit,
+            )),
             Some(Control::Qr(_)) | None => values,
         };
         let feature = matches!(row.control, Some(Control::Feature { .. }));
@@ -675,10 +688,7 @@ impl PagesView {
             .child(values);
         if front {
             element = element.child(deck::bounds_recorder(Rc::clone(&self.row_bounds), index));
-            if !row.info {
-                element =
-                    element.on_click(cx.listener(move |view, _, _, cx| view.click(index, cx)));
-            }
+            element = element.on_click(cx.listener(move |view, _, _, cx| view.click(index, cx)));
         }
         element.into_any_element()
     }

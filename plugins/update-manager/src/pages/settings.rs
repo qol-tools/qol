@@ -26,7 +26,7 @@ fn could_not(row: Row, refusal: &impl std::fmt::Display) -> Row {
 pub(super) fn rules(sheet: &mut Sheet, session: &Session) {
     if session.mint().is_none() {
         sheet.row(
-            Row::info("rules", "Nothing installs on its own here")
+            Row::new("rules", "Nothing installs on its own here")
                 .detail("So there is nothing for qol to hold"),
         );
         return;
@@ -131,7 +131,7 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
     );
     if let Some(error) = session.errors.get(&Op::Hours) {
         sheet.row(
-            Row::info("error", "Could not change the hours")
+            Row::new("error", "Could not change the hours")
                 .detail(error.as_str())
                 .tone(Tone::Attention)
                 .attention(true),
@@ -181,7 +181,7 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
             "your setting, written to mint's timer. it stays when qol stops.",
         );
         sheet.row(
-            Row::info("timer", "Mint's timer")
+            Row::new("timer", "Mint's timer")
                 .detail(format!(
                     "Runs {} to {}{}.",
                     hours.from,
@@ -196,7 +196,7 @@ fn hours(session: &Session, now: NaiveDateTime) -> Sheet {
         );
         if let (Some(at), true) = (session.host.restart_at, session.moved()) {
             sheet.row(
-                Row::info("moved", format!("{}'s restart", cap(&night_of(at, now))))
+                Row::new("moved", format!("{}'s restart", cap(&night_of(at, now))))
                     .detail("Moved after the update hours, and still waits if Mint's run is going")
                     .value(at.format("%H:%M").to_string()),
             );
@@ -277,7 +277,7 @@ fn auto(session: &Session) -> Sheet {
         );
         press_auto(&mut sheet, session, row, key, !on);
     }
-    sheet.row(Row::info("firmware", "Firmware").value("never"));
+    sheet.row(Row::new("firmware", "Firmware").value("never"));
     sheet
 }
 
@@ -339,7 +339,7 @@ fn changes(session: &Session, now: NaiveDateTime) -> Sheet {
     }
     if !any {
         sheet.row(
-            Row::info("nothing", "Nothing yet")
+            Row::new("nothing", "Nothing yet")
                 .detail("A setting you change here is listed until you set it back"),
         );
     }
@@ -366,12 +366,12 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                 "this computer is not yours. the change stays after you leave.",
             );
             sheet.row(
-                Row::info("now", "Now")
+                Row::new("now", "Now")
                     .detail("Mint's timer, as the owner left it")
                     .value(session.hours().span()),
             );
             sheet.row(
-                Row::info("after", "After")
+                Row::new("after", "After")
                     .detail("Stays until the owner changes it back")
                     .value(after.span()),
             );
@@ -410,7 +410,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                 "this computer is not yours. the restart happens even after you leave.",
             );
             sheet.row(
-                Row::info("at", "At")
+                Row::new("at", "At")
                     .detail(match session.run_at() {
                         Some(run) => format!("After {run} ends"),
                         None => cap(&word),
@@ -419,7 +419,7 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
             );
             let names = finish_names(session);
             sheet.row(
-                Row::info("finishes", "Finishes").detail(if names.is_empty() {
+                Row::new("finishes", "Finishes").detail(if names.is_empty() {
                     "Nothing waits for it".to_string()
                 } else {
                     names
@@ -447,12 +447,12 @@ fn ask(session: &Session, now: NaiveDateTime) -> Option<Sheet> {
                 "this computer is not yours. the change stays after you leave.",
             );
             sheet.row(
-                Row::info("now", "Now")
+                Row::new("now", "Now")
                     .detail("As the owner left it")
                     .value(on_off(on)),
             );
             sheet.row(
-                Row::info("after", "After")
+                Row::new("after", "After")
                     .detail("Stays until the owner changes it back")
                     .value(on_off(!on)),
             );

@@ -197,14 +197,14 @@ fn list(snapshot: &Snapshot, memory: &Memory, now: DateTime<Local>) -> Page {
     phones.push(app_row());
     let page = Page::new("pointzerver").group(phones).group(
         Group::new("this computer", "what the PointZ app connects to.")
-            .row(Row::info("hostname", "Hostname").value(snapshot.hostname.clone()))
+            .row(Row::new("hostname", "Hostname").value(snapshot.hostname.clone()))
             .row(
-                Row::info("ip", "IP address")
+                Row::new("ip", "IP address")
                     .value(snapshot.ip.clone().unwrap_or_else(|| "none".into())),
             )
-            .row(Row::info("control", "Control port").value(ServerConfig::COMMAND_PORT.to_string()))
+            .row(Row::new("control", "Control port").value(ServerConfig::COMMAND_PORT.to_string()))
             .row(
-                Row::info("discovery", "Discovery port")
+                Row::new("discovery", "Discovery port")
                     .value(ServerConfig::DISCOVERY_PORT.to_string()),
             ),
     );
@@ -224,7 +224,7 @@ fn pair(pairing: &Pairing) -> Page {
                 "type the code into the PointZ app on your phone.",
             )
             .row(
-                Row::info("code", "Code")
+                Row::new("code", "Code")
                     .value(spaced(&pairing.code))
                     .detail(format!("Runs out in {} s", pairing.seconds)),
             )
