@@ -88,7 +88,35 @@ impl Fixture {
         authority(&self.shared).expected()
     }
 
-    pub(crate) async fn ready(&self) -> u16 {
+    pub(crate) async fn ready(&self) {
+        let mut view = self
+            .owner
+            .handle
+            .inner
+            .lock()
+            .unwrap()
+            .authority()
+            .unwrap()
+            .network
+            .as_ref()
+            .unwrap()
+            .subscribe();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if !matches!(
+                    view.borrow().status.enrollment_listener,
+                    ListenerStatus::Starting {}
+                ) {
+                    return;
+                }
+                view.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    pub(crate) async fn enrollment_port(&self) -> u16 {
         let mut view = self
             .owner
             .handle

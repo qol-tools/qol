@@ -9,7 +9,7 @@ use tokio::{
 
 use super::{nearby, Job, Owner, MAX_EXCHANGES};
 use crate::admin::{AttemptState, EnrollmentFailure};
-use crate::network::{ListenerStatus, NetworkFailure};
+use crate::network::{IdleReason, ListenerStatus, NetworkFailure};
 use crate::service::enrollment::{EnrollmentError, EnrollmentOutcome, Invitation, NearbyOffer};
 use crate::service::network::{discovery::cancelled, NetworkSnapshot};
 use crate::service::{PeerAuthority, PeerPin};
@@ -17,33 +17,29 @@ use crate::PeerId;
 
 const IO_DEADLINE: Duration = Duration::from_secs(5);
 const EXCHANGE_DEADLINE: Duration = Duration::from_secs(130);
+const RECHECK: Duration = Duration::from_secs(1);
 
 impl Owner {
     pub(in crate::service::network) async fn run(
         mut self,
         authority: PeerAuthority,
-        listener: Result<TcpListener, NetworkFailure>,
         mut stop: watch::Receiver<bool>,
         view: watch::Sender<NetworkSnapshot>,
     ) -> Result<(), NetworkFailure> {
         let mut inbound = JoinSet::new();
         let mut outbound = JoinSet::new();
         let mut offering = JoinSet::new();
-        let result = match listener {
-            Ok(listener) => {
-                self.serve(
-                    &authority,
-                    listener,
-                    &mut stop,
-                    &view,
-                    &mut inbound,
-                    &mut outbound,
-                    &mut offering,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        };
+        let result = self
+            .serve(
+                &authority,
+                &mut stop,
+                &view,
+                &mut inbound,
+                &mut outbound,
+                &mut offering,
+            )
+            .await;
+        self.gate.close();
         self.commands.close();
         while self.commands.try_recv().is_ok() {}
         self.offer_commands.close();
@@ -75,11 +71,57 @@ impl Owner {
         result
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn listener_wanted(&self, authority: &PeerAuthority, receiving: bool) -> bool {
+        receiving
+            || self.gate.held()
+            || self.offers.pending()
+            || authority.invitation_open_until().is_some()
+    }
+
+    fn reconcile(
+        &self,
+        authority: &PeerAuthority,
+        listener: &mut Option<TcpListener>,
+        view: &watch::Sender<NetworkSnapshot>,
+        receiving: bool,
+    ) -> bool {
+        self.gate.refresh();
+        let wanted = self.listener_wanted(authority, receiving);
+        if wanted && listener.is_none() {
+            let opened = self
+                .gate
+                .open()
+                .and_then(|opened| opened.local_addr().map(|address| (opened, address.port())));
+            match opened {
+                Ok((opened, port)) => {
+                    *listener = Some(opened);
+                    view.send_modify(|view| {
+                        view.status.enrollment_listener = ListenerStatus::Listening { port }
+                    });
+                }
+                Err(_) => {
+                    view.send_modify(|view| {
+                        view.status.enrollment_listener = ListenerStatus::Failed {
+                            error: NetworkFailure::Listener,
+                        }
+                    });
+                    return true;
+                }
+            }
+        } else if !wanted && listener.is_some() && self.gate.release() {
+            *listener = None;
+            view.send_modify(|view| {
+                view.status.enrollment_listener = ListenerStatus::Idle {
+                    reason: IdleReason::NothingOpen,
+                }
+            });
+        }
+        false
+    }
+
     async fn serve(
         &mut self,
         authority: &PeerAuthority,
-        listener: TcpListener,
         stop: &mut watch::Receiver<bool>,
         view: &watch::Sender<NetworkSnapshot>,
         inbound: &mut JoinSet<()>,
@@ -90,21 +132,24 @@ impl Owner {
             return Ok(());
         }
         let mut changes = authority.watch_changes();
-        let port = listener
-            .local_addr()
-            .map_err(|_| NetworkFailure::Listener)?
-            .port();
+        let mut gate_changes = self.gate.subscribe();
+        let mut listener: Option<TcpListener> = None;
         view.send_modify(|view| {
-            view.status.enrollment_listener = ListenerStatus::Listening { port }
+            view.status.enrollment_listener = ListenerStatus::Idle {
+                reason: IdleReason::NothingOpen,
+            }
         });
         loop {
             if authority.check_enrollment_ready().is_err() {
                 return Err(NetworkFailure::Authority);
             }
+            let retry_bind = self.reconcile(authority, &mut listener, view, !inbound.is_empty());
             tokio::select! {
                 biased;
                 () = cancelled(stop) => return Ok(()),
                 change = changes.changed() => if change.is_err() { return Err(NetworkFailure::Authority); },
+                _ = gate_changes.changed() => {},
+                () = recheck(listener.is_some() || retry_bind) => {},
                 result = outbound.join_next(), if !outbound.is_empty() => {
                     match result {
                         Some(Ok((transaction, state))) => self.state(transaction, state, true),
@@ -117,11 +162,7 @@ impl Owner {
                 },
                 result = offering.join_next(), if !offering.is_empty() => {
                     match result {
-                        Some(Ok((peer, result))) => {
-                            if let (Some(grants), Some(control)) = (self.offers.finished(peer, result), self.control()) {
-                                control.accept_offer(authority, peer, grants);
-                            }
-                        },
+                        Some(Ok((peer, result))) => self.offers.finished(peer, result),
                         Some(Err(_)) => return Err(NetworkFailure::Task),
                         None => {},
                     }
@@ -143,11 +184,12 @@ impl Owner {
                         (transaction, send(authority, job).await)
                     });
                 },
-                accepted = listener.accept(), if inbound.len() < MAX_EXCHANGES => {
+                accepted = accept(&listener), if listener.is_some() && inbound.len() < MAX_EXCHANGES => {
                     let (stream, _) = accepted.map_err(|_| NetworkFailure::Listener)?;
                     let authority = authority.clone();
+                    let gate = self.gate.clone();
                     inbound.spawn(async move {
-                        let _ = timeout(EXCHANGE_DEADLINE, receive(authority, stream)).await;
+                        let _ = timeout(EXCHANGE_DEADLINE, receive(authority, gate, stream)).await;
                     });
                 },
             }
@@ -155,7 +197,26 @@ impl Owner {
     }
 }
 
-async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), EnrollmentError> {
+async fn accept(listener: &Option<TcpListener>) -> std::io::Result<(TcpStream, SocketAddr)> {
+    match listener {
+        Some(listener) => listener.accept().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn recheck(open: bool) {
+    if open {
+        tokio::time::sleep(RECHECK).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn receive(
+    authority: PeerAuthority,
+    gate: std::sync::Arc<super::Gate>,
+    stream: TcpStream,
+) -> Result<(), EnrollmentError> {
     let local = stream
         .local_addr()
         .map_err(|_| EnrollmentError::Transport)?;
@@ -168,16 +229,20 @@ async fn receive(authority: PeerAuthority, stream: TcpStream) -> Result<(), Enro
     tokio::select! {
         biased;
         () = invalidated(&authority) => Err(EnrollmentError::Transport),
-        result = serve(&authority, connection, local) => result,
+        result = serve(&authority, &gate, connection, local) => result,
     }
 }
 
 async fn serve(
     authority: &PeerAuthority,
+    gate: &super::Gate,
     connection: crate::service::PeerConnection<TcpStream>,
     local: SocketAddr,
 ) -> Result<(), EnrollmentError> {
     match connection.session_kind() {
+        crate::service::SessionKind::Nearby if !gate.nearby_open() => {
+            Err(EnrollmentError::Transport)
+        }
         crate::service::SessionKind::Nearby => authority.serve_nearby(connection, local).await,
         _ => authority.serve_enrollment(connection).await.map(|_| ()),
     }

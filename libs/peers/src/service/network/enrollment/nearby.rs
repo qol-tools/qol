@@ -39,6 +39,7 @@ enum OfferState {
         invitation: Box<Invitation>,
         code: LinkCode,
         deadline: Instant,
+        grants: Vec<OperationKey>,
     },
     Confirmed {
         transaction: TransactionId,
@@ -57,33 +58,35 @@ impl Offers {
         self.0.lock().unwrap_or_else(|error| error.into_inner())
     }
 
-    pub(super) fn finished(
-        &self,
-        peer: PeerId,
-        result: Result<NearbyOffer, EnrollmentError>,
-    ) -> Option<Vec<OperationKey>> {
+    pub(super) fn finished(&self, peer: PeerId, result: Result<NearbyOffer, EnrollmentError>) {
         let mut offers = self.lock();
-        let (_, state) = offers.get_mut(&peer)?;
+        let Some((_, state)) = offers.get_mut(&peer) else {
+            return;
+        };
         let OfferState::Connecting { grants, .. } = state else {
-            return None;
+            return;
         };
         let grants = std::mem::take(grants);
-        match result {
-            Ok(offer) => {
-                *state = OfferState::Ready {
-                    invitation: Box::new(offer.invitation),
-                    code: offer.code,
-                    deadline: Instant::now() + CONFIRM_WINDOW,
-                };
-                Some(grants)
-            }
-            Err(error) => {
-                *state = OfferState::Failed {
-                    error: failure(error),
-                };
-                None
-            }
-        }
+        *state = match result {
+            Ok(offer) => OfferState::Ready {
+                invitation: Box::new(offer.invitation),
+                code: offer.code,
+                deadline: Instant::now() + CONFIRM_WINDOW,
+                grants,
+            },
+            Err(error) => OfferState::Failed {
+                error: failure(error),
+            },
+        };
+    }
+
+    pub(super) fn pending(&self) -> bool {
+        let now = Instant::now();
+        self.lock().values().any(|(_, state)| match state {
+            OfferState::Connecting { .. } => true,
+            OfferState::Ready { deadline, .. } => *deadline > now,
+            OfferState::Confirmed { .. } | OfferState::Failed { .. } => false,
+        })
     }
 
     pub(super) fn close(&self) {
@@ -158,7 +161,6 @@ impl Control {
         authority: &PeerAuthority,
         expected: StoreRevision,
         peer: PeerId,
-        grants: Vec<OperationKey>,
     ) -> Result<AttemptState, Error> {
         let mut offers = self.offers.lock();
         let Some((
@@ -167,6 +169,7 @@ impl Control {
                 invitation,
                 code,
                 deadline,
+                grants,
             },
         )) = offers.get(&peer)
         else {
@@ -179,6 +182,7 @@ impl Control {
         }
         let code = *code;
         let name = name.clone();
+        let grants = grants.clone();
         let document = invitation.export()?;
         let transaction = authority.prepare_nearby_join(expected, invitation)?;
         let revision = authority.projection()?.revision;
@@ -192,30 +196,6 @@ impl Control {
             Vec::new(),
             grants,
         )
-    }
-
-    pub(super) fn accept_offer(
-        &self,
-        authority: &PeerAuthority,
-        peer: PeerId,
-        grants: Vec<OperationKey>,
-    ) {
-        let result = match authority.projection() {
-            Ok(projection) => self
-                .confirm_nearby(authority, projection.revision, peer, grants)
-                .map(drop),
-            Err(_) => Err(refusal(EnrollmentFailure::Unavailable)),
-        };
-        let Err(error) = result else {
-            return;
-        };
-        let error = match error {
-            Error::Enrollment { error } => error,
-            _ => EnrollmentFailure::Unavailable,
-        };
-        if let Some((_, state @ OfferState::Ready { .. })) = self.offers.lock().get_mut(&peer) {
-            *state = OfferState::Failed { error };
-        }
     }
 
     pub(in crate::service::network) fn decline_nearby(

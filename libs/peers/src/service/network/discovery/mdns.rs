@@ -72,36 +72,34 @@ async fn serve(
         .map(|byte| format!("{byte:02x}"))
         .collect();
     let hostname = format!("qol-{}.{}.local.", &digest[..32], &digest[32..]);
-    let link = advertisement.link.map(|port| port.to_string());
-    let mut properties = vec![("version", "1"), ("peer_id", peer.as_str())];
-    if let Some(link) = &link {
-        properties.push(("name", advertisement.name.as_str()));
-        properties.push(("link", link.as_str()));
-    }
-    let mut info = ServiceInfo::new(
-        SERVICE,
-        &peer,
-        &hostname,
-        "",
-        advertisement.port,
-        &properties[..],
-    )
-    .map_err(|_| NetworkFailure::Discovery)?
-    .enable_addr_auto();
-    let interface = if advertisement.bind.is_unspecified() {
-        IfKind::IPv4
-    } else {
-        IfKind::Addr(advertisement.bind.into())
-    };
-    info.set_interfaces(vec![interface]);
+    let fullname = format!("{peer}.{SERVICE}");
+    let mut link = advertisement.link.clone();
+    let mut link_open = true;
     daemon
-        .register(info)
+        .register(service_info(
+            &advertisement,
+            &peer,
+            &hostname,
+            *link.borrow_and_update(),
+        )?)
         .map_err(|_| NetworkFailure::Discovery)?;
     let browse = daemon
         .browse(SERVICE)
         .map_err(|_| NetworkFailure::Discovery)?;
     loop {
         let event = tokio::select! {
+            changed = link.changed(), if link_open => {
+                if changed.is_err() {
+                    link_open = false;
+                } else {
+                    let current = *link.borrow_and_update();
+                    let _ = daemon.unregister(&fullname);
+                    daemon
+                        .register(service_info(&advertisement, &peer, &hostname, current)?)
+                        .map_err(|_| NetworkFailure::Discovery)?;
+                }
+                None
+            },
             event = monitor.recv_async() => match event.map_err(|_| NetworkFailure::Discovery)? {
                 DaemonEvent::Announce(..) => Some(DiscoveryEvent::Ready),
                 DaemonEvent::Error(_) => return Err(NetworkFailure::Discovery),
@@ -132,6 +130,37 @@ async fn serve(
                 .map_err(|_| NetworkFailure::Discovery)?;
         }
     }
+}
+
+fn service_info(
+    advertisement: &Advertisement,
+    peer: &str,
+    hostname: &str,
+    link: Option<u16>,
+) -> Result<ServiceInfo, NetworkFailure> {
+    let link = link.map(|port| port.to_string());
+    let mut properties = vec![("version", "1"), ("peer_id", peer)];
+    if let Some(link) = &link {
+        properties.push(("name", advertisement.name.as_str()));
+        properties.push(("link", link.as_str()));
+    }
+    let mut info = ServiceInfo::new(
+        SERVICE,
+        peer,
+        hostname,
+        "",
+        advertisement.port,
+        &properties[..],
+    )
+    .map_err(|_| NetworkFailure::Discovery)?
+    .enable_addr_auto();
+    let interface = if advertisement.bind.is_unspecified() {
+        IfKind::IPv4
+    } else {
+        IfKind::Addr(advertisement.bind.into())
+    };
+    info.set_interfaces(vec![interface]);
+    Ok(info)
 }
 
 fn nearby(info: &ResolvedService) -> Option<NearbyAdvertisement> {
