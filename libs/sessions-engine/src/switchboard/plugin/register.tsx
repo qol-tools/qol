@@ -734,7 +734,7 @@ const isWaiting = (entry: Entry, states: Record<string, RunState>): boolean =>
   !entry.isWorking && !entry.isDismissed && !isEnded(entry) && !isCut(entry) && states[entry.agentId]?.state === WAITING_STATE
 
 export const parentOf = (list: Entry[], entry: Entry): Entry | undefined => {
-  if (entry.launcher === undefined || isCut(entry)) return undefined
+  if (entry.launcher === undefined) return undefined
   const parent = addressed(list, entry.launcher)
   return parent === undefined || parent.agentId === entry.agentId || parent.isDismissed || isEnded(parent) ? undefined : parent
 }

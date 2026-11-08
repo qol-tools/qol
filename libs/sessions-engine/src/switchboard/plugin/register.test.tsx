@@ -1815,6 +1815,7 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(row('p1', { isWorking: true }), list)).toEqual({ label: 'working', state: 'working' })
   expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
   expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
+  expect(parentOf(list, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }))?.agentId).toBe('p1')
   expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
   expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
   expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
