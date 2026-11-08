@@ -15,6 +15,7 @@ export type Entry = {
   launcher?: string
   resumedFrom?: string
   isStoppedByUser?: boolean
+  isClosed?: true
   isInterrupted?: boolean
   isRunOver?: true
   key?: string

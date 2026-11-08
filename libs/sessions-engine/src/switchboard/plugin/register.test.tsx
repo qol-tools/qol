@@ -2810,10 +2810,17 @@ test('the close command stops the fork you write to and drops it from the board,
   expect(await close()).toContain('Closed asking-fork.')
   expect(stops).toEqual(['TaskStop a8'])
   expect(rows().find(row => row.agentId === 'a8')?.isDismissed).toBe(true)
+  await deliver($, stopNotification('a8', 'asking-fork: asks'), 'task-notification')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Watcher: pull request 9 merged.'), 'task-notification')
+  expect(rows().find(row => row.agentId === 'a8')?.isDismissed).toBe(true)
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'other-fork hi' })
   expect(await close()).toContain('Closed other-fork.')
   expect(stops).toEqual(['TaskStop a8', 'TaskStop a9'])
   expect(rows().find(row => row.agentId === 'a9')?.isDismissed).toBe(true)
+  await $.turn.start({ turnId: 'back-1', agentId: 'a8', text: 'carry on' })
+  await settle()
+  expect(rows().find(row => row.agentId === 'a8')).toMatchObject({ isDismissed: false, isWorking: true })
+  expect(rows().find(row => row.agentId === 'a8')?.isClosed).toBeUndefined()
 })
 
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {

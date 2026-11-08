@@ -695,7 +695,7 @@ export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]
   return [...carried, ...kept].slice(-KEEP)
 }
 
-const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, ...entry }: Entry): Entry => entry
+const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOver: ____, isClosed: _____, ...entry }: Entry): Entry => entry
 
 const RUN_OVER_MS = 15_000
 
@@ -1189,9 +1189,10 @@ const file = async ($: EngineInterface, report: Report): Promise<Entry> => {
         report: clip(report.report, REPORT_CHARS),
         at: isSame ? entry.at : now,
         isWorking: false,
-        isDismissed: isSame ? entry.isDismissed : false,
+        isDismissed: isSame ? entry.isDismissed : entry?.isClosed === true,
         hasNewReply: isSame ? entry.hasNewReply === true : !isShown && report.status !== USER_STOP,
         ...(report.status === USER_STOP ? { isStoppedByUser: true } : {}),
+        ...(entry?.isClosed === true ? { isClosed: true } : {}),
       }
       return filed
     }),
@@ -1358,7 +1359,7 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
       .catch((error: unknown) => String(error))
     if (failed !== undefined) return `${name} could not be closed: ${printable(failed)}`
   }
-  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true } : one)))
+  await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true } : one)))
   if ((await read($, writingTo)) === agentId) await writeTo($, undefined)
   if (viewedFork === agentId) await $.ui.view({}).catch(() => undefined)
   return `Closed ${name}. It left the agent list and the board; resume_session brings it back.`
