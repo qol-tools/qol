@@ -172,6 +172,7 @@ mod tests {
             "const own = project === undefined || !(await isTrustedFolder($, project)) ? [] : await Promise.all(",
             "await file($, { agentId, status: 'completed', report: last.answer })",
             "if (last !== undefined && last.turnId !== turnId) return",
+            "if (e.agentId !== undefined && !isHeld && !isKilledOnly(e.text)) {",
             "await $.session.messages({ agentId: target })",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
             "WRITING TO",

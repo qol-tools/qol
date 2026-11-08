@@ -2411,6 +2411,13 @@ export const readText = (list: Entry[], fork: string | undefined, all: readonly 
     .join('\n')
 }
 
+const NOTIFICATIONS = /<task-notification>[\s\S]*?<\/task-notification>/g
+
+export const isKilledOnly = (text: string): boolean => {
+  const blocks = text.match(NOTIFICATIONS) ?? []
+  return blocks.length > 0 && blocks.every(block => block.includes('<status>killed</status>'))
+}
+
 export const resumedFork = (text: string, isFork: (agentId: string) => boolean): string | undefined => {
   const block = text.trim()
   if (!NOTIFICATION.test(block) || block.includes('<status>') || block.includes('<result>')) return undefined
@@ -2941,7 +2948,7 @@ export const register: Register = on => {
       await noteReopen($, { turnStart: e.turnId, agentId: e.agentId, isHeld, text: printable(e.text).slice(0, 120), at: await $.clock.now() })
     }
     if (e.agentId === undefined && !isHeld) await logSaid($, YOU, userWords(e.text)).catch(() => {})
-    if (e.agentId !== undefined && !isHeld) {
+    if (e.agentId !== undefined && !isHeld && !isKilledOnly(e.text)) {
       const list = await read($, board)
       if (list.some(entry => entry.agentId === e.agentId && (!entry.isWorking || entry.isRunOver === true))) await markWorking($, e.agentId, undefined)
     }

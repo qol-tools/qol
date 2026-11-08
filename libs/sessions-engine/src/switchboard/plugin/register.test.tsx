@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1096,6 +1096,22 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   await answered($, 'a1', 0, 'real-2')
   await answered($, 'a1', 1, 'real-2')
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
+})
+
+test('closing the switchboard kills each fork hold, and the turn that notice starts leaves the fork idle so the next open does not cut it', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  await typed($, notification('a1', 'a1-fork: a fork', 'Which colour should it be?'), 'task-notification')
+  const killed = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${id}</tool-use-id>\n<output-file>/tmp/${id}.output</output-file>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
+  await $.turn.start({ text: `[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event.\n\n${killed('b1')}\n${killed('b2')}`, turnId: 'killed-1', agentId: 'a1' })
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).not.toContain('working')
+  expect(isKilledOnly(`${killed('b1')}\n${notification('a2', 'a2-fork: other', 'done')}`)).toBe(false)
+  expect(isKilledOnly('Make it amber.')).toBe(false)
+  await $.turn.start({ text: 'Make it amber.', turnId: 'real-1', agentId: 'a1' })
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('working')
 })
 
 test('a turn queued ahead of a hold leaves the hold pending, so the hold turn still runs no model', async ($, on) => {
