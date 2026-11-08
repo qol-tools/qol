@@ -71,7 +71,7 @@ impl ParsedCommand {
 
     fn verify_hmac(&self, key: &[u8; 32], mac: &[u8; 32]) -> Option<Vec<u8>> {
         let mut verifier =
-            HmacSha256::new_from_slice(key).expect("HMAC accepts a 32-byte device key");
+            <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts a 32-byte device key");
         update_mac(
             &mut verifier,
             self.sent_at_ms,
@@ -131,7 +131,7 @@ pub(crate) fn seal_v2(
     sent_at_ms: u64,
     nonce: [u8; 16],
 ) -> Vec<u8> {
-    let mut signer = HmacSha256::new_from_slice(key).unwrap();
+    let mut signer = <HmacSha256 as Mac>::new_from_slice(key).unwrap();
     update_mac(&mut signer, sent_at_ms, &device_id, &nonce, payload);
     let envelope = Envelope {
         version: HMAC_VERSION,
