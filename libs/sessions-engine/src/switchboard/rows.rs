@@ -22,9 +22,15 @@ const FOLDER_SEPARATOR: char = '/';
 const FOLDER_DEPTH: usize = 2;
 const CWD_KEY: &str = "cwd";
 const WORKING_LABEL: &str = "working";
-const PARKED_LABEL: &str = "parked";
+const WAITING_LABEL: &str = "waiting";
 const YOUR_TURN_LABEL: &str = "your turn";
 const IDLE_LABEL: &str = "idle";
+const WAITS_ON_LABEL: &str = "waits on";
+const ASKS_LABEL: &str = "asks you";
+const FRESH_MARK: char = '◉';
+const FRESH_LOOK: &str = "\x1b[1m\x1b[38;5;147m";
+const PARENT_KEY: &str = "parentAgentId";
+const MARKS_EXTENSION: &str = ".json";
 const ELLIPSIS: char = '…';
 const GAP: &str = "  ";
 const TAIL_SEPARATOR: &str = " · ";
@@ -65,7 +71,7 @@ static STATE_LOOKS: [StateLook; 3] = [
         bold: false,
     },
     StateLook {
-        state: PARKED_LABEL,
+        state: WAITING_LABEL,
         color: "blue",
         bold: false,
     },
@@ -84,6 +90,15 @@ pub(super) fn state_looks() -> String {
             .collect(),
     )
     .to_string()
+}
+
+pub(super) fn state_word(state: &ForkState) -> &'static str {
+    match state {
+        ForkState::Working => WORKING_LABEL,
+        ForkState::Waiting(_) => WAITING_LABEL,
+        ForkState::YourTurn => YOUR_TURN_LABEL,
+        ForkState::Idle => IDLE_LABEL,
+    }
 }
 
 fn state_paint(state: &str) -> Option<String> {
@@ -124,6 +139,46 @@ struct Fork {
     started_ms: Option<u64>,
     color: Option<String>,
     folder: Option<String>,
+    parent: Option<String>,
+    fresh: bool,
+    asks: bool,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Marks {
+    fresh: Vec<String>,
+    asks: Vec<String>,
+}
+
+impl Marks {
+    fn marked(&self, id: &str, fork: Fork) -> Fork {
+        Fork {
+            fresh: self.fresh.iter().any(|one| one == id),
+            asks: self.asks.iter().any(|one| one == id),
+            ..fork
+        }
+    }
+}
+
+fn read_marks(folder: &Path, session: &Path) -> Marks {
+    let Some(stem) = session.file_stem() else {
+        return Marks::default();
+    };
+    let mut name = stem.to_os_string();
+    name.push(MARKS_EXTENSION);
+    std::fs::read(folder.join(name))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn session_marks(session: Option<&Path>) -> Marks {
+    let folder = std::env::var_os(super::MARKS_ENV).filter(|folder| !folder.is_empty());
+    match (session, folder) {
+        (Some(session), Some(folder)) => read_marks(Path::new(&folder), session),
+        _ => Marks::default(),
+    }
 }
 
 struct Clock<'a> {
@@ -310,34 +365,96 @@ fn short_folder(label: &str) -> &str {
     }
 }
 
-fn head(name: &str, color: &str, task: &Task, folder: Option<&str>, fit: HeadFit) -> Drawn {
-    let mut text = painted(name, color);
-    let mut width = width(name);
-    if matches!(fit, HeadFit::Full | HeadFit::NoEffort) {
-        if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
-            let label = plain(&model_label(model));
-            width += GAP.len() + label.chars().count();
-            text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
-            if fit == HeadFit::Full {
-                if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
-                    let effort = plain(&effort);
-                    width += 1 + effort.chars().count();
-                    text.push(' ');
-                    text.push_str(&effort);
+fn looked(text: &str, paint: Option<&str>) -> String {
+    match paint {
+        Some(paint) => format!("{paint}{text}{BOLD_OFF}{COLOR_OFF}"),
+        None => text.to_owned(),
+    }
+}
+
+fn lead(fresh: bool) -> Drawn {
+    if !fresh {
+        return Drawn {
+            text: GAP.to_owned(),
+            width: width(GAP),
+        };
+    }
+    Drawn {
+        text: format!("{} ", looked(&FRESH_MARK.to_string(), Some(FRESH_LOOK))),
+        width: width(&format!("{FRESH_MARK} ")),
+    }
+}
+
+struct Head<'a> {
+    name: &'a str,
+    color: &'a str,
+    lead: Drawn,
+    badge: Drawn,
+    task: &'a Task,
+    folder: Option<&'a str>,
+}
+
+impl Head<'_> {
+    fn drawn(&self, name: &str, fit: HeadFit) -> Drawn {
+        let task = self.task;
+        let mut text = format!(
+            "{}{}{}",
+            self.lead.text,
+            painted(name, self.color),
+            self.badge.text
+        );
+        let mut width = self.lead.width + width(name) + self.badge.width;
+        if matches!(fit, HeadFit::Full | HeadFit::NoEffort) {
+            if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
+                let label = plain(&model_label(model));
+                width += GAP.len() + label.chars().count();
+                text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
+                if fit == HeadFit::Full {
+                    if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
+                        let effort = plain(&effort);
+                        width += 1 + effort.chars().count();
+                        text.push(' ');
+                        text.push_str(&effort);
+                    }
                 }
             }
         }
+        if let Some(folder) = self.folder.filter(|folder| !folder.is_empty()) {
+            let shown = match fit {
+                HeadFit::NameShortFolder => short_folder(folder),
+                _ => folder,
+            };
+            let shown = plain(shown);
+            width += GAP.len() + shown.chars().count();
+            text.push_str(&format!("{GAP}{DIM}{shown}{DIM_OFF}"));
+        }
+        Drawn { text, width }
     }
-    if let Some(folder) = folder.filter(|folder| !folder.is_empty()) {
-        let shown = match fit {
-            HeadFit::NameShortFolder => short_folder(folder),
-            _ => folder,
+
+    fn named(&self, room: usize) -> Drawn {
+        let name = |room: usize| truncate(self.name, room);
+        let (lead, name, badge) = if self.lead.width + self.badge.width < room {
+            (
+                Some(&self.lead),
+                name(room - self.lead.width - self.badge.width),
+                Some(&self.badge),
+            )
+        } else if self.lead.width < room {
+            (Some(&self.lead), name(room - self.lead.width), None)
+        } else {
+            (None, name(room), None)
         };
-        let shown = plain(shown);
-        width += GAP.len() + shown.chars().count();
-        text.push_str(&format!("{GAP}{DIM}{shown}{DIM_OFF}"));
+        let parts = [lead, badge].into_iter().flatten();
+        Drawn {
+            text: format!(
+                "{}{}{}",
+                lead.map_or("", |lead| lead.text.as_str()),
+                painted(&name, self.color),
+                badge.map_or("", |badge| badge.text.as_str())
+            ),
+            width: width(&name) + parts.map(|part| part.width).sum::<usize>(),
+        }
     }
-    Drawn { text, width }
 }
 
 struct StateLabel {
@@ -346,27 +463,79 @@ struct StateLabel {
 }
 
 fn state_label(state: &ForkState) -> StateLabel {
-    let (word, look) = match state {
-        ForkState::Working => (WORKING_LABEL.to_owned(), WORKING_LABEL),
-        ForkState::Parked(prs) => {
+    let look = state_word(state);
+    let word = match state {
+        ForkState::Waiting(prs) if !prs.is_empty() => {
             let numbers = prs
                 .iter()
                 .filter_map(|pr| pr.rsplit('/').next())
                 .map(|number| format!("#{number}"))
                 .collect::<Vec<_>>();
-            let word = if numbers.is_empty() {
-                PARKED_LABEL.to_owned()
-            } else {
-                format!("{PARKED_LABEL} {}", numbers.join(","))
-            };
-            (word, PARKED_LABEL)
+            format!("{look} {}", numbers.join(","))
         }
-        ForkState::YourTurn => (YOUR_TURN_LABEL.to_owned(), YOUR_TURN_LABEL),
-        ForkState::Idle => (IDLE_LABEL.to_owned(), IDLE_LABEL),
+        _ => look.to_owned(),
     };
     StateLabel {
         word,
         color: state_paint(look),
+    }
+}
+
+#[derive(Default)]
+struct Family {
+    count: usize,
+    asking: usize,
+    busy: usize,
+}
+
+impl Family {
+    fn of(id: &str, all: &[Shown]) -> Self {
+        let mut family = Self::default();
+        for one in all
+            .iter()
+            .filter(|one| one.fork.parent.as_deref() == Some(id))
+        {
+            let busy = one.fork.asks
+                || matches!(one.state, Some(ForkState::Working | ForkState::Waiting(_)));
+            family.count += 1;
+            family.asking += usize::from(one.fork.asks);
+            family.busy += usize::from(busy);
+        }
+        family
+    }
+
+    fn badge(&self) -> Drawn {
+        if self.count == 0 {
+            return Drawn {
+                text: String::new(),
+                width: 0,
+            };
+        }
+        let (text, look) = if self.asking == 0 {
+            (format!(" +{}", self.count), WAITING_LABEL)
+        } else {
+            (
+                format!(
+                    " +{}{TAIL_SEPARATOR}{} {ASKS_LABEL}",
+                    self.count, self.asking
+                ),
+                YOUR_TURN_LABEL,
+            )
+        };
+        Drawn {
+            width: width(&text),
+            text: looked(&text, state_paint(look).as_deref()),
+        }
+    }
+
+    fn state(&self, own: Option<&ForkState>, asks: bool) -> Option<StateLabel> {
+        if self.busy == 0 || asks || own == Some(&ForkState::Working) {
+            return own.map(state_label);
+        }
+        Some(StateLabel {
+            word: format!("{WAITS_ON_LABEL} {}", self.busy),
+            color: state_paint(WAITING_LABEL),
+        })
     }
 }
 
@@ -388,10 +557,10 @@ impl Tail {
     fn text(&self, fit: TailFit, paint: bool) -> String {
         let mut parts = Vec::new();
         if let Some(state) = &self.state {
-            parts.push(match state.color.as_deref().filter(|_| paint) {
-                Some(color) => format!("{color}{}{BOLD_OFF}{COLOR_OFF}", state.word),
-                None => state.word.clone(),
-            });
+            parts.push(looked(
+                &state.word,
+                state.color.as_deref().filter(|_| paint),
+            ));
         }
         if fit == TailFit::Full {
             parts.extend(self.started.clone());
@@ -410,34 +579,24 @@ impl Tail {
     }
 }
 
-fn fitted(
-    name: &str,
-    color: &str,
-    summary: &str,
-    task: &Task,
-    folder: Option<&str>,
-    tail: &Tail,
-    columns: usize,
-) -> String {
+fn fitted(head: &Head, summary: &str, tail: &Tail, columns: usize) -> String {
+    let name = head.name;
     let name_floor = width(name).min(NAME_MIN);
     for (head_fit, tail_fit) in LADDER {
         let Drawn {
             text: tail,
             width: tail_width,
         } = tail.drawn(tail_fit);
-        let fixed = head("", color, task, folder, head_fit).width + GAP.len() + tail_width;
+        let fixed = head.drawn("", head_fit).width + GAP.len() + tail_width;
         if name_floor + fixed > columns {
             continue;
         }
         if head_fit == HeadFit::Full && tail_fit == TailFit::Full && !summary.is_empty() {
-            let capped = head(
+            let capped = head.drawn(
                 &truncate(
                     name,
                     (columns / NAME_SHARE).max(NAME_MIN).min(columns - fixed),
                 ),
-                color,
-                task,
-                folder,
                 head_fit,
             );
             let room = columns.saturating_sub(capped.width + GAP.len() * 2 + tail_width);
@@ -447,27 +606,28 @@ fn fitted(
                 return format!("{}{GAP}{summary}{}{tail}", capped.text, " ".repeat(pad));
             }
         }
-        let shown = head(
-            &truncate(name, columns - fixed),
-            color,
-            task,
-            folder,
-            head_fit,
-        );
+        let shown = head.drawn(&truncate(name, columns - fixed), head_fit);
         let pad = columns - shown.width - tail_width;
         return format!("{}{}{tail}", shown.text, " ".repeat(pad));
     }
     let shown = tail.drawn(TailFit::NoTokens);
     if shown.width == 0 || shown.width + 2 > columns {
-        let tail = tail.text(TailFit::NoTokens, false);
-        return truncate(format!("{name} {tail}").trim_end(), columns);
+        return head.named(columns).text;
     }
-    let name = truncate(name, columns - shown.width - 1);
-    let pad = columns - width(&name) - shown.width;
-    format!("{}{}{}", painted(&name, color), " ".repeat(pad), shown.text)
+    let named = head.named(columns - shown.width - 1);
+    let pad = columns - named.width - shown.width;
+    format!("{}{}{}", named.text, " ".repeat(pad), shown.text)
 }
 
-fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
+struct Shown<'a> {
+    task: &'a Task,
+    fork: Fork,
+    state: Option<ForkState>,
+}
+
+fn row(one: &Shown, all: &[Shown], columns: Option<usize>, clock: &Clock) -> Option<String> {
+    let task = one.task;
+    let fork = &one.fork;
     let (key, friendly) = key_and_friendly(&task.description);
     let name = plain(
         filled(task.name.as_deref())
@@ -487,36 +647,34 @@ fn row(task: &Task, columns: Option<usize>, clock: &Clock) -> Option<String> {
     .collect::<Vec<_>>()
     .join(" · ");
     let summary = summary.trim();
-    let fork = (clock.fork)(&task.id);
     let color = fork
         .color
         .as_deref()
         .and_then(session_color)
         .unwrap_or_else(|| key_color(&name));
     let started = fork.started_ms.or(task.start_time);
+    let family = Family::of(&task.id, all);
     let tail = Tail {
-        state: (clock.state)(&task.id, task.status.as_deref())
-            .as_ref()
-            .map(state_label),
+        state: family.state(one.state.as_ref(), fork.asks),
         started: started
             .and_then(clock.started_label)
             .map(|label| plain(&label)),
         elapsed: started.map(|start| elapsed_label(clock.now_ms.saturating_sub(start) / 1000)),
         tokens: task.token_count,
     };
+    let head = Head {
+        name: &name,
+        color,
+        lead: lead(fork.fresh),
+        badge: family.badge(),
+        task,
+        folder: fork.folder.as_deref(),
+    };
     match columns {
         Some(0) => None,
-        Some(columns) => Some(fitted(
-            &name,
-            color,
-            summary,
-            task,
-            fork.folder.as_deref(),
-            &tail,
-            columns,
-        )),
+        Some(columns) => Some(fitted(&head, summary, &tail, columns)),
         None => {
-            let shown = head(&name, color, task, fork.folder.as_deref(), HeadFit::Full);
+            let shown = head.drawn(&name, HeadFit::Full);
             let line = [
                 shown.text.as_str(),
                 summary,
@@ -639,12 +797,22 @@ fn last_color(transcript: &Path) -> Option<String> {
 }
 
 fn fork_facts(transcript: &Path) -> Fork {
-    let Some(first) = first_row(transcript) else {
-        return Fork::default();
-    };
     let meta = meta_of(transcript);
+    let parent = meta
+        .as_ref()
+        .and_then(|meta| meta.get(PARENT_KEY))
+        .and_then(Value::as_str)
+        .filter(|parent| !parent.is_empty())
+        .map(str::to_owned);
+    let Some(first) = first_row(transcript) else {
+        return Fork {
+            parent,
+            ..Fork::default()
+        };
+    };
     let home = qol_platform::launch_working_dir();
     Fork {
+        parent,
         started_ms: first.started_ms,
         color: meta
             .as_ref()
@@ -656,6 +824,7 @@ fn fork_facts(transcript: &Path) -> Fork {
             .as_ref()
             .and_then(|meta| meta_path(meta, CWD_KEY))
             .and_then(|cwd| folder_label(&cwd, home.as_deref())),
+        ..Fork::default()
     }
 }
 
@@ -665,13 +834,21 @@ fn render(raw: &str, clock: &Clock) -> Result<Vec<String>> {
     }
     let rows: Rows =
         serde_json::from_str(raw).context("the agent rows payload is not valid JSON")?;
-    Ok(rows
+    let shown: Vec<Shown> = rows
         .tasks
         .iter()
         .filter(|task| !task.id.is_empty())
-        .filter_map(|task| {
-            let content = row(task, rows.columns, clock)?;
-            Some(json!({"id": task.id, "content": content}).to_string())
+        .map(|task| Shown {
+            task,
+            fork: (clock.fork)(&task.id),
+            state: (clock.state)(&task.id, task.status.as_deref()),
+        })
+        .collect();
+    Ok(shown
+        .iter()
+        .filter_map(|one| {
+            let content = row(one, &shown, rows.columns, clock)?;
+            Some(json!({"id": one.task.id, "content": content}).to_string())
         })
         .collect())
 }
@@ -700,10 +877,12 @@ pub(super) fn run() -> Result<()> {
         .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok())
         .unwrap_or_default();
     let session = session_transcript(&raw);
+    let marks = session_marks(session.as_deref());
     let fork = |id: &str| {
-        agent_transcript(session.as_deref(), id)
+        let facts = agent_transcript(session.as_deref(), id)
             .map(|transcript| fork_facts(&transcript))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        marks.marked(id, facts)
     };
     let state = |id: &str, status: Option<&str>| session_state(session.as_deref(), id, status);
     let clock = Clock {
@@ -729,9 +908,8 @@ mod tests {
 
     fn cyan_fork(_id: &str) -> Fork {
         Fork {
-            started_ms: None,
             color: Some("cyan".to_owned()),
-            folder: None,
+            ..Fork::default()
         }
     }
 
@@ -749,9 +927,9 @@ mod tests {
 
     fn content_in(raw: Value, folder: &str) -> Vec<String> {
         let fork = |_id: &str| Fork {
-            started_ms: None,
             color: Some("cyan".to_owned()),
             folder: Some(folder.to_owned()),
+            ..Fork::default()
         };
         let clock = Clock {
             now_ms: NOW,
@@ -851,7 +1029,7 @@ mod tests {
         let row = &rows[0];
         assert!(
             row.starts_with(
-                "\x1b[36mRTX 3080 limits research\x1b[39m  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
+                "  \x1b[36mRTX 3080 limits research\x1b[39m  \x1b[33mOpus 5.5\x1b[39m high  Checking gpu-unlock RTX 3080 support"
             ),
             "{row:?}"
         );
@@ -877,7 +1055,7 @@ mod tests {
         }));
         let visible = visible(&rows[0]);
         assert!(
-            visible.starts_with("fork-a  Sonnet 5.5 4096  A very"),
+            visible.starts_with("  fork-a  Sonnet 5.5 4096  A very"),
             "{visible:?}"
         );
         assert!(visible.contains('…'), "{visible:?}");
@@ -904,7 +1082,7 @@ mod tests {
         assert_eq!(
             unbounded,
             [format!(
-                "{CYAN}fork-a{COLOR_OFF}  work  idle · {STARTED} · 5s · 10 tokens"
+                "  {CYAN}fork-a{COLOR_OFF}  work  idle · {STARTED} · 5s · 10 tokens"
             )]
         );
     }
@@ -913,8 +1091,7 @@ mod tests {
     fn the_transcript_start_outranks_the_run_start() {
         let fork = |id: &str| Fork {
             started_ms: (id == "a1").then_some(NOW - 3_600_000),
-            color: None,
-            folder: None,
+            ..Fork::default()
         };
         let label = |ms: u64| Some(format!("at {ms}"));
         let clock = Clock {
@@ -1007,13 +1184,15 @@ mod tests {
             format!("kcd2-modding Opus 5.5 high {STARTED} · 25s · 53.9k tokens")
         );
         assert_eq!(at(52), "kcd2-modding Opus 5.5 high 25s · 53.9k tokens");
-        assert_eq!(at(41), "kcd2-modding Opus 5.5 high 53.9k tokens");
-        assert_eq!(at(40), "kcd2-modding Opus 5.5 53.9k tokens");
-        assert_eq!(at(36), "kcd2-modding Opus 5.5 53.9k tokens");
-        assert_eq!(at(30), "kcd2-modding 53.9k tokens");
-        assert_eq!(at(22), "kcd2-modding 53.9k");
+        assert_eq!(at(43), "kcd2-modding Opus 5.5 high 53.9k tokens");
+        assert_eq!(at(42), "kcd2-modding Opus 5.5 53.9k tokens");
+        assert_eq!(at(38), "kcd2-modding Opus 5.5 53.9k tokens");
+        assert_eq!(at(37), "kcd2-modding 53.9k tokens");
+        assert_eq!(at(28), "kcd2-modding 53.9k tokens");
+        assert_eq!(at(21), "kcd2-modding 53.9k");
+        assert_eq!(at(16), "kcd2-modding");
         assert_eq!(at(14), "kcd2-modding");
-        assert_eq!(at(8), "kcd2-mo…");
+        assert_eq!(at(8), "kcd2-…");
     }
 
     #[test]
@@ -1040,29 +1219,29 @@ mod tests {
                 110,
                 format!("{head} continue KCD2 modding {STARTED} · 25s · 53.9k tokens"),
             ),
-            (85, format!("{head} con… {STARTED} · 25s · 53.9k tokens")),
-            (84, format!("{head} {STARTED} · 25s · 53.9k tokens")),
-            (79, format!("{head} {STARTED} · 25s · 53.9k tokens")),
-            (78, format!("{head} 25s · 53.9k tokens")),
-            (65, format!("{head} 25s · 53.9k tokens")),
-            (64, format!("{head} 53.9k tokens")),
-            (59, format!("{head} 53.9k tokens")),
+            (87, format!("{head} con… {STARTED} · 25s · 53.9k tokens")),
+            (86, format!("{head} {STARTED} · 25s · 53.9k tokens")),
+            (81, format!("{head} {STARTED} · 25s · 53.9k tokens")),
+            (80, format!("{head} 25s · 53.9k tokens")),
+            (67, format!("{head} 25s · 53.9k tokens")),
+            (66, format!("{head} 53.9k tokens")),
+            (61, format!("{head} 53.9k tokens")),
             (
-                58,
+                60,
                 "kcd2-modding Opus 5.5 Git/qol-monorepo 53.9k tokens".to_owned(),
             ),
             (
-                54,
+                56,
                 "kcd2-modding Opus 5.5 Git/qol-monorepo 53.9k tokens".to_owned(),
             ),
-            (53, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
-            (44, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
-            (43, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
-            (40, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
-            (39, "kcd2-modding qol-monorepo 53.9k".to_owned()),
-            (33, "kcd2-modding qol-monorepo 53.9k".to_owned()),
-            (32, "kcd2-modding qol-monorepo".to_owned()),
-            (28, "kcd2-modding qol-monorepo".to_owned()),
+            (55, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
+            (46, "kcd2-modding Git/qol-monorepo 53.9k tokens".to_owned()),
+            (45, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
+            (42, "kcd2-modding qol-monorepo 53.9k tokens".to_owned()),
+            (41, "kcd2-modding qol-monorepo 53.9k".to_owned()),
+            (35, "kcd2-modding qol-monorepo 53.9k".to_owned()),
+            (34, "kcd2-modding qol-monorepo".to_owned()),
+            (30, "kcd2-modding qol-monorepo".to_owned()),
         ] {
             assert_eq!(at(columns), shown, "{columns} columns");
         }
@@ -1095,7 +1274,7 @@ mod tests {
         let row = &rows[0];
         assert!(
             row.starts_with(&format!(
-                "{CYAN}switchboard-flow-improvements{COLOR_OFF}  \x1b[33mOpus 5.5\x1b[39m high  \x1b[2mGit/qol-monorepo\x1b[22m  orchestration revisions · Committing changes"
+                "  {CYAN}switchboard-flow-improvements{COLOR_OFF}  \x1b[33mOpus 5.5\x1b[39m high  \x1b[2mGit/qol-monorepo\x1b[22m  orchestration revisions · Committing changes"
             )),
             "{row:?}"
         );
@@ -1111,7 +1290,7 @@ mod tests {
         assert_eq!(
             unbounded,
             [format!(
-                "{CYAN}fork-a{COLOR_OFF}  \x1b[2m~/qol\x1b[22m  work  0 tokens"
+                "  {CYAN}fork-a{COLOR_OFF}  \x1b[2m~/qol\x1b[22m  work  0 tokens"
             )]
         );
         let sneaky = content_in(
@@ -1210,7 +1389,10 @@ mod tests {
                 {"id": "", "description": "dropped"},
             ],
         }));
-        assert_eq!(rows, [format!("{CYAN}Start [31ming{COLOR_OFF}  0 tokens")]);
+        assert_eq!(
+            rows,
+            [format!("  {CYAN}Start [31ming{COLOR_OFF}  0 tokens")]
+        );
     }
 
     #[test]
@@ -1272,7 +1454,7 @@ mod tests {
         }));
         let visible = visible(&rows[0]);
         assert_eq!(visible.chars().count(), 50, "{visible:?}");
-        assert!(visible.starts_with("Investigate why"), "{visible:?}");
+        assert!(visible.starts_with("  Investigate why"), "{visible:?}");
         assert!(visible.contains("…  Opus 5.5 high"), "{visible:?}");
         assert!(visible.ends_with("  idle · 0 tokens"), "{visible:?}");
     }
@@ -1291,7 +1473,7 @@ mod tests {
         assert_eq!(
             rows,
             [format!(
-                "{CYAN}fork-a{COLOR_OFF}  \x1b[33mevil [2J\x1b[39m hi ]0;x gh  work  0 tokens"
+                "  {CYAN}fork-a{COLOR_OFF}  \x1b[33mevil [2J\x1b[39m hi ]0;x gh  work  0 tokens"
             )]
         );
     }
@@ -1345,7 +1527,7 @@ mod tests {
             squeezed(&rows),
             [
                 "fork-aturn your turn · 0 tokens",
-                "fork-apark parked #407 · 0 tokens",
+                "fork-apark waiting #407 · 0 tokens",
                 "fork-adone idle · 0 tokens",
                 "fork-awork working · 0 tokens",
                 "fork-amiss idle · 0 tokens",
@@ -1361,7 +1543,7 @@ mod tests {
             rows[0]
         );
         assert!(
-            rows[1].contains("\x1b[34mparked #407\x1b[22m\x1b[39m"),
+            rows[1].contains("\x1b[34mwaiting #407\x1b[22m\x1b[39m"),
             "{:?}",
             rows[1]
         );
@@ -1378,12 +1560,12 @@ mod tests {
                 .map(visible)
                 .collect::<Vec<_>>(),
             [
-                "fork-aturn  your turn · 0 tokens",
-                "fork-apark  parked #407 · 0 tokens",
-                "fork-adone  idle · 0 tokens",
-                "fork-awork  working · 0 tokens",
-                "fork-amiss  idle · 0 tokens",
-                "fork-akill  0 tokens",
+                "  fork-aturn  your turn · 0 tokens",
+                "  fork-apark  waiting #407 · 0 tokens",
+                "  fork-adone  idle · 0 tokens",
+                "  fork-awork  working · 0 tokens",
+                "  fork-amiss  idle · 0 tokens",
+                "  fork-akill  0 tokens",
             ]
         );
     }
@@ -1395,7 +1577,7 @@ mod tests {
             "tasks": [{"id": "a1", "name": "fork-a", "description": "work", "status": "running"}],
         }));
         let shown = visible(&rows[0]);
-        assert_eq!(shown, "for… working");
+        assert_eq!(shown, "  f… working");
         assert!(
             rows[0].ends_with("\x1b[32mworking\x1b[22m\x1b[39m"),
             "{:?}",
@@ -1405,7 +1587,7 @@ mod tests {
             "columns": 6,
             "tasks": [{"id": "a1", "name": "fork-a", "description": "work", "status": "running"}],
         }));
-        assert_eq!(tiny, ["fork-…"]);
+        assert_eq!(tiny, [format!("  {CYAN}for…{COLOR_OFF}")]);
     }
 
     #[test]
@@ -1547,7 +1729,7 @@ mod tests {
             looks,
             json!([
                 {"state": "working", "color": "green", "bold": false},
-                {"state": "parked", "color": "blue", "bold": false},
+                {"state": "waiting", "color": "blue", "bold": false},
                 {"state": "your turn", "color": "yellow", "bold": true},
             ])
         );
@@ -1565,9 +1747,8 @@ mod tests {
     #[test]
     fn the_key_is_painted_in_the_session_color_or_a_steady_one_of_its_own() {
         let orange = |_id: &str| Fork {
-            started_ms: None,
             color: Some("orange".to_owned()),
-            folder: None,
+            ..Fork::default()
         };
         let plain_fork = |_id: &str| Fork::default();
         let raw = json!({"columns": 40, "tasks": [{"id": "a1", "name": "kcd2-modding", "description": "x"}]}).to_string();
@@ -1582,7 +1763,7 @@ mod tests {
             line["content"].as_str().unwrap().to_owned()
         };
         assert!(
-            row_with(&orange).starts_with("\x1b[38;5;208mkcd2-modding\x1b[39m"),
+            row_with(&orange).starts_with("  \x1b[38;5;208mkcd2-modding\x1b[39m"),
             "{:?}",
             row_with(&orange)
         );
@@ -1590,17 +1771,16 @@ mod tests {
         assert_eq!(own, key_color("kcd2-modding"));
         assert_ne!(own, MODEL_COLOR, "a key never borrows the model's yellow");
         assert!(
-            row_with(&plain_fork).starts_with(&format!("{own}kcd2-modding{COLOR_OFF}")),
+            row_with(&plain_fork).starts_with(&format!("  {own}kcd2-modding{COLOR_OFF}")),
             "{:?}",
             row_with(&plain_fork)
         );
         let unknown = |_id: &str| Fork {
-            started_ms: None,
             color: Some("default".to_owned()),
-            folder: None,
+            ..Fork::default()
         };
         assert!(
-            row_with(&unknown).starts_with(own),
+            row_with(&unknown).starts_with(&format!("  {own}")),
             "{:?}",
             row_with(&unknown)
         );
@@ -1628,5 +1808,286 @@ mod tests {
         assert!(parts[1].parse::<u8>().is_ok(), "{label}");
         assert_eq!(parts[2].len(), 5, "{label}");
         assert_eq!(&parts[2][2..3], ":", "{label}");
+    }
+
+    const FRESH: &str = "\x1b[1m\x1b[38;5;147m◉\x1b[22m\x1b[39m ";
+    const PULL: &str = "https://github.com/o/r/pull/9";
+
+    fn content_of(
+        raw: Value,
+        fork: &dyn Fn(&str) -> Fork,
+        state: &dyn Fn(&str, Option<&str>) -> Option<ForkState>,
+    ) -> Vec<String> {
+        let clock = Clock {
+            now_ms: NOW,
+            fork,
+            state,
+            started_label: &fixed_label,
+        };
+        render(&raw.to_string(), &clock)
+            .unwrap()
+            .into_iter()
+            .map(|line| {
+                let line: Value = serde_json::from_str(&line).unwrap();
+                line["content"].as_str().unwrap().to_owned()
+            })
+            .collect()
+    }
+
+    fn family_fork(id: &str) -> Fork {
+        Fork {
+            color: Some("cyan".to_owned()),
+            parent: id.starts_with("as").then(|| "ap".to_owned()),
+            asks: id == "as3",
+            fresh: id == "as3",
+            ..Fork::default()
+        }
+    }
+
+    fn family_state(id: &str, status: Option<&str>) -> Option<ForkState> {
+        match id {
+            "as1" => Some(ForkState::Working),
+            "as3" => Some(ForkState::YourTurn),
+            "as4" => Some(ForkState::Waiting(vec![PULL.to_owned()])),
+            "ao" => None,
+            _ => fork_state::state(status, None),
+        }
+    }
+
+    fn family_task(id: &str, status: &str) -> Value {
+        json!({"id": id, "description": format!("fork-{id}"), "status": status})
+    }
+
+    #[test]
+    fn a_fresh_reply_puts_a_blue_mark_before_the_name_and_other_rows_keep_two_spaces() {
+        let fork = |id: &str| Fork {
+            color: Some("cyan".to_owned()),
+            fresh: id == "a1",
+            ..Fork::default()
+        };
+        let tasks = json!([
+            {"id": "a1", "name": "fork-a", "description": "work", "status": "completed"},
+            {"id": "a2", "name": "fork-b", "description": "work", "status": "completed"},
+        ]);
+        assert_eq!(
+            content_of(json!({"tasks": tasks.clone()}), &fork, &status_state),
+            [
+                format!("{FRESH}{CYAN}fork-a{COLOR_OFF}  work  idle · 0 tokens"),
+                format!("  {CYAN}fork-b{COLOR_OFF}  work  idle · 0 tokens"),
+            ]
+        );
+        for columns in 1..=60 {
+            let rows = content_of(
+                json!({"columns": columns, "tasks": tasks.clone()}),
+                &fork,
+                &status_state,
+            );
+            for row in &rows {
+                let shown = visible(row);
+                assert!(shown.chars().count() <= columns, "{columns}: {shown:?}");
+                if columns >= 20 {
+                    assert_eq!(shown.chars().count(), columns, "{columns}: {shown:?}");
+                }
+            }
+            if columns >= 20 {
+                assert!(rows[0].starts_with(FRESH), "{columns}: {:?}", rows[0]);
+                assert!(visible(&rows[0]).starts_with("◉ fork-a"), "{columns}");
+                assert!(visible(&rows[1]).starts_with("  fork-b"), "{columns}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fork_that_started_forks_counts_them_after_its_name_and_waits_on_the_busy_ones() {
+        let tasks = json!([
+            family_task("ap", "completed"),
+            family_task("as1", "running"),
+            family_task("as2", "completed"),
+            family_task("as3", "completed"),
+            family_task("as4", "completed"),
+            family_task("ao", "completed"),
+        ]);
+        let rows = content_of(json!({"tasks": tasks.clone()}), &family_fork, &family_state);
+        assert_eq!(
+            rows.iter()
+                .map(String::as_str)
+                .map(visible)
+                .collect::<Vec<_>>(),
+            [
+                "  fork-ap +4 · 1 asks you  waits on 3 · 0 tokens",
+                "  fork-as1  working · 0 tokens",
+                "  fork-as2  idle · 0 tokens",
+                "◉ fork-as3  your turn · 0 tokens",
+                "  fork-as4  waiting #9 · 0 tokens",
+                "  fork-ao  0 tokens",
+            ]
+        );
+        assert!(
+            rows[0].starts_with(&format!(
+                "  {CYAN}fork-ap{COLOR_OFF}\x1b[1m\x1b[33m +4 · 1 asks you\x1b[22m\x1b[39m"
+            )),
+            "{:?}",
+            rows[0]
+        );
+        assert!(
+            rows[0].contains("\x1b[34mwaits on 3\x1b[22m\x1b[39m"),
+            "{:?}",
+            rows[0]
+        );
+        let working =
+            json!({"tasks": [family_task("ap", "running"), family_task("as1", "running")]});
+        assert_eq!(
+            visible(&content_of(working, &family_fork, &family_state)[0]),
+            "  fork-ap +1  working · 0 tokens"
+        );
+        let asking = |id: &str| Fork {
+            asks: id == "ap" || id == "as3",
+            ..family_fork(id)
+        };
+        let asks =
+            json!({"tasks": [family_task("ap", "completed"), family_task("as1", "running")]});
+        assert_eq!(
+            visible(&content_of(asks, &asking, &family_state)[0]),
+            "  fork-ap +1  idle · 0 tokens"
+        );
+        let quiet =
+            json!({"tasks": [family_task("ap", "completed"), family_task("as2", "completed")]});
+        let rows = content_of(quiet, &family_fork, &family_state);
+        assert_eq!(visible(&rows[0]), "  fork-ap +1  idle · 0 tokens");
+        assert!(
+            rows[0].starts_with(&format!(
+                "  {CYAN}fork-ap{COLOR_OFF}\x1b[34m +1\x1b[22m\x1b[39m"
+            )),
+            "{:?}",
+            rows[0]
+        );
+    }
+
+    #[test]
+    fn the_name_truncates_before_the_badge_and_no_family_row_is_wider_than_its_columns() {
+        let tasks = json!([
+            {"id": "ap", "description": "a-long-parent-name", "status": "completed"},
+            family_task("as1", "running"),
+        ]);
+        let at = |columns: usize| {
+            content_of(
+                json!({"columns": columns, "tasks": tasks.clone()}),
+                &family_fork,
+                &family_state,
+            )
+        };
+        assert_eq!(visible(&at(36)[0]), "  a-long-parent-… +1  waits on 1 · 0");
+        assert_eq!(visible(&at(20)[0]), "  a-l… +1 waits on 1");
+        assert_eq!(visible(&at(7)[0]), "  a… +1");
+        assert!(
+            at(36)[0].contains("\x1b[34m +1\x1b[22m\x1b[39m"),
+            "{:?}",
+            at(36)[0]
+        );
+        for columns in 1..=80 {
+            for row in at(columns) {
+                let shown = visible(&row);
+                assert!(shown.chars().count() <= columns, "{columns}: {shown:?}");
+            }
+        }
+        let wide = json!({"columns": 60, "tasks": [
+            family_task("ap", "completed"),
+            family_task("as1", "running"),
+            family_task("as3", "completed"),
+        ]});
+        let rows = content_of(wide, &family_fork, &family_state);
+        assert_eq!(
+            squeezed(&rows),
+            [
+                "fork-ap +2 · 1 asks you waits on 2 · 0 tokens",
+                "fork-as1 working · 0 tokens",
+                "◉ fork-as3 your turn · 0 tokens",
+            ]
+        );
+        for row in &rows {
+            assert_eq!(visible(row).chars().count(), 60, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn the_marks_file_is_named_by_the_switchboard_session_and_a_bad_one_marks_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("c0ab.json"),
+            json!({"fresh": ["a1"], "asks": ["a2", "a3"]}).to_string(),
+        )
+        .unwrap();
+        let marks = read_marks(dir.path(), Path::new("/p/proj/c0ab.jsonl"));
+        assert_eq!(marks.fresh, ["a1"]);
+        assert_eq!(marks.asks, ["a2", "a3"]);
+        let asking = marks.marked(
+            "a2",
+            Fork {
+                color: Some("cyan".to_owned()),
+                ..Fork::default()
+            },
+        );
+        assert!(asking.asks && !asking.fresh);
+        assert_eq!(asking.color.as_deref(), Some("cyan"));
+        let fresh = marks.marked("a1", Fork::default());
+        assert!(fresh.fresh && !fresh.asks);
+        std::fs::write(dir.path().join("bad.json"), "{").unwrap();
+        std::fs::write(dir.path().join("odd.json"), "{\"fresh\": 3}").unwrap();
+        for name in ["bad", "odd", "missing"] {
+            let marks = read_marks(dir.path(), &Path::new("/p").join(format!("{name}.jsonl")));
+            assert!(marks.fresh.is_empty() && marks.asks.is_empty(), "{name}");
+        }
+        assert!(session_marks(None).fresh.is_empty());
+    }
+
+    #[test]
+    fn a_sub_fork_names_its_parent_in_its_meta_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = "{\"type\":\"user\",\"message\":{\"content\":\"Project: /w\"}}\n";
+        let sub = dir.path().join("agent-a1.jsonl");
+        std::fs::write(&sub, first).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a1.meta.json"),
+            json!({PARENT_KEY: "a98", "cwd": "/qol-no-home/Git/app"}).to_string(),
+        )
+        .unwrap();
+        let facts = fork_facts(&sub);
+        assert_eq!(facts.parent.as_deref(), Some("a98"));
+        assert_eq!(facts.folder.as_deref(), Some("Git/app"));
+        let unread = dir.path().join("agent-a2.jsonl");
+        std::fs::write(&unread, "").unwrap();
+        std::fs::write(
+            dir.path().join("agent-a2.meta.json"),
+            json!({PARENT_KEY: "a98"}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(fork_facts(&unread).parent.as_deref(), Some("a98"));
+        let top = dir.path().join("agent-a3.jsonl");
+        std::fs::write(&top, first).unwrap();
+        std::fs::write(
+            dir.path().join("agent-a3.meta.json"),
+            json!({PARENT_KEY: ""}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(fork_facts(&top).parent, None);
+    }
+
+    #[test]
+    fn each_state_has_one_word_and_waiting_names_its_pull_requests() {
+        for (state, word) in [
+            (ForkState::Working, WORKING_LABEL),
+            (ForkState::Waiting(Vec::new()), WAITING_LABEL),
+            (ForkState::YourTurn, YOUR_TURN_LABEL),
+            (ForkState::Idle, IDLE_LABEL),
+        ] {
+            assert_eq!(state_word(&state), word);
+            assert_eq!(state_label(&state).word, word);
+        }
+        assert_eq!(WAITING_LABEL, "waiting");
+        let both = ForkState::Waiting(vec![
+            "https://github.com/o/r/pull/515".to_owned(),
+            PULL.to_owned(),
+        ]);
+        assert_eq!(state_label(&both).word, "waiting #515,#9");
     }
 }

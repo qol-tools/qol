@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, sbAt, sessionState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { fromUser, hasUnread, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -656,8 +656,10 @@ const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
   on('process.run', (_: unknown, e: { argv: string[] }) => ({ value: adopted(forks, runs, e.argv) }))
 }
 
+const isStates = (argv: string[]) => argv.slice(2).join(' ') === 'switchboard hook fork-states'
+
 const adopted = (forks: Forks, runs: string[][], argv: string[]) => {
-  if (isRecord(argv) || isAuth(argv)) return NO_RECORD
+  if (isRecord(argv) || isAuth(argv) || isStates(argv)) return NO_RECORD
   runs.push(argv)
   const wanted = argv[argv.indexOf('--fork') + 1]
   const found = Object.entries(forks).find(([id, fork]) => id === wanted || fork.name.split(':')[0] === wanted)
@@ -1768,20 +1770,48 @@ test('RECENT holds the five newest closed forks once each, never one open again 
   expect(recentlyClosed([])).toEqual([])
 })
 
-const LOOKS = '[{"state":"working","color":"green","bold":false},{"state":"parked","color":"blue","bold":false},{"state":"your turn","color":"yellow","bold":true}]'
+const LOOKS = '[{"state":"working","color":"green","bold":false},{"state":"waiting","color":"blue","bold":false},{"state":"your turn","color":"yellow","bold":true}]'
 
 test('the state colors come from CLI Sessions, and a board state takes the agent list state it matches', () => {
   expect([...stateLooks(LOOKS)]).toEqual([
     ['working', { color: 'green', isBold: false }],
-    ['parked', { color: 'blue', isBold: false }],
+    ['waiting', { color: 'blue', isBold: false }],
     ['your turn', { color: 'yellow', isBold: true }],
   ])
   for (const broken of [undefined, '', 'nope', '{}', '[{"state":7,"color":"red"}]', '[{"state":"working","color":""}]']) expect(stateLooks(broken).size).toBe(0)
   const row = (extra: Record<string, unknown>) => ({ agentId: 'a1', name: 'a1-fork: a fork', headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra })
   expect(sessionState(row({ isWorking: true }))).toBe('working')
-  expect(sessionState(row({ kind: 'waiting' }))).toBe('parked')
-  for (const kind of ['ask', 'test', 'failed', 'blocked']) expect(sessionState(row({ kind }))).toBe('your turn')
-  for (const extra of [{ kind: 'note' }, { kind: 'merged' }, { kind: 'ask', isClosed: true }, { kind: 'ask', isDone: true }, { kind: 'waiting', isInterrupted: true }]) expect(sessionState(row(extra))).toBeUndefined()
+  expect(sessionState(row({ kind: 'note' }), [], { a1: { state: 'waiting' } })).toBe('waiting')
+  for (const kind of ['ask', 'test', 'failed', 'blocked']) expect(sessionState(row({ kind }), [], { a1: { state: 'waiting' } })).toBe('your turn')
+  for (const extra of [{ kind: 'note' }, { kind: 'merged' }, { kind: 'waiting' }, { kind: 'ask', isClosed: true }, { kind: 'ask', isDone: true }, { kind: 'note', isInterrupted: true }]) expect(sessionState(row(extra))).toBeUndefined()
+  expect(sessionState(row({ kind: 'note', isDone: true }), [], { a1: { state: 'waiting' } })).toBeUndefined()
+})
+
+test('waiting comes from what a fork runs, and a fork that started forks counts them in its state', () => {
+  const row = (agentId: string, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra }) as any
+  expect(runStatesOf('{"a1":{"state":"waiting","pulls":["https://github.com/o/r/pull/7","nope"]},"a2":{"state":"your turn"},"bad id!":{"state":"idle"},"a3":{"state":""},"a4":7}')).toEqual({ a1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7'] }, a2: { state: 'your turn' } })
+  for (const broken of ['', 'nope', '[]', 'null', '7']) expect(runStatesOf(broken)).toEqual({})
+  const waiting = { a1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7', 'https://github.com/o/r/pull/9'] } }
+  expect(shownState(row('a1', { kind: 'note' }), [], waiting)).toEqual({ label: 'waiting #7,#9', state: 'waiting' })
+  expect(shownState(row('a1', { kind: 'waiting' }))).toEqual({ label: 'note' })
+  expect(shownState(row('a1', { kind: 'ask' }), [], waiting)).toEqual({ label: 'ask', state: 'your turn' })
+  expect(shownState(row('a1', { kind: 'note', isStoppedByUser: true }))).toEqual({ label: 'stopped' })
+  const parent = row('p1', { kind: 'note' })
+  const list = [parent, row('k1', { launcher: 'p1', isWorking: true }), row('k2', { launcher: 'p1', kind: 'note' }), row('k3', { launcher: 'p1', kind: 'ask' }), row('k4', { launcher: 'p1', isDismissed: true }), row('s1')]
+  expect(subForksOf(list, parent).map(one => one.agentId)).toEqual(['k1', 'k2', 'k3'])
+  expect(shownState(parent, list)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  const quiet = list.filter(one => one.agentId !== 'k3')
+  expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
+  expect(shownState(parent, quiet.filter(one => one.agentId !== 'k1'), { k2: { state: 'your turn' } })).toEqual({ label: 'note' })
+  expect(shownState(row('p1', { isWorking: true }), list)).toEqual({ label: 'working', state: 'working' })
+  expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
+  expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
+  expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
+  expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
+  expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
+  expect(hasUnread(list, parent)).toBe(false)
+  expect(hasUnread(list.map(one => (one.agentId === 'k2' ? { ...one, hasNewReply: true } : one)), parent)).toBe(true)
 })
 
 test('the board paints each state in the color the agent list gives it, and keeps its own look without them', async ($, on) => {
@@ -2351,11 +2381,11 @@ test('a fork that replies while another chat shows gets a new reply mark until i
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
   await deliver($, notification('b9', 'other-fork: other', 'Pull request #9 merged.'), 'task-notification')
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour?'), 'task-notification')
-  const marks = await ui.findAll({ type: 'Text', text: /new reply/ })
+  const marks = await ui.findAll({ type: 'Text', text: /◉/ })
   expect(marks.length).toBe(1)
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -2367,14 +2397,14 @@ test('a new reply mark goes once the fork is opened in its own view', async ($, 
   await spawn($, 'b9', 'other-fork: other')
   await deliver($, notification('b9', 'other-fork: other', 'Which colour?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeDefined()
   await ui.unmount()
   const viewed = promptBand(false)
   const band = await $.ui.mount({ ...viewed, props: { ...viewed.props, view: { agentId: 'b9' } } })
   await settle()
   await band.unmount()
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await after.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await after.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await after.unmount()
 })
 
@@ -2532,6 +2562,126 @@ const forkChat = async ($: any, panes: string[]): Promise<string[]> => {
   return rows
 }
 
+test('a fork that started forks holds them on its row: their asks show under it, and writing to it lists them by letter and reads their replies', async ($, on) => {
+  const sent: any[] = []
+  const viewed: string[] = []
+  const written: Record<string, string> = {}
+  engine(on, sent)
+  on('clock.after', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
+  on('ui.view', (_: unknown, e: { agentId: string }) => {
+    viewed.push(e.agentId)
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: parent')
+  await spawn($, 'k1', 'child-fork: child', 'p1')
+  await spawn($, 'k2', 'helper-fork: helper', 'p1')
+  await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
+  await deliver($, notification('k1', 'child-fork: child', 'Which colour should it be?'))
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: ['k1'] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 sub-fork asks' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /child-fork: Which colour should it be\?/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /helper-fork/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'WORKING' })).toBeUndefined()
+  expect(await ui.findAll({ type: 'Text', text: /◉/ })).toHaveLength(1)
+  await ui.press({ key: 'send-k1' })
+  await ui.press({ key: 'confirm-k1' })
+  expect(sent).toHaveLength(1)
+  expect(JSON.stringify(sent[0].to)).toContain('k1')
+  expect(JSON.stringify(sent[0])).toContain('amber')
+  await ui.unmount()
+
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'parent-fork ', cursor: 12 })
+  const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await writing.find({ type: 'Text', text: /SUB-FORKS/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /letter opens a sub-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /child-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /helper-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /◉/ })).toBeUndefined()
+  await writing.press({ key: 'sub-k2' })
+  expect(viewed).toEqual(['k2'])
+  await writing.unmount()
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [] })
+})
+
+test('open pull requests gather under PULL REQUESTS at the bottom of the board, and each fork row names its own', async ($, on) => {
+  engine(on)
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' }, p2: { cwd: '/work', description: 'p2-fork: a fork' } })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (e.argv[1] === 'fork-watch' && e.argv[2] === '--deliver')
+      return {
+        value: {
+          exitCode: 0,
+          stderr: '',
+          stdout: JSON.stringify({
+            results: [],
+            pulls: [
+              { agent_id: 'p2', pull_request: 'https://github.com/o/r/pull/12', number: 12, merge_commit: 'bbbbbbbbbbbb', is_watched: false },
+              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/11', number: 11, merge_commit: null, is_watched: true },
+              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/10', number: 10, merge_commit: 'aaaaaaaaaaaa', is_watched: false },
+            ],
+          }),
+        },
+      }
+    return { value: NO_RECORD }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const id of ['p1', 'p2']) await spawn($, id, `${id}-fork: a fork`)
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'PULL REQUESTS' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '#11' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^#1[02]$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^✓ 2 merged · newest #12 bbbbbbb by p2-fork$/ })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'p2-fork ', cursor: 8 })
+  const forks = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await forks.find({ type: 'Text', text: /pull requests$/ })).toBeDefined()
+  expect(await forks.find({ type: 'Text', text: '#11 open' })).toBeDefined()
+  expect(await forks.find({ type: 'Text', text: '#12 merged' })).toBeDefined()
+  await forks.unmount()
+})
+
+test('a fork reads waiting while it runs a watcher, from the fork state CLI Sessions reads', async ($, on) => {
+  const asked: any[] = []
+  engine(on)
+  on('clock.after', () => ({ value: undefined }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-states') return { value: NO_RECORD }
+    asked.push(JSON.parse(e.init?.stdin ?? '{}'))
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ w1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7'] }, i1: { state: 'idle' } }) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'w1', 'watch-fork: watches')
+  await spawn($, 'i1', 'idle-fork: idles')
+  await deliver($, notification('w1', 'watch-fork: watches', 'Pull request #7 is open.'))
+  await deliver($, notification('i1', 'idle-fork: idles', 'Done for now.'))
+  await settle()
+  expect(asked.at(-1)).toEqual({ conversation: '/conv/switchboard-session.jsonl', ids: ['w1', 'i1'] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'WAITING' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'waiting #7' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
+  await ui.unmount()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(waiting on its pull request, agent id w1)')
+})
+
 test('the fork chat names the fork state, says what it works on, and the board marks a reply until the next send', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
@@ -2554,9 +2704,9 @@ test('the fork chat names the fork state, says what it works on, and the board m
   expect(await block.find({ type: 'Text', text: /^working · / })).toBeUndefined()
   await block.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeDefined()
   await typed($, 'asking-fork thanks')
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await ui.unmount()
 })
 
