@@ -277,7 +277,7 @@ pub(super) struct SettingsPanelView {
     panel: SettingsPanel,
     parent_link: ParentLink,
     stack: Vec<Level>,
-    copied: Option<(usize, usize, usize)>,
+    copied: Option<((usize, usize, usize), String)>,
     runtime: SettingsRuntime,
     runtime_queries: Vec<String>,
     sources: Vec<SourceState>,
@@ -2365,7 +2365,14 @@ impl SettingsPanelView {
             }
             RowControl::Color(_) => self.open_color_wheel(selected, window, cx),
             RowControl::Action { .. } => self.dispatch_action(cx),
-            RowControl::Status { error: None, .. } => self.copy_status(selected, cx),
+            RowControl::Status {
+                error: None,
+                label: Some(label),
+                ..
+            } => {
+                let label = label.clone();
+                self.copy_status(selected, label, cx);
+            }
             RowControl::Status { .. } => {}
             RowControl::List { items, finder, .. } if !items.is_empty() || finder.is_some() => {
                 self.open_list_card(selected, cx);
@@ -2418,9 +2425,9 @@ impl SettingsPanelView {
         monitor.select_next();
     }
 
-    fn copy_status(&mut self, index: usize, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(self.display_value(index)));
-        self.copied = Some(self.copy_place(index));
+    fn copy_status(&mut self, index: usize, value: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()));
+        self.copied = Some((self.copy_place(index), value));
         cx.notify();
     }
 
@@ -3583,20 +3590,24 @@ impl SettingsPanelView {
         {
             return cell.child(self.unavailable_indicator(index));
         }
-        if let RowControl::Status { tone, .. } = self.level().rows[index].control {
+        if let RowControl::Status { tone, label, .. } = &self.level().rows[index].control {
+            let tone = *tone;
+            let copies = label.is_some();
             return cell
                 .child(StatusIndicator::new(
                     ("settings-status", index),
                     self.display_value(index),
                     rgb(status_tone_color(self.kit, tone)),
                 ))
-                .child(settings_action_mark(
-                    ("settings-status-copy", index),
-                    ActionMark::Run,
-                    false,
-                    row,
-                    self.kit,
-                ));
+                .when(copies, |cell| {
+                    cell.child(settings_action_mark(
+                        ("settings-status-copy", index),
+                        ActionMark::Run,
+                        false,
+                        row,
+                        self.kit,
+                    ))
+                });
         }
         if self.action_is_busy(index) {
             cell = cell.child(settings_action_spinner(
@@ -4195,6 +4206,14 @@ impl Render for SettingsPanelView {
         #[cfg(debug_assertions)]
         let build_started = std::time::Instant::now();
         self.kit = crate::kit::kit();
+        let here = self.copy_place(self.level().selected);
+        if self
+            .copied
+            .as_ref()
+            .is_some_and(|(place, _)| *place != here)
+        {
+            self.copied = None;
+        }
         self.poll_visible.store(
             window.is_window_active(),
             std::sync::atomic::Ordering::Relaxed,
@@ -4990,12 +5009,20 @@ impl SettingsPanelView {
                 Some("edit")
             }
             RowControl::Gamepad { .. } => Some("next"),
-            RowControl::Status { error: None, .. }
-                if self.copied == Some(self.copy_place(self.level().selected)) =>
+            RowControl::Status {
+                error: None,
+                label: Some(label),
+                ..
+            } if self.copied.as_ref()
+                == Some(&(self.copy_place(self.level().selected), label.clone())) =>
             {
                 Some("copied")
             }
-            RowControl::Status { error: None, .. } => Some("copy"),
+            RowControl::Status {
+                error: None,
+                label: Some(_),
+                ..
+            } => Some("copy"),
             RowControl::List { .. }
             | RowControl::Status { .. }
             | RowControl::QrCode { .. }
