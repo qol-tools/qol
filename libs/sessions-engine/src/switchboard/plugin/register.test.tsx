@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, hasUnread, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, parentOf, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -1811,6 +1811,14 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
   expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
   expect(hasUnread(list, parent)).toBe(false)
+  const deep = [parent, row('k1', { launcher: 'p1', kind: 'note' }), row('g1', { launcher: 'k1', kind: 'ask', hasNewReply: true }), row('g2', { launcher: 'g1', isWorking: true })]
+  expect(subForksOf(deep, parent).map(one => one.agentId)).toEqual(['k1'])
+  expect(forksUnder(deep, parent).map(one => one.agentId)).toEqual(['k1', 'g1', 'g2'])
+  expect(shownState(parent, deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(deep[1], deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(parent, deep.map(one => (one.agentId === 'g1' ? { ...one, kind: 'note' } : one)))).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(hasUnread(deep, parent)).toBe(true)
+  expect(forksUnder([row('a1', { launcher: 'b1' }), row('b1', { launcher: 'a1' })], row('a1', { launcher: 'b1' })).map(one => one.agentId)).toEqual(['b1'])
   expect(hasUnread(list.map(one => (one.agentId === 'k2' ? { ...one, hasNewReply: true } : one)), parent)).toBe(true)
 })
 

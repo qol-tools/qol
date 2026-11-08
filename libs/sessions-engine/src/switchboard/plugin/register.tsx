@@ -211,7 +211,7 @@ const stateOf = (entry: Entry, list: Entry[] = [], states: Record<string, RunSta
   if (entry.isWorking) return 'working'
   if (isEnded(entry)) return 'done'
   if (entry.kind !== undefined && NEEDS_YOU.includes(entry.kind)) return 'needs the user'
-  const subs = subForksOf(list, entry)
+  const subs = forksUnder(list, entry)
   const asking = subs.filter(needsYou).length
   if (asking > 0) return `${asking} of its sub-forks need${asking === 1 ? 's' : ''} the user`
   const live = subs.filter(sub => isLive(sub, states)).length
@@ -407,7 +407,7 @@ const writeTo = async ($: EngineInterface, entry: Entry | undefined): Promise<vo
 const seen = ($: EngineInterface, agentId: string, withSubForks = false): Promise<void> =>
   change($, list => {
     const entry = list.find(one => one.agentId === agentId)
-    const cleared = new Set([agentId, ...(withSubForks && entry !== undefined ? subForksOf(list, entry).map(sub => sub.agentId) : [])])
+    const cleared = new Set([agentId, ...(withSubForks && entry !== undefined ? forksUnder(list, entry).map(sub => sub.agentId) : [])])
     return list.map(one => (cleared.has(one.agentId) && one.hasNewReply === true ? { ...one, hasNewReply: false } : one))
   })
 
@@ -732,6 +732,23 @@ export const parentOf = (list: Entry[], entry: Entry): Entry | undefined => {
 export const subForksOf = (list: Entry[], parent: Entry): Entry[] =>
   list.filter(entry => !entry.isDismissed && entry.successor === undefined && entry.agentId !== parent.agentId && parentOf(list, entry)?.agentId === parent.agentId)
 
+export const forksUnder = (list: Entry[], parent: Entry): Entry[] => {
+  const found: Entry[] = []
+  const met = new Set([parent.agentId])
+  const queue = [parent]
+  for (let at = 0; at < queue.length; at += 1) {
+    const one = queue[at]
+    if (one === undefined) continue
+    for (const sub of subForksOf(list, one)) {
+      if (met.has(sub.agentId)) continue
+      met.add(sub.agentId)
+      found.push(sub)
+      queue.push(sub)
+    }
+  }
+  return found
+}
+
 const isLive = (entry: Entry, states: Record<string, RunState>): boolean => entry.isWorking || needsYou(entry) || isWaiting(entry, states)
 
 export type Shown = { label: string; state?: string }
@@ -741,7 +758,7 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
   if (isEnded(entry)) return { label: 'closed' }
   if (isCut(entry)) return { label: 'stopped mid-turn' }
   if (needsYou(entry)) return { label: entry.kind ?? 'ask', state: YOUR_TURN_STATE }
-  const subs = subForksOf(list, entry)
+  const subs = forksUnder(list, entry)
   const asking = subs.filter(needsYou).length
   if (asking > 0) return { label: `${asking} sub-fork${asking === 1 ? ' asks' : 's ask'}`, state: YOUR_TURN_STATE }
   const live = subs.filter(sub => isLive(sub, states)).length
@@ -753,7 +770,7 @@ export const shownState = (entry: Entry, list: Entry[] = [], states: Record<stri
 
 export const sessionState = (entry: Entry, list: Entry[] = [], states: Record<string, RunState> = {}): string | undefined => shownState(entry, list, states).state
 
-export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewReply === true || subForksOf(list, entry).some(sub => sub.hasNewReply === true)
+export const hasUnread = (list: Entry[], entry: Entry): boolean => entry.hasNewReply === true || forksUnder(list, entry).some(sub => sub.hasNewReply === true)
 
 export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => ({
   fresh: list.filter(entry => !entry.isDismissed && entry.hasNewReply === true).map(entry => entry.agentId),
@@ -2767,10 +2784,11 @@ export const register: Register = on => {
     const isFocused = e.props.isFocused
     const top = list.filter(entry => parentOf(list, entry) === undefined)
     const subsOf = (entry: Entry) => subForksOf(list, entry)
-    const askersOf = (entry: Entry) => [...(needsYou(entry) ? [entry] : []), ...subsOf(entry).filter(needsYou).sort((a, b) => a.at - b.at)]
+    const familyIn = (entry: Entry) => forksUnder(list, entry)
+    const askersOf = (entry: Entry) => [...(needsYou(entry) ? [entry] : []), ...familyIn(entry).filter(needsYou).sort((a, b) => a.at - b.at)]
     const needs = top.filter(entry => askersOf(entry).length > 0).sort((a, b) => a.at - b.at)
     const cut = top.filter(entry => isCut(entry) && !needs.includes(entry)).sort((a, b) => a.at - b.at)
-    const working = top.filter(entry => !needs.includes(entry) && !isCut(entry) && (entry.isWorking || subsOf(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
+    const working = top.filter(entry => !needs.includes(entry) && !isCut(entry) && (entry.isWorking || familyIn(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
     const waiting = top.filter(entry => !needs.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
     const idle = top.filter(entry => !needs.includes(entry) && !isCut(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
     const askers = needs.flatMap(askersOf)
