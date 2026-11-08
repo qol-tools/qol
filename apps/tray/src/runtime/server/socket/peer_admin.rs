@@ -614,6 +614,11 @@ mod enrollment_tests {
         inviter.close().await;
         let inviter = Fixture::new(&inviter_root).await;
         let joiner = Fixture::new(&joiner_root).await;
+        let Response::Invitation { .. } =
+            call(&inviter, inviter.automatic_invitation_request()).await
+        else {
+            panic!("inviter invitation");
+        };
         let port = inviter.enrollment_port().await;
         joiner.ready().await;
         assert_eq!(joiner.expected().authority_id, old.authority_id);

@@ -197,6 +197,8 @@ async fn pair(temporary: &std::path::Path) -> (Fixture, Fixture) {
     .await;
     laptop.shared.peer_admin(Request::Enable);
     desk.shared.peer_admin(Request::Enable);
+    nearby(&laptop);
+    nearby(&desk);
     (laptop, desk)
 }
 
