@@ -676,7 +676,11 @@ const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const parts = [loading === '' ? undefined : loading, tree.status, count === 0 ? undefined : `Fork board · ${count} need${count === 1 ? 's' : ''} you · /board`].filter(one => one !== undefined)
   $.ui.status(parts.length === 0 ? undefined : parts.join(' │ '))
   suggestFork($, list)
-  marksQueue = marksQueue.then(() => writeMarks($, list)).catch(() => {})
+  queueMarks($, list)
+}
+
+const queueMarks = ($: EngineInterface, list?: Entry[]): void => {
+  marksQueue = marksQueue.then(async () => writeMarks($, list ?? (await read($, board)))).catch(() => {})
 }
 
 const suggestFork = ($: EngineInterface, list: Entry[]): void => {
@@ -786,10 +790,19 @@ export const marksOf = (list: Entry[]): { fresh: string[]; asks: string[] } => (
 let marksWritten = ''
 let marksQueue: Promise<void> = Promise.resolve()
 
+const pickedModels = async ($: EngineInterface, list: Entry[]): Promise<Record<string, { model?: string; effort?: string }>> => {
+  const shown = await Promise.all(list.filter(entry => !entry.isDismissed && !isEnded(entry)).map(async entry => [entry.agentId, await settingOf($, keyOf(entry))] as const))
+  return Object.fromEntries(
+    shown.flatMap(([agentId, one]) =>
+      one.model === undefined && one.effort === undefined ? [] : [[agentId, { ...(one.model === undefined ? {} : { model: modelName(one.model) }), ...(one.effort === undefined ? {} : { effort: one.effort }) }]],
+    ),
+  )
+}
+
 const writeMarks = async ($: EngineInterface, list: Entry[]): Promise<void> => {
   const folder = await $.env.get('QOL_SWITCHBOARD_MARKS')
   if (folder === undefined || folder === '' || !folder.startsWith('/')) return
-  const text = JSON.stringify(marksOf(list))
+  const text = JSON.stringify({ ...marksOf(list), models: await pickedModels($, list) })
   const path = `${folder}/${await $.session.id()}.json`
   if (`${path}\n${text}` === marksWritten) return
   await $.fs.write(path, text)
@@ -1763,6 +1776,7 @@ const choose = async ($: EngineInterface, key: string, choice: Omit<ModelChoice,
   const at = Math.max(await $.clock.now(), ((await read($, modelsSeen))[key]?.at ?? 0) + 1)
   await update($, modelChoices, all => ({ ...all, [key]: { ...all[key], ...choice, at } }))
   if (modelsLoaded) await $.store.set(CHOICES_KEY, await read($, modelChoices)).catch(() => undefined)
+  queueMarks($)
 }
 
 const noteSeen = async ($: EngineInterface, key: string, model: string, effort: string | undefined, choice: ModelChoice | undefined): Promise<void> => {
@@ -1771,6 +1785,7 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
   const at = Math.max(await $.clock.now(), (choice?.at ?? 0) + 1)
   await update($, modelsSeen, all => ({ ...all, [key]: { model, ...(effort === undefined ? {} : { effort }), at } }))
   if (modelsLoaded) await $.store.set(SEEN_KEY, await read($, modelsSeen)).catch(() => undefined)
+  queueMarks($)
 }
 
 const SETTING = /^(model|effort)-(.+)-([a-z]+)$/

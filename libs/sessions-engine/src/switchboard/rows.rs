@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
@@ -142,6 +143,14 @@ struct Fork {
     parent: Option<String>,
     fresh: bool,
     asks: bool,
+    picked: Picked,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct Picked {
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -149,6 +158,7 @@ struct Fork {
 struct Marks {
     fresh: Vec<String>,
     asks: Vec<String>,
+    models: HashMap<String, Picked>,
 }
 
 impl Marks {
@@ -156,6 +166,7 @@ impl Marks {
         Fork {
             fresh: self.fresh.iter().any(|one| one == id),
             asks: self.asks.iter().any(|one| one == id),
+            picked: self.models.get(id).cloned().unwrap_or_default(),
             ..fork
         }
     }
@@ -390,13 +401,13 @@ struct Head<'a> {
     color: &'a str,
     lead: Drawn,
     badge: Drawn,
-    task: &'a Task,
+    model: Option<&'a str>,
+    effort: Option<String>,
     folder: Option<&'a str>,
 }
 
 impl Head<'_> {
     fn drawn(&self, name: &str, fit: HeadFit) -> Drawn {
-        let task = self.task;
         let mut text = format!(
             "{}{}{}",
             self.lead.text,
@@ -405,13 +416,14 @@ impl Head<'_> {
         );
         let mut width = self.lead.width + width(name) + self.badge.width;
         if matches!(fit, HeadFit::Full | HeadFit::NoEffort) {
-            if let Some(model) = task.model.as_deref().filter(|model| !model.is_empty()) {
+            if let Some(model) = self.model.filter(|model| !model.is_empty()) {
                 let label = plain(&model_label(model));
                 width += GAP.len() + label.chars().count();
                 text.push_str(&format!("{GAP}{MODEL_COLOR}{label}{COLOR_OFF}"));
                 if fit == HeadFit::Full {
-                    if let Some(effort) = task.effort.as_ref().and_then(effort_label) {
-                        let effort = plain(&effort);
+                    if let Some(effort) = self.effort.as_deref().filter(|effort| !effort.is_empty())
+                    {
+                        let effort = plain(effort);
                         width += 1 + effort.chars().count();
                         text.push(' ');
                         text.push_str(&effort);
@@ -667,7 +679,12 @@ fn row(one: &Shown, all: &[Shown], columns: Option<usize>, clock: &Clock) -> Opt
         color,
         lead: lead(fork.fresh),
         badge: family.badge(),
-        task,
+        model: fork.picked.model.as_deref().or(task.model.as_deref()),
+        effort: fork
+            .picked
+            .effort
+            .clone()
+            .or_else(|| task.effort.as_ref().and_then(effort_label)),
         folder: fork.folder.as_deref(),
     };
     match columns {
@@ -1113,6 +1130,39 @@ mod tests {
         );
         assert!(
             rows[1].contains(&format!("at {} · 1s", NOW - 1_000)),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn the_model_and_effort_the_board_picked_outrank_the_ones_the_fork_started_with() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("c0ab.json"),
+            json!({"models": {"a1": {"model": "Sonnet", "effort": "max"}, "a2": {"effort": "low"}}, "fresh": []}).to_string(),
+        )
+        .unwrap();
+        let marks = read_marks(dir.path(), Path::new("/p/proj/c0ab.jsonl"));
+        let fork = |id: &str| marks.marked(id, Fork::default());
+        let clock = Clock {
+            now_ms: NOW,
+            fork: &fork,
+            state: &status_state,
+            started_label: &fixed_label,
+        };
+        let raw = json!({
+            "columns": 120,
+            "tasks": [
+                {"id": "a1", "name": "picked", "startTime": NOW - 1_000, "model": "claude-opus-5-5", "effort": "high"},
+                {"id": "a2", "name": "effort", "startTime": NOW - 1_000, "model": "claude-opus-5-5", "effort": "high"},
+                {"id": "a3", "name": "kept", "startTime": NOW - 1_000, "model": "claude-opus-5-5", "effort": "high"},
+            ],
+        });
+        let rows = render(&raw.to_string(), &clock).unwrap();
+        assert!(rows[0].contains("\x1b[33mSonnet\x1b[39m max"), "{rows:?}");
+        assert!(rows[1].contains("\x1b[33mOpus 5.5\x1b[39m low"), "{rows:?}");
+        assert!(
+            rows[2].contains("\x1b[33mOpus 5.5\x1b[39m high"),
             "{rows:?}"
         );
     }

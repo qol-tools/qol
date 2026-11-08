@@ -2602,7 +2602,7 @@ test('a fork that started forks holds them on its row: their asks show under it,
   await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
   await deliver($, notification('k1', 'child-fork: child', 'Which colour should it be?'))
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: ['k1'] })
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: ['k1'], models: {} })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '1 sub-fork asks' })).toBeDefined()
@@ -2631,7 +2631,7 @@ test('a fork that started forks holds them on its row: their asks show under it,
   expect(viewed).toEqual(['k2'])
   await writing.unmount()
   await settle()
-  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [] })
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {} })
 })
 
 test('open pull requests gather under PULL REQUESTS at the bottom of the board, and each fork row names its own', async ($, on) => {
@@ -3278,8 +3278,14 @@ test('the close command stops the fork you write to and drops it from the board,
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []
+  const written: Record<string, string> = {}
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -3325,6 +3331,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
   expect(await command('model', '')).toBe('asking-fork model: Haiku. /model opus|sonnet|haiku changes it; with no fork picked, /model changes the switchboard.')
   expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}').models).toEqual({ a8: { model: 'Haiku', effort: 'max' } })
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'haiku', effort: 'max' })
   await ui.unmount()
