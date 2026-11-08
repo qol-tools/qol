@@ -1,5 +1,6 @@
 pub(crate) mod daemon;
 pub(crate) mod pairing;
+mod panel;
 
 use crate::input::InputHandler;
 

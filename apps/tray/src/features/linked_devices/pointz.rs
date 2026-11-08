@@ -10,6 +10,7 @@ use qol_peers::service::pointz::{
     LegacyPointz, PointzAdapter, PointzOptions, PointzSink, COMMAND_PORT, DISCOVERY_PORT,
 };
 use qol_peers::service::PeerAuthority;
+use qol_peers::AuthorityError;
 use qol_plugin_api::manifest::PeerTrust;
 use qol_plugin_daemon::daemon::{DaemonConfig, SocketSource};
 use qol_runtime::protocol::DaemonResponse;
@@ -22,6 +23,7 @@ const POINTZ_UID: &str = "9cb88d65-1d43-4fde-95b6-105761f0a14b";
 const LEGACY_SEED: &str = "pairing-secret";
 const LEGACY_DEVICES: &str = "devices.json";
 const MIGRATED_SUFFIX: &str = "migrated";
+const OFF_MARKER: &str = "pointz-off";
 const DELIVERY_TIMEOUT: Duration = Duration::from_millis(250);
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -163,6 +165,9 @@ impl PeerHostHandle {
                 let Installed::Compatible(target) = &installed else {
                     return Err(Error::PointzUnavailable);
                 };
+                if switched_off(target) {
+                    return Err(Error::PointzUnavailable);
+                }
                 host.ensure_pointz_authority(target)?;
                 host.reconcile_pointz(installed);
                 let active = host.authority()?;
@@ -182,6 +187,24 @@ impl PeerHostHandle {
                 qol_runtime::probe!("TRAY_PEERS", "event=pointz_pairing outcome=cancelled");
                 Ok(Response::PointzPairing {
                     pairing: PointzPairing::CLOSED,
+                })
+            }
+            PointzRequest::Serve { on } => {
+                let Installed::Compatible(target) = &installed else {
+                    return Err(Error::PointzUnavailable);
+                };
+                serve(target, on)?;
+                if on {
+                    host.ensure_pointz_authority(target)?;
+                }
+                host.reconcile_pointz(Installed::Compatible(target.clone()));
+                qol_runtime::probe!(
+                    "TRAY_PEERS",
+                    "event=pointz_serve outcome={}",
+                    if on { "on" } else { "off" }
+                );
+                Ok(Response::PointzStatus {
+                    status: host.pointz_status(&installed)?,
                 })
             }
             PointzRequest::Remove {
@@ -237,8 +260,9 @@ impl Host {
         let State::Active(active) = &mut self.state else {
             return;
         };
-        if active.authority.pointz().ok().flatten().is_none() {
+        if active.authority.pointz().ok().flatten().is_none() || switched_off(&target) {
             stop_adapter(active);
+            active.pointz.failure = None;
             return;
         }
         if active
@@ -406,6 +430,33 @@ fn installed(plugins: &PluginManager, data_root: Option<&Path>) -> Installed {
         socket: crate::plugins::action_executor::daemon_socket(plugin),
         data: data_root.map(|root| root.join("plugins").join(plugin.id.as_str())),
     })
+}
+
+fn switched_off(target: &Target) -> bool {
+    target
+        .data
+        .as_ref()
+        .is_some_and(|data| std::fs::symlink_metadata(data.join(OFF_MARKER)).is_ok())
+}
+
+fn serve(target: &Target, on: bool) -> Result<(), Error> {
+    let Some(data) = &target.data else {
+        return if on {
+            Ok(())
+        } else {
+            Err(AuthorityError::Storage.into())
+        };
+    };
+    let marker = data.join(OFF_MARKER);
+    let written = if on {
+        match std::fs::remove_file(&marker) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    } else {
+        std::fs::create_dir_all(data).and_then(|()| std::fs::write(&marker, b""))
+    };
+    written.map_err(|_| AuthorityError::Storage.into())
 }
 
 fn legacy_files_exist(target: &Target) -> bool {

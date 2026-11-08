@@ -9,6 +9,8 @@ impl ServerConfig {
     pub const DISCOVERY_PORT: u16 = 45454;
     pub const COMMAND_PORT: u16 = 45455;
     pub const UNKNOWN_HOSTNAME: &'static str = "Unknown";
+    pub const APP_DOWNLOAD_URL: &'static str =
+        "https://github.com/qol-tools/pointz/releases/latest";
 
     pub const MOUSE_CLICK_DELAY_MS: u64 = 10;
     pub const FALLBACK_SCREEN_WIDTH: f64 = 1920.0;

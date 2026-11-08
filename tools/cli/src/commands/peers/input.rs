@@ -74,6 +74,8 @@ pub(super) fn parse(args: &[&str], stdin: &mut impl Read) -> Result<Action> {
         ["pointz", "devices"] => Action::Pages(Pages::Phones),
         ["pointz", "pair"] => Action::Direct(pointz(PointzRequest::BeginPairing {})),
         ["pointz", "cancel"] => Action::Direct(pointz(PointzRequest::CancelPairing {})),
+        ["pointz", "on"] => Action::Direct(pointz(PointzRequest::Serve { on: true })),
+        ["pointz", "off"] => Action::Direct(pointz(PointzRequest::Serve { on: false })),
         ["pointz", "remove", device] => Action::Mutation(Mutation::RemovePhone(
             device
                 .parse()

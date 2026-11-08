@@ -39,14 +39,14 @@ pub(super) fn header_of(items: &[Item], index: usize) -> Option<usize> {
         .rposition(|item| matches!(item, Item::Header(_)))
 }
 
-pub(super) fn resolve(page: &Page, selected: Option<&str>, previous: usize) -> Option<usize> {
+pub(super) fn resolve(page: &Page, wanted: &[&str], previous: usize) -> Option<usize> {
     let items = items(page);
     let selectable = selectable(page, &items);
-    if let Some(id) = selected {
+    for id in wanted {
         let found = selectable
             .iter()
             .copied()
-            .find(|index| row_at(page, &items, *index).is_some_and(|row| row.id == id));
+            .find(|index| row_at(page, &items, *index).is_some_and(|row| row.id == *id));
         if found.is_some() {
             return found;
         }
@@ -59,8 +59,11 @@ pub(super) fn resolve(page: &Page, selected: Option<&str>, previous: usize) -> O
 }
 
 pub(super) fn settle(page: &Page, place: &Place) -> Option<usize> {
-    let wanted = place.selected.as_deref().or(page.focus.as_deref());
-    resolve(page, wanted, place.index)
+    let wanted: Vec<&str> = [place.selected.as_deref(), page.focus.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    resolve(page, &wanted, place.index)
 }
 
 pub(super) fn step(page: &Page, current: usize, direction: isize) -> Option<usize> {
@@ -77,6 +80,8 @@ pub(super) fn enter_verb(row: &Row) -> Option<String> {
         (_, None) => None,
         (Some(Control::Toggle(_)), _) => Some("flip".into()),
         (Some(Control::Button(label)), _) => Some(label.trim_end_matches('…').to_string()),
+        (Some(Control::Destroy { verb, .. }), _) => Some(verb.clone()),
+        (_, Some(Enter::Press)) if row.opens => Some("open".into()),
         (_, Some(Enter::Open(_) | Enter::Replace(_))) => Some("open".into()),
         (_, Some(Enter::Back)) => Some("back".into()),
         (_, Some(Enter::Press)) => Some("choose".into()),
@@ -157,6 +162,11 @@ pub(super) fn reconcile(stack: &mut Vec<Place>, pages: &Pages) -> bool {
         .max(1);
     let trimmed = keep < stack.len();
     stack.truncate(keep);
+    if trimmed {
+        if let Some(top) = stack.last_mut() {
+            top.selected = None;
+        }
+    }
     trimmed
 }
 
@@ -199,11 +209,12 @@ mod tests {
 
     #[test]
     fn selection_follows_the_row_id_then_the_old_place() {
-        assert_eq!(resolve(&page(), Some("now"), 0), Some(5));
-        assert_eq!(resolve(&page(), Some("gone"), 3), Some(5));
-        assert_eq!(resolve(&page(), Some("gone"), 9), Some(5));
-        assert_eq!(resolve(&page(), None, 0), Some(1));
-        assert_eq!(resolve(&Page::new("empty"), None, 0), None);
+        assert_eq!(resolve(&page(), &["now"], 0), Some(5));
+        assert_eq!(resolve(&page(), &["gone"], 3), Some(5));
+        assert_eq!(resolve(&page(), &["gone"], 9), Some(5));
+        assert_eq!(resolve(&page(), &["gone", "tonight"], 9), Some(2));
+        assert_eq!(resolve(&page(), &[], 0), Some(1));
+        assert_eq!(resolve(&Page::new("empty"), &[], 0), None);
     }
 
     #[test]
@@ -217,6 +228,9 @@ mod tests {
             settle(&page.clone().focus("gone"), &Place::new("restart")),
             Some(1)
         );
+        place.selected = Some("removed".into());
+        place.index = 1;
+        assert_eq!(settle(&page, &place), Some(5));
     }
 
     #[test]
@@ -247,6 +261,18 @@ mod tests {
         assert_eq!(
             enter_verb(&Row::new("c", "02:00").check(true).press()).as_deref(),
             Some("choose")
+        );
+        let pair = Row::new("pair", "Pair a phone").press_open();
+        assert_eq!(enter_verb(&pair).as_deref(), Some("open"));
+        assert!(opens(&pair));
+        let remove = Row::new("remove", "Remove this phone").destroy("remove", "remove Pixel 8");
+        assert_eq!(enter_verb(&remove).as_deref(), Some("remove"));
+        assert!(!opens(&remove));
+        let server = Row::new("server", "PointZerver").feature(true, "1 phone", "pointzerver");
+        assert_eq!(enter_verb(&server).as_deref(), Some("open"));
+        assert_eq!(
+            enter_verb(&Row::new("app", "Get the phone app").qr("https://example.com")),
+            None
         );
     }
 
@@ -295,6 +321,15 @@ mod tests {
         let mut empty = Vec::new();
         reconcile(&mut empty, &pages);
         assert_eq!(names(&empty), ["main"]);
+
+        let mut exposed = stack(&["main", "waiting", "gone"]);
+        exposed[1].selected = Some("old".into());
+        assert!(reconcile(&mut exposed, &pages));
+        assert_eq!(exposed[1].selected, None);
+        let mut kept = stack(&["main", "waiting"]);
+        kept[1].selected = Some("old".into());
+        assert!(!reconcile(&mut kept, &pages));
+        assert_eq!(kept[1].selected.as_deref(), Some("old"));
 
         let mut lost = stack(&["main", "waiting"]);
         assert!(reconcile(&mut lost, &Pages::new("main")));

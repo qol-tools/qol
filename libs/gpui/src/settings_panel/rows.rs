@@ -1477,7 +1477,7 @@ fn qr_url_text(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn qr_modules(url: &str) -> Result<Vec<bool>, String> {
+pub(in crate::settings_panel) fn qr_modules(url: &str) -> Result<Vec<bool>, String> {
     let code = qrcode::QrCode::new(url).map_err(|error| error.to_string())?;
     let width = code.width();
     let quiet = 4;

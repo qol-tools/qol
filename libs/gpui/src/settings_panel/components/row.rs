@@ -32,6 +32,7 @@ pub struct SettingsRow {
     attention: bool,
     lift: f32,
     opens: bool,
+    destroys: bool,
     launch: Option<Launch>,
     children: Vec<AnyElement>,
     on_click: Option<ClickHandler>,
@@ -65,6 +66,7 @@ impl SettingsRow {
             attention: false,
             lift: 0.0,
             opens: false,
+            destroys: false,
             launch: None,
             children: Vec::new(),
             on_click: None,
@@ -97,6 +99,11 @@ impl SettingsRow {
     /// part, so every row that opens something shows it the same way.
     pub fn opens(mut self, opens: bool) -> Self {
         self.opens = opens;
+        self
+    }
+
+    pub fn destroys(mut self, destroys: bool) -> Self {
+        self.destroys = destroys;
         self
     }
 
@@ -181,6 +188,15 @@ impl RenderOnce for SettingsRow {
         }
         if self.selected && self.focused {
             row = paint_settings_selection(row, self.kit);
+            if self.destroys {
+                row = row.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .border(px(qol_theme::LINE))
+                        .border_color(rgb(self.kit.palette.danger)),
+                );
+            }
         } else if attention {
             row = paint_settings_attention(row, self.kit);
         }

@@ -1,13 +1,40 @@
 use crate::text::TextStyled;
 use gpui::prelude::*;
-use gpui::{div, px, rgb};
+use gpui::{div, px, rgb, ElementId, SharedString};
 use qol_theme::TextStyle;
 
 use crate::kit::Kit;
 use crate::settings_panel::rows::{Row, RowControl};
-use crate::settings_panel::{PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT};
+use crate::settings_panel::{
+    PANEL_LIST_DESCRIPTION_HEIGHT, PANEL_LIST_GAP, PANEL_LIST_HEADER_HEIGHT, PANEL_LIST_PADDING_Y,
+    PANEL_QR_CODE_HEIGHT, PANEL_QR_URL_HEIGHT,
+};
 
 use super::{one_line, paint_settings_selection, settings_query_spinner, RowGround};
+
+pub(in crate::settings_panel) struct QrBlock<'a> {
+    pub label: &'a str,
+    pub description: Option<&'a str>,
+    pub placeholder: Option<&'a str>,
+    pub url: Option<&'a str>,
+    pub modules: &'a [bool],
+    pub error: Option<&'a str>,
+}
+
+pub(in crate::settings_panel) fn qr_heights(described: bool) -> (f32, f32) {
+    let header = PANEL_LIST_HEADER_HEIGHT
+        + if described {
+            PANEL_LIST_DESCRIPTION_HEIGHT
+        } else {
+            0.0
+        };
+    let body = PANEL_LIST_PADDING_Y
+        + header
+        + PANEL_QR_CODE_HEIGHT
+        + PANEL_QR_URL_HEIGHT
+        + 2.0 * PANEL_LIST_GAP;
+    (body, header)
+}
 
 pub(in crate::settings_panel) fn qr_code_display(
     row: &Row,
@@ -27,6 +54,41 @@ pub(in crate::settings_panel) fn qr_code_display(
     else {
         return div();
     };
+    qr_block(
+        QrBlock {
+            label: &row.label,
+            description: row.description.as_deref(),
+            placeholder: row.placeholder.as_deref(),
+            url: url.as_deref(),
+            modules,
+            error: error.as_deref(),
+        },
+        ("settings-qr-spinner", index),
+        highlighted,
+        loading,
+        body_height,
+        header_height,
+        kit,
+    )
+}
+
+pub(in crate::settings_panel) fn qr_block(
+    block: QrBlock<'_>,
+    spinner: impl Into<ElementId>,
+    highlighted: bool,
+    loading: bool,
+    body_height: f32,
+    header_height: f32,
+    kit: Kit,
+) -> gpui::Div {
+    let QrBlock {
+        label,
+        description,
+        placeholder,
+        url,
+        modules,
+        error,
+    } = block;
     let row_ground = RowGround::of(highlighted, true);
     let ground = row_ground.rest(kit);
     let mut container = div()
@@ -60,14 +122,14 @@ pub(in crate::settings_panel) fn qr_code_display(
                         div()
                             .text(TextStyle::Name)
                             .text_color(rgb(ground.ink))
-                            .child(row.label.clone()),
+                            .child(SharedString::from(label.to_string())),
                     )
-                    .when_some(row.description.clone(), |group, description| {
+                    .when_some(description, |group, description| {
                         group.child(
                             div()
                                 .text(TextStyle::Detail)
                                 .text_color(rgb(ground.soft))
-                                .child(description),
+                                .child(SharedString::from(description.to_string())),
                         )
                     }),
             ),
@@ -111,27 +173,21 @@ pub(in crate::settings_panel) fn qr_code_display(
                 .justify_center()
                 .h(px(PANEL_QR_CODE_HEIGHT));
             if loading {
-                frame.child(settings_query_spinner(
-                    ("settings-qr-spinner", index),
-                    row_ground,
-                    kit,
-                ))
+                frame.child(settings_query_spinner(spinner, row_ground, kit))
             } else {
-                let placeholder = row
-                    .placeholder
-                    .clone()
-                    .unwrap_or_else(|| "unavailable".into());
                 frame
                     .text(TextStyle::Value)
                     .text_color(rgb(ground.soft))
-                    .child(placeholder)
+                    .child(SharedString::from(
+                        placeholder.unwrap_or("unavailable").to_string(),
+                    ))
             }
         }
     };
     container = container.child(code_block);
-    let status = match (error.as_ref(), url.as_ref()) {
-        (Some(message), _) => message.clone(),
-        (None, Some(url)) => url.clone(),
+    let status = match (error, url) {
+        (Some(message), _) => message.to_string(),
+        (None, Some(url)) => url.to_string(),
         (None, None) => String::new(),
     };
     if !status.is_empty() {

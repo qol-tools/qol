@@ -2,54 +2,6 @@ schema_version = 1
 title = "PointZerver"
 description = "Control your computer from your phone."
 
-[field.connection_status]
-type = "status"
-label = "Status"
-query = "connection_status"
-value_from = "state"
-label_map = { ok = "Running" }
-tone_map = { ok = "success" }
-
-[field.begin_pairing]
-type = "action"
-label = "Pair a phone"
-action = "begin_pairing"
-variant = "primary"
-description = "Shows a one-minute pairing code; type it into the PointZ app to pair with this computer."
-
-[field.pairing_pin]
-type = "status"
-label = "Pairing code"
-query = "pairing_status"
-value_from = "pin"
-
-[field.command_port]
-type = "status"
-label = "Control port"
-query = "connection_info"
-value_from = "command_port"
-
-[field.discovery_port]
-type = "status"
-label = "Discovery port"
-query = "connection_info"
-value_from = "discovery_port"
-
-[field.hostname]
-type = "status"
-label = "Hostname"
-query = "connection_info"
-value_from = "hostname"
-
-[field.ip]
-type = "status"
-label = "IP address"
-query = "connection_info"
-value_from = "ip"
-
-[field.download_qr]
-type = "qr_code"
-label = "Get the phone app"
-query = "connection_info"
-value_from = "app_download_url"
-card_description = "Scan to download the PointZ app."
+[pages]
+query = "pages"
+action = "press"
