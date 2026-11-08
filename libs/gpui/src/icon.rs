@@ -34,10 +34,11 @@ pub enum Icon {
     File,
     Drive,
     Grid,
+    Add,
 }
 
 impl Icon {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::Enter,
         Self::Tab,
         Self::Backspace,
@@ -68,6 +69,7 @@ impl Icon {
         Self::File,
         Self::Drive,
         Self::Grid,
+        Self::Add,
     ];
 
     fn name(self) -> &'static str {
@@ -102,6 +104,7 @@ impl Icon {
             Self::File => "file",
             Self::Drive => "drive",
             Self::Grid => "grid",
+            Self::Add => "add",
         }
     }
 
@@ -153,6 +156,7 @@ impl Icon {
                 r#"<rect x="1.5" y="3.5" width="9" height="5" rx=".6"/><circle cx="8.2" cy="6" r=".7" fill="currentColor"/>"#
             }
             Self::Grid => r#"<path d="M2 2h3v3H2zM7 2h3v3H7zM2 7h3v3H2zM7 7h3v3H7z"/>"#,
+            Self::Add => r#"<path d="M6 2.5v7M2.5 6h7"/>"#,
         }
     }
 
