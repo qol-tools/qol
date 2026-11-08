@@ -1158,7 +1158,14 @@ mod tests {
                 {"id": "a3", "name": "kept", "startTime": NOW - 1_000, "model": "claude-opus-5-5", "effort": "high"},
             ],
         });
-        let rows = render(&raw.to_string(), &clock).unwrap();
+        let rows: Vec<String> = render(&raw.to_string(), &clock)
+            .unwrap()
+            .into_iter()
+            .map(|line| {
+                let line: Value = serde_json::from_str(&line).unwrap();
+                line["content"].as_str().unwrap().to_owned()
+            })
+            .collect();
         assert!(rows[0].contains("\x1b[33mSonnet\x1b[39m max"), "{rows:?}");
         assert!(rows[1].contains("\x1b[33mOpus 5.5\x1b[39m low"), "{rows:?}");
         assert!(
