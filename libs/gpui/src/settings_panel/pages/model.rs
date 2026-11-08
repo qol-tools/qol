@@ -51,11 +51,21 @@ pub(super) fn resolve(page: &Page, wanted: &[&str], previous: usize) -> Option<u
             return found;
         }
     }
-    selectable
+    let acting: Vec<usize> = selectable
+        .iter()
+        .copied()
+        .filter(|index| row_at(page, &items, *index).is_some_and(|row| row.copies().is_none()))
+        .collect();
+    let candidates = if acting.is_empty() {
+        &selectable
+    } else {
+        &acting
+    };
+    candidates
         .iter()
         .copied()
         .find(|index| *index >= previous)
-        .or_else(|| selectable.last().copied())
+        .or_else(|| candidates.last().copied())
 }
 
 pub(super) fn settle(page: &Page, place: &Place) -> Option<usize> {
@@ -213,11 +223,30 @@ mod tests {
     #[test]
     fn selection_follows_the_row_id_then_the_old_place() {
         assert_eq!(resolve(&page(), &["now"], 0), Some(5));
-        assert_eq!(resolve(&page(), &["gone"], 3), Some(4));
+        assert_eq!(resolve(&page(), &["gone"], 3), Some(5));
+        assert_eq!(resolve(&page(), &["kernel"], 0), Some(4));
         assert_eq!(resolve(&page(), &["gone"], 9), Some(5));
         assert_eq!(resolve(&page(), &["gone", "tonight"], 9), Some(2));
         assert_eq!(resolve(&page(), &[], 0), Some(1));
         assert_eq!(resolve(&Page::new("empty"), &[], 0), None);
+    }
+
+    #[test]
+    fn a_page_without_focus_opens_on_a_row_that_acts_before_one_that_copies() {
+        let notes = Page::new("ask").group(
+            Group::new("ask", "the computer restarts.")
+                .row(Row::new("in-use", "Speakers stop playing"))
+                .row(Row::new("cancel", "Cancel").back())
+                .row(Row::new("go", "Restart now").button("restart").press()),
+        );
+        assert_eq!(resolve(&notes, &[], 0), Some(2));
+        let only = Page::new("about").group(
+            Group::new("this computer", "on this network.")
+                .row(Row::new("hostname", "Hostname").value("desk"))
+                .row(Row::new("ip", "IP address").value("10.0.0.2")),
+        );
+        assert_eq!(resolve(&only, &[], 0), Some(1));
+        assert_eq!(resolve(&only, &[], 9), Some(2));
     }
 
     #[test]
