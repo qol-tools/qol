@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 pub(super) const NAME: &str = "qol-switchboard";
 pub(super) const BOARD_TOOL: &str = "mcp__qol-switchboard__fork_board";
 pub(super) const RESUME_TOOL: &str = "mcp__qol-switchboard__resume_session";
-pub(super) const DONE_TOOL: &str = "mcp__qol-switchboard__fork_done";
 pub(super) const BOARD_COMMAND: &str = "/board";
 const FOLDER: &str = "plugin";
 const MANIFEST: &str = r#"{
@@ -186,11 +185,13 @@ mod tests {
         assert!(MODULE.contains(&format!("const RESUME = '{resume}'")));
         assert!(MODULE.contains("'adopt', '--conversations', conversations"));
         assert!(MODULE_TESTS.contains(RESUME_TOOL));
-        assert!(MODULE.contains(&format!("const FORK_DONE_NAME = '{DONE_TOOL}'")));
-        let done = DONE_TOOL.strip_prefix(&format!("mcp__{NAME}__")).unwrap();
-        assert!(MODULE.contains(&format!("const FORK_DONE = '{done}'")));
-        assert!(MODULE_TESTS.contains(DONE_TOOL));
-        for retired in ["Recommend(?:ed)?", "<kind>: <headline>", "const HEADER"] {
+        for retired in [
+            "Recommend(?:ed)?",
+            "<kind>: <headline>",
+            "const HEADER",
+            "fork_done",
+            "isDoneOpen",
+        ] {
             assert!(!MODULE.contains(retired), "{retired}");
         }
     }
@@ -204,6 +205,7 @@ mod tests {
             "$.process.run([program, 'fork-watch', '--deliver']",
             "$.env.get('QOL_CLI_SESSIONS')",
             "$.env.get('QOL_SWITCHBOARD_WATCHES')",
+            "$.env.get('QOL_SWITCHBOARD_STATE_LOOKS')",
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
             "const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })",
@@ -213,10 +215,10 @@ mod tests {
             "[program, 'sessions', 'record', verb, ...args]",
             "await recordRun($, 'resume', ['--key', marked])",
             "'--description', claimed?.description ?? session.description",
-            "on('tool.call', { tool: FORK_DONE_NAME }, async ($, e) => {",
-            "{ deny: 'Only a fork marks itself done.' }",
+            "await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])",
+            "const recent = recentlyClosed(everyRow)",
             "void recordRun($, 'archive', ['--key', entry.key])",
-            "void recordRun($, 'stopped', ['--key', key])",
+            "void recordRun($, 'stopped', ['--key', before.key])",
             "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
             "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",

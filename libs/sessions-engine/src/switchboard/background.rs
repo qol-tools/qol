@@ -9,6 +9,8 @@ const STOP_TOOLS: [&str; 2] = ["TaskStop", "KillShell"];
 const STOP_ID_KEYS: [&str; 2] = ["task_id", "shell_id"];
 const NOTICE_ORIGIN: &str = "task-notification";
 const NOTICE_OPEN: &str = "<task-notification>";
+const NOTICE_CLOSE: &str = "</task-notification>";
+const SESSION_KEY: &str = "sessionId";
 const NOTICE_PREAMBLE: &str = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
 const NOTICE_ID_TAG: &str = "task-id";
 const NOTICE_STATUS_TAG: &str = "status";
@@ -35,50 +37,83 @@ fn header_tag(line: &str) -> Option<(&str, &str)> {
     Some((name, value))
 }
 
-pub(super) fn notice_of(row: &Value) -> Option<(&str, &str)> {
+fn notices_of(row: &Value) -> Vec<&str> {
     let from_the_harness = row.get("type").and_then(Value::as_str) == Some("user")
         && row.pointer("/origin/kind").and_then(Value::as_str) == Some(NOTICE_ORIGIN);
     if !from_the_harness {
-        return None;
+        return Vec::new();
     }
-    envelope_of(row.pointer("/message/content")?.as_str()?)
+    row.pointer("/message/content")
+        .and_then(Value::as_str)
+        .map(envelopes_of)
+        .unwrap_or_default()
 }
 
-fn queued_notice_of(row: &Value) -> Option<(&str, &str)> {
-    let attachment = row.get("attachment")?;
+fn queued_notices_of(row: &Value) -> Vec<&str> {
+    let Some(attachment) = row.get("attachment") else {
+        return Vec::new();
+    };
     let from_the_harness = row.get("type").and_then(Value::as_str) == Some("attachment")
         && attachment.get("type").and_then(Value::as_str) == Some(QUEUED_NOTICE)
         && attachment.pointer("/origin/kind").and_then(Value::as_str) == Some(NOTICE_ORIGIN);
     if !from_the_harness {
-        return None;
+        return Vec::new();
     }
-    envelope_of(attachment.get("prompt")?.as_str()?)
+    attachment
+        .get("prompt")
+        .and_then(Value::as_str)
+        .map(envelopes_of)
+        .unwrap_or_default()
 }
 
-fn envelope_of(content: &str) -> Option<(&str, &str)> {
+fn envelopes_of(content: &str) -> Vec<&str> {
     let mut lines = content.lines();
-    let mut first = lines.next()?;
-    if first == NOTICE_PREAMBLE {
-        lines.by_ref().find(|line| line.is_empty())?;
-        first = lines.next()?;
-    }
-    if first != NOTICE_OPEN {
-        return None;
-    }
-    let (mut id, mut status) = (None, None);
-    for line in lines {
-        match header_tag(line) {
-            Some((NOTICE_ID_TAG, value)) => {
-                id.get_or_insert(value);
-            }
-            Some((NOTICE_STATUS_TAG, value)) => {
-                status.get_or_insert(value);
-            }
-            Some((tag, _)) if NOTICE_SKIPPED_TAGS.contains(&tag) => {}
-            _ => break,
+    let mut next = lines.next();
+    if next == Some(NOTICE_PREAMBLE) {
+        if !lines.by_ref().any(str::is_empty) {
+            return Vec::new();
         }
+        next = lines.next();
     }
-    Some((id?, status?))
+    let mut ids = Vec::new();
+    while next == Some(NOTICE_OPEN) {
+        let (mut id, mut status) = (None, None);
+        let mut in_header = true;
+        for line in lines.by_ref() {
+            if line == NOTICE_CLOSE {
+                break;
+            }
+            if !in_header {
+                continue;
+            }
+            match header_tag(line) {
+                Some((NOTICE_ID_TAG, value)) => {
+                    id.get_or_insert(value);
+                }
+                Some((NOTICE_STATUS_TAG, value)) => {
+                    status.get_or_insert(value);
+                }
+                Some((tag, _)) if NOTICE_SKIPPED_TAGS.contains(&tag) => {}
+                _ => in_header = false,
+            }
+        }
+        if let (Some(id), Some(_)) = (id, status) {
+            ids.push(id);
+        }
+        next = lines.find(|line| !line.is_empty());
+    }
+    ids
+}
+
+fn session_of(row: &Value) -> Option<&str> {
+    row.get(SESSION_KEY).and_then(Value::as_str)
+}
+
+fn latest_session(transcript: &str) -> Option<String> {
+    transcript.lines().rev().find_map(|line| {
+        let row = serde_json::from_str::<Value>(line).ok()?;
+        session_of(&row).map(str::to_owned)
+    })
 }
 
 fn blocks<'a>(row: &'a Value, kind: &str) -> Vec<&'a Value> {
@@ -113,6 +148,7 @@ struct Reader {
     commands: HashMap<String, String>,
     stops: HashMap<String, String>,
     open: Vec<Background>,
+    runs: HashMap<String, String>,
 }
 
 impl Reader {
@@ -153,8 +189,11 @@ impl Reader {
     }
 
     fn user(&mut self, row: &Value) {
-        if let Some((id, _)) = notice_of(row) {
-            self.close(id);
+        let ended = notices_of(row);
+        if !ended.is_empty() {
+            for id in ended {
+                self.close(id);
+            }
             return;
         }
         for result in blocks(row, "tool_result") {
@@ -172,6 +211,9 @@ impl Reader {
                 continue;
             };
             self.close(&id);
+            if let Some(session) = session_of(row) {
+                self.runs.insert(id.clone(), session.to_owned());
+            }
             self.open.push(Background {
                 id,
                 command: self.commands.remove(call),
@@ -201,14 +243,19 @@ pub(super) fn running(transcript: &str) -> Vec<Background> {
             Some("assistant") => reader.assistant(&row),
             Some("user") => reader.user(&row),
             Some("attachment") => {
-                if let Some((id, _)) = queued_notice_of(&row) {
+                for id in queued_notices_of(&row) {
                     reader.close(id);
                 }
             }
             _ => {}
         }
     }
-    reader.open
+    let Some(latest) = latest_session(transcript) else {
+        return reader.open;
+    };
+    let Reader { mut open, runs, .. } = reader;
+    open.retain(|work| runs.get(&work.id).is_none_or(|run| *run == latest));
+    open
 }
 
 #[cfg(test)]
@@ -390,6 +437,60 @@ mod tests {
             [("bhold".to_owned(), Some(HOLD_COMMAND.to_owned()))]
         );
         assert_eq!(ids(&[started, quoted].concat()).len(), 2);
+    }
+
+    #[test]
+    fn one_notice_row_can_end_several_commands() {
+        let started = [
+            waiting("bhold", HOLD_COMMAND),
+            waiting("bwatch", "node pr-watch.cjs"),
+            waiting("bbuild", "cargo build"),
+        ]
+        .concat();
+        let batched = row(
+            "user",
+            NOTICE_ORIGIN,
+            &format!(
+                "{NOTICE_PREAMBLE}\nThis is an automated background-task event.\n\n{}\n\n{}",
+                envelope("bhold", "killed", "first line\nsecond line"),
+                envelope("bwatch", "killed", ""),
+            ),
+        );
+        assert_eq!(
+            ids(&[started, batched].concat()),
+            [("bbuild".to_owned(), Some("cargo build".to_owned()))]
+        );
+    }
+
+    #[test]
+    fn a_command_started_in_an_earlier_switchboard_run_ended_with_that_run() {
+        let in_run = |session: &str, rows: String| -> String {
+            rows.lines()
+                .map(|line| {
+                    let mut row: Value = serde_json::from_str(line).unwrap();
+                    row[SESSION_KEY] = Value::from(session);
+                    format!("{row}\n")
+                })
+                .collect()
+        };
+        let earlier = in_run(
+            "s1",
+            [
+                waiting("bwatch", "node pr-watch.cjs"),
+                waiting("bhold1", HOLD_COMMAND),
+            ]
+            .concat(),
+        );
+        let latest = in_run("s2", waiting("bhold2", HOLD_COMMAND));
+        assert_eq!(
+            ids(&[earlier.clone(), latest].concat()),
+            [("bhold2".to_owned(), Some(HOLD_COMMAND.to_owned()))]
+        );
+        assert_eq!(ids(&earlier).len(), 2);
+        assert_eq!(
+            ids(&[earlier, waiting("bplain", "cargo build")].concat()).len(),
+            3
+        );
     }
 
     #[test]
