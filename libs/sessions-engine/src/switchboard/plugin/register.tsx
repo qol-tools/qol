@@ -728,6 +728,7 @@ const settleRun = ($: EngineInterface, agentId: string): Promise<void> =>
   change($, list => list.map(({ isRunOver, ...one }) => (one.agentId === agentId && one.isWorking && isRunOver === true ? { ...one, isWorking: false } : { ...one, ...(isRunOver === undefined ? {} : { isRunOver }) })))
 
 const markWorking = async ($: EngineInterface, agentId: string, name: string | undefined, project?: string, launcher?: string, key?: string): Promise<void> => {
+  keeping.delete(agentId)
   const now = await $.clock.now()
   const placed = { ...(project === undefined ? {} : { project }), ...(launcher === undefined ? {} : { launcher }), ...(key === undefined ? {} : { key }) }
   let marked: string | undefined
@@ -1946,15 +1947,17 @@ export const intake = async (
   let isKept = false
   if (status === USER_STOP) {
     const before = (await read($, board)).find(one => one.agentId === agentId)
-    isKept = keeping.has(agentId) || (before !== undefined && !before.isWorking && before.isClosed !== true && before.successor === undefined && !closing.has(agentId))
+    const isSuperseded = before?.successor !== undefined
+    isKept = !isSuperseded && (keeping.has(agentId) || (before !== undefined && !before.isWorking && before.isClosed !== true && !closing.has(agentId)))
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isStoppedByUser: true } : one)))
-    if (!isKept && before?.key !== undefined) void recordRun($, 'stopped', ['--key', before.key])
+    if (!isKept && !isSuperseded && before?.key !== undefined) void recordRun($, 'stopped', ['--key', before.key])
   }
   const name = AGENT_SUMMARY.exec(field(block, 'summary') ?? '')?.[1]
   const result = RESULT.exec(block)
   if (result !== null && (!once(block, '<result>') || !once(block, '</result>'))) return undefined
   const report = result?.[2]?.trim() ?? ''
   if (HANDED_BACK.test(report)) return undefined
+  if (report === RESTARTED_REPLY) keeping.delete(agentId)
   const entry =
     (report === RESTARTED_REPLY ? await rested($, agentId) : undefined) ??
     (await file($, { agentId, name, status, report, ...(report === RESTARTED_REPLY ? { filing: { kind: 'note' as Kind, headline: RESTARTED_REPLY } } : {}) }))
@@ -1981,12 +1984,17 @@ const keep = async ($: EngineInterface, agentId: string): Promise<void> => {
   if (keeping.has(agentId)) return
   keeping.add(agentId)
   const entry = (await read($, board)).find(one => one.agentId === agentId)
-  if (entry === undefined) return
+  if (entry === undefined) {
+    keeping.delete(agentId)
+    return
+  }
   const sent = await sendTo($, entry, KEPT, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry))).catch(() => undefined)
   if (sent?.isDelivered === true) {
+    if (sent.agentId !== agentId) keeping.delete(agentId)
     await change($, list => list.map(one => (one.agentId === sent.agentId ? unflagged(one) : one)))
     return
   }
+  keeping.delete(agentId)
   if (entry.key !== undefined) await recordRun($, 'stopped', ['--key', entry.key])
 }
 

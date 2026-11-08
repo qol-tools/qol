@@ -1636,6 +1636,34 @@ test('Esc on an idle fork only leaves its view: the board brings it straight bac
   expect((store.get('board:switchboard-session') as Row[]).find(row => row.agentId === 'a1-copy')?.isStoppedByUser).toBeUndefined()
 })
 
+test('a fork Esc kept under its own id is stopped like any other once it works again, and is kept again once idle', async ($, on) => {
+  const calls: string[][] = []
+  const sent: any[] = []
+  engine(on, sent)
+  recordEngine(on, calls)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'one-fork: one')
+  await deliver($, notification('a1', 'one-fork: one', 'All finished.'))
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await settle()
+  expect(sent.map(one => one.to)).toEqual(['a1'])
+  await $.turn.start({ text: 'Esc stopped this fork while it was idle, so the board brought it back.', turnId: 'turn-a1', agentId: 'a1' })
+  await answered($, 'a1', 1)
+  await deliver($, notification('a1', 'one-fork: one', 'Back on the fork board.'))
+  await $.turn.start({ text: 'carry on', turnId: 'turn-a1-real', agentId: 'a1' })
+  await settle()
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await settle()
+  expect(sent.map(one => one.to)).toEqual(['a1'])
+  expect(verbs(calls, 'stopped')).toEqual([['stopped', '--key', 'one-fork']])
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(stopped, agent id a1)')
+  await deliver($, notification('a1', 'one-fork: one', 'All finished again.'))
+  await deliver($, stopNotification('a1', 'one-fork: one'))
+  await settle()
+  expect(sent.map(one => one.to)).toEqual(['a1', 'a1'])
+  expect(verbs(calls, 'stopped')).toHaveLength(1)
+})
+
 test('bringing a closed fork back from RECENT lists it once, under the id it came back with', async ($, on) => {
   const calls: string[][] = []
   const store = new Map<string, unknown>()
