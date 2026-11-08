@@ -3386,6 +3386,17 @@ test('a reply the fork gives in its own view, which sends no notification, is fi
   const row = rows().find(one => one.agentId === 'a8')
   expect(row).toMatchObject({ kind: 'note', headline: 'Amber is in, and I am watching CI again.', isWorking: false })
   expect(row?.isRunOver).toBeUndefined()
+  await $.turn.start({ turnId: 'view-2', agentId: 'a8', text: 'and the border?' })
+  await $.turn.complete({ turnId: 'view-2', agentId: 'a8', answer: 'The border is amber too.', durationMs: 1, isAborted: false, reason: 'done' })
+  const [first] = timers.splice(0, 1)
+  await $.turn.start({ turnId: 'view-3', agentId: 'a8', text: 'thanks' })
+  await $.turn.complete({ turnId: 'view-3', agentId: 'a8', answer: 'Glad it fits.', durationMs: 1, isAborted: false, reason: 'done' })
+  first?.()
+  await settle()
+  expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Amber is in, and I am watching CI again.', isWorking: true })
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Glad it fits.', isWorking: false })
 })
 
 test('a hand-back that starts a switchboard turn leaves no you row in the SWITCHBOARD log', async ($, on) => {

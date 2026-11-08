@@ -868,13 +868,14 @@ const unstopped = ({ isStoppedByUser: _, isInterrupted: __, isDone: ___, isRunOv
 
 const RUN_OVER_MS = 15_000
 
-const lastAnswers = new Map<string, { turnId: string; answer: string }>()
+const lastTurns = new Map<string, { turnId: string; answer?: string }>()
 
 const settleRun = async ($: EngineInterface, agentId: string, turnId: string): Promise<void> => {
-  const last = lastAnswers.get(agentId)
-  if (last?.turnId === turnId) lastAnswers.delete(agentId)
+  const last = lastTurns.get(agentId)
+  if (last !== undefined && last.turnId !== turnId) return
+  lastTurns.delete(agentId)
   const entry = (await read($, board)).find(one => one.agentId === agentId)
-  if (last?.turnId === turnId && entry?.isWorking === true && entry.isRunOver === true) {
+  if (last?.answer !== undefined && entry?.isWorking === true && entry.isRunOver === true) {
     await file($, { agentId, status: 'completed', report: last.answer })
     return
   }
@@ -2910,7 +2911,7 @@ export const register: Register = on => {
     const done = await next(e)
     const ended = e.agentId
     if (ended !== undefined) await change($, list => list.map(one => (one.agentId === ended && one.isWorking ? { ...one, isRunOver: true } : one)))
-    if (ended !== undefined && typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted) lastAnswers.set(ended, { turnId: e.turnId, answer: e.answer })
+    if (ended !== undefined) lastTurns.set(ended, { turnId: e.turnId, ...(typeof e.answer === 'string' && e.answer.trim() !== '' && !e.isAborted ? { answer: e.answer } : {}) })
     if (ended !== undefined) $.clock.after(RUN_OVER_MS, () => void settleRun($, ended, e.turnId).catch(() => undefined))
     if (e.agentId !== undefined) await refreshWriting($, e.agentId).catch(() => undefined)
     if (e.agentId !== undefined && (await read($, writingTo)) === e.agentId) {
