@@ -3285,6 +3285,7 @@ test('the fork you write to shows its model and effort on one row, its pickers c
     cursor: e.start + e.inputText.length,
   }))
   on('session.messages', () => ({ value: [] }))
+  on('command.run', { command: 'model' }, () => ({ text: 'the switchboard model picker' }))
   on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number; model: string; effort?: unknown }) {
     steps.push({ ...(e.agentId === undefined ? {} : { agentId: e.agentId }), model: e.model, effort: e.effort })
     yield { kind: 'text', index: 0, text: 'ok' }
@@ -3301,6 +3302,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'medium' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const command = async (name: string, args: string) => String((await $.command.run({ command: name, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  expect(await command('model', 'haiku')).toBe('the switchboard model picker')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
   expect(picker).toMatchObject({ props: { value: 'opus' } })
@@ -3318,6 +3321,12 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
   expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /effort medium → high, from its next model call/ })).toBeDefined()
+  expect(await command('model', 'haiku')).toBe('asking-fork uses Haiku from its next model call.')
+  expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
+  expect(await command('model', '')).toBe('asking-fork model: Haiku. /model opus|sonnet|haiku changes it; with no fork picked, /model changes the switchboard.')
+  expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'haiku', effort: 'max' })
   await ui.unmount()
 })
 

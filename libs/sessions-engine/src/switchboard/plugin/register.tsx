@@ -1775,27 +1775,53 @@ const noteSeen = async ($: EngineInterface, key: string, model: string, effort: 
 
 const SETTING = /^(model|effort)-(.+)-([a-z]+)$/
 
-const pickSetting = async ($: EngineInterface, element: string): Promise<void> => {
-  const parts = SETTING.exec(element)
-  if (parts === null) return
-  const [, kind, key = '', value] = parts
+const settingOf = async ($: EngineInterface, key: string): Promise<{ model?: string; effort?: string }> => {
   await loadModels($)
   const was = (await read($, modelsSeen))[key]
   const choice = (await read($, modelChoices))[key]
   const isNewer = choice !== undefined && (was === undefined || was.at < choice.at)
+  const model = (isNewer ? choice?.model : undefined) ?? was?.model
+  const effort = (isNewer ? choice?.effort : undefined) ?? was?.effort
+  return { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) }
+}
+
+const pickSetting = async ($: EngineInterface, element: string): Promise<void> => {
+  const parts = SETTING.exec(element)
+  if (parts === null) return
+  const [, kind, key = '', value] = parts
+  const now = await settingOf($, key)
   if (kind === 'model') {
     const to = MODELS.find(one => one === value)
-    const from = (isNewer ? choice?.model : undefined) ?? was?.model
+    const from = now.model
     if (to === undefined || familyOf(from) === to) return
     await choose($, key, { model: to })
     await logSaid($, `${YOU} → ${key}`, `model ${from === undefined ? '' : `${modelName(from)} → `}${modelName(to)}, from its next model call`)
     return
   }
   const to = EFFORTS.find(one => one === value)
-  const from = (isNewer ? choice?.effort : undefined) ?? was?.effort
+  const from = now.effort
   if (to === undefined || to === from) return
   await choose($, key, { effort: to })
   await logSaid($, `${YOU} → ${key}`, `effort ${from === undefined ? '' : `${from} → `}${to}, from its next model call`)
+}
+
+const settingTarget = async ($: EngineInterface): Promise<Entry | undefined> => {
+  const agentId = viewedFork ?? (await read($, writingTo))
+  return agentId === '' ? undefined : (await read($, board)).find(one => one.agentId === agentId && !isEnded(one))
+}
+
+const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: string): Promise<string | undefined> => {
+  const target = await settingTarget($)
+  if (target === undefined) return undefined
+  const key = keyOf(target)
+  const word = args.trim().toLowerCase()
+  const choices: readonly string[] = kind === 'model' ? MODELS : EFFORTS
+  if (choices.includes(word)) {
+    await pickSetting($, `${kind}-${key}-${word}`)
+    return `${key} uses ${kind === 'model' ? modelName(word) : `${word} effort`} from its next model call.`
+  }
+  const now = (await settingOf($, key))[kind]
+  return `${key} ${kind}: ${now === undefined ? 'shows at its next model call' : kind === 'model' ? modelName(now) : now}. /${kind} ${choices.join('|')} changes it; with no fork picked, /${kind} changes the switchboard.`
 }
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
@@ -2625,6 +2651,13 @@ export const register: Register = on => {
 
   on('command.run', { command: CLOSE }, async $ => ({ text: await closeFork($) })).catch(() => ({ text: 'The fork could not be closed.' }))
 
+  for (const kind of ['model', 'effort'] as const) {
+    on('command.run', { command: kind }, async ($, e, next) => {
+      const text = await setByCommand($, kind, e.args)
+      return text === undefined ? next(e) : { text }
+    }).catch(($, e, next) => (next.called ? { text: `The ${kind} could not be changed.` } : next(e)))
+  }
+
   on('prompt.submit', async ($, e, next) => {
     const quiet = await quietReport($, e.text, e.command === undefined ? e.origin.kind : undefined)
     if (quiet !== undefined) {
@@ -3334,7 +3367,7 @@ export const register: Register = on => {
     const switchboardFrame = frame(
       'switchboard',
       <Text bold>SWITCHBOARD</Text>,
-      <Text dimColor>this chat · /model here changes only the switchboard</Text>,
+      <Text dimColor>this chat · /model with no fork picked changes the switchboard</Text>,
       <Box flexDirection="column">
         {modelRows(SWITCHBOARD, mainModel, false)}
         {switchboardSaid.length > 0 && divider('LOG')}
