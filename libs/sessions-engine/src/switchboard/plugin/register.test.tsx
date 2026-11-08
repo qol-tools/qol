@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -948,6 +948,26 @@ test('until the open reaches it, a fork cut off mid-turn waits under its own hea
   expect(sent).toHaveLength(1)
 })
 
+test('sub-forks a restart stopped wait on their parent row under the stopped heading, and continue reaches each of them', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, name: string, isWorking: boolean, launcher?: string) => ({ agentId, name, kind: 'note', headline: 'Pull request #5 merged.', report: '', at: 1, isWorking, isDismissed: false, ...(launcher === undefined ? {} : { launcher }) })
+  store.set('board:earlier-session', [row('p1', 'parent-fork: parent', false), row('s1', 'sub-one: first', true, 'p1'), row('s2', 'sub-two: second', true, 'p1')])
+  engine(on, sent, [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /STOPPED BY A RESTART/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2 sub-forks stopped mid-turn/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sub-one/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  await ui.press({ key: 'continue-p1' })
+  expect(sent.map(one => one.to).sort()).toEqual(['s1', 's2'])
+  expect(await ui.find({ type: 'Text', text: /STOPPED BY A RESTART/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 const answered = async ($: any, agentId: string, index: number, turnId = `turn-${agentId}`) => {
   const chunks: any[] = []
   const stream = $.turn.step({ turnId, index, model: 'opus', messageCount: 2, agentId })
@@ -1816,7 +1836,9 @@ test('waiting comes from what a fork runs, and a fork that started forks counts 
   expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
   expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
   expect(parentOf(list, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }))?.agentId).toBe('p1')
-  expect(needYouCount([parent, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }), row('c1', { kind: 'note', isInterrupted: true }), row('a2', { kind: 'ask' })])).toBe(2)
+  const stopped = [parent, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }), row('c1', { kind: 'note', isInterrupted: true }), row('a2', { kind: 'ask' }), row('a3', { kind: 'note' }), row('k6', { launcher: 'a3', kind: 'ask' }), row('k7', { launcher: 'a3', kind: 'note', isInterrupted: true })]
+  expect(stoppedFamilies(stopped).map(one => one.agentId)).toEqual(['p1', 'c1'])
+  expect(needYouCount(stopped)).toBe(4)
   expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
   expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
   expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })

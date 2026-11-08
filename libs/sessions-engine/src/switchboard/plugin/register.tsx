@@ -669,7 +669,12 @@ const ready = async ($: EngineInterface): Promise<void> => {
   await refreshStatus($).catch(() => undefined)
 }
 
-export const needYouCount = (list: Entry[]): number => list.filter(entry => needsYou(entry) || (isCut(entry) && parentOf(list, entry) === undefined)).length
+export const cutIn = (list: Entry[], entry: Entry): Entry[] => [entry, ...forksUnder(list, entry)].filter(isCut)
+
+export const stoppedFamilies = (list: Entry[]): Entry[] =>
+  list.filter(entry => parentOf(list, entry) === undefined && !needsYou(entry) && !forksUnder(list, entry).some(needsYou) && cutIn(list, entry).length > 0)
+
+export const needYouCount = (list: Entry[]): number => list.filter(needsYou).length + stoppedFamilies(list).length
 
 const refreshStatus = async ($: EngineInterface): Promise<void> => {
   const list = await read($, board)
@@ -3033,10 +3038,10 @@ export const register: Register = on => {
     const familyIn = (entry: Entry) => forksUnder(list, entry)
     const askersOf = (entry: Entry) => [...(needsYou(entry) ? [entry] : []), ...familyIn(entry).filter(needsYou).sort((a, b) => a.at - b.at)]
     const needs = top.filter(entry => askersOf(entry).length > 0).sort((a, b) => a.at - b.at)
-    const cut = top.filter(entry => isCut(entry) && !needs.includes(entry)).sort((a, b) => a.at - b.at)
-    const working = top.filter(entry => !needs.includes(entry) && !isCut(entry) && (entry.isWorking || familyIn(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
-    const waiting = top.filter(entry => !needs.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
-    const idle = top.filter(entry => !needs.includes(entry) && !isCut(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
+    const cut = stoppedFamilies(list).sort((a, b) => a.at - b.at)
+    const working = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && (entry.isWorking || familyIn(entry).some(sub => isLive(sub, states)))).sort((a, b) => a.at - b.at)
+    const waiting = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && isWaiting(entry, states)).sort((a, b) => a.at - b.at)
+    const idle = top.filter(entry => !needs.includes(entry) && !cut.includes(entry) && !working.includes(entry) && !waiting.includes(entry) && !isEnded(entry)).sort((a, b) => a.at - b.at)
     const askers = needs.flatMap(askersOf)
     const badgeOf = (entry: Entry): string => {
       const count = familyIn(entry).filter(one => !isEnded(one)).length
@@ -3091,6 +3096,9 @@ export const register: Register = on => {
     const carryOn = (entry: Entry) => async () => {
       const sent = await sendTo($, entry, CONTINUE)
       $.ui.toast(sent.isDelivered ? `${keyName(entry.name)} continues its work.` : `Not sent to ${keyName(entry.name)}: ${printable(String(sent.reason ?? 'not delivered'))}`)
+    }
+    const carryOnAll = (entries: Entry[]) => async () => {
+      for (const entry of entries) await carryOn(entry)()
     }
     const dismiss = (agentIds: string[]) => () => {
       void change($, all => all.map(one => (agentIds.includes(one.agentId) ? { ...one, isDismissed: true } : one)))
@@ -3494,7 +3502,7 @@ export const register: Register = on => {
         {target === undefined && cut.length > 0 && heading('STOPPED BY A RESTART')}
         {target === undefined && cut.map(entry => (
           <Box key={`cut-${entry.agentId}`} flexDirection="column">
-            {title(entry, 'stopped mid-turn')}
+            {title(entry, isCut(entry) ? 'stopped mid-turn' : `${cutIn(list, entry).length} sub-fork${cutIn(list, entry).length === 1 ? '' : 's'} stopped mid-turn`)}
             <Box paddingLeft={2} flexDirection="column">
               {entry.headline !== '' && (
                 <Text dimColor wrap="wrap">
@@ -3502,10 +3510,10 @@ export const register: Register = on => {
                 </Text>
               )}
               <Box flexDirection="row" gap={2}>
-                <Button key={`continue-${entry.agentId}`} plain onPress={carryOn(entry)}>
+                <Button key={`continue-${entry.agentId}`} plain onPress={carryOnAll(cutIn(list, entry))}>
                   continue
                 </Button>
-                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss([entry.agentId])}>
+                <Button key={`dismiss-${entry.agentId}`} plain dimColor onPress={dismiss(cutIn(list, entry).map(one => one.agentId))}>
                   dismiss
                 </Button>
               </Box>
