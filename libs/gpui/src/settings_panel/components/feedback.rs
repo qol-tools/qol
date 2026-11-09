@@ -18,6 +18,29 @@ impl SettingsFeedback {
     }
 }
 
+#[derive(IntoElement)]
+pub struct SettingsCopied {
+    value: SharedString,
+}
+
+impl SettingsCopied {
+    pub fn new(value: impl Into<SharedString>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+}
+
+impl RenderOnce for SettingsCopied {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        kit().notice(
+            NoticeTone::Done,
+            format!("Copied {} to the clipboard", self.value),
+            None,
+        )
+    }
+}
+
 impl RenderOnce for SettingsFeedback {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let tone = if self.danger {

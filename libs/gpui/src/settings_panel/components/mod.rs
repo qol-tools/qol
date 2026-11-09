@@ -38,7 +38,7 @@ pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,
 };
-pub use feedback::SettingsFeedback;
+pub use feedback::{SettingsCopied, SettingsFeedback};
 pub use finder::{
     settings_finder_empty, settings_search_mark, settings_signal_bars, FinderPickEnd,
     SettingsFinderLead, SettingsFinderPick, FINDER_MARK_SMALL,

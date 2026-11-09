@@ -28,9 +28,9 @@ use super::components::{
     rail_item_label, settings_accent_dot, settings_action_mark, settings_action_spinner,
     settings_block_header, settings_error_line, settings_finder_empty, settings_label_group,
     settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
-    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsFeedback,
-    SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow, SettingsToggle,
-    SettingsValueTone, SliderStyle,
+    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsCopied,
+    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
+    SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -3602,7 +3602,7 @@ impl SettingsPanelView {
                 .when(copies, |cell| {
                     cell.child(settings_action_mark(
                         ("settings-status-copy", index),
-                        ActionMark::Run,
+                        ActionMark::Copy,
                         false,
                         row,
                         self.kit,
@@ -4337,6 +4337,9 @@ impl Render for SettingsPanelView {
             .when_some(self.save_error.clone(), |root, message| {
                 root.child(self.render_failure_bar(message))
             })
+            .when_some(self.copied.clone(), |root, (_, value)| {
+                root.child(SettingsCopied::new(value))
+            })
             .child(self.render_hint_bar(cx))
             .child(self.resize_canvas())
     }
@@ -5009,15 +5012,6 @@ impl SettingsPanelView {
                 Some("edit")
             }
             RowControl::Gamepad { .. } => Some("next"),
-            RowControl::Status {
-                error: None,
-                label: Some(label),
-                ..
-            } if self.copied.as_ref()
-                == Some(&(self.copy_place(self.level().selected), label.clone())) =>
-            {
-                Some("copied")
-            }
             RowControl::Status {
                 error: None,
                 label: Some(_),
