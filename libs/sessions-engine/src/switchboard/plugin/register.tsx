@@ -4,6 +4,7 @@ import type { EngineInterface, PromptAutocompleteSuggestion, PromptDecoration, R
 import type { CheckResult, Entry, Kind, ModelChoice, ModelSeen, Pull, PullDetail, RunState } from '../types'
 
 const PROJECT = /^\s*Project:\s*(.+?)\s*$/
+const MODEL_LINE = /^\s*Model:\s*([A-Za-z0-9][\w.[\]-]*)\s*$/
 const FORK = 'project-fork'
 const NAME = 'qol-switchboard'
 const PANE = 'board'
@@ -982,6 +983,12 @@ export const withLauncher = (prompt: string, parentAgentId: string | undefined):
   return [first, launcherLine(parentAgentId), ...body].join('\n')
 }
 
+export const modelLineOf = (prompt: string): string | undefined => {
+  const [, second, third] = prompt.split('\n')
+  const line = second?.startsWith(LAUNCHER) ? third : second
+  return line === undefined ? undefined : MODEL_LINE.exec(line)?.[1]
+}
+
 const recipientId = (to: unknown): string | undefined =>
   typeof to === 'string' ? to : typeof to === 'object' && to !== null && typeof (to as { agentId?: unknown }).agentId === 'string' ? (to as { agentId: string }).agentId : undefined
 
@@ -1674,7 +1681,7 @@ const ledgerOf = (rows: readonly LedgerRow[]): Pull[] =>
 const PULL_REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/([0-9]{1,10})$/
 const IN_QUEUE_QUERY = 'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){isInMergeQueue}}}'
 const HEAD_SHA = /^[0-9a-f]{40}$/
-const MODEL_NAME = /(opus|sonnet|haiku|fable)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?/i
+const MODEL_NAME = /(opus|sonnet|haiku|fable|mythos)(?:-(\d{1,3}))?(?:-(\d{1,2})(?!\d))?/i
 
 export const modelName = (model: string): string => {
   const match = MODEL_NAME.exec(model)
@@ -2561,14 +2568,16 @@ export const register: Register = on => {
     }
     const cwd = project[1] as string
     const prompt = withLauncher(e.prompt, e.parentAgentId)
+    const model = modelLineOf(e.prompt)
+    const spawnAs = { ...e, cwd, prompt, ...(model === undefined ? {} : { model }) }
     const claimed = await recordClaim($, e.description, cwd)
     if (claimed === undefined) {
       if ((await recordProgram($)) !== undefined) await logEvent($, { fork: keyName(e.description), said: 'The session record could not be claimed for this fork.' }).catch(() => undefined)
-      return next({ ...e, cwd, prompt })
+      return next(spawnAs)
     }
     claims.set(e.description, claimed.key)
     claims.set(claimed.description, claimed.key)
-    return next({ ...e, cwd, prompt, description: claimed.description })
+    return next({ ...spawnAs, description: claimed.description })
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: 'The qol-switchboard plugin could not start this fork in its project folder.' },
   )
@@ -2583,6 +2592,8 @@ export const register: Register = on => {
     if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
     if (key !== undefined) await recordPart($, key, agentId)
+    const model = isNew ? modelLineOf(e.prompt) : undefined
+    if (model !== undefined) await choose($, key ?? keyName(e.description), { model })
     return started
   }).catch(($, e, next) => next(e))
 
