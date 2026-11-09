@@ -2006,8 +2006,19 @@ const ROWS = [
 test('fork keys complete from the first letters of the key or of any word in it', () => {
   expect(keyCompletions(ROWS, 'kc')).toEqual([{ text: 'kcd2-next-tasks ', label: 'kcd2-next-tasks', description: 'KCD2 next task list · /git/kcd2' }])
   expect(keyCompletions(ROWS, 'NEXT').map(one => one.label)).toEqual(['kcd2-next-tasks'])
-  expect(keyCompletions(ROWS, 's').map(one => one.label)).toEqual(['azeroth-survivors-broken-builds', 'switchboard-flow-improvements'])
+  expect(keyCompletions(ROWS, 's').map(one => one.label)).toEqual(['switchboard-flow-improvements', 'azeroth-survivors-broken-builds'])
   for (const token of ['old', 'free', '/b', '@kc', 'zz']) expect(keyCompletions(ROWS, token)).toEqual([])
+})
+
+test('a key that starts with the typed letters completes and addresses before a key with a later word that does', () => {
+  const rows = [
+    row('b1', 'switchboard-flow-improvements: orchestration', { kind: 'ask' }),
+    row('b2', 'improve-economy-site-design: economy', { isWorking: true }),
+  ] as any[]
+  expect(reachable(rows).map(one => one.agentId)).toEqual(['b1', 'b2'])
+  expect(keyCompletions(rows, 'impro').map(one => one.label)).toEqual(['improve-economy-site-design', 'switchboard-flow-improvements'])
+  expect(toFork(rows, 'impro: hi')?.entry.agentId).toBe('b2')
+  expect(toFork(rows, 'flow: hi')?.entry.agentId).toBe('b1')
 })
 
 test('Tab walks the forks in board order and Shift+Tab walks back, wrapping at both ends', () => {
@@ -2032,7 +2043,7 @@ test('a full key, or a unique start of one with a colon, addresses a fork with o
     ['azeroth: rebuild', 'a3', 'rebuild'],
     ['azeroth-survivors-broken-builds rebuild', 'a3', 'rebuild'],
     ['kcd2 yes', undefined, undefined],
-    ['s: hi', undefined, undefined],
+    ['s: hi', 'a2', 'hi'],
     ['what is running?', undefined, undefined],
     ['kcd2-next-tasks', 'a1', ''],
     ['kcd2-next-tasks   ', 'a1', ''],
