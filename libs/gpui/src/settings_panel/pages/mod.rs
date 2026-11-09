@@ -21,9 +21,10 @@ use crate::kit::{kit, Chip};
 use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
-    qr_block, qr_heights, settings_busy_message, settings_destroy_label_group,
-    settings_label_group, settings_message, settings_page, settings_value_group, HintTone, QrBlock,
-    RowGround, SettingsFeature, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
+    qr_block, qr_heights, settings_busy_message, settings_copied_description, settings_copy_mark,
+    settings_destroy_label_group, settings_label_group, settings_message, settings_page,
+    settings_value_group, HintTone, QrBlock, RowGround, SettingsFeature, SettingsFeedback,
+    SettingsHint, SettingsTick, SettingsToggle,
 };
 use super::{
     escape_step, intent, settings_action_mark, settings_action_spinner, settings_value_text,
@@ -629,6 +630,7 @@ impl PagesView {
                 .is_some_and(|(pressed_page, pressed_row)| {
                     *pressed_page == place.page && *pressed_row == row.id
                 });
+        let copied = front && self.copied == Some((place.page.clone(), row.id.clone()));
         let mut values = settings_value_group();
         if busy
             && row.copies().is_none()
@@ -670,22 +672,20 @@ impl PagesView {
                 ground,
                 kit,
             )),
-            None if row.copies().is_some() => values.child(settings_action_mark(
-                (action_id, index),
-                ActionMark::Run,
-                busy,
-                ground,
-                kit,
-            )),
+            None if row.copies().is_some() => {
+                values.child(settings_copy_mark((action_id, index), copied, ground, kit))
+            }
             Some(Control::Qr(_)) | None => values,
         };
         let feature = matches!(row.control, Some(Control::Feature { .. }));
         let destroys = matches!(row.control, Some(Control::Destroy { .. }));
-        let detail = row.detail.clone().map(Into::into);
+        let detail = row.detail.clone().map(Into::into).filter(|_| !copied);
         let label = if destroys {
             settings_destroy_label_group(row.label.clone(), detail, ground, kit)
         } else {
-            settings_label_group(row.label.clone(), detail, ground, kit)
+            settings_label_group(row.label.clone(), detail, ground, kit).when(copied, |group| {
+                group.child(settings_copied_description(kit))
+            })
         };
         let mut element = SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)
@@ -939,17 +939,12 @@ impl CustomSettingsBreadcrumbs for PagesView {
                 }
             }
         }
-        let copied = selected
-            .as_ref()
-            .is_some_and(|(page, row)| self.copied == Some((page.clone(), row.id.clone())));
         let row = selected.map(|(_, row)| row);
         if let Some(Control::Feature { .. }) = row.as_ref().and_then(|row| row.control.as_ref()) {
             left.push(SettingsHint::new(Key::LEFT, "off"));
             left.push(SettingsHint::new(Key::RIGHT, "on"));
         }
-        if copied {
-            left.push(SettingsHint::new(Key::ENTER, "copied"));
-        } else if let Some(verb) = row.as_ref().and_then(model::enter_verb) {
+        if let Some(verb) = row.as_ref().and_then(model::enter_verb) {
             left.push(SettingsHint::new(Key::ENTER, verb));
         }
         if !matches!(
