@@ -89,6 +89,12 @@ pub fn runtime_dir() -> Option<PathBuf> {
     data_dir().map(|path| path.join("runtime"))
 }
 
+pub fn trace_log_path() -> PathBuf {
+    runtime_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(qol_conventions::TRACE_LOG_FILE)
+}
+
 pub fn data_subdir(name: &str) -> Option<PathBuf> {
     data_dir().map(|path| path.join(name))
 }
@@ -363,6 +369,17 @@ pub fn valid_install_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_trace_log_lives_in_the_runtime_dir() {
+        let path = trace_log_path();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(qol_conventions::TRACE_LOG_FILE)
+        );
+        let expected_dir = runtime_dir().unwrap_or_else(std::env::temp_dir);
+        assert_eq!(path.parent(), Some(expected_dir.as_path()));
+    }
 
     #[test]
     fn a_blank_codesign_identity_counts_as_none() {

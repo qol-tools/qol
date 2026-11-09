@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn tail_input_maps_detail_toggle_and_ctrl_c() {
         let args = Args::parse(&[]).unwrap();
-        let mut runner = TraceRunner::new(args, PathBuf::from(DEFAULT_LOG_FILE));
+        let mut runner = TraceRunner::new(args, qol_config::trace_log_path());
 
         let toggle = DetailToggleInput::handle_key(
             &mut runner,

@@ -2,13 +2,22 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const DEFAULT_BINARY = resolve(REPO, "target", "debug", "qol-shot");
-const TRACE_LOG = "/tmp/qol-altmon.log";
+const TRACE_LOG_FILE = "qol-altmon.log";
+
+function localDataDir() {
+  if (process.platform === "darwin") return join(homedir(), "Library", "Application Support");
+  if (process.platform === "win32") return process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local");
+  return process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+}
+
+const TRACE_LOG = join(localDataDir(), "qol-tray", "runtime", TRACE_LOG_FILE);
 const VERDICTS = new Set(["pass", "fail", "blocked"]);
 
 const MANUAL_SCENARIOS = [

@@ -771,7 +771,7 @@ mod tests {
     use crate::dev_console::key_bindings::{action_for, Action};
     use crate::dev_console::log_pane::DevLogFile;
 
-    use crate::dev_console::stream_view::{current_log_source, DEFAULT_TRACE_LOG_FILE};
+    use crate::dev_console::stream_view::current_log_source;
     use crate::dev_console::worktrees_panel::worktree_panel_rows;
 
     #[test]
@@ -1160,7 +1160,7 @@ mod tests {
         trace.view = View::Trace;
         let trace_text = render_text(&mut trace);
         assert!(
-            trace_text.contains(DEFAULT_TRACE_LOG_FILE),
+            trace_text.contains(&qol_config::trace_log_path().display().to_string()),
             "trace pane should show trace file path"
         );
         assert!(
