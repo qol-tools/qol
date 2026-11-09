@@ -48,7 +48,7 @@ fn notes(sheet: &mut Sheet, session: &Session) {
     sheet.heading("right now");
     if session.locked() {
         sheet.row(
-            Row::info("locked", "You are not an administrator here")
+            Row::new("locked", "You are not an administrator here")
                 .detail(
                     "Installs ask for an administrator's password. Mint's settings are read-only.",
                 )
@@ -65,8 +65,8 @@ fn notes(sheet: &mut Sheet, session: &Session) {
     }
     for (index, problem) in problems.into_iter().enumerate() {
         let row = match problem.split_once(": ") {
-            Some((label, detail)) => Row::info(format!("problem:{index}"), label).detail(detail),
-            None => Row::info(format!("problem:{index}"), problem.as_str()),
+            Some((label, detail)) => Row::new(format!("problem:{index}"), label).detail(detail),
+            None => Row::new(format!("problem:{index}"), problem.as_str()),
         };
         sheet.row(row.tone(Tone::Attention));
     }
@@ -76,14 +76,14 @@ fn status(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
     sheet.heading("updates");
     if let Some(job) = session.job.as_ref().filter(|job| !job.started) {
         sheet.row(
-            Row::info("waiting", "Waiting for the password")
+            Row::new("waiting", "Waiting for the password")
                 .value(plural(total(job.updates.iter()), "update", "updates"))
                 .busy(true),
         );
     } else if let Some(job) = session.job.as_ref() {
         let all = total(job.updates.iter());
         sheet.row(
-            Row::info(
+            Row::new(
                 "waiting",
                 format!("Installing {}", plural(all, "update", "updates")),
             )
@@ -91,9 +91,9 @@ fn status(sheet: &mut Sheet, session: &Session, now: NaiveDateTime) {
             .busy(true),
         );
     } else if session.updates.is_none() {
-        sheet.row(Row::info("waiting", "Looking for updates").busy(true));
+        sheet.row(Row::new("waiting", "Looking for updates").busy(true));
     } else if session.list().is_empty() {
-        let row = Row::info("waiting", "Nothing waiting");
+        let row = Row::new("waiting", "Nothing waiting");
         sheet.row(match session.checked {
             Some(at) => row.value(format!("checked {}", at.format("%H:%M"))),
             None => row,
@@ -143,13 +143,13 @@ fn owner(sheet: &mut Sheet, session: &Session) {
     });
     let Some(mint) = session.mint() else {
         sheet.row(
-            Row::info("auto", "Mint's Update Manager is not set up here").value("when you say"),
+            Row::new("auto", "Mint's Update Manager is not set up here").value("when you say"),
         );
         return;
     };
     if session.locked() {
-        sheet.row(Row::info("auto", "Installs on its own").value(auto_value(mint.auto)));
-        sheet.row(Row::info("hours", "Hours").value(hours_value(session)));
+        sheet.row(Row::new("auto", "Installs on its own").value(auto_value(mint.auto)));
+        sheet.row(Row::new("hours", "Hours").value(hours_value(session)));
         return;
     }
     sheet.row(

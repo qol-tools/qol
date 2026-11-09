@@ -6,6 +6,15 @@ description = "Open the PointZerver settings window"
 [action.begin_pairing]
 description = "Allow a nearby PointZ client to pair for one minute"
 
+[action.press]
+description = "Do what a row on a PointZerver page does: input names the page, the row, the open pages and, for the switch, whether it turns on"
+input = { page = "string", row = "string", open = "string_array", set = "boolean" }
+
+[query.pages]
+description = "The PointZerver pages the panel shows: input names the open pages, and the answer holds them and the first page"
+poll_interval_ms = 1000
+input = { open = "string_array" }
+
 [query.connection_status]
 description = "Current qol-pointz daemon state"
 poll_interval_ms = 3000
@@ -13,7 +22,3 @@ poll_interval_ms = 3000
 [query.connection_info]
 description = "Hostname, IP, ports, and app download URL"
 poll_interval_ms = 5000
-
-[query.pairing_status]
-description = "Whether pairing is open and the current pairing code"
-poll_interval_ms = 1000

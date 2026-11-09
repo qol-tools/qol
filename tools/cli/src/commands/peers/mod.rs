@@ -134,8 +134,8 @@ fn command_with_runner(run: Runner) -> Command {
         ),
         (
             "pointz",
-            " <status|devices|pair|cancel|remove DEVICE>",
-            "Inspect paired PointZ phones, open or cancel a pairing window, or remove a phone.",
+            " <status|devices|pair|cancel|on|off|remove DEVICE>",
+            "Inspect paired PointZ phones, open or cancel a pairing window, switch PointZerver on or off, or remove a phone.",
         ),
     ] {
         command = command.subcommand(handlers(

@@ -13,6 +13,7 @@ use crate::theme::Ground;
 mod choice_value;
 mod device_entry;
 mod display_layout_tile;
+mod feature;
 mod feedback;
 mod finder;
 mod group_header;
@@ -38,6 +39,7 @@ pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,
 };
+pub use feature::SettingsFeature;
 pub use feedback::SettingsFeedback;
 pub use finder::{
     settings_finder_empty, settings_search_mark, settings_signal_bars, FinderPickEnd,
@@ -52,7 +54,7 @@ pub(super) use number_field::{number_field, NumberCue, NumberText, SliderStyle};
 pub use placement_preview::{
     placement_caption, placement_hold_progress, placement_toast, PlacementHold,
 };
-pub(super) use qr_code::qr_code_display;
+pub(super) use qr_code::{qr_block, qr_code_display, qr_heights, QrBlock};
 pub use row::{settings_row_shade, SettingsRow};
 pub use text_field::SettingsTextField;
 pub use tile::{
@@ -438,6 +440,27 @@ pub fn settings_label_group(
         .flex_col()
         .gap(px(qol_theme::SPACE_STACK))
         .child(settings_label(label, kit))
+        .children(description.map(|text| settings_description(text, row, kit)))
+}
+
+pub fn settings_destroy_label_group(
+    label: impl Into<SharedString>,
+    description: Option<SharedString>,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(qol_theme::SPACE_STACK))
+        .child(
+            div()
+                .text(TextStyle::Name)
+                .text_color(rgb(kit.palette.danger))
+                .child(label.into()),
+        )
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 

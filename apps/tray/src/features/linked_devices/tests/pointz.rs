@@ -243,3 +243,41 @@ async fn pairing_on_a_fresh_device_creates_the_authority_and_opens_a_window() {
     fixture.pointz(PointzRequest::CancelPairing {});
     assert!(!fixture.pointz_status().pairing.open);
 }
+
+#[tokio::test]
+async fn switching_pointz_off_stops_the_transport_until_it_is_switched_back_on() {
+    let _serial = CUTOVER_TESTS.lock().await;
+    let fixture = Fixture::new(true);
+    let marker = fixture.data.join("pointz-off");
+
+    let Response::PointzStatus { status } = fixture.pointz(PointzRequest::Serve { on: true })
+    else {
+        panic!("status response required");
+    };
+    assert!(matches!(status.transport, PointzTransport::Running { .. }));
+
+    let Response::PointzStatus { status } = fixture.pointz(PointzRequest::Serve { on: false })
+    else {
+        panic!("status response required");
+    };
+    assert_eq!(status.transport, PointzTransport::Stopped {});
+    assert!(exists(&marker));
+    assert_eq!(
+        fixture.pointz(PointzRequest::BeginPairing {}),
+        Response::Error {
+            error: Error::PointzUnavailable
+        }
+    );
+    fixture.reconcile().await;
+    assert_eq!(
+        fixture.pointz_status().transport,
+        PointzTransport::Stopped {}
+    );
+
+    let Response::PointzStatus { status } = fixture.pointz(PointzRequest::Serve { on: true })
+    else {
+        panic!("status response required");
+    };
+    assert!(matches!(status.transport, PointzTransport::Running { .. }));
+    assert!(!exists(&marker));
+}
