@@ -3636,3 +3636,88 @@ test("a fork Claude Code cannot read back shows its conversation from its transc
   await ui.unmount()
 })
 
+const killedHold = (taskId: string) =>
+  `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>toolu_hold_1</tool-use-id>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
+
+test('a board whose rows vanished mid-conversation gets them back from its saved copy, and a fork woken only by its killed hold is not working', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  let isGone = false
+  const isBoard = (e: { plugin?: string; key?: string }) => e.plugin === 'qol-switchboard' && e.key === 'board'
+  on('state.get', async (_: unknown, e: any, next: any) => {
+    const held = await next(e)
+    return isGone && isBoard(e) ? { value: { ...held.value, value: undefined } } : held
+  })
+  on('state.set', (_: unknown, e: any, next: any) => {
+    if (isBoard(e)) isGone = false
+    return next(e)
+  })
+  await spawn($, 'a1', 'first-fork: one')
+  await spawn($, 'b1', 'second-fork: two')
+  await spawn($, 'c1', 'third-fork: three')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await settle()
+  const saved = () => (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking, one.report]).sort()
+  expect(saved().map(one => one[0])).toEqual(['a1', 'b1', 'c1'])
+  const report = saved()[0]?.[2]
+  isGone = true
+  await $.agent.spawn({ prompt: killedHold('hold-a1'), description: 'first-fork: one', subagentType: 'project-fork', resume: { agentId: 'a1' } } as any)
+  await settle()
+  expect(saved().map(one => one[0])).toEqual(['a1', 'b1', 'c1'])
+  expect(saved()[0]).toEqual(['a1', false, report])
+  await $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork b1', description: 'second-fork: two', subagentType: 'project-fork', resume: { agentId: 'b1' } } as any)
+  await settle()
+  expect(saved()).toEqual([
+    ['a1', false, report],
+    ['b1', true, ''],
+    ['c1', true, ''],
+  ])
+})
+
+test('a board state that stays empty, as while the switchboard shuts down, never overwrites the saved rows', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  let isGone = false
+  on('state.get', async (_: unknown, e: any, next: any) => {
+    const held = await next(e)
+    return isGone && e.plugin === 'qol-switchboard' && e.key === 'board' ? { value: { ...held.value, value: undefined } } : held
+  })
+  await spawn($, 'a1', 'first-fork: one')
+  await spawn($, 'b1', 'second-fork: two')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await typed($, notification('b1', 'second-fork: two', 'The second report.'), 'task-notification')
+  await settle()
+  const before = JSON.stringify(store.get('board:switchboard-session'))
+  expect((store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking])).toEqual([['a1', false], ['b1', false]])
+  isGone = true
+  await $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork b1', description: 'second-fork: two', subagentType: 'project-fork', resume: { agentId: 'b1' } } as any)
+  await settle()
+  expect(JSON.stringify(store.get('board:switchboard-session'))).toBe(before)
+})
+
+test('a fork its killed hold wakes as the switchboard shuts down keeps its row, and the next real message makes it work', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  on('clock.after', () => new Promise(() => {}))
+  await spawn($, 'a1', 'first-fork: one')
+  await typed($, notification('a1', 'first-fork: one', 'The first report.'), 'task-notification')
+  await settle()
+  const saved = () => (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.isWorking, one.report, one.at])
+  const before = saved()
+  expect(before.map(one => one.slice(0, 3))).toEqual([['a1', false, 'The first report.']])
+  const resume = () => $.agent.spawn({ prompt: 'Project: /work\nLauncher: the switchboard\nfork a1', description: 'first-fork: one', subagentType: 'project-fork', resume: { agentId: 'a1' } } as any)
+  await resume()
+  await $.turn.start({ text: killedHold('hold-a1'), turnId: 'turn-killed', agentId: 'a1' })
+  await settle()
+  expect(saved()).toEqual(before)
+  await resume()
+  await $.turn.start({ text: 'Carry on with the next part.', turnId: 'turn-real', agentId: 'a1' })
+  await settle()
+  expect(saved().map(one => one.slice(0, 3))).toEqual([['a1', true, 'The first report.']])
+})
+

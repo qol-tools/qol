@@ -585,32 +585,63 @@ const followFocus = async ($: EngineInterface): Promise<void> => {
 }
 
 let loading: Promise<void> | undefined
+let held = { session: '', rows: 0 }
 let viewedFork: string | undefined
 let tree: SbTree = { commands: [] }
 
-const loadSaved = async ($: EngineInterface): Promise<void> => {
-  if ((await read($, board)).length > 0) return
+const savedRows = async ($: EngineInterface): Promise<Entry[]> => {
   const saved = await $.store.get(STORE_PREFIX + (await $.session.id()))
-  const rows = Array.isArray(saved) ? saved.filter(isEntry) : []
+  return Array.isArray(saved) ? saved.filter(isEntry) : []
+}
+
+const rowsHeld = async ($: EngineInterface): Promise<number> => {
+  const session = await $.session.id()
+  if (held.session !== session) held = { session, rows: 0 }
+  return held.rows
+}
+
+const holdRows = async ($: EngineInterface, count: number): Promise<void> => {
+  held = { session: await $.session.id(), rows: Math.min(count, KEEP) }
+}
+
+const loadSaved = async ($: EngineInterface): Promise<void> => {
+  const live = await read($, board)
+  if (live.length > 0) return holdRows($, live.length)
+  const rows = await savedRows($)
+  await holdRows($, rows.length)
   if (rows.length > 0) await update($, board, list => ((list ?? []).length > 0 ? (list ?? []) : rows))
   const pending = await $.store.get(REOPEN_PREFIX + (await $.session.id()))
   if (Array.isArray(pending) && pending.length > 0) $.clock.after(REOPEN_DELAY_MS, () => void reopenForks($).catch(() => undefined))
 }
 
 export const ensureLoaded = ($: EngineInterface): Promise<void> => {
-  loading ??= loadSaved($).catch(() => undefined)
+  loading ??= loadSaved($).catch(() => {
+    loading = undefined
+  })
   return loading
+}
+
+const regainRows = async ($: EngineInterface): Promise<void> => {
+  const live = await read($, board)
+  if (live.length >= (await rowsHeld($))) return
+  const lost = (await savedRows($)).filter(row => !live.some(one => one.agentId === row.agentId))
+  if (lost.length > 0) await update($, board, list => [...lost.filter(row => !(list ?? []).some(one => one.agentId === row.agentId)), ...(list ?? [])])
 }
 
 const persist = async ($: EngineInterface): Promise<void> => {
   try {
     await ensureLoaded($)
-    await $.store.set(STORE_PREFIX + (await $.session.id()), await read($, board))
+    const live = await read($, board)
+    if (loading === undefined) return
+    if (live.length < (await rowsHeld($)) && (await savedRows($)).length > live.length) return
+    await holdRows($, live.length)
+    await $.store.set(STORE_PREFIX + (await $.session.id()), live)
   } catch {}
 }
 
 const change = async ($: EngineInterface, fn: (list: Entry[]) => Entry[]): Promise<void> => {
   await ensureLoaded($)
+  await regainRows($).catch(() => undefined)
   await update($, board, list => fn(list ?? []).slice(-KEEP))
   await persist($)
   await refreshStatus($)
@@ -2498,7 +2529,8 @@ export const register: Register = on => {
     const agentId = started.agentId ?? e.resume?.agentId
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
-    if (!isNew && (await isRestartWake($, agentId).catch(() => false))) return started
+    if (!isNew && (isKilledOnly(e.prompt) || (await isRestartWake($, agentId).catch(() => false)))) return started
+    if (!isNew && (await read($, board)).some(one => one.agentId === agentId)) return started
     const key = isNew ? claims.get(e.description) : undefined
     if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
@@ -2530,6 +2562,7 @@ export const register: Register = on => {
       if (!isHealed) await $.store.set(CUTS_HEALED, true)
       if (merged.length > 0) await update($, board, list => [...merged, ...(list ?? []).filter(one => !merged.some(row => row.agentId === one.agentId))])
       loading = Promise.resolve()
+      await holdRows($, (await read($, board)).length)
       if (others.length > 0) {
         await $.store.set(STORE_PREFIX + id, merged)
         const kept = await $.store.get(STORE_PREFIX + id)
