@@ -317,12 +317,7 @@ pub fn settings_action_mark(
     row: RowGround,
     kit: Kit,
 ) -> gpui::Div {
-    let frame = div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .size(px(ACTION_MARK_SIZE));
+    let frame = action_mark_frame();
     if busy || mark == ActionMark::Busy {
         return frame.child(settings_action_spinner(id, kit).size(px(12.)));
     }
@@ -336,6 +331,40 @@ pub fn settings_action_mark(
         }
     };
     frame.children(mark.icon().map(|glyph| icon(glyph, ACTION_MARK_SIZE, ink)))
+}
+
+fn action_mark_frame() -> gpui::Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(px(ACTION_MARK_SIZE))
+}
+
+pub const COPIED_DESCRIPTION: &str = "Copied to the clipboard";
+
+pub fn settings_copy_mark(
+    id: impl Into<ElementId>,
+    copied: bool,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    if !copied {
+        return settings_action_mark(id, ActionMark::Copy, false, row, kit);
+    }
+    action_mark_frame().children(
+        ActionMark::Copy
+            .icon()
+            .map(|glyph| icon(glyph, ACTION_MARK_SIZE, kit.palette.success)),
+    )
+}
+
+pub fn settings_copied_description(kit: Kit) -> gpui::Div {
+    div()
+        .text(TextStyle::Detail)
+        .text_color(rgb(kit.palette.success))
+        .child(COPIED_DESCRIPTION)
 }
 
 pub fn rail_caption_height() -> f32 {

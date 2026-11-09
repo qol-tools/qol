@@ -80,10 +80,10 @@
   },
   "action marks": {
     "owner": "libs/gpui/",
-    "use": "a kit part in libs/gpui that draws the mark, one per action: › goes into a page, the open-outside mark leaves qol, ↵ does it now, red × destroys, + adds, ⋯ more, the dots are busy, the tick is the one in use, × closes (qol_gpui::ActionMark names them); a row never carries a button",
+    "use": "a kit part in libs/gpui that draws the mark, one per action: › goes into a page, the open-outside mark leaves qol, ↵ does it now, red × destroys, + adds, ⋯ more, the dots are busy, the tick is the one in use, × closes, the copy mark copies (qol_gpui::ActionMark names them); a row never carries a button",
     "paths": [
       "pictures::chevron", "pictures::open_outside", "pictures::tick",
-      "Icon::Reveal", "Icon::Enter", "Icon::Close", "Icon::Add", "Icon::More", "Icon::Tick",
+      "Icon::Reveal", "Icon::Enter", "Icon::Close", "Icon::Add", "Icon::More", "Icon::Tick", "Icon::Copy",
       "Busy::ring", "Busy::new"
     ],
     "allow": []

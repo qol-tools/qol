@@ -11,10 +11,11 @@ pub enum ActionMark {
     Busy,
     Chosen,
     Close,
+    Copy,
 }
 
 impl ActionMark {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Page,
         Self::Leave,
         Self::Run,
@@ -24,6 +25,7 @@ impl ActionMark {
         Self::Busy,
         Self::Chosen,
         Self::Close,
+        Self::Copy,
     ];
 
     pub fn name(self) -> &'static str {
@@ -37,6 +39,7 @@ impl ActionMark {
             Self::Busy => "busy",
             Self::Chosen => "chosen",
             Self::Close => "close",
+            Self::Copy => "copy",
         }
     }
 
@@ -51,6 +54,7 @@ impl ActionMark {
             Self::Busy => "is working on it",
             Self::Chosen => "is the one in use",
             Self::Close => "closes or dismisses",
+            Self::Copy => "copies the value to the clipboard",
         }
     }
 
@@ -69,6 +73,7 @@ impl ActionMark {
             Self::Add => Some(Icon::Add),
             Self::More => Some(Icon::More),
             Self::Chosen => Some(Icon::Tick),
+            Self::Copy => Some(Icon::Copy),
             Self::Page | Self::Leave | Self::Busy => None,
         }
     }
@@ -87,6 +92,7 @@ impl ActionMark {
             Self::More => &["Icon::More"],
             Self::Busy => &["Busy::ring", "Busy::new"],
             Self::Chosen => &["Icon::Tick", "pictures::tick"],
+            Self::Copy => &["Icon::Copy"],
         }
     }
 }
