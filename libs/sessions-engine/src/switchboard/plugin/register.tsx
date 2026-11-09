@@ -2620,6 +2620,7 @@ export const register: Register = on => {
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
     if (!isNew && (isKilledOnly(e.prompt) || (await isRestartWake($, agentId).catch(() => false)))) return started
+    if (!isNew && (await read($, board)).some(one => one.agentId === agentId)) return started
     const key = isNew ? claims.get(e.description) : undefined
     if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
