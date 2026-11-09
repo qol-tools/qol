@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use super::device_programs;
 use super::model::{Shortcut, ShortcutsConfig};
 use super::plugin_manifest;
 use super::validation;
@@ -15,8 +16,10 @@ pub fn load() -> Result<ShortcutsConfig> {
 
 pub fn save(config: &ShortcutsConfig) -> Result<()> {
     let path = crate::paths::shortcuts_path()?;
+    let device_path = crate::paths::shortcut_programs_path()?;
     let _guard = mutation_guard()?;
-    save_to(&path, config)
+    save_to(&path, config)?;
+    device_programs::record_to(&device_path, config)
 }
 
 fn load_from(path: &Path) -> Result<ShortcutsConfig> {
@@ -119,31 +122,43 @@ impl std::error::Error for MutationError {}
 
 pub fn create_persisted(shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
     let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
-    create_at(&path, shortcut)
+    let device_path = crate::paths::shortcut_programs_path().map_err(MutationError::Load)?;
+    create_at(&path, &device_path, shortcut)
 }
 
 pub fn update_persisted(shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
     let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
-    mutate_at(&path, |config| update(config, shortcut))
+    let device_path = crate::paths::shortcut_programs_path().map_err(MutationError::Load)?;
+    let id = shortcut.id.clone();
+    mutate_at(&path, &device_path, &id, |config| update(config, shortcut))
 }
 
 pub fn remove_persisted(id: &str) -> Result<ShortcutsConfig, MutationError> {
     let path = crate::paths::shortcuts_path().map_err(MutationError::Load)?;
-    mutate_at(&path, |config| remove(config, id))
+    let device_path = crate::paths::shortcut_programs_path().map_err(MutationError::Load)?;
+    mutate_at(&path, &device_path, id, |config| remove(config, id))
 }
 
-fn create_at(path: &Path, shortcut: Shortcut) -> Result<ShortcutsConfig, MutationError> {
-    mutate_at(path, |config| add(config, shortcut))
+fn create_at(
+    path: &Path,
+    device_path: &Path,
+    shortcut: Shortcut,
+) -> Result<ShortcutsConfig, MutationError> {
+    let id = shortcut.id.clone();
+    mutate_at(path, device_path, &id, |config| add(config, shortcut))
 }
 
 fn mutate_at(
     path: &Path,
+    device_path: &Path,
+    id: &str,
     mutate: impl FnOnce(&mut ShortcutsConfig) -> Result<(), String>,
 ) -> Result<ShortcutsConfig, MutationError> {
     let _guard = mutation_guard()?;
     let mut config = read_from(path).map_err(MutationError::Load)?;
     mutate(&mut config).map_err(MutationError::Rejected)?;
     save_to(path, &config).map_err(MutationError::Save)?;
+    device_programs::record_shortcut_to(device_path, &config, id).map_err(MutationError::Save)?;
     retain_loadable(&mut config, path);
     Ok(config)
 }
@@ -422,7 +437,14 @@ mod tests {
         };
         save_to(&path, &config).unwrap();
 
-        let shown = create_at(&path, url_shortcut("new", "New", "https://new.io")).unwrap();
+        let device_path = dir.path().join("device/shortcut-programs.json");
+
+        let shown = create_at(
+            &path,
+            &device_path,
+            url_shortcut("new", "New", "https://new.io"),
+        )
+        .unwrap();
 
         let ids = |config: &ShortcutsConfig| {
             config
@@ -440,15 +462,17 @@ mod tests {
         const COUNT: usize = 40;
         let dir = tempfile::tempdir().unwrap();
         let path = Arc::new(dir.path().join("shortcuts.json"));
+        let device_path = Arc::new(dir.path().join("device/shortcut-programs.json"));
         let barrier = Arc::new(Barrier::new(COUNT));
         let handles = (0..COUNT)
             .map(|index| {
                 let path = Arc::clone(&path);
+                let device_path = Arc::clone(&device_path);
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
                     let id = format!("race-{index}");
-                    create_at(&path, url_shortcut(&id, &id, "https://x.io"))
+                    create_at(&path, &device_path, url_shortcut(&id, &id, "https://x.io"))
                 })
             })
             .collect::<Vec<_>>();
@@ -459,5 +483,86 @@ mod tests {
 
         let config = load_from(&path).unwrap();
         assert_eq!(config.shortcuts.len(), COUNT);
+    }
+
+    fn launch_shortcut(id: &str, app_name: &str) -> Shortcut {
+        Shortcut {
+            id: id.to_string(),
+            name: id.to_string(),
+            enabled: true,
+            export_to_launcher: false,
+            source: None,
+            action: ShortcutAction::LaunchApp {
+                app: crate::shortcuts::model::AppRef::Name {
+                    name: app_name.to_string(),
+                },
+            },
+        }
+    }
+
+    fn device_entry_names(path: &Path) -> Vec<(String, String)> {
+        let json = serde_json::to_value(device_programs::load_from(path).unwrap()).unwrap();
+        json.as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, program)| {
+                let app = program.get("app").unwrap();
+                (id.clone(), app["name"].as_str().unwrap().to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn create_update_and_remove_keep_the_device_copy_in_step() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("os/linux/shortcuts.json");
+        let device_path = dir.path().join("device/shortcut-programs.json");
+
+        create_at(&path, &device_path, launch_shortcut("editor", "gedit")).unwrap();
+        create_at(
+            &path,
+            &device_path,
+            url_shortcut("docs", "Docs", "https://x.io"),
+        )
+        .unwrap();
+        assert_eq!(
+            device_entry_names(&device_path),
+            [("editor".to_string(), "gedit".to_string())]
+        );
+
+        mutate_at(&path, &device_path, "editor", |config| {
+            update(config, launch_shortcut("editor", "kate"))
+        })
+        .unwrap();
+        assert_eq!(
+            device_entry_names(&device_path),
+            [("editor".to_string(), "kate".to_string())]
+        );
+
+        mutate_at(&path, &device_path, "editor", |config| {
+            remove(config, "editor")
+        })
+        .unwrap();
+        assert!(device_programs::load_from(&device_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_mutation_does_not_trust_a_program_it_did_not_touch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("os/linux/shortcuts.json");
+        let device_path = dir.path().join("device/shortcut-programs.json");
+        let pulled = ShortcutsConfig {
+            shortcuts: vec![launch_shortcut("pulled", "npx")],
+        };
+        save_to(&path, &pulled).unwrap();
+
+        create_at(
+            &path,
+            &device_path,
+            url_shortcut("docs", "Docs", "https://x.io"),
+        )
+        .unwrap();
+
+        assert!(device_programs::load_from(&device_path).unwrap().is_empty());
     }
 }
