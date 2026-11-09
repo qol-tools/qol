@@ -1842,14 +1842,18 @@ const setByCommand = async ($: EngineInterface, kind: 'model' | 'effort', args: 
   const target = await settingTarget($)
   if (target === undefined) return undefined
   const key = keyOf(target)
-  const word = args.trim().toLowerCase()
-  const choices: readonly string[] = kind === 'model' ? MODELS : EFFORTS
-  if (choices.includes(word)) {
-    await pickSetting($, `${kind}-${key}-${word}`)
-    return `${key} uses ${kind === 'model' ? modelName(word) : `${word} effort`} from its next model call.`
+  const words = args.trim().toLowerCase().split(/\s+/).filter(word => word !== '')
+  const model = kind === 'model' ? MODELS.find(one => words.includes(one)) : undefined
+  const effort = EFFORTS.find(one => words.includes(one))
+  if (words.length > 0 && words.length === (model === undefined ? 0 : 1) + (effort === undefined ? 0 : 1)) {
+    if (model !== undefined) await pickSetting($, `model-${key}-${model}`)
+    if (effort !== undefined) await pickSetting($, `effort-${key}-${effort}`)
+    const picked = [model === undefined ? '' : modelName(model), effort === undefined ? '' : `${effort} effort`].filter(part => part !== '')
+    return `${key} uses ${picked.join(' at ')} from its next model call.`
   }
-  const now = (await settingOf($, key))[kind]
-  return `${key} ${kind}: ${now === undefined ? 'shows at its next model call' : kind === 'model' ? modelName(now) : now}. /${kind} ${choices.join('|')} changes it; with no fork picked, /${kind} changes the switchboard.`
+  const now = await settingOf($, key)
+  if (kind === 'effort') return `${key} effort: ${now.effort ?? 'shows at its next model call'}. /effort ${EFFORTS.join('|')} changes it; with no fork picked, /effort changes the switchboard.`
+  return `${key} model: ${now.model === undefined ? 'shows at its next model call' : modelName(now.model)}${now.effort === undefined ? '' : ` at ${now.effort} effort`}. /model ${MODELS.join('|')} and a level, such as /model haiku max, changes it; with no fork picked, /model changes the switchboard.`
 }
 
 export const withChoice = async <T extends { agentId?: string; model: string; effort?: string | number }>($: EngineInterface, e: T): Promise<T> => {
