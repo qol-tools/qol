@@ -26,11 +26,11 @@ use super::components::{
 use super::components::{
     one_line, paint_settings_selection, qr_code_display, rail_caption, rail_caption_height,
     rail_item_label, settings_accent_dot, settings_action_mark, settings_action_spinner,
-    settings_block_header, settings_error_line, settings_finder_empty, settings_label_group,
-    settings_page, settings_query_spinner, settings_selected_text, settings_swatch,
-    settings_value_text, ChoiceArt, RowGround, SettingsChoiceValue, SettingsCopied,
-    SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar, SettingsRow,
-    SettingsToggle, SettingsValueTone, SliderStyle,
+    settings_block_header, settings_copied_description, settings_copy_mark, settings_error_line,
+    settings_finder_empty, settings_label_group, settings_page, settings_query_spinner,
+    settings_selected_text, settings_swatch, settings_value_text, ChoiceArt, RowGround,
+    SettingsChoiceValue, SettingsFeedback, SettingsGroupHeader, SettingsHint, SettingsHintBar,
+    SettingsRow, SettingsToggle, SettingsValueTone, SliderStyle,
 };
 use super::components::{
     settings_device_kind, settings_device_list, DeviceLight, SettingsDeviceEntry,
@@ -2435,6 +2435,17 @@ impl SettingsPanelView {
         (self.materialized_source, self.stack.len(), index)
     }
 
+    fn row_is_copied(&self, index: usize) -> bool {
+        let Some((place, value)) = &self.copied else {
+            return false;
+        };
+        *place == self.copy_place(index)
+            && matches!(
+                &self.level().rows[index].control,
+                RowControl::Status { label: Some(label), .. } if label == value
+            )
+    }
+
     fn dispatch_action(&mut self, cx: &mut Context<Self>) {
         let row_index = self.level().selected;
         let Some(row) = self.level().rows.get(row_index) else {
@@ -3600,10 +3611,9 @@ impl SettingsPanelView {
                     rgb(status_tone_color(self.kit, tone)),
                 ))
                 .when(copies, |cell| {
-                    cell.child(settings_action_mark(
+                    cell.child(settings_copy_mark(
                         ("settings-status-copy", index),
-                        ActionMark::Copy,
-                        false,
+                        self.row_is_copied(index),
                         row,
                         self.kit,
                     ))
@@ -3852,12 +3862,17 @@ impl SettingsPanelView {
         };
         let selected = index == self.level().selected;
         let ground = RowGround::of(selected, self.body_has_focus());
+        let copied = self.row_is_copied(index);
         let label_group = settings_label_group(
             label,
-            row_description(row, &self.query_state_of(row), &self.applied_query_payloads),
+            row_description(row, &self.query_state_of(row), &self.applied_query_payloads)
+                .filter(|_| !copied),
             ground,
             self.kit,
-        );
+        )
+        .when(copied, |group| {
+            group.child(settings_copied_description(self.kit))
+        });
         let value_cell = self.render_value_cell(index, ground, cx);
         let mut line = SettingsRow::setting(("settings-row", index), self.kit)
             .selected(selected, self.body_has_focus())
@@ -4336,9 +4351,6 @@ impl Render for SettingsPanelView {
             ))
             .when_some(self.save_error.clone(), |root, message| {
                 root.child(self.render_failure_bar(message))
-            })
-            .when_some(self.copied.clone(), |root, (_, value)| {
-                root.child(SettingsCopied::new(value))
             })
             .child(self.render_hint_bar(cx))
             .child(self.resize_canvas())
