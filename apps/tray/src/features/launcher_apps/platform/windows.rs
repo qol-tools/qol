@@ -143,7 +143,7 @@ impl<'a> IconFiles<'a> {
         if let Some(path) = self.marks.get(&mark) {
             return Ok(path.clone());
         }
-        let svg = marks.svg(mark);
+        let svg = marks.entry_svg(mark);
         let pngs = MARK_SIZES
             .iter()
             .map(|&size| {

@@ -136,7 +136,8 @@ impl Mark {
     }
 
     pub fn markup(self) -> String {
-        self.document("currentColor")
+        self.solid_markup()
+            .map_or_else(|| self.document(), str::to_string)
     }
 
     pub fn solid_markup(self) -> Option<&'static str> {
@@ -144,7 +145,8 @@ impl Mark {
     }
 
     pub fn svg(self, line: u32) -> String {
-        self.document(&format!("#{line:06x}"))
+        self.markup()
+            .replace("currentColor", &format!("#{line:06x}"))
     }
 
     pub fn line_on(ground: &Ground) -> u32 {
@@ -168,9 +170,9 @@ impl Mark {
         }
     }
 
-    fn document(self, stroke: &str) -> String {
+    fn document(self) -> String {
         format!(
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="{stroke}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">{}</svg>"#,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">{}</svg>"#,
             self.body()
         )
     }
@@ -316,7 +318,8 @@ mod tests {
         for mark in Mark::ALL {
             let svg = mark.svg(0x123456);
             assert!(svg.starts_with("<svg xmlns="), "{}", mark.name());
-            assert!(svg.contains(r##"stroke="#123456""##), "{}", mark.name());
+            assert!(svg.contains("#123456"), "{}", mark.name());
+            assert!(!svg.contains("currentColor"), "{}", mark.name());
             assert!(svg.ends_with("</svg>"), "{}", mark.name());
         }
     }
@@ -332,11 +335,22 @@ mod tests {
     #[test]
     fn markup_takes_the_ink_it_is_drawn_with() {
         for mark in Mark::ALL {
-            assert!(
-                mark.markup().contains(r#"stroke="currentColor""#),
-                "{}",
-                mark.name()
-            );
+            assert!(mark.markup().contains("currentColor"), "{}", mark.name());
+        }
+    }
+
+    #[test]
+    fn a_mark_with_a_solid_drawing_draws_it_everywhere() {
+        for mark in Mark::ALL {
+            if let Some(solid) = mark.solid_markup() {
+                assert_eq!(mark.markup(), solid, "{}", mark.name());
+                assert_eq!(
+                    mark.svg(0x123456),
+                    solid.replace("currentColor", "#123456"),
+                    "{}",
+                    mark.name()
+                );
+            }
         }
     }
 

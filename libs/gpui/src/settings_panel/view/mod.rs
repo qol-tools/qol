@@ -3917,7 +3917,7 @@ impl SettingsPanelView {
             .min_h(px(RAIL_ITEM_MIN_HEIGHT))
             .px(px(qol_theme::SPACE_INSET + qol_theme::SPACE_CELL))
             .gap(px(qol_theme::SPACE_INSET))
-            .child(crate::icon::mark(mark, super::PANEL_RAIL_MARK_SIZE, line).solid())
+            .child(crate::icon::mark(mark, super::PANEL_RAIL_MARK_SIZE, line))
             .child(rail_item_label(label, active, self.kit))
             .cursor(CursorStyle::PointingHand);
         if active {
