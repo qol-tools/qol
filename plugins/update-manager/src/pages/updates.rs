@@ -146,7 +146,7 @@ pub(super) fn install_row(sheet: &mut Sheet, session: &Session) {
     let label = format!("{} waiting", session.list().len());
     if session.job.is_some() || available.is_empty() {
         let held = session.held();
-        let row = Row::info("install", label);
+        let row = Row::new("install", label);
         sheet.row(match session.job {
             None if !held.is_empty() => row.value(held_phrase(&held)),
             _ => row,
@@ -228,21 +228,21 @@ fn version(update: &Update) -> String {
 
 fn warnings(sheet: &mut Sheet, session: &Session, update: &Update) {
     if update.restart {
-        sheet.row(Row::info("restart", "Finishes at a restart").tone(Tone::Attention));
+        sheet.row(Row::new("restart", "Finishes at a restart").tone(Tone::Attention));
     }
     if let Some((label, _)) = update.caution.as_ref() {
-        sheet.row(Row::info("caution", label.as_str()).tone(Tone::Attention));
+        sheet.row(Row::new("caution", label.as_str()).tone(Tone::Attention));
     }
     if update.held == Some(Held::Administrator) {
         sheet.row(
-            Row::info("release", "Its hold comes off")
+            Row::new("release", "Its hold comes off")
                 .detail(update.why.as_str())
                 .tone(Tone::Attention),
         );
     }
     if let Some(in_use) = session.in_use.as_ref().filter(|_| update.stops_sound) {
         sheet.row(
-            Row::info("in-use", format!("{} drops for a moment", in_use.label))
+            Row::new("in-use", format!("{} drops for a moment", in_use.label))
                 .tone(Tone::Attention),
         );
     }
@@ -257,11 +257,11 @@ fn one(session: &Session, update: &Update) -> Sheet {
     }
     sheet.heading("choose");
     if let Some(detail) = job_detail(session, update) {
-        sheet.row(Row::info("state", cap(&detail)));
+        sheet.row(Row::new("state", cap(&detail)));
     } else if let Some(held) = update.held.filter(|_| !update.installable()) {
-        sheet.row(Row::info("state", held.title()).detail(update.why.as_str()));
+        sheet.row(Row::new("state", held.title()).detail(update.why.as_str()));
     } else if !idle {
-        sheet.row(Row::info("state", "Waits for the install that is running"));
+        sheet.row(Row::new("state", "Waits for the install that is running"));
     } else {
         let value = match update.bytes() {
             Some(bytes) if update.count() == 1 => size(bytes),
@@ -309,7 +309,7 @@ fn packages(update: &Update) -> Vec<Sheet> {
         .iter()
         .enumerate()
         .map(|(index, package)| {
-            let row = Row::info(format!("package:{index}"), package.name.as_str())
+            let row = Row::new(format!("package:{index}"), package.name.as_str())
                 .detail(package.detail.as_str());
             match package.bytes {
                 Some(bytes) => row.value(size(bytes)),
@@ -331,7 +331,7 @@ fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
         .collect();
     if !restart.is_empty() {
         sheet.row(
-            Row::info("restart", names(&restart))
+            Row::new("restart", names(&restart))
                 .value("restart")
                 .tone(Tone::Attention),
         );
@@ -344,7 +344,7 @@ fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
             .collect();
         if !stops.is_empty() {
             sheet.row(
-                Row::info("in-use", format!("{} drops for a moment", in_use.label))
+                Row::new("in-use", format!("{} drops for a moment", in_use.label))
                     .detail(format!(
                         "{} restart{} Bluetooth or sound",
                         names(&stops),
@@ -359,14 +359,14 @@ fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
         .filter_map(|update| update.caution.as_ref())
         .enumerate()
     {
-        sheet.row(Row::info(format!("caution:{index}"), label.as_str()).tone(Tone::Attention));
+        sheet.row(Row::new(format!("caution:{index}"), label.as_str()).tone(Tone::Attention));
     }
     for update in set
         .iter()
         .filter(|update| update.held == Some(Held::Administrator))
     {
         sheet.row(
-            Row::info(format!("release:{}", update.id), "Its hold comes off")
+            Row::new(format!("release:{}", update.id), "Its hold comes off")
                 .detail(update.label.as_str())
                 .tone(Tone::Attention),
         );
@@ -374,7 +374,7 @@ fn install(session: &Session, id: &str, set: &[&Update]) -> Sheet {
     let held = session.held();
     if !held.is_empty() {
         sheet.row(
-            Row::info(
+            Row::new(
                 "held",
                 format!(
                     "{} {} held",
@@ -418,7 +418,7 @@ fn failed(session: &Session) -> Option<Sheet> {
         },
     );
     sheet.row(
-        Row::info("reason", failed.failure.reason.label())
+        Row::new("reason", failed.failure.reason.label())
             .detail(failed.failure.reason.detail())
             .tone(Tone::Attention)
             .attention(true),
@@ -426,7 +426,7 @@ fn failed(session: &Session) -> Option<Sheet> {
     for update in failed.updates.iter().filter(|update| update.restart) {
         if let Some(running) = update.running.as_deref() {
             sheet.row(
-                Row::info(
+                Row::new(
                     format!("running:{}", update.id),
                     format!("{running} keeps running"),
                 )

@@ -28,7 +28,7 @@ pub(super) fn row_at<'a>(page: &'a Page, items: &[Item], index: usize) -> Option
 
 pub(super) fn selectable(page: &Page, items: &[Item]) -> Vec<usize> {
     (0..items.len())
-        .filter(|index| row_at(page, items, *index).is_some_and(|row| !row.info))
+        .filter(|index| row_at(page, items, *index).is_some())
         .collect()
 }
 
@@ -39,28 +39,41 @@ pub(super) fn header_of(items: &[Item], index: usize) -> Option<usize> {
         .rposition(|item| matches!(item, Item::Header(_)))
 }
 
-pub(super) fn resolve(page: &Page, selected: Option<&str>, previous: usize) -> Option<usize> {
+pub(super) fn resolve(page: &Page, wanted: &[&str], previous: usize) -> Option<usize> {
     let items = items(page);
     let selectable = selectable(page, &items);
-    if let Some(id) = selected {
+    for id in wanted {
         let found = selectable
             .iter()
             .copied()
-            .find(|index| row_at(page, &items, *index).is_some_and(|row| row.id == id));
+            .find(|index| row_at(page, &items, *index).is_some_and(|row| row.id == *id));
         if found.is_some() {
             return found;
         }
     }
-    selectable
+    let acting: Vec<usize> = selectable
+        .iter()
+        .copied()
+        .filter(|index| row_at(page, &items, *index).is_some_and(|row| row.copies().is_none()))
+        .collect();
+    let candidates = if acting.is_empty() {
+        &selectable
+    } else {
+        &acting
+    };
+    candidates
         .iter()
         .copied()
         .find(|index| *index >= previous)
-        .or_else(|| selectable.last().copied())
+        .or_else(|| candidates.last().copied())
 }
 
 pub(super) fn settle(page: &Page, place: &Place) -> Option<usize> {
-    let wanted = place.selected.as_deref().or(page.focus.as_deref());
-    resolve(page, wanted, place.index)
+    let wanted: Vec<&str> = [place.selected.as_deref(), page.focus.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    resolve(page, &wanted, place.index)
 }
 
 pub(super) fn step(page: &Page, current: usize, direction: isize) -> Option<usize> {
@@ -73,10 +86,15 @@ pub(super) fn step(page: &Page, current: usize, direction: isize) -> Option<usiz
 }
 
 pub(super) fn enter_verb(row: &Row) -> Option<String> {
+    if row.copies().is_some() {
+        return Some("copy".into());
+    }
     match (&row.control, &row.enter) {
         (_, None) => None,
         (Some(Control::Toggle(_)), _) => Some("flip".into()),
         (Some(Control::Button(label)), _) => Some(label.trim_end_matches('…').to_string()),
+        (Some(Control::Destroy { verb, .. }), _) => Some(verb.clone()),
+        (_, Some(Enter::Press)) if row.opens => Some("open".into()),
         (_, Some(Enter::Open(_) | Enter::Replace(_))) => Some("open".into()),
         (_, Some(Enter::Back)) => Some("back".into()),
         (_, Some(Enter::Press)) => Some("choose".into()),
@@ -157,6 +175,11 @@ pub(super) fn reconcile(stack: &mut Vec<Place>, pages: &Pages) -> bool {
         .max(1);
     let trimmed = keep < stack.len();
     stack.truncate(keep);
+    if trimmed {
+        if let Some(top) = stack.last_mut() {
+            top.selected = None;
+        }
+    }
     trimmed
 }
 
@@ -174,7 +197,7 @@ mod tests {
             )
             .group(
                 Group::new("what finishes", "installed, waiting.")
-                    .row(Row::info("kernel", "Linux kernel 6.8.0-147"))
+                    .row(Row::new("kernel", "Linux kernel 6.8.0-147"))
                     .row(Row::new("now", "Restart now").button("restart…").press()),
             )
     }
@@ -192,18 +215,38 @@ mod tests {
                 Item::Row(1, 1),
             ]
         );
-        assert_eq!(selectable(&page(), &items(&page())), [1, 2, 5]);
+        assert_eq!(selectable(&page(), &items(&page())), [1, 2, 4, 5]);
         assert_eq!(header_of(&items(&page()), 5), Some(3));
         assert_eq!(header_of(&items(&page()), 2), Some(0));
     }
 
     #[test]
     fn selection_follows_the_row_id_then_the_old_place() {
-        assert_eq!(resolve(&page(), Some("now"), 0), Some(5));
-        assert_eq!(resolve(&page(), Some("gone"), 3), Some(5));
-        assert_eq!(resolve(&page(), Some("gone"), 9), Some(5));
-        assert_eq!(resolve(&page(), None, 0), Some(1));
-        assert_eq!(resolve(&Page::new("empty"), None, 0), None);
+        assert_eq!(resolve(&page(), &["now"], 0), Some(5));
+        assert_eq!(resolve(&page(), &["gone"], 3), Some(5));
+        assert_eq!(resolve(&page(), &["kernel"], 0), Some(4));
+        assert_eq!(resolve(&page(), &["gone"], 9), Some(5));
+        assert_eq!(resolve(&page(), &["gone", "tonight"], 9), Some(2));
+        assert_eq!(resolve(&page(), &[], 0), Some(1));
+        assert_eq!(resolve(&Page::new("empty"), &[], 0), None);
+    }
+
+    #[test]
+    fn a_page_without_focus_opens_on_a_row_that_acts_before_one_that_copies() {
+        let notes = Page::new("ask").group(
+            Group::new("ask", "the computer restarts.")
+                .row(Row::new("in-use", "Speakers stop playing"))
+                .row(Row::new("cancel", "Cancel").back())
+                .row(Row::new("go", "Restart now").button("restart").press()),
+        );
+        assert_eq!(resolve(&notes, &[], 0), Some(2));
+        let only = Page::new("about").group(
+            Group::new("this computer", "on this network.")
+                .row(Row::new("hostname", "Hostname").value("desk"))
+                .row(Row::new("ip", "IP address").value("10.0.0.2")),
+        );
+        assert_eq!(resolve(&only, &[], 0), Some(1));
+        assert_eq!(resolve(&only, &[], 9), Some(2));
     }
 
     #[test]
@@ -217,12 +260,16 @@ mod tests {
             settle(&page.clone().focus("gone"), &Place::new("restart")),
             Some(1)
         );
+        place.selected = Some("removed".into());
+        place.index = 1;
+        assert_eq!(settle(&page, &place), Some(5));
     }
 
     #[test]
-    fn steps_skip_headers_and_info_rows_and_stop_at_the_ends() {
-        assert_eq!(step(&page(), 2, 1), Some(5));
-        assert_eq!(step(&page(), 5, -1), Some(2));
+    fn steps_skip_headers_and_stop_at_the_ends() {
+        assert_eq!(step(&page(), 2, 1), Some(4));
+        assert_eq!(step(&page(), 4, 1), Some(5));
+        assert_eq!(step(&page(), 5, -1), Some(4));
         assert_eq!(step(&page(), 5, 1), Some(5));
         assert_eq!(step(&page(), 1, -1), Some(1));
     }
@@ -236,7 +283,7 @@ mod tests {
             [
                 Some("open".to_string()),
                 Some("flip".to_string()),
-                None,
+                Some("copy".to_string()),
                 Some("restart".to_string()),
             ]
         );
@@ -247,6 +294,18 @@ mod tests {
         assert_eq!(
             enter_verb(&Row::new("c", "02:00").check(true).press()).as_deref(),
             Some("choose")
+        );
+        let pair = Row::new("pair", "Pair a phone").press_open();
+        assert_eq!(enter_verb(&pair).as_deref(), Some("open"));
+        assert!(opens(&pair));
+        let remove = Row::new("remove", "Remove this phone").destroy("remove", "remove Pixel 8");
+        assert_eq!(enter_verb(&remove).as_deref(), Some("remove"));
+        assert!(!opens(&remove));
+        let server = Row::new("server", "PointZerver").feature(true, "1 phone", "pointzerver");
+        assert_eq!(enter_verb(&server).as_deref(), Some("open"));
+        assert_eq!(
+            enter_verb(&Row::new("app", "Get the phone app").qr("https://example.com")),
+            None
         );
     }
 
@@ -295,6 +354,15 @@ mod tests {
         let mut empty = Vec::new();
         reconcile(&mut empty, &pages);
         assert_eq!(names(&empty), ["main"]);
+
+        let mut exposed = stack(&["main", "waiting", "gone"]);
+        exposed[1].selected = Some("old".into());
+        assert!(reconcile(&mut exposed, &pages));
+        assert_eq!(exposed[1].selected, None);
+        let mut kept = stack(&["main", "waiting"]);
+        kept[1].selected = Some("old".into());
+        assert!(!reconcile(&mut kept, &pages));
+        assert_eq!(kept[1].selected.as_deref(), Some("old"));
 
         let mut lost = stack(&["main", "waiting"]);
         assert!(reconcile(&mut lost, &Pages::new("main")));

@@ -4,7 +4,7 @@ uid = "9cb88d65-1d43-4fde-95b6-105761f0a14b"
 name = "PointZerver"
 icon = "pointz"
 description = "Control your computer from your phone"
-version = "1.80.4"
+version = "1.81.0"
 author = "KMRH47"
 platforms = ["linux", "macos", "windows"]
 
@@ -20,6 +20,11 @@ args = ["--action", "settings"]
 [action.begin_pairing]
 label = "Pair a phone"
 args = ["begin_pairing"]
+
+[action.press]
+label = "Press a Row"
+args = ["press"]
+hotkey = false
 
 [capabilities]
 gpui = true

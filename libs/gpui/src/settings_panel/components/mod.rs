@@ -3,7 +3,9 @@ use gpui::prelude::*;
 use gpui::{div, px, rgb, rgba, ElementId, Rgba, SharedString};
 use qol_theme::TextStyle;
 
+use crate::action_mark::ActionMark;
 use crate::busy::Busy;
+use crate::icon::icon;
 use crate::kit::kit;
 use crate::kit::Kit;
 use crate::theme::Ground;
@@ -11,6 +13,7 @@ use crate::theme::Ground;
 mod choice_value;
 mod device_entry;
 mod display_layout_tile;
+mod feature;
 mod feedback;
 mod finder;
 mod group_header;
@@ -36,6 +39,7 @@ pub use display_layout_tile::{
     display_layout_ghost, display_layout_stage, display_layout_tile, display_layout_tile_style,
     DisplayLayoutTile, DisplayLayoutTileStyle,
 };
+pub use feature::SettingsFeature;
 pub use feedback::SettingsFeedback;
 pub use finder::{
     settings_finder_empty, settings_search_mark, settings_signal_bars, FinderPickEnd,
@@ -50,7 +54,7 @@ pub(super) use number_field::{number_field, NumberCue, NumberText, SliderStyle};
 pub use placement_preview::{
     placement_caption, placement_hold_progress, placement_toast, PlacementHold,
 };
-pub(super) use qr_code::qr_code_display;
+pub(super) use qr_code::{qr_block, qr_code_display, qr_heights, QrBlock};
 pub use row::{settings_row_shade, SettingsRow};
 pub use text_field::SettingsTextField;
 pub use tile::{
@@ -304,63 +308,63 @@ pub fn settings_value_text(
     }
 }
 
-pub fn settings_action_affordance(
+const ACTION_MARK_SIZE: f32 = 14.0;
+
+pub fn settings_action_mark(
     id: impl Into<ElementId>,
-    label: impl Into<SharedString>,
-    variant: Option<&str>,
+    mark: ActionMark,
     busy: bool,
     row: RowGround,
     kit: Kit,
 ) -> gpui::Div {
+    let frame = action_mark_frame();
+    if busy || mark == ActionMark::Busy {
+        return frame.child(settings_action_spinner(id, kit).size(px(12.)));
+    }
     let ground = row.rest(kit);
-    let hover = row.hover(kit);
-    let band = row == RowGround::Band;
-    let (background, text) = if band && variant != Some("danger") {
-        (rgba(ground.well.packed()), ground.ink)
+    let ink = if mark.is_danger() {
+        kit.palette.danger
     } else {
-        match variant {
-            Some("ghost") => (rgb(kit.grounds.menu.bg), kit.grounds.pane.soft),
-            Some("danger") => (
-                rgba(qol_theme::translucent(
-                    kit.palette.danger,
-                    qol_theme::Alpha::Halo,
-                )),
-                kit.palette.danger,
-            ),
-            Some("primary") | None | Some(_) => (rgb(kit.grounds.band.bg), kit.grounds.pane.ink),
+        match row {
+            RowGround::Pane => ground.soft,
+            RowGround::Band => ground.ink,
         }
     };
-    let mut control = div()
+    frame.children(mark.icon().map(|glyph| icon(glyph, ACTION_MARK_SIZE, ink)))
+}
+
+fn action_mark_frame() -> gpui::Div {
+    div()
         .flex()
-        .flex_row()
+        .flex_none()
         .items_center()
-        .gap(px(qol_theme::SPACE_TIGHT));
-    if busy {
-        control = control.child(settings_action_spinner(id, kit).size(px(12.)));
+        .justify_center()
+        .size(px(ACTION_MARK_SIZE))
+}
+
+pub const COPIED_DESCRIPTION: &str = "Copied to the clipboard";
+
+pub fn settings_copy_mark(
+    id: impl Into<ElementId>,
+    copied: bool,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    if !copied {
+        return settings_action_mark(id, ActionMark::Copy, false, row, kit);
     }
-    let control = control
-        .px(px(qol_theme::SPACE_INSET))
-        .py(px(qol_theme::SPACE_TIGHT))
-        .rounded(px(qol_theme::RADIUS_CONTROL))
-        .when(variant == Some("ghost") && !band, |control| {
-            control.shadow(crate::kit::raised_shadow(kit.grounds.pane.ink))
-        })
-        .text(TextStyle::ListName);
-    let control = if variant == Some("danger") {
-        control.bg(background)
-    } else {
-        ground_bg(
-            control,
-            background,
-            hover.map(|hover| rgba(hover.well.packed())),
-        )
-    };
-    let element = if variant == Some("danger") {
-        div().text_color(rgb(text))
-    } else {
-        ground_text(div(), rgb(text), hover.map(|hover| rgb(hover.ink)))
-    };
-    control.child(element.child(label.into()))
+    action_mark_frame().children(
+        ActionMark::Copy
+            .icon()
+            .map(|glyph| icon(glyph, ACTION_MARK_SIZE, kit.palette.success)),
+    )
+}
+
+pub fn settings_copied_description(kit: Kit) -> gpui::Div {
+    div()
+        .text(TextStyle::Detail)
+        .text_color(rgb(kit.palette.success))
+        .child(COPIED_DESCRIPTION)
 }
 
 pub fn rail_caption_height() -> f32 {
@@ -436,6 +440,27 @@ pub fn settings_label_group(
         .flex_col()
         .gap(px(qol_theme::SPACE_STACK))
         .child(settings_label(label, kit))
+        .children(description.map(|text| settings_description(text, row, kit)))
+}
+
+pub fn settings_destroy_label_group(
+    label: impl Into<SharedString>,
+    description: Option<SharedString>,
+    row: RowGround,
+    kit: Kit,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(qol_theme::SPACE_STACK))
+        .child(
+            div()
+                .text(TextStyle::Name)
+                .text_color(rgb(kit.palette.danger))
+                .child(label.into()),
+        )
         .children(description.map(|text| settings_description(text, row, kit)))
 }
 

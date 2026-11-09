@@ -1,3 +1,5 @@
+pub(crate) mod pages;
+
 pub const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 
 pub fn open_settings() {

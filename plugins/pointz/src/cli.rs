@@ -5,7 +5,7 @@ use qol_headless::{Command, CommandResult, DoctorCheck, HeadlessApp};
 
 const PLUGIN_ID: &str = env!("QOL_PLUGIN_ID");
 const PUBLIC_FLAG: &str = "--public";
-const DIRECT_ACTIONS: [(&str, &str); 5] = [
+const DIRECT_ACTIONS: [(&str, &str); 6] = [
     ("settings", "Open the PointZerver settings surface."),
     (
         "begin_pairing",
@@ -19,6 +19,10 @@ const DIRECT_ACTIONS: [(&str, &str); 5] = [
     (
         "connection_info",
         "Request hostname, IP address, and port metadata.",
+    ),
+    (
+        "press",
+        "Forward a press to the running daemon; the settings panel sends the page and the row.",
     ),
 ];
 
@@ -650,6 +654,7 @@ mod tests {
             "ping",
             "connection_status",
             "connection_info",
+            "press",
             "kill",
             "doctor",
         ] {
