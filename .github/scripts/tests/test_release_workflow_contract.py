@@ -1181,11 +1181,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             registry.index("- name: Push registry artifact"),
         )
         self.assertIn("packages: write", registry)
-        self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
-        self.assertLess(
-            registry.index("ref: ${{ env.RELEASE_REF }}"),
-            registry.index("- name: Checkout the registry tool from main"),
-        )
+        source = named_step(registry, "Checkout the release source", "      ")
+        for contract in ["ref: ${{ env.RELEASE_REF }}", "path: source", "persist-credentials: false"]:
+            with self.subTest(contract=contract):
+                self.assertIn(contract, source)
+        self.assertEqual(registry.count("RELEASE_REF"), 1)
+        self.assertIn("working-directory: source", push_source(registry))
+        self.assertNotIn("working-directory: source", named_step(registry, "Build registry tool", "      "))
         checkout = named_step(registry, "Checkout the registry tool from main", "      ")
         for contract in ["ref: main", "path: trusted", "persist-credentials: false"]:
             with self.subTest(contract=contract):
@@ -1195,7 +1197,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("workspace: trusted", registry)
         self.assertIn("working-directory: trusted", named_step(registry, "Build registry tool", "      "))
         self.assertNotIn("uses: ./.github/actions/rust-setup", registry)
-        self.assertIn("trusted/target/debug/qol-plugin-registry push", push_source(registry))
+        self.assertIn("../trusted/target/debug/qol-plugin-registry push", push_source(registry))
+        self.assertIn("--files ../release_files", push_source(registry))
         push = named_step(registry, "Push registry artifact", "      ")
         for contract in [
             "set -euo pipefail",

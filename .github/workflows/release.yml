@@ -140,9 +140,11 @@ jobs:
     env:
       RUSTFLAGS: -D warnings -C link-arg=-fuse-ld=lld
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout the release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.RELEASE_REF }}
+          path: source
           persist-credentials: false
 
       - name: Checkout the registry tool from main
@@ -170,15 +172,16 @@ jobs:
         run: cargo build --locked -p qol-plugin-registry
 
       - name: Push registry artifact
+        working-directory: source
         env:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
         run: |
           set -euo pipefail
-          trusted/target/debug/qol-plugin-registry push \
+          ../trusted/target/debug/qol-plugin-registry push \
             --registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins" \
             --source "https://github.com/${GITHUB_REPOSITORY}" \
-            --tag "${RELEASE_TAG}" --files release_files | tee -a "${GITHUB_STEP_SUMMARY}"
+            --tag "${RELEASE_TAG}" --files ../release_files | tee -a "${GITHUB_STEP_SUMMARY}"
 
   index:
     name: Refresh plugin index
