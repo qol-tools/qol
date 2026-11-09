@@ -37,6 +37,8 @@ class PatternTests(unittest.TestCase):
             "plugins/cli-sessions/src/ui/render.rs",
             "libs/sessions-engine/src/switchboard/rows.rs",
             "apps/tray/src/settings_surface/mod.rs",
+            "plugins/lights/qol-config.toml",
+            "plugins/lights/qol-runtime.toml",
             "plugins/cli-sessions/src/attention/mod.rs",
             "libs/sessions-engine/src/switchboard/resume.rs",
             ".github/workflows/ci.yml",
@@ -48,6 +50,7 @@ class PatternTests(unittest.TestCase):
                 "plugins/cli-sessions/src/ui/render.rs",
                 "libs/sessions-engine/src/switchboard/rows.rs",
                 "apps/tray/src/settings_surface/mod.rs",
+                "plugins/lights/qol-config.toml",
             ],
         )
 
