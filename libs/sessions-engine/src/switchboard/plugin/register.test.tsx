@@ -3349,6 +3349,59 @@ test('the close command stops the fork you write to and drops it from the board,
   expect(rows().find(row => row.agentId === 'a8')?.isClosed).toBeUndefined()
 })
 
+test('closing a fork closes the sub-forks it started before it, and a busy sub-fork holds the close until it is pressed again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const stops: string[] = []
+  const calls: string[][] = []
+  engine(on, [], [], [], store)
+  recordEngine(on, calls)
+  on('clock.after', () => new Promise(() => {}))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  on('session.messages', () => ({ value: [] }))
+  on('agent.list', () => ({ value: ['p1', 'k1', 'k2', 'g1', 'o1', 'p2', 'k3'].map(id => ({ id, status: 'running' })) }))
+  on('tool.call', (_: unknown, e: { tool: string; task_id?: string }) => {
+    stops.push(`${e.tool} ${e.task_id ?? ''}`)
+    return { result: { message: 'stopped' } }
+  })
+  const close = async () => String((await $.command.run({ command: 'close-fork', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  const write = (name: string) => $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: `${name} hi` })
+  const closed = () => ((store.get('board:switchboard-session') as { agentId: string; isClosed?: boolean }[] | undefined) ?? []).filter(row => row.isClosed === true).map(row => row.agentId).sort()
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: parent')
+  await spawn($, 'k1', 'child-fork: child', 'p1')
+  await spawn($, 'k2', 'helper-fork: helper', 'p1')
+  await spawn($, 'g1', 'grand-fork: grand', 'k1')
+  await spawn($, 'o1', 'other-fork: other')
+  await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
+  await deliver($, notification('k1', 'child-fork: child', 'Half of it is in.'))
+  await deliver($, notification('g1', 'grand-fork: grand', 'Looked it up.'))
+  await deliver($, notification('o1', 'other-fork: other', 'The build is green.'))
+  await settle()
+  await write('parent-fork')
+  expect(await close()).toContain("parent-fork's sub-fork helper-fork is still working, so parent-fork stays open. ctrl+x ctrl+x again closes it anyway, with its 3 sub-forks.")
+  expect(stops).toEqual([])
+  expect(closed()).toEqual([])
+  expect(await close()).toContain('Closed parent-fork and its 3 sub-forks. They moved to RECENT on the board')
+  expect([...stops].sort()).toEqual(['TaskStop g1', 'TaskStop k1', 'TaskStop k2', 'TaskStop p1'])
+  expect(stops.at(-1)).toBe('TaskStop p1')
+  expect(stops.indexOf('TaskStop g1')).toBeLessThan(stops.indexOf('TaskStop k1'))
+  expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
+  expect(verbs(calls, 'done').map(call => call[2]).sort()).toEqual(['child-fork', 'grand-fork', 'helper-fork', 'parent-fork'])
+  const board = String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)
+  expect(board).toContain('agent id o1')
+  for (const gone of ['p1', 'k1', 'k2', 'g1']) expect(board).not.toContain(`agent id ${gone}`)
+  await spawn($, 'p2', 'second-fork: second')
+  await spawn($, 'k3', 'aide-fork: aide', 'p2')
+  await deliver($, notification('k3', 'aide-fork: aide', 'Read the file.'))
+  await settle()
+  await write('second-fork')
+  expect(await close()).toContain('second-fork is still working, so it stays open. ctrl+x ctrl+x again closes it anyway, with its 1 sub-fork.')
+  expect(closed()).toEqual(['g1', 'k1', 'k2', 'p1'])
+})
+
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []

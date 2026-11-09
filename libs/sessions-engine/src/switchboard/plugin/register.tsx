@@ -1764,20 +1764,10 @@ const RECENT_MAX = 5
 export const CLOSE_AGAIN_MS = 10_000
 let closeArmed = { agentId: '', at: 0 }
 
-export const closeFork = async ($: EngineInterface): Promise<string> => {
-  const agentId = viewedFork ?? (await read($, writingTo))
-  const entry = agentId === '' ? undefined : (await read($, board)).find(one => one.agentId === agentId)
-  if (entry === undefined) return 'No fork to close: write to one or open its conversation first.'
-  const name = keyName(entry.name)
-  const now = await $.clock.now()
-  const watched = pullsOf(await read($, pulls), agentId).find(pull => pull.mergeCommit === undefined && pull.isWatched)
-  const busy = entry.isWorking ? 'is still working' : watched !== undefined ? `still watches #${watched.number ?? '?'}` : undefined
-  const isForced = closeArmed.agentId === agentId && now - closeArmed.at < CLOSE_AGAIN_MS
-  if (busy !== undefined && !isForced) {
-    closeArmed = { agentId, at: now }
-    return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway.`
-  }
-  closeArmed = { agentId: '', at: 0 }
+const subForksText = (count: number): string => `${count} sub-fork${count === 1 ? '' : 's'}`
+
+const endFork = async ($: EngineInterface, entry: Entry): Promise<string | undefined> => {
+  const { agentId } = entry
   closing.add(agentId)
   try {
     if (listedAgents(await $.agent.list().catch(() => [])).has(agentId)) {
@@ -1785,7 +1775,7 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
         .call({ tool: 'TaskStop', task_id: agentId })
         .then(one => one.deny ?? (one.isError === true ? (one.text ?? 'TaskStop failed') : undefined))
         .catch((error: unknown) => String(error))
-      if (failed !== undefined) return `${name} could not be closed: ${printable(failed)}`
+      if (failed !== undefined) return `${keyName(entry.name)} could not be closed: ${printable(failed)}`
     }
     await change($, list => list.map(one => (one.agentId === agentId ? { ...one, isWorking: false, isDismissed: true, isClosed: true, isDone: true } : one)))
   } finally {
@@ -1793,13 +1783,48 @@ export const closeFork = async ($: EngineInterface): Promise<string> => {
   }
   const row = entry.key === undefined ? await backfill($, entry) : entry
   if (row.key !== undefined) await recordRun($, 'done', ['--key', row.key, '--reason', CLOSED_REASON])
-  if ((await read($, writingTo)) === agentId) await writeTo($, undefined)
+  return undefined
+}
+
+export const closeFork = async ($: EngineInterface): Promise<string> => {
+  const agentId = viewedFork ?? (await read($, writingTo))
+  const list = await read($, board)
+  const entry = agentId === '' ? undefined : list.find(one => one.agentId === agentId)
+  if (entry === undefined) return 'No fork to close: write to one or open its conversation first.'
+  const name = keyName(entry.name)
+  const now = await $.clock.now()
+  const subs = forksUnder(list, entry)
+  const watching = await read($, pulls)
+  const busyOf = (one: Entry): string | undefined => {
+    const watched = pullsOf(watching, one.agentId).find(pull => pull.mergeCommit === undefined && pull.isWatched)
+    return one.isWorking ? 'is still working' : watched !== undefined ? `still watches #${watched.number ?? '?'}` : undefined
+  }
+  const busy = busyOf(entry)
+  const busySubs = subs.filter(sub => busyOf(sub) !== undefined)
+  const isForced = closeArmed.agentId === agentId && now - closeArmed.at < CLOSE_AGAIN_MS
+  if ((busy !== undefined || busySubs.length > 0) && !isForced) {
+    closeArmed = { agentId, at: now }
+    const withSubs = subs.length === 0 ? '' : `, with its ${subForksText(subs.length)}`
+    if (busy !== undefined) return `${name} ${busy}, so it stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+    const [first] = busySubs
+    const atWork = first === undefined ? '' : `${keyName(first.name)} ${busyOf(first) ?? ''}`
+    const others = busySubs.length === 1 ? '' : ` and ${busySubs.length - 1} more of its sub-forks ${busySubs.length === 2 ? 'is' : 'are'} busy`
+    return `${name}'s sub-fork ${atWork}${others}, so ${name} stays open. ${CLOSE_CHORD} again closes it anyway${withSubs}.`
+  }
+  closeArmed = { agentId: '', at: 0 }
+  for (const one of [...subs].reverse().concat(entry)) {
+    const failed = await endFork($, one)
+    if (failed !== undefined) return failed
+  }
+  const closed = new Set([agentId, ...subs.map(sub => sub.agentId)])
+  if (closed.has(await read($, writingTo))) await writeTo($, undefined)
   if (viewedFork === agentId) await $.ui.view({}).catch(() => undefined)
   const key = keyOf(entry)
   await dropTypedKey($, key)
   const [later] = CLEAR_TYPED_MS
   if (later !== undefined) $.clock.after(later, () => void dropTypedKey($, key))
-  return `Closed ${name}. It moved to RECENT on the board; its row in the agent list turns red until Claude Code drops it, within half a minute.`
+  if (subs.length === 0) return `Closed ${name}. It moved to RECENT on the board; its row in the agent list turns red until Claude Code drops it, within half a minute.`
+  return `Closed ${name} and its ${subForksText(subs.length)}. They moved to RECENT on the board; their rows in the agent list turn red until Claude Code drops them, within half a minute.`
 }
 
 const dropTypedKey = async ($: EngineInterface, key: string): Promise<void> => {
@@ -2598,7 +2623,7 @@ export const register: Register = on => {
       await noteReopen($, { at: await $.clock.now(), start: id, boards: others.length, carried: earlier.length, own: own.length, rows: merged.map(one => one.agentId), pending })
       if (pending.length > 0) await $.store.set(REOPEN_PREFIX + id, pending)
       await $.command.register({ name: PANE, description: "Show the fork board: each fork's last report, what needs you first", immediate: true })
-      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open (${CLOSE_CHORD} once bound): it moves under RECENT on the board and leaves the agent list within half a minute`, immediate: true })
+      await $.command.register({ name: CLOSE, description: `Close the fork you write to or have open, with the sub-forks it started (${CLOSE_CHORD} once bound): they move under RECENT on the board and leave the agent list within half a minute`, immediate: true })
       void Promise.all([
         $.tool.register({
         name: TOOL,
