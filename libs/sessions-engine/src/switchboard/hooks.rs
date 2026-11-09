@@ -19,6 +19,7 @@ pub(super) const PRE_AGENT: &str = "pre-agent";
 pub(super) const FORK_CONTEXT: &str = "fork-context";
 pub(super) const AGENT_ROWS: &str = "agent-rows";
 pub(super) const FORK_STATES: &str = "fork-states";
+pub(super) const FOLD_TRANSCRIPTS: &str = "fold-transcripts";
 pub(super) const ROLE_REFRESH: &str = "role-refresh";
 pub(super) const ROLE_REFRESH_SLOTS: usize = 3;
 pub(super) const ROLE_REFRESH_SOURCES: &str = "resume|compact";
@@ -261,7 +262,7 @@ fn read_payload() -> Result<Payload> {
 pub(super) fn run(args: &[OsString]) -> Result<()> {
     let name = args.first().and_then(|arg| arg.to_str()).ok_or_else(|| {
         anyhow!(
-            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}>"
+            "usage: switchboard hook <{PRE_AGENT}|{FORK_CONTEXT} N|{ROLE_REFRESH} N|{AGENT_ROWS}|{FORK_STATES}|{FOLD_TRANSCRIPTS} DIR>"
         )
     })?;
     match name {
@@ -272,6 +273,20 @@ pub(super) fn run(args: &[OsString]) -> Result<()> {
                 .read_to_string(&mut raw)
                 .context("failed to read the fork states payload")?;
             crate::cli::line(fork_states(&raw)?);
+            Ok(())
+        }
+        FOLD_TRANSCRIPTS => {
+            let conversations = args
+                .get(1)
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("{FOLD_TRANSCRIPTS} takes the conversations folder"))?;
+            if !super::adopt::is_switchboards(&conversations, switchboard_dir().as_deref()) {
+                bail!(
+                    "{} is not the switchboard's conversations folder",
+                    conversations.display()
+                );
+            }
+            crate::cli::line(serde_json::to_string(&super::fold::fold(&conversations))?);
             Ok(())
         }
         RETIRED_POST_AGENT => Ok(()),
@@ -604,6 +619,7 @@ mod tests {
             ROLE_REFRESH,
             AGENT_ROWS,
             FORK_STATES,
+            FOLD_TRANSCRIPTS,
         ] {
             assert!(error.contains(verb), "{verb}: {error}");
         }

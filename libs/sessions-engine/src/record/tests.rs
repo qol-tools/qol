@@ -160,7 +160,7 @@ fn part_appends_the_next_number_and_an_agent_id_already_held_changes_nothing() {
 }
 
 #[test]
-fn archive_copies_each_existing_transcript_and_skips_a_missing_one() {
+fn archive_shares_each_existing_transcript_and_skips_a_missing_one() {
     let root = tempfile::TempDir::new().unwrap();
     let store = store(root.path());
     claim(&store, 1, "work: thing");
@@ -202,6 +202,10 @@ fn archive_copies_each_existing_transcript_and_skips_a_missing_one() {
     assert_eq!(fs::read_to_string(archive(3)).unwrap(), "three\n");
     assert!(!archive(2).exists());
     assert!(archive(1).ends_with("records/work/part-1.jsonl"));
+    assert!(
+        crate::file_link::is_same_file(&first, &archive(1)),
+        "the archive is the transcript itself, so it costs no second copy and never goes stale"
+    );
 
     fs::write(&first, "one, grown\n").unwrap();
     fs::remove_file(&third).unwrap();
