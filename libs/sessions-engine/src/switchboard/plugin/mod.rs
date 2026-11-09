@@ -113,7 +113,7 @@ mod tests {
             "...(isFresh ? ['--fresh'] : [])",
             "$.env.get('QOL_SWITCHBOARD_CONVERSATIONS')",
             "const adopted = await adoptFork($, e.to, false)",
-            "const merged = await withRecords($, mergeBoards(earlier,",
+            "const merged = await withRecords($, mergeBoards(healed(earlier),",
         ] {
             assert!(MODULE.contains(needle), "{needle}");
         }
@@ -174,7 +174,7 @@ mod tests {
             "if (last !== undefined && last.turnId !== turnId) return",
             "if (e.agentId !== undefined && !isHeld && !isKilledOnly(e.text)) {",
             "await fillLaunchers($).catch(() => undefined)",
-            "await $.session.messages({ agentId: target })",
+            "await messagesOf($, target)",
             "...missingForks(rows, [...records.values()], await $.clock.now())",
             "WRITING TO",
             "on('prompt.change', async ($, e, next) => {",
@@ -220,7 +220,7 @@ mod tests {
             "if (result.exit_code === MERGED_EXIT && (await fileMerged($, result, fork).then(() => true, () => false))) return true",
             "'open · CLI Sessions watching' : 'open · no watcher'",
             "const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })",
-            "mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own)",
+            "mergeBoards(healed(earlier), live.length === 0 ? healed(own).map(cutIfWorking) : own)",
             "const sent = await sendTo($, entry, CONTINUE)",
             "!entry.isDismissed && entry.successor === undefined && entry.isDone !== true",
             "[program, 'sessions', 'record', verb, ...args]",
@@ -230,7 +230,7 @@ mod tests {
             "const recent = recentlyClosed(everyRow)",
             "void recordRun($, 'archive', ['--key', entry.key])",
             "void recordRun($, 'stopped', ['--key', before.key])",
-            "const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))",
+            "const merged = await withRecords($, mergeBoards(healed(earlier), live.length === 0 ? healed(own).map(cutIfWorking) : own))",
             "const sent = await sendTo($, entry, REOPENED, holdingVia($, direct($), RESTARTED_REPLY, isCut(entry)))",
             "await sendTo($, entry, BACK, holdingVia($, viaBand($, true), RESTARTED_REPLY, isCut(entry)))",
             "const reply = await heldReply($, e.agentId, e.turnId)",
