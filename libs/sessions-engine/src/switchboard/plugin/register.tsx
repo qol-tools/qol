@@ -2513,6 +2513,8 @@ export const register: Register = on => {
     if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
     if (key !== undefined) await recordPart($, key, agentId)
+    const model = isNew ? modelLineOf(e.prompt) : undefined
+    if (model !== undefined) await choose($, key ?? keyName(e.description), { model })
     return started
   }).catch(($, e, next) => next(e))
 
