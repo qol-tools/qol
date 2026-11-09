@@ -43,7 +43,7 @@ fn open(pages: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn the_root_holds_the_feature_row_pairing_the_app_and_this_computer() {
+fn the_root_holds_the_feature_row_the_app_and_this_computer() {
     let pages = build(&snapshot(), &Memory::new(), now());
     assert!(pages.problems().is_empty(), "{:?}", pages.problems());
     assert!(pages.dead_ends().is_empty(), "{:?}", pages.dead_ends());
@@ -63,10 +63,7 @@ fn the_root_holds_the_feature_row_pairing_the_app_and_this_computer() {
     let root = pages.page(ROOT).unwrap();
     assert_eq!(root.focus.as_deref(), Some(SERVER));
     let ids: Vec<&str> = root.rows().map(|row| row.id.as_str()).collect();
-    assert_eq!(
-        ids,
-        [SERVER, PAIR, APP, "hostname", "ip", "control", "discovery"]
-    );
+    assert_eq!(ids, [SERVER, APP, "hostname", "ip", "control", "discovery"]);
     assert_eq!(row(&pages, ROOT, APP).enter, Some(Enter::Open(APP.into())));
     let shown: Vec<(&str, Option<&str>)> = root.groups[1]
         .rows
@@ -137,7 +134,7 @@ fn the_feature_row_says_why_phones_cannot_reach_this_computer() {
 }
 
 #[test]
-fn the_pointzerver_page_lists_only_the_phones() {
+fn the_pointzerver_page_holds_pairing_then_the_phones() {
     let joined = phone("galaxy", "Galaxy S24", now() - TimeDelta::minutes(1));
     let pages = build(
         &Snapshot {
@@ -148,30 +145,29 @@ fn the_pointzerver_page_lists_only_the_phones() {
         now(),
     );
     let page = pages.page(LIST).unwrap();
-    let ids: Vec<&str> = page.rows().map(|row| row.id.as_str()).collect();
-    assert_eq!(ids, ["phone:galaxy", "phone:pixel"]);
-    let phones = &page.groups[0].rows;
+    let sections: Vec<(&str, Vec<&str>)> = page
+        .groups
+        .iter()
+        .map(|group| {
+            (
+                group.title.as_str(),
+                group.rows.iter().map(|row| row.id.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sections,
+        [
+            ("pairing", vec![PAIR]),
+            ("phones", vec!["phone:galaxy", "phone:pixel"]),
+        ]
+    );
+    let phones = &page.groups[1].rows;
     assert_eq!(phones[0].detail.as_deref(), Some("Paired just now"));
     assert_eq!(phones[1].detail.as_deref(), Some("Paired 3 November"));
-    let pair = row(&pages, ROOT, PAIR);
+    let pair = &page.groups[0].rows[0];
     assert!(pair.opens);
     assert_eq!(pair.enter, Some(Enter::Press));
-
-    let none = build(
-        &Snapshot {
-            phones: Vec::new(),
-            ..snapshot()
-        },
-        &Memory::new(),
-        now(),
-    );
-    let ids: Vec<&str> = none
-        .page(LIST)
-        .unwrap()
-        .rows()
-        .map(|row| row.id.as_str())
-        .collect();
-    assert_eq!(ids, [PAIR]);
 }
 
 #[test]
@@ -244,7 +240,6 @@ fn the_app_card_is_one_qr_row_and_a_phone_page_asks_before_it_removes() {
 fn presses_name_what_the_row_does() {
     assert_eq!(act(ROOT, SERVER, Some(false)), Act::Serve(false));
     assert_eq!(act(ROOT, SERVER, None), Act::Nothing);
-    assert_eq!(act(ROOT, PAIR, None), Act::Pair);
     assert_eq!(act(LIST, PAIR, None), Act::Pair);
     assert_eq!(act(PAIR, STOP, None), Act::Stop);
     assert_eq!(

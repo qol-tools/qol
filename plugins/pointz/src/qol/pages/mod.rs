@@ -113,7 +113,7 @@ pub(crate) enum Act {
 pub(crate) fn act(page: &str, row: &str, set: Option<bool>) -> Act {
     match (page, row, set) {
         (ROOT, SERVER, Some(on)) => Act::Serve(on),
-        (ROOT | LIST, PAIR, _) => Act::Pair,
+        (LIST, PAIR, _) => Act::Pair,
         (PAIR, STOP, _) => Act::Stop,
         (page, REMOVE, _) => match page.strip_prefix(PHONE) {
             Some(id) => Act::Remove(id.to_string()),
@@ -160,7 +160,6 @@ fn root(snapshot: &Snapshot) -> Page {
                     .feature(on, count(snapshot.phones.len()), LIST)
                     .attention(!healthy),
             )
-            .row(pair_row())
             .row(
                 Row::new(APP, "Get the phone app")
                     .detail("Scan to download the PointZ app.")
@@ -204,10 +203,12 @@ fn count(phones: usize) -> String {
 }
 
 fn list(snapshot: &Snapshot, memory: &Memory, now: DateTime<Local>) -> Page {
+    let pairing = Group::new("pairing", "add a phone that can control this computer.").row(
+        Row::new(PAIR, "Pair a phone")
+            .detail("Shows a one-minute code to type into the PointZ app")
+            .press_open(),
+    );
     let mut phones = Group::new("phones", "phones that can control this computer.");
-    if snapshot.phones.is_empty() {
-        phones.push(pair_row());
-    }
     for phone in &snapshot.phones {
         phones.push(
             Row::new(phone_id(&phone.id), phone.name.clone())
@@ -215,17 +216,11 @@ fn list(snapshot: &Snapshot, memory: &Memory, now: DateTime<Local>) -> Page {
                 .open(phone_id(&phone.id)),
         );
     }
-    let page = Page::new("pointzerver").group(phones);
+    let page = Page::new("pointzerver").group(pairing).group(phones);
     match &memory.focus {
         Some(focus) => page.focus(focus.clone()),
         None => page,
     }
-}
-
-fn pair_row() -> Row {
-    Row::new(PAIR, "Pair a phone")
-        .detail("Shows a one-minute code to type into the PointZ app")
-        .press_open()
 }
 
 fn pair(pairing: &Pairing) -> Page {
