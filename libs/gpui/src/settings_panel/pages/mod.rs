@@ -1,29 +1,33 @@
 mod model;
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::prelude::*;
 use gpui::{
-    div, px, AnyElement, App, AsyncApp, Context, Div, FocusHandle, Focusable, KeyDownEvent, Render,
-    Subscription, Task, WeakEntity, Window,
+    div, px, AnyElement, App, AsyncApp, ClipboardItem, Context, Div, FocusHandle, Focusable,
+    KeyDownEvent, Render, Subscription, Task, WeakEntity, Window,
 };
 use qol_config::contract::PagesSpec;
 use qol_config::pages::{
     Control, Enter, Go, Notice, Page, Pages, Press, PressReply, Row, Stack, Tone,
 };
 
+use crate::action_mark::ActionMark;
 use crate::deck;
 use crate::key::Key;
 use crate::kit::{kit, Chip};
 use crate::scrollbar::{ScrollSource, OVERFLOW_FADE_HEIGHT};
 
 use super::components::{
-    settings_busy_message, settings_label_group, settings_message, settings_page,
-    settings_value_group, RowGround, SettingsFeedback, SettingsHint, SettingsTick, SettingsToggle,
+    qr_block, qr_heights, settings_busy_message, settings_copied_description, settings_copy_mark,
+    settings_destroy_label_group, settings_label_group, settings_message, settings_page,
+    settings_value_group, HintTone, QrBlock, RowGround, SettingsFeature, SettingsFeedback,
+    SettingsHint, SettingsTick, SettingsToggle,
 };
 use super::{
-    escape_step, intent, settings_action_affordance, settings_action_spinner, settings_value_text,
+    escape_step, intent, settings_action_mark, settings_action_spinner, settings_value_text,
     CustomHints, CustomPanelCallback, CustomPanelContext, CustomPanelFactory,
     CustomPanelNoticeTone, CustomPanelNotifier, CustomPanelView, CustomSettingsBreadcrumbs,
     EscapeStep, Intent, SettingsDestination, SettingsGroupHeader, SettingsRow, SettingsRuntime,
@@ -83,6 +87,9 @@ pub(super) struct PagesView {
     loading: bool,
     visiting: bool,
     pressing: Option<(String, String)>,
+    asking: Option<(String, String)>,
+    copied: Option<(String, String)>,
+    codes: HashMap<String, Result<Vec<bool>, String>>,
     poller: Option<Task<()>>,
     subscriptions: Vec<Subscription>,
     opened: Instant,
@@ -127,6 +134,9 @@ impl PagesView {
             loading: false,
             visiting: false,
             pressing: None,
+            asking: None,
+            copied: None,
+            codes: HashMap::new(),
             poller: None,
             subscriptions: Vec::new(),
             opened: Instant::now(),
@@ -257,7 +267,7 @@ impl PagesView {
         cx.notify();
     }
 
-    fn press(&mut self, page: String, row: String, cx: &mut Context<Self>) {
+    fn press(&mut self, page: String, row: String, set: Option<bool>, cx: &mut Context<Self>) {
         if self.pressing.is_some() {
             return;
         }
@@ -269,6 +279,7 @@ impl PagesView {
             page,
             row,
             open: self.open_pages(),
+            set,
         })
         .unwrap_or_default();
         cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
@@ -386,6 +397,9 @@ impl PagesView {
     }
 
     fn back_to(&mut self, level: usize, cx: &mut Context<Self>) {
+        self.asking = None;
+        self.copied = None;
+        let stop = self.stop_on_leaving(level);
         self.sequence = self.sequence.wrapping_add(1);
         let depth = self.stack.len().saturating_sub(1);
         if let Moved::Popped(mut gone) = model::pop_to(&mut self.stack, level) {
@@ -393,6 +407,25 @@ impl PagesView {
                 self.leave(top, depth, cx);
             }
         }
+        if let Some((page, row)) = stop {
+            self.press(page, row, None, cx);
+        }
+    }
+
+    fn stop_on_leaving(&self, level: usize) -> Option<(String, String)> {
+        let pages = self.pages.as_ref()?;
+        self.stack.get(level + 1..)?.iter().rev().find_map(|place| {
+            let leave = pages.page(&place.page)?.leave.as_ref()?;
+            Some((place.page.clone(), leave.row.clone()))
+        })
+    }
+
+    fn front_leave_label(&self) -> Option<String> {
+        if self.stack.len() < 2 {
+            return None;
+        }
+        let (_, page) = self.front()?;
+        page.leave.as_ref().map(|leave| leave.label.clone())
     }
 
     fn front(&self) -> Option<(&Place, &Page)> {
@@ -438,7 +471,10 @@ impl PagesView {
             return;
         };
         let items = model::items(page);
-        if let Some(row) = model::row_at(page, &items, index).filter(|row| !row.info) {
+        if let Some(row) = model::row_at(page, &items, index) {
+            if place.selected.as_ref() != Some(&row.id) {
+                self.copied = None;
+            }
             place.index = index;
             place.selected = Some(row.id.clone());
             place.scroll.follow(
@@ -468,25 +504,64 @@ impl PagesView {
         let Some((page, row)) = self.selected_row() else {
             return;
         };
+        if matches!(row.control, Some(Control::Destroy { .. })) {
+            let asked = (page.clone(), row.id.clone());
+            if self.asking.as_ref() != Some(&asked) {
+                self.asking = Some(asked);
+                return;
+            }
+        }
+        self.asking = None;
+        if let Some(text) = row.copies() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+            self.copied = Some((page, row.id));
+            return;
+        }
         match row.enter {
             Some(Enter::Open(target)) => self.navigate(&Go::Open(target), cx),
             Some(Enter::Replace(target)) => self.navigate(&Go::Replace(target), cx),
             Some(Enter::Back) => self.navigate(&Go::Back, cx),
-            Some(Enter::Press) => self.press(page, row.id, cx),
+            Some(Enter::Press) => self.press(page, row.id, None, cx),
             None => {}
         }
     }
 
+    fn switch(&mut self, on: bool, cx: &mut Context<Self>) -> bool {
+        let Some((page, row)) = self.selected_row() else {
+            return false;
+        };
+        let Some(Control::Feature { on: now, .. }) = row.control else {
+            return false;
+        };
+        if now != on {
+            self.press(page, row.id, Some(on), cx);
+        }
+        true
+    }
+
     fn click(&mut self, index: usize, cx: &mut Context<Self>) {
+        let before = self.stack.last().map(|place| place.index);
+        if before != Some(index) {
+            self.asking = None;
+        }
         self.select(index);
         self.activate(cx);
         cx.notify();
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.asking.take().is_some() {
+            cx.notify();
+            return;
+        }
         match escape_step(self.stack.len().saturating_sub(1), false, true) {
             EscapeStep::PopCard => {
+                let level = self.stack.len().saturating_sub(2);
+                let stop = self.stop_on_leaving(level);
                 self.navigate(&Go::Back, cx);
+                if let Some((page, row)) = stop {
+                    self.press(page, row, None, cx);
+                }
                 cx.notify();
             }
             EscapeStep::CloseFilter | EscapeStep::AscendRail | EscapeStep::Dismiss => {
@@ -498,11 +573,23 @@ impl PagesView {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        match intent(
-            event.keystroke.key.as_str(),
-            event.keystroke.key_char.as_deref(),
-            false,
-        ) {
+        let key = event.keystroke.key.as_str();
+        if matches!(key, "left" | "right") && !event.keystroke.modifiers.modified() {
+            self.asking = None;
+            if self.switch(key == "right", cx) {
+                cx.notify();
+            }
+            return;
+        }
+        let wanted = intent(key, event.keystroke.key_char.as_deref(), false);
+        if !matches!(wanted, Some(Intent::Activate)) {
+            self.copied = None;
+        }
+        if !matches!(wanted, Some(Intent::Activate | Intent::Close)) && self.asking.take().is_some()
+        {
+            cx.notify();
+        }
+        match wanted {
             Some(Intent::Close) => {
                 self.escape(window, cx);
                 return;
@@ -533,6 +620,9 @@ impl PagesView {
         let [_, row_id, spinner_id, action_id] = if front { FRONT_IDS } else { CLOSING_IDS };
         let selected = front && place.selected.is_some() && place.index == index;
         let ground = RowGround::of(selected, focused);
+        if let Some(Control::Qr(url)) = &row.control {
+            return self.render_qr(row, url, index, selected && focused, front, spinner_id);
+        }
         let busy = row.busy
             || self
                 .pressing
@@ -540,8 +630,15 @@ impl PagesView {
                 .is_some_and(|(pressed_page, pressed_row)| {
                     *pressed_page == place.page && *pressed_row == row.id
                 });
+        let copied = front && self.copied == Some((place.page.clone(), row.id.clone()));
         let mut values = settings_value_group();
-        if busy && !matches!(row.control, Some(Control::Button(_))) {
+        if busy
+            && row.copies().is_none()
+            && !matches!(
+                row.control,
+                Some(Control::Button(_) | Control::Destroy { .. })
+            )
+        {
             values = values.child(settings_action_spinner((spinner_id, index), kit));
         }
         if let Some(tag) = &row.tag {
@@ -557,37 +654,114 @@ impl PagesView {
         }
         values = match &row.control {
             Some(Control::Toggle(on)) => values.child(SettingsToggle::new(*on, ground, kit)),
-            Some(Control::Button(label)) => values.child(settings_action_affordance(
+            Some(Control::Button(_)) => values.child(settings_action_mark(
                 (action_id, index),
-                label.clone(),
-                None,
+                ActionMark::Run,
                 busy,
                 ground,
                 kit,
             )),
             Some(Control::Check) => values.child(SettingsTick::new(ground, kit)),
-            None => values,
+            Some(Control::Feature { on, count }) => {
+                values.child(SettingsFeature::new(*on, count.clone(), ground, kit))
+            }
+            Some(Control::Destroy { .. }) => values.child(settings_action_mark(
+                (action_id, index),
+                ActionMark::Destroy,
+                busy,
+                ground,
+                kit,
+            )),
+            None if row.copies().is_some() => {
+                values.child(settings_copy_mark((action_id, index), copied, ground, kit))
+            }
+            Some(Control::Qr(_)) | None => values,
+        };
+        let feature = matches!(row.control, Some(Control::Feature { .. }));
+        let destroys = matches!(row.control, Some(Control::Destroy { .. }));
+        let detail = row.detail.clone().map(Into::into).filter(|_| !copied);
+        let label = if destroys {
+            settings_destroy_label_group(row.label.clone(), detail, ground, kit)
+        } else {
+            settings_label_group(row.label.clone(), detail, ground, kit).when(copied, |group| {
+                group.child(settings_copied_description(kit))
+            })
         };
         let mut element = SettingsRow::setting((row_id, index), kit)
             .selected(selected, focused)
-            .opens(model::opens(row))
+            .opens(model::opens(row) && !feature)
+            .destroys(destroys)
             .attention(row.attention)
             .dimmed(row.dim)
-            .child(settings_label_group(
-                row.label.clone(),
-                row.detail.clone().map(Into::into),
-                ground,
-                kit,
-            ))
+            .child(label)
             .child(values);
         if front {
             element = element.child(deck::bounds_recorder(Rc::clone(&self.row_bounds), index));
-            if !row.info {
-                element =
-                    element.on_click(cx.listener(move |view, _, _, cx| view.click(index, cx)));
-            }
+            element = element.on_click(cx.listener(move |view, _, _, cx| view.click(index, cx)));
         }
         element.into_any_element()
+    }
+
+    fn render_qr(
+        &self,
+        row: &Row,
+        url: &str,
+        index: usize,
+        highlighted: bool,
+        front: bool,
+        spinner_id: &'static str,
+    ) -> AnyElement {
+        let (modules, error) = match self.codes.get(url) {
+            Some(Ok(modules)) => (modules.as_slice(), None),
+            Some(Err(error)) => (&[][..], Some(error.as_str())),
+            None => (&[][..], None),
+        };
+        let (body, header) = qr_heights(row.detail.is_some());
+        let block = qr_block(
+            QrBlock {
+                label: &row.label,
+                description: row.detail.as_deref(),
+                placeholder: None,
+                url: (!modules.is_empty()).then_some(url),
+                modules,
+                error,
+            },
+            (spinner_id, index),
+            highlighted,
+            false,
+            body,
+            header,
+            kit(),
+        );
+        let block = block.relative();
+        if front {
+            block
+                .child(deck::bounds_recorder(Rc::clone(&self.row_bounds), index))
+                .into_any_element()
+        } else {
+            block.into_any_element()
+        }
+    }
+
+    fn cache_codes(&mut self) {
+        let Some(pages) = self.pages.as_ref() else {
+            return;
+        };
+        let wanted: Vec<String> = pages
+            .pages
+            .values()
+            .flat_map(|page| page.rows())
+            .filter_map(|row| match &row.control {
+                Some(Control::Qr(url)) => Some(url.clone()),
+                _ => None,
+            })
+            .collect();
+        self.codes.retain(|url, _| wanted.contains(url));
+        for url in wanted {
+            self.codes
+                .entry(url)
+                .or_insert_with_key(|url| super::rows::qr_modules(url));
+        }
     }
 
     fn render_page(
@@ -748,18 +922,46 @@ impl CustomSettingsBreadcrumbs for PagesView {
     }
 
     fn settings_hints(&self) -> Option<CustomHints> {
+        let selected = self.selected_row();
         let mut left = Vec::new();
-        if let Some(verb) = self
-            .selected_row()
-            .and_then(|(_, row)| model::enter_verb(&row))
-        {
+        if let Some((page, row)) = selected.as_ref() {
+            if let Some(Control::Destroy { ask, .. }) = &row.control {
+                let asked = (page.clone(), row.id.clone());
+                if self.asking.as_ref() == Some(&asked) {
+                    return Some(CustomHints {
+                        question: None,
+                        left: vec![
+                            SettingsHint::new(Key::ENTER, ask.clone()).tone(HintTone::Discard),
+                            SettingsHint::new(Key::UP_DOWN, "move"),
+                        ],
+                        right: vec![SettingsHint::new(Key::ESC, "keep it")],
+                    });
+                }
+            }
+        }
+        let row = selected.map(|(_, row)| row);
+        if let Some(Control::Feature { .. }) = row.as_ref().and_then(|row| row.control.as_ref()) {
+            left.push(SettingsHint::new(Key::LEFT, "off"));
+            left.push(SettingsHint::new(Key::RIGHT, "on"));
+        }
+        if let Some(verb) = row.as_ref().and_then(model::enter_verb) {
             left.push(SettingsHint::new(Key::ENTER, verb));
         }
-        left.push(SettingsHint::new(Key::UP_DOWN, "move"));
+        if !matches!(
+            row.as_ref().and_then(|row| row.control.as_ref()),
+            Some(Control::Qr(_))
+        ) {
+            left.push(SettingsHint::new(Key::UP_DOWN, "move"));
+        }
+        let escape = match self.front_leave_label() {
+            Some(label) => label,
+            None if self.stack.len() > 1 => "back".to_string(),
+            None => "close".to_string(),
+        };
         Some(CustomHints {
             question: None,
             left,
-            right: Vec::new(),
+            right: vec![SettingsHint::new(Key::ESC, escape)],
         })
     }
 }
@@ -791,6 +993,7 @@ impl Render for PagesView {
             self.start_polling(cx);
         }
         self.sync_selection();
+        self.cache_codes();
         if let Some((place, page)) = self.front() {
             let items = model::items(page);
             place.scroll.follow(

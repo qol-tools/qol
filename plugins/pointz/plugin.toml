@@ -21,6 +21,11 @@ args = ["--action", "settings"]
 label = "Pair a phone"
 args = ["begin_pairing"]
 
+[action.press]
+label = "Press a Row"
+args = ["press"]
+hotkey = false
+
 [capabilities]
 gpui = true
 doctor = true

@@ -226,6 +226,14 @@ fn pointz_commands_map_to_canonical_requests() {
             pointz(PointzRequest::CancelPairing {}),
         ),
         (
+            vec!["pointz", "on"],
+            pointz(PointzRequest::Serve { on: true }),
+        ),
+        (
+            vec!["pointz", "off"],
+            pointz(PointzRequest::Serve { on: false }),
+        ),
+        (
             vec!["pointz", "remove", "AQEBAQEBAQEBAQEBAQEBAQ"],
             Action::Mutation(Mutation::RemovePhone(device)),
         ),
