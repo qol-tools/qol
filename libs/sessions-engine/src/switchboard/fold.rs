@@ -47,6 +47,12 @@ impl Transcript {
     fn is_file_of(&self, other: &Self) -> bool {
         self.device == other.device && self.index == other.index
     }
+
+    fn is_as_read(&self) -> bool {
+        fs::symlink_metadata(&self.path).is_ok_and(|metadata| {
+            metadata.len() == self.len && metadata.modified().ok() == Some(self.modified)
+        })
+    }
 }
 
 fn is_transcript(name: &str) -> bool {
@@ -126,6 +132,9 @@ fn fold_fork(mut copies: Vec<Transcript>, folded: &mut Folded) {
             continue;
         };
         let newer = &kept[holder].path;
+        if !copy.is_as_read() {
+            continue;
+        }
         if crate::file_link::link(newer, &copy.path, &partial_of(&copy.path)).is_ok() {
             folded.shared += 1;
             if copy.links == 1 {
@@ -269,6 +278,21 @@ mod tests {
             fs::read_to_string(root.path().join("part-1.jsonl")).unwrap(),
             "one\n"
         );
+    }
+
+    #[test]
+    fn a_copy_that_changed_since_it_was_read_keeps_its_own_file() {
+        let root = tempfile::tempdir().unwrap();
+        let older = write(root.path(), "c1", "a1", "one\n", 300);
+        write(root.path(), "c2", "a1", "one\ntwo\n", 100);
+        let read = copies(root.path()).remove("agent-a1.jsonl").unwrap();
+        fs::write(&older, "one\nlate row\n").unwrap();
+        let mut folded = Folded::default();
+
+        fold_fork(read, &mut folded);
+
+        assert_eq!(folded, Folded::default());
+        assert_eq!(fs::read_to_string(&older).unwrap(), "one\nlate row\n");
     }
 
     #[test]

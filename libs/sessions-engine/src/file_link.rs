@@ -24,6 +24,9 @@ pub(crate) fn is_same_file(left: &Path, right: &Path) -> bool {
 }
 
 pub(crate) fn link(source: &Path, destination: &Path, temporary: &Path) -> io::Result<()> {
+    if is_same_file(source, destination) {
+        return Ok(());
+    }
     let placed = fs::hard_link(source, temporary).and_then(|()| fs::rename(temporary, destination));
     if placed.is_err() {
         let _ = fs::remove_file(temporary);
@@ -76,6 +79,22 @@ mod tests {
             link_or_copy(&source, &destination, &temporary).unwrap(),
             Placed::Shared
         );
+    }
+
+    #[test]
+    fn linking_a_file_onto_itself_leaves_no_temporary_link() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.jsonl");
+        let destination = root.path().join("destination.jsonl");
+        let temporary = root.path().join("destination.tmp");
+        fs::write(&source, "one\n").unwrap();
+        link(&source, &destination, &temporary).unwrap();
+
+        link(&source, &destination, &temporary).unwrap();
+
+        assert!(is_same_file(&source, &destination));
+        assert!(!temporary.exists());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[test]
