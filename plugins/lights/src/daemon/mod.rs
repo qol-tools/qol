@@ -67,13 +67,17 @@ fn device_monitor_loop(
                     online: true,
                     network_address: Some(device.network_address),
                 };
-                let mut known = false;
-                if let Ok(mut config) = store::load() {
-                    known = config.devices.contains_key(&ieee);
-                    config.devices.insert(ieee.clone(), entry);
-                    let _ = store::save(&config);
-                    log::info!("device joined: {} (0x{:04X})", ieee, device.network_address);
-                }
+                let mut config = match store::load() {
+                    Ok(config) => config,
+                    Err(error) => {
+                        log::warn!("device joined: {ieee}, but its config did not load: {error:#}");
+                        continue;
+                    }
+                };
+                let known = config.devices.contains_key(&ieee);
+                config.devices.insert(ieee.clone(), entry);
+                let _ = store::save(&config);
+                log::info!("device joined: {} (0x{:04X})", ieee, device.network_address);
                 let mut counted = false;
                 pairing::update(&pairing, |session| {
                     counted = session.light_joined(ieee.clone(), known, Instant::now())
