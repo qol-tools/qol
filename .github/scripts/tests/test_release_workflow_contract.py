@@ -1181,7 +1181,11 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             registry.index("- name: Push registry artifact"),
         )
         self.assertIn("packages: write", registry)
-        self.assertNotIn("RELEASE_REF", registry)
+        self.assertIn("ref: ${{ env.RELEASE_REF }}", registry)
+        self.assertLess(
+            registry.index("ref: ${{ env.RELEASE_REF }}"),
+            registry.index("- name: Checkout the registry tool from main"),
+        )
         checkout = named_step(registry, "Checkout the registry tool from main", "      ")
         for contract in ["ref: main", "path: trusted", "persist-credentials: false"]:
             with self.subTest(contract=contract):
