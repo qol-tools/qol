@@ -113,7 +113,7 @@ pub(crate) enum Act {
 pub(crate) fn act(page: &str, row: &str, set: Option<bool>) -> Act {
     match (page, row, set) {
         (ROOT, SERVER, Some(on)) => Act::Serve(on),
-        (LIST, PAIR, _) => Act::Pair,
+        (ROOT | LIST, PAIR, _) => Act::Pair,
         (PAIR, STOP, _) => Act::Stop,
         (page, REMOVE, _) => match page.strip_prefix(PHONE) {
             Some(id) => Act::Remove(id.to_string()),
@@ -147,18 +147,40 @@ pub(crate) fn name_of<'a>(phones: &'a [Phone], id: &str) -> Option<&'a str> {
 fn root(snapshot: &Snapshot) -> Page {
     let on = !matches!(snapshot.serving, Serving::Off | Serving::Unknown);
     let healthy = matches!(snapshot.serving, Serving::Running | Serving::Off);
-    Page::new("PointZerver").focus(SERVER).group(
-        Group::new(
-            "remote control",
-            "use your phone as this computer's mouse and keyboard.",
+    Page::new("PointZerver")
+        .focus(SERVER)
+        .group(
+            Group::new(
+                "remote control",
+                "use your phone as this computer's mouse and keyboard.",
+            )
+            .row(
+                Row::new(SERVER, "PointZerver")
+                    .detail(describe(snapshot))
+                    .feature(on, count(snapshot.phones.len()), LIST)
+                    .attention(!healthy),
+            )
+            .row(pair_row())
+            .row(
+                Row::new(APP, "Get the phone app")
+                    .detail("Scan to download the PointZ app.")
+                    .open(APP),
+            ),
         )
+        .group(this_computer(snapshot))
+}
+
+fn this_computer(snapshot: &Snapshot) -> Group {
+    Group::new("this computer", "what the PointZ app connects to.")
+        .row(Row::new("hostname", "Hostname").value(snapshot.hostname.clone()))
         .row(
-            Row::new(SERVER, "PointZerver")
-                .detail(describe(snapshot))
-                .feature(on, count(snapshot.phones.len()), LIST)
-                .attention(!healthy),
-        ),
-    )
+            Row::new("ip", "IP address")
+                .value(snapshot.ip.clone().unwrap_or_else(|| "none".into())),
+        )
+        .row(Row::new("control", "Control port").value(ServerConfig::COMMAND_PORT.to_string()))
+        .row(
+            Row::new("discovery", "Discovery port").value(ServerConfig::DISCOVERY_PORT.to_string()),
+        )
 }
 
 fn describe(snapshot: &Snapshot) -> String {
@@ -182,11 +204,10 @@ fn count(phones: usize) -> String {
 }
 
 fn list(snapshot: &Snapshot, memory: &Memory, now: DateTime<Local>) -> Page {
-    let mut phones = Group::new("phones", "phones that can control this computer.").row(
-        Row::new(PAIR, "Pair a phone")
-            .detail("Shows a one-minute code to type into the PointZ app")
-            .press_open(),
-    );
+    let mut phones = Group::new("phones", "phones that can control this computer.");
+    if snapshot.phones.is_empty() {
+        phones.push(pair_row());
+    }
     for phone in &snapshot.phones {
         phones.push(
             Row::new(phone_id(&phone.id), phone.name.clone())
@@ -194,42 +215,31 @@ fn list(snapshot: &Snapshot, memory: &Memory, now: DateTime<Local>) -> Page {
                 .open(phone_id(&phone.id)),
         );
     }
-    phones.push(app_row());
-    let page = Page::new("pointzerver").group(phones).group(
-        Group::new("this computer", "what the PointZ app connects to.")
-            .row(Row::new("hostname", "Hostname").value(snapshot.hostname.clone()))
-            .row(
-                Row::new("ip", "IP address")
-                    .value(snapshot.ip.clone().unwrap_or_else(|| "none".into())),
-            )
-            .row(Row::new("control", "Control port").value(ServerConfig::COMMAND_PORT.to_string()))
-            .row(
-                Row::new("discovery", "Discovery port")
-                    .value(ServerConfig::DISCOVERY_PORT.to_string()),
-            ),
-    );
+    let page = Page::new("pointzerver").group(phones);
     match &memory.focus {
         Some(focus) => page.focus(focus.clone()),
         None => page,
     }
 }
 
+fn pair_row() -> Row {
+    Row::new(PAIR, "Pair a phone")
+        .detail("Shows a one-minute code to type into the PointZ app")
+        .press_open()
+}
+
 fn pair(pairing: &Pairing) -> Page {
-    Page::new("pair a phone")
-        .focus(APP)
-        .leave(STOP, "stop pairing")
-        .group(
-            Group::new(
-                "pair a phone",
-                "type the code into the PointZ app on your phone.",
-            )
-            .row(
-                Row::new("code", "Code")
-                    .value(spaced(&pairing.code))
-                    .detail(format!("Runs out in {} s", pairing.seconds)),
-            )
-            .row(app_row()),
+    Page::new("pair a phone").leave(STOP, "stop pairing").group(
+        Group::new(
+            "pair a phone",
+            "type the code into the PointZ app on your phone.",
         )
+        .row(
+            Row::new("code", "Code")
+                .value(spaced(&pairing.code))
+                .detail(format!("Runs out in {} s", pairing.seconds)),
+        ),
+    )
 }
 
 fn app() -> Page {
@@ -240,12 +250,6 @@ fn app() -> Page {
                 .qr(ServerConfig::APP_DOWNLOAD_URL),
         ),
     )
-}
-
-fn app_row() -> Row {
-    Row::new(APP, "Get the phone app")
-        .detail("Scan to download the PointZ app.")
-        .open(APP)
 }
 
 fn phone_page(phone: &Phone, now: DateTime<Local>) -> Page {

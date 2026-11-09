@@ -43,7 +43,7 @@ fn open(pages: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn the_root_holds_one_feature_row_that_opens_the_pointzerver_page() {
+fn the_root_holds_the_feature_row_pairing_the_app_and_this_computer() {
     let pages = build(&snapshot(), &Memory::new(), now());
     assert!(pages.problems().is_empty(), "{:?}", pages.problems());
     assert!(pages.dead_ends().is_empty(), "{:?}", pages.dead_ends());
@@ -60,8 +60,28 @@ fn the_root_holds_one_feature_row_that_opens_the_pointzerver_page() {
         server.detail.as_deref(),
         Some("Running · phones find kmrh-desk at 192.168.1.24")
     );
-    assert_eq!(pages.page(ROOT).unwrap().focus.as_deref(), Some(SERVER));
-    assert_eq!(pages.page(ROOT).unwrap().rows().count(), 1);
+    let root = pages.page(ROOT).unwrap();
+    assert_eq!(root.focus.as_deref(), Some(SERVER));
+    let ids: Vec<&str> = root.rows().map(|row| row.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [SERVER, PAIR, APP, "hostname", "ip", "control", "discovery"]
+    );
+    assert_eq!(row(&pages, ROOT, APP).enter, Some(Enter::Open(APP.into())));
+    let shown: Vec<(&str, Option<&str>)> = root.groups[1]
+        .rows
+        .iter()
+        .map(|row| (row.label.as_str(), row.copies()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("Hostname", Some("kmrh-desk")),
+            ("IP address", Some("192.168.1.24")),
+            ("Control port", Some("45455")),
+            ("Discovery port", Some("45454")),
+        ]
+    );
 }
 
 #[test]
@@ -117,7 +137,7 @@ fn the_feature_row_says_why_phones_cannot_reach_this_computer() {
 }
 
 #[test]
-fn the_pointzerver_page_lists_phones_between_pairing_and_the_app() {
+fn the_pointzerver_page_lists_only_the_phones() {
     let joined = phone("galaxy", "Galaxy S24", now() - TimeDelta::minutes(1));
     let pages = build(
         &Snapshot {
@@ -128,36 +148,30 @@ fn the_pointzerver_page_lists_phones_between_pairing_and_the_app() {
         now(),
     );
     let page = pages.page(LIST).unwrap();
-    let ids: Vec<&str> = page.groups[0]
-        .rows
-        .iter()
+    let ids: Vec<&str> = page.rows().map(|row| row.id.as_str()).collect();
+    assert_eq!(ids, ["phone:galaxy", "phone:pixel"]);
+    let phones = &page.groups[0].rows;
+    assert_eq!(phones[0].detail.as_deref(), Some("Paired just now"));
+    assert_eq!(phones[1].detail.as_deref(), Some("Paired 3 November"));
+    let pair = row(&pages, ROOT, PAIR);
+    assert!(pair.opens);
+    assert_eq!(pair.enter, Some(Enter::Press));
+
+    let none = build(
+        &Snapshot {
+            phones: Vec::new(),
+            ..snapshot()
+        },
+        &Memory::new(),
+        now(),
+    );
+    let ids: Vec<&str> = none
+        .page(LIST)
+        .unwrap()
+        .rows()
         .map(|row| row.id.as_str())
         .collect();
-    assert_eq!(ids, ["pair", "phone:galaxy", "phone:pixel", "app"]);
-    assert_eq!(
-        page.groups[0].rows[1].detail.as_deref(),
-        Some("Paired just now")
-    );
-    assert_eq!(
-        page.groups[0].rows[2].detail.as_deref(),
-        Some("Paired 3 November")
-    );
-    assert!(page.groups[0].rows[0].opens);
-    assert_eq!(page.groups[0].rows[0].enter, Some(Enter::Press));
-    let shown: Vec<(&str, Option<&str>)> = page.groups[1]
-        .rows
-        .iter()
-        .map(|row| (row.label.as_str(), row.copies()))
-        .collect();
-    assert_eq!(
-        shown,
-        [
-            ("Hostname", Some("kmrh-desk")),
-            ("IP address", Some("192.168.1.24")),
-            ("Control port", Some("45455")),
-            ("Discovery port", Some("45454")),
-        ]
-    );
+    assert_eq!(ids, [PAIR]);
 }
 
 #[test]
@@ -181,7 +195,7 @@ fn the_code_shows_only_on_the_pair_card_while_pairing_is_open() {
     assert_eq!(code.value.as_deref(), Some("482 913"));
     assert_eq!(code.detail.as_deref(), Some("Runs out in 58 s"));
     assert_eq!(code.copies(), Some("482 913"));
-    assert_eq!(card.focus.as_deref(), Some(APP));
+    assert_eq!(card.rows().count(), 1);
     let leave = card.leave.as_ref().unwrap();
     assert_eq!(
         (leave.row.as_str(), leave.label.as_str()),
@@ -230,6 +244,7 @@ fn the_app_card_is_one_qr_row_and_a_phone_page_asks_before_it_removes() {
 fn presses_name_what_the_row_does() {
     assert_eq!(act(ROOT, SERVER, Some(false)), Act::Serve(false));
     assert_eq!(act(ROOT, SERVER, None), Act::Nothing);
+    assert_eq!(act(ROOT, PAIR, None), Act::Pair);
     assert_eq!(act(LIST, PAIR, None), Act::Pair);
     assert_eq!(act(PAIR, STOP, None), Act::Stop);
     assert_eq!(
