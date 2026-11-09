@@ -452,6 +452,30 @@ test("fork_board reads a nested fork's parent from its meta when the row never r
   expect(all).toContain('[fork board] parent-fork (working, agent id m1)')
 })
 
+test('a sub-fork row an earlier board lost its parent on gets the parent back from its meta, so it folds under that fork again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const row = (agentId: string, name: string) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isInterrupted: true, isDismissed: false })
+  store.set('board:earlier-session', [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first'), row('s2', 'sub-two: second')])
+  engine(on, [], [], [], store)
+  const metas: Record<string, string> = {
+    '/conv/switchboard-session/subagents/agent-s1.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
+    '/conv/switchboard-session/subagents/agent-s2.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
+  }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path in metas }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: metas[e.path] }))
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('agent id s1, listed under parent-fork')
+  expect((store.get('board:switchboard-session') as any[]).filter(one => one.launcher === 'p1').map(one => one.agentId).sort()).toEqual(['s1', 's2'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^ \+2$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sub-one/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the board names the key that reaches it until it holds the keys, and closes from a button', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)

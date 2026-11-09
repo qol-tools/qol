@@ -2072,6 +2072,7 @@ export const reopenForks = async ($: EngineInterface): Promise<void> => {
       if (rest.length === 0) await $.store.delete(key)
       else await $.store.set(key, rest)
     }
+    await fillLaunchers($).catch(() => undefined)
     if (again.length > 0) reopenTries += 1
     if (again.length > 0 && reopenTries < REOPEN_TRIES) $.clock.after(REOPEN_RETRY_MS, () => void reopenForks($).catch(() => undefined))
     else if (again.length > 0) await $.store.delete(key)
@@ -2387,6 +2388,18 @@ const withLaunchers = ($: EngineInterface, list: Entry[]): Promise<Entry[]> =>
     }),
   )
 
+const fillLaunchers = async ($: EngineInterface): Promise<void> => {
+  const list = await read($, board)
+  const found = new Map((await withLaunchers($, list)).flatMap((one, index) => (one.launcher === undefined || list[index]?.launcher !== undefined ? [] : [[one.agentId, one.launcher] as const])))
+  if (found.size === 0) return
+  await change($, rows =>
+    rows.map(one => {
+      const launcher = found.get(one.agentId)
+      return one.launcher === undefined && launcher !== undefined ? { ...one, launcher } : one
+    }),
+  )
+}
+
 const listedUnder = (list: Entry[], entry: Entry): string | undefined => {
   if (entry.launcher === undefined) return undefined
   const parent = list.find(one => one.agentId === entry.launcher)
@@ -2520,6 +2533,7 @@ export const register: Register = on => {
           for (const key of others) await $.store.delete(key)
         }
       }
+      await fillLaunchers($).catch(() => undefined)
       for (const key of (await $.store.keys()).filter(one => one.startsWith(REOPEN_PREFIX) && one !== REOPEN_PREFIX + id)) await $.store.delete(key)
       if (live.length === 0) for (const key of (await $.store.keys()).filter(one => one.startsWith(HOLD_PREFIX))) await $.store.delete(key)
       const pending = e.isInteractive && live.length === 0 ? merged.filter(isUnfinished).map(one => one.agentId) : []
