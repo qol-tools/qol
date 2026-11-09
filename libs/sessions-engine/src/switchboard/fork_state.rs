@@ -5,13 +5,20 @@ use super::background::{self, Background};
 use super::resume::AGENT_PREFIX;
 
 const TURN_STATUSES: [&str; 2] = ["running", "pending"];
-const SETTLED_STATUS: &str = "completed";
+pub(super) const SETTLED_STATUS: &str = "completed";
 const SUBAGENTS: &str = "subagents";
+const GH: &str = "gh";
+const CI_WAITS: [(&[&str], Option<&str>); 2] = [
+    (&["run", "watch"], None),
+    (&["pr", "checks"], Some("--watch")),
+];
+const COMMAND_ENDS: [char; 3] = [';', '&', '|'];
+const WORD_MARKS: [char; 9] = [';', '&', '|', '(', ')', '$', '`', '{', '}'];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ForkState {
     Working,
-    Parked(Vec<String>),
+    Waiting(Vec<String>),
     YourTurn,
     Idle,
 }
@@ -26,17 +33,60 @@ pub(super) fn transcript_of(conversation: &Path, agent_id: &str) -> Option<PathB
     })
 }
 
+fn command_words(command: &str) -> Vec<Vec<&str>> {
+    let mut commands = Vec::new();
+    for line in command.lines() {
+        let mut words = Vec::new();
+        for word in line.split_whitespace() {
+            let bare = word.trim_matches(&WORD_MARKS[..]);
+            if !bare.is_empty() {
+                words.push(bare);
+            }
+            if word.ends_with(&COMMAND_ENDS[..]) {
+                commands.push(std::mem::take(&mut words));
+            }
+        }
+        commands.push(words);
+    }
+    commands
+}
+
+fn is_gh(word: &str) -> bool {
+    word.rsplit('/').next() == Some(GH)
+}
+
+fn waits_on_ci(command: &str) -> bool {
+    command_words(command).iter().any(|words| {
+        words
+            .iter()
+            .enumerate()
+            .filter(|(_, word)| is_gh(word))
+            .any(|(at, _)| {
+                let rest = &words[at + 1..];
+                CI_WAITS.iter().any(|&(verb, flag)| {
+                    rest.starts_with(verb)
+                        && flag.is_none_or(|flag| rest[verb.len()..].contains(&flag))
+                })
+            })
+    })
+}
+
 fn settled(running: &[Background]) -> ForkState {
+    let own: Vec<&str> = running
+        .iter()
+        .filter(|work| !work.is_hold())
+        .map(|work| work.command.as_deref().unwrap_or_default())
+        .collect();
     let mut prs: Vec<String> = Vec::new();
-    for work in running.iter().filter(|work| !work.is_hold()) {
-        for pr in crate::prs::pull_requests(work.command.as_deref().unwrap_or_default()) {
+    for command in &own {
+        for pr in crate::prs::pull_requests(command) {
             if !prs.contains(&pr) {
                 prs.push(pr);
             }
         }
     }
-    if !prs.is_empty() {
-        return ForkState::Parked(prs);
+    if !prs.is_empty() || own.iter().any(|command| waits_on_ci(command)) {
+        return ForkState::Waiting(prs);
     }
     if running.iter().any(Background::is_hold) {
         return ForkState::YourTurn;
@@ -44,7 +94,7 @@ fn settled(running: &[Background]) -> ForkState {
     if running.is_empty() {
         ForkState::Idle
     } else {
-        ForkState::Parked(prs)
+        ForkState::Waiting(prs)
     }
 }
 
@@ -97,15 +147,15 @@ mod tests {
         assert_eq!(settle(&hold), Some(ForkState::YourTurn));
         assert_eq!(
             settle(&[hold.clone(), watch.clone()].concat()),
-            Some(ForkState::Parked(vec![pr.clone()]))
+            Some(ForkState::Waiting(vec![pr.clone()]))
         );
         assert_eq!(
             settle(&[watch.clone(), waiting("bwatch2", WATCH)].concat()),
-            Some(ForkState::Parked(vec![pr]))
+            Some(ForkState::Waiting(vec![pr]))
         );
         assert_eq!(
             settle(&waiting("bbuild", "cargo build")),
-            Some(ForkState::Parked(Vec::new()))
+            Some(ForkState::Waiting(Vec::new()))
         );
         assert_eq!(
             settle(&[hold.clone(), waiting("bgame", "./kcd2-forge play")].concat()),
@@ -123,6 +173,46 @@ mod tests {
             Some(ForkState::Idle)
         );
         assert_eq!(state(Some(SETTLED_STATUS), None), Some(ForkState::Idle));
+    }
+
+    #[test]
+    fn a_fork_waiting_on_ci_waits_even_while_its_hold_runs() {
+        let hold = waiting("bhold", HOLD_COMMAND);
+        let with_hold = |command: &str| settle(&[hold.clone(), waiting("bci", command)].concat());
+        for command in [
+            "gh run watch 42497833437 --repo qol-tools/qol --interval 30 >/dev/null 2>&1; gh run rerun 42497833437 --repo qol-tools/qol --failed && echo rerun-started",
+            "gh pr checks 7 --watch",
+            "gh pr checks 7 --repo o/r --watch --interval 30",
+            "/usr/bin/gh run watch 5",
+            "cd /w && gh run watch 5",
+            "(gh run watch 5)",
+        ] {
+            assert_eq!(
+                with_hold(command),
+                Some(ForkState::Waiting(Vec::new())),
+                "{command}"
+            );
+        }
+        assert_eq!(
+            with_hold("gh pr checks https://github.com/o/r/pull/9 --watch"),
+            Some(ForkState::Waiting(vec![
+                "https://github.com/o/r/pull/9".to_owned()
+            ]))
+        );
+        for command in [
+            "gh pr checks 7",
+            "gh run view 42 --log",
+            "gh run list; watch date",
+            "gh pr checks 7 && echo --watch",
+            "rg 'gh run watch' src",
+            "ghx run watch 5",
+        ] {
+            assert_eq!(with_hold(command), Some(ForkState::YourTurn), "{command}");
+        }
+        assert_eq!(
+            settle(&waiting("bci", "gh run watch 5")),
+            Some(ForkState::Waiting(Vec::new()))
+        );
     }
 
     #[test]

@@ -51,6 +51,8 @@ export type ModelChoice = { model?: string; effort?: 'low' | 'medium' | 'high' |
 
 export type ModelSeen = { model: string; effort?: string; at: number }
 
+export type RunState = { state: string; pulls?: string[] }
+
 declare module 'claude-code' {
   interface PluginState {
     'qol-switchboard': {
@@ -63,6 +65,8 @@ declare module 'claude-code' {
       pullDetails: Record<string, PullDetail>
       modelChoices: Record<string, ModelChoice>
       modelsSeen: Record<string, ModelSeen>
+      forkStates: Record<string, RunState>
+      idleShown: boolean
       focusActivity: string
       freshReply: string
       focusShown: { id: string; prevId: string; agentId: string; key: string; rows: { isUser: boolean; text: string }[] }

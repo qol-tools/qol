@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { fromUser, keyCompletions, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, nextKey, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, sbAt, sessionState, stateLooks, sbCompletions, sbHint, sbLine, sbTab, sbTree, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -107,7 +107,7 @@ const engine = (on: any, sent: unknown[] = [], panes: string[] = [], spawned: Sp
     open.delete(e.id)
     return { value: undefined }
   })
-  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('prompt.submit', (_: unknown, e: { text: string; context?: string[] }) => ({ text: e.text, ...(e.context === undefined ? {} : { context: e.context }) }))
   on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', (_: unknown, e: { answer: string }) => ({ text: e.answer }))
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
@@ -173,8 +173,16 @@ test('a hand-back report is rewritten in place to its first sentence and Haiku s
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /Nothing needs you/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /PR #77 merged\./ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 idle' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' · 1 ◉' })).toBeDefined()
+  await ui.press({ key: 'idle-fold' })
   expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /PR #77 merged\./ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'hide idle' })).toBeDefined()
+  await ui.press({ key: 'idle-fold' })
+  expect(await ui.find({ type: 'Text', text: '1 idle' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -444,6 +452,30 @@ test("fork_board reads a nested fork's parent from its meta when the row never r
   expect(all).toContain('[fork board] parent-fork (working, agent id m1)')
 })
 
+test('a sub-fork row an earlier board lost its parent on gets the parent back from its meta, so it folds under that fork again', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const row = (agentId: string, name: string) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isInterrupted: true, isDismissed: false })
+  store.set('board:earlier-session', [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first'), row('s2', 'sub-two: second')])
+  engine(on, [], [], [], store)
+  const metas: Record<string, string> = {
+    '/conv/switchboard-session/subagents/agent-s1.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
+    '/conv/switchboard-session/subagents/agent-s2.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
+  }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path in metas }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: metas[e.path] }))
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('agent id s1, listed under parent-fork')
+  expect((store.get('board:switchboard-session') as any[]).filter(one => one.launcher === 'p1').map(one => one.agentId).sort()).toEqual(['s1', 's2'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^ \+2$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sub-one/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the board names the key that reaches it until it holds the keys, and closes from a button', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
@@ -656,8 +688,10 @@ const adoptEngine = (on: any, forks: Forks, runs: string[][]) => {
   on('process.run', (_: unknown, e: { argv: string[] }) => ({ value: adopted(forks, runs, e.argv) }))
 }
 
+const isStates = (argv: string[]) => argv.slice(2).join(' ') === 'switchboard hook fork-states'
+
 const adopted = (forks: Forks, runs: string[][], argv: string[]) => {
-  if (isRecord(argv) || isAuth(argv)) return NO_RECORD
+  if (isRecord(argv) || isAuth(argv) || isStates(argv)) return NO_RECORD
   runs.push(argv)
   const wanted = argv[argv.indexOf('--fork') + 1]
   const found = Object.entries(forks).find(([id, fork]) => id === wanted || fork.name.split(':')[0] === wanted)
@@ -938,6 +972,26 @@ test('until the open reaches it, a fork cut off mid-turn waits under its own hea
   expect(sent).toHaveLength(1)
 })
 
+test('sub-forks a restart stopped wait on their parent row under the stopped heading, and continue reaches each of them', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const sent: any[] = []
+  const row = (agentId: string, name: string, isWorking: boolean, launcher?: string) => ({ agentId, name, kind: 'note', headline: 'Pull request #5 merged.', report: '', at: 1, isWorking, isDismissed: false, ...(launcher === undefined ? {} : { launcher }) })
+  store.set('board:earlier-session', [row('p1', 'parent-fork: parent', false), row('s1', 'sub-one: first', true, 'p1'), row('s2', 'sub-two: second', true, 'p1')])
+  engine(on, sent, [], [], store)
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /STOPPED BY A RESTART/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2 sub-forks stopped mid-turn/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sub-one/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  await ui.press({ key: 'continue-p1' })
+  expect(sent.map(one => one.to).sort()).toEqual(['s1', 's2'])
+  expect(await ui.find({ type: 'Text', text: /STOPPED BY A RESTART/ })).toBeUndefined()
+  await ui.unmount()
+})
+
 const answered = async ($: any, agentId: string, index: number, turnId = `turn-${agentId}`) => {
   const chunks: any[] = []
   const stream = $.turn.step({ turnId, index, model: 'opus', messageCount: 2, agentId })
@@ -1066,6 +1120,22 @@ test('a hold whose turn never ran or ended early never answers a later real turn
   await answered($, 'a1', 0, 'real-2')
   await answered($, 'a1', 1, 'real-2')
   expect(steps).toEqual(['real-2:0', 'real-2:1'])
+})
+
+test('closing the switchboard kills each fork hold, and the turn that notice starts leaves the fork idle so the next open does not cut it', async ($, on) => {
+  const sent: any[] = []
+  engine(on, sent)
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a1', 'a1-fork: a fork')
+  await typed($, notification('a1', 'a1-fork: a fork', 'Which colour should it be?'), 'task-notification')
+  const killed = (id: string) => `<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>toolu_${id}</tool-use-id>\n<output-file>/tmp/${id}.output</output-file>\n<status>killed</status>\n<summary>Background command "Hold this fork in the agent list" was stopped</summary>\n</task-notification>`
+  await $.turn.start({ text: `[SYSTEM NOTIFICATION - NOT USER INPUT]\nThis is an automated background-task event.\n\n${killed('b1')}\n${killed('b2')}`, turnId: 'killed-1', agentId: 'a1' })
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).not.toContain('working')
+  expect(isKilledOnly(`${killed('b1')}\n${notification('a2', 'a2-fork: other', 'done')}`)).toBe(false)
+  expect(isKilledOnly('Make it amber.')).toBe(false)
+  await $.turn.start({ text: 'Make it amber.', turnId: 'real-1', agentId: 'a1' })
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('working')
 })
 
 test('a turn queued ahead of a hold leaves the hold pending, so the hold turn still runs no model', async ($, on) => {
@@ -1717,7 +1787,7 @@ test('a fork that reports or is stopped reads idle or stopped, on the board and 
   expect(board).toContain('(stopped, agent id a2)')
   expect(board).not.toContain('(done')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '2 idle' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'RECENT' })).toBeUndefined()
   await ui.unmount()
 })
@@ -1768,20 +1838,60 @@ test('RECENT holds the five newest closed forks once each, never one open again 
   expect(recentlyClosed([])).toEqual([])
 })
 
-const LOOKS = '[{"state":"working","color":"green","bold":false},{"state":"parked","color":"blue","bold":false},{"state":"your turn","color":"yellow","bold":true}]'
+const LOOKS = '[{"state":"working","color":"green","bold":false},{"state":"waiting","color":"blue","bold":false},{"state":"your turn","color":"yellow","bold":true}]'
 
 test('the state colors come from CLI Sessions, and a board state takes the agent list state it matches', () => {
   expect([...stateLooks(LOOKS)]).toEqual([
     ['working', { color: 'green', isBold: false }],
-    ['parked', { color: 'blue', isBold: false }],
+    ['waiting', { color: 'blue', isBold: false }],
     ['your turn', { color: 'yellow', isBold: true }],
   ])
   for (const broken of [undefined, '', 'nope', '{}', '[{"state":7,"color":"red"}]', '[{"state":"working","color":""}]']) expect(stateLooks(broken).size).toBe(0)
   const row = (extra: Record<string, unknown>) => ({ agentId: 'a1', name: 'a1-fork: a fork', headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra })
   expect(sessionState(row({ isWorking: true }))).toBe('working')
-  expect(sessionState(row({ kind: 'waiting' }))).toBe('parked')
-  for (const kind of ['ask', 'test', 'failed', 'blocked']) expect(sessionState(row({ kind }))).toBe('your turn')
-  for (const extra of [{ kind: 'note' }, { kind: 'merged' }, { kind: 'ask', isClosed: true }, { kind: 'ask', isDone: true }, { kind: 'waiting', isInterrupted: true }]) expect(sessionState(row(extra))).toBeUndefined()
+  expect(sessionState(row({ kind: 'note' }), [], { a1: { state: 'waiting' } })).toBe('waiting')
+  for (const kind of ['ask', 'test', 'failed', 'blocked']) expect(sessionState(row({ kind }), [], { a1: { state: 'waiting' } })).toBe('your turn')
+  for (const extra of [{ kind: 'note' }, { kind: 'merged' }, { kind: 'waiting' }, { kind: 'ask', isClosed: true }, { kind: 'ask', isDone: true }, { kind: 'note', isInterrupted: true }]) expect(sessionState(row(extra))).toBeUndefined()
+  expect(sessionState(row({ kind: 'note', isDone: true }), [], { a1: { state: 'waiting' } })).toBeUndefined()
+})
+
+test('waiting comes from what a fork runs, and a fork that started forks counts them in its state', () => {
+  const row = (agentId: string, extra: Record<string, unknown> = {}) => ({ agentId, name: `${agentId}-fork: a fork`, headline: '', report: '', at: 1, isWorking: false, isDismissed: false, ...extra }) as any
+  expect(runStatesOf('{"a1":{"state":"waiting","pulls":["https://github.com/o/r/pull/7","nope"]},"a2":{"state":"your turn"},"bad id!":{"state":"idle"},"a3":{"state":""},"a4":7}')).toEqual({ a1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7'] }, a2: { state: 'your turn' } })
+  for (const broken of ['', 'nope', '[]', 'null', '7']) expect(runStatesOf(broken)).toEqual({})
+  const waiting = { a1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7', 'https://github.com/o/r/pull/9'] } }
+  expect(shownState(row('a1', { kind: 'note' }), [], waiting)).toEqual({ label: 'waiting #7,#9', state: 'waiting' })
+  expect(shownState(row('a1', { kind: 'waiting' }))).toEqual({ label: 'note' })
+  expect(shownState(row('a1', { kind: 'ask' }), [], waiting)).toEqual({ label: 'ask', state: 'your turn' })
+  expect(shownState(row('a1', { kind: 'note', isStoppedByUser: true }))).toEqual({ label: 'stopped' })
+  const parent = row('p1', { kind: 'note' })
+  const list = [parent, row('k1', { launcher: 'p1', isWorking: true }), row('k2', { launcher: 'p1', kind: 'note' }), row('k3', { launcher: 'p1', kind: 'ask' }), row('k4', { launcher: 'p1', isDismissed: true }), row('s1')]
+  expect(subForksOf(list, parent).map(one => one.agentId)).toEqual(['k1', 'k2', 'k3'])
+  expect(shownState(parent, list)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  const quiet = list.filter(one => one.agentId !== 'k3')
+  expect(shownState(parent, quiet)).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(shownState(parent, quiet, { k2: { state: 'waiting' } })).toEqual({ label: 'waits on 2', state: 'waiting' })
+  expect(shownState(parent, quiet.filter(one => one.agentId !== 'k1'), { k2: { state: 'your turn' } })).toEqual({ label: 'note' })
+  expect(shownState(row('p1', { isWorking: true }), list)).toEqual({ label: 'working', state: 'working' })
+  expect(shownState(row('p1', { kind: 'test' }), list)).toEqual({ label: 'test', state: 'your turn' })
+  expect(parentOf(list, row('k9', { launcher: 'gone' }))).toBeUndefined()
+  expect(parentOf(list, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }))?.agentId).toBe('p1')
+  const stopped = [parent, row('k5', { launcher: 'p1', kind: 'note', isInterrupted: true }), row('c1', { kind: 'note', isInterrupted: true }), row('a2', { kind: 'ask' }), row('a3', { kind: 'note' }), row('k6', { launcher: 'a3', kind: 'ask' }), row('k7', { launcher: 'a3', kind: 'note', isInterrupted: true })]
+  expect(stoppedFamilies(stopped).map(one => one.agentId)).toEqual(['p1', 'c1'])
+  expect(needYouCount(stopped)).toBe(4)
+  expect(parentOf([{ ...parent, isDone: true }], row('k1', { launcher: 'p1' }))).toBeUndefined()
+  expect(parentOf([parent, row('p2', { launcher: 'p1', isDismissed: true }), row('p3', { launcher: 'p1' })], row('k1', { launcher: 'p1' }))?.agentId).toBe('p1')
+  expect(marksOf([row('a1', { hasNewReply: true }), row('a2', { kind: 'ask' }), row('a3', { hasNewReply: true, isDismissed: true })])).toEqual({ fresh: ['a1'], asks: ['a2'] })
+  expect(hasUnread(list, parent)).toBe(false)
+  const deep = [parent, row('k1', { launcher: 'p1', kind: 'note' }), row('g1', { launcher: 'k1', kind: 'ask', hasNewReply: true }), row('g2', { launcher: 'g1', isWorking: true })]
+  expect(subForksOf(deep, parent).map(one => one.agentId)).toEqual(['k1'])
+  expect(forksUnder(deep, parent).map(one => one.agentId)).toEqual(['k1', 'g1', 'g2'])
+  expect(shownState(parent, deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(deep[1], deep)).toEqual({ label: '1 sub-fork asks', state: 'your turn' })
+  expect(shownState(parent, deep.map(one => (one.agentId === 'g1' ? { ...one, kind: 'note' } : one)))).toEqual({ label: 'waits on 1', state: 'waiting' })
+  expect(hasUnread(deep, parent)).toBe(true)
+  expect(forksUnder([row('a1', { launcher: 'b1' }), row('b1', { launcher: 'a1' })], row('a1', { launcher: 'b1' })).map(one => one.agentId)).toEqual(['b1'])
+  expect(hasUnread(list.map(one => (one.agentId === 'k2' ? { ...one, hasNewReply: true } : one)), parent)).toBe(true)
 })
 
 test('the board paints each state in the color the agent list gives it, and keeps its own look without them', async ($, on) => {
@@ -2351,11 +2461,11 @@ test('a fork that replies while another chat shows gets a new reply mark until i
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'asking-fork ', cursor: 12 })
   await deliver($, notification('b9', 'other-fork: other', 'Pull request #9 merged.'), 'task-notification')
   await deliver($, notification('a8', 'asking-fork: asks', 'Which colour?'), 'task-notification')
-  const marks = await ui.findAll({ type: 'Text', text: /new reply/ })
+  const marks = await ui.findAll({ type: 'Text', text: /◉/ })
   expect(marks.length).toBe(1)
   await $.prompt.change({ origin: { kind: 'composer' }, text: 'other-fork ', cursor: 11 })
   await $.prompt.change({ origin: { kind: 'composer' }, text: '', cursor: 0 })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -2367,14 +2477,14 @@ test('a new reply mark goes once the fork is opened in its own view', async ($, 
   await spawn($, 'b9', 'other-fork: other')
   await deliver($, notification('b9', 'other-fork: other', 'Which colour?'), 'task-notification')
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeDefined()
   await ui.unmount()
   const viewed = promptBand(false)
   const band = await $.ui.mount({ ...viewed, props: { ...viewed.props, view: { agentId: 'b9' } } })
   await settle()
   await band.unmount()
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await after.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await after.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await after.unmount()
 })
 
@@ -2532,6 +2642,140 @@ const forkChat = async ($: any, panes: string[]): Promise<string[]> => {
   return rows
 }
 
+test('a fork that started forks holds them on its row: their asks show under it, and writing to it lists them by letter and reads their replies', async ($, on) => {
+  const sent: any[] = []
+  const viewed: string[] = []
+  const written: Record<string, string> = {}
+  engine(on, sent)
+  on('clock.after', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
+  on('ui.view', (_: unknown, e: { agentId: string }) => {
+    viewed.push(e.agentId)
+    return { value: {} }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'p1', 'parent-fork: parent')
+  await spawn($, 'k1', 'child-fork: child', 'p1')
+  await spawn($, 'k2', 'helper-fork: helper', 'p1')
+  await deliver($, notification('p1', 'parent-fork: parent', 'Split the work in two.'))
+  await deliver($, notification('k1', 'child-fork: child', 'Which colour should it be?'))
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: ['p1', 'k1'], asks: ['k1'], models: {} })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /^1 needs you\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 sub-fork asks' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' +2' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /child-fork: Which colour should it be\?/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Recommend: amber/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /helper-fork/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'WORKING' })).toBeUndefined()
+  expect(await ui.findAll({ type: 'Text', text: /◉/ })).toHaveLength(1)
+  await ui.press({ key: 'send-k1' })
+  await ui.press({ key: 'confirm-k1' })
+  expect(sent).toHaveLength(1)
+  expect(JSON.stringify(sent[0].to)).toContain('k1')
+  expect(JSON.stringify(sent[0])).toContain('amber')
+  await ui.unmount()
+
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'parent-fork ', cursor: 12 })
+  const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await writing.find({ type: 'Text', text: /SUB-FORKS/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^parent-fork \+2 +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /letter opens a sub-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /child-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /helper-fork/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /◉/ })).toBeUndefined()
+  await writing.press({ key: 'sub-k2' })
+  expect(viewed).toEqual(['k2'])
+  await writing.unmount()
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}')).toEqual({ fresh: [], asks: [], models: {} })
+})
+
+test('open pull requests gather under PULL REQUESTS at the bottom of the board, and each fork row names its own', async ($, on) => {
+  engine(on)
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  watchEngine(on, { p1: { cwd: '/work', description: 'p1-fork: a fork' }, p2: { cwd: '/work', description: 'p2-fork: a fork' } })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    if (e.argv[1] === 'fork-watch' && e.argv[2] === '--deliver')
+      return {
+        value: {
+          exitCode: 0,
+          stderr: '',
+          stdout: JSON.stringify({
+            results: [],
+            pulls: [
+              { agent_id: 'p2', pull_request: 'https://github.com/o/r/pull/12', number: 12, merge_commit: 'bbbbbbbbbbbb', is_watched: false },
+              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/11', number: 11, merge_commit: null, is_watched: true },
+              { agent_id: 'p1', pull_request: 'https://github.com/o/r/pull/10', number: 10, merge_commit: 'aaaaaaaaaaaa', is_watched: false },
+            ],
+          }),
+        },
+      }
+    return { value: NO_RECORD }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  for (const id of ['p1', 'p2']) await spawn($, id, `${id}-fork: a fork`)
+  await settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'PULL REQUESTS' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '#11' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^#1[02]$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^✓ 2 merged · newest #12 bbbbbbb by p2-fork$/ })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'p2-fork ', cursor: 8 })
+  const forks = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await forks.find({ type: 'Text', text: /pull requests$/ })).toBeDefined()
+  expect(await forks.find({ type: 'Text', text: '#11 open' })).toBeDefined()
+  expect(await forks.find({ type: 'Text', text: '#12 merged' })).toBeDefined()
+  await forks.unmount()
+})
+
+test('a fork reads waiting while it runs a watcher, from the fork state CLI Sessions reads', async ($, on) => {
+  const asked: any[] = []
+  engine(on)
+  on('clock.after', () => ({ value: undefined }))
+  on('session.messages', () => ({ value: [] }))
+  on('prompt.change', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-states') return { value: NO_RECORD }
+    asked.push(JSON.parse(e.init?.stdin ?? '{}'))
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ w1: { state: 'waiting', pulls: ['https://github.com/o/r/pull/7'] }, i1: { state: 'idle' } }) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'w1', 'watch-fork: watches')
+  await spawn($, 'i1', 'idle-fork: idles')
+  await deliver($, notification('w1', 'watch-fork: watches', 'Pull request #7 is open.'))
+  await deliver($, notification('i1', 'idle-fork: idles', 'Done for now.'))
+  await settle()
+  expect(asked.at(-1)).toEqual({ conversation: '/conv/switchboard-session.jsonl', ids: ['w1', 'i1'] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'WAITING' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'waiting #7' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'IDLE' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '1 idle' })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.change({ origin: { kind: 'composer' }, text: 'watch-fork ', cursor: 11 })
+  const writing = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await writing.find({ type: 'Text', text: /^watch-fork +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: /^idle-fork +$/ })).toBeUndefined()
+  expect(await writing.find({ type: 'Text', text: '1 idle' })).toBeDefined()
+  await writing.press({ key: 'idle-fold' })
+  expect(await writing.find({ type: 'Text', text: /^idle-fork +$/ })).toBeDefined()
+  expect(await writing.find({ type: 'Text', text: 'hide idle' })).toBeDefined()
+  await writing.unmount()
+  expect(String((await $.tool.call({ tool: 'mcp__qol-switchboard__fork_board' })).result)).toContain('(waiting on its pull request, agent id w1)')
+})
+
 test('the fork chat names the fork state, says what it works on, and the board marks a reply until the next send', async ($, on) => {
   const panes: string[] = []
   engine(on, [], panes)
@@ -2554,9 +2798,9 @@ test('the fork chat names the fork state, says what it works on, and the board m
   expect(await block.find({ type: 'Text', text: /^working · / })).toBeUndefined()
   await block.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeDefined()
   await typed($, 'asking-fork thanks')
-  expect(await ui.find({ type: 'Text', text: /new reply/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /◉/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -2771,22 +3015,128 @@ test('the prompt box offers fork keys for its first word only', async ($, on) =>
   expect((await ask('tell as')).suggestions).toEqual([])
 })
 
-test('a fork key typed in a fork view goes to the viewed fork, never to the named one', async ($, on) => {
+test('a fork key typed in a fork view goes to the named fork, and the viewed fork keeps its own words', async ($, on) => {
   const sent: any[] = []
+  const viewed: string[] = []
   engine(on, sent)
+  on('clock.after', () => ({ value: undefined }))
+  on('ui.view', (_: unknown, e: { agentId?: string }) => {
+    viewed.push(e.agentId ?? 'main')
+    return { value: {} }
+  })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await spawn($, 'a8', 'asking-fork: asks')
   await spawn($, 'a9', 'other-fork: other')
   sent.length = 0
   const band = promptBand(false)
   const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'a9' } } })
-  expect((await typed($, 'asking-fork yes')).text).toBe('asking-fork yes')
+  expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork')
+  expect(sent.map(one => [JSON.stringify(one.to), one.text])).toEqual([[JSON.stringify(sent[0].to), fromUser('yes')]])
+  expect(JSON.stringify(sent[0].to)).toContain('a8')
+  expect((await typed($, 'other-fork still here')).text).toBe('still here')
+  expect((await typed($, 'plain words')).text).toBe('plain words')
+  expect((await typed($, 'asking-fork')).drop).toBe('Opened asking-fork.')
+  expect(viewed).toEqual(['a8'])
+  expect(sent.length).toBe(1)
   await inFork.unmount()
   const inMain = await $.ui.mount(band)
-  expect((await typed($, 'asking-fork yes')).drop).toContain('→ asking-fork')
+  expect((await typed($, 'asking-fork again')).drop).toContain('→ asking-fork')
   await inMain.unmount()
 })
 
+const hookFiles = (): Record<string, string> => ({
+  '/home/me/.claude/plugins/installed_plugins.json': JSON.stringify({ version: 2, plugins: { 'de@kit': [{ scope: 'user', installPath: '/plugins/de' }], 'off@kit': [{ scope: 'user', installPath: '/plugins/off' }] } }),
+  '/plugins/de/hooks/hooks.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/de.mjs"', timeout: 5 }] }], Stop: [{ hooks: [{ type: 'command', command: 'stop-hook' }] }] } }),
+  '/plugins/off/hooks/hooks.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'off-hook' }] }] } }),
+  '/work/.claude/settings.json': JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'project-hook' }, { type: 'prompt', prompt: 'ignored' }] }] } }),
+  '/home/me/.claude.json': JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: true } } }),
+})
+
+const hookEngine = (on: any, runs: { argv: string[]; init: any }[], files = hookFiles()) => {
+  on('session.cwd', () => ({ value: '/' }))
+  on('settings.read', () => ({ value: { hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'cat ~/.claude/terse-rule.txt' }] }] }, enabledPlugins: { 'de@kit': true, 'off@kit': false } } }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/me' : e.name === 'QOL_SWITCHBOARD_CONVERSATIONS' ? '/conv' : undefined }))
+  on('fs.exists', (_: unknown, e: { path: string }) => ({ value: e.path in files }))
+  on('fs.read', (_: unknown, e: { path: string }) => ({ value: files[e.path] }))
+  on('process.run', (_: unknown, e: { argv: string[]; init?: any }) => {
+    if (e.argv[0] !== 'bash') return { value: NO_RECORD }
+    runs.push({ argv: e.argv, init: e.init })
+    const prompt = String(JSON.parse(e.init?.stdin ?? '{}').prompt)
+    const command = e.argv[2] ?? ''
+    if (command.includes('terse-rule')) return { value: { exitCode: 0, stderr: '', stdout: 'Be terse.\n' } }
+    if (command.includes('de.mjs') && prompt === 'de') return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ decision: 'block', reason: 'de <what to design>' }) } }
+    if (command.includes('de.mjs') && prompt.startsWith('de ')) return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Design round rules.' } }) } }
+    return { value: { exitCode: 0, stderr: '', stdout: '' } }
+  })
+}
+
+test('your prompt hooks run on the words a fork gets, typed in its view or sent from the switchboard, in its folder', async ($, on) => {
+  const sent: any[] = []
+  const runs: { argv: string[]; init: any }[] = []
+  engine(on, sent)
+  hookEngine(on, runs)
+  on('clock.after', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await spawn($, 'a9', 'other-fork: other')
+  sent.length = 0
+  runs.length = 0
+  expect((await typed($, 'asking-fork de launcher look')).drop).toContain('→ asking-fork')
+  expect(runs.map(one => one.argv[2]).sort()).toEqual(['cat ~/.claude/terse-rule.txt', 'node "${CLAUDE_PLUGIN_ROOT}/de.mjs"', 'project-hook'])
+  const de = runs.find(one => one.argv[2]?.includes('de.mjs'))
+  expect(de?.init.cwd).toBe('/work')
+  expect(de?.init.timeoutMs).toBe(5000)
+  expect(de?.init.env).toEqual({ CLAUDE_PROJECT_DIR: '/work', CLAUDE_PLUGIN_ROOT: '/plugins/de' })
+  expect(JSON.parse(de?.init.stdin)).toEqual({ session_id: 'switchboard-session', transcript_path: '/conv/switchboard-session/subagents/agent-a8.jsonl', cwd: '/work', hook_event_name: 'UserPromptSubmit', prompt: 'de launcher look', source: 'user', agent_id: 'a8', agent_type: 'project-fork' })
+  expect(sent.length).toBe(1)
+  expect(sent[0].text).toContain(fromUser('de launcher look'))
+  expect(sent[0].text).toContain('UserPromptSubmit hook additional context: Be terse.')
+  expect(sent[0].text).toContain('UserPromptSubmit hook additional context: Design round rules.')
+  expect(typedByUser(sent[0].text)).toBe('de launcher look')
+  expect((await typed($, 'asking-fork de')).drop).toBe('de <what to design>')
+  expect(sent.length).toBe(1)
+  const band = promptBand(false)
+  const inFork = await $.ui.mount({ ...band, props: { ...band.props, view: { agentId: 'a9' } } })
+  runs.length = 0
+  const own = await typed($, 'de settings rows')
+  expect(own.text).toBe('de settings rows')
+  expect(own.context).toEqual(['Be terse.', 'Design round rules.'])
+  expect(JSON.parse(runs[0]?.init.stdin).agent_id).toBe('a9')
+  expect((await typed($, 'de')).drop).toBe('de <what to design>')
+  expect((await typed($, 'other-fork')).drop).toBe('other-fork is open.')
+  expect(sent.length).toBe(1)
+  await inFork.unmount()
+})
+
+test('a project the user never trusted keeps its own prompt hooks from running, as Claude Code does', async ($, on) => {
+  const sent: any[] = []
+  const runs: { argv: string[]; init: any }[] = []
+  engine(on, sent)
+  hookEngine(on, runs, { ...hookFiles(), '/home/me/.claude.json': JSON.stringify({ projects: { '/work': { hasTrustDialogAccepted: false } } }) })
+  on('clock.after', () => ({ value: undefined }))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  runs.length = 0
+  expect((await typed($, 'asking-fork de launcher look')).drop).toContain('→ asking-fork')
+  expect(runs.map(one => one.argv[2]).sort()).toEqual(['cat ~/.claude/terse-rule.txt', 'node "${CLAUDE_PLUGIN_ROOT}/de.mjs"'])
+  expect(isTrusted({ projects: { '/media/disk': { hasTrustDialogAccepted: true }, '/media/disk/Git': { hasTrustDialogAccepted: false } } }, '/media/disk/Git/repo/')).toBe(true)
+  expect(isTrusted({ projects: { '/': { hasTrustDialogAccepted: true } } }, '/anything')).toBe(true)
+  for (const config of [undefined, null, {}, { projects: null }, { projects: { '/work': { hasTrustDialogAccepted: 'yes' } } }, { projects: { '/work/sub': { hasTrustDialogAccepted: true } } }]) expect(isTrusted(config, '/work')).toBe(false)
+  expect(isTrusted({ projects: { work: { hasTrustDialogAccepted: true } } }, 'work')).toBe(false)
+})
+
+test('a prompt hook answer reads as context, a block or nothing', () => {
+  expect(hookAnswer({ exitCode: 0, stdout: 'plain words\n', stderr: '' })).toEqual({ context: ['plain words'] })
+  expect(hookAnswer({ exitCode: 0, stdout: '', stderr: '' })).toEqual({ context: [] })
+  expect(hookAnswer({ exitCode: 1, stdout: 'broken', stderr: 'err' })).toEqual({ context: [] })
+  expect(hookAnswer({ exitCode: 2, stdout: '', stderr: 'no such verb\n' })).toEqual({ context: [], block: 'no such verb' })
+  expect(hookAnswer({ exitCode: 0, stdout: JSON.stringify({ continue: false, stopReason: 'stop here' }), stderr: '' })).toEqual({ context: [], block: 'stop here' })
+  expect(hookAnswer({ exitCode: 0, stdout: JSON.stringify({ decision: 'block' }), stderr: '' }).block).toBe('A prompt hook stopped this message.')
+  expect(hookAnswer({ exitCode: 0, stdout: JSON.stringify({ suppressOutput: true }), stderr: '' })).toEqual({ context: [] })
+  expect(hookAnswer({ exitCode: 0, stdout: '42', stderr: '' })).toEqual({ context: ['42'] })
+  expect(promptCommands({ UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'a', timeout: 60 }, { type: 'command', command: ' ' }, { type: 'http', url: 'x' }] }, null, { hooks: 'x' }] })).toEqual([{ command: 'a', timeoutMs: 10_000 }])
+  expect(promptCommands(undefined)).toEqual([])
+})
 
 const TREE = JSON.stringify({
   status: 'claude · default · me@work.com',
@@ -2908,6 +3258,15 @@ test('a model id reads as its family and version', () => {
   expect(modelName('gpt-x')).toBe('gpt-x')
 })
 
+test('a picked model keeps the full id the agent list labels, with its [1m] suffix', () => {
+  for (const [model, label] of [
+    ['claude-opus-4-6[1m]', 'claude-opus-4-6[1m]'],
+    ['claude-sonnet-4-5', 'claude-sonnet-4-5'],
+    ['opus[1m]', 'Opus[1m]'],
+    ['haiku', 'Haiku'],
+  ]) expect(pickedLabel(model)).toBe(label)
+})
+
 test('a pull request reads as its state, its checks without the skipped ones, the claude review and the live test', () => {
   const view = {
     isDraft: true,
@@ -2992,13 +3351,20 @@ test('the close command stops the fork you write to and drops it from the board,
 test('the fork you write to shows its model and effort on one row, its pickers change its next model call, and the switchboard keeps its own', async ($, on) => {
   const store = new Map<string, unknown>()
   const steps: { agentId?: string; model: string; effort?: unknown }[] = []
+  const written: Record<string, string> = {}
   engine(on, [], [], [], store)
   on('clock.after', () => new Promise(() => {}))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'QOL_SWITCHBOARD_MARKS' ? '/data/marks' : undefined }))
+  on('fs.write', (_: unknown, e: { path: string; text: string }) => {
+    written[e.path] = e.text
+    return { value: undefined }
+  })
   on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
   }))
   on('session.messages', () => ({ value: [] }))
+  on('command.run', { command: 'model' }, () => ({ text: 'the switchboard model picker' }))
   on('turn.step', async function* (_: unknown, e: { agentId?: string; turnId: string; index: number; model: string; effort?: unknown }) {
     steps.push({ ...(e.agentId === undefined ? {} : { agentId: e.agentId }), model: e.model, effort: e.effort })
     yield { kind: 'text', index: 0, text: 'ok' }
@@ -3015,6 +3381,8 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   await step('a8', 'claude-opus-5-5', 'medium')
   expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'claude-opus-5-5', effort: 'medium' })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const command = async (name: string, args: string) => String((await $.command.run({ command: name, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 200 } })).text)
+  expect(await command('model', 'haiku')).toBe('the switchboard model picker')
   await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
   const picker = await ui.find({ type: 'Select', key: 'model-asking-fork' })
   expect(picker).toMatchObject({ props: { value: 'opus' } })
@@ -3032,6 +3400,18 @@ test('the fork you write to shows its model and effort on one row, its pickers c
   expect(steps.at(-1)).toEqual({ model: 'claude-opus-5-5', effort: 'medium' })
   expect(await ui.find({ type: 'Text', text: /applies at its next model call/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /effort medium → high, from its next model call/ })).toBeDefined()
+  expect(await command('model', 'haiku')).toBe('asking-fork uses Haiku from its next model call.')
+  expect(await command('effort', ' MAX ')).toBe('asking-fork uses max effort from its next model call.')
+  expect(await command('model', '')).toBe('asking-fork model: Haiku at max effort. /model opus|sonnet|haiku and a level, such as /model haiku max, changes it; with no fork picked, /model changes the switchboard.')
+  expect(await command('effort', 'loud')).toMatch(/^asking-fork effort: max\. \/effort low\|medium\|high\|xhigh\|max changes it/)
+  for (const wrong of ['haiku loud', 'haiku sonnet', 'max max', 'max haiku extra']) expect(await command('model', wrong)).toMatch(/^asking-fork model: Haiku at max effort\./)
+  expect(await command('effort', 'haiku max')).toMatch(/^asking-fork effort: max\./)
+  expect(await command('model', 'Sonnet LOW')).toBe('asking-fork uses Sonnet at low effort from its next model call.')
+  expect(await command('model', 'max haiku')).toBe('asking-fork uses Haiku at max effort from its next model call.')
+  await settle()
+  expect(JSON.parse(written['/data/marks/switchboard-session.json'] ?? '{}').models).toEqual({ a8: { model: 'Haiku', effort: 'max' } })
+  await step('a8', 'claude-opus-5-5', 'medium')
+  expect(steps.at(-1)).toEqual({ agentId: 'a8', model: 'haiku', effort: 'max' })
   await ui.unmount()
 })
 
@@ -3080,6 +3460,37 @@ test('a fork whose run ends with no report coming, as after its one hand-back, s
   await settle()
   expect(rows().find(row => row.agentId === 'a8')).toMatchObject({ isWorking: false })
   expect(rows().find(row => row.agentId === 'a8')?.isRunOver).toBeUndefined()
+})
+
+test('a reply the fork gives in its own view, which sends no notification, is filed as its report once the wait passes', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const timers: (() => void)[] = []
+  engine(on, [], [], [], store)
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  const rows = () => (store.get('board:switchboard-session') as any[]) ?? []
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour should it be? I recommend amber.'))
+  await settle()
+  expect(rows().find(row => row.agentId === 'a8')).toMatchObject({ kind: 'ask', isWorking: false })
+  await $.turn.start({ turnId: 'view-1', agentId: 'a8', text: 'amber' })
+  await $.turn.complete({ turnId: 'view-1', agentId: 'a8', answer: 'Amber is in, and I am watching CI again.', durationMs: 1, isAborted: false, reason: 'done' })
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  const row = rows().find(one => one.agentId === 'a8')
+  expect(row).toMatchObject({ kind: 'note', headline: 'Amber is in, and I am watching CI again.', isWorking: false })
+  expect(row?.isRunOver).toBeUndefined()
+  await $.turn.start({ turnId: 'view-2', agentId: 'a8', text: 'and the border?' })
+  await $.turn.complete({ turnId: 'view-2', agentId: 'a8', answer: 'The border is amber too.', durationMs: 1, isAborted: false, reason: 'done' })
+  const [first] = timers.splice(0, 1)
+  await $.turn.start({ turnId: 'view-3', agentId: 'a8', text: 'thanks' })
+  await $.turn.complete({ turnId: 'view-3', agentId: 'a8', answer: 'Glad it fits.', durationMs: 1, isAborted: false, reason: 'done' })
+  first?.()
+  await settle()
+  expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Amber is in, and I am watching CI again.', isWorking: true })
+  for (const fire of timers.splice(0)) fire()
+  await settle()
+  expect(rows().find(one => one.agentId === 'a8')).toMatchObject({ headline: 'Glad it fits.', isWorking: false })
 })
 
 test('a hand-back that starts a switchboard turn leaves no you row in the SWITCHBOARD log', async ($, on) => {
