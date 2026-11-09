@@ -242,7 +242,7 @@ mod tests {
             "sendTo($, await placed($, agentId, name, project), message, viaBand($))",
             "await drainOutbox($).catch(() => undefined)",
             "next.origin.plugin === NAME",
-            "loading ??= loadSaved($).catch(() => undefined)",
+            "loading ??= loadSaved($).catch(() => {",
             "on('ui.render', { component: 'Placed' }, async ($, e, next) => {",
             "await $.ui.place({ id })",
         ] {
