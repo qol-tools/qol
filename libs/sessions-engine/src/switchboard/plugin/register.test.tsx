@@ -3150,6 +3150,7 @@ test('a project the user never trusted keeps its own prompt hooks from running, 
   expect(isTrusted({ projects: { '/': { hasTrustDialogAccepted: true } } }, '/anything')).toBe(true)
   for (const config of [undefined, null, {}, { projects: null }, { projects: { '/work': { hasTrustDialogAccepted: 'yes' } } }, { projects: { '/work/sub': { hasTrustDialogAccepted: true } } }]) expect(isTrusted(config, '/work')).toBe(false)
   expect(isTrusted({ projects: { work: { hasTrustDialogAccepted: true } } }, 'work')).toBe(false)
+  for (const folder of ['/work/../tmp/planted', '/work/sub/../../tmp/planted', '/work/..', '/work/./sub']) expect(isTrusted({ projects: { '/work': { hasTrustDialogAccepted: true } } }, folder)).toBe(false)
 })
 
 test('a prompt hook answer reads as context, a block or nothing', () => {

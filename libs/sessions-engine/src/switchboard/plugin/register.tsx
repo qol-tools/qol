@@ -1385,6 +1385,7 @@ export const isTrusted = (config: unknown, folder: string): boolean => {
   const projects = typeof config === 'object' && config !== null ? (config as { projects?: unknown }).projects : undefined
   if (typeof projects !== 'object' || projects === null || !folder.startsWith('/')) return false
   const parts = folder.split('/').filter(part => part !== '')
+  if (parts.some(part => part === '.' || part === '..')) return false
   const folders = [...parts.map((_, at) => `/${parts.slice(0, parts.length - at).join('/')}`), '/']
   return folders.some(one => ((projects as Record<string, unknown>)[one] as { hasTrustDialogAccepted?: unknown } | undefined)?.hasTrustDialogAccepted === true)
 }
