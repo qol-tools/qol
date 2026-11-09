@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withSent } from '../hooks/register'
+import { forksUnder, fromUser, hasUnread, hookAnswer, isKilledOnly, isTrusted, promptCommands, typedByUser, keyCompletions, marksOf, mergedLog, listedAgents, mayMessage, mergeBoards, missingForks, modelName, needYouCount, nextKey, parentOf, pickedLabel, pullDetailOf, reachable, recentlyClosed, recentWords, recordOwners, reportLine, runStatesOf, saidOf, sbAt, sessionState, shownState, stateLooks, stoppedFamilies, sbCompletions, sbHint, sbLine, sbTab, sbTree, subForksOf, toFork, withoutCut, withSent } from '../hooks/register'
 
 const PANE = {
   plugin: 'qol-switchboard',
@@ -456,6 +456,7 @@ test('a sub-fork row an earlier board lost its parent on gets the parent back fr
   const store = new Map<string, unknown>()
   const row = (agentId: string, name: string) => ({ agentId, name, headline: '', report: '', at: 1, isWorking: false, isInterrupted: true, isDismissed: false })
   store.set('board:earlier-session', [row('p1', 'parent-fork: parent'), row('s1', 'sub-one: first'), row('s2', 'sub-two: second')])
+  store.set('cuts-healed-1', true)
   engine(on, [], [], [], store)
   const metas: Record<string, string> = {
     '/conv/switchboard-session/subagents/agent-s1.meta.json': JSON.stringify({ agentType: 'project-fork', parentAgentId: 'p1' }),
@@ -2230,7 +2231,7 @@ test('missingForks adds an unfinished record whose last fork has no board row, o
     { key: 'twin', parts: [{ agent_id: 'b1' }] },
     { key: 'done', parts: [{ agent_id: 'c1' }], done: {} },
   ]
-  expect(missingForks([row], records, 9)).toEqual([{ agentId: 'b1', name: 'lost: words', key: 'lost', headline: '', report: '', at: 7, isWorking: false, isInterrupted: true, isDismissed: false, project: '/w' }])
+  expect(missingForks([row], records, 9)).toEqual([{ agentId: 'b1', name: 'lost: words', key: 'lost', headline: '', report: '', at: 7, isWorking: false, isDismissed: false, project: '/w' }])
 })
 
 test('the board shows the fork whose key starts the prompt under WRITING TO, and drops it when the key goes', async ($, on) => {
@@ -3508,3 +3509,109 @@ test('a hand-back that starts a switchboard turn leaves no you row in the SWITCH
   await settle()
   expect(((store.get('sblog-3') as { who: string }[] | undefined) ?? []).filter(row => row.who === 'you')).toHaveLength(1)
 })
+
+test('the message that puts a fork back after a restart leaves its row as it was: its time, its report, not working and no new reply', async ($, on) => {
+  const store = new Map<string, unknown>([['cuts-healed-1', true]])
+  const sent: any[] = []
+  const forks = [
+    { agentId: 'a1', name: 'kept-fork: words', kind: 'note', headline: 'Done for now.', report: 'Done for now.', at: 7, isWorking: false, isDismissed: false },
+    { agentId: 'b1', name: 'bare-fork: no report yet', headline: '', report: '', at: 8, isWorking: false, isDismissed: false },
+    { agentId: 'c1', name: 'cut-fork: was mid-turn', kind: 'note', headline: 'Half way.', report: 'Half way.', at: 9, isWorking: true, isDismissed: false },
+  ]
+  store.set('board:earlier-session', forks)
+  engine(on, sent, [], [], store)
+  on('agent.list', () => ({ value: [] }))
+  const timers: Array<() => void> = []
+  on('clock.after', () => new Promise(resolve => timers.push(() => resolve({ value: undefined }))))
+  const rounds = async () => {
+    for (let round = 0; round < 4; round += 1) {
+      await renderBand($)
+      for (const fire of timers.splice(0)) fire()
+      await settle()
+    }
+  }
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await rounds()
+  expect(sent.map(one => [one.to, one.text]).sort()).toEqual([['a1', 'Back in the agent list.'], ['b1', 'Back in the agent list.'], ['c1', 'Back in the agent list.']])
+  for (const fork of forks) {
+    await $.agent.spawn({ prompt: `Project: /work\nLauncher: the switchboard\nfork ${fork.agentId}`, description: fork.name, subagentType: 'project-fork', resume: { agentId: fork.agentId } } as any)
+    await $.turn.start({ text: 'Back in the agent list.', turnId: `turn-${fork.agentId}`, agentId: fork.agentId })
+    expect((await answered($, fork.agentId, 0))[0]).toMatchObject({ kind: 'tool', name: 'Bash' })
+    expect((await answered($, fork.agentId, 1)).find(one => one.kind === 'text')?.text).toBe('Back on the fork board.')
+    await $.turn.complete({ turnId: `turn-${fork.agentId}`, agentId: fork.agentId, answer: 'Back on the fork board.', durationMs: 1, isAborted: false, reason: 'done' })
+    await typed($, notification(fork.agentId, fork.name, 'Back on the fork board.'), 'task-notification')
+  }
+  await rounds()
+  const rows = (store.get('board:switchboard-session') as any[]).map(one => [one.agentId, one.at, one.isWorking, one.kind ?? '', one.headline, one.isInterrupted === true, one.hasNewReply === true])
+  expect(rows.sort()).toEqual([
+    ['a1', 7, false, 'note', 'Done for now.', false, false],
+    ['b1', 8, false, '', '', false, false],
+    ['c1', 9, false, 'note', 'Half way.', true, false],
+  ])
+})
+
+test('the first open with this version drops the stopped mid-turn marks an earlier board kept, and a fork that was working when it closed still gets one', async ($, on) => {
+  const store = new Map<string, unknown>()
+  const row = (agentId: string, extra: object) => ({ agentId, name: `${agentId}-fork: a fork`, kind: 'note', headline: 'h', report: 'r', at: 1, isWorking: false, isDismissed: false, ...extra })
+  store.set('board:earlier-session', [row('old1', { isInterrupted: true }), row('w1', { isWorking: true }), row('n1', {})])
+  engine(on, [], [], [], store)
+  on('agent.list', () => ({ value: [{ id: 'old1' }, { id: 'w1' }, { id: 'n1' }] }))
+  on('clock.after', () => new Promise(() => {}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await settle()
+  const cut = (store.get('board:switchboard-session') as any[]).filter(one => one.isInterrupted === true).map(one => one.agentId)
+  expect(cut).toEqual(['w1'])
+  expect(store.get('cuts-healed-1')).toBe(true)
+})
+
+test('withoutCut drops the mark from a row at rest and keeps a working row and anything else as it is', () => {
+  const row = { agentId: 'a1', name: 'a', headline: '', report: '', at: 1, isWorking: false, isDismissed: false }
+  expect(withoutCut({ ...row, isInterrupted: true })).toEqual(row)
+  expect(withoutCut({ ...row, isWorking: true, isInterrupted: true })).toEqual({ ...row, isWorking: true, isInterrupted: true })
+  expect(withoutCut(row)).toBe(row)
+  expect(withoutCut('junk')).toBe('junk')
+})
+
+test('saidOf reads the rows the transcript reader prints and nothing else', () => {
+  expect(saidOf('[{"role":"assistant","text":"hi"}]')).toEqual([{ role: 'assistant', text: 'hi' }])
+  expect(saidOf('[]')).toEqual([])
+  expect(saidOf('{"deny":"no"}')).toBeUndefined()
+  expect(saidOf('not json')).toBeUndefined()
+})
+
+test("a fork Claude Code cannot read back shows its conversation from its transcript on disk, read again only once the transcript changed", async ($, on) => {
+  const panes: string[] = []
+  engine(on, [], panes)
+  on('clock.after', () => ({ value: undefined }))
+  on('prompt.edit', (_: unknown, e: { text: string; start: number; end: number; inputText: string }) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
+  const env: Record<string, string> = { QOL_CLI_SESSIONS: '/bin/qol-cli-sessions', QOL_SWITCHBOARD_CONVERSATIONS: '/conv' }
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: env[e.name] }))
+  on('session.messages', () => ({ value: { deny: 'a8 is not one of the agents of this session' } }))
+  let size = 10
+  on('fs.stat', (_: unknown, e: { path: string }) => ({ value: e.path === '/conv/switchboard-session/subagents/agent-a8.jsonl' ? { size, mtimeMs: 5 } : { size: 0, mtimeMs: 0 } }))
+  const asked: unknown[] = []
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { stdin?: string } }) => {
+    if (e.argv.slice(1).join(' ') !== 'sessions switchboard hook fork-said') return { value: NO_RECORD }
+    asked.push(JSON.parse(e.init?.stdin ?? '{}'))
+    return { value: { exitCode: 0, stderr: '', stdout: JSON.stringify([{ role: 'user', text: fromUser('pick one') }, { role: 'assistant', text: 'Amber or teal?' }]) } }
+  })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await spawn($, 'a8', 'asking-fork: asks')
+  await deliver($, notification('a8', 'asking-fork: asks', 'Which colour, amber or teal?'), 'task-notification')
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'asking-fork hi' })
+  expect(await forkChat($, panes)).toEqual(['pick one', 'Amber or teal?'])
+  expect(asked).toEqual([{ conversation: '/conv/switchboard-session.jsonl', id: 'a8', rows: 80 }])
+  await $.turn.complete({ turnId: 'held-1', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(asked).toHaveLength(1)
+  size = 20
+  await $.turn.complete({ turnId: 'held-2', agentId: 'a8', answer: '', durationMs: 1, isAborted: false, reason: 'done' })
+  await settle()
+  expect(asked).toHaveLength(2)
+  await ui.unmount()
+})
+

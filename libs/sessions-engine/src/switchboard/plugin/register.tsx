@@ -471,11 +471,50 @@ const sameSaid = (a: Said[], b: Said[]): boolean =>
 
 let writingFetch = 0
 
+const SAID_ROWS = 80
+const saidRead = new Map<string, { stamp: string; rows: unknown[] }>()
+
+export const saidOf = (stdout: string): unknown[] | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    return Array.isArray(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const saidOnDisk = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
+  const program = await $.env.get('QOL_CLI_SESSIONS')
+  const conversations = await $.env.get('QOL_SWITCHBOARD_CONVERSATIONS')
+  if (program === undefined || program === '' || conversations === undefined || conversations === '' || !ID.test(agentId)) return undefined
+  const session = await $.session.id()
+  const stat = await $.fs.stat(`${conversations}/${session}/subagents/agent-${agentId}.jsonl`).catch(() => undefined)
+  if (stat === undefined || stat.size === 0) return undefined
+  const stamp = `${stat.size}:${stat.mtimeMs}`
+  const known = saidRead.get(agentId)
+  if (known?.stamp === stamp) return known.rows
+  const ran = await $.process.run([program, 'sessions', 'switchboard', 'hook', 'fork-said'], {
+    cwd: folderOf(program),
+    stdin: JSON.stringify({ conversation: `${conversations}/${session}.jsonl`, id: agentId, rows: SAID_ROWS }),
+    timeoutMs: STATES_TIMEOUT_MS,
+  })
+  const rows = ran.exitCode === 0 ? saidOf(ran.stdout) : undefined
+  if (rows !== undefined) saidRead.set(agentId, { stamp, rows })
+  return rows
+}
+
+const messagesOf = async ($: EngineInterface, agentId: string): Promise<unknown[] | undefined> => {
+  const held: unknown = await $.session.messages({ agentId }).catch(() => undefined)
+  if (Array.isArray(held) && held.length > 0) return held
+  const saved = await saidOnDisk($, agentId).catch(() => undefined)
+  return saved ?? (Array.isArray(held) ? held : undefined)
+}
+
 const refreshWriting = async ($: EngineInterface, agentId?: string): Promise<void> => {
   const target = await read($, writingTo)
   if (agentId !== undefined && agentId !== target) return
   const fetch = ++writingFetch
-  const found = target === '' ? [] : await $.session.messages({ agentId: target }).catch(() => undefined)
+  const found = target === '' ? [] : await messagesOf($, target)
   if (found === undefined || fetch !== writingFetch || (await read($, writingTo)) !== target) return
   const entry = (await read($, board)).find(one => one.agentId === target)
   const logged = entry === undefined ? [] : sentNotes(await $.store.get(`${SENT_PREFIX}${keyOf(entry)}`).catch(() => undefined))
@@ -873,6 +912,14 @@ const isEntry = (entry: unknown): entry is Entry =>
 
 const cutIfWorking = ({ isRunOver, ...entry }: Entry): Entry => ({ ...entry, isWorking: false, ...(entry.isWorking && isRunOver !== true ? { isInterrupted: true } : {}) })
 
+const CUTS_HEALED = 'cuts-healed-1'
+
+export const withoutCut = (row: unknown): unknown => {
+  if (!isEntry(row) || row.isInterrupted !== true || row.isWorking) return row
+  const { isInterrupted: _, ...healed } = row
+  return healed
+}
+
 export const mergeBoards = (earlier: readonly unknown[], own: readonly unknown[]): Entry[] => {
   const kept = own.filter(isEntry)
   const owned = new Set(kept.map(entry => entry.agentId))
@@ -1185,7 +1232,7 @@ export const missingForks = (rows: readonly Entry[], records: readonly SessionRe
     if (agentId === undefined || listed.has(agentId)) return []
     listed.add(agentId)
     const at = Number(record.created_ms) || now
-    return [{ agentId, name: recordName(record), key: record.key, headline: '', report: '', at, isWorking: false, isInterrupted: true, isDismissed: false, ...(record.cwd === undefined ? {} : { project: record.cwd }) }]
+    return [{ agentId, name: recordName(record), key: record.key, headline: '', report: '', at, isWorking: false, isDismissed: false, ...(record.cwd === undefined ? {} : { project: record.cwd }) }]
   })
 }
 
@@ -1518,10 +1565,11 @@ const rested = async ($: EngineInterface, agentId: string): Promise<Entry | unde
   let kept: Entry | undefined
   const hold = await holdOf($, agentId)
   const wasCut = hold?.wasCut === true
+  const isWake = hold?.text === BACK
   if (hold?.isDone === true) await dropHold($, agentId)
   await change($, list =>
     list.map(one => {
-      if (one.agentId !== agentId || (one.kind === undefined && !wasCut)) return one
+      if (one.agentId !== agentId || (one.kind === undefined && !wasCut && !isWake)) return one
       kept = { ...one, isWorking: false, ...(wasCut ? { isInterrupted: true } : {}) }
       return kept
     }),
@@ -2002,6 +2050,11 @@ export const holdingVia = ($: EngineInterface, send: Sender, reply: string, wasC
   }
   quiet.add(holds)
   return holds
+}
+
+const isRestartWake = async ($: EngineInterface, agentId: string): Promise<boolean> => {
+  const hold = await holdOf($, agentId)
+  return hold !== undefined && hold.text === BACK && hold.isDone !== true
 }
 
 const heldReply = async ($: EngineInterface, agentId: string | undefined, turnId: string): Promise<string | undefined> => {
@@ -2500,6 +2553,7 @@ export const register: Register = on => {
     const agentId = started.agentId ?? e.resume?.agentId
     if (agentId === undefined) return started
     const isNew = e.resume === undefined
+    if (!isNew && (await isRestartWake($, agentId).catch(() => false))) return started
     const key = isNew ? claims.get(e.description) : undefined
     if (key !== undefined) for (const [alias, one] of claims) if (one === key) claims.delete(alias)
     await markWorking($, agentId, e.description, isNew ? projectOf(e.prompt) : undefined, isNew ? e.parentAgentId : undefined, key)
@@ -2523,7 +2577,10 @@ export const register: Register = on => {
         if (Array.isArray(rows)) earlier.push(...rows)
       }
       const own = (Array.isArray(saved) ? saved : []).filter(isEntry)
-      const merged = await withRecords($, mergeBoards(earlier, live.length === 0 ? own.map(cutIfWorking) : own))
+      const isHealed = live.length > 0 || (await $.store.get(CUTS_HEALED)) === true
+      const healed = (rows: readonly unknown[]): Entry[] => (isHealed ? rows : rows.map(withoutCut)).filter(isEntry)
+      const merged = await withRecords($, mergeBoards(healed(earlier), live.length === 0 ? healed(own).map(cutIfWorking) : own))
+      if (!isHealed) await $.store.set(CUTS_HEALED, true)
       if (merged.length > 0) await update($, board, list => [...merged, ...(list ?? []).filter(one => !merged.some(row => row.agentId === one.agentId))])
       loading = Promise.resolve()
       if (others.length > 0) {
@@ -2777,10 +2834,7 @@ export const register: Register = on => {
       }
       if ((await read($, freshReply)) === at.entry.agentId) await update($, freshReply, () => '')
       await logSaid($, `${YOU} → ${keyOf(at.entry)}`, at.message).catch(() => {})
-      const fetched = await $.session.messages({ agentId: at.entry.agentId }).then(
-        found => found,
-        () => undefined,
-      )
+      const fetched = await messagesOf($, at.entry.agentId)
       const before = recentWords(fetched ?? [], Infinity)
       const noted = noteSent(at.entry.agentId, clipSaid(plainText(at.message)), before, await $.clock.now())
       const note = { text: noted.text, anchor: [...before].reverse().find(row => !row.isUser)?.text ?? '' }
