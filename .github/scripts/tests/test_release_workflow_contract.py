@@ -1203,7 +1203,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         for contract in [
             "set -euo pipefail",
             '--registry "ghcr.io/${GITHUB_REPOSITORY_OWNER}/plugins"',
-            '--tag "${RELEASE_TAG}" --files release_files',
+            '--tag "${RELEASE_TAG}" --files ../release_files',
         ]:
             with self.subTest(contract=contract):
                 self.assertIn(contract, push)
