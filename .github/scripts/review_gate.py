@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 from cancel_superseded_queue_runs import cancel
 from queue_verdict import gh_json
@@ -15,7 +16,10 @@ REVIEW_BOT = "github-actions[bot]"
 REVIEW_WORKFLOW = "claude-review.yml"
 VERDICT_JOB = "claude review"
 COMMAND = re.compile(r"/review-override ([0-9a-f]{40})")
-RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) -->")
+OVERRIDE_WORKFLOW_PATH = ".github/workflows/review-override.yml"
+OVERRIDE_EVENT = "issue_comment"
+OWNER = "KMRH47"
+RECORD = re.compile(r"<!-- qol-review-override ([0-9a-f]{40}) (\S+) (\d+) -->")
 CANCEL_GRACE_SECONDS = 300
 RESTART_POLLS = 12
 POLL_SECONDS = 5
@@ -39,18 +43,52 @@ def comments(repo: str, pr: str) -> list[dict]:
     return [comment for page in pages for comment in page]
 
 
-def override_for(entries: list[dict], head_sha: str) -> dict | None:
+def run_of(repo: str, run_id: str) -> dict:
+    return gh_json([f"repos/{repo}/actions/runs/{run_id}"])
+
+
+def moment(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def posted_by_override_run(comment: dict, run: dict) -> bool:
+    if run.get("path") != OVERRIDE_WORKFLOW_PATH or run.get("event") != OVERRIDE_EVENT:
+        return False
+    if (run.get("triggering_actor") or {}).get("login") != OWNER:
+        return False
+    created, started = moment(comment.get("created_at")), moment(run.get("run_started_at"))
+    if created is None or started is None or created < started:
+        return False
+    if run.get("status") == "completed":
+        ended = moment(run.get("updated_at"))
+        return ended is not None and created <= ended
+    return True
+
+
+def override_for(entries: list[dict], head_sha: str, repo: str, lookup: Callable[[str, str], dict] | None = None) -> dict | None:
+    lookup = lookup or run_of
     for comment in reversed(entries):
         match = RECORD.match(comment.get("body") or "")
-        if comment.get("user", {}).get("login") == REVIEW_BOT and match and match.group(1) == head_sha:
+        if comment.get("user", {}).get("login") != REVIEW_BOT or not match or match.group(1) != head_sha:
+            continue
+        try:
+            run = lookup(repo, match.group(3))
+        except RuntimeError:
+            continue
+        if posted_by_override_run(comment, run):
             return {"actor": match.group(2), "url": comment.get("html_url", "")}
     return None
 
 
-def record(head_sha: str, actor: str) -> str:
+def record(head_sha: str, actor: str, run_id: str) -> str:
     return "\n".join(
         [
-            f"<!-- qol-review-override {head_sha} {actor} -->",
+            f"<!-- qol-review-override {head_sha} {actor} {run_id} -->",
             "",
             "> [!NOTE]",
             f"> **Review override** · @{actor} passed the review of `{head_sha[:7]}`.",
@@ -76,7 +114,7 @@ def verdict(env: dict, summary: str | None) -> int:
         return 0
     if review == "quota" and env.get("REVIEW_RESULT") == "success":
         return 0
-    override = override_for(comments(env["GITHUB_REPOSITORY"], env["PR_NUMBER"]), env["HEAD_SHA"])
+    override = override_for(comments(env["GITHUB_REPOSITORY"], env["PR_NUMBER"]), env["HEAD_SHA"], env["GITHUB_REPOSITORY"])
     if not override:
         print(f"::error::the review verdict is {review or 'missing'}; only a pass verdict or an owner override may queue")
         return 1
@@ -119,7 +157,7 @@ def refuse(repo: str, pr: str, reason: str) -> int:
     return 1
 
 
-def apply_override(repo: str, pr: str, body: str, actor: str, sleep: Callable[[float], None] = time.sleep) -> int:
+def apply_override(repo: str, pr: str, body: str, actor: str, run_id: str, sleep: Callable[[float], None] = time.sleep) -> int:
     named = COMMAND.fullmatch((body.strip().splitlines() or [""])[0].strip())
     if not named:
         return refuse(repo, pr, "name the full 40-character head commit the override is for: `/review-override <sha>`.")
@@ -132,8 +170,8 @@ def apply_override(repo: str, pr: str, body: str, actor: str, sleep: Callable[[f
     if review.get("conclusion") == "success":
         print(f"the review of {head_sha[:7]} already passed: {review['html_url']}")
         return 0
-    if not override_for(comments(repo, pr), head_sha):
-        gh(["--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={record(head_sha, actor)}"])
+    if not override_for(comments(repo, pr), head_sha, repo):
+        gh(["--method", "POST", f"repos/{repo}/issues/{pr}/comments", "-f", f"body={record(head_sha, actor, run_id)}"])
     print(f"@{actor} overrode the review of {head_sha[:7]}: {review['html_url']}")
     rerun_verdict(repo, review, sleep)
     return 0
@@ -148,7 +186,7 @@ def main(argv: list[str]) -> int:
         if command == "superseded":
             return end_if_superseded(env["GITHUB_REPOSITORY"], env["HEAD_SHA"], env["GITHUB_RUN_ID"])
         if command == "override":
-            return apply_override(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["COMMENT"], env["ACTOR"])
+            return apply_override(env["GITHUB_REPOSITORY"], env["PR_NUMBER"], env["COMMENT"], env["ACTOR"], env["GITHUB_RUN_ID"])
     except (RuntimeError, KeyError, json.JSONDecodeError) as error:
         print(f"::error::{error}")
         return 1
