@@ -514,7 +514,7 @@ pub fn tile(
 pub(super) fn launcher_mark(art: &Path) -> Option<Mark> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     let dir = DIR.get_or_init(launcher_marks::marks_dir).as_deref()?;
-    launcher_marks::mark_at(dir, art)
+    launcher_marks::drawn_mark(dir, art)
 }
 
 pub fn name_text(name: &str, style: TextStyle, ink: u32) -> Div {

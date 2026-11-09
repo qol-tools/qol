@@ -214,37 +214,16 @@ pub struct MarkView {
     mark: Mark,
     size: f32,
     line: u32,
-    solid: bool,
 }
 
 pub fn mark(mark: Mark, size: f32, line: u32) -> MarkView {
-    MarkView {
-        mark,
-        size,
-        line,
-        solid: false,
-    }
-}
-
-impl MarkView {
-    pub fn solid(mut self) -> Self {
-        self.solid = true;
-        self
-    }
+    MarkView { mark, size, line }
 }
 
 impl RenderOnce for MarkView {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        match self.mark.solid_markup().filter(|_| self.solid) {
-            Some(markup) => {
-                let name = format!("mark-solid-{}", self.mark.name());
-                tinted(&name, markup, self.size, self.line, window)
-            }
-            None => {
-                let name = format!("mark-{}", self.mark.name());
-                tinted(&name, &self.mark.markup(), self.size, self.line, window)
-            }
-        }
+        let name = format!("mark-{}", self.mark.name());
+        tinted(&name, &self.mark.markup(), self.size, self.line, window)
     }
 }
 

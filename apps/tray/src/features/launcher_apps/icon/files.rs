@@ -21,6 +21,10 @@ impl MarkFiles {
         mark.svg(self.line)
     }
 
+    pub fn entry_svg(&self, mark: Mark) -> String {
+        mark.app_svg().unwrap_or_else(|| self.svg(mark))
+    }
+
     pub fn write(&self) -> Result<()> {
         std::fs::create_dir_all(&self.dir).with_context(|| {
             format!("Failed to create launcher icon dir {}", self.dir.display())
@@ -93,6 +97,16 @@ mod tests {
             }
         }
         assert!(!stray.exists());
+    }
+
+    #[test]
+    fn an_entry_draws_the_desktop_art_where_a_mark_has_it() {
+        let files = MarkFiles::in_dir(PathBuf::from("/marks"), 0x8a93f7);
+        assert_eq!(
+            files.entry_svg(Mark::Explorer),
+            Mark::Explorer.app_svg().unwrap()
+        );
+        assert_eq!(files.entry_svg(Mark::Sound), Mark::Sound.svg(0x8a93f7));
     }
 
     #[test]

@@ -26,6 +26,10 @@ pub fn mark_at(dir: &Path, path: &Path) -> Option<Mark> {
     (mark_path(dir, mark) == path).then_some(mark)
 }
 
+pub fn drawn_mark(dir: &Path, path: &Path) -> Option<Mark> {
+    mark_at(dir, path).filter(|mark| mark_path(dir, *mark) == path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,6 +50,16 @@ mod tests {
             Some(Mark::Explorer)
         );
         assert_eq!(mark_at(dir, &app_path(dir, Mark::Sound)), None);
+    }
+
+    #[test]
+    fn app_art_is_shown_as_its_picture_not_drawn_as_a_mark() {
+        let dir = Path::new("/data/launcher-icons");
+        assert_eq!(drawn_mark(dir, &app_path(dir, Mark::Explorer)), None);
+        assert_eq!(
+            drawn_mark(dir, &mark_path(dir, Mark::Explorer)),
+            Some(Mark::Explorer)
+        );
     }
 
     #[test]

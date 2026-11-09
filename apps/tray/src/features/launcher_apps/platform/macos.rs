@@ -130,7 +130,7 @@ fn icon_png(icon: &LauncherIcon, marks: &MarkFiles) -> Option<Vec<u8>> {
             None => Mark::App,
         },
     };
-    super::raster::svg_png(&marks.svg(mark), ICON_PIXELS)
+    super::raster::svg_png(&marks.entry_svg(mark), ICON_PIXELS)
 }
 
 fn launcher_icon(icon: &LauncherIcon, marks: &MarkFiles) -> Option<PathBuf> {
